@@ -26,6 +26,9 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Monitor
 import androidx.compose.material.icons.outlined.MergeType
 import androidx.compose.material.icons.outlined.Diversity3
 import androidx.compose.material.icons.outlined.Email
@@ -46,6 +49,10 @@ import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.GroupAdd
 import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.SettingsEthernet
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.LiveTv
 import androidx.compose.material.icons.outlined.LocalOffer
 import androidx.compose.material.icons.outlined.NotificationsActive
@@ -452,6 +459,119 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_admin_compute,
             icon = Icons.Outlined.Memory,
             route = MoreRoutes.ADMIN_COMPUTE,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        // B7 web-parity CLOUD-INFRA management surfaces (mirror the web /remote/* pages). Backends are
+        // owner-scoped require_ui_session control planes; a 403 (defence-in-depth) renders Forbidden.
+        // Surfaced operatorOnly in the ADMIN/Infra hub per the batch playbook.
+        MoreEntry(
+            id = "infra_ec2",
+            labelRes = R.string.more_entry_infra_ec2,
+            icon = Icons.Outlined.Cloud,
+            route = MoreRoutes.INFRA_EC2,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "infra_k8s",
+            labelRes = R.string.more_entry_infra_k8s,
+            icon = Icons.Outlined.Memory,
+            route = MoreRoutes.INFRA_K8S,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "infra_security_groups",
+            labelRes = R.string.more_entry_infra_security_groups,
+            icon = Icons.Outlined.Shield,
+            route = MoreRoutes.INFRA_SECURITY_GROUPS,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "infra_hosts",
+            labelRes = R.string.more_entry_infra_hosts,
+            icon = Icons.Outlined.Dns,
+            route = MoreRoutes.INFRA_HOSTS,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "infra_monitoring",
+            labelRes = R.string.more_entry_infra_monitoring,
+            icon = Icons.Outlined.Monitor,
+            route = MoreRoutes.INFRA_MONITORING,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "infra_billing",
+            labelRes = R.string.more_entry_infra_billing,
+            icon = Icons.Outlined.Paid,
+            route = MoreRoutes.INFRA_BILLING,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        // B7 web-parity REMOTE-ACCESS surfaces (mirror the web /remote/* + /remote-desktop pages).
+        // Owner-scoped require_ui_session control planes; surfaced operatorOnly in the ADMIN/Infra hub.
+        MoreEntry(
+            id = "remote_ssh_keys",
+            labelRes = R.string.more_entry_remote_ssh_keys,
+            icon = Icons.Outlined.VpnKey,
+            route = MoreRoutes.REMOTE_SSH_KEYS,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "remote_ssh_recordings",
+            labelRes = R.string.more_entry_remote_ssh_recordings,
+            icon = Icons.Outlined.Terminal,
+            route = MoreRoutes.REMOTE_SSH_RECORDINGS,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "remote_bastion",
+            labelRes = R.string.more_entry_remote_bastion,
+            icon = Icons.Outlined.Hub,
+            route = MoreRoutes.REMOTE_BASTION,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "remote_connection_profiles",
+            labelRes = R.string.more_entry_remote_connection_profiles,
+            icon = Icons.Outlined.SettingsEthernet,
+            route = MoreRoutes.REMOTE_CONNECTION_PROFILES,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "remote_templates",
+            labelRes = R.string.more_entry_remote_templates,
+            icon = Icons.Outlined.Dashboard,
+            route = MoreRoutes.REMOTE_TEMPLATES,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "remote_desktop",
+            labelRes = R.string.more_entry_remote_desktop,
+            icon = Icons.Outlined.DesktopWindows,
+            route = MoreRoutes.REMOTE_DESKTOP,
             hub = MoreHub.ADMIN,
             section = MoreSection.SUPPORT,
             operatorOnly = true,

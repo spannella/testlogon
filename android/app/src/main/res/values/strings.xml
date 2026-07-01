@@ -907,6 +907,19 @@
     <string name="more_entry_admin_payment_health">Payment health</string>
     <string name="more_entry_admin_risk">Risk dashboard</string>
     <string name="more_entry_admin_compute">Compute</string>
+    <!-- B7 web-parity cloud-infra management surfaces (operator/Infra hub). -->
+    <string name="more_entry_infra_ec2">EC2 instances</string>
+    <string name="more_entry_infra_k8s">Containers</string>
+    <string name="more_entry_infra_security_groups">Security groups</string>
+    <string name="more_entry_infra_hosts">Host inventory</string>
+    <string name="more_entry_infra_monitoring">Instance monitoring</string>
+    <string name="more_entry_infra_billing">Compute spend</string>
+    <string name="more_entry_remote_ssh_keys">SSH keys</string>
+    <string name="more_entry_remote_ssh_recordings">SSH recordings</string>
+    <string name="more_entry_remote_bastion">SSH bastion</string>
+    <string name="more_entry_remote_connection_profiles">Connection profiles</string>
+    <string name="more_entry_remote_templates">Instance templates</string>
+    <string name="more_entry_remote_desktop">Remote desktop</string>
     <string name="more_entry_admin_jobs">Background jobs</string>
     <string name="more_entry_admin_rate_limits">Rate limits</string>
     <string name="more_entry_admin_tenants">Tenants</string>

@@ -264,6 +264,13 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // B6 web-parity: admin-ops read dashboards (financials + payment-health + risk + compute + jobs;
         // rate-limits + audit-exports are root-gated -> render Forbidden for our admin account). Mirror /admin/*.
         adminOpsDestinations(navController)
+        // B7 web-parity: CLOUD-INFRA management surfaces (ec2 / k8s / security-groups / hosts /
+        // monitoring / compute-billing). Owner-scoped require_ui_session; 403 -> Forbidden.
+        cloudInfraDestinations(navController)
+        // B7 web-parity: REMOTE-ACCESS surfaces (ssh-keys / recordings / bastion /
+        // connection-profiles / templates / remote-desktop). Owner-scoped require_ui_session; 403 ->
+        // Forbidden. remote-desktop live viewer is an honest open-on-desktop state (RFB is not mobile).
+        remoteAccessDestinations(navController)
         // Web-parity ROOT/ADMIN governance: tenants + SSO + role-mgmt (root-gated -> Forbidden for
         // admin) + subscription-tier MANAGER (admin-drivable). Each self-gates via the backend 403.
         adminRootDestinations(navController)

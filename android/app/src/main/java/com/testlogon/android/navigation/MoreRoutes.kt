@@ -363,6 +363,26 @@ object MoreRoutes {
     const val ADMIN_KYC_TEMPLATES = KycTemplatesAdminDest.ROUTE
     const val ADMIN_KYC_TRANSLATIONS = KycTranslationsAdminDest.ROUTE
 
+    // B7 web-parity CLOUD-INFRA management surfaces. Owner-scoped require_ui_session (NOT admin); each
+    // self-gates via the backend 403. Surfaced in the operator/Infra hub (operatorOnly in MoreCatalog).
+    const val INFRA_EC2 = Ec2Dest.ROUTE
+    const val INFRA_K8S = K8sDest.ROUTE
+    const val INFRA_SECURITY_GROUPS = SecurityGroupsDest.ROUTE
+    const val INFRA_HOSTS = HostInventoryDest.ROUTE
+    const val INFRA_MONITORING = InstanceMonitoringDest.ROUTE
+    const val INFRA_BILLING = ComputeBillingDest.ROUTE
+
+    // B7 web-parity REMOTE-ACCESS surfaces (mirror the web /remote/* + /remote-desktop pages). Backends
+    // are owner-scoped require_ui_session control planes; each self-gates via the backend 403. Surfaced in
+    // the operator/Infra hub (operatorOnly in MoreCatalog). remote-desktop is FLAGGED on web (default ON);
+    // the Android live viewer is an honest open-on-desktop state.
+    const val REMOTE_SSH_KEYS = SshKeysDest.ROUTE
+    const val REMOTE_SSH_RECORDINGS = SshRecordingsDest.ROUTE
+    const val REMOTE_BASTION = SshBastionDest.ROUTE
+    const val REMOTE_CONNECTION_PROFILES = ConnProfilesDest.ROUTE
+    const val REMOTE_TEMPLATES = InstanceTemplatesDest.ROUTE
+    const val REMOTE_DESKTOP = RemoteDesktopDest.ROUTE
+
     // AND-374: projects (paged list -> detail + the account-scoped Google Drive provider connect flow).
     const val PROJECTS = ProjectsListDest.ROUTE
 
@@ -545,6 +565,18 @@ object MoreRoutes {
             ADMIN_SSO,
             ADMIN_ROLES,
             ADMIN_SUBSCRIPTION_TIER_MANAGER,
+            INFRA_EC2,
+            INFRA_K8S,
+            INFRA_SECURITY_GROUPS,
+            INFRA_HOSTS,
+            INFRA_MONITORING,
+            INFRA_BILLING,
+            REMOTE_SSH_KEYS,
+            REMOTE_SSH_RECORDINGS,
+            REMOTE_BASTION,
+            REMOTE_CONNECTION_PROFILES,
+            REMOTE_TEMPLATES,
+            REMOTE_DESKTOP,
             PROJECTS,
             DELEGATE_CONSOLE,
             DMCA,
