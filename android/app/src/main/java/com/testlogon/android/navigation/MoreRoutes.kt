@@ -131,6 +131,10 @@ object MoreRoutes {
     // AND-261: the READ-ONLY bulk/batch payout tools (admin batch list + detail; no execute action).
     const val BULK_PAYOUTS = BulkPayoutsDest.ROUTE
 
+    // Web-parity admin bulk-payout PROMOTE console (eligible -> preview -> EXECUTE; admin-gated; execute
+    // moves real funds behind a confirm). The write half of /admin/bulk-payouts.
+    const val BULK_PAYOUTS_PROMOTE = BulkPayoutPromoteDest.ROUTE
+
     // AND-254: the creator engagement-rate analytics (server rate + trend chart). Base route (no arg);
     // the registered composable route carries an optional `?period=` deep-link arg.
     const val ENGAGEMENT = EngagementDest.ROUTE_BASE
@@ -290,6 +294,34 @@ object MoreRoutes {
     // B5: admin content-moderation board (queue + ticket detail + claim/decision/resolve).
     const val ADMIN_MODERATION = ModerationBoardDest.ROUTE
 
+    // Web-parity admin ADS surfaces (all require_admin_or_root; ad-platform kill-switch toggle is
+    // root-only -> surfaced read-only). Each self-gates via the backend 403.
+    const val ADMIN_AD_CREATIVE_REVIEW = AdCreativeReviewDest.ROUTE
+    const val ADMIN_AD_FRAUD = AdFraudDest.ROUTE
+    const val ADMIN_AD_PLATFORM = AdPlatformDest.ROUTE
+
+    // Web-parity admin 1099 MANAGER (year list + generate/correct/batch; require_admin_or_root). Distinct
+    // from the user-facing own-1099 view (TAX_FORMS_1099).
+    const val ADMIN_TAX_FORMS_1099 = AdminTaxFormDest.ROUTE
+
+    // B6: admin-ops read dashboards. ADMIN-drivable reads (financials/payment-health/risk/compute/jobs)
+    // + ROOT-gated (rate-limits/audit-exports -> Forbidden for admin). Each self-gates via the backend 403.
+    const val ADMIN_FINANCIALS = AdminOpsFinancialsDest.ROUTE
+    const val ADMIN_PAYMENT_HEALTH = AdminOpsPaymentHealthDest.ROUTE
+    const val ADMIN_RISK = AdminOpsRiskDest.ROUTE
+    const val ADMIN_COMPUTE = AdminOpsComputeDest.ROUTE
+    const val ADMIN_JOBS = AdminOpsJobsDest.ROUTE
+    const val ADMIN_RATE_LIMITS = AdminOpsRateLimitsDest.ROUTE
+    const val ADMIN_AUDIT_EXPORTS = AdminOpsAuditExportsDest.ROUTE
+
+    // Web-parity ROOT/ADMIN governance. tenants/SSO/role-mgmt are require_root_session/require_root ->
+    // ROOT-GATED (render Forbidden for our admin account); the subscription-tier MANAGER is
+    // require_admin_or_root -> ADMIN-drivable. Each self-gates via the backend 403.
+    const val ADMIN_TENANTS = AdminTenantsDest.ROUTE
+    const val ADMIN_SSO = AdminSsoDest.ROUTE
+    const val ADMIN_ROLES = AdminRolesDest.ROUTE
+    const val ADMIN_SUBSCRIPTION_TIER_MANAGER = AdminTierManagerDest.ROUTE
+
     // B5: admin video-review queue (approve/reject).
     const val ADMIN_VIDEO_REVIEW = VideoReviewDest.ROUTE
 
@@ -422,6 +454,7 @@ object MoreRoutes {
             PAYOUTS,
             PAYOUT_SETUP,
             BULK_PAYOUTS,
+            BULK_PAYOUTS_PROMOTE,
             INVOICES,
             REFUNDS,
             DISPUTES,
@@ -454,6 +487,10 @@ object MoreRoutes {
             ADMIN_EMAIL_DASHBOARD,
             ADMIN_SMS_DASHBOARD,
             ADMIN_MODERATION,
+            ADMIN_AD_CREATIVE_REVIEW,
+            ADMIN_AD_FRAUD,
+            ADMIN_AD_PLATFORM,
+            ADMIN_TAX_FORMS_1099,
             ADMIN_VIDEO_REVIEW,
             ADMIN_DMCA,
             ADMIN_REFUNDS,
@@ -461,6 +498,17 @@ object MoreRoutes {
             ADMIN_APPEALS,
             ADMIN_FRAUD,
             ADMIN_PAYMENT_INCIDENTS,
+            ADMIN_FINANCIALS,
+            ADMIN_PAYMENT_HEALTH,
+            ADMIN_RISK,
+            ADMIN_COMPUTE,
+            ADMIN_JOBS,
+            ADMIN_RATE_LIMITS,
+            ADMIN_AUDIT_EXPORTS,
+            ADMIN_TENANTS,
+            ADMIN_SSO,
+            ADMIN_ROLES,
+            ADMIN_SUBSCRIPTION_TIER_MANAGER,
             PROJECTS,
             DELEGATE_CONSOLE,
             DMCA,

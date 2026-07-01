@@ -31,6 +31,12 @@ interface AdminBillingConfigRepository {
 
     /** The effective platform billing configuration. Idempotent GET (root-gated server-side). */
     suspend fun getBillingConfig(): ApiResult<AdminBillingConfig>
+
+    /** Change history (ADMIN-drivable). */
+    suspend fun getAudit(): ApiResult<List<BillingConfigAuditEntry>>
+
+    /** Reset all keys to defaults (ROOT-only -> 403 for our admin account). */
+    suspend fun resetAll(): ApiResult<AdminBillingConfig>
 }
 
 @Singleton
@@ -43,6 +49,14 @@ class AdminBillingConfigRepositoryImpl @Inject constructor(
 
     override suspend fun getBillingConfig(): ApiResult<AdminBillingConfig> = withContext(io) {
         call { api.getAdminBillingConfig() }.map { it.toDomain() }
+    }
+
+    override suspend fun getAudit(): ApiResult<List<BillingConfigAuditEntry>> = withContext(io) {
+        call { api.getBillingConfigAudit() }.map { log -> log.entries.map { it.toDomain() } }
+    }
+
+    override suspend fun resetAll(): ApiResult<AdminBillingConfig> = withContext(io) {
+        call { api.resetBillingConfig(BillingConfigResetReqDto(keys = null)) }.map { it.toDomain() }
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {

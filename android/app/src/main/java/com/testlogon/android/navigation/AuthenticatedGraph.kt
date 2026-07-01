@@ -242,6 +242,24 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         appealAdminDestination(navController)
         fraudAdminDestination(navController)
         incidentAdminDestination(navController)
+        // Web-parity admin ADS surfaces: creative-review queue + ad-fraud dashboard + ad-platform console
+        // (all require_admin_or_root reads/actions; ad-platform's kill-switch toggle is root-only). Each
+        // self-gates via the backend 403. Mirror /admin/ads/creatives/review, /admin/ads/fraud, /admin/ad-platform.
+        adCreativeReviewDestination(navController)
+        adFraudDestination(navController)
+        adPlatformDestination(navController)
+        // Web-parity admin 1099 MANAGER (year list + generate/correct/batch; require_admin_or_root).
+        // Distinct from the user-facing own-1099 view. Mirror /admin/tax-forms-1099.
+        adminTaxFormDestination(navController)
+        // Web-parity admin bulk-payout PROMOTE console (eligible -> preview -> EXECUTE; require_admin_or_root).
+        // EXECUTE moves real funds - gated behind a confirm dialog. Mirror the write half of /admin/bulk-payouts.
+        bulkPayoutPromoteDestination(navController)
+        // B6 web-parity: admin-ops read dashboards (financials + payment-health + risk + compute + jobs;
+        // rate-limits + audit-exports are root-gated -> render Forbidden for our admin account). Mirror /admin/*.
+        adminOpsDestinations(navController)
+        // Web-parity ROOT/ADMIN governance: tenants + SSO + role-mgmt (root-gated -> Forbidden for
+        // admin) + subscription-tier MANAGER (admin-drivable). Each self-gates via the backend 403.
+        adminRootDestinations(navController)
         // AND-404: read-only admin email/SMS delivery dashboards (per-channel stats + recent activity; 403
         // self-gate). One generic VM; channel via nav arg.
         messagingDashboardDestinations(navController)

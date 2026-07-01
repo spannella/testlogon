@@ -880,7 +880,24 @@
     <string name="more_entry_appeal_admin">Appeals review</string>
     <string name="more_entry_fraud_admin">Fraud review</string>
     <string name="more_entry_incident_admin">Payment incidents</string>
+    <string name="more_entry_ad_creative_review">Creative review</string>
+    <string name="more_entry_ad_fraud">Ad fraud</string>
+    <string name="more_entry_ad_platform">Ad platform</string>
+    <string name="more_entry_admin_tax_forms_1099">1099 forms (admin)</string>
+    <string name="more_entry_bulk_payouts_promote">Bulk payout console</string>
     <string name="more_entry_helpdesk_dashboard">Helpdesk dashboard</string>
+    <!-- B6 admin-ops read dashboards -->
+    <string name="more_entry_admin_financials">Platform financials</string>
+    <string name="more_entry_admin_payment_health">Payment health</string>
+    <string name="more_entry_admin_risk">Risk dashboard</string>
+    <string name="more_entry_admin_compute">Compute</string>
+    <string name="more_entry_admin_jobs">Background jobs</string>
+    <string name="more_entry_admin_rate_limits">Rate limits</string>
+    <string name="more_entry_admin_tenants">Tenants</string>
+    <string name="more_entry_admin_sso">SSO providers</string>
+    <string name="more_entry_admin_roles">Role management</string>
+    <string name="more_entry_admin_subscription_tiers">Subscription tier manager</string>
+    <string name="more_entry_admin_audit_exports">Audit exports</string>
 
     <!-- AND-295/296/297 — 1:1 calling -->
     <string name="more_entry_call_history">Call history</string>
@@ -1760,6 +1777,9 @@
 
     <!-- AND-248: billing config (read-only) -->
     <string name="more_entry_billing_config">Billing configuration</string>
+    <string name="billing_config_section_audit">Change history</string>
+    <string name="billing_config_audit_empty">No configuration changes recorded.</string>
+    <string name="billing_config_reset">Reset to defaults</string>
     <string name="billing_config_title">Billing configuration</string>
     <string name="billing_config_loading">Loading billing configuration…</string>
     <string name="billing_config_empty">No billing configuration</string>

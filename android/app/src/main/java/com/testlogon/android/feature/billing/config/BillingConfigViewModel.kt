@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.ui.i18n.UiText
 import com.testlogon.android.data.billing.AdminBillingConfig
+import com.testlogon.android.data.billing.BillingConfigAuditEntry
 import com.testlogon.android.data.billing.AdminBillingConfigRepository
 import com.testlogon.android.feature.billing.error.BillingErrorMapper
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -26,8 +27,10 @@ sealed interface BillingConfigUiState {
     data object Loading : BillingConfigUiState
     data class Content(
         val config: AdminBillingConfig,
+        val audit: List<BillingConfigAuditEntry> = emptyList(),
         val isStale: Boolean = false,
         val isRefreshing: Boolean = false,
+        val resetMessage: String? = null,
     ) : BillingConfigUiState
 
     /** Defensive: a 404 (route disabled). The effective config normally always returns 200. */
@@ -58,6 +61,24 @@ class BillingConfigViewModel @Inject constructor(
 
     fun refresh() = load()
 
+    /** Reset billing overrides to defaults. ROOT-only server-side; a 403 surfaces as a message. */
+    fun resetToDefaults() {
+        viewModelScope.launch {
+            when (val r = repository.resetAll()) {
+                is ApiResult.Success ->
+                    _state.value = BillingConfigUiState.Content(config = r.data, resetMessage = "Reset to defaults.")
+                else -> {
+                    val status = (r as? ApiResult.Failure)?.error?.status
+                    val msg = if (status == 403) "Reset is root-only; your account is not authorised."
+                        else "Reset failed. Try again."
+                    (_state.value as? BillingConfigUiState.Content)?.let {
+                        _state.value = it.copy(resetMessage = msg)
+                    }
+                }
+            }
+        }
+    }
+
     private fun load() {
         val current = _state.value
         _state.value = if (current is BillingConfigUiState.Content) {
@@ -67,8 +88,10 @@ class BillingConfigViewModel @Inject constructor(
         }
         viewModelScope.launch {
             when (val result = repository.getBillingConfig()) {
-                is ApiResult.Success ->
-                    _state.value = BillingConfigUiState.Content(result.data)
+                is ApiResult.Success -> {
+                    val audit = (repository.getAudit() as? ApiResult.Success)?.data ?: emptyList()
+                    _state.value = BillingConfigUiState.Content(config = result.data, audit = audit)
+                }
                 else -> _state.update { reduceError(it, result) }
             }
         }
