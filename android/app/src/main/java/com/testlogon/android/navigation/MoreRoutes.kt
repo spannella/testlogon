@@ -343,6 +343,26 @@ object MoreRoutes {
     // B5: admin payment-incidents queue (status filter + submit-response).
     const val ADMIN_PAYMENT_INCIDENTS = IncidentAdminDest.ROUTE
 
+    // Web-parity KYC-admin review queues (A1..A8). Each admin-gated; self-gates via backend 403.
+    const val ADMIN_KYC_CASES = KycCaseAdminDest.ROUTE
+    const val ADMIN_KYC_DOCUMENTS = KycDocAdminDest.ROUTE
+    const val ADMIN_KYC_RESIDENCY = KycResidencyAdminDest.ROUTE
+    const val ADMIN_KYC_PROOF_OF_FUNDS = KycPofAdminDest.ROUTE
+    const val ADMIN_KYC_LIVENESS = KycLivenessAdminDest.ROUTE
+    const val ADMIN_KYC_SCREENING = KycScreeningAdminDest.ROUTE
+    const val ADMIN_KYC_ID_SCANNER = KycIdScanAdminDest.ROUTE
+    const val ADMIN_KYC_BUSINESS = KycBusinessAdminDest.ROUTE
+
+    // Web-parity KYC-admin dashboards + config (B2..B9). Admin-gated; each self-gates via backend 403.
+    const val ADMIN_KYC_WORKLOAD = KycWorkloadAdminDest.ROUTE
+    const val ADMIN_KYC_METRICS = KycMetricsAdminDest.ROUTE
+    const val ADMIN_KYC_ANALYTICS = KycAnalyticsAdminDest.ROUTE
+    const val ADMIN_KYC_MONITORING = KycMonitoringAdminDest.ROUTE
+    const val ADMIN_KYC_ADDRESS_VERIFICATION = KycAddressVerifAdminDest.ROUTE
+    const val ADMIN_KYC_COMPLIANCE = KycComplianceAdminDest.ROUTE
+    const val ADMIN_KYC_TEMPLATES = KycTemplatesAdminDest.ROUTE
+    const val ADMIN_KYC_TRANSLATIONS = KycTranslationsAdminDest.ROUTE
+
     // AND-374: projects (paged list -> detail + the account-scoped Google Drive provider connect flow).
     const val PROJECTS = ProjectsListDest.ROUTE
 
@@ -498,6 +518,22 @@ object MoreRoutes {
             ADMIN_APPEALS,
             ADMIN_FRAUD,
             ADMIN_PAYMENT_INCIDENTS,
+            ADMIN_KYC_CASES,
+            ADMIN_KYC_DOCUMENTS,
+            ADMIN_KYC_RESIDENCY,
+            ADMIN_KYC_PROOF_OF_FUNDS,
+            ADMIN_KYC_LIVENESS,
+            ADMIN_KYC_SCREENING,
+            ADMIN_KYC_ID_SCANNER,
+            ADMIN_KYC_BUSINESS,
+            ADMIN_KYC_WORKLOAD,
+            ADMIN_KYC_METRICS,
+            ADMIN_KYC_ANALYTICS,
+            ADMIN_KYC_MONITORING,
+            ADMIN_KYC_ADDRESS_VERIFICATION,
+            ADMIN_KYC_COMPLIANCE,
+            ADMIN_KYC_TEMPLATES,
+            ADMIN_KYC_TRANSLATIONS,
             ADMIN_FINANCIALS,
             ADMIN_PAYMENT_HEALTH,
             ADMIN_RISK,

@@ -242,6 +242,13 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         appealAdminDestination(navController)
         fraudAdminDestination(navController)
         incidentAdminDestination(navController)
+        // Web-parity KYC-admin review queues (A1..A8): case queue + document/residency/proof-of-funds/
+        // liveness-call/screening/id-scanner/business review. All admin-gated (backend 403 -> Forbidden).
+        kycCaseAdminDestination(navController)
+        kycReviewDestinations(navController)
+        // Web-parity KYC-admin DASHBOARDS + CONFIG (B2..B9): workload / metrics / analytics /
+        // monitoring / address-verification / compliance reports / templates (CRUD) / translations (CRUD).
+        kycAdminDashboardDestinations(navController)
         // Web-parity admin ADS surfaces: creative-review queue + ad-fraud dashboard + ad-platform console
         // (all require_admin_or_root reads/actions; ad-platform's kill-switch toggle is root-only). Each
         // self-gates via the backend 403. Mirror /admin/ads/creatives/review, /admin/ads/fraud, /admin/ad-platform.
