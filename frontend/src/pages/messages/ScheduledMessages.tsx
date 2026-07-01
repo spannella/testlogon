@@ -1,11 +1,20 @@
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Clock, Trash2, Loader2 } from "lucide-react";
+import { Clock, Trash2, Loader2, Pencil, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getScheduledMessages, cancelScheduledMessage } from "@/api/endpoints/messaging";
+import { getScheduledMessages, cancelScheduledMessage, editScheduledMessage } from "@/api/endpoints/messaging";
 import type { Message } from "@/api/types";
+
+// Format an epoch-seconds ts as the value a <input type="datetime-local"> expects
+// (local "YYYY-MM-DDTHH:mm"), accounting for the local tz offset.
+function toDatetimeLocalValue(ts: number): string {
+  const d = new Date(ts * 1000);
+  const off = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - off).toISOString().slice(0, 16);
+}
 
 interface ScheduledMessagesProps {
   open: boolean;
@@ -40,17 +49,86 @@ function ScheduledMessageRow({
   conversationId: string;
 }) {
   const queryClient = useQueryClient();
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["scheduled-messages", conversationId] });
+
+  // deliver_at is the scheduled send time; fall back to created_at
+  const sendAt = message.deliver_at ?? message.created_at;
+
+  const [editing, setEditing] = useState(false);
+  // Only text-bearing kinds can have their text edited; all can be rescheduled.
+  const textEditable =
+    message.kind === "text" ||
+    message.kind === "image" ||
+    message.kind === "gallery" ||
+    message.kind === "file" ||
+    message.kind === "audio" ||
+    message.kind === "video" ||
+    message.kind === "file_share" ||
+    message.kind === "video_share";
+  const [editText, setEditText] = useState(message.text ?? "");
+  const [editWhen, setEditWhen] = useState(toDatetimeLocalValue(sendAt));
+
   const cancelMut = useMutation({
     mutationFn: () => cancelScheduledMessage(conversationId, message.message_id),
     onSuccess: () => {
       toast.success("Scheduled message cancelled");
-      void queryClient.invalidateQueries({ queryKey: ["scheduled-messages", conversationId] });
+      void invalidate();
     },
     onError: () => toast.error("Failed to cancel scheduled message"),
   });
 
-  // deliver_at is the scheduled send time; fall back to created_at
-  const sendAt = message.deliver_at ?? message.created_at;
+  const editMut = useMutation({
+    mutationFn: () => {
+      const whenMs = new Date(editWhen).getTime();
+      return editScheduledMessage(conversationId, message.message_id, {
+        text: textEditable && !message.is_encrypted ? editText : undefined,
+        send_at: isNaN(whenMs) ? undefined : Math.floor(whenMs / 1000),
+        send_at_tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Scheduled message updated");
+      setEditing(false);
+      void invalidate();
+    },
+    onError: (err: unknown) =>
+      toast.error(err instanceof Error ? err.message : "Failed to update scheduled message"),
+  });
+
+  if (editing) {
+    return (
+      <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+        {textEditable && !message.is_encrypted && (
+          <textarea
+            className="w-full rounded border border-input bg-background p-2 text-sm"
+            rows={2}
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            placeholder="Message text"
+          />
+        )}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground">Sends at</label>
+          <input
+            type="datetime-local"
+            className="rounded border border-input bg-background px-2 py-1 text-sm"
+            value={editWhen}
+            onChange={(e) => setEditWhen(e.target.value)}
+          />
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={editMut.isPending}>
+            <X className="mr-1 h-3.5 w-3.5" /> Cancel
+          </Button>
+          <Button size="sm" onClick={() => editMut.mutate()} disabled={editMut.isPending}>
+            {editMut.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1 h-3.5 w-3.5" />}
+            Save
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-3">
@@ -59,6 +137,19 @@ function ScheduledMessageRow({
         <p className="truncate text-sm">{messagePreview(message)}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">Sends: {formatTs(sendAt)}</p>
       </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 shrink-0"
+        onClick={() => {
+          setEditText(message.text ?? "");
+          setEditWhen(toDatetimeLocalValue(sendAt));
+          setEditing(true);
+        }}
+        aria-label="Edit scheduled message"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+      </Button>
       <Button
         variant="ghost"
         size="icon"
@@ -79,6 +170,9 @@ export function ScheduledMessages({ open, onOpenChange, conversationId }: Schedu
     queryFn: () => getScheduledMessages(conversationId),
     enabled: open,
     staleTime: 10_000,
+    // Keep the list fresh so a message that gets delivered drops off promptly
+    // (the SSE thread stream also invalidates this key from ConversationView).
+    refetchInterval: open ? 15_000 : false,
   });
 
   return (

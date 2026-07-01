@@ -88,6 +88,17 @@ import {
 } from "@/api/endpoints/broadcast";
 import { useAuthStore } from "@/stores/authStore";
 
+// The backend provisions a WHIP (WebRTC) ingest by default; some sessions may
+// return an rtmp:// URL. Label the ingest URL by its scheme so the browser copy
+// UI never mislabels a WHIP endpoint as "RTMP".
+function ingestUrlLabel(url?: string | null): string {
+  const u = (url ?? "").toLowerCase();
+  if (u.startsWith("rtmp://") || u.startsWith("rtmps://")) return "RTMP URL";
+  if (u.startsWith("srt://")) return "SRT URL";
+  if (u.includes("whip") || u.startsWith("http://") || u.startsWith("https://")) return "WHIP URL";
+  return "Ingest URL";
+}
+
 // ─── Status Badge Colors ────────────────────────────────���───────
 
 const STATUS_STYLES: Record<BroadcastSessionStatus, string> = {
@@ -674,7 +685,10 @@ function SessionDetailDialog({
               <h4 className="text-sm font-medium">Ingest Configuration</h4>
               <div className="rounded-md border p-3 space-y-2 text-sm">
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">RTMP URL:</span>
+                  {/* The backend now provisions a WHIP (WebRTC) ingest by default; older
+                      sessions may still return an rtmp:// URL. Label by scheme so we
+                      never mislabel a WHIP endpoint as "RTMP". */}
+                  <span className="text-muted-foreground">{ingestUrlLabel(session.ingest_url)}:</span>
                   <div className="flex items-center gap-1">
                     <code className="text-xs bg-muted px-2 py-1 rounded">{session.ingest_url}</code>
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copyToClipboard(session.ingest_url!)}>
@@ -976,10 +990,14 @@ function CreateSessionDialog({
             <Label htmlFor="session-ingest">Ingest URL (optional)</Label>
             <Input
               id="session-ingest"
-              placeholder="rtmp://ingest.example.com/live"
+              placeholder="Leave blank to auto-provision a WHIP ingest"
               value={ingestUrl}
               onChange={(e) => setIngestUrl(e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">
+              Leave blank and the server provisions a WHIP (WebRTC) ingest URL for you. You can
+              still supply your own rtmp://… endpoint here.
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="session-key">Stream Key Reference (optional)</Label>

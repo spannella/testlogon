@@ -1164,6 +1164,15 @@ export interface Message {
   target_datetime?: number | null;
   associated_event_type?: "broadcast" | "call" | "calendar" | "custom" | null;
   associated_event_id?: string | null;
+  // B-COUNTDOWN #31: the stashed reveal payload, surfaced ONLY once the countdown
+  // target has passed. Present on any message that carried countdown_reveal_* on
+  // send (not just the dedicated "countdown" kind).
+  countdown_reveal?: {
+    revealed?: boolean;
+    text?: string | null;
+    image?: GalleryImageItem | null;
+    media?: GalleryImageItem[] | null;
+  } | null;
   // GIF & Sticker message fields (MSG-008)
   gif_url?: string | null;
   gif_alt_text?: string | null;
@@ -1252,7 +1261,21 @@ export interface LinkPreview {
   site_name?: string;
 }
 
-export interface SendTextMessageReq {
+// B-COUNTDOWN #31: a countdown + reveal payload that can now be attached to ANY
+// message (text/image/gallery/...), not just the dedicated "countdown" kind. When
+// the target passes, the backend reveals the stashed text/image/media as
+// `Message.countdown_reveal`.
+export interface CountdownRevealFieldsReq {
+  countdown_target_datetime?: number; // UTC unix ts when the countdown completes
+  countdown_target_datetime_local?: string; // wall-clock alternative (resolved with tz)
+  countdown_target_tz?: string; // IANA tz for the local wall-clock
+  countdown_title?: string;
+  countdown_reveal_text?: string;
+  countdown_reveal_image?: GalleryImageItem;
+  countdown_reveal_media?: GalleryImageItem[];
+}
+
+export interface SendTextMessageReq extends CountdownRevealFieldsReq {
   text?: string;
   encryption?: MessageEncryptionEnvelope;
   reply_to_message_id?: string;
@@ -1263,6 +1286,9 @@ export interface SendTextMessageReq {
   lock_price_cents?: number;
   lock_description?: string;
   send_at?: number;
+  // B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+  send_at_local?: string;
+  send_at_tz?: string;
   view_once?: boolean;
   expires_in_seconds?: number;
   tip_amount_cents?: number;
@@ -1272,7 +1298,7 @@ export interface SendTextMessageReq {
   client_request_id?: string;
 }
 
-export interface SendImageMessageReq {
+export interface SendImageMessageReq extends CountdownRevealFieldsReq {
   bucket: string;
   key: string;
   content_type?: string;
@@ -1291,6 +1317,8 @@ export interface SendImageMessageReq {
   tip_amount_cents?: number;
   tip_payment_method_id?: string;
   send_at?: number;
+  send_at_local?: string;
+  send_at_tz?: string;
   encryption?: MessageEncryptionEnvelope;
 }
 
@@ -2881,6 +2909,17 @@ export interface MessagingConfig {
   messaging_reporting_enabled?: boolean;
 }
 
+// B-LOTTERY2 #23/#24: an optional cover image for the whole lottery message,
+// and per-outcome MULTI-media (mixed images + videos). bucket is optional; the
+// backend fills it in for local storage.
+export interface LotteryMessageImage {
+  bucket?: string;
+  key: string;
+  content_type?: string;
+  width?: number;
+  height?: number;
+}
+
 export interface LotteryOutcomeInput {
   outcome_id?: string;
   display_label?: string;
@@ -2888,6 +2927,9 @@ export interface LotteryOutcomeInput {
   payload_type: "text" | "image" | "video";
   text_content?: string;
   media_asset_id?: string;
+  // B-LOTTERY2 #24: an outcome may carry multiple media assets. media_asset_id
+  // stays as the single-asset back-compat form (= first element).
+  media_asset_ids?: string[];
 }
 
 export interface LotteryConfigInput {
@@ -2899,6 +2941,9 @@ export interface CreateLotteryMessageReq {
   message_type?: "lottery_dm";
   conversation_id: string;
   lottery_config: LotteryConfigInput;
+  // B-LOTTERY2 #23: optional cover image + cover text shown before unlock.
+  image?: LotteryMessageImage;
+  text?: string;
 }
 
 export interface LotteryOutcome {
@@ -2908,6 +2953,9 @@ export interface LotteryOutcome {
   payload_type: "text" | "image" | "video";
   text_content?: string;
   media_asset_id?: string;
+  // B-LOTTERY2 #24: full list of media assets when an outcome carries >1.
+  media_assets?: Array<Record<string, unknown>>;
+  media_asset_ids?: string[];
   media_metadata?: {
     bucket?: string;
     key?: string;
@@ -2928,6 +2976,9 @@ export interface LotterySelectedOutcome {
   payload_type: "text" | "image" | "video";
   text_content?: string;
   media_asset_id?: string;
+  // B-LOTTERY2 #24: full media list when the winning outcome carries >1 asset.
+  media_assets?: Array<Record<string, unknown>>;
+  media_asset_ids?: string[];
 }
 
 export interface LotteryMessage {
@@ -2938,6 +2989,9 @@ export interface LotteryMessage {
   lock_state: "locked" | "unlocked";
   lottery_config: LotteryConfig;
   selected_outcome?: LotterySelectedOutcome;
+  // B-LOTTERY2 #23: sender-view cover image + text.
+  image?: LotteryMessageImage;
+  text?: string;
   idempotent?: boolean;
   created_at: number;
 }

@@ -16,12 +16,16 @@ import { getRoleFromAccessToken } from "@/lib/adminCapabilities";
 import {
   addTicketMessage,
   assignTicket,
+  closeOwnTicket,
   createTicket,
   getAdminTicketSummary,
   getTicket,
   listTickets,
+  reopenOwnTicket,
   setTicketStatus,
   type Ticket,
+  type TicketCloseAction,
+  type TicketMessage,
   type TicketStatus,
 } from "@/api/endpoints/tickets";
 import { JiraLinkedPanel } from "./JiraLinkedPanel";
@@ -124,6 +128,27 @@ export default function TicketsPage() {
       if (isAdmin) void summaryQuery.refetch();
     },
     onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Unable to update status"),
+  });
+
+  // B8/B9 B-SUP2 #15 / B-HELP2 #17: owner-authorized close/reopen of one's own ticket.
+  const closeMut = useMutation({
+    mutationFn: (action: TicketCloseAction) => closeOwnTicket(selectedId!, action),
+    onSuccess: (_res, action) => {
+      toast.success(action === "cancel" ? "Ticket cancelled" : "Ticket closed");
+      void selectedTicketQuery.refetch();
+      void listQuery.refetch();
+    },
+    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Unable to close ticket"),
+  });
+
+  const reopenMut = useMutation({
+    mutationFn: () => reopenOwnTicket(selectedId!),
+    onSuccess: () => {
+      toast.success("Ticket reopened");
+      void selectedTicketQuery.refetch();
+      void listQuery.refetch();
+    },
+    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Unable to reopen ticket"),
   });
 
   useEffect(() => {
@@ -296,6 +321,40 @@ export default function TicketsPage() {
                   <span>Updated: {fmt(selectedTicket.updated_at)}</span>
                 </div>
 
+                {currentUserSub && selectedTicket.owner_sub === currentUserSub && (
+                  <div className="flex flex-wrap gap-2 rounded-md border p-3">
+                    {selectedTicket.status === "done" || selectedTicket.status === "cancelled" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => reopenMut.mutate()}
+                        disabled={reopenMut.isPending}
+                      >
+                        Reopen ticket
+                      </Button>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => closeMut.mutate("close")}
+                          disabled={closeMut.isPending}
+                        >
+                          Close ticket
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => closeMut.mutate("cancel")}
+                          disabled={closeMut.isPending}
+                        >
+                          Cancel ticket
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {isAdmin && (
                   <div className="space-y-2 rounded-md border p-3">
                     <Label htmlFor="assign-target">Assign admin sub</Label>
@@ -322,7 +381,8 @@ export default function TicketsPage() {
                         />{" "}
                         • {fmt(m.created_at)}
                       </div>
-                      <div>{m.body}</div>
+                      {m.body && <div>{m.body}</div>}
+                      <TicketMessageMedia message={m} />
                     </div>
                   ))}
                 </div>
@@ -340,6 +400,47 @@ export default function TicketsPage() {
           </CardContent>
         </Card>
       </div>}
+    </div>
+  );
+}
+
+function TicketMessageMedia({ message }: { message: TicketMessage }) {
+  const media = message.media ?? [];
+  const hasImageUrl = !!message.image_url;
+  if (!hasImageUrl && media.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {hasImageUrl && (
+        <a href={message.image_url!} target="_blank" rel="noreferrer">
+          <img src={message.image_url!} alt="attachment" className="max-h-40 rounded border" />
+        </a>
+      )}
+      {media.map((item, idx) => {
+        const src = item.thumbnail || item.url || undefined;
+        const href = item.url || item.thumbnail || undefined;
+        const isImage = (item.kind === "image" || (item.content_type ?? "").startsWith("image/")) && src;
+        if (isImage) {
+          return (
+            <a key={idx} href={href} target="_blank" rel="noreferrer">
+              <img src={src} alt={item.name ?? "attachment"} className="max-h-40 rounded border" />
+            </a>
+          );
+        }
+        return (
+          <a
+            key={idx}
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted/60"
+          >
+            {item.name || item.path || item.kind || "attachment"}
+            {item.size_bytes != null && (
+              <span className="text-muted-foreground">({Math.round(item.size_bytes / 1024)} KB)</span>
+            )}
+          </a>
+        );
+      })}
     </div>
   );
 }
