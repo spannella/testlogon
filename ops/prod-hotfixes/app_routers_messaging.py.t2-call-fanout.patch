@@ -1,0 +1,114 @@
+--- a/app/routers/messaging.py
++++ b/app/routers/messaging.py
+@@ -13855,6 +13855,23 @@
+                 pe["text"] = msg.get("text")
+                 pe["kind"] = msg.get("kind") or "text"
+                 pe["created_at"] = msg.get("created_at")
++        # T2 FIX: flatten call.* / webrtc.* so the Android SseEnvelopeParser (reads
++        # call_id/conversation_id/sender_id at TOP level) + the incoming-call UI
++        # (caller_name) work off the poll backstop, not just SSE.
++        elif str(pe.get("type", "")).startswith(("call.", "webrtc.")) and isinstance(pe.get("payload"), dict):
++            _cp = pe["payload"]
++            pe = dict(pe)
++            pe["call_id"] = _cp.get("call_id") or pe.get("call_id")
++            pe["conversation_id"] = _cp.get("conversation_id") or pe.get("conversation_id")
++            pe["sender_id"] = _cp.get("caller_user_id") or pe.get("sender_id")
++            if _cp.get("caller_name") is not None:
++                pe["caller_name"] = _cp.get("caller_name")
++            if _cp.get("caller_user_id") is not None:
++                pe["caller_user_id"] = _cp.get("caller_user_id")
++            if _cp.get("initial_mode") is not None:
++                pe["initial_mode"] = _cp.get("initial_mode")
++            if _cp.get("mode") is not None:
++                pe["mode"] = _cp.get("mode")
+         events.append(pe)
+     return {"events": events}
+ 
+@@ -15527,6 +15544,25 @@
+     )
+ 
+ 
++def _resolve_caller_name(user_id: str) -> str:
++    """T2 FIX: best-effort human caller name (display_name -> users table -> email -> sub)."""
++    try:
++        ident = get_profile_identity(user_id) or {}
++        name = (ident.get("display_name") or "").strip()
++        if name:
++            return name
++        row = tbl_users.get_item(Key={"user_id": user_id}).get("Item") or {}
++        name = (row.get("display_name") or "").strip()
++        if name:
++            return name
++        email = (ident.get("email") or row.get("email") or "").strip()
++        if email:
++            return email.split("@")[0]
++    except Exception:
++        pass
++    return user_id.split("@")[0] if "@" in user_id else user_id
++
++
+ @router.post("/messages/calls/invite", response_model=CallInviteOut)
+ async def create_call_invite(
+     body: CallInviteIn,
+@@ -15571,6 +15607,61 @@
+             rate_cents_per_min=rate_cents,
+             max_duration_seconds=max_dur,
+         )
++        # T2 FIX: fan the call.invite to the CALLEE (SSE/poll) + FCM push, carrying a
++        # resolved caller_name so the incoming-call UI shows who is calling (previously
++        # only call.missed was ever fanned, from the timeout backstop).
++        try:
++            _caller_name = _resolve_caller_name(user_id)
++            _mode = str(getattr(record, "initial_mode", "") or body.initial_mode or "audio")
++            _call_payload = {
++                "call_id": record.call_id,
++                "conversation_id": record.conversation_id,
++                "caller_user_id": record.caller_user_id,
++                "caller_name": _caller_name,
++                "callee_user_id": record.callee_user_id,
++                "initial_mode": _mode,
++                "mode": _mode,
++                "state": record.state,
++            }
++            fanout_event_to_conversation(
++                conversation_id=record.conversation_id,
++                sender_id=user_id,
++                event_type="call.invite",
++                payload=_call_payload,
++                respect_mute=False,
++            )
++        except Exception as _fx:
++            logger.warning("call.invite fanout failed for %s: %s", body.call_id, _fx)
++        try:
++            from app.services.push import fcm_send, web_push_send as _web_push_send
++            from app.core.tables import T as _T
++            _push_title = _caller_name
++            _push_body = "Incoming video call" if _mode == "video" else "Incoming call"
++            _push_data = {
++                "type": "call.invite",
++                "kind": "call.invite",
++                "entity_id": record.call_id,
++                "call_id": record.call_id,
++                "conversation_id": record.conversation_id,
++                "caller_user_id": record.caller_user_id,
++                "caller_name": _caller_name,
++                "initial_mode": _mode,
++                "title": _push_title,
++                "body": _push_body,
++                "deep_link": "/messages/%s" % record.conversation_id,
++            }
++            _r = _T.push_devices.query(KeyConditionExpression=Key("user_sub").eq(record.callee_user_id), Limit=50)
++            for _it in _r.get("Items", [])[:25]:
++                _tok = _it.get("token", "")
++                _plat = _it.get("platform", "")
++                if not _tok:
++                    continue
++                if _plat in ("android", "ios"):
++                    fcm_send(_tok, _push_title, _push_body, _push_data)
++                elif _plat == "web" and S.web_push_enabled:
++                    _web_push_send(_tok, _push_title, _push_body, url="/messages/%s" % record.conversation_id, tag="call")
++        except Exception as _px:
++            logger.warning("call.invite push failed for %s: %s", body.call_id, _px)
+         return CallInviteOut(
+             call_id=record.call_id,
+             conversation_id=record.conversation_id,
