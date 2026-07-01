@@ -58,11 +58,14 @@ data object BroadcastCreateDest {
 }
 
 /**
- * Default broadcast profile id used by the mobile host "Go Live" entry. The backend stores profile_id as an
- * opaque grouping key and does not validate it (the session owner is the authenticated user via created_by),
- * so a stable constant is sufficient to create + publish from the app.
+ * Default broadcast profile id used by the mobile host "Go Live" entry.
+ *
+ * T3 — this MUST be the profile's DDB key (`profile_id`), NOT its display name. create_session stores the
+ * value verbatim, but going live calls `get_profile(session.profile_id)` (key lookup on `profile_id`); a
+ * non-existent id (e.g. the name "mobile") 404s at start, so the session never reaches `live` and no viewer
+ * can discover it. This is the id of the seeded "mobile" broadcast profile (region us-east-2, 720p) on prod.
  */
-const val HOST_BROADCAST_PROFILE_ID = "mobile"
+const val HOST_BROADCAST_PROFILE_ID = "a0fcbf38-9797-47bc-bc8b-04b5522d0513"
 
 
 /** AND-308 — the host ingest (camera/mic publish) destination, keyed by sessionId. */

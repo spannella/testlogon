@@ -3445,6 +3445,12 @@
     <string name="delegate_console_load_failed">Couldn\'t load delegate data.</string>
     <string name="delegate_console_action_failed">Couldn\'t complete that action.</string>
     <string name="delegate_console_revoked">Your delegate access ended. You\'re acting as yourself again.</string>
+    <!-- T4: managed-creators picker (enter delegate mode). -->
+    <string name="delegate_console_managed_heading">Creators you can manage</string>
+    <string name="delegate_console_managed_enter">Enter</string>
+    <string name="delegate_console_managed_empty">No creators have added you as a delegate yet.</string>
+    <string name="delegate_console_managed_error">Couldn\'t load the creators you can manage.</string>
+    <string name="delegate_console_managed_retry">Retry</string>
 
     <!-- AND-364: content boost (paid post promotion). -->
     <string name="boost_title">Boost post</string>

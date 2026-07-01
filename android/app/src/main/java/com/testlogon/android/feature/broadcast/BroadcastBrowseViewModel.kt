@@ -93,17 +93,56 @@ class BroadcastBrowseViewModel @Inject constructor(
     fun refresh() {
         viewModelScope.launch {
             markRefreshing()
-            when (val result = repo.sessions(limit = LIST_LIMIT)) {
+            val now = Instant.ofEpochMilli(clock.now())
+
+            // T3 — the LIVE bucket is sourced from the PUBLIC live-discovery feed (GET broadcast/live) so a
+            // second-user VIEWER can find any creator's live broadcast. The base sessions list is
+            // operator-scoped (a non-operator only sees their own sessions) and cannot surface other hosts.
+            val liveResult = repo.liveSessions(limit = LIST_LIMIT)
+            // Upcoming / past still come from the (own/scheduled) sessions list.
+            val baseResult = repo.sessions(limit = LIST_LIMIT)
+
+            // Bucketize the public feed's currently-live sessions; keep only the LIVE bucket from it.
+            val publicLive: List<BroadcastItem> = when (liveResult) {
+                is ApiResult.Success -> BroadcastBucketizer.bucketize(liveResult.data.items, now).first
+                else -> emptyList()
+            }
+
+            when (baseResult) {
                 is ApiResult.Success -> {
-                    val now = Instant.ofEpochMilli(clock.now())
-                    val (live, upcoming, past) = BroadcastBucketizer.bucketize(result.data.items, now)
-                    val enrichedLive = enrichViewerCounts(live)
+                    val (ownLive, upcoming, past) = BroadcastBucketizer.bucketize(baseResult.data.items, now)
+                    // Merge public-live with any of the viewer's own live sessions, deduped by sessionId
+                    // (public feed wins its own entries; own-live is appended for the host's self-view).
+                    val mergedLive = mergeLive(publicLive, ownLive)
+                    val enrichedLive = enrichViewerCounts(mergedLive)
                     publishContent(enrichedLive, upcoming, past)
                 }
-                is ApiResult.Failure -> publishError(result.error.toBroadcastError())
-                is ApiResult.NetworkError -> publishError(BroadcastError.Network)
+                // The base list is unavailable (e.g. a non-operator 403), but the public live feed is not:
+                // still show whatever is live so a pure viewer is never blocked from discovering broadcasts.
+                is ApiResult.Failure ->
+                    if (publicLive.isNotEmpty()) {
+                        publishContent(enrichViewerCounts(publicLive), emptyList(), emptyList())
+                    } else {
+                        publishError(baseResult.error.toBroadcastError())
+                    }
+                is ApiResult.NetworkError ->
+                    if (publicLive.isNotEmpty()) {
+                        publishContent(enrichViewerCounts(publicLive), emptyList(), emptyList())
+                    } else {
+                        publishError(BroadcastError.Network)
+                    }
             }
         }
+    }
+
+    /** T3 — union of the public-live feed and the viewer's own live sessions, deduped by sessionId. */
+    private fun mergeLive(
+        publicLive: List<BroadcastItem>,
+        ownLive: List<BroadcastItem>,
+    ): List<BroadcastItem> {
+        if (ownLive.isEmpty()) return publicLive
+        val seen = publicLive.mapTo(HashSet()) { it.sessionId }
+        return publicLive + ownLive.filter { it.sessionId !in seen }
     }
 
     fun retry() = refresh()

@@ -10,6 +10,8 @@ import com.testlogon.android.data.broadcast.BroadcastRepository
 import com.testlogon.android.data.broadcast.BroadcastScheduledPage
 import com.testlogon.android.data.broadcast.BroadcastSession
 import com.testlogon.android.data.broadcast.BroadcastSessionPage
+import com.testlogon.android.data.broadcast.HostControlRepository
+import com.testlogon.android.data.broadcast.HostHealthReport
 import com.testlogon.android.data.webrtc.BroadcastPublisher
 import com.testlogon.android.data.webrtc.GoLiveResult
 import com.testlogon.android.data.webrtc.PublishState
@@ -99,6 +101,33 @@ class IngestViewModelTest {
         }
     }
 
+    /**
+     * A fake host-control repo: records start/stop calls (T3 go-live-on-connect). Returns Failure by
+     * default so [IngestViewModel.markSessionLive] takes the tolerant path (no session object needed).
+     */
+    private class FakeHostControl : HostControlRepository {
+        var startCalls = 0
+        var stopCalls = 0
+        override suspend fun start(sessionId: String): ApiResult<BroadcastSession> {
+            startCalls++
+            return ApiResult.Failure(ApiError(404, "nope"))
+        }
+        override suspend fun stop(sessionId: String): ApiResult<BroadcastSession> {
+            stopCalls++
+            return ApiResult.Failure(ApiError(404, "nope"))
+        }
+        override suspend fun resume(sessionId: String): ApiResult<BroadcastSession> =
+            ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun reschedule(
+            sessionId: String,
+            scheduledAtEpochSeconds: Long,
+        ): ApiResult<BroadcastSession> = ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun health(sessionId: String): ApiResult<HostHealthReport> =
+            ApiResult.Failure(ApiError(404, "nope"))
+        override suspend fun session(sessionId: String): ApiResult<BroadcastSession> =
+            ApiResult.Failure(ApiError(404, "nope"))
+    }
+
     /** A publisher whose goLive result and state are configurable (for the non-FLAGGED-only branches). */
     private class FakePublisher(
         private val result: GoLiveResult,
@@ -116,11 +145,30 @@ class IngestViewModelTest {
         repo: BroadcastRepository,
         publisher: BroadcastPublisher,
         sessionId: String? = "bcs_1",
+        hostControl: HostControlRepository = FakeHostControl(),
     ): IngestViewModel {
         val saved = SavedStateHandle(
             if (sessionId != null) mapOf(IngestViewModel.ARG_SESSION_ID to sessionId) else emptyMap(),
         )
-        return IngestViewModel(repo, publisher, saved, com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer)
+        return IngestViewModel(
+            repo,
+            hostControl,
+            publisher,
+            saved,
+            com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer,
+        )
+    }
+
+    @Test
+    fun start_publisherStarted_flipsSessionLiveOnBackend() = runTest {
+        val repo = FakeRepo(createResult = ApiResult.Success(input()))
+        val hostControl = FakeHostControl()
+        val vm = vm(repo, FakePublisher(GoLiveResult.Started), hostControl = hostControl)
+        vm.start()
+        runCurrent()
+
+        // T3 — a connected publish must POST broadcast/sessions/{id}/start so the session is discoverable.
+        assertTrue(hostControl.startCalls >= 1)
     }
 
     @Test

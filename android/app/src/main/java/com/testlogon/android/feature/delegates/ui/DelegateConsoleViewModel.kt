@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.feature.delegates.data.DelegateFeedRepository
 import com.testlogon.android.feature.delegates.data.DelegateMessagingRepository
 import com.testlogon.android.feature.delegates.data.DelegationContextProvider
+import com.testlogon.android.feature.delegates.data.DelegationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +27,7 @@ import javax.inject.Inject
 @HiltViewModel
 class DelegateConsoleViewModel @Inject constructor(
     private val contextProvider: DelegationContextProvider,
+    private val delegationRepository: DelegationRepository,
     private val feedRepository: DelegateFeedRepository,
     private val messagingRepository: DelegateMessagingRepository,
 ) : ViewModel() {
@@ -43,6 +45,8 @@ class DelegateConsoleViewModel @Inject constructor(
             contextProvider.delegationContext.collect { ctx ->
                 if (ctx == null) {
                     _uiState.value = DelegateConsoleUiState(active = false)
+                    // T4 — NOT a dead-end: load the managed creators so the user can pick one to act for.
+                    loadManagedCreators()
                 } else {
                     _uiState.value = _uiState.value.copy(
                         active = true,
@@ -51,9 +55,50 @@ class DelegateConsoleViewModel @Inject constructor(
                         canPostFeed = feedRepository.canPost(),
                         canReadChat = messagingRepository.canRead(),
                         canRespond = messagingRepository.canRespond(),
+                        entering = null,
                     )
                     load()
                 }
+            }
+        }
+    }
+
+    /**
+     * T4 — GET the creators the current user may act for (ui/delegates/managed) and surface them as the
+     * Enter picker. Only meaningful while NOT in delegate mode; a failure sets [managedError] so the screen
+     * shows a retry rather than a dead "you are not a delegate" wall.
+     */
+    fun loadManagedCreators() {
+        _uiState.value = _uiState.value.copy(managedLoading = true, managedError = false)
+        viewModelScope.launch {
+            when (val result = delegationRepository.managedCreators()) {
+                is ApiResult.Success -> _uiState.value = _uiState.value.copy(
+                    managedLoading = false,
+                    managedError = false,
+                    managedCreators = result.data,
+                )
+                else -> _uiState.value = _uiState.value.copy(
+                    managedLoading = false,
+                    managedError = true,
+                )
+            }
+        }
+    }
+
+    /**
+     * T4 — ENTER delegate context for [creatorId] via [DelegationContextProvider.enterAsCreator], which
+     * resolves the creator's granted permissions and writes the process-global managing-creator flag. The
+     * observed context flow then flips [active] to true and loads the delegate feed / conversations, so the
+     * console stops being a dead-end. A failure surfaces a notice and leaves the picker in place.
+     */
+    fun enter(creatorId: String) {
+        if (_uiState.value.entering != null) return
+        _uiState.value = _uiState.value.copy(entering = creatorId, notice = null)
+        viewModelScope.launch {
+            when (contextProvider.enterAsCreator(creatorId)) {
+                // On success the delegationContext flow emits -> observeContext() flips active + clears entering.
+                is ApiResult.Success -> Unit
+                else -> _uiState.value = _uiState.value.copy(entering = null, notice = NOTICE_ACTION_FAILED)
             }
         }
     }

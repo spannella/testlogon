@@ -122,7 +122,8 @@ class CallSignalingHub @Inject constructor(
                     put("call_id", callId)
                     put("conversation_id", conversationId)
                     senderId?.let { put("caller_user_id", it) }
-                    ((payload["mode"] ?: payload["accepted_mode"]) as? String)?.let { put("initial_mode", it) }
+                    (payload["caller_name"] as? String)?.takeIf { it.isNotBlank() }?.let { put("caller_name", it) }
+                    ((payload["initial_mode"] ?: payload["mode"] ?: payload["accepted_mode"]) as? String)?.let { put("initial_mode", it) }
                 }
                 val handled = callPushHandler.tryHandle(map)
                 Log.d("TLHUB", "call event $type handled=$handled map=$map")
@@ -240,4 +241,6 @@ private fun SignalPayloadDto.toMap(): Map<String, Any?> = buildMap {
     sdpMlineIndex?.let { put("sdp_mline_index", it) }
     mode?.let { put("mode", it) }
     acceptedMode?.let { put("accepted_mode", it) }
+    initialMode?.let { put("initial_mode", it) }
+    callerName?.let { put("caller_name", it) }
 }

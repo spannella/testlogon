@@ -31,6 +31,17 @@ interface BroadcastApi {
         @Query("limit") limit: Int? = null,
     ): BroadcastSessionListRespDto
 
+    /**
+     * T3 — PUBLIC live-discovery feed: currently-live sessions across ALL creators, for any authenticated
+     * VIEWER. `broadcast/sessions?status=live` is operator-scoped (a non-operator only sees their OWN
+     * sessions), so a second-user viewer could never find the host's broadcast through it. This dedicated
+     * endpoint returns the same BroadcastSessionListOut = { items, has_more } shape.
+     */
+    @GET("broadcast/live")
+    suspend fun listLiveSessions(
+        @Query("limit") limit: Int? = null,
+    ): BroadcastSessionListRespDto
+
     @GET("broadcast/sessions/scheduled")
     suspend fun listScheduledSessions(
         @Query("limit") limit: Int? = null,

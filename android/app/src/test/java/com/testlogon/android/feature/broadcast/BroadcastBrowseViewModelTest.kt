@@ -58,6 +58,9 @@ class BroadcastBrowseViewModelTest {
         var result: ApiResult<BroadcastSessionPage>,
     ) : BroadcastRepository {
         override suspend fun sessions(status: String?, limit: Int?) = result
+        // T3 — mirror the base result so the merged LIVE bucket matches the existing test expectations
+        // (the VM dedups public-live vs own-live by sessionId).
+        override suspend fun liveSessions(limit: Int?) = result
         override suspend fun scheduledSessions(limit: Int?): ApiResult<BroadcastScheduledPage> =
             ApiResult.Success(BroadcastScheduledPage(emptyList(), 0))
         override suspend fun upcomingSessions(limit: Int?): ApiResult<BroadcastScheduledPage> =

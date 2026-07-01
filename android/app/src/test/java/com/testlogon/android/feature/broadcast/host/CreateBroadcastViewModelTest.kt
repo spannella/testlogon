@@ -69,6 +69,8 @@ class CreateBroadcastViewModelTest {
 
         override suspend fun sessions(status: String?, limit: Int?) =
             ApiResult.Success(BroadcastSessionPage(emptyList(), false))
+        override suspend fun liveSessions(limit: Int?) =
+            ApiResult.Success(BroadcastSessionPage(emptyList(), false))
         override suspend fun scheduledSessions(limit: Int?): ApiResult<BroadcastScheduledPage> =
             ApiResult.Success(BroadcastScheduledPage(emptyList(), 0))
         override suspend fun upcomingSessions(limit: Int?): ApiResult<BroadcastScheduledPage> =

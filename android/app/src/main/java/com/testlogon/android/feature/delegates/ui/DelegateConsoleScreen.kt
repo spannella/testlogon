@@ -8,16 +8,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -37,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.core.model.delegates.ManagedCreator
 import com.testlogon.android.core.network.delegates.DelegatedConversationOut
 import com.testlogon.android.core.network.delegates.DelegatedPostOut
 
@@ -49,6 +53,10 @@ object DelegateConsoleTestTags {
     const val MESSAGE_SUBMIT_PREFIX = "delegate_console_message_submit_"
     const val POST_ROW_PREFIX = "delegate_console_post_row_"
     const val CONVERSATION_ROW_PREFIX = "delegate_console_conversation_row_"
+    // T4 — managed-creators picker (shown when NOT in delegate mode).
+    const val MANAGED_ROW_PREFIX = "delegate_console_managed_row_"
+    const val MANAGED_ENTER_PREFIX = "delegate_console_managed_enter_"
+    const val MANAGED_RETRY = "delegate_console_managed_retry"
 }
 
 /**
@@ -70,6 +78,8 @@ fun DelegateConsoleRoute(
         onCreatePost = viewModel::createPost,
         onSendMessage = viewModel::sendMessage,
         onNoticeShown = viewModel::consumeNotice,
+        onEnterCreator = viewModel::enter,
+        onRetryManaged = viewModel::loadManagedCreators,
     )
 }
 
@@ -82,6 +92,8 @@ fun DelegateConsoleScreen(
     onCreatePost: (String) -> Unit,
     onSendMessage: (conversationId: String, text: String) -> Unit,
     onNoticeShown: () -> Unit,
+    onEnterCreator: (String) -> Unit = {},
+    onRetryManaged: () -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val loadFailedMessage = stringResource(R.string.delegate_console_load_failed)
@@ -119,7 +131,11 @@ fun DelegateConsoleScreen(
                 DelegationBanner(creatorName = state.creatorName, onExit = onExit)
             }
             if (!state.active) {
-                NotDelegateContent()
+                ManagedCreatorsPicker(
+                    state = state,
+                    onEnterCreator = onEnterCreator,
+                    onRetryManaged = onRetryManaged,
+                )
             } else {
                 DelegateConsoleContent(
                     state = state,
@@ -131,11 +147,22 @@ fun DelegateConsoleScreen(
     }
 }
 
+/**
+ * T4 — the managed-creators picker shown when NOT in delegate mode. This is the fix for the dead-end: it
+ * lists the creators the current user may act for and offers an "Enter" action per row that calls
+ * [onEnterCreator] -> DelegationContextProvider.enter(creatorId), putting the app into delegate context.
+ * Loading / error / empty states are all handled so the console is never a blank "you are not a delegate"
+ * wall.
+ */
 @Composable
-private fun NotDelegateContent() {
+private fun ManagedCreatorsPicker(
+    state: DelegateConsoleUiState,
+    onEnterCreator: (String) -> Unit,
+    onRetryManaged: () -> Unit,
+) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
             stringResource(R.string.delegate_console_not_delegate_title),
@@ -145,6 +172,83 @@ private fun NotDelegateContent() {
             stringResource(R.string.delegate_console_not_delegate_body),
             style = MaterialTheme.typography.bodyMedium,
         )
+
+        when {
+            state.managedLoading && state.managedCreators.isEmpty() -> {
+                CircularProgressIndicator()
+            }
+            state.managedError && state.managedCreators.isEmpty() -> {
+                Text(
+                    stringResource(R.string.delegate_console_managed_error),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(
+                    onClick = onRetryManaged,
+                    modifier = Modifier.testTag(DelegateConsoleTestTags.MANAGED_RETRY),
+                ) {
+                    Text(stringResource(R.string.delegate_console_managed_retry))
+                }
+            }
+            state.managedCreators.isEmpty() -> {
+                Text(
+                    stringResource(R.string.delegate_console_managed_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            else -> {
+                Text(
+                    stringResource(R.string.delegate_console_managed_heading),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(state.managedCreators, key = { it.creatorId }) { creator ->
+                        ManagedCreatorRow(
+                            creator = creator,
+                            entering = state.entering == creator.creatorId,
+                            enabled = state.entering == null,
+                            onEnter = { onEnterCreator(creator.creatorId) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManagedCreatorRow(
+    creator: ManagedCreator,
+    entering: Boolean,
+    enabled: Boolean,
+    onEnter: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(DelegateConsoleTestTags.MANAGED_ROW_PREFIX + creator.creatorId),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                creator.label ?: creator.creatorId,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            creator.status?.let { status ->
+                Text(status, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        if (entering) {
+            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+        } else {
+            Button(
+                onClick = onEnter,
+                enabled = enabled,
+                modifier = Modifier.testTag(DelegateConsoleTestTags.MANAGED_ENTER_PREFIX + creator.creatorId),
+            ) {
+                Text(stringResource(R.string.delegate_console_managed_enter))
+            }
+        }
     }
 }
 

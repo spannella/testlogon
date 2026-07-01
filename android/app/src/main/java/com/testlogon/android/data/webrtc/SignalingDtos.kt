@@ -83,6 +83,8 @@ data class SignalPayloadDto(
     @Json(name = "sdp_mline_index") val sdpMlineIndex: Int? = null,
     @Json(name = "mode") val mode: String? = null,
     @Json(name = "accepted_mode") val acceptedMode: String? = null,
+    @Json(name = "initial_mode") val initialMode: String? = null,
+    @Json(name = "caller_name") val callerName: String? = null,
 )
 
 /** One event from GET messaging/events/poll. */
