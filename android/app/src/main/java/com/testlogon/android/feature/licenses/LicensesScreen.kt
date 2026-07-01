@@ -14,9 +14,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Copyright
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -34,7 +37,9 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -69,6 +74,10 @@ object LicensesTestTags {
     const val TAB_PREFIX = "licenses_tab_"
     const val ROW_PREFIX = "licenses_row_"
     const val REVENUE_SUMMARY = "licenses_revenue_summary"
+    const val MENU = "licenses_menu"
+    const val MENU_COMPLIANCE = "licenses_menu_compliance"
+    const val MENU_REQUESTS = "licenses_menu_requests"
+    const val MENU_REVENUE = "licenses_menu_revenue"
 }
 
 /** Route-level licensing-hub entry (reachable from the More hub). Mirrors the web /licenses routes. */
@@ -76,6 +85,9 @@ object LicensesTestTags {
 fun LicensesRoute(
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
+    onOpenCompliance: () -> Unit,
+    onOpenRequests: () -> Unit,
+    onOpenRevenue: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LicensesViewModel = hiltViewModel(),
 ) {
@@ -102,6 +114,9 @@ fun LicensesRoute(
         onRefresh = viewModel::onRefresh,
         onRetry = viewModel::onRetry,
         onSelectTab = viewModel::onSelectTab,
+        onOpenCompliance = onOpenCompliance,
+        onOpenRequests = onOpenRequests,
+        onOpenRevenue = onOpenRevenue,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -114,6 +129,9 @@ fun LicensesScreen(
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     onSelectTab: (LicensesTab) -> Unit,
+    onOpenCompliance: () -> Unit,
+    onOpenRequests: () -> Unit,
+    onOpenRevenue: () -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -130,6 +148,13 @@ fun LicensesScreen(
                             contentDescription = stringResource(R.string.action_back),
                         )
                     }
+                },
+                actions = {
+                    LicensesOverflowMenu(
+                        onOpenCompliance = onOpenCompliance,
+                        onOpenRequests = onOpenRequests,
+                        onOpenRevenue = onOpenRevenue,
+                    )
                 },
             )
         },
@@ -189,6 +214,35 @@ fun LicensesScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun LicensesOverflowMenu(
+    onOpenCompliance: () -> Unit,
+    onOpenRequests: () -> Unit,
+    onOpenRevenue: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    IconButton(onClick = { expanded = true }, modifier = Modifier.testTag(LicensesTestTags.MENU)) {
+        Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.licenses_more_actions))
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.licenses_menu_compliance)) },
+            onClick = { expanded = false; onOpenCompliance() },
+            modifier = Modifier.testTag(LicensesTestTags.MENU_COMPLIANCE),
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.licenses_menu_requests)) },
+            onClick = { expanded = false; onOpenRequests() },
+            modifier = Modifier.testTag(LicensesTestTags.MENU_REQUESTS),
+        )
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.licenses_menu_revenue)) },
+            onClick = { expanded = false; onOpenRevenue() },
+            modifier = Modifier.testTag(LicensesTestTags.MENU_REVENUE),
+        )
     }
 }
 
