@@ -3441,6 +3441,7 @@
     <string name="delegate_console_post_action">Post</string>
     <string name="delegate_console_compose_message_hint">Send a message…</string>
     <string name="delegate_console_send_action">Send</string>
+    <string name="delegate_console_open_conversation">Open full conversation</string>
     <string name="delegate_console_post_pending">Pending approval</string>
     <string name="delegate_console_load_failed">Couldn\'t load delegate data.</string>
     <string name="delegate_console_action_failed">Couldn\'t complete that action.</string>

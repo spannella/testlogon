@@ -21,6 +21,7 @@ import com.testlogon.android.core.network.auth.AuthEventSink
 import com.testlogon.android.core.network.auth.SessionAuthenticator
 import com.testlogon.android.core.network.cookie.PersistentCookieJar
 import com.testlogon.android.core.network.csrf.CsrfInterceptor
+import com.testlogon.android.core.network.delegates.DelegateRoutingInterceptor
 import com.testlogon.android.core.network.health.HealthApi
 import com.testlogon.android.core.network.host.HostSelectionInterceptor
 import com.testlogon.android.core.network.retry.RetryInterceptor
@@ -111,6 +112,7 @@ object NetworkModule {
         hostSelectionInterceptor: HostSelectionInterceptor,
         csrfInterceptor: CsrfInterceptor,
         retryInterceptor: RetryInterceptor,
+        delegateRoutingInterceptor: DelegateRoutingInterceptor,
         loggingInterceptor: HttpLoggingInterceptor,
     ): OkHttpClient.Builder = OkHttpClient.Builder()
         .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -118,9 +120,11 @@ object NetworkModule {
         .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .cookieJar(cookieJar)
-        // Host selection first (so downstream sees the effective URL), then CSRF, then retry,
-        // and logging last so it observes/redacts the final headers.
+        // Host selection first (so downstream sees the effective URL), then delegate re-routing (so the
+        // rewritten messaging path is the one CSRF/retry/logging observe), then CSRF, then retry, and
+        // logging last so it observes/redacts the final headers.
         .addInterceptor(hostSelectionInterceptor)
+        .addInterceptor(delegateRoutingInterceptor)
         .addInterceptor(csrfInterceptor)
         .addInterceptor(retryInterceptor)
         .apply { if (BuildConfig.DEBUG) addInterceptor(loggingInterceptor) }
@@ -134,9 +138,11 @@ object NetworkModule {
         hostSelectionInterceptor: HostSelectionInterceptor,
         csrfInterceptor: CsrfInterceptor,
         retryInterceptor: RetryInterceptor,
+        delegateRoutingInterceptor: DelegateRoutingInterceptor,
         loggingInterceptor: HttpLoggingInterceptor,
     ): OkHttpClient = baseClientBuilder(
-        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor, loggingInterceptor,
+        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor,
+        delegateRoutingInterceptor, loggingInterceptor,
     ).build()
 
     @Provides
@@ -146,10 +152,12 @@ object NetworkModule {
         hostSelectionInterceptor: HostSelectionInterceptor,
         csrfInterceptor: CsrfInterceptor,
         retryInterceptor: RetryInterceptor,
+        delegateRoutingInterceptor: DelegateRoutingInterceptor,
         loggingInterceptor: HttpLoggingInterceptor,
         authenticator: SessionAuthenticator,
     ): OkHttpClient = baseClientBuilder(
-        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor, loggingInterceptor,
+        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor,
+        delegateRoutingInterceptor, loggingInterceptor,
     ).authenticator(authenticator).build()
 
     @Provides

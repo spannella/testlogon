@@ -435,6 +435,10 @@ fun ThreadRoute(
                 },
             )
         },
+        // FULL-PARITY (delegate) — the persistent "Managing @creator" banner, shown only while a delegate
+        // context is active (self-observes; renders nothing otherwise). Makes the reused thread clearly a
+        // manage-as-creator surface; every send is routed to the creator-attributed delegate endpoints.
+        banner = { com.testlogon.android.feature.delegates.ui.DelegationBannerHost() },
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -920,6 +924,10 @@ fun ThreadScreen(
     onOpenScheduled: () -> Unit = {},
     onPlaceCall: (String) -> Unit = {},
     searchBar: @Composable () -> Unit = {},
+    // FULL-PARITY (delegate) — an optional banner slot rendered directly under the top app bar. The
+    // ThreadRoute passes the "Managing @creator" DelegationBannerHost here so the reused thread makes it
+    // clear the user is acting as the creator; empty (invisible) in normal self-messaging.
+    banner: @Composable () -> Unit = {},
     snackbarHostState: androidx.compose.material3.SnackbarHostState =
         remember { androidx.compose.material3.SnackbarHostState() },
     modifier: Modifier = Modifier,
@@ -944,6 +952,7 @@ fun ThreadScreen(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         topBar = {
+          androidx.compose.foundation.layout.Column {
             if (searchActive) {
                 searchBar()
             } else {
@@ -1067,6 +1076,8 @@ fun ThreadScreen(
                 },
                 )
             }
+            banner()
+          }
         },
         bottomBar = {
             // AND-133 — the composer swaps to the recording overlay / preview card while a voice

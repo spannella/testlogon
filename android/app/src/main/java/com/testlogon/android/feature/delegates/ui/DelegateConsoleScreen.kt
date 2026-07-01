@@ -2,6 +2,7 @@
 
 package com.testlogon.android.feature.delegates.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -53,6 +54,8 @@ object DelegateConsoleTestTags {
     const val MESSAGE_SUBMIT_PREFIX = "delegate_console_message_submit_"
     const val POST_ROW_PREFIX = "delegate_console_post_row_"
     const val CONVERSATION_ROW_PREFIX = "delegate_console_conversation_row_"
+    // FULL-PARITY — open the full messaging thread/composer for this conversation (creator-attributed).
+    const val CONVERSATION_OPEN_PREFIX = "delegate_console_conversation_open_"
     // T4 — managed-creators picker (shown when NOT in delegate mode).
     const val MANAGED_ROW_PREFIX = "delegate_console_managed_row_"
     const val MANAGED_ENTER_PREFIX = "delegate_console_managed_enter_"
@@ -68,6 +71,7 @@ object DelegateConsoleTestTags {
 @Composable
 fun DelegateConsoleRoute(
     onBack: () -> Unit,
+    onOpenThread: (String) -> Unit = {},
     viewModel: DelegateConsoleViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -80,6 +84,7 @@ fun DelegateConsoleRoute(
         onNoticeShown = viewModel::consumeNotice,
         onEnterCreator = viewModel::enter,
         onRetryManaged = viewModel::loadManagedCreators,
+        onOpenThread = onOpenThread,
     )
 }
 
@@ -94,6 +99,7 @@ fun DelegateConsoleScreen(
     onNoticeShown: () -> Unit,
     onEnterCreator: (String) -> Unit = {},
     onRetryManaged: () -> Unit = {},
+    onOpenThread: (String) -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val loadFailedMessage = stringResource(R.string.delegate_console_load_failed)
@@ -141,6 +147,7 @@ fun DelegateConsoleScreen(
                     state = state,
                     onCreatePost = onCreatePost,
                     onSendMessage = onSendMessage,
+                    onOpenThread = onOpenThread,
                 )
             }
         }
@@ -257,6 +264,7 @@ private fun DelegateConsoleContent(
     state: DelegateConsoleUiState,
     onCreatePost: (String) -> Unit,
     onSendMessage: (conversationId: String, text: String) -> Unit,
+    onOpenThread: (String) -> Unit = {},
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -300,6 +308,7 @@ private fun DelegateConsoleContent(
                     conversation = conversation,
                     canRespond = state.canRespond,
                     onSendMessage = onSendMessage,
+                    onOpenThread = onOpenThread,
                 )
             }
         }
@@ -352,11 +361,13 @@ private fun ConversationRow(
     conversation: DelegatedConversationOut,
     canRespond: Boolean,
     onSendMessage: (conversationId: String, text: String) -> Unit,
+    onOpenThread: (String) -> Unit = {},
 ) {
     var text by remember(conversation.conversationId) { mutableStateOf("") }
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable { onOpenThread(conversation.conversationId) }
             .testTag(DelegateConsoleTestTags.CONVERSATION_ROW_PREFIX + conversation.conversationId),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -366,6 +377,17 @@ private fun ConversationRow(
         )
         conversation.lastMessagePreview?.let {
             Text(it, style = MaterialTheme.typography.bodySmall)
+        }
+        // FULL-PARITY: open the SAME full messaging thread/composer as normal messaging (image / video /
+        // gallery / file / gating / scheduled / countdown / lottery / reactions / replies / edit). Every
+        // send routes to the creator-attributed delegate endpoints while managing this creator.
+        OutlinedButton(
+            onClick = { onOpenThread(conversation.conversationId) },
+            modifier = Modifier.testTag(
+                DelegateConsoleTestTags.CONVERSATION_OPEN_PREFIX + conversation.conversationId,
+            ),
+        ) {
+            Text(stringResource(R.string.delegate_console_open_conversation))
         }
         if (canRespond) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
