@@ -1,14 +1,14 @@
 package com.testlogon.android.data.broadcast.chat
 
 /**
- * AND-281 — broadcast live-chat domain models (DTO-free).
+ * AND-281 / BCAST-016 — broadcast live-chat domain models (DTO-free).
  *
- * Shapes mirror the VERIFIED BroadcastChatMessageOut (reference/openapi.index.txt;
- * src/api/endpoints/broadcast-chat.ts ChatMessage): the server message is FLAT — `message_id`,
+ * Shapes mirror the VERIFIED BroadcastChatMessageOut. The server message is FLAT — `message_id`,
  * `sender_id`, `sender_display_name`, `text` (nullable), `kind`, `created_at` (epoch SECONDS int),
- * `reactions_counts` map + `my_reactions` array. There is NO nested author, NO avatar/is_host field,
- * and NO client_id/nonce on the wire (dedup is by server `message_id` + a heuristic; FR-5). Timestamps
- * are epoch Long; money would be Long cents (not used here).
+ * `reactions_counts` map + `my_reactions` array. BCAST-016 adds the rich-type fields: reply preview,
+ * media (image/video + thumbnail + media_kind), locked/PPV (lock_price_cents/lock_description/
+ * is_unlocked), view-once (view_once/view_once_consumed), expiring (expires_at/expired) and scheduled
+ * (scheduled/send_at). `isSelf`/`isHost` are derived by the repository/VM (passed in), not on the wire.
  */
 data class ChatMessage(
     /** Server message_id; for an optimistic local entry this equals [clientNonce] until reconciled. */
@@ -20,7 +20,7 @@ data class ChatMessage(
     val senderDisplayName: String,
     val isSelf: Boolean = false,
     val isHost: Boolean = false,
-    /** Nullable on the wire (locked/deleted messages have null text). */
+    /** Nullable on the wire (locked/deleted/expired messages have null text). */
     val text: String?,
     val kind: String = "text",
     /** Derived from created_at epoch SECONDS. */
@@ -28,7 +28,48 @@ data class ChatMessage(
     val deleted: Boolean = false,
     val reactions: List<ChatReaction> = emptyList(),
     val deliveryState: DeliveryState = DeliveryState.SENT,
-)
+
+    // ---- BCAST-016 rich types ----
+    /** Reply: the message this one replies to + a small quoted preview {sender, text}. */
+    val replyToMessageId: String? = null,
+    val replyPreviewSender: String? = null,
+    val replyPreviewText: String? = null,
+
+    /** Media: image_url / video_url (+ poster thumbnail_url) and the server-classified media_kind. */
+    val imageUrl: String? = null,
+    val videoUrl: String? = null,
+    val thumbnailUrl: String? = null,
+    val mediaKind: String? = null,
+
+    /** Locked / PPV (broadcaster-only send). [isUnlocked] is false while withheld pending payment. */
+    val lockPriceCents: Long? = null,
+    val lockDescription: String? = null,
+    val isUnlocked: Boolean = true,
+
+    /** View-once: delivered inline once, then redacted after the viewer calls /view. */
+    val viewOnce: Boolean = false,
+    val viewOnceConsumed: Boolean = false,
+
+    /** Expiring (broadcaster-only): absolute TTL; content nulled after [expiresAtEpochSeconds]. */
+    val expiresAtEpochSeconds: Long? = null,
+    val expired: Boolean = false,
+
+    /** Scheduled: held then promoted when [sendAtEpochSeconds] is due while the session is still live. */
+    val scheduled: Boolean = false,
+    val sendAtEpochSeconds: Long? = null,
+
+    /** LOCAL-ONLY: the viewer chose to reveal this view-once message this session (never on the wire). */
+    val locallyRevealed: Boolean = false,
+) {
+    /** A locked PPV message whose content is still withheld (viewer has not paid). */
+    val isLocked: Boolean get() = (lockPriceCents ?: 0L) > 0L && !isUnlocked
+
+    /** True when this row carries a photo attachment. */
+    val hasImage: Boolean get() = !imageUrl.isNullOrBlank() || mediaKind == "image"
+
+    /** True when this row carries a video attachment. */
+    val hasVideo: Boolean get() = !videoUrl.isNullOrBlank() || mediaKind == "video"
+}
 
 /** Optimistic send lifecycle of a local outbound message. */
 enum class DeliveryState { SENDING, SENT, FAILED }
@@ -39,6 +80,32 @@ data class ChatReaction(
     val count: Int,
     val reactedBySelf: Boolean,
 )
+
+/** Result of uploading a picked video for a broadcast chat message (a servable url + poster). */
+data class BroadcastVideoUpload(
+    val videoUrl: String,
+    val thumbnailUrl: String?,
+)
+
+/**
+ * BCAST-016 — the composer's staged rich-send options (reply target + gating). Carried in the panel
+ * view-state and folded into the send request. Media is uploaded separately (image_url/video_url).
+ */
+data class ChatComposeOptions(
+    val replyToMessageId: String? = null,
+    val replyPreviewSender: String? = null,
+    val replyPreviewText: String? = null,
+    val viewOnce: Boolean = false,
+    val lockPriceCents: Long? = null,
+    val lockDescription: String? = null,
+    val expiresInSeconds: Long? = null,
+    val sendAtEpochSeconds: Long? = null,
+) {
+    val hasReply: Boolean get() = replyToMessageId != null
+    /** True when any gating option is set (drives the composer "options active" affordance). */
+    val hasGating: Boolean get() =
+        viewOnce || lockPriceCents != null || expiresInSeconds != null || sendAtEpochSeconds != null
+}
 
 /**
  * A decoded broadcast-chat domain event (parsed from an SSE frame). Its OWN sealed type — deliberately

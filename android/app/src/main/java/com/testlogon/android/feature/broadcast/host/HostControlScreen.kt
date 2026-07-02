@@ -742,6 +742,7 @@ private fun HostLiveChatSection(sessionId: String) {
         )
         LiveChatPanel(
             sessionId = sessionId,
+            isHost = true,
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag(HostControlTestTags.LIVE_CHAT),

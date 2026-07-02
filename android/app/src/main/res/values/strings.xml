@@ -2232,6 +2232,28 @@
     <string name="live_chat_jump_latest">Jump to latest</string>
     <string name="live_chat_error_generic">Couldn\'t load chat.</string>
     <string name="live_chat_react_cd">React to message</string>
+    <string name="live_chat_reply">Reply</string>
+    <string name="live_chat_options_title">Message options</string>
+    <string name="live_chat_opt_view_once">View once</string>
+    <string name="live_chat_opt_schedule">Schedule (in 1 min)</string>
+    <string name="live_chat_opt_expire">Disappear after 5 min</string>
+    <string name="live_chat_opt_lock">Lock ($1.00)</string>
+    <string name="live_chat_done">Done</string>
+    <string name="live_chat_badge_scheduled">SCHEDULED</string>
+    <string name="live_chat_badge_view_once">VIEW ONCE</string>
+    <string name="live_chat_badge_expiring">EXPIRING</string>
+    <string name="live_chat_expired">This message expired</string>
+    <string name="live_chat_view_once_viewed">Viewed</string>
+    <string name="live_chat_view_once_tap">Tap to view once</string>
+    <string name="live_chat_locked">Locked message</string>
+    <string name="live_chat_unlock_price">Unlock $%1$s</string>
+    <string name="live_chat_image_cd">Chat image</string>
+    <string name="live_chat_video_cd">Play video</string>
+    <string name="live_chat_sending">Sending…</string>
+    <string name="live_chat_replying_to">Replying to %1$s</string>
+    <string name="live_chat_cancel_reply">Cancel reply</string>
+    <string name="live_chat_attach_cd">Attach photo or video</string>
+    <string name="live_chat_uploading">Uploading…</string>
 
     <!-- Broadcast tips + goals (AND-282) -->
     <string name="bcast_tip_action">Tip</string>

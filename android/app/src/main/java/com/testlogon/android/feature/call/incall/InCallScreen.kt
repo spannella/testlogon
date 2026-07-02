@@ -68,6 +68,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.HasDefaultViewModelProviderFactory
+import androidx.lifecycle.DEFAULT_ARGS_KEY
+import androidx.lifecycle.viewmodel.CreationExtras
+import androidx.lifecycle.viewmodel.MutableCreationExtras
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelProvider
+import androidx.core.os.bundleOf
+import com.testlogon.android.feature.messaging.thread.ThreadRoute
+import com.testlogon.android.feature.messaging.thread.ThreadViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
@@ -279,10 +290,7 @@ fun InCallScreen(
         // conversation (reuses the messaging thread data + realtime). Overlaid last so it sits on top.
         if (chatOpen) {
             InCallChatDrawer(
-                state = chatState,
-                peerName = state.peerName,
-                onDraftChange = onChatDraftChange,
-                onSend = onChatSend,
+                conversationId = chatState.conversationId,
                 onClose = { chatOpen = false },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -294,108 +302,62 @@ fun InCallScreen(
 
 @Composable
 private fun InCallChatDrawer(
-    state: InCallChatUiState,
-    peerName: String?,
-    onDraftChange: (String) -> Unit,
-    onSend: () -> Unit,
+    conversationId: String?,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
         modifier = modifier
-            .fillMaxHeight(0.6f)
+            .fillMaxHeight(0.96f)
             .testTag("incall_chat_drawer"),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 3.dp,
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .imePadding()
-                .padding(horizontal = 12.dp),
-        ) {
-            // Header: title + close.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        if (conversationId.isNullOrEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().statusBarsPadding(),
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = peerName?.let { "Chat with $it" } ?: "In-call chat",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    text = "Chat unavailable",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                IconButton(
-                    onClick = onClose,
-                    modifier = Modifier.testTag("incall_chat_close"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "Close chat",
-                    )
-                }
             }
-
-            // Message list (newest at the bottom via reverseLayout, so we render newest-first).
-            val listState = rememberLazyListState()
-            val reversed = remember(state.messages) { state.messages.asReversed() }
-            LaunchedEffect(state.messages.size) {
-                if (state.messages.isNotEmpty()) listState.scrollToItem(0)
-            }
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .testTag("incall_chat_list"),
-                state = listState,
-                reverseLayout = true,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                items(reversed, key = { it.key }) { msg ->
-                    ChatBubble(msg)
-                }
-            }
-
-            // Composer.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OutlinedTextField(
-                    value = state.draft,
-                    onValueChange = onDraftChange,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("incall_chat_input"),
-                    placeholder = { Text("Message") },
-                    maxLines = 4,
-                )
-                Spacer(Modifier.size(8.dp))
-                IconButton(
-                    onClick = onSend,
-                    enabled = state.draft.isNotBlank(),
-                    modifier = Modifier.testTag("incall_chat_send"),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send message",
-                        tint = if (state.draft.isNotBlank()) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        },
-                    )
-                }
+            return@Surface
+        }
+        // FIX C (rich types) — embed the REAL DM thread UI bound to the call's conversation so the
+        // in-call drawer inherits the FULL messaging composer (reactions, replies, image, locked,
+        // view-once, video, expiring, scheduled) + every DM message renderer, with zero duplication.
+        // The ThreadViewModel reads its conversation id from SavedStateHandle; the call graph has no
+        // nav args, so we seed it via DEFAULT_ARGS in CreationExtras (exactly what hiltViewModel builds
+        // the SavedStateHandle from). Media picks flow through the same picker seam as the DM thread.
+        val parentOwner = checkNotNull(LocalViewModelStoreOwner.current)
+        val hiltOwner = parentOwner as? HasDefaultViewModelProviderFactory
+        // hilt-navigation-compose 1.2 has no creationExtras overload, so seed the ThreadViewModel's
+        // SavedStateHandle by delegating to a store-owner whose defaultViewModelCreationExtras carries
+        // the conversation id under DEFAULT_ARGS_KEY (what hiltViewModel(owner, key) reads).
+        val argOwner = remember(conversationId, parentOwner) {
+            object : ViewModelStoreOwner, HasDefaultViewModelProviderFactory {
+                override val viewModelStore: ViewModelStore = parentOwner.viewModelStore
+                override val defaultViewModelProviderFactory: ViewModelProvider.Factory =
+                    hiltOwner?.defaultViewModelProviderFactory ?: ViewModelProvider.NewInstanceFactory()
+                override val defaultViewModelCreationExtras: CreationExtras =
+                    MutableCreationExtras(hiltOwner?.defaultViewModelCreationExtras ?: CreationExtras.Empty).apply {
+                        set(DEFAULT_ARGS_KEY, bundleOf(ThreadViewModel.ARG_CONVERSATION_ID to conversationId))
+                    }
             }
         }
+        val threadViewModel: ThreadViewModel = hiltViewModel(
+            viewModelStoreOwner = argOwner,
+            key = "incall_thread_$conversationId",
+        )
+        ThreadRoute(
+            onBack = onClose,
+            viewModel = threadViewModel,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
