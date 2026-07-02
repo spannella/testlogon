@@ -63,4 +63,11 @@ enum class ChatConnectionState { CONNECTING, LIVE, RECONNECTING, OFFLINE }
 sealed interface ChatStreamSignal {
     data class Connection(val state: ChatConnectionState) : ChatStreamSignal
     data class Decoded(val event: ChatStreamEvent) : ChatStreamSignal
+
+    /**
+     * Emitted by the poll backstop each time a history poll succeeds (HTTP 2xx). Lets the panel enable
+     * send + treat the transport as usable even while the long-lived SSE is stuck RECONNECTING on-device
+     * (mirrors how messaging keeps realtime alive via /events/poll when the stream will not connect).
+     */
+    data class PollAlive(val alive: Boolean) : ChatStreamSignal
 }

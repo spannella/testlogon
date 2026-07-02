@@ -47,7 +47,14 @@ sealed interface LiveChatUiState {
  * Optimistic send inserts a SENDING entry keyed by a LOCAL-ONLY clientNonce; the SSE echo / POST
  * response reconciles it to SENT by matching senderId+text (then adopting the server message_id), since
  * the wire carries no client_id (FR-5). The in-memory list is capped at [MAX_RETAINED]. Built with
- * AssistedInject so the sessionId is supplied at the call site (the panel composes into the viewer).
+ * AssistedInject so the sessionId is supplied at the call site (the panel composes into the viewer AND
+ * the host live screen).
+ *
+ * TRANSPORT DECOUPLE: the long-lived SSE does not connect on-device (same failure documented for the
+ * messaging /events/stream), so the repository also drives a POLL backstop that emits
+ * [ChatStreamSignal.PollAlive] + re-delivered [ChatStreamEvent.MessageReceived] frames. Send-enablement
+ * therefore keys off a WORKING TRANSPORT (SSE LIVE **or** the poll being alive), NOT strictly the SSE
+ * connection being LIVE — otherwise canSend would never become true when the SSE is stuck RECONNECTING.
  */
 @HiltViewModel(assistedFactory = LiveChatViewModel.Factory::class)
 class LiveChatViewModel @AssistedInject constructor(
@@ -64,6 +71,11 @@ class LiveChatViewModel @AssistedInject constructor(
     val uiState: StateFlow<LiveChatUiState> = _uiState.asStateFlow()
 
     private var streamJob: Job? = null
+
+    // The raw SSE connection status and the poll-backstop liveness are tracked separately so the
+    // effective (displayed + send-gating) transport can be either one.
+    private var sseStatus: ConnectionStatus = ConnectionStatus.RECONNECTING
+    private var pollAlive: Boolean = false
 
     init {
         loadHistory()
@@ -82,7 +94,7 @@ class LiveChatViewModel @AssistedInject constructor(
         _uiState.update { state ->
             (state as? LiveChatUiState.Content)?.copy(
                 composerText = text,
-                canSend = text.isNotBlank() && state.connection == ConnectionStatus.LIVE,
+                canSend = text.isNotBlank() && transportUp(),
             ) ?: state
         }
     }
@@ -90,7 +102,7 @@ class LiveChatViewModel @AssistedInject constructor(
     fun send() {
         val content = _uiState.value as? LiveChatUiState.Content ?: return
         val text = content.composerText.trim()
-        if (text.isEmpty() || content.connection != ConnectionStatus.LIVE) return
+        if (text.isEmpty() || !transportUp()) return
         val nonce = UUID.randomUUID().toString()
         val optimistic = ChatMessage(
             id = nonce,
@@ -139,32 +151,57 @@ class LiveChatViewModel @AssistedInject constructor(
         onResumeStreaming()
     }
 
+    // ---- transport ----
+
+    /** True when a working transport exists: the SSE is LIVE, OR the poll backstop is delivering. */
+    private fun transportUp(): Boolean = sseStatus == ConnectionStatus.LIVE || pollAlive
+
+    /**
+     * The status shown to the user: LIVE when either transport is up, otherwise the raw SSE status. This
+     * keeps the panel from showing a scary "Reconnecting" banner while the poll backstop is happily
+     * delivering messages + accepting sends.
+     */
+    private fun effectiveConnection(): ConnectionStatus =
+        if (transportUp()) ConnectionStatus.LIVE else sseStatus
+
+    /** Recompute the displayed connection + canSend after either transport signal changes. */
+    private fun recomputeTransport() {
+        _uiState.update { current ->
+            val content = current.asContent()
+            content.copy(
+                connection = effectiveConnection(),
+                canSend = transportUp() && content.composerText.isNotBlank(),
+            )
+        }
+    }
+
     // ---- reducer ----
 
     private fun reduce(signal: ChatStreamSignal) {
         when (signal) {
             is ChatStreamSignal.Connection -> applyConnection(signal.state)
             is ChatStreamSignal.Decoded -> applyEvent(signal.event)
+            is ChatStreamSignal.PollAlive -> {
+                pollAlive = signal.alive
+                recomputeTransport()
+            }
         }
     }
 
     private fun applyConnection(state: ChatConnectionState) {
-        // Stay on the pure Connecting state until the first Open (LIVE) or a frame arrives.
-        if (state == ChatConnectionState.CONNECTING && _uiState.value is LiveChatUiState.Connecting) {
+        // Stay on the pure Connecting state until the first Open (LIVE) or a frame/poll arrives — unless
+        // the poll backstop has already made the transport usable, in which case we materialize Content.
+        if (state == ChatConnectionState.CONNECTING &&
+            _uiState.value is LiveChatUiState.Connecting && !pollAlive
+        ) {
             return
         }
-        val mapped = when (state) {
+        sseStatus = when (state) {
             ChatConnectionState.LIVE -> ConnectionStatus.LIVE
             ChatConnectionState.CONNECTING, ChatConnectionState.RECONNECTING -> ConnectionStatus.RECONNECTING
             ChatConnectionState.OFFLINE -> ConnectionStatus.OFFLINE
         }
-        _uiState.update { current ->
-            val content = current.asContent()
-            content.copy(
-                connection = mapped,
-                canSend = mapped == ConnectionStatus.LIVE && content.composerText.isNotBlank(),
-            )
-        }
+        recomputeTransport()
     }
 
     private fun applyEvent(event: ChatStreamEvent) {
@@ -294,7 +331,7 @@ class LiveChatViewModel @AssistedInject constructor(
         is LiveChatUiState.Content -> this
         else -> LiveChatUiState.Content(
             messages = emptyList(),
-            connection = ConnectionStatus.RECONNECTING,
+            connection = effectiveConnection(),
             composerText = "",
             canSend = false,
             pinnedToBottom = true,

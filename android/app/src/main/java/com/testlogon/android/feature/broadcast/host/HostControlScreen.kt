@@ -52,6 +52,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.data.broadcast.BroadcastSession
+import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
 import com.testlogon.android.data.broadcast.BroadcastSessionStatus
 import com.testlogon.android.data.broadcast.HealthLevel
 import com.testlogon.android.data.broadcast.HostHealthReport
@@ -111,6 +112,9 @@ object HostControlTestTags {
 
     /** #7c — the live self-view PIP of the host's own camera while managing. */
     const val SELF_VIEW = "host_self_view"
+
+    /** Bidirectional host live-chat read/compose panel. */
+    const val LIVE_CHAT = "host_live_chat"
 }
 
 /**
@@ -148,6 +152,10 @@ fun HostControlRoute(
     HostControlScreen(
         state = state,
         videoRenderer = viewModel.videoRenderer,
+        // Bidirectional live chat for the host: the SAME viewer LiveChatPanel + LiveChatViewModel,
+        // keyed by this broadcast session id, so the host can READ the live chat and POST messages
+        // (not just moderate). Only shown once the session id resolves.
+        chatPanel = { state.session?.id?.let { sid -> HostLiveChatSection(sessionId = sid) } },
         onStart = viewModel::onStart,
         onStop = viewModel::onStop,
         onConfirmStop = viewModel::onConfirmStopDialog,
@@ -180,6 +188,9 @@ fun HostControlScreen(
     // #7c — the native-WebRTC renderer for the live self-view PIP. Defaulted to the placeholder so
     // existing call sites / tests are unaffected.
     videoRenderer: VideoRenderer = PlaceholderVideoRenderer,
+    // Bidirectional live-chat panel slot (host read + compose). Defaulted empty so existing call
+    // sites / Compose tests that render the stateless surface without Hilt are unaffected.
+    chatPanel: @Composable () -> Unit = {},
     onStop: () -> Unit,
     onConfirmStop: (Boolean) -> Unit,
     onResume: () -> Unit,
@@ -263,6 +274,9 @@ fun HostControlScreen(
                 onResume = onResume,
                 onReschedule = onReschedule,
             )
+
+            // Bidirectional live chat (read + compose) for the host, alongside the moderation controls.
+            chatPanel()
 
             // AND-310 — manage this broadcast's inputs (list / activate / promote to live program).
             OutlinedButton(
@@ -706,5 +720,31 @@ private fun RescheduleDialog(
                 TimePicker(state = timePickerState)
             }
         }
+    }
+}
+
+
+/**
+ * Host live-chat section: a labelled LiveChatPanel keyed by the broadcast [sessionId]. Reuses the exact
+ * viewer panel + LiveChatViewModel so the host reads the live chat and posts messages through the same
+ * send path (attributed to the host = session creator). The panel poll backstop keeps it usable even
+ * when the SSE will not connect on-device.
+ */
+@Composable
+private fun HostLiveChatSection(sessionId: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.live_chat_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        LiveChatPanel(
+            sessionId = sessionId,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(HostControlTestTags.LIVE_CHAT),
+        )
     }
 }

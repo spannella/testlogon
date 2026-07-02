@@ -8,6 +8,7 @@ import com.testlogon.android.core.data.telemetry.AuthTelemetry
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.core.network.delegates.DelegateRoutingStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -102,6 +103,12 @@ class AuthRepositoryImpl @Inject constructor(
     // across sessions. Defaulted to a fresh in-memory store so direct-construction tests are unaffected;
     // Hilt injects the process-global singleton.
     private val delegationStateStore: DelegationStateStore = DelegationStateStore(),
+    // AND-359 (FR-7) hardening: also clear the NETWORK-layer delegate routing so account B never POSTs
+    // to /messaging/delegate/{A_creator}/... The DelegationContextProvider bridges this asynchronously
+    // off DelegationStateStore only while it is alive; clearing it here directly closes the leak on
+    // logout / session-expiry / account-switch. Defaulted for direct-construction tests; Hilt injects
+    // the process-global singleton.
+    private val delegateRoutingStore: DelegateRoutingStore = DelegateRoutingStore(),
 ) : AuthRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -109,12 +116,17 @@ class AuthRepositoryImpl @Inject constructor(
     private val _cachedUser = MutableStateFlow<User?>(null)
     override val cachedUser: StateFlow<User?> = _cachedUser.asStateFlow()
 
-    override suspend fun login(username: String, password: String): ApiResult<LoginOutcome> =
-        apiCall {
+    override suspend fun login(username: String, password: String): ApiResult<LoginOutcome> {
+        // Account-switch boundary: a fresh credential entry may be a DIFFERENT user. Drop any stale
+        // manage-as-creator delegate context NOW so the new session never routes sends to the previous
+        // creator delegate endpoints (login-of-a-different-user leak).
+        resetDelegateContext()
+        return apiCall {
             api.sessionStart(
                 SessionStartReq(challengeContext = mapOf("username" to username, "password" to password)),
             )
         }.flatMapSuspend { resp -> resp.toLoginOutcome() }
+    }
 
     private suspend fun SessionStartResp.toLoginOutcome(): ApiResult<LoginOutcome> {
         val authenticated = !authRequired && !sessionId.isNullOrBlank()
@@ -153,7 +165,7 @@ class AuthRepositoryImpl @Inject constructor(
             if (r.error.status == 401) {
                 _cachedUser.value = null
                 authStateStore.clear(com.testlogon.android.core.model.LogoutReason.SESSION_EXPIRED)
-                delegationStateStore.clear() // AND-359 FR-7: drop manage-as selection on auth reset.
+                resetDelegateContext() // AND-359 FR-7: drop manage-as selection + routing on auth reset.
             }
             r // network / 5xx: persisted auth flag untouched (flaky host must not log out).
         }
@@ -209,7 +221,7 @@ class AuthRepositoryImpl @Inject constructor(
         // (b-c) guaranteed local teardown regardless of (a)
         cookieCleaner.clear()
         authStateStore.clear()
-        delegationStateStore.clear() // AND-359 FR-7: drop manage-as selection on logout.
+        resetDelegateContext() // AND-359 FR-7: drop manage-as selection + routing on logout.
         authAreaCache.clear() // AND-045 per-identity cache cleared on logout
         // AND-118: wipe all user-scoped Room cache rows so account B never sees account A's content.
         // Best-effort and self-bounded — never blocks or fails logout.
@@ -276,6 +288,18 @@ class AuthRepositoryImpl @Inject constructor(
                 }
             }
         }
+
+    /**
+     * Clears the manage-as-creator delegate context in BOTH the source-of-truth [DelegationStateStore]
+     * and the network-layer [DelegateRoutingStore], so no subsequent request is re-targeted onto a stale
+     * creator delegate route. Synchronous + direct (does not rely on the async DelegationContextProvider
+     * bridge, which is only alive after a delegate feature has been opened). Called on logout,
+     * session-expiry (definitive 401), and each fresh login (account switch).
+     */
+    private fun resetDelegateContext() {
+        delegationStateStore.clear()
+        delegateRoutingStore.activeCreatorId = null
+    }
 
     private fun invalidCode(): ApiResult<MfaVerifyOutcome> =
         ApiResult.Failure(ApiError(status = 0, message = "Enter your code", code = "invalid_code"))
