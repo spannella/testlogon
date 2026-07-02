@@ -1,0 +1,66 @@
+--- a/app/routers/messaging.py
++++ b/app/routers/messaging.py
+@@ -15691,6 +15691,63 @@
+             actor_user_id=user_id,
+             idempotency_key=body.idempotency_key,
+         )
++        # FIX A (#97): fan call.accept BACK to the CALLER so the caller Ringing UI
++        # transitions to Connecting (previously accept was never fanned to the caller,
++        # so the caller stayed on Ringing until server_timeout). Mirrors the T2
++        # call.invite fanout. accept_invite() enforces actor==callee, so sender_id=user_id
++        # is the callee and fanout_event_to_conversation excludes the sender -> only the
++        # caller receives this. The /events/poll call.* flatten lifts
++        # call_id/conversation_id/caller_user_id to the top level for the app parser
++        # (SseEnvelopeParser -> CallSignalingHub -> CallEvent.Accepted).
++        try:
++            _mode = str(getattr(record, "initial_mode", "") or "audio")
++            _accept_payload = {
++                "call_id": record.call_id,
++                "conversation_id": record.conversation_id,
++                "caller_user_id": record.caller_user_id,
++                "callee_user_id": record.callee_user_id,
++                "initial_mode": _mode,
++                "mode": _mode,
++                "accepted_mode": _mode,
++                "state": record.state,
++            }
++            fanout_event_to_conversation(
++                conversation_id=record.conversation_id,
++                sender_id=user_id,
++                event_type="call.accept",
++                payload=_accept_payload,
++                respect_mute=False,
++            )
++        except Exception as _fx:
++            logger.warning("call.accept fanout failed for %s: %s", call_id, _fx)
++        try:
++            from app.services.push import fcm_send, web_push_send as _web_push_send
++            from app.core.tables import T as _T
++            _push_data = {
++                "type": "call.accept",
++                "kind": "call.accept",
++                "entity_id": record.call_id,
++                "call_id": record.call_id,
++                "conversation_id": record.conversation_id,
++                "caller_user_id": record.caller_user_id,
++                "callee_user_id": record.callee_user_id,
++                "initial_mode": _mode,
++                "title": "Call connected",
++                "body": "Call connected",
++                "deep_link": "/messages/%s" % record.conversation_id,
++            }
++            _r = _T.push_devices.query(KeyConditionExpression=Key("user_sub").eq(record.caller_user_id), Limit=50)
++            for _it in _r.get("Items", [])[:25]:
++                _tok = _it.get("token", "")
++                _plat = _it.get("platform", "")
++                if not _tok:
++                    continue
++                if _plat in ("android", "ios"):
++                    fcm_send(_tok, "Call connected", "Call connected", _push_data)
++                elif _plat == "web" and S.web_push_enabled:
++                    _web_push_send(_tok, "Call connected", "Call connected", url="/messages/%s" % record.conversation_id, tag="call")
++        except Exception as _px:
++            logger.warning("call.accept push failed for %s: %s", call_id, _px)
+         return CallActionOut(
+             call_id=record.call_id,
+             conversation_id=record.conversation_id,

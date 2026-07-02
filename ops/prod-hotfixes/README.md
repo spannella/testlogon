@@ -288,3 +288,28 @@ static asset). Verified: `/login`,`/messages`,`/more`,`/admin/moderation` -> 200
 404 JSON, `/foo.js` 404. Applies at prod offset ~L1620 (right before `return app`);
 android-impl backend diverges from prod, so this is a re-appliable prod artifact, not a
 branch merge. Backup on prod: `app/main.py.bak_webcatchall_1782949220`.
+
+---
+
+## #97 — 1:1 video call connect + in-call chat (2026-07)
+
+Two live prod changes made calls actually connect media (the app-side in-call chat drawer
+is committed normally under `android/`, not here).
+
+- **`app_routers_messaging.py.call-accept-fanout.patch`** (FIX A) — in the `accept_call_invite`
+  path, fan a `call.accept` event back to the **caller** via `fanout_event_to_conversation`
+  (+ best-effort FCM/web push). Previously accept was never fanned to the caller, so the caller
+  stayed on Ringing until `server_timeout`. `accept_invite()` enforces actor==callee and the
+  fanout excludes the sender, so only the caller receives it. The existing `/events/poll`
+  `call.*` flatten lifts `call_id`/`conversation_id`/`caller_user_id` to the top level for the
+  app parser. Sibling of the T2 `call.invite` fanout (`app_routers_messaging.py.t2-call-fanout.patch`).
+  Generated from prod backup `messaging.py.bak_calls_1783014110`. Verified: caller `/events/poll`
+  receives `call.accept` after callee accepts; on two phones the caller left Ringing → in-call.
+
+- **`coturn/`** (FIX B) — standing TURN-server infra (coturn 4.6.1 on the prod EC2) so
+  `turn-credentials` issues ICE servers and calls traverse NAT. See `coturn/README.md` for the
+  install, `/etc/turnserver.conf` (`coturn/turnserver.conf`, secret redacted),
+  `/etc/default/coturn` (`coturn/default-coturn`), the 4 `.env.local` `MESSAGING_WEBRTC_TURN_*`
+  keys, the SG ingress (udp/3478, tcp/3478, udp/49160-49200), and the standing-cleanup list.
+  Verified externally (STUN binding + full `turnutils_uclient` Allocate/relay, 0 loss) and on two
+  phones (bidirectional video ~24 fps).
