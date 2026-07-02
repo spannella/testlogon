@@ -145,7 +145,7 @@ export default function Login() {
       if (!resp.auth_required && resp.session_id) {
         // No MFA required — login complete
         const me = await getMe();
-        login(me.user_sub, "");
+        login(me.user_sub, "", { role: me.role ?? null, isAdmin: me.is_admin ?? false, adminProfile: me.admin_profile ?? null });
         navigate("/", { replace: true });
         return;
       }
@@ -228,7 +228,7 @@ export default function Login() {
 
         if (finalResp.status === "ok" && finalResp.session_id) {
           const me = await getMe();
-          login(me.user_sub, "");
+          login(me.user_sub, "", { role: me.role ?? null, isAdmin: me.is_admin ?? false, adminProfile: me.admin_profile ?? null });
           navigate("/", { replace: true });
         } else if (finalResp.required_factors.length > 0) {
           // More factors needed
@@ -378,7 +378,7 @@ export default function Login() {
 
       if (finishResp.status === "ok" && finishResp.session_id) {
         const me = await getMe();
-        login(me.user_sub, "");
+        login(me.user_sub, "", { role: me.role ?? null, isAdmin: me.is_admin ?? false, adminProfile: me.admin_profile ?? null });
         navigate("/", { replace: true });
       } else {
         setError("Authentication failed.");

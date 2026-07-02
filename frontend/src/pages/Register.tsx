@@ -314,7 +314,7 @@ export default function Register() {
       } else {
         if (resp.session_id) {
           const me = await getMe();
-          login(me.user_sub, "");
+          login(me.user_sub, "", { role: me.role ?? null, isAdmin: me.is_admin ?? false, adminProfile: me.admin_profile ?? null });
           navigate("/", { replace: true });
           return;
         }
@@ -348,7 +348,7 @@ export default function Register() {
       const mfaSetup = resp.mfa_setup ?? [];
       if (resp.session_id) {
         const me = await getMe();
-        login(me.user_sub, "");
+        login(me.user_sub, "", { role: me.role ?? null, isAdmin: me.is_admin ?? false, adminProfile: me.admin_profile ?? null });
         if (mfaSetup.length > 0) {
           setPendingSmsMfa(mfaSetup.includes("sms") || pendingSmsMfa);
           setPendingTotpMfa(mfaSetup.includes("totp") || pendingTotpMfa);

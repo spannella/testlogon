@@ -1597,7 +1597,8 @@ export function ComposeBar({
         </div>
       )}
 
-      <div className="flex items-end gap-2">
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-end gap-2">
         {onSendImage && (
           <>
             <Button
@@ -1817,6 +1818,8 @@ export function ComposeBar({
           </Button>
         )}
 
+        </div>
+        <div className="flex items-end gap-2">
         {voiceRecording && onSendVoiceMessage ? (
           <div className="flex-1">
             <VoiceRecorder
@@ -1957,6 +1960,7 @@ export function ComposeBar({
             <Send className="h-4 w-4" />
           )}
         </Button>
+      </div>
       </div>
 
       <FilePickerDialog

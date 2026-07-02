@@ -32,6 +32,9 @@ export interface MeResp {
   user_sub: string;
   session_id: string;
   ip: string;
+  role?: string;
+  is_admin?: boolean;
+  admin_profile?: { type: "general" | "scoped"; scopes: string[] };
 }
 
 export interface SessionInfo {
