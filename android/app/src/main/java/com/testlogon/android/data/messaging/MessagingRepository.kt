@@ -313,6 +313,15 @@ interface MessagingRepository {
     suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation>
 
     /**
+     * #18 — resolve the conversation's peers for the audio/video-call menu from the CONVERSATION
+     * PARTICIPANTS (not message senders), so a brand-new/empty 1:1 DM still exposes the call option.
+     * Returns the conversation [ConversationPeers.type] plus the OTHER participants' user subs (self
+     * excluded). Default no-op keeps test fakes / other implementers unaffected.
+     */
+    suspend fun conversationPeers(conversationId: String): ApiResult<ConversationPeers> =
+        ApiResult.Success(ConversationPeers(type = "dm", otherUserSubs = emptyList()))
+
+    /**
      * AND-153 — search contacts (people) by display-name token. Returns a single bounded list (the
      * endpoint has no pagination). A blank/whitespace-only query short-circuits to an empty list with
      * NO network request (a blank `q` would 422 server-side). The query is trimmed and capped at 64
@@ -1580,6 +1589,23 @@ class MessagingRepositoryImpl @Inject constructor(
             is ApiResult.NetworkError -> result
         }
     }
+
+    // #18 — resolve peers from the conversation record (participants), used by the thread call menu.
+    override suspend fun conversationPeers(conversationId: String): ApiResult<ConversationPeers> =
+        withContext(io) {
+            when (val r = apiCall { api.getConversation(conversationId) }) {
+                is ApiResult.Success -> {
+                    val me = authStateStore.userSub.value
+                    val others = r.data.participants
+                        .map { it.userId }
+                        .filter { it.isNotBlank() && it != me }
+                        .distinct()
+                    ApiResult.Success(ConversationPeers(type = r.data.type, otherUserSubs = others))
+                }
+                is ApiResult.Failure -> r
+                is ApiResult.NetworkError -> r
+            }
+        }
 
     // ---- AND-153: contact search ----
 

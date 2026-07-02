@@ -48,6 +48,7 @@ class InCallViewModel @Inject constructor(
     private val statsSampler: CallStatsSampler,
     private val recordingController: RecordingController,
     private val callMediaHolder: com.testlogon.android.data.webrtc.CallMediaHolder,
+    private val clock: com.testlogon.android.core.data.cache.Clock,
     private val savedState: SavedStateHandle,
     // The real native-WebRTC renderer (RealVideoRenderer) bound in WebRtcApiModule; the screen passes it
     // to the local/remote video composables so they host a SurfaceViewRenderer instead of the placeholder.
@@ -222,18 +223,26 @@ class InCallViewModel @Inject constructor(
         // Duration: prefer the heartbeat-driven elapsedSeconds; otherwise the local 1Hz ticker counting up
         // from the moment Connected was observed. While Reconnecting the displayed value freezes, but the
         // underlying counter keeps advancing (so it resumes correctly once quality recovers).
-        val connected = phase is CallPhase.Connected
-        val baseSeconds = when {
+        // Duration is anchored to the CONNECTED-AT timestamp (CallPhase.Connected.sinceEpochMs) so it
+        // starts at connect (not invite/ring) and reflects real elapsed time regardless of when the
+        // screen subscribed. The heartbeat-reported elapsedSeconds wins when present; otherwise it is
+        // now - connectedAt. The 1Hz durationTicker (combined above) forces this recompute every second
+        // and stops once the phase leaves Connected. While Reconnecting the displayed value freezes (the
+        // underlying clock keeps advancing, so it resumes seamlessly); on end it holds the last value.
+        val connectedSinceMs = (phase as? CallPhase.Connected)?.sinceEpochMs
+        val liveSeconds: Long? = when {
             elapsedSeconds > 0 -> elapsedSeconds
-            connected -> tick
-            else -> 0L
+            connectedSinceMs != null -> ((clock.now() - connectedSinceMs).coerceAtLeast(0L)) / 1_000L
+            else -> null
         }
-        val durationLabel = if (lifecycle == InCallLifecycle.Reconnecting) {
-            CallDurationFormatter.format(frozenDurationSeconds)
-        } else {
-            frozenDurationSeconds = baseSeconds
-            CallDurationFormatter.format(baseSeconds)
+        if (liveSeconds != null && lifecycle != InCallLifecycle.Reconnecting) {
+            frozenDurationSeconds = liveSeconds
         }
+        val baseSeconds = when {
+            lifecycle == InCallLifecycle.Reconnecting -> frozenDurationSeconds
+            else -> liveSeconds ?: frozenDurationSeconds
+        }
+        val durationLabel = CallDurationFormatter.format(baseSeconds)
         // AND-301: billing for the running-cost overlay. The authoritative cost/balance/warnings are
         // copied from each heartbeat into the session (CallManager); between heartbeats we bridge with the
         // local estimate (ceil(elapsed/60) * rate). On Ended we surface the final cost (authoritative if

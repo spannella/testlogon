@@ -1023,8 +1023,10 @@ fun ThreadScreen(
                             onClick = { menuOpen = false; onOpenSearch() },
                             modifier = Modifier.testTag(ThreadSearchTestTags.OPEN),
                         )
-                        // 1:1 video call — only when the DM peer is resolved.
-                        state.peerUserSub?.let { callee ->
+                        // 1:1 video call — only for a 1:1 DM whose peer is resolved (#18: peer now
+                        // comes from the conversation participants, so an empty DM still shows it; groups
+                        // never do).
+                        if (state.isDm) state.peerUserSub?.let { callee ->
                             androidx.compose.material3.DropdownMenuItem(
                                 text = { Text("Video call") },
                                 leadingIcon = { Icon(Icons.Filled.Call, contentDescription = null) },

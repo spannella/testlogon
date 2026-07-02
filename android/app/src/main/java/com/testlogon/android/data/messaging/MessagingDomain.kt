@@ -551,6 +551,16 @@ data class Conversation(
 }
 
 /**
+ * #18 — minimal peer info for the thread audio/video-call menu, resolved from the conversation record's
+ * participants (not message senders). [type] is the conversation type ("dm"/"group"); [otherUserSubs]
+ * are the participants other than the local user. A 1:1 DM has exactly one entry.
+ */
+data class ConversationPeers(
+    val type: String,
+    val otherUserSubs: List<String>,
+)
+
+/**
  * AND-153 — a contact (people-search) result. Mapped from [ContactDto]; carries only what the
  * `/messaging/contacts/search` endpoint returns ([id] from `user_id`, [displayName] from
  * `display_name`). There is no username / avatar URL / presence on the wire, so the UI renders an

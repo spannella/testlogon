@@ -208,6 +208,11 @@ class ThreadViewModel @Inject constructor(
     // thread screen on open.
     private val draftSaver = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 64)
 
+    // #18 — the DM-vs-group truth resolved from the conversation PARTICIPANTS (null until loaded).
+    // Once known it is authoritative over the sender-count heuristic below (a group with a single active
+    // sender must NOT be treated as a DM, which would wrongly expose the call menu).
+    private var participantIsDm: Boolean? = null
+
     init {
         observeThread()
         observeRealtime()
@@ -216,6 +221,32 @@ class ThreadViewModel @Inject constructor(
         observeDraftSaver()
         startTyping()
         observePeerPhoto()
+        resolvePeerFromParticipants()
+    }
+
+    /**
+     * #18 — resolve the DM call peer from the CONVERSATION PARTICIPANTS so the audio/video-call menu
+     * shows even in a brand-new/empty 1:1 DM (no inbound message yet). Only a 1:1 DM (type "dm" with a
+     * single OTHER participant) seeds [ThreadUiState.peerUserSub] + marks [ThreadUiState.isDm]; group
+     * conversations never get a call peer. The sender-derived path in [observeThread] stays as a fallback.
+     */
+    private fun resolvePeerFromParticipants() {
+        viewModelScope.launch {
+            val peers = when (val r = repository.conversationPeers(conversationId)) {
+                is ApiResult.Success -> r.data
+                else -> return@launch
+            }
+            if (peers.otherUserSubs.isEmpty()) return@launch
+            val isDmConversation = peers.type != "group" && peers.otherUserSubs.size == 1
+            val single = peers.otherUserSubs.singleOrNull().takeIf { isDmConversation }
+            participantIsDm = isDmConversation
+            _state.update { prior ->
+                prior.copy(
+                    peerUserSub = prior.peerUserSub ?: single,
+                    isDm = isDmConversation,
+                )
+            }
+        }
     }
 
     /**
@@ -307,8 +338,10 @@ class ThreadViewModel @Inject constructor(
                         },
                         receipts = computeReceipts(visible, self),
                         peerUserSub = prior.peerUserSub ?: otherSenders.firstOrNull(),
-                        // Once messages exist, lock isDm from the distinct-sender count.
-                        isDm = if (visible.isEmpty()) prior.isDm else otherSenders.size <= 1,
+                        // Once messages exist, lock isDm from the distinct-sender count — unless the
+                        // participant roster already resolved the authoritative DM-vs-group truth (#18).
+                        isDm = participantIsDm
+                            ?: if (visible.isEmpty()) prior.isDm else otherSenders.size <= 1,
                     )
                 }
                 // AND-152 — once the deep-link target message is loaded, scroll to it (once).
