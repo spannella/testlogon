@@ -1,0 +1,237 @@
+--- a/app/services/broadcast_chat_store.py
++++ b/app/services/broadcast_chat_store.py
+@@ -160,13 +160,18 @@
+     session_id: str,
+     user_id: str,
+     display_name: str,
+-    text: str,
++    text: Optional[str],
+     *,
+     skip_rate_limit: bool = False,
+     reply_to_message_id: Optional[str] = None,
+     expires_in_seconds: Optional[int] = None,
+     lock_price_cents: Optional[int] = None,
+     lock_description: Optional[str] = None,
++    image_url: Optional[str] = None,
++    video_url: Optional[str] = None,
++    thumbnail_url: Optional[str] = None,
++    view_once: bool = False,
++    send_at: Optional[int] = None,
+ ) -> Dict[str, Any]:
+     """Send a chat message. Enforces rate limit and mute checks.
+ 
+@@ -186,7 +191,20 @@
+     ts = now_ts()
+     ts_ms = int(time.time() * 1000)
+     msg_id = "cm_" + uuid4().hex
+-    sort_key = f"{ts_ms:016d}#{msg_id}"
++
++    # Phase G (BCAST-016) — Scheduled delivery: hold under a SCHED# sort key until due.
++    is_scheduled = send_at is not None and int(send_at) > ts + 2
++    if is_scheduled:
++        sort_key = f"SCHED#{int(send_at):016d}#{msg_id}"
++    else:
++        sort_key = f"{ts_ms:016d}#{msg_id}"
++
++    # Phase E (BCAST-016) — Media kind derivation
++    _media_kind: Optional[str] = None
++    if video_url:
++        _media_kind = "video"
++    elif image_url:
++        _media_kind = "image"
+ 
+     item: Dict[str, Any] = {
+         "session_id": session_id,
+@@ -194,11 +212,25 @@
+         "message_id": msg_id,
+         "sender_id": user_id,
+         "sender_display_name": display_name,
+-        "text": text.strip(),
++        "text": (text or "").strip(),
+         "created_at": ts,
+         "deleted": False,
+         "ttl": ts + 7 * 24 * 3600,
+     }
++    if _media_kind:
++        item["kind"] = _media_kind
++        item["media_kind"] = _media_kind
++        if image_url:
++            item["image_url"] = image_url
++        if video_url:
++            item["video_url"] = video_url
++        if thumbnail_url:
++            item["thumbnail_url"] = thumbnail_url
++    if view_once:
++        item["view_once"] = True
++    if is_scheduled:
++        item["scheduled"] = True
++        item["send_at"] = int(send_at)
+ 
+     # Phase B — Reply
+     if reply_to_message_id:
+@@ -233,9 +265,11 @@
+ 
+     T.broadcast_chat_messages.put_item(Item=item)
+ 
+-    # Publish via SSE for real-time delivery
+     out = _chat_msg_out(item)
+-    broadcast_sse_publish(session_id, {"_type": "chat:message", **out})
++    # Scheduled messages are held until due; do not fan out yet (BCAST-016 Phase G)
++    if not is_scheduled:
++        # Publish via SSE for real-time delivery
++        broadcast_sse_publish(session_id, {"_type": "chat:message", **out})
+ 
+     return {**out, "sort_key": sort_key}
+ 
+@@ -300,8 +334,8 @@
+ 
+     resp = T.broadcast_chat_messages.query(**kwargs)
+     items = resp.get("Items", [])
+-    # Filter out LOTTERY#/LENTRY# config/entry items (BCAST-014)
+-    items = [i for i in items if not (i.get("sort_key", "").startswith("LOTTERY#") or i.get("sort_key", "").startswith("LENTRY#"))]
++    # Filter out LOTTERY#/LENTRY# config/entry + SCHED# held items (BCAST-014/016)
++    items = [i for i in items if not (i.get("sort_key", "").startswith("LOTTERY#") or i.get("sort_key", "").startswith("LENTRY#") or i.get("sort_key", "").startswith("SCHED#") or i.get("scheduled"))]
+     # Reverse to chronological order for display
+     items.reverse()
+ 
+@@ -454,4 +488,140 @@
+     if item.get("lottery_id"):
+         out["lottery_id"] = item["lottery_id"]
+ 
++    # Phase E — Media (BCAST-016)
++    if item.get("media_kind"):
++        out["media_kind"] = item["media_kind"]
++    if item.get("image_url"):
++        out["image_url"] = item["image_url"]
++    if item.get("video_url"):
++        out["video_url"] = item["video_url"]
++    if item.get("thumbnail_url"):
++        out["thumbnail_url"] = item["thumbnail_url"]
++
++    # Phase F — View-once (BCAST-016): client-cooperative one-view.
++    if item.get("view_once"):
++        out["view_once"] = True
++        _seen = item.get("view_once_seen") or set()
++        _consumed = (not is_sender) and (viewer_user_id is not None) and (viewer_user_id in _seen)
++        out["view_once_consumed"] = bool(_consumed)
++        if _consumed:
++            out["text"] = None
++            out["image_url"] = None
++            out["video_url"] = None
++            out["thumbnail_url"] = None
++
++    # Phase G — Scheduled (BCAST-016)
++    if item.get("scheduled"):
++        out["scheduled"] = True
++    if item.get("send_at") is not None:
++        out["send_at"] = int(item["send_at"])
++
+     return out
++
++
++# ─── Phase G / F: Scheduled promotion + view-once consume (BCAST-016) ──────
++
++_SCHED_SWEEP_LOCK = threading.Lock()
++_SCHED_SWEEP_LAST: Dict[str, float] = {}
++_SCHED_SWEEP_MIN_INTERVAL = 3.0
++
++
++def promote_due_scheduled_chats(session_id: str, session_is_live: bool) -> int:
++    """Promote (or drop) scheduled chat messages that are now due.
++
++    Held messages live under a ``SCHED#<send_at>#<msg_id>`` sort key and are
++    excluded from history/stream. When ``send_at <= now`` we re-append them as
++    normal messages (fresh time-ordered sort key) if the session is still live,
++    or drop them if the broadcast has ended. Self-throttled per session.
++    """
++    now_s = time.time()
++    with _SCHED_SWEEP_LOCK:
++        last = _SCHED_SWEEP_LAST.get(session_id, 0.0)
++        if now_s - last < _SCHED_SWEEP_MIN_INTERVAL:
++            return 0
++        _SCHED_SWEEP_LAST[session_id] = now_s
++
++    ts = now_ts()
++    try:
++        resp = T.broadcast_chat_messages.query(
++            KeyConditionExpression=Key("session_id").eq(session_id)
++            & Key("sort_key").begins_with("SCHED#"),
++            Limit=50,
++        )
++    except Exception:
++        return 0
++    promoted = 0
++    for it in resp.get("Items", []):
++        send_at = int(it.get("send_at", 0) or 0)
++        if send_at > ts:
++            continue
++        old_sk = it.get("sort_key")
++        if not session_is_live:
++            try:
++                T.broadcast_chat_messages.delete_item(
++                    Key={"session_id": session_id, "sort_key": old_sk}
++                )
++            except Exception:
++                pass
++            continue
++        ts_ms = int(time.time() * 1000)
++        new_sk = f"{ts_ms:016d}#{it['message_id']}"
++        new_item = {k: v for k, v in it.items() if k not in ("sort_key", "scheduled", "send_at")}
++        new_item["sort_key"] = new_sk
++        new_item["created_at"] = ts
++        try:
++            T.broadcast_chat_messages.put_item(Item=new_item)
++            T.broadcast_chat_messages.delete_item(
++                Key={"session_id": session_id, "sort_key": old_sk}
++            )
++        except Exception:
++            continue
++        out = _chat_msg_out(new_item)
++        try:
++            broadcast_sse_publish(session_id, {"_type": "chat:message", **out})
++        except Exception:
++            pass
++        promoted += 1
++    return promoted
++
++
++def consume_view_once(session_id: str, message_id: str, viewer_user_id: str) -> Dict[str, Any]:
++    """Consume a view-once chat message for a viewer (one-view server enforcement)."""
++    from fastapi import HTTPException
++
++    sort_key = _find_sort_key(session_id, message_id)
++    if not sort_key:
++        raise HTTPException(status_code=404, detail="Message not found")
++    item = T.broadcast_chat_messages.get_item(
++        Key={"session_id": session_id, "sort_key": sort_key}
++    ).get("Item")
++    if not item or not item.get("view_once"):
++        raise HTTPException(status_code=400, detail="Message is not a view-once message")
++
++    is_sender = item.get("sender_id") == viewer_user_id
++    seen = item.get("view_once_seen") or set()
++    already = (not is_sender) and (viewer_user_id in seen)
++
++    if not is_sender and not already:
++        try:
++            T.broadcast_chat_messages.update_item(
++                Key={"session_id": session_id, "sort_key": sort_key},
++                UpdateExpression="ADD view_once_seen :u",
++                ExpressionAttributeValues={":u": {viewer_user_id}},
++            )
++        except Exception:
++            pass
++
++    reveal = is_sender or not already
++    return {
++        "ok": True,
++        "message_id": message_id,
++        "view_once": True,
++        "view_once_consumed": (not is_sender),
++        "already_consumed": bool(already),
++        "text": item.get("text") if reveal else None,
++        "image_url": item.get("image_url") if reveal else None,
++        "video_url": item.get("video_url") if reveal else None,
++        "thumbnail_url": item.get("thumbnail_url") if reveal else None,
++        "media_kind": item.get("media_kind"),
++    }

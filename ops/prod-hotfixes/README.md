@@ -313,3 +313,29 @@ is committed normally under `android/`, not here).
   keys, the SG ingress (udp/3478, tcp/3478, udp/49160-49200), and the standing-cleanup list.
   Verified externally (STUN binding + full `turnutils_uclient` Allocate/relay, 0 loss) and on two
   phones (bidirectional video ~24 fps).
+
+## BCAST-016 — Broadcast live-chat rich message types (LIVE PROD HOTFIX)
+
+Extends the broadcast live group chat (`/broadcast/sessions/{id}/chat`) beyond
+text/reactions/tips/product/lottery to the full rich-type set, mirroring DM messaging.
+Applied live on prod, restarted, verified end-to-end (2-account, per-viewer redaction).
+The app side is committed normally under `android/` (broadcast `LiveChatPanel`/`LiveChatViewModel`
++ data layer, and the in-call drawer which is DM-backed and needs no backend change).
+
+- **`app_routers_broadcast.py.richchat-BCAST-016.patch`** — `BroadcastChatSendIn` now accepts
+  `image_url`, `video_url`, `thumbnail_url`, `view_once`, `send_at` (in addition to the
+  pre-existing `reply_to_message_id`, `expires_in_seconds`, `lock_price_cents`/`lock_description`);
+  `text` relaxed to Optional (media-only sends). Response/history/stream carry the 8 new out
+  fields with per-viewer redaction. NEW endpoint `POST /broadcast/sessions/{id}/chat/{mid}/view`
+  (view-once consume). Generated from prod backup `broadcast.py.bak_richchat_1783017858`.
+
+- **`app_services_broadcast_chat_store.py.richchat-BCAST-016.patch`** — persistence + `_chat_msg_out`
+  for image/video (kind + media_kind), `view_once`/`view_once_consumed` (per-viewer `view_once_seen`),
+  `send_at`/`scheduled` (held under `SCHED#<send_at>#<mid>`, lazy `promote_due_scheduled_chats()`
+  posts when due while the session is live, drops if it ended first). Generated from prod backup
+  `broadcast_chat_store.py.bak_richchat_1783017858`.
+
+Scoping notes (semantically-odd-for-live-chat, implemented faithfully): locked = per-viewer
+pay-to-reveal (host-only send); view-once = client-cooperative one-view; expiring = host-only
+absolute-TTL redaction; scheduled = queue-to-post while live. media rides the existing
+`chat:message` frame; reaction/unlock use the in-process SSE channel.
