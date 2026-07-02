@@ -1,7 +1,7 @@
 package com.testlogon.android.data.webrtc
 
 import kotlinx.coroutines.flow.MutableStateFlow
-import org.webrtc.VideoTrack
+import livekit.org.webrtc.VideoTrack
 import javax.inject.Inject
 import javax.inject.Singleton
 

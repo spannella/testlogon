@@ -164,7 +164,7 @@ dependencies {
 
     // Hilt
     implementation(libs.hilt.android)
-    implementation(libs.stream.webrtc.android) // WebRTC media engine (org.webrtc)
+    implementation(libs.livekit.android) // WebRTC media engine (livekit.org.webrtc via livekit-webrtc) + LiveKit SDK (sets up audio room #104); ONLY org.webrtc-lineage provider
     ksp(libs.hilt.compiler)
 
     // Test

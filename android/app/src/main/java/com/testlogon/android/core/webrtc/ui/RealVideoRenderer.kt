@@ -12,9 +12,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.testlogon.android.data.webrtc.CallMediaHolder
 import com.testlogon.android.data.webrtc.VideoRole
 import com.testlogon.android.data.webrtc.VideoScaling
-import org.webrtc.EglBase
-import org.webrtc.RendererCommon
-import org.webrtc.SurfaceViewRenderer
+import livekit.org.webrtc.EglBase
+import livekit.org.webrtc.RendererCommon
+import livekit.org.webrtc.SurfaceViewRenderer
 import javax.inject.Inject
 import javax.inject.Singleton
 

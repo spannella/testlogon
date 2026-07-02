@@ -1,6 +1,6 @@
 [versions]
 agp = "8.7.3"
-streamWebrtc = "1.3.8"
+livekit = "2.18.3"                # LiveKit Android SDK; transitively provides livekit-webrtc (io.github.webrtc-sdk:android-prefixed = livekit.org.webrtc, M125) — the ONLY org.webrtc provider (getstream removed). Sets up the audio room (#104).
 kotlin = "2.0.21"
 ksp = "2.0.21-1.0.25"            # MUST track the Kotlin version prefix exactly
 hilt = "2.52"
@@ -42,7 +42,7 @@ detekt = "1.23.8"            # 1.23.x patch aligned to Kotlin 2.0.21
 detektCompose = "0.4.16"
 
 [libraries]
-stream-webrtc-android = { group = "io.getstream", name = "stream-webrtc-android", version.ref = "streamWebrtc" }
+livekit-android = { group = "io.livekit", name = "livekit-android", version.ref = "livekit" }
 # AndroidX core / lifecycle
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 # AND-114 — per-app locales backport (AppCompatDelegate.setApplicationLocales) for minSdk 24.

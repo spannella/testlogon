@@ -2,7 +2,7 @@ package com.testlogon.android.data.webrtc
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
-import org.webrtc.Camera2Enumerator
+import livekit.org.webrtc.Camera2Enumerator
 import javax.inject.Inject
 import javax.inject.Singleton
 

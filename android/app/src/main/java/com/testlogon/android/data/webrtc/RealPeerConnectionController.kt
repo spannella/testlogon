@@ -11,22 +11,22 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.suspendCancellableCoroutine
-import org.webrtc.AudioSource
-import org.webrtc.AudioTrack
-import org.webrtc.Camera2Enumerator
-import org.webrtc.CameraVideoCapturer
-import org.webrtc.EglBase
-import org.webrtc.IceCandidate as RtcIceCandidate
-import org.webrtc.MediaConstraints
-import org.webrtc.MediaStream
-import org.webrtc.PeerConnection
-import org.webrtc.PeerConnectionFactory
-import org.webrtc.RtpReceiver
-import org.webrtc.SdpObserver
-import org.webrtc.SessionDescription
-import org.webrtc.SurfaceTextureHelper
-import org.webrtc.VideoSource
-import org.webrtc.VideoTrack
+import livekit.org.webrtc.AudioSource
+import livekit.org.webrtc.AudioTrack
+import livekit.org.webrtc.Camera2Enumerator
+import livekit.org.webrtc.CameraVideoCapturer
+import livekit.org.webrtc.EglBase
+import livekit.org.webrtc.IceCandidate as RtcIceCandidate
+import livekit.org.webrtc.MediaConstraints
+import livekit.org.webrtc.MediaStream
+import livekit.org.webrtc.PeerConnection
+import livekit.org.webrtc.PeerConnectionFactory
+import livekit.org.webrtc.RtpReceiver
+import livekit.org.webrtc.SdpObserver
+import livekit.org.webrtc.SessionDescription
+import livekit.org.webrtc.SurfaceTextureHelper
+import livekit.org.webrtc.VideoSource
+import livekit.org.webrtc.VideoTrack
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
@@ -214,7 +214,7 @@ class RealPeerConnectionController @Inject constructor(
         override fun onIceConnectionReceivingChange(receiving: Boolean) {}
         override fun onAddStream(stream: MediaStream) {}
         override fun onRemoveStream(stream: MediaStream) {}
-        override fun onDataChannel(channel: org.webrtc.DataChannel) {}
+        override fun onDataChannel(channel: livekit.org.webrtc.DataChannel) {}
         override fun onRenegotiationNeeded() {}
     }
 

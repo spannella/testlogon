@@ -6,11 +6,11 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import org.webrtc.DefaultVideoDecoderFactory
-import org.webrtc.DefaultVideoEncoderFactory
-import org.webrtc.EglBase
-import org.webrtc.PeerConnectionFactory
-import org.webrtc.audio.JavaAudioDeviceModule
+import livekit.org.webrtc.DefaultVideoDecoderFactory
+import livekit.org.webrtc.DefaultVideoEncoderFactory
+import livekit.org.webrtc.EglBase
+import livekit.org.webrtc.PeerConnectionFactory
+import livekit.org.webrtc.audio.JavaAudioDeviceModule
 import javax.inject.Singleton
 
 /**
