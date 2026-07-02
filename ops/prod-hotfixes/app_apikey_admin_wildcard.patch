@@ -1,0 +1,164 @@
+# LIVE PROD HOTFIX: API-key full admin coverage (admin:all wildcard + principal injection)
+# Applied to prod /home/ubuntu/testlogon 2026-07-02 (ts 1782952977; backups app/**/*.bak_apikey_1782952977).
+# BATCH1: app/main.py _api_key_principal_middleware() sets request.state.api_key_principal for ALL
+#   routers when X-API-Key / Authorization: ApiKey present (idempotent; no key header -> untouched;
+#   invalid/revoked/expired/CIDR key -> principal left unset so route auth 401/403s; bearer-conflict
+#   honors S.api_key_dual_credential_mode). Registered right after _playback_entitlement_middleware.
+# BATCH2: admin:all wildcard capability -> (a) api_key_capabilities.py canonical+expand full set,
+#   (b) api_key_authorization.py requires_scope short-circuits ALLOW (also fixes unmapped_route),
+#   (c) api_keys.py create gate: admin:all grantable ONLY to admin/root owners (else 403).
+# NOTE: prod source diverges from android-impl; git apply this to PRODs real source, not this branch.
+#
+--- a/app/services/api_key_capabilities.py
++++ b/app/services/api_key_capabilities.py
+@@ -3,6 +3,7 @@
+ from typing import Dict, Iterable, List, Set
+ 
+ CANONICAL_API_KEY_CAPABILITIES: tuple[str, ...] = (
++    "admin:all",
+     "ads:manage",
+     "ads:read",
+     "ads:serve",
+@@ -32,6 +33,9 @@
+ 
+ _CANONICAL_SET = set(CANONICAL_API_KEY_CAPABILITIES)
+ 
++# BATCH2: admin:all is a wildcard capability implying every canonical scope.
++WILDCARD_API_KEY_CAPABILITY = "admin:all"
++
+ # Canonical inheritance semantics for broader capability grants.
+ # These are one-way implications: the broader scope implies the narrower scopes.
+ CAPABILITY_IMPLICATIONS: Dict[str, tuple[str, ...]] = {
+@@ -66,6 +70,9 @@
+ 
+ def expand_api_key_capabilities(values: Iterable[str] | None) -> List[str]:
+     expanded: Set[str] = set(normalize_api_key_capabilities(values))
++    if WILDCARD_API_KEY_CAPABILITY in expanded:
++        # BATCH2: the wildcard expands to the FULL canonical capability set.
++        return sorted(set(CANONICAL_API_KEY_CAPABILITIES))
+     queue = list(expanded)
+     while queue:
+         current = queue.pop(0)
+--- a/app/services/api_key_authorization.py
++++ b/app/services/api_key_authorization.py
+@@ -6,7 +6,7 @@
+ 
+ from app.services.api_metering_contract import route_id_from_request
+ from app.services.api_keys import effective_api_key_capabilities
+-from app.services.api_key_capabilities import expand_api_key_capabilities
++from app.services.api_key_capabilities import expand_api_key_capabilities, WILDCARD_API_KEY_CAPABILITY
+ from app.services.api_key_route_scope_registry import resolve_required_scopes_for_route
+ 
+ EntitlementGate = Callable[[Request | None, Dict[str, Any], list[str]], bool | Dict[str, Any] | None]
+@@ -32,6 +32,18 @@
+     request: Request | None = None,
+     entitlement_gate: Optional[EntitlementGate] = None,
+ ) -> Dict[str, Any]:
++    # BATCH2: an admin:all wildcard key is allowed on EVERY route (incl. unmapped),
++    # bypassing per-scope and entitlement checks.
++    _granted_all = set(expand_api_key_capabilities(effective_api_key_capabilities(key_item)))
++    if WILDCARD_API_KEY_CAPABILITY in _granted_all:
++        return {
++            "ok": True,
++            "wildcard": True,
++            "required_scopes": _normalize_required_scopes(required_scopes),
++            "granted_scopes": sorted(_granted_all),
++            "api_key_id": str(key_item.get("key_id") or ""),
++            "entitlement": None,
++        }
+     required = _normalize_required_scopes(required_scopes)
+     if not required:
+         raise HTTPException(
+--- a/app/services/api_keys.py
++++ b/app/services/api_keys.py
+@@ -138,6 +138,27 @@
+     return out
+ 
+ 
++def _enforce_wildcard_owner_role_or_403(user_sub: str, capabilities: List[str]) -> None:
++    # BATCH2: the admin:all wildcard may be granted ONLY to admin/root owners.
++    if "admin:all" not in {str(c).strip().lower() for c in capabilities or []}:
++        return
++    from app.auth.roles import normalize_role, Role
++    try:
++        item = T.users.get_item(Key={"user_sub": user_sub}).get("Item") or {}
++    except Exception:
++        item = {}
++    role = normalize_role(item.get("role"))
++    if role not in {Role.ADMIN, Role.ROOT}:
++        raise HTTPException(
++            403,
++            {
++                "code": "api_key_wildcard_forbidden",
++                "message": "The admin:all capability may only be granted to admin/root owners",
++                "details": {"required_role": "admin", "owner_role": role.value},
++            },
++        )
++
++
+ def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = None, capabilities: List[str] | None = None) -> Dict[str, Any]:
+     ts = now_ts()
+     key_id = secrets.token_hex(16)
+@@ -149,7 +170,8 @@
+         ttl = 0  # user explicitly chose no expiry
+ 
+     normalized_capabilities = _normalize_capabilities_or_400(capabilities)
+-    _enforce_capability_plan_or_403(user_sub, normalized_capabilities)
++    _enforce_wildcard_owner_role_or_403(user_sub, normalized_capabilities)
++    _enforce_capability_plan_or_403(user_sub, [c for c in normalized_capabilities if c != "admin:all"])
+ 
+     item = {
+         "key_id": key_id,
+--- a/app/main.py
++++ b/app/main.py
+@@ -452,6 +452,41 @@
+         return await call_next(request)
+     return _middleware
+ 
++
++# --- BATCH1: API-key principal injection (decoupled from scope enforcement) ---
++# When api-key headers (X-API-Key / Authorization: ApiKey) are present, validate
++# the key and set request.state.api_key_principal so the shared identity deps
++# (get_authenticated_user / require_ui_session) resolve the OWNER role for ALL
++# routers -- not just the 7 policy-gated ones. No key header -> untouched.
++def _api_key_principal_middleware():
++    async def _middleware(request: Request, call_next):
++        try:
++            from app.services.api_key_policy_enforcement import _has_api_key_headers, _has_bearer_header
++            from app.services.api_key_auth_dependency import require_api_key_principal
++            from app.core.settings import S as _S
++            state = getattr(request, "state", None)
++            already = getattr(state, "api_key_principal", None) if state is not None else None
++            if not isinstance(already, dict) and _has_api_key_headers(request):
++                mode = str(getattr(_S, "api_key_dual_credential_mode", "prefer_api_key") or "prefer_api_key").strip().lower()
++                proceed = True
++                if _has_bearer_header(request):
++                    if mode == "prefer_session":
++                        proceed = False
++                    elif mode == "reject":
++                        return JSONResponse(status_code=400, content={"detail": {"code": "api_key_dual_credential_conflict", "reason": "dual_credential_conflict", "message": "Both API key and Bearer credentials were provided"}})
++                if proceed:
++                    try:
++                        await require_api_key_principal(request)
++                    except Exception:
++                        # present-but-invalid key (revoked/expired/CIDR/bad): do NOT
++                        # authenticate -- leave principal unset so route auth 401/403s.
++                        pass
++        except Exception:
++            logger.debug("api_key_principal_middleware fell through", exc_info=True)
++        return await call_next(request)
++    return _middleware
++
++
+ # --- GAP-0323: crawler-detection meta-tag middleware ---------------------
+ # Social bots (Facebook, Twitter/X, Discord, Slack, LinkedIn, ...) do not
+ # execute JS, so client-side react-helmet-async produces no OG/meta tags for
+@@ -621,6 +656,7 @@
+     app.middleware("http")(_api_consumer_rate_limit_middleware())   # PLT-001: between IP RL and metering
+     app.middleware("http")(_api_usage_metering_middleware())
+     app.middleware("http")(_playback_entitlement_middleware())
++    app.middleware("http")(_api_key_principal_middleware())  # BATCH1: set api_key_principal for ALL routers
+     if METRICS_ENABLED:
+         app.middleware("http")(metrics_middleware)
+         set_app_info(app.title, app.version)
+
