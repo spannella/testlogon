@@ -230,7 +230,10 @@ private fun CapabilitiesSection(
                 text = stringResource(R.string.api_keys_caps_title),
                 style = MaterialTheme.typography.titleMedium,
             )
-            ApiKeyCapabilities.GROUPED.forEach { (group, caps) ->
+            ApiKeyCapabilities.GROUPED.forEach { (group, groupCaps) ->
+                // The wildcard (admin:all) is grantable only at CREATE time (admin/root owners); don't offer it here.
+                val caps = groupCaps.filterNot { ApiKeyCapabilities.isWildcard(it.id) }
+                if (caps.isEmpty()) return@forEach
                 Text(
                     text = group,
                     style = MaterialTheme.typography.labelLarge,

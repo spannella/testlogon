@@ -18,8 +18,16 @@ data class ApiCapability(
 
 object ApiKeyCapabilities {
 
+    /**
+     * The backend WILDCARD capability id (mirrors `api_key_capabilities.py` WILDCARD_API_KEY_CAPABILITY).
+     * A key holding [WILDCARD] can do EVERYTHING via the API; the backend grants it ONLY to admin/root owners
+     * (a non-admin owner selecting it gets a 403 `api_key_wildcard_forbidden`, surfaced inline on create).
+     */
+    const val WILDCARD: String = "admin:all"
+
     /** Verbatim wire ids, in catalog order (must match the backend canonical set). */
     val ALL: List<ApiCapability> = listOf(
+        ApiCapability(WILDCARD, "Full access", "Full access (admin)"),
         ApiCapability("ads:manage", "Ads", "Manage"),
         ApiCapability("ads:read", "Ads", "Read"),
         ApiCapability("ads:serve", "Ads", "Serve"),
@@ -48,6 +56,9 @@ object ApiKeyCapabilities {
     )
 
     private val BY_ID: Map<String, ApiCapability> = ALL.associateBy { it.id }
+
+    /** True when [id] is the all-powerful wildcard capability. */
+    fun isWildcard(id: String): Boolean = id == WILDCARD
 
     /** Catalog in display order, grouped by product area (groups preserve first-seen order). */
     val GROUPED: List<Pair<String, List<ApiCapability>>> =

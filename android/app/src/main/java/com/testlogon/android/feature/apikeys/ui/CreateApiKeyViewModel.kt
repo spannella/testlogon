@@ -26,6 +26,11 @@ import javax.inject.Inject
  * once. A 422 whose loc tail is `label` maps to the inline [CreateApiKeyForm.labelError]; other failures
  * populate [CreateApiKeyForm.submitError] (a 401 "Fresh MFA required" surfaces here verbatim so the user knows to
  * re-verify MFA). A TERMINAL 401 from an expired session -> one-shot NavigateToLogin.
+ *
+ * Full-access (admin:all) wildcard: the backend grants it ONLY to admin/root owners; a non-admin owner selecting
+ * the "Full access (admin)" chip gets a 403 `api_key_wildcard_forbidden`, which we map to a clear inline
+ * [CreateApiKeyForm.submitError] (the generic [ApiErrorParser] would otherwise collapse the unknown code to a
+ * "something went wrong" fallback).
  */
 @HiltViewModel
 class CreateApiKeyViewModel @Inject constructor(
@@ -79,10 +84,14 @@ class CreateApiKeyViewModel @Inject constructor(
                         _effects.send(ApiKeysEffect.NavigateToLogin)
                     } else {
                         val labelError = errorParser.fieldErrorForLocTail(result.error, FIELD_LABEL)
+                        // The wildcard-forbidden 403 carries an unmapped code -> give it a clear, specific message.
+                        val submitError =
+                            if (result.error.code == WILDCARD_FORBIDDEN_CODE) WILDCARD_FORBIDDEN_MESSAGE
+                            else result.error.message
                         _form.value = _form.value.copy(
                             submitting = false,
                             labelError = labelError,
-                            submitError = result.error.message,
+                            submitError = submitError,
                         )
                     }
                 }
@@ -99,5 +108,8 @@ class CreateApiKeyViewModel @Inject constructor(
         private const val HTTP_UNAUTHORIZED = 401
         private const val FIELD_LABEL = "label"
         private const val OFFLINE_FALLBACK = "Couldn't reach the server. Try again."
+        private const val WILDCARD_FORBIDDEN_CODE = "api_key_wildcard_forbidden"
+        private const val WILDCARD_FORBIDDEN_MESSAGE =
+            "Full access (admin) can only be granted to admin or root owners."
     }
 }
