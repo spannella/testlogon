@@ -7,16 +7,25 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Person
@@ -26,20 +35,25 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.outlined.ChatBubble
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -81,9 +95,11 @@ import com.testlogon.android.feature.call.recording.RecordingUploadStatus
 fun InCallRoute(
     onCallEnded: () -> Unit,
     viewModel: InCallViewModel = hiltViewModel(),
+    chatViewModel: InCallChatViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val recording by viewModel.recordingState.collectAsStateWithLifecycle()
+    val chatState by chatViewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
         viewModel.callEnded.collect { onCallEnded() }
     }
@@ -111,6 +127,9 @@ fun InCallRoute(
         onRecordDecline = viewModel::onRecordDecline,
         onRecordCancel = viewModel::onRecordCancel,
         onRecordRetry = viewModel::onRecordRetry,
+        chatState = chatState,
+        onChatDraftChange = chatViewModel::onDraftChange,
+        onChatSend = chatViewModel::onSend,
     )
 }
 
@@ -125,10 +144,18 @@ fun InCallScreen(
     onRecordDecline: () -> Unit = {},
     onRecordCancel: () -> Unit = {},
     onRecordRetry: () -> Unit = {},
+    chatState: InCallChatUiState = InCallChatUiState(),
+    onChatDraftChange: (String) -> Unit = {},
+    onChatSend: () -> Unit = {},
 ) {
+    // FIX C — the in-call chat drawer is a local overlay toggled from the control bar; it rides the DM.
+    var chatOpen by remember { mutableStateOf(false) }
+
     // Auto-hide the controls after 4s of inactivity in video mode; in audio-only they stay visible.
-    LaunchedEffect(state.controlsVisible, state.isVideoCall) {
-        if (state.isVideoCall && state.controlsVisible) {
+    // Pause the auto-hide while the chat drawer is open so the controls (and its chat button) don't
+    // disappear underneath it.
+    LaunchedEffect(state.controlsVisible, state.isVideoCall, chatOpen) {
+        if (state.isVideoCall && state.controlsVisible && !chatOpen) {
             kotlinx.coroutines.delay(4_000)
             onAction(InCallAction.ToggleControls)
         }
@@ -211,6 +238,7 @@ fun InCallScreen(
                 onAction = onAction,
                 recordingPhase = recording.phase,
                 onRecord = onRecord,
+                onOpenChat = { chatOpen = true },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -245,6 +273,163 @@ fun InCallScreen(
                 onAccept = onRecordConsent,
                 onDecline = onRecordDecline,
             )
+        }
+
+        // FIX C — in-call chat drawer: a lightweight bottom sheet over the call, bound to the call's DM
+        // conversation (reuses the messaging thread data + realtime). Overlaid last so it sits on top.
+        if (chatOpen) {
+            InCallChatDrawer(
+                state = chatState,
+                peerName = state.peerName,
+                onDraftChange = onChatDraftChange,
+                onSend = onChatSend,
+                onClose = { chatOpen = false },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun InCallChatDrawer(
+    state: InCallChatUiState,
+    peerName: String?,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxHeight(0.6f)
+            .testTag("incall_chat_drawer"),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .imePadding()
+                .padding(horizontal = 12.dp),
+        ) {
+            // Header: title + close.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = peerName?.let { "Chat with $it" } ?: "In-call chat",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.testTag("incall_chat_close"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close chat",
+                    )
+                }
+            }
+
+            // Message list (newest at the bottom via reverseLayout, so we render newest-first).
+            val listState = rememberLazyListState()
+            val reversed = remember(state.messages) { state.messages.asReversed() }
+            LaunchedEffect(state.messages.size) {
+                if (state.messages.isNotEmpty()) listState.scrollToItem(0)
+            }
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .testTag("incall_chat_list"),
+                state = listState,
+                reverseLayout = true,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                items(reversed, key = { it.key }) { msg ->
+                    ChatBubble(msg)
+                }
+            }
+
+            // Composer.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = state.draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("incall_chat_input"),
+                    placeholder = { Text("Message") },
+                    maxLines = 4,
+                )
+                Spacer(Modifier.size(8.dp))
+                IconButton(
+                    onClick = onSend,
+                    enabled = state.draft.isNotBlank(),
+                    modifier = Modifier.testTag("incall_chat_send"),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send message",
+                        tint = if (state.draft.isNotBlank()) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatBubble(msg: InCallChatMessage) {
+    val bubbleColor = if (msg.isOwn) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (msg.isOwn) Arrangement.End else Arrangement.Start,
+    ) {
+        Surface(
+            color = bubbleColor,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.widthIn(max = 280.dp),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                Text(
+                    text = msg.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = when {
+                        msg.failed -> "Failed"
+                        msg.sending -> "Sending…"
+                        else -> msg.timeLabel
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -378,6 +563,7 @@ private fun ControlBar(
     onAction: (InCallAction) -> Unit,
     recordingPhase: RecordingPhase,
     onRecord: () -> Unit,
+    onOpenChat: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val micCd = stringResource(if (state.micEnabled) R.string.call_mute_cd else R.string.call_unmute_cd)
@@ -424,6 +610,13 @@ private fun ControlBar(
         RecordingControl(
             phase = recordingPhase,
             onRecord = onRecord,
+        )
+        // FIX C — open the in-call chat drawer (rides the call's DM conversation).
+        ControlButton(
+            icon = Icons.Outlined.ChatBubble,
+            contentDescription = "Open in-call chat",
+            tag = "incall_chat_open",
+            onClick = onOpenChat,
         )
         ControlButton(
             icon = Icons.Filled.CallEnd,
