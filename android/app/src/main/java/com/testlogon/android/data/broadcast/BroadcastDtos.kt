@@ -45,6 +45,9 @@ data class BroadcastSessionDto(
     @Json(name = "tip_enabled") val tipEnabled: Boolean? = null,
     @Json(name = "tip_min_cents") val tipMinCents: Long? = null,
     @Json(name = "tip_max_cents") val tipMaxCents: Long? = null,
+    // #104 AUDIO ROOM — session mode ("video" | "audio_room") + stage capacity, carried on the same DTO.
+    @Json(name = "mode") val mode: String = "video",
+    @Json(name = "stage_max_slots") val stageMaxSlots: Int = 20,
 )
 
 /**
@@ -55,6 +58,9 @@ data class BroadcastSessionDto(
 @JsonClass(generateAdapter = true)
 data class BroadcastSessionCreateInDto(
     @Json(name = "profile_id") val profileId: String,
+    // #104 AUDIO ROOM — additive + defaulted so existing video create() callers are unaffected.
+    @Json(name = "mode") val mode: String = "video",
+    @Json(name = "stage_max_slots") val stageMaxSlots: Int = 20,
 )
 
 /**

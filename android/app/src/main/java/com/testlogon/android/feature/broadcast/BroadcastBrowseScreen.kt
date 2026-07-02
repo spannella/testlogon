@@ -2,6 +2,7 @@
 
 package com.testlogon.android.feature.broadcast
 
+import com.testlogon.android.feature.broadcast.audioroom.AudioRoomDiscoverySection
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -82,6 +83,7 @@ fun BroadcastBrowseRoute(
     onBack: () -> Unit,
     onSessionClick: (sessionId: String, status: BroadcastSessionStatus) -> Unit,
     onGoLiveHost: () -> Unit = {},
+    onOpenAudioRoom: (String) -> Unit = {},
     viewModel: BroadcastBrowseViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -103,6 +105,7 @@ fun BroadcastBrowseRoute(
         onToggleReminder = viewModel::toggleReminder,
         onRetry = viewModel::retry,
         onGoLiveHost = onGoLiveHost,
+        onOpenAudioRoom = onOpenAudioRoom,
     )
 }
 
@@ -115,6 +118,7 @@ fun BroadcastBrowseScreen(
     onToggleReminder: (String, Boolean) -> Unit,
     onRetry: () -> Unit,
     onGoLiveHost: () -> Unit = {},
+    onOpenAudioRoom: (String) -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -143,6 +147,8 @@ fun BroadcastBrowseScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // #104 AUDIO ROOM — audio-rooms strip (Start + live audio rooms), distinct from the video list.
+            AudioRoomDiscoverySection(onOpenAudioRoom = onOpenAudioRoom)
             val content = state.contentOrCached()
             if (content != null) {
                 BucketTabs(content = content, onSelectBucket = onSelectBucket)

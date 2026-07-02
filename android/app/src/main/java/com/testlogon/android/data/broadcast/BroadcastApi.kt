@@ -40,6 +40,8 @@ interface BroadcastApi {
     @GET("broadcast/live")
     suspend fun listLiveSessions(
         @Query("limit") limit: Int? = null,
+        // #104 AUDIO ROOM — optional mode filter (e.g. "audio_room"); null keeps existing video callers.
+        @Query("mode") mode: String? = null,
     ): BroadcastSessionListRespDto
 
     @GET("broadcast/sessions/scheduled")

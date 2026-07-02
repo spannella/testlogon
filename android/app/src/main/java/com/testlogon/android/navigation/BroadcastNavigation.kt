@@ -31,6 +31,8 @@ import com.testlogon.android.feature.broadcast.tipsconfig.TipsConfigRoute
 import com.testlogon.android.feature.broadcast.tipsconfig.TipsConfigViewModel
 import com.testlogon.android.feature.broadcasthost.manage.GoalsProductsViewModel
 import com.testlogon.android.feature.broadcasthost.manage.ManageRoute
+import com.testlogon.android.feature.broadcast.audioroom.AudioRoomRoute
+import com.testlogon.android.feature.broadcast.audioroom.AudioRoomViewModel
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
 import com.testlogon.android.feature.guest.GuestAcceptRoute
@@ -48,6 +50,13 @@ data object BroadcastViewerDest {
     const val ROUTE = "broadcast/viewer/{${ViewerViewModel.ARG_SESSION_ID}}"
 
     fun build(sessionId: String): String = "broadcast/viewer/${Uri.encode(sessionId)}"
+}
+
+/** #104 AUDIO ROOM (LiveKit) — the audio-room stage destination (host/speaker/listener), keyed by sessionId. */
+data object AudioRoomDest {
+    const val ROUTE = "broadcast/audioroom/{${AudioRoomViewModel.ARG_SESSION_ID}}"
+
+    fun build(sessionId: String): String = "broadcast/audioroom/${Uri.encode(sessionId)}"
 }
 
 /** AND-307 — the host create/schedule (Go Live) destination, keyed by the broadcast profile id. */
@@ -355,11 +364,29 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
     ) {
         LiveQaHostRoute(onBack = { navController.popBackStack() })
     }
+    // #104 AUDIO ROOM — the LiveKit audio-room stage destination (deep-linkable for share/join).
+    composable(
+        route = AudioRoomDest.ROUTE,
+        arguments = listOf(
+            navArgument(AudioRoomViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+        deepLinks = listOf(
+            navDeepLink {
+                uriPattern = "testlogon://broadcast/audioroom/{${AudioRoomViewModel.ARG_SESSION_ID}}"
+            },
+        ),
+    ) {
+        AudioRoomRoute(onBack = { navController.popBackStack() })
+    }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(
             onBack = { navController.popBackStack() },
             onSessionClick = { sessionId, _ ->
                 navController.navigate(BroadcastViewerDest.build(sessionId)) { launchSingleTop = true }
+            },
+            // #104 — open (or, after Start, create+open) a LiveKit audio room.
+            onOpenAudioRoom = { sessionId ->
+                navController.navigate(AudioRoomDest.build(sessionId)) { launchSingleTop = true }
             },
             // Host "Go Live": enter the real create -> ingest (camera/mic publish) flow. The backend treats
             // profile_id as an opaque grouping key (the session is owned by the authenticated user via
