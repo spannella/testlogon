@@ -271,3 +271,20 @@ the resolved name.
   (~L16055); the android-impl branch backend diverges from prod, so this is a
   re-appliable prod artifact, not a branch merge. Backup on prod:
   `messaging.py.bak_deleg_1782935787`.
+
+## app_main.py.webcatchall.patch (WEB bug 2 — SPA deep-link catch-all, 2026-07-01)
+`create_app()` served `index.html` ONLY at `GET /`; any server-side load/reload of a
+client route (`/login`, `/messages`, ...) fell through to `{"detail":"Not Found"}`,
+breaking phone-Chrome deep-links and hard reloads. FIX: a final GET catch-all
+`@app.get("/{full_path:path}", include_in_schema=False)` registered LAST (after every
+`include_router` + the `/static` mount, so it can never shadow them). Serves
+`static_dir/index.html` for unmatched non-API GET paths; returns a real JSON 404 for
+reserved API/asset namespaces (`ui,v1,api,messaging,broadcast,mock,internal,static,
+metrics,openapi,docs,redoc,tickets,posts,o,oauth,webhooks,.well-known,browser-ssh,
+broadcast-devtools`) and for any path whose last segment has a file extension (missing
+static asset). Verified: `/login`,`/messages`,`/more`,`/admin/moderation` -> 200 HTML
+(loopback + public HTTPS + on-Pixel Chrome deep-link renders the SPA Messages screen);
+`/openapi.json` 200 JSON, `/ui/me` 401 JSON, `/ui/bogus`,`/v1/nope`,`/messaging/bogus`
+404 JSON, `/foo.js` 404. Applies at prod offset ~L1620 (right before `return app`);
+android-impl backend diverges from prod, so this is a re-appliable prod artifact, not a
+branch merge. Backup on prod: `app/main.py.bak_webcatchall_1782949220`.
