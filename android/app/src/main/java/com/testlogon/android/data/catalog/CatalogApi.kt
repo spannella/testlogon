@@ -1,6 +1,9 @@
 package com.testlogon.android.data.catalog
 
+import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -40,8 +43,39 @@ interface CatalogApi {
         @Query("next_token") nextToken: String? = null,
     ): CatalogItemListDto
 
+    /**
+     * ECOM (reviews) — the item-review sub-resource. Reviews are keyed by item_id alone (no category in
+     * the path). List is an idempotent GET; add is a non-idempotent POST; delete removes by review_id.
+     * X-CSRF-Token / session cookies are attached by the interceptor chain.
+     *
+     *  - GET    ui/catalog/items/{item_id}/reviews              -> CatalogReviewListOut
+     *  - POST   ui/catalog/items/{item_id}/reviews              -> CatalogReviewOut (body CatalogReviewCreateIn)
+     *  - DELETE ui/catalog/items/{item_id}/reviews/{review_id}  -> { ok: true }
+     */
+    @GET("ui/catalog/items/{itemId}/reviews")
+    suspend fun listReviews(
+        @Path("itemId") itemId: String,
+        @Query("page_size") pageSize: Int = REVIEW_PAGE_SIZE,
+        @Query("next_token") nextToken: String? = null,
+    ): CatalogReviewListDto
+
+    @POST("ui/catalog/items/{itemId}/reviews")
+    suspend fun addReview(
+        @Path("itemId") itemId: String,
+        @Body body: CatalogReviewCreateDto,
+    ): CatalogReviewDto
+
+    @DELETE("ui/catalog/items/{itemId}/reviews/{reviewId}")
+    suspend fun deleteReview(
+        @Path("itemId") itemId: String,
+        @Path("reviewId") reviewId: String,
+    ): OkRespCatalogDto
+
     companion object {
         /** Web client default (cart.ts getCategories / getCategoryItems). */
         const val PAGE_SIZE = 50
+
+        /** Reviews page size (backend caps at 200). */
+        const val REVIEW_PAGE_SIZE = 50
     }
 }

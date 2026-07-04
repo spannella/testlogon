@@ -85,6 +85,11 @@ object MoreRoutes {
     // AND-211: the shopping cart.
     val CART: String get() = CartDest.ROUTE
 
+    // ECOM: the wishlist / favourites (saved catalog items).
+    val WISHLIST: String get() = WishlistDest.ROUTE
+    val SELLER_STORE: String get() = SellerStoreDest.ROUTE
+    val SELLER_ORDERS: String get() = SellerOrdersDest.ROUTE
+
     // AND-332: the server file manager (path-based browse + upload/download/share/Drive-import).
     const val FILES = FilesDest.ROUTE
 
@@ -458,6 +463,9 @@ object MoreRoutes {
             GALLERY,
             CATALOG,
             CART,
+            WISHLIST,
+            SELLER_STORE,
+            SELLER_ORDERS,
             FILES,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Copyright
 import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Balance
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.CreditCardOff
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Handshake
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.SupportAgent
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Insights
@@ -937,6 +939,34 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.CART,
             hub = MoreHub.SHOP,
             section = MoreSection.APP,
+        ),
+        // ECOM: wishlist / favourites — saved catalog items.
+        MoreEntry(
+            id = "wishlist",
+            labelRes = R.string.more_entry_wishlist,
+            icon = Icons.Outlined.FavoriteBorder,
+            route = MoreRoutes.WISHLIST,
+            hub = MoreHub.SHOP,
+            section = MoreSection.APP,
+        ),
+        // ECOM (seller store): creator/operator-gated store management (SHOP hub).
+        MoreEntry(
+            id = "seller_store",
+            labelRes = R.string.more_entry_seller_store,
+            icon = Icons.Outlined.Storefront,
+            route = MoreRoutes.SELLER_STORE,
+            hub = MoreHub.SHOP,
+            section = MoreSection.APP,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "seller_orders",
+            labelRes = R.string.more_entry_seller_orders,
+            icon = Icons.Outlined.Inventory2,
+            route = MoreRoutes.SELLER_ORDERS,
+            hub = MoreHub.SHOP,
+            section = MoreSection.APP,
+            operatorOnly = true,
         ),
         MoreEntry(
             id = "purchase_history",

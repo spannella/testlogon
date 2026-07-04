@@ -192,6 +192,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         productDetailDestination(navController)
         // AND-207: catalog full-text search (rows open the product detail route).
         catalogSearchDestination(navController)
+        // ECOM: wishlist / favourites (SHOP hub) — saved catalog items tap through to product detail.
+        wishlistDestination(navController)
+        sellerStoreDestination(navController)
+        listingEditorDestination(navController)
+        sellerOrdersDestination(navController)
         // AND-211/AND-212: shopping cart (line items, qty edit, remove, in-cart search).
         cartDestination(navController)
         // AND-213: checkout session / order review (reached from the cart "Proceed to checkout").

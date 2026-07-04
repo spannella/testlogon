@@ -83,3 +83,44 @@ internal fun CatalogItemListDto.toDomain(): CatalogItemPage = CatalogItemPage(
     items = items.map { it.toDomain() },
     nextToken = nextToken,
 )
+
+// ─── Reviews (ECOM) ──────────────────────────────────────────────────────────
+
+/**
+ * One catalog item review. [reviewer] is the free-form author the server stores; the client writes its
+ * own user_sub there, so [isOwnedBy] can flag delete-own without a server-side ownership field.
+ */
+data class CatalogReview(
+    val reviewId: String,
+    val itemId: String,
+    val rating: Int,
+    val title: String?,
+    val body: String?,
+    val reviewer: String?,
+    val createdAt: String,
+) {
+    /** True when this review's author matches the signed-in user's [userSub] (delete-own gate). */
+    fun isOwnedBy(userSub: String?): Boolean =
+        userSub != null && reviewer != null && reviewer == userSub
+}
+
+/** One mapped page of reviews plus the opaque next-page cursor (null/absent = last page). */
+data class CatalogReviewPage(
+    val reviews: List<CatalogReview>,
+    val nextToken: String?,
+)
+
+internal fun CatalogReviewDto.toDomain(): CatalogReview = CatalogReview(
+    reviewId = reviewId,
+    itemId = itemId,
+    rating = rating,
+    title = title,
+    body = body,
+    reviewer = reviewer,
+    createdAt = createdAt,
+)
+
+internal fun CatalogReviewListDto.toDomain(): CatalogReviewPage = CatalogReviewPage(
+    reviews = items.map { it.toDomain() },
+    nextToken = nextToken,
+)

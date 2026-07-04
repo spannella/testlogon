@@ -8,13 +8,20 @@ import com.testlogon.android.data.cart.CartItem
 import com.testlogon.android.data.cart.CartRepository
 import com.testlogon.android.data.catalog.CatalogItem
 import com.testlogon.android.data.catalog.CatalogRepository
+import com.testlogon.android.data.catalog.CatalogReview
+import com.testlogon.android.data.feed.CurrentUserRepository
+import com.testlogon.android.data.wishlist.WishlistRepository
+import com.testlogon.android.data.wishlist.wishlistKey
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -37,7 +44,29 @@ sealed interface ProductDetailEvent {
     /** The add succeeded; carries the created line item (no cart count — read separately). */
     data class AddedToCart(val item: CartItem) : ProductDetailEvent
     data class AddToCartFailed(val message: String) : ProductDetailEvent
+
+    /** ECOM — review / wishlist snackbar effects. */
+    data object ReviewSubmitted : ProductDetailEvent
+    data class ReviewSubmitFailed(val message: String) : ProductDetailEvent
+    data object ReviewDeleted : ProductDetailEvent
+    data class WishlistFailed(val message: String) : ProductDetailEvent
 }
+
+/** ECOM (reviews) — state for the reviews section on the product-detail screen. */
+sealed interface ReviewsUiState {
+    data object Loading : ReviewsUiState
+    data class Ready(
+        val reviews: List<CatalogReview>,
+        val averageRating: Double?,
+        val count: Int,
+        /** user_sub of the signed-in user, for the delete-own gate (null until resolved). */
+        val currentUserSub: String?,
+    ) : ReviewsUiState
+    data class Error(val message: String) : ReviewsUiState
+}
+
+/** ECOM (reviews) — transient submit status for the compose row. */
+enum class ReviewSubmitStatus { Idle, InFlight }
 
 /**
  * AND-206 / AND-208 — product detail presentation logic.
@@ -53,6 +82,8 @@ sealed interface ProductDetailEvent {
 class ProductDetailViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val cartRepository: CartRepository,
+    private val wishlistRepository: WishlistRepository,
+    private val currentUserRepository: CurrentUserRepository,
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
@@ -68,8 +99,30 @@ class ProductDetailViewModel @Inject constructor(
     private val _events = Channel<ProductDetailEvent>(Channel.BUFFERED)
     val events: Flow<ProductDetailEvent> = _events.receiveAsFlow()
 
+    // ── Reviews ──
+    private val _reviewsState = MutableStateFlow<ReviewsUiState>(ReviewsUiState.Loading)
+    val reviewsState: StateFlow<ReviewsUiState> = _reviewsState.asStateFlow()
+
+    private val _reviewSubmitState = MutableStateFlow(ReviewSubmitStatus.Idle)
+    val reviewSubmitState: StateFlow<ReviewSubmitStatus> = _reviewSubmitState.asStateFlow()
+
+    private var currentUserSub: String? = null
+
+    // ── Wishlist heart ──
+    private val itemKey = wishlistKey(categoryId, itemId)
+
+    /** Filled/outlined heart, derived from the shared wishlist saved-set. */
+    val isSaved: StateFlow<Boolean> = wishlistRepository.saved
+        .map { it.contains(itemKey) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val _wishlistInFlight = MutableStateFlow(false)
+    val wishlistInFlight: StateFlow<Boolean> = _wishlistInFlight.asStateFlow()
+
     init {
         load()
+        loadReviews()
+        viewModelScope.launch { wishlistRepository.ensureLoaded() }
     }
 
     fun load() {
@@ -104,6 +157,88 @@ class ProductDetailViewModel @Inject constructor(
                 is ApiResult.NetworkError -> _events.send(ProductDetailEvent.AddToCartFailed(OFFLINE_MESSAGE))
             }
             _addState.update { AddToCartStatus.Idle }
+        }
+    }
+
+    // ── Reviews ──────────────────────────────────────────────────────────────
+
+    /** Loads the review list (and resolves the current user_sub for the delete-own gate). */
+    fun loadReviews() {
+        _reviewsState.update { ReviewsUiState.Loading }
+        viewModelScope.launch {
+            if (currentUserSub == null) {
+                (currentUserRepository.currentUserSub() as? ApiResult.Success)?.let { currentUserSub = it.data }
+            }
+            _reviewsState.value = when (val r = catalogRepository.reviews(itemId)) {
+                is ApiResult.Success -> {
+                    val reviews = r.data.reviews
+                    ReviewsUiState.Ready(
+                        reviews = reviews,
+                        averageRating = reviews.map { it.rating }.average().takeIf { reviews.isNotEmpty() },
+                        count = reviews.size,
+                        currentUserSub = currentUserSub,
+                    )
+                }
+                is ApiResult.Failure -> ReviewsUiState.Error(r.error.message)
+                is ApiResult.NetworkError -> ReviewsUiState.Error(OFFLINE_MESSAGE)
+            }
+        }
+    }
+
+    fun retryReviews() = loadReviews()
+
+    /** Posts a review (rating 1..5). No-op while a submit is already in flight (double-tap guard). */
+    fun submitReview(rating: Int, title: String, body: String) {
+        if (rating !in 1..5) return
+        if (_reviewSubmitState.value == ReviewSubmitStatus.InFlight) return
+        _reviewSubmitState.update { ReviewSubmitStatus.InFlight }
+        viewModelScope.launch {
+            val r = catalogRepository.addReview(
+                itemId = itemId,
+                rating = rating,
+                title = title,
+                body = body,
+                reviewer = currentUserSub,
+            )
+            when (r) {
+                is ApiResult.Success -> {
+                    _events.send(ProductDetailEvent.ReviewSubmitted)
+                    loadReviews()
+                }
+                is ApiResult.Failure -> _events.send(ProductDetailEvent.ReviewSubmitFailed(r.error.message))
+                is ApiResult.NetworkError -> _events.send(ProductDetailEvent.ReviewSubmitFailed(OFFLINE_MESSAGE))
+            }
+            _reviewSubmitState.update { ReviewSubmitStatus.Idle }
+        }
+    }
+
+    /** Deletes one of the user's own reviews (the UI only offers delete on owned rows). */
+    fun deleteReview(reviewId: String) {
+        viewModelScope.launch {
+            when (val r = catalogRepository.deleteReview(itemId, reviewId)) {
+                is ApiResult.Success -> {
+                    _events.send(ProductDetailEvent.ReviewDeleted)
+                    loadReviews()
+                }
+                is ApiResult.Failure -> _events.send(ProductDetailEvent.ReviewSubmitFailed(r.error.message))
+                is ApiResult.NetworkError -> _events.send(ProductDetailEvent.ReviewSubmitFailed(OFFLINE_MESSAGE))
+            }
+        }
+    }
+
+    // ── Wishlist ─────────────────────────────────────────────────────────────
+
+    /** Toggles this item in the wishlist. Optimistic; a failure surfaces a snackbar. */
+    fun toggleWishlist() {
+        if (_wishlistInFlight.value) return
+        _wishlistInFlight.update { true }
+        viewModelScope.launch {
+            when (val r = wishlistRepository.toggle(categoryId, itemId)) {
+                is ApiResult.Success -> Unit
+                is ApiResult.Failure -> _events.send(ProductDetailEvent.WishlistFailed(r.error.message))
+                is ApiResult.NetworkError -> _events.send(ProductDetailEvent.WishlistFailed(OFFLINE_MESSAGE))
+            }
+            _wishlistInFlight.update { false }
         }
     }
 

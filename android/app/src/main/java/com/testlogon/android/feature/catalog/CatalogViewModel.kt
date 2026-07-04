@@ -12,6 +12,8 @@ import com.testlogon.android.data.catalog.CatalogApi
 import com.testlogon.android.data.catalog.CatalogCategory
 import com.testlogon.android.data.catalog.CatalogItem
 import com.testlogon.android.data.catalog.CatalogRepository
+import com.testlogon.android.data.wishlist.WishlistRepository
+import com.testlogon.android.data.wishlist.wishlistKey
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -50,6 +52,7 @@ sealed interface CatalogUiState {
 @HiltViewModel
 class CatalogViewModel @Inject constructor(
     private val repository: CatalogRepository,
+    private val wishlistRepository: WishlistRepository,
     private val savedState: SavedStateHandle,
 ) : ViewModel() {
 
@@ -57,6 +60,9 @@ class CatalogViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow<CatalogUiState>(CatalogUiState.Loading)
     val uiState: StateFlow<CatalogUiState> = _uiState.asStateFlow()
+
+    /** Shared wishlist saved-set (`category#item` keys) — lights the heart on catalog cells. */
+    val savedKeys: StateFlow<Set<String>> = wishlistRepository.saved
 
     /** Paged item stream that re-creates the Pager when the selected category changes. */
     val items: Flow<PagingData<CatalogItem>> =
@@ -77,7 +83,17 @@ class CatalogViewModel @Inject constructor(
 
     init {
         loadCategories()
+        viewModelScope.launch { wishlistRepository.ensureLoaded() }
     }
+
+    /** Toggles a catalog item in the wishlist (heart on the cell). Optimistic; errors are silent here. */
+    fun toggleWishlist(item: CatalogItem) {
+        viewModelScope.launch { wishlistRepository.toggle(item.categoryId, item.itemId) }
+    }
+
+    /** Whether [item] is currently in the wishlist (derived from [savedKeys]). */
+    fun isSaved(keys: Set<String>, item: CatalogItem): Boolean =
+        keys.contains(wishlistKey(item.categoryId, item.itemId))
 
     fun loadCategories() {
         _uiState.update { CatalogUiState.Loading }

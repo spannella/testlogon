@@ -15,14 +15,18 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,6 +79,7 @@ object CatalogTestTags {
     const val APPEND_FOOTER = "catalog_append_footer"
     const val APPEND_RETRY = "catalog_append_retry"
     fun chip(categoryId: String) = "catalog_chip_$categoryId"
+    fun wishlist(itemId: String) = "wishlist_toggle_$itemId"
 }
 
 /**
@@ -92,12 +97,15 @@ fun CatalogRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val items = viewModel.items.collectAsLazyPagingItems()
+    val savedKeys by viewModel.savedKeys.collectAsStateWithLifecycle()
     CatalogScreen(
         state = state,
         items = items,
+        savedKeys = savedKeys,
         onSelectCategory = viewModel::selectCategory,
         onRetryCategories = viewModel::retryCategories,
         onItemClick = onItemClick,
+        onToggleWishlist = viewModel::toggleWishlist,
         onSearch = onSearch,
         onCart = onCart,
         onRefresh = { items.refresh() },
@@ -110,9 +118,11 @@ fun CatalogRoute(
 fun CatalogScreen(
     state: CatalogUiState,
     items: LazyPagingItems<CatalogItem>,
+    savedKeys: Set<String>,
     onSelectCategory: (String) -> Unit,
     onRetryCategories: () -> Unit,
     onItemClick: (categoryId: String, itemId: String) -> Unit,
+    onToggleWishlist: (CatalogItem) -> Unit,
     onSearch: () -> Unit,
     onCart: () -> Unit,
     onRefresh: () -> Unit,
@@ -176,8 +186,10 @@ fun CatalogScreen(
                     CatalogContent(
                         state = state,
                         items = items,
+                        savedKeys = savedKeys,
                         onSelectCategory = onSelectCategory,
                         onItemClick = onItemClick,
+                        onToggleWishlist = onToggleWishlist,
                         onRefresh = onRefresh,
                     )
             }
@@ -189,8 +201,10 @@ fun CatalogScreen(
 private fun CatalogContent(
     state: CatalogUiState.Ready,
     items: LazyPagingItems<CatalogItem>,
+    savedKeys: Set<String>,
     onSelectCategory: (String) -> Unit,
     onItemClick: (categoryId: String, itemId: String) -> Unit,
+    onToggleWishlist: (CatalogItem) -> Unit,
     onRefresh: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -222,7 +236,12 @@ private fun CatalogContent(
                             modifier = Modifier.testTag(CatalogTestTags.ITEMS_EMPTY),
                         )
 
-                    else -> CatalogGrid(items = items, onItemClick = onItemClick)
+                    else -> CatalogGrid(
+                        items = items,
+                        savedKeys = savedKeys,
+                        onItemClick = onItemClick,
+                        onToggleWishlist = onToggleWishlist,
+                    )
                 }
             }
         }
@@ -256,7 +275,9 @@ private fun CategoryChips(
 @Composable
 private fun CatalogGrid(
     items: LazyPagingItems<CatalogItem>,
+    savedKeys: Set<String>,
     onItemClick: (categoryId: String, itemId: String) -> Unit,
+    onToggleWishlist: (CatalogItem) -> Unit,
 ) {
     val gridState = rememberLazyGridState()
     LazyVerticalGrid(
@@ -270,7 +291,12 @@ private fun CatalogGrid(
         items(count = items.itemCount, key = { index -> items.peek(index)?.itemId ?: index }) { index ->
             val item = items[index]
             if (item != null) {
-                CatalogItemCell(item = item, onClick = { onItemClick(item.categoryId, item.itemId) })
+                CatalogItemCell(
+                    item = item,
+                    isSaved = savedKeys.contains("${item.categoryId}#${item.itemId}"),
+                    onClick = { onItemClick(item.categoryId, item.itemId) },
+                    onToggleWishlist = { onToggleWishlist(item) },
+                )
             }
         }
 
@@ -309,7 +335,9 @@ private fun CatalogGrid(
 @Composable
 private fun CatalogItemCell(
     item: CatalogItem,
+    isSaved: Boolean,
     onClick: () -> Unit,
+    onToggleWishlist: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val thumbCd = item.name.ifBlank { stringResource(R.string.catalog_item_cd) }
@@ -342,6 +370,30 @@ private fun CatalogItemCell(
                     Text(
                         stringResource(R.string.catalog_no_image),
                         style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+            // Wishlist heart overlay (top-right of the thumbnail).
+            val heartCd = stringResource(if (isSaved) R.string.wishlist_remove else R.string.wishlist_add)
+            IconButton(
+                onClick = onToggleWishlist,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .testTag(CatalogTestTags.wishlist(item.itemId))
+                    .semantics { contentDescription = heartCd },
+            ) {
+                Box(
+                    Modifier
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
+                        .padding(4.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isSaved) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                        contentDescription = heartCd,
+                        tint = if (isSaved) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
             }
