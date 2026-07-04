@@ -68,3 +68,28 @@ the reliable one-shot endpoint POST /ui/shoppingcart/carts/{cart_id}/purchase
 confirmation (tracking) screen. Files: data/cart/{CartApi,CartDtos,CartDomain,
 CartRepository}.kt, feature/checkout/{CheckoutSessionViewModel,OrderReviewScreen}.kt,
 navigation/CartNavigation.kt.
+
+## BUG E — shop purchases not refundable from the app order-detail (entry_id unreachable)
+
+**Symptom:** on-device "Request a refund" from the order-detail screen returned
+`404 Transaction not found`; refunding a cart purchase via the app was impossible.
+
+**Root cause:** `record_cart_purchase` (app/services/purchase_history.py) writes the
+buyer purchase-debit billing ledger entry via `new_ledger_entry`, which auto-assigns
+a random `entry_id` (ulidish). `refund_requests.create_refund_request` matches the
+refund target by that ledger `entry_id`, but the client never receives it — the
+purchase-history transaction only exposes `txn_id` (and `external_ref`=order_id).
+The Android order-detail passes `txn_id` (PurchasesDomain `id = txnId`) as
+`transaction_entry_id`, which never matches the ledger entry_id → "Transaction not found".
+
+**Fix:** after building the buyer purchase-debit ledger item, set
+`led_item["entry_id"] = txn_id` so the debit is addressable by the same txn_id the
+client already holds. Backend-only; the app already passes the correct id (no rebuild).
+Approve path also matches on the `entry_id` field, so approval works too.
+
+**Verified:** API refund request via txn_id → 201; admin approve → 200 (approved, 2500).
+On-device: fresh purchase → order-detail → Request a refund → "Refund request / Pending"
+(previously "Transaction not found"), crash-free.
+
+Prod-applied to the ACTIVE serving path /home/ubuntu/testlogon/app/services/purchase_history.py
+(`.bak_ecom_1783125555`) + restart; openapi 200.
