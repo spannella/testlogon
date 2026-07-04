@@ -1,0 +1,95 @@
+--- app/services/vod_purchase.py.bak_ecom2_1783143629	2026-06-04 19:00:28.287705899 +0000
++++ app/services/vod_purchase.py	2026-07-04 05:40:29.180401642 +0000
+@@ -516,7 +516,7 @@
+         _sk, credit_item = new_ledger_entry(
+             key_name="pk",
+             key_value=user_pk(seller_id),
+-            entry_type="vod_purchase_credit",
++            entry_type="credit",
+             amount_cents=price_cents,
+             state="settled",
+             reason="VOD sale",
+--- app/services/vod_rental.py.bak_ecom2_1783143629	2026-05-31 19:15:02.818271335 +0000
++++ app/services/vod_rental.py	2026-07-04 05:40:29.184895138 +0000
+@@ -163,7 +163,7 @@
+         _s, credit = new_ledger_entry(
+             key_name="pk",
+             key_value=user_pk(seller_id),
+-            entry_type="vod_rental_credit",
++            entry_type="credit",
+             amount_cents=amount_cents,
+             state="settled",
+             reason=f"VOD {tier} sale",
+--- app/services/license_revenue.py.bak_ecom2_1783143629	2026-05-31 01:45:07.393625520 +0000
++++ app/services/license_revenue.py	2026-07-04 05:40:29.187727770 +0000
+@@ -182,7 +182,7 @@
+                 _sk_cr, item_cr = new_ledger_entry(
+                     key_name="pk",
+                     key_value=user_pk(licensor_id),
+-                    entry_type="license_revenue_credit",
++                    entry_type="credit",
+                     amount_cents=split_cents,
+                     state="settled",
+                     reason=f"License revenue share from {source_type}",
+@@ -521,7 +521,7 @@
+             _sk, item = new_ledger_entry(
+                 key_name="pk",
+                 key_value=user_pk(licensor_id),
+-                entry_type="license_fixed_fee_credit",
++                entry_type="credit",
+                 amount_cents=fixed_cost,
+                 state="settled",
+                 reason="License fixed fee",
+--- app/services/ad_billing.py.bak_ecom2_1783143629	2026-06-07 03:23:35.033421246 +0000
++++ app/services/ad_billing.py	2026-07-04 05:40:29.190569534 +0000
+@@ -190,7 +190,7 @@
+             _sk, credit_item = new_ledger_entry(
+                 key_name="pk",
+                 key_value=user_pk(creator_id),
+-                entry_type="ad_revenue_credit",
++                entry_type="credit",
+                 amount_cents=creator_share,
+                 state="settled",
+                 reason="Ad revenue share",
+--- app/services/ad_placement.py.bak_ecom2_1783143629	2026-06-07 03:23:35.033421246 +0000
++++ app/services/ad_placement.py	2026-07-04 05:40:29.193695217 +0000
+@@ -451,7 +451,7 @@
+         _sk, credit_item = new_ledger_entry(
+             key_name="pk",
+             key_value=user_pk(video.owner_user_id),
+-            entry_type="ad_revenue_credit",
++            entry_type="credit",
+             amount_cents=revenue_cents,
+             state="settled",
+             reason="Ad revenue",
+--- app/services/content_ad_controls.py.bak_ecom2_1783143629	2026-06-07 03:23:35.063421316 +0000
++++ app/services/content_ad_controls.py	2026-07-04 05:40:29.195865686 +0000
+@@ -335,7 +335,13 @@
+             kwargs["ExclusiveStartKey"] = last_key
+         resp = T.billing.query(**kwargs)
+         for item in resp.get("Items", []):
+-            if item.get("type") != "ad_revenue_credit":
++            _etype = item.get("type")
++            _reason = str(item.get("reason") or "")
++            # BUG#3 compat: seller ad-revenue credits now write type="credit"
++            # (so they count in creator earnings/payouts); still identify them
++            # here by reason, and keep matching legacy "ad_revenue_credit" rows.
++            if not (_etype == "ad_revenue_credit"
++                    or (_etype == "credit" and _reason.startswith("Ad revenue"))):
+                 continue
+             if _to_int(item.get("ts")) < cutoff:
+                 continue
+--- app/services/platform_financial_dashboard.py.bak_ecom2_1783143629	2026-06-07 03:23:35.091421382 +0000
++++ app/services/platform_financial_dashboard.py	2026-07-04 05:40:29.198773733 +0000
+@@ -220,6 +220,11 @@
+ 
+     for e in entries:
+         etype = str(e.get("type", "unknown"))
++        # BUG#3 compat: seller ad-revenue credits now write type="credit" so they
++        # count toward creator earnings/payouts; re-derive the ad-revenue class by
++        # reason here so the platform revenue rollup still attributes them.
++        if etype == "credit" and str(e.get("reason", "")).startswith("Ad revenue"):
++            etype = "ad_revenue_credit"
+         amount = abs(_to_int(e.get("amount_cents")))
+         state = str(e.get("state", ""))
+         tx_count += 1

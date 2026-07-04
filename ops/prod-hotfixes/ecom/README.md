@@ -93,3 +93,80 @@ On-device: fresh purchase → order-detail → Request a refund → "Refund requ
 
 Prod-applied to the ACTIVE serving path /home/ubuntu/testlogon/app/services/purchase_history.py
 (`.bak_ecom_1783125555`) + restart; openapi 200.
+
+## BUG F — digital-goods seller credits invisible to earnings/payouts (2026-07-04)
+
+Sibling of BUG A, for the DIGITAL delivery paths. `billing_shared.new_ledger_entry`
+persists `"type": entry_type`, and the earnings/payout consumers
+(`creator_earnings._query_credit_entries` / `get_earnings_transactions` and
+`creator_payouts.get_available_balance`) hard-filter `Attr("type").eq("credit")`.
+The seller-earning credit writers for VOD/license/ad used NON-`credit` entry_types, so
+those rows were filtered out before counting and the seller earned nothing on-paper from
+a digital sale (buyer txn / stock / credit-row all otherwise correct). The earnings
+CATEGORY is derived from `reason` (`creator_earnings.classify_entry`), not from type, and
+`LEDGER_ENTRY_SIGN` maps every one of these types AND `credit` to +1, so `signed_amount_cents`
+is unchanged by the flip.
+
+FIX (per-writer entry_type flip to `credit`; debits + refund/affiliate/sponsorship
+credits left untouched so they are NOT swept into seller earnings):
+- `vod_purchase.py`         `vod_purchase_credit`      -> `credit`  (reason "VOD sale" -> vod_purchases)
+- `vod_rental.py`           `vod_rental_credit`        -> `credit`  (reason "VOD {tier} sale" -> vod_purchases)
+- `license_revenue.py`      `license_revenue_credit`   -> `credit`  (reason "License revenue share from ..." -> other)
+- `license_revenue.py`      `license_fixed_fee_credit` -> `credit`  (reason "License fixed fee" -> other)
+- `ad_billing.py`           `ad_revenue_credit`        -> `credit`  (reason "Ad revenue share")
+- `ad_placement.py`         `ad_revenue_credit`        -> `credit`  (reason "Ad revenue")
+
+Consumer-string check (verify-before-change): only `ad_revenue_credit` was read by any
+consumer. Both made forward+backward compatible (identify ad-revenue by `reason`, still
+match the legacy type): `content_ad_controls.get_ad_revenue_breakdown` and
+`platform_financial_dashboard._aggregate`. The vod/license type strings had no consumers.
+The earnings/payout QUERY was deliberately NOT broadened.
+
+Verified (prod, real sessions; seller crash1782189692@testlogon.example; fresh buyer):
+- Pre-fix real VOD purchase (1500c): earnings total 26200->26200, vod_purchases 0, payout
+  total_earned 26200->26200 -> credit invisible (bug reproduced).
+- Post-fix VOD purchase (2500c) + license split (2000c): earnings total 26200->30700 (+4500),
+  vod_purchases 0->2500, other 26200->28200 (+2000), transaction_count 8->10; payout
+  total_earned 26200->30700 (+4500). `/ui/earnings/transactions` shows "VOD sale"->vod_purchases,
+  "License revenue share from content_sale"->other.
+- `available_cents` stayed 0 (all credits inside the payout hold window; total_earned is the
+  authoritative moved figure).
+- Ad path NOT seeded E2E (needs the ad-serving pipeline); ad-consumer compat unit-verified
+  (`platform_financial_dashboard._aggregate` net_revenue counts new `credit`+reason "Ad revenue"
+  and legacy rows, excludes a `credit`/"VOD sale" row).
+
+Prod .bak: `<file>.bak_ecom2_1783143629` (all 7 files) on /home/ubuntu/testlogon; restart_backend.sh;
+openapi 200. See bug3_seller_credit_visibility.patch + README_bug3_seller_credit_visibility.md.
+
+## BUG G — shop order stuck at pending_payment after a completed cart purchase (2026-07-04)
+
+`commerce_order_service.create_order` seeds the /ui/orders header at
+`lifecycle_status="created"` (legacy mirror `status="pending_payment"`; prod has
+`ORDER_LIFECYCLE_ENABLED=1`). `shoppingcart.purchase_cart` captures payment synchronously
+(buyer txn COMPLETED, stock decremented, seller credited) but never called the
+`order_lifecycle` state machine, so the header was orphaned in `created`/`pending_payment`
+forever.
+
+FIX: after `_ecm_commit`, advance the header `created -> approved` (legacy
+`pending_payment -> approved`) via the existing `order_lifecycle.transition_order`.
+`approved` is the ONLY forward edge out of `created` (created -> {approved, held, cancelled})
+and legacy-mirrors to payment-approved/paid — no new states invented. Deliberately NOT
+`completed` (a post-shipment terminal state that would require falsely asserting
+allocate/pick/pack/ship events). Safe + idempotent: guarded on `lifecycle_status=="created"`,
+CAS/version-gated with the canonical cart idempotency key, best-effort (never blocks/reverses
+a purchase), fires only on the first successful purchase (replays return earlier). The
+checkout-session/redirect path is untouched.
+
+Verified (prod, real sessions, https://tl-api.bitbazaar.cc; buyer ecbuyer1783123620@…, physical
+widget @2500c):
+- BEFORE: 8 pre-fix orders all `status=pending_payment / lifecycle_status=created`.
+- AFTER: new order c9d4e9d32a2808741d1db9030c3352bf -> `status=approved / lifecycle_status=approved`;
+  history = None->created (order_created) then created->approved (actor=buyer, "Cart purchase paid").
+  Older orders remain pending_payment.
+- No regression: purchase-history txn `status=COMPLETED`, external_ref=order_id (linkage intact).
+- Idempotent replay: re-POST same cart -> same order_id, stays approved, history still exactly 2 rows.
+
+Prod-only file (order_lifecycle router/service + the diverged purchase_cart do NOT exist in the
+android-impl dev clone), so this is a prod-apply record, not a runnable branch fold. Prod .bak:
+`app/services/shoppingcart.py.bak_ecom2_1783144144`; restart_backend.sh; openapi 200. See
+bug2_order_lifecycle_advance.patch + README_bug2_order_lifecycle.md.
