@@ -93,3 +93,25 @@ internal fun CartItemsRespDto.toDomain(total: CartTotal?): FullCart {
         currency = total?.currency ?: "USD",
     )
 }
+
+/**
+ * FIX (ecom residual #1) — the result of a completed cart purchase. [purchaseTxnId] is the
+ * purchase-history transaction id used to route to the order-confirmation / tracking screen.
+ */
+data class CartPurchaseResult(
+    val cartId: String,
+    val orderId: String,
+    val purchaseTxnId: String?,
+    val purchasedTotalCents: Long,
+    val currency: String,
+    val discountCents: Long,
+)
+
+internal fun CartPurchaseOutDto.toDomain(): CartPurchaseResult = CartPurchaseResult(
+    cartId = cartId,
+    orderId = orderId,
+    purchaseTxnId = purchaseTxnId,
+    purchasedTotalCents = purchasedTotalCents,
+    currency = currency ?: "USD",
+    discountCents = discountCents ?: 0L,
+)

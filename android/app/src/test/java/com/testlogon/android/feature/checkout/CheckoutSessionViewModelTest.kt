@@ -107,10 +107,11 @@ class CheckoutSessionViewModelTest {
     }
 
     @Test
-    fun placeOrder_billingStub_surfacesPaymentsUnavailable_andNeverCharges() = runTest {
+    fun placeOrder_completesPurchase_viaReliableCartEndpoint() = runTest {
+        // FIX (ecom residual #1): "Place order" now completes via cartRepository.purchase and emits
+        // PurchaseComplete with the purchase txn id (routed to order confirmation by the nav layer).
         val checkout = FakeCheckoutRepository().apply { result = ApiResult.Success(session()) }
-        val billing = RecordingBillingAuthorizer() // returns NotConfigured, records the call
-        val model = vm(checkout, billing = billing)
+        val model = vm(checkout)
         advanceUntilIdle()
 
         val events = mutableListOf<CheckoutEvent>()
@@ -119,10 +120,10 @@ class CheckoutSessionViewModelTest {
         model.placeOrder()
         advanceUntilIdle()
 
-        assertTrue(events.single() is CheckoutEvent.PaymentsUnavailable)
-        // The stub was asked to authorize but it NEVER charges: createSession is the only network call.
-        assertTrue(billing.authorizeCalled)
-        assertEquals(1, checkout.createCalls) // no extra/charge call beyond session creation
+        val evt = events.single()
+        assertTrue(evt is CheckoutEvent.PurchaseComplete)
+        assertEquals("txn_paid", (evt as CheckoutEvent.PurchaseComplete).txnId)
+        assertEquals(1, checkout.createCalls) // only the session-creation call; no billing-stub charge
         job.cancel()
     }
 }
@@ -161,4 +162,19 @@ private class FakeCartRepoForCheckout : CartRepository {
     override suspend fun removeLine(sku: String): ApiResult<FullCart> =
         ApiResult.Success(FullCart.empty("cart_1"))
     override suspend fun clearCart(): ApiResult<OkRespDto> = ApiResult.Success(OkRespDto(ok = true))
+    override suspend fun purchase(
+        cartId: String,
+        idempotencyKey: String,
+        promoCode: String?,
+        promoCodeId: String?,
+    ): ApiResult<com.testlogon.android.data.cart.CartPurchaseResult> = ApiResult.Success(
+        com.testlogon.android.data.cart.CartPurchaseResult(
+            cartId = cartId,
+            orderId = "ord_paid",
+            purchaseTxnId = "txn_paid",
+            purchasedTotalCents = 4498,
+            currency = "USD",
+            discountCents = 0,
+        ),
+    )
 }

@@ -96,3 +96,27 @@ data class UpdateCartItemQtyRequest(
 data class OkRespDto(
     @Json(name = "ok") val ok: Boolean? = null,
 )
+
+/**
+ * FIX (ecom residual #1) — request/response for the one-shot cart purchase
+ * (POST ui/shoppingcart/carts/{cart_id}/purchase, schema CartPurchaseIn / ShoppingCartPurchaseOut).
+ * This is the reliable path that actually creates the order, decrements stock and credits the seller.
+ */
+@JsonClass(generateAdapter = true)
+data class CartPurchaseInDto(
+    @Json(name = "promo_code") val promoCode: String? = null,
+    @Json(name = "promo_code_id") val promoCodeId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CartPurchaseOutDto(
+    @Json(name = "cart_id") val cartId: String,
+    @Json(name = "order_id") val orderId: String,
+    @Json(name = "purchased_at") val purchasedAt: String,
+    @Json(name = "purchased_total_cents") val purchasedTotalCents: Long,
+    @Json(name = "currency") val currency: String? = null,
+    @Json(name = "purchase_txn_id") val purchaseTxnId: String? = null,
+    @Json(name = "original_total_cents") val originalTotalCents: Long? = null,
+    @Json(name = "discount_cents") val discountCents: Long? = null,
+    @Json(name = "promo_code_id") val promoCodeId: String? = null,
+)

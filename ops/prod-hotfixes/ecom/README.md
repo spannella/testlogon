@@ -42,3 +42,29 @@ purchase was un-refundable. FIX: use `abs(...)` to derive the refundable amount.
   `/ui/payouts/balance` total_earned 6200 (held per 7-day PAYOUT_HOLD_PERIOD_SECONDS).
 - On-device: seller Earnings screen shows "Other $62.00 100%".
 - Refund request 201 -> admin approve 200.
+
+## BUG D — app-driven shop purchases still did not credit the seller (2026-07-04)
+Follow-up found while verifying the in-app buyer checkout end-to-end. BUG A credits
+each cart item's creator via `_ci.get("creator_user_id")`, but that field is only
+populated by `add_catalog_item` (POST /carts/{id}/items/catalog). The Android app
+adds via `add_item` (POST /carts/{id}/items) and its `CartItemInDto` carries no
+creator field, so app-added cart items had no `creator_user_id` -> the BUG-A credit
+loop skipped them and the seller earned nothing from an in-app purchase (stock still
+decremented, buyer ledger still written). FIX: in `add_item`, when `creator_user_id`
+is absent but `item_id`+`category_id` are present, enrich `creator_user_id` from the
+catalog item's `creator_id` (same source add_catalog_item uses). Client-agnostic; fixes
+web + app uniformly. See shoppingcart_add_item_creator.py.patch.
+Verified (prod, on-device, real sessions): full app flow browse->product->add-to-cart->
+cart->checkout->Place Order created order fb8d2b4e..., stock 47->46, seller
+/ui/earnings/summary 6200->8700 (+2500 "Shop sale" attributed to buyer), payouts
+total_earned 6200->8700.
+
+## Related app fix (residual #1 — the in-app checkout now completes)
+android/ CheckoutSessionViewModel.placeOrder() previously routed "Place order" through
+the never-authorizing BillingAuthorizer stub (PaymentsUnavailable) / an external
+redirect that 404s on stripe-mock, so no in-app purchase could complete. It now calls
+the reliable one-shot endpoint POST /ui/shoppingcart/carts/{cart_id}/purchase
+(X-Idempotency-Key) via CartRepository.purchase(); on success it routes to the order
+confirmation (tracking) screen. Files: data/cart/{CartApi,CartDtos,CartDomain,
+CartRepository}.kt, feature/checkout/{CheckoutSessionViewModel,OrderReviewScreen}.kt,
+navigation/CartNavigation.kt.

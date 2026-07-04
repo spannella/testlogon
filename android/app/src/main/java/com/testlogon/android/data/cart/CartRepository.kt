@@ -58,6 +58,21 @@ interface CartRepository {
      */
     suspend fun itemsForCart(cartId: String): ApiResult<List<CartItem>> =
         ApiResult.Success(emptyList())
+
+    /**
+     * FIX (ecom residual #1) — completes the purchase for [cartId] via the reliable one-shot endpoint
+     * POST ui/shoppingcart/carts/{cart_id}/purchase (X-Idempotency-Key). This actually creates the
+     * order, decrements stock, credits the seller and writes the buyer ledger entry. The app checkout
+     * previously dead-ended at an external redirect and never called this. Default = not implemented
+     * (existing fakes need no change).
+     */
+    suspend fun purchase(
+        cartId: String,
+        idempotencyKey: String,
+        promoCode: String? = null,
+        promoCodeId: String? = null,
+    ): ApiResult<CartPurchaseResult> =
+        ApiResult.NetworkError(UnsupportedOperationException("purchase not implemented"), isTimeout = false)
 }
 
 @Singleton
@@ -126,6 +141,25 @@ class CartRepositoryImpl @Inject constructor(
     override suspend fun itemsForCart(cartId: String): ApiResult<List<CartItem>> = withContext(io) {
         // Reuse the existing list-items GET + mapper; empty list when the cart has no items.
         call { api.getCartItems(cartId) }.map { resp -> resp.items.orEmpty().map { it.toDomain() } }
+    }
+
+    override suspend fun purchase(
+        cartId: String,
+        idempotencyKey: String,
+        promoCode: String?,
+        promoCodeId: String?,
+    ): ApiResult<CartPurchaseResult> = withContext(io) {
+        call {
+            api.purchaseCart(
+                cartId = cartId,
+                idempotencyKey = idempotencyKey,
+                body = CartPurchaseInDto(promoCode = promoCode, promoCodeId = promoCodeId),
+            )
+        }.map { it.toDomain() }.also {
+            // The purchased cart is consumed server-side; drop the cached handle so the next
+            // add-to-cart resolves/creates a fresh cart instead of reusing the dead one.
+            if (it is ApiResult.Success) cachedCartId = null
+        }
     }
 
     /** Loads items + total for [cartId] and composes them into a [FullCart]. */

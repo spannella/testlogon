@@ -41,6 +41,9 @@ sealed interface OrderReviewUiState {
 sealed interface CheckoutEvent {
     data object PaymentsUnavailable : CheckoutEvent
     data class PaymentFailed(val message: String) : CheckoutEvent
+
+    /** FIX (ecom residual #1) — the purchase completed; [txnId] routes to order confirmation. */
+    data class PurchaseComplete(val txnId: String?, val orderId: String) : CheckoutEvent
 }
 
 /**
@@ -127,28 +130,26 @@ class CheckoutSessionViewModel @Inject constructor(
     fun retry() = start()
 
     /**
-     * AND-213 / AND-031 — attempts payment for the created session via the billing stub. The stub
-     * returns NotConfigured, so this surfaces PaymentsUnavailable and never charges. When AND-031 wires
-     * a real authorizer, the Authorized branch will carry the payment_method_id to a billing call.
+     * FIX (ecom residual #1) — completes the purchase via the reliable cart-purchase endpoint
+     * (POST ui/shoppingcart/carts/{cart_id}/purchase, X-Idempotency-Key). This actually creates the
+     * order, decrements stock and credits the seller. Previously "Place order" routed through the
+     * never-authorizing [BillingAuthorizer] stub, so no in-app purchase could ever complete.
      */
     fun placeOrder() {
-        val ready = _state.value as? OrderReviewUiState.Ready ?: return
+        _state.value as? OrderReviewUiState.Ready ?: return
+        val cart = cartId
+        if (cart.isNullOrBlank()) {
+            viewModelScope.launch { _events.send(CheckoutEvent.PaymentFailed(GENERIC_PAYMENT_ERROR)) }
+            return
+        }
         if (_placing.value) return
         _placing.update { true }
         viewModelScope.launch {
-            val result = billingAuthorizer.authorize(
-                amountMinorUnits = ready.session.totalCents,
-                currency = ready.session.currency,
-            )
-            when (result) {
-                is BillingResult.NotConfigured -> _events.send(CheckoutEvent.PaymentsUnavailable)
-                is BillingResult.Cancelled -> Unit
-                is BillingResult.Declined -> _events.send(CheckoutEvent.PaymentFailed(result.reason))
-                is BillingResult.Failed ->
-                    _events.send(CheckoutEvent.PaymentFailed(result.cause.message ?: GENERIC_PAYMENT_ERROR))
-                // The stub never returns Authorized. The real charge call is owned by AND-227/AND-031;
-                // this ViewModel must NOT call a charge endpoint, so Authorized is intentionally inert.
-                is BillingResult.Authorized -> _events.send(CheckoutEvent.PaymentsUnavailable)
+            when (val r = cartRepository.purchase(cart, idempotencyKey)) {
+                is ApiResult.Success ->
+                    _events.send(CheckoutEvent.PurchaseComplete(r.data.purchaseTxnId, r.data.orderId))
+                is ApiResult.Failure -> _events.send(CheckoutEvent.PaymentFailed(r.error.message))
+                is ApiResult.NetworkError -> _events.send(CheckoutEvent.PaymentFailed(OFFLINE_MESSAGE))
             }
             _placing.update { false }
         }

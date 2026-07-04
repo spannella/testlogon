@@ -72,6 +72,8 @@ fun OrderReviewRoute(
     // AND-227/228/229: provider-selection entry point. "Place order" still routes through the
     // BillingAuthorizer stub (AND-031); this callback opens the redirect checkout (hosted/PayPal/CCBill).
     onChoosePaymentMethod: (totalCents: Long, currency: String) -> Unit = { _, _ -> },
+    // FIX (ecom residual #1): fired when the reliable purchase completes; routes to order confirmation.
+    onOrderComplete: (txnId: String?, orderId: String) -> Unit = { _, _ -> },
     viewModel: CheckoutSessionViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -84,6 +86,7 @@ fun OrderReviewRoute(
             when (event) {
                 is CheckoutEvent.PaymentsUnavailable -> snackbarHostState.showSnackbar(paymentsUnavailable)
                 is CheckoutEvent.PaymentFailed -> snackbarHostState.showSnackbar(event.message)
+                is CheckoutEvent.PurchaseComplete -> onOrderComplete(event.txnId, event.orderId)
             }
         }
     }

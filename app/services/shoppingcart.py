@@ -362,6 +362,17 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
         item["item_id"] = payload["item_id"]
     if payload.get("creator_user_id"):
         item["creator_user_id"] = payload["creator_user_id"]
+    elif payload.get("item_id") and payload.get("category_id"):
+        # ECOM fix: enrich creator_user_id from the catalog so seller-credit fires for
+        # clients (the Android app) that add via POST /items without a creator field.
+        try:
+            _cat_it = T.catalog.get_item(
+                Key=_catalog_item_key(payload["category_id"], payload["item_id"])
+            ).get("Item")
+            if _cat_it and _cat_it.get("creator_id"):
+                item["creator_user_id"] = _cat_it["creator_id"]
+        except Exception:
+            pass
     T.shopping_cart.put_item(Item=item)
     _touch_cart_activity(user_sub, cart_id)
     return _item_from_item(item)
