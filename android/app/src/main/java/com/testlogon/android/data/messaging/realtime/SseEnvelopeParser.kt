@@ -93,6 +93,7 @@ class SseEnvelopeParser @Inject constructor(moshi: Moshi) {
                     conversationId = (data["conversation_id"] as? String) ?: conversationId ?: "",
                     senderId = data["sender_id"] as? String,
                     payload = (data["payload"] as? Map<String, Any?>) ?: emptyMap(),
+                    createdAtEpochSeconds = (data["created_at"] as? Number)?.toLong(),
                 )
             } else {
                 MessagingEvent.Other(type, conversationId)

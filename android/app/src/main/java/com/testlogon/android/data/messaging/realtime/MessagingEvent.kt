@@ -85,6 +85,8 @@ sealed interface MessagingEvent {
         val conversationId: String,
         val senderId: String?,
         val payload: Map<String, Any?>,
+        /** Server event time (epoch seconds); drives the stale-invite drop guard. Null when unknown. */
+        val createdAtEpochSeconds: Long? = null,
     ) : MessagingEvent
 
     /** Any other event type we observe but do not act on directly (used to refresh lists). */

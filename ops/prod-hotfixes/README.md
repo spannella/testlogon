@@ -339,3 +339,15 @@ Scoping notes (semantically-odd-for-live-chat, implemented faithfully): locked =
 pay-to-reveal (host-only send); view-once = client-cooperative one-view; expiring = host-only
 absolute-TTL redaction; scheduled = queue-to-post while live. media rides the existing
 `chat:message` frame; reaction/unlock use the in-process SSE channel.
+
+
+## app_routers_messaging.py.ghostcall-suppress-stale-invite.patch (ghost incoming-call fix)
+
+`GET /messaging/events/poll` re-served the newest ~100 per-user events on every app launch — including
+days-old `call.invite`s whose call had long gone terminal (missed/ended) — with no TTL / terminal filter.
+On the Android client those replayed invites rang a "ghost" `IncomingCallActivity` ("Peer Bravo") that the
+user had to decline. `events_poll` now drops any `call.invite` whose top-level `created_at` is older than a
+generous multiple of `messaging_webrtc_call_ringing_timeout_seconds` (≈3×, floor 180s) — always terminal,
+never a live ring. Age-only, no per-event DDB read; web-safe (web uses `/events/stream`, additive filter).
+The robust core fix is client-side (app drops stale/expired invites before ringing); this is defense-in-depth
++ payload hygiene. Prod backup: `app/routers/messaging.py.bak_ghostcall_1783300848`.

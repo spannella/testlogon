@@ -95,6 +95,9 @@ data class PollEventDto(
     @Json(name = "call_id") val callId: String? = null,
     @Json(name = "conversation_id") val conversationId: String? = null,
     @Json(name = "sender_id") val senderId: String? = null,
+    // Server event creation time (epoch seconds); drives the stale-invite drop guard so a days-old
+    // replayed call.invite from this poll never rings.
+    @Json(name = "created_at") val createdAt: Long? = null,
     @Json(name = "payload") val payload: SignalPayloadDto? = null,
 )
 

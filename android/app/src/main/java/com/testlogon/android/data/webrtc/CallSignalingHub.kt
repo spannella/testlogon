@@ -81,7 +81,7 @@ class CallSignalingHub @Inject constructor(
                         val type = ev.type ?: return@forEach
                         if (type.startsWith("call.") || type.startsWith("webrtc.")) {
                             Log.d("TLHUB", "poll inbound type=$type call=${ev.callId}")
-                            processSignal(type, ev.callId ?: return@forEach, ev.conversationId ?: "", ev.senderId, ev.payload?.toMap() ?: emptyMap())
+                            processSignal(type, ev.callId ?: return@forEach, ev.conversationId ?: "", ev.senderId, ev.payload?.toMap() ?: emptyMap(), ev.createdAt)
                         }
                     }
                 }
@@ -100,7 +100,7 @@ class CallSignalingHub @Inject constructor(
                     if (event !is MessagingEvent.CallSignal) return@collect
                     if (event.eventIdOrType().let { !seen.add(it) }) return@collect
                     Log.d("TLHUB", "sse inbound type=${event.type} call=${event.callId}")
-                    processSignal(event.type, event.callId, event.conversationId, event.senderId, event.payload)
+                    processSignal(event.type, event.callId, event.conversationId, event.senderId, event.payload, event.createdAtEpochSeconds)
                 }
             } catch (_: Throwable) {
             }
@@ -114,6 +114,7 @@ class CallSignalingHub @Inject constructor(
         conversationId: String,
         senderId: String?,
         payload: Map<String, Any?>,
+        createdAtEpochSeconds: Long? = null,
     ) {
         when {
             type.startsWith("call.") -> {
@@ -124,6 +125,8 @@ class CallSignalingHub @Inject constructor(
                     senderId?.let { put("caller_user_id", it) }
                     (payload["caller_name"] as? String)?.takeIf { it.isNotBlank() }?.let { put("caller_name", it) }
                     ((payload["initial_mode"] ?: payload["mode"] ?: payload["accepted_mode"]) as? String)?.let { put("initial_mode", it) }
+                    // Carry the server event time so a stale/replayed call.invite is DROPPED (not rung).
+                    createdAtEpochSeconds?.let { put("created_at", it.toString()) }
                 }
                 val handled = callPushHandler.tryHandle(map)
                 Log.d("TLHUB", "call event $type handled=$handled map=$map")
