@@ -4745,36 +4745,32 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
         if req.payment_method_id not in pm_ids:
             raise HTTPException(status_code=400, detail="Payment method not found")
 
-    pi = payments.create_payment_intent(
-        user_id=user_id,
-        amount_cents=req.amount_cents,
-        currency=req.currency,
-        metadata={"type": "tip_post", "post_id": post_id},
-    )
-    conf = payments.confirm_payment_intent(payment_intent_id=pi["payment_intent_id"])
-    if conf.get("status") != "succeeded":
-        raise HTTPException(status_code=402, detail="Payment failed")
-
+    # TIP-007: the mock PaymentProvider stub is replaced by the centralized
+    # charge_tip seam (called below, after the tip_total bump). The stub always
+    # "succeeded", so removing it changes no behavior.
     updated = ddb_update_item(
         key={"pk": pk_post(post_id), "sk": sk_post()},
         update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
         expr_vals={":z": 0, ":amt": req.amount_cents},
     )
 
-    # Write billing ledger debit + credit entries (best-effort)
+    # Write billing ledger debit + credit entries via the centralized charge_tip seam.
     post_author = post.get("user_id")
+    _tip_txn_id = ""
     if post_author and post_author != user_id:
-        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-        write_tip_ledger(TipLedgerEntry(
-            tipper_user_id=user_id,
-            recipient_user_id=post_author,
+        from app.services.tips import charge_tip
+        _tp = charge_tip(
+            tipper_id=user_id,
+            recipient_id=post_author,
             amount_cents=req.amount_cents,
             currency=req.currency,
+            payment_method_id=req.payment_method_id,
             content_type="post",
             content_id=post_id,
-            payment_method_id=req.payment_method_id,
-            extra_meta={"post_id": post_id},
-        ))
+            meta={"post_id": post_id},
+            idempotency_key="posttip:" + new_id(),
+        )
+        _tip_txn_id = _tp.tip_payment_id
 
     # GAP-0026: Best-effort license revenue split for tipped post.
     # Wrapped in try/except so a split failure never breaks the tip transaction.
@@ -4785,7 +4781,7 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
             licensee_id=user_id,
             source_type="post_tip",
             source_amount_cents=req.amount_cents,
-            source_txn_id=pi["payment_intent_id"],
+            source_txn_id=_tip_txn_id or post_id,
             currency=str(req.currency or "usd").lower(),
         )
     except Exception:
@@ -5911,15 +5907,9 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
     if target.get("deleted"):
         raise HTTPException(status_code=409, detail="Comment deleted")
 
-    pi = payments.create_payment_intent(
-        user_id=tipper_id,
-        amount_cents=req.amount_cents,
-        currency=req.currency,
-        metadata={"type": "tip", "post_id": post_id, "comment_id": comment_id},
-    )
-    conf = payments.confirm_payment_intent(payment_intent_id=pi["payment_intent_id"])
-    if conf.get("status") != "succeeded":
-        raise HTTPException(status_code=402, detail="Payment failed")
+    # TIP-008: the mock PaymentProvider stub is replaced by the centralized
+    # charge_tip seam (called below). Keep a stub-shaped receipt for the response.
+    pi = {"provider": "stub", "payment_intent_id": None, "status": "succeeded"}
 
     key = {"pk": target["pk"], "sk": target["sk"]}
     updated = ddb_update_item(
@@ -5932,17 +5922,19 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
 
     # Write billing ledger debit + credit entries for comment tip (best-effort)
     if comment_author and comment_author != tipper_id:
-        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-        write_tip_ledger(TipLedgerEntry(
-            tipper_user_id=tipper_id,
-            recipient_user_id=comment_author,
+        from app.services.tips import charge_tip
+        _ct = charge_tip(
+            tipper_id=tipper_id,
+            recipient_id=comment_author,
             amount_cents=req.amount_cents,
             currency=req.currency,
+            payment_method_id=getattr(req, "payment_method_id", None),
             content_type="comment",
             content_id=comment_id,
-            payment_method_id=getattr(req, "payment_method_id", None),
-            extra_meta={"post_id": post_id, "comment_id": comment_id},
-        ))
+            meta={"post_id": post_id, "comment_id": comment_id},
+            idempotency_key="cmttip:" + new_id(),
+        )
+        pi["payment_intent_id"] = _ct.tip_payment_id
 
     if comment_author and comment_author != tipper_id:
         put_notification(

@@ -186,6 +186,7 @@ def charge_tip(
     meta: Optional[Dict[str, Any]] = None,
     idempotency_key: str,
     acting_delegate_id: Optional[str] = None,
+    tip_payment_id: Optional[str] = None,
 ) -> TipResult:
     """Centralized tip charge + credit. See module docstring.
 
@@ -217,7 +218,9 @@ def charge_tip(
     pm = resolve_tip_payment_method(tipper_id, payment_method_id)
 
     # 5. Mock charge (B0). The real stripe-mock PaymentIntent is B1/TIP-101.
-    tip_payment_id = "tip_" + uuid.uuid4().hex
+    # Callers that already minted a tip id (and stored it on their content row)
+    # pass it through so the ledger row + content row stay linked; else mint one.
+    tip_payment_id = tip_payment_id or ("tip_" + uuid.uuid4().hex)
     payment_intent_id: Optional[str] = None
 
     # Precompute fee/net for the receipt (write_tip_ledger applies the same split).

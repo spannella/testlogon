@@ -8088,6 +8088,12 @@ def send_text_message(
         mid = "m_" + new_id()
 
     # Process tip
+    # TIP-005 orphan-credit fix: validate the tip+lock mutual-exclusion BEFORE any
+    # ledger write. Previously this 400 lived AFTER write_tip_ledger, so a lock+tip
+    # text send settled a credit and THEN 400d (orphan credit). The image/gallery
+    # paths already validate first; this aligns the text path with them.
+    if inp.lock_price_cents and inp.tip_amount_cents:
+        raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
     tip_amount_cents: Optional[int] = None
     tip_currency: Optional[str] = None
     tip_payment_id: Optional[str] = None
@@ -8128,22 +8134,21 @@ def send_text_message(
             # that cancelling a scheduled tipped message does not charge the sender.
             recipient_id = _resolve_tip_recipient(conversation_id, user_id)
             if recipient_id:
-                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-                write_tip_ledger(TipLedgerEntry(
-                    tipper_user_id=user_id,
-                    recipient_user_id=recipient_id,
+                from app.services.tips import charge_tip
+                charge_tip(
+                    tipper_id=user_id,
+                    recipient_id=recipient_id,
                     amount_cents=tip_amount_cents,
                     currency="USD",
+                    payment_method_id=inp.tip_payment_method_id,
                     content_type="message",
                     content_id=mid,
-                    payment_method_id=inp.tip_payment_method_id,
+                    meta={"conversation_id": conversation_id},
+                    idempotency_key=f"msgtip:{mid}",
                     tip_payment_id=tip_payment_id,
-                    extra_meta={"conversation_id": conversation_id},
-                ))
+                )
 
-    # Validate: lock_price_cents and tip_amount_cents cannot both be set
-    if inp.lock_price_cents and inp.tip_amount_cents:
-        raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
+    # (tip+lock mutual-exclusion is validated above, before any ledger write)
 
     # Expiry
     # When the message is scheduled, start the timer from the scheduled delivery time
@@ -8430,18 +8435,19 @@ def create_image_message(
             # Scheduled messages defer billing to _deliver_scheduled_message.
             recipient_id = _resolve_tip_recipient(conversation_id, user_id)
             if recipient_id:
-                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-                write_tip_ledger(TipLedgerEntry(
-                    tipper_user_id=user_id,
-                    recipient_user_id=recipient_id,
+                from app.services.tips import charge_tip
+                charge_tip(
+                    tipper_id=user_id,
+                    recipient_id=recipient_id,
                     amount_cents=tip_amount_cents,
                     currency="USD",
+                    payment_method_id=inp.tip_payment_method_id,
                     content_type="message",
                     content_id=mid,
-                    payment_method_id=inp.tip_payment_method_id,
+                    meta={"conversation_id": conversation_id},
+                    idempotency_key=f"msgtip:{mid}",
                     tip_payment_id=_img_tip_payment_id,
-                    extra_meta={"conversation_id": conversation_id},
-                ))
+                )
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -9043,18 +9049,19 @@ def create_gallery_message(
         if not is_scheduled_gal:
             recipient_id = _resolve_tip_recipient(conversation_id, user_id)
             if recipient_id:
-                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-                write_tip_ledger(TipLedgerEntry(
-                    tipper_user_id=user_id,
-                    recipient_user_id=recipient_id,
+                from app.services.tips import charge_tip
+                charge_tip(
+                    tipper_id=user_id,
+                    recipient_id=recipient_id,
                     amount_cents=gal_tip_amount_cents,
                     currency="USD",
+                    payment_method_id=inp.tip_payment_method_id,
                     content_type="message",
                     content_id=mid,
-                    payment_method_id=inp.tip_payment_method_id,
+                    meta={"conversation_id": conversation_id},
+                    idempotency_key=f"msgtip:{mid}",
                     tip_payment_id=_gal_tip_payment_id,
-                    extra_meta={"conversation_id": conversation_id},
-                ))
+                )
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -13626,18 +13633,19 @@ def _deliver_scheduled_message(item: dict) -> None:
     if item.get("tip_amount_cents"):
         recipient_id = _resolve_tip_recipient(conversation_id, user_id)
         if recipient_id:
-            from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-            write_tip_ledger(TipLedgerEntry(
-                tipper_user_id=user_id,
-                recipient_user_id=recipient_id,
+            from app.services.tips import charge_tip
+            charge_tip(
+                tipper_id=user_id,
+                recipient_id=recipient_id,
                 amount_cents=int(item["tip_amount_cents"]),
                 currency=item.get("tip_currency", "USD"),
+                payment_method_id=item.get("tip_payment_method_id"),
                 content_type="message",
                 content_id=message_id,
-                payment_method_id=item.get("tip_payment_method_id"),
+                meta={"conversation_id": conversation_id},
+                idempotency_key=f"msgtip:{message_id}",
                 tip_payment_id=item.get("tip_payment_id"),
-                extra_meta={"conversation_id": conversation_id},
-            ))
+            )
 
     # Fetch participants and bump unread counts
     try:
@@ -13927,18 +13935,19 @@ def send_message_tip(
     # Write billing ledger debit + credit entries for the tip
     msg_author = msg.get("sender_id")
     if msg_author and msg_author != user_id:
-        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-        write_tip_ledger(TipLedgerEntry(
-            tipper_user_id=user_id,
-            recipient_user_id=msg_author,
+        from app.services.tips import charge_tip
+        charge_tip(
+            tipper_id=user_id,
+            recipient_id=msg_author,
             amount_cents=inp.amount_cents,
             currency=inp.currency,
+            payment_method_id=inp.payment_method_id,
             content_type="message",
             content_id=message_id,
-            payment_method_id=inp.payment_method_id,
+            meta={"conversation_id": conversation_id},
+            idempotency_key="msgtip:" + new_id(),
             tip_payment_id=tip_payment_id,
-            extra_meta={"conversation_id": conversation_id},
-        ))
+        )
         # FIN-001: generate an invoice for the tip (best-effort)
         from app.services.invoices import create_invoice_safe
         from app.services.profile import get_profile_identity
