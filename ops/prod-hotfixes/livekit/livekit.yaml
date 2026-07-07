@@ -1,11 +1,13 @@
 # /etc/livekit/livekit.yaml on prod EC2 i-08f937fc705ebea75 (mode 0600, root).
 # SECRET REDACTED for the committed copy — real value lives ONLY in the on-box file
 # and in the standing secrets-rotation list (see README.md).
+# 2026-07-07: rtc switched from the udp port-RANGE (50000-50200) to a SINGLE UDP MUX
+# port (udp_port: 7882) to lift the ~100-participant cap (RTC/UDP port exhaustion).
+# All media for all participants is now demuxed over the one port. See README "Scale fix".
 port: 7880
 rtc:
   tcp_port: 7881
-  port_range_start: 50000
-  port_range_end: 50200
+  udp_port: 7882
   use_external_ip: true
 keys:
   API03cbfc10f882: <REDACTED-56-char-secret — see /etc/livekit/livekit.yaml on the box>

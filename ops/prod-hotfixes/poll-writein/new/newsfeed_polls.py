@@ -333,6 +333,22 @@ def add_write_in(
             target_oid = o["option_id"]
             break
 
+    # Pre-validate the vote WILL be accepted BEFORE mutating poll options, so a
+    # rejected vote (multi at cap / single vote-change disabled) never leaves an
+    # orphaned write-in option behind. Mirrors cast_vote's rejection rules.
+    _wi_mode = question.get("choice_mode", "single")
+    if _wi_mode == "multi":
+        _wi_max = question.get("max_selections", len(question.get("options", [])))
+        _wi_votes = get_user_multi_votes(post, question_id, user_sub)
+        _wi_already = target_oid is not None and target_oid in _wi_votes
+        if not _wi_already and len(_wi_votes) >= _wi_max:
+            raise HTTPException(400, f"Maximum {_wi_max} selections allowed")
+    else:
+        _wi_cur = get_user_vote_for_question(post, question_id, user_sub)
+        if _wi_cur and _wi_cur != target_oid and not poll_data.get("allow_vote_change", True):
+            raise HTTPException(409, {"code": "VOTE_CHANGE_DISABLED",
+                                      "message": "Vote changes are not allowed."})
+
     created = False
     if target_oid is None:
         created = True
