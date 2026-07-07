@@ -200,6 +200,7 @@ class ComposePostViewModel @Inject constructor(
                     choiceMode = choiceMode,
                     maxSelections = if (d.multiSelect) d.trimmedOptions.size else null,
                     closesAt = d.closesAtOrNull(nowSec),
+                    allowWriteIn = d.allowWriteIn,
                 )
             }
             val newsfeedPoll: NewsfeedPollDataReq? = poll?.let { d ->
@@ -210,9 +211,11 @@ class ComposePostViewModel @Inject constructor(
                             choiceMode = choiceMode,
                             options = d.trimmedOptions.map { NewsfeedPollOptionReq(it) },
                             maxSelections = if (d.multiSelect) d.trimmedOptions.size else null,
+                            allowWriteIn = d.allowWriteIn,
                         ),
                     ),
                     closesAt = d.closesAtOrNull(nowSec),
+                    allowWriteIn = d.allowWriteIn,
                 )
             }
             // #4 (B-GROUPUNIFY) — a group audience posts to the group store (the backend bridges it into

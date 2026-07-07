@@ -120,6 +120,7 @@ class SyndicateOverviewViewModel @Inject constructor(
                 choiceMode = if (d.multiSelect) "multi" else "single",
                 maxSelections = if (d.multiSelect) d.trimmedOptions.size else null,
                 closesAt = d.closesAtOrNull(nowSec),
+                allowWriteIn = d.allowWriteIn,
             )
         }
         viewModelScope.launch {

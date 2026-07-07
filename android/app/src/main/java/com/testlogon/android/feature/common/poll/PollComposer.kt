@@ -33,6 +33,8 @@ data class PollDraft(
     val multiSelect: Boolean = false,
     /** Optional auto-close horizon in hours from now (null = never / manual close). */
     val closesInHours: Int? = null,
+    /** Sender-controlled: when true, voters may add their own write-in options. */
+    val allowWriteIn: Boolean = false,
 ) {
     val trimmedOptions: List<String> get() = options.map { it.trim() }.filter { it.isNotEmpty() }
     val isValid: Boolean get() = question.isNotBlank() && trimmedOptions.size >= 2
@@ -47,6 +49,7 @@ data class PollDraft(
             choiceMode = if (multiSelect) "multi" else "single",
             maxSelections = if (multiSelect) trimmedOptions.size else null,
             closesAt = closesAt(nowSeconds),
+            allowWriteIn = allowWriteIn,
         )
 
     fun closesAtOrNull(nowSeconds: Long = System.currentTimeMillis() / 1000L): Long? = closesAt(nowSeconds)
@@ -57,6 +60,7 @@ object PollComposerTestTags {
     const val ADD_OPTION = "poll_compose_add_option"
     const val MULTI_TOGGLE = "poll_compose_multi"
     const val SINGLE_TOGGLE = "poll_compose_single"
+    const val WRITE_IN_TOGGLE = "poll_compose_write_in"
     fun option(index: Int) = "poll_compose_option_$index"
     fun removeOption(index: Int) = "poll_compose_remove_$index"
     fun duration(hours: Int) = "poll_compose_duration_$hours"
@@ -135,6 +139,24 @@ fun PollComposer(
                 enabled = enabled,
                 label = { Text("Multi-select") },
                 modifier = Modifier.testTag(PollComposerTestTags.MULTI_TOGGLE),
+            )
+        }
+
+        // Sender-controlled write-in: when on, voters may add their own options to this poll.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Allow write-in answers", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Voters can add their own options",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            androidx.compose.material3.Switch(
+                checked = draft.allowWriteIn,
+                onCheckedChange = { onChange(draft.copy(allowWriteIn = it)) },
+                enabled = enabled,
+                modifier = Modifier.testTag(PollComposerTestTags.WRITE_IN_TOGGLE),
             )
         }
 

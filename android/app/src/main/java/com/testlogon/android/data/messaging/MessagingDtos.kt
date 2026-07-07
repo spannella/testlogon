@@ -68,6 +68,8 @@ data class CreatePollMessageReq(
     @Json(name = "max_selections") val maxSelections: Int? = null,
     @Json(name = "closes_at") val closesAt: Long? = null,
     @Json(name = "text") val text: String? = null,
+    /** Sender-controlled: allow voters to add their own write-in options. */
+    @Json(name = "allow_write_in") val allowWriteIn: Boolean = false,
 )
 
 @JsonClass(generateAdapter = true)

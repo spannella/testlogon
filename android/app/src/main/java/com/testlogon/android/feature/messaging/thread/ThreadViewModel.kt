@@ -1691,6 +1691,7 @@ class ThreadViewModel @Inject constructor(
                 maxSelections = draft.trimmedOptions.size,
                 closesAt = draft.closesAtOrNull(),
                 text = null,
+                allowWriteIn = draft.allowWriteIn,
             )
             _events.trySend(ThreadEvent.ScrollToBottom)
         }

@@ -20,7 +20,9 @@ import com.testlogon.android.data.feed.PollVoteResult
 import com.testlogon.android.data.feed.PostActionsRepository
 import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.data.feed.PostEngagementRepository
+import com.testlogon.android.data.feed.applyResultsPage
 import com.testlogon.android.data.feed.applyVote
+import com.testlogon.android.data.feed.applyWriteIn
 import com.testlogon.android.data.feed.reactedByMe
 import com.testlogon.android.data.feed.toggledReaction
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -303,7 +305,7 @@ class FeedViewModel @Inject constructor(
     fun ensurePollState(post: FeedPost) {
         val poll = post.poll ?: return
         if (pollStates.value.containsKey(post.id)) return
-        pollStates.update { it + (post.id to initialPollStateFor(poll)) }
+        pollStates.update { it + (post.id to pollStateFor(poll)) }
     }
 
     fun onPollOptionSelected(postId: String, questionId: String, optionId: String) {
@@ -314,7 +316,9 @@ class FeedViewModel @Inject constructor(
         pollStates.update { it + (postId to PollCardState.Voting(poll, questionId, optionId)) }
         viewModelScope.launch {
             val next: PollCardState = when (val r = polls.vote(postId, questionId, optionId)) {
-                is ApiResult.Success -> PollCardState.Results(poll.applyVote(r.data))
+                // Stay INTERACTIVE while the poll is open so a MULTI question keeps toggling options and a
+                // single question can change its vote (allow_vote_change) — full multi-select on newsfeed.
+                is ApiResult.Success -> pollStateFor(poll.applyVote(r.data))
                 is ApiResult.Failure -> PollCardState.Error(poll, questionId, r.error.message)
                 is ApiResult.NetworkError -> PollCardState.Error(poll, questionId, OFFLINE_POLL_MESSAGE)
             }
@@ -329,10 +333,40 @@ class FeedViewModel @Inject constructor(
         onPollOptionSelected(postId, questionId, optionId)
     }
 
+    /** Submit a voter write-in (sender-enabled polls only); consolidates/appends the option + votes it. */
+    fun onPollWriteIn(postId: String, questionId: String, text: String) {
+        val current = pollStates.value[postId] ?: return
+        val poll = current.poll
+        if (!poll.isInteractive || text.isBlank()) return
+        viewModelScope.launch {
+            val next: PollCardState = when (val r = polls.writeIn(postId, questionId, text.trim())) {
+                is ApiResult.Success ->
+                    pollStateFor(poll.applyWriteIn(questionId, r.data, _currentUserSub.value))
+                is ApiResult.Failure -> PollCardState.Error(poll, questionId, r.error.message)
+                is ApiResult.NetworkError -> PollCardState.Error(poll, questionId, OFFLINE_POLL_MESSAGE)
+            }
+            pollStates.update { it + (postId to next) }
+        }
+    }
+
+    /** Page the next slice of a write-in question's options (sorted by count desc) into the poll. */
+    fun onPollShowMore(postId: String, questionId: String, offset: Int) {
+        val current = pollStates.value[postId] ?: return
+        val poll = current.poll
+        viewModelScope.launch {
+            when (val r = polls.pollResults(postId, questionId, offset, POLL_WRITE_IN_PAGE)) {
+                is ApiResult.Success ->
+                    pollStates.update { it + (postId to pollStateFor(poll.applyResultsPage(r.data))) }
+                else -> Unit // best-effort refresh; the card reveals locally from the snapshot it holds
+            }
+        }
+    }
+
     private companion object {
         const val PAGE_SIZE = 20
         const val PREFETCH_DISTANCE = 10
         const val INITIAL_LOAD_SIZE = 20
+        const val POLL_WRITE_IN_PAGE = 5
         const val OFFLINE_LIKE_MESSAGE = "Couldn't update like. Try again."
         const val OFFLINE_HIDE_MESSAGE = "Couldn't hide post. Tap to retry."
         const val BOOKMARK_FAIL_MESSAGE = "Couldn't save post. Retry."
@@ -350,13 +384,14 @@ sealed interface PollCardState {
     data class Error(override val poll: Poll, val questionId: String, val message: String) : PollCardState
 }
 
-/** Seed state: a closed poll or one already voted on every question opens read-only; else selectable. */
-internal fun initialPollStateFor(poll: Poll): PollCardState =
-    if (poll.closed || (poll.questions.isNotEmpty() && poll.questions.all { it.hasVoted })) {
-        PollCardState.Results(poll)
-    } else {
-        PollCardState.Idle(poll)
-    }
+/**
+ * State for a poll snapshot: a CLOSED poll opens read-only (Results); an OPEN poll stays interactive
+ * (Idle) even after voting, so multi-select questions can keep toggling options, single questions can
+ * change their vote (allow_vote_change) and voters can add write-ins. Per-option interactivity (e.g. a
+ * single already-voted question with vote-change disabled) is enforced in the card + by the backend.
+ */
+internal fun pollStateFor(poll: Poll): PollCardState =
+    if (poll.closed) PollCardState.Results(poll) else PollCardState.Idle(poll)
 
 /** A hide / not-interested action carrying the post id and its captured feed index (for rollback). */
 sealed interface FeedAction {

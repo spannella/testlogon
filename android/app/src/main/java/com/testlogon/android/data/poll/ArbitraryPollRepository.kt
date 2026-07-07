@@ -2,6 +2,7 @@ package com.testlogon.android.data.poll
 
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.poll.ArbitraryPoll
+import com.testlogon.android.core.model.poll.ArbitraryPollPage
 import com.testlogon.android.core.network.error.ApiErrorParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,17 @@ interface PollVoter {
     suspend fun unvote(pollId: String, questionId: String): ApiResult<ArbitraryPoll>
     suspend fun close(pollId: String): ApiResult<ArbitraryPoll>
     suspend fun refresh(pollId: String): ApiResult<ArbitraryPoll>
+
+    /** Submit a voter write-in on [questionId]; returns the fresh full poll (new option appears in it). */
+    suspend fun writeIn(pollId: String, questionId: String, text: String): ApiResult<ArbitraryPoll>
+
+    /** Fetch one page of a question's options (sorted by count desc) for the "show more" reveal. */
+    suspend fun results(
+        pollId: String,
+        questionId: String,
+        offset: Int,
+        topN: Int,
+    ): ApiResult<ArbitraryPollPage>
 }
 
 @Singleton
@@ -47,6 +59,23 @@ class ArbitraryPollRepository @Inject constructor(
 
     override suspend fun refresh(pollId: String): ApiResult<ArbitraryPoll> =
         withContext(Dispatchers.IO) { call { api.get(pollId).toDomain() } }
+
+    override suspend fun writeIn(
+        pollId: String,
+        questionId: String,
+        text: String,
+    ): ApiResult<ArbitraryPoll> = withContext(Dispatchers.IO) {
+        call { api.writeIn(pollId, ArbitraryPollWriteInReq(text = text, questionId = questionId)).toDomain() }
+    }
+
+    override suspend fun results(
+        pollId: String,
+        questionId: String,
+        offset: Int,
+        topN: Int,
+    ): ApiResult<ArbitraryPollPage> = withContext(Dispatchers.IO) {
+        call { api.results(pollId, questionId, topN, offset).toPage() }
+    }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

@@ -15,6 +15,8 @@ data class PollInputDto(
     @Json(name = "choice_mode") val choiceMode: String = "single",
     @Json(name = "max_selections") val maxSelections: Int? = null,
     @Json(name = "closes_at") val closesAt: Long? = null,
+    /** Sender-controlled: when true, voters may add their own write-in options. */
+    @Json(name = "allow_write_in") val allowWriteIn: Boolean = false,
 )
 
 /** Live poll snapshot embedded on a post/message (arbitrary_polls._snapshot shape). */
@@ -29,6 +31,7 @@ data class PollSnapshotDto(
     @Json(name = "total_votes") val totalVotes: Int = 0,
     @Json(name = "vote_counts") val voteCounts: Map<String, Map<String, Int>> = emptyMap(),
     @Json(name = "my_votes") val myVotes: Map<String, List<String>>? = null,
+    @Json(name = "allow_write_in") val allowWriteIn: Boolean = false,
 )
 
 data class PollSnapshotQuestionDto(
@@ -37,9 +40,12 @@ data class PollSnapshotQuestionDto(
     @Json(name = "choice_mode") val choiceMode: String = "single",
     @Json(name = "options") val options: List<PollSnapshotOptionDto> = emptyList(),
     @Json(name = "max_selections") val maxSelections: Int? = null,
+    @Json(name = "allow_write_in") val allowWriteIn: Boolean = false,
 )
 
 data class PollSnapshotOptionDto(
     @Json(name = "option_id") val optionId: String = "",
     @Json(name = "text") val text: String = "",
+    @Json(name = "is_write_in") val isWriteIn: Boolean = false,
+    @Json(name = "author") val author: String? = null,
 )

@@ -63,6 +63,8 @@ data class NewsfeedPollDataReq(
     @Json(name = "closes_at") val closesAt: Long? = null,
     @Json(name = "anonymous") val anonymous: Boolean = true,
     @Json(name = "allow_vote_change") val allowVoteChange: Boolean = true,
+    /** Sender-controlled: allow voters to add their own write-in options. */
+    @Json(name = "allow_write_in") val allowWriteIn: Boolean = false,
 )
 
 @JsonClass(generateAdapter = true)
@@ -71,6 +73,7 @@ data class NewsfeedPollQuestionReq(
     @Json(name = "choice_mode") val choiceMode: String = "single",
     @Json(name = "options") val options: List<NewsfeedPollOptionReq>,
     @Json(name = "max_selections") val maxSelections: Int? = null,
+    @Json(name = "allow_write_in") val allowWriteIn: Boolean = false,
 )
 
 @JsonClass(generateAdapter = true)

@@ -220,6 +220,8 @@ fun FeedRoute(
         onEnsureAuthorName = viewModel::resolveAuthor,
         onPollOptionClick = viewModel::onPollOptionSelected,
         onPollRetry = viewModel::onPollRetry,
+        onPollWriteIn = viewModel::onPollWriteIn,
+        onPollShowMore = viewModel::onPollShowMore,
         modifier = modifier,
     )
 
@@ -269,6 +271,8 @@ fun FeedScreen(
     onEnsureAuthorName: (authorId: String) -> Unit = {},
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
+    onPollWriteIn: (postId: String, questionId: String, text: String) -> Unit = { _, _, _ -> },
+    onPollShowMore: (postId: String, questionId: String, offset: Int) -> Unit = { _, _, _ -> },
 ) {
     val listState = rememberLazyListState()
     Scaffold(
@@ -361,6 +365,8 @@ fun FeedScreen(
                         onEnsureAuthorName = onEnsureAuthorName,
                         onPollOptionClick = onPollOptionClick,
                         onPollRetry = onPollRetry,
+                        onPollWriteIn = onPollWriteIn,
+                        onPollShowMore = onPollShowMore,
                     )
                 }
                 }
@@ -444,6 +450,8 @@ private fun FeedList(
     onEnsureAuthorName: (authorId: String) -> Unit,
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit,
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit,
+    onPollWriteIn: (postId: String, questionId: String, text: String) -> Unit = { _, _, _ -> },
+    onPollShowMore: (postId: String, questionId: String, offset: Int) -> Unit = { _, _, _ -> },
 ) {
     LazyColumn(
         state = listState,
@@ -484,6 +492,8 @@ private fun FeedList(
                     pollState = pollStates[item.id],
                     onPollOptionClick = onPollOptionClick,
                     onPollRetry = onPollRetry,
+                    onPollWriteIn = onPollWriteIn,
+                    onPollShowMore = onPollShowMore,
                 )
             }
         }

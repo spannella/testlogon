@@ -581,6 +581,7 @@ interface MessagingRepository {
         maxSelections: Int?,
         closesAt: Long?,
         text: String?,
+        allowWriteIn: Boolean,
     ): ApiResult<Unit>
 
     /** AND-136 — refresh authoritative poll state (idempotent GET) into Room. */
@@ -2717,6 +2718,7 @@ class MessagingRepositoryImpl @Inject constructor(
         maxSelections: Int?,
         closesAt: Long?,
         text: String?,
+        allowWriteIn: Boolean,
     ): ApiResult<Unit> = withContext(io) {
         val create = apiCall {
             api.createPollMessage(
@@ -2728,6 +2730,7 @@ class MessagingRepositoryImpl @Inject constructor(
                     maxSelections = if (multiSelect) maxSelections else null,
                     closesAt = closesAt,
                     text = text?.takeIf { it.isNotBlank() },
+                    allowWriteIn = allowWriteIn,
                 ),
             )
         }

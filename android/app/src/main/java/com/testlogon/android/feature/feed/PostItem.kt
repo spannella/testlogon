@@ -88,6 +88,9 @@ fun PostItem(
     pollState: PollCardState? = null,
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
+    // Write-in polls: submit a voter write-in / page the remaining options.
+    onPollWriteIn: (postId: String, questionId: String, text: String) -> Unit = { _, _, _ -> },
+    onPollShowMore: (postId: String, questionId: String, offset: Int) -> Unit = { _, _, _ -> },
 ) {
     Column(
         modifier = modifier
@@ -155,6 +158,8 @@ fun PostItem(
                             state = pollState ?: PollCardState.Results(poll),
                             onOptionClick = { q, o -> onPollOptionClick(post.id, q, o) },
                             onRetry = { q, o -> onPollRetry(post.id, q, o) },
+                            onWriteIn = { q, text -> onPollWriteIn(post.id, q, text) },
+                            onShowMore = { q, offset -> onPollShowMore(post.id, q, offset) },
                         )
                     }
                 }
