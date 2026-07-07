@@ -1,0 +1,11 @@
+--- app/services/syndicate_feed.py.bak_pollwritein_1783440214
++++ app/services/syndicate_feed.py
+@@ -138,7 +138,7 @@
+             choice_mode=poll.get("choice_mode", "single"),
+             max_selections=poll.get("max_selections"), closes_at=poll.get("closes_at"),
+             allow_vote_change=poll.get("allow_vote_change", True),
+-            anonymous=poll.get("anonymous", True), surface="syndicate", ref_id=syndicate_id)
++            anonymous=poll.get("anonymous", True), allow_write_in=poll.get("allow_write_in", False), surface="syndicate", ref_id=syndicate_id)
+         _poll_id = _poll_snap["poll_id"]
+ 
+     item: Dict[str, Any] = {
