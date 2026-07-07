@@ -69,3 +69,41 @@ were made before every prod edit.
 - HTTP orphan test: lock+tip text send → `400 "Cannot combine lock_price_cents with
   tip_amount_cents"` with NO credit row written; tip-only send → 200 with a net-400
   credit to the recipient.
+
+## TIP-013 — contract tests + full real-endpoint verification + regression fix
+
+**Regression found & fixed (behavior-preserving).** The Phase-2 migration wrote the
+newsfeed tip idempotency keys as `"posttip:" + new_id()` / `"cmttip:" + new_id()`,
+but `newsfeed.new_id(prefix)` REQUIRES a prefix arg (unlike `messaging.new_id()`
+which is 0-arg). So `tip_post` and `tip_comment` raised `TypeError` → **HTTP 500 on
+every post/comment tip** since commit `7c070f93`. Fixed to `new_id("posttip")` /
+`new_id("cmttip")` in `app/routers/newsfeed.py` (and in `migrate_shared_surfaces.py`
+so a re-apply produces the corrected code). Prod hotfixed with
+`.bak_tipb0_20260707211343`.
+
+**Contract tests:** `tests/test_tips_charge_tip.py` (17 tests, green) locks the
+`charge_tip` money-path contract: each content_type → paired settled debit(gross) +
+credit(net, `type:"credit"`) with the 20% split; idempotent replay = no second
+ledger; self-tip / bad amount / bad content_type → 400; PM ownership (unknown → 400,
+blank allowed in dev); delegate `can_tip` default-DENY (403 without the grant).
+
+**Live prod verification (real HTTP endpoints, DynamoDB Local, ledger before/after):**
+
+| Surface | Endpoint | Result |
+|---|---|---|
+| message | `POST /messaging/conversations/{c}/messages` (tip_amount_cents) | 200 · debit 500 / credit 400 · replay(same client_request_id) → no new rows |
+| post | `POST /posts/{id}/tip` | 200 · debit 500 / credit 400 |
+| comment | `POST /posts/{id}/comments/{cid}/tip` | 200 · debit 500 / credit 400 |
+| broadcast | `POST /broadcast/sessions/{s}/chat/tip` | 201 · debit 500 / credit 400 |
+| video | `POST /ui/videos/{id}/tip` | 200 · debit 500 / credit 400 |
+
+- **Orphan-credit:** lock+tip text send → `400` with recipient ledger unchanged
+  (0 rows before AND after) and no tipper debit.
+- **Idempotency (charge_tip seam, all 5 content_types):** replay same key →
+  `idempotent_replay=True`, no new ledger rows; each also bumps `get_earnings_summary`
+  +400 and `get_available_balance.total_earned_cents` +400 for the recipient.
+- **Delegate `can_tip`:** a tip with `acting_delegate_id` lacking the grant → `403
+  delegate_tip_forbidden`.
+
+All synthetic users/rows cleaned up after each run. Backend restarted; `/openapi.json`
+→ 200.

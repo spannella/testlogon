@@ -4768,7 +4768,7 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
             content_type="post",
             content_id=post_id,
             meta={"post_id": post_id},
-            idempotency_key="posttip:" + new_id(),
+            idempotency_key=new_id("posttip"),
         )
         _tip_txn_id = _tp.tip_payment_id
 
@@ -5932,7 +5932,7 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
             content_type="comment",
             content_id=comment_id,
             meta={"post_id": post_id, "comment_id": comment_id},
-            idempotency_key="cmttip:" + new_id(),
+            idempotency_key=new_id("cmttip"),
         )
         pi["payment_intent_id"] = _ct.tip_payment_id
 
