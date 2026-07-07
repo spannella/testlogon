@@ -1178,6 +1178,16 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Ad Clicks — CPA attribution store (ADV-002). hash=ad_click_id;
+        # TTL on expires_at (last-click 7d); GSI ByViewer for purchase-time lookup.
+        TableDef(
+            _resolve_table_name(getattr(S, "ad_clicks_table_name", "AdClicks"), "AdClicks"),
+            "ad_click_id",
+            gsi=[
+                {"index_name": "ByViewer", "partition_key": "viewer_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Content-Provider Ad Controls (ADS-010) — per-content ad overrides
         TableDef(
             _resolve_table_name(
@@ -2586,6 +2596,18 @@ def main() -> None:
         _retry_transient_ddb_call(
             client.update_time_to_live,
             TableName=_billing_table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
+        )
+    except Exception:
+        pass
+    # ADV-002: Enable TTL on ad_clicks table with attribute "expires_at"
+    # (last-click 7d CPA window; only ad_click rows write expires_at).
+    _ad_clicks_table = _resolve_table_name(getattr(S, "ad_clicks_table_name", "AdClicks"), "AdClicks")
+    try:
+        client = ddb.meta.client
+        _retry_transient_ddb_call(
+            client.update_time_to_live,
+            TableName=_ad_clicks_table,
             TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
         )
     except Exception:

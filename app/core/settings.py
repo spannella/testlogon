@@ -1716,6 +1716,8 @@ class Settings:
     # Subscription-Gated VOD (MON-005)
     vod_subscription_gating_enabled: bool = os.environ.get("VOD_SUBSCRIPTION_GATING_ENABLED", "1") not in ("0", "false", "False")
     ad_billing_table_name: str = os.environ.get("DDB_AD_BILLING", "AdBilling")
+    # ADV-002: CPA click-attribution store (last-click 7d window, TTL on expires_at)
+    ad_clicks_table_name: str = os.environ.get("DDB_AD_CLICKS", "AdClicks")
 
     # Advertiser Accounts & Campaigns (ADS-001)
 

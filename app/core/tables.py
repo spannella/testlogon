@@ -179,6 +179,7 @@ class Tables:
     content_ad_controls: Any
     ad_frequency_caps: Any
     ad_billing: Any
+    ad_clicks: Any
     ad_analytics_rollups: Any
     ad_fraud_events: Any
     ad_optimization_recommendations: Any
@@ -421,6 +422,7 @@ T = Tables(
     content_ad_controls=_safe_table(S.content_ad_controls_table_name),
     ad_frequency_caps=_safe_table(S.ad_frequency_caps_table_name),
     ad_billing=_safe_table(S.ad_billing_table_name),
+    ad_clicks=_safe_table(S.ad_clicks_table_name),
     ad_analytics_rollups=_safe_table(S.ad_analytics_rollups_table_name),
     ad_fraud_events=_safe_table(S.ad_fraud_events_table_name),
     ad_optimization_recommendations=_safe_table(S.ad_optimization_recommendations_table_name),
