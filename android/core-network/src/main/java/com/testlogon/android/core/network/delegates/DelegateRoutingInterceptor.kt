@@ -16,7 +16,7 @@ import javax.inject.Singleton
  * backend re-runs the identical normal send handlers with user_id=creator and stamps [via @delegate].
  *
  * The rewrite is a WHITELIST - any messaging path WITHOUT a delegate route (read receipts, tips, unlock,
- * pins, voice/voicemail, polls, calendar/find-datetime, delete/revoke, hide, schedule mgmt, attachment
+ * pins, voice/voicemail, calendar/find-datetime, delete/revoke, hide, schedule mgmt, attachment
  * grants, search, single-conversation GET, the conversation LIST) is left untouched and simply acts as the
  * delegate's own identity server-side (harmless / gated). Query params and body are preserved.
  *
@@ -32,6 +32,7 @@ import javax.inject.Singleton
  *  - POST   messaging/conversations/{cid}/messages/{mid}/reactions -> delegate
  *  - PATCH  messaging/conversations/{cid}/messages/{mid}       -> delegate (edit)
  *  - POST   messaging/messages/lottery                         -> .../delegate/{c}/messages/lottery
+ *  - POST   ui/polls/{poll_id}/{vote|write-in|close}           -> .../delegate/{c}/polls/{poll_id}/{...} (arbitrary-poll voting, all surfaces)
  */
 @Singleton
 class DelegateRoutingInterceptor @Inject constructor(
@@ -80,6 +81,21 @@ class DelegateRoutingInterceptor @Inject constructor(
             (segments[4] == "availability" || segments[4] == "close")
         ) {
             return listOf("messaging", "delegate", creator) + segments.drop(1)
+        }
+
+        // ui/polls/{poll_id}/{vote|write-in|close}  (ARBITRARY-POLL voting on ANY surface: messaging /
+        // group / syndicate / newsfeed all vote through the shared /ui/polls client). Attribute the
+        // cast to the CREATOR by re-targeting onto the verified delegate poll routes
+        //   POST messaging/delegate/{creator}/polls/{poll_id}/{vote|write-in|close}
+        // which take the IDENTICAL request body (option_id/question_id ; text/question_id ; empty) and
+        // return the same poll snapshot, so ArbitraryPollApi is reused verbatim. GET snapshot/results and
+        // DELETE unvote have no delegate route + are identity-agnostic reads -> left on /ui/polls.
+        if (method == "POST" &&
+            segments.size == 4 &&
+            segments[0] == "ui" && segments[1] == "polls" &&
+            (segments[3] == "vote" || segments[3] == "write-in" || segments[3] == "close")
+        ) {
+            return listOf("messaging", "delegate", creator, "polls", segments[2], segments[3])
         }
 
         // messaging/conversations/{cid}/<tail...>
