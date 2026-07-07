@@ -378,6 +378,7 @@ async def serve_ad_endpoint(body: AdServeRequestIn, ctx=Depends(require_ui_sessi
         slot_type=body.slot_type,
         user_id=ctx["user_sub"],
         user_context=getattr(body, "user_context", None),
+        content_owner_id=getattr(body, "content_owner_id", "") or "",
     )
     return result
 

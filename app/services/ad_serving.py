@@ -51,6 +51,7 @@ def serve_ad(
     slot_type: str,
     user_id: str,
     user_context: Optional[Dict[str, Any]] = None,
+    content_owner_id: str = "",
 ) -> Dict[str, Any]:
     """Select and return the best ad for the given context."""
     from app.services.ad_campaigns import list_campaigns_by_status
@@ -172,6 +173,34 @@ def serve_ad(
         winner["creatives"], campaign_weights=winner["campaign"].get("creative_weights") or {}
     )
 
+    # ADV-103: mint a per-serve ad_click_id for CPA attribution. Persist a row in
+    # AdClicks (status=served, 7d TTL) carrying the content owner so a later
+    # purchase/subscribe can resolve the last click. effective_price_cents is the
+    # winning bid as a placeholder until the B3 auction sets a cleared price.
+    ad_click_id = uuid.uuid4().hex
+    _bid_cpm_win = int(winner["campaign"].get("bid_cpm_cents", 500) or 500)
+    try:
+        _now = now_ts()
+        T.ad_clicks.put_item(Item={
+            "ad_click_id": ad_click_id,
+            "viewer_sub": user_id,
+            "campaign_id": winner["campaign"]["campaign_id"],
+            "account_id": winner["campaign"]["account_id"],
+            "creative_id": creative["creative_id"],
+            "content_owner_sub": content_owner_id or "",
+            "surface": surface,
+            "slot_type": slot_type,
+            "content_id": content_id,
+            "status": "served",
+            "effective_price_cents": _bid_cpm_win,
+            "created_at": _now,
+            "expires_at": _now + 604800,
+        })
+    except Exception:
+        logger.warning(
+            "ad_click_mint_failed campaign=%s", winner["campaign"].get("campaign_id")
+        )
+
     # 6. Build tracking URLs
     tracking_base = "/ui/ads/track"
     tracking_params = (
@@ -180,6 +209,7 @@ def serve_ad(
         f"&account_id={winner['campaign']['account_id']}"
         f"&surface={surface}&slot_type={slot_type}"
         f"&content_id={content_id}&creator_id={creator_id}"
+        f"&ad_click_id={ad_click_id}"
     )
 
     return {
@@ -200,6 +230,9 @@ def serve_ad(
         "skip_url": f"{tracking_base}?event=skip&{tracking_params}",
         "is_house_ad": False,
         "campaign_id": winner["campaign"]["campaign_id"],
+        "account_id": winner["campaign"]["account_id"],
+        "ad_click_id": ad_click_id,
+        "content_owner_id": content_owner_id or "",
         "promo_code_id": creative.get("promo_code_id"),
         "affiliate_link_id": creative.get("affiliate_link_id"),
     }

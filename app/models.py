@@ -4956,6 +4956,8 @@ class AdServeRequestIn(BaseModel):
                            description="Type of ad slot within the surface")
     user_context: Optional[Dict[str, Any]] = Field(default=None,
                                                     description="Additional viewer context for targeting")
+    content_owner_id: str = Field(default="",
+                                  description="Sub of the content owner for CPA attribution; empty for standalone units")
 
 
 class AdServeResponseOut(BaseModel):

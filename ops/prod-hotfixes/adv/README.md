@@ -82,3 +82,73 @@ test row deleted after. Convention matched: `BillingMode=PAY_PER_REQUEST`, GSI P
 | ADV-001 | Read prod ad flags via SSM | (this README, flag table) | read-only |
 | ADV-002 | Create `ad_clicks` (AdClicks) table + TTL + GSI | `create_ad_clicks.py`; dev-clone reg in settings/tables/local-ddb-init | **yes** — table live on prod DDB-Local |
 | ADV-003 | Establish this fold folder + convention | `ops/prod-hotfixes/adv/` | n/a (doc) |
+
+---
+
+## ADV-B1 — real funding + serving + newsfeed sponsored fields (ADV-101..104)
+
+Live prod hotfix applied 2026-07-07 via SSM against `/home/ubuntu/testlogon`.
+Re-apply artifact: **`apply_advb1.py`** (idempotent, marker-skip, makes a
+`.bak_advb1_<ts>` per file). Seed + money-path verifier: **`seed_verify_advb1.py`**.
+
+Re-apply:  `/home/ubuntu/testlogon/.venv/bin/python apply_advb1.py /home/ubuntu/testlogon`
+then restart the backend. Verify: load env + `PYTHONPATH=<root>` then run
+`seed_verify_advb1.py` → `OVERALL ALL_PASS`.
+
+### Changes
+- **ADV-101** `ad_billing.deposit_funds` now CHARGES `payment_method_id` via a
+  stripe-mock PaymentIntent (`_charge_deposit`, mirrors `tips._charge_tip`:
+  `off_session=True, confirm=True, idempotency_key="addep:{acct}:{amt}:{pm}"`)
+  BEFORE any ledger/balance write. Decline/processor-error → `HTTPException(402)`,
+  no ledger row, no balance credit. The `budget_deposit` ledger meta now records
+  `stripe_payment_intent_id`. stripe-mock nuance handled exactly like TIP-101
+  (accept the created intent unless canceled/payment_failed when `stripe_api_base`
+  is overridden; real Stripe still requires `succeeded`; real CardError declines).
+- **ADV-102** `ad_billing._process_charge` debits the balance FIRST under
+  `ConditionExpression="attribute_exists(balance_cents) AND balance_cents >= :amt"`;
+  on `ConditionalCheckFailedException` it returns
+  `{"ok": False, "reason": "insufficient_funds"}` and writes NOTHING (no ledger,
+  no campaign-spend bump, no revenue split). Balance can never go negative.
+- **ADV-103** `ad_serving.serve_ad` mints a per-serve `ad_click_id` (uuid) and
+  writes an `AdClicks` row (`viewer_sub`, `campaign_id`, `account_id`,
+  `creative_id`, `content_owner_sub`, `surface`, `slot_type`, `content_id`,
+  `status="served"`, `effective_price_cents`=winning bid placeholder, `created_at`,
+  `expires_at`=now+7d TTL). New kwarg `content_owner_id` (default "") carries the
+  content owner; response + tracking URLs now include `ad_click_id`, and the
+  response also carries `account_id` + `content_owner_id`. House-ad path mints
+  nothing. `AdServeRequestIn` gains `content_owner_id`; `ads.py` /serve passes it.
+- **ADV-104** `newsfeed._fetch_sponsored_post` surfaces `account_id`,
+  `ad_click_id`, `content_owner_id` into the injected sponsored dict (already had
+  is_sponsored/creative/campaign/cta/impression+click urls). Feed returns raw
+  dicts (no response_model), so the fields reach the app.
+- **B0 prod-registration gap closed:** B0 created the physical `AdClicks` table on
+  prod but only registered `T.ad_clicks` / `ad_clicks_table_name` on the dev clone.
+  This hotfix folds that registration into prod `app/core/tables.py` +
+  `app/core/settings.py` (dev clone already had it → marker-skip).
+
+### Verified on prod (2026-07-07, seed_verify_advb1.py → ALL_PASS)
+- ADV-101: deposit $5000 → PaymentIntent created + balance 0→500000 + ledger meta
+  carries the PI id; declined charge (CardError→402) → balance unchanged.
+- ADV-102: over-balance charge → `insufficient_funds`, balance unchanged (>=0);
+  a legitimate small charge still debits atomically.
+- ADV-103: two serves mint distinct ad_click_ids; `AdClicks` row present with
+  `status=served`, `expires_at≈now+7d`; `content_owner_id` carry verified.
+- ADV-104: injected sponsored dict carries is_sponsored/campaign/account_id/
+  ad_click_id/content_owner_id/cta/impression+click urls.
+- Seeded funded+approved campaign left live for the app tickets:
+  account `adacct_6ad6af06389d`, campaign `camp_e976f3150eb6`, creative `cr_756bf247c1f7`.
+
+### Prod .bak files
+`ad_billing.py`/`ad_serving.py`/`newsfeed.py`/`models.py`/`ads.py` →
+`*.bak_advb1_20260707_225618`;  `settings.py`/`tables.py` →
+`*.bak_advb1_20260707_230210`.
+
+## Fold log (B1)
+
+| Ticket | Change | Artifact | Prod applied |
+|---|---|---|---|
+| ADV-101 | deposit_funds charges PM (stripe-mock PI) before credit | `apply_advb1.py` (ad_billing.py) | **yes** |
+| ADV-102 | funds-guard ConditionExpression on _process_charge | `apply_advb1.py` (ad_billing.py) | **yes** |
+| ADV-103 | serve_ad mints ad_click_id + AdClicks row + content_owner | `apply_advb1.py` (ad_serving.py, models.py, ads.py) | **yes** |
+| ADV-104 | newsfeed injection surfaces ad_click_id/account_id/content_owner | `apply_advb1.py` (newsfeed.py) | **yes** |
+| ADV-002-fix | register T.ad_clicks on prod (B0 gap) | `apply_advb1.py` (settings.py, tables.py) | **yes** |

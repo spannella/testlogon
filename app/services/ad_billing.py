@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from boto3.dynamodb.conditions import Key, Attr
+from botocore.exceptions import ClientError
 
+from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.billing_shared import new_ledger_entry, user_pk
@@ -28,9 +30,30 @@ MIN_DEPOSIT_CENTS = 5000  # $50 minimum deposit
 
 
 def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "") -> dict:
-    """Add funds to advertiser account balance."""
+    """Add funds to advertiser account balance.
+
+    ADV-101: the payment_method_id is now actually CHARGED via the stripe-mock
+    PaymentIntent rail (mirrors billing.charge_once / tips._charge_tip) BEFORE any
+    balance credit. A declined card / processor error raises HTTPException(402)
+    before any ledger row is written or balance credited -- a failed deposit never
+    credits the account.
+    """
     if amount_cents < MIN_DEPOSIT_CENTS:
         raise ValueError(f"Minimum deposit is $50")
+
+    # ADV-101: charge the payment method FIRST. Resolve the owner sub so the
+    # charge lands on the advertiser's own Stripe customer.
+    owner_sub = ""
+    try:
+        from app.services.ad_accounts import get_ad_account
+        _acct = get_ad_account(account_id)
+        owner_sub = (_acct or {}).get("owner_sub", "")
+    except Exception:
+        owner_sub = ""
+    payment_intent_id = _charge_deposit(
+        owner_sub=owner_sub, account_id=account_id,
+        amount_cents=amount_cents, payment_method_id=payment_method_id,
+    )
 
     ts = now_ts()
     entry_id = f"dep_{uuid.uuid4().hex[:12]}"
@@ -49,12 +72,15 @@ def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "
         "amount_cents": amount_cents,
         "state": "settled",
         "reason": "Account deposit",
-        "meta": {"payment_method_id": payment_method_id},
+        "meta": {
+            "payment_method_id": payment_method_id,
+            "stripe_payment_intent_id": payment_intent_id or "",
+        },
         "month_key": month_key,
         "created_at": ts,
     })
 
-    # Increment account balance
+    # Increment account balance (only reached after a successful charge)
     T.ad_accounts.update_item(
         Key={"pk": f"ACCT#{account_id}", "sk": "META"},
         UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt",
@@ -62,6 +88,70 @@ def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "
     )
 
     return {"ok": True, "entry_id": entry_id, "new_balance_cents": _get_balance(account_id)}
+
+
+def _charge_deposit(*, owner_sub: str, account_id: str, amount_cents: int,
+                    payment_method_id: str) -> Optional[str]:
+    """ADV-101: charge an advertiser deposit via the stripe-mock PaymentIntent rail.
+
+    Mirrors app.services.tips._charge_tip / billing.charge_once: off_session +
+    confirm with an idempotency_key so a retried deposit never double-charges.
+
+    Returns the PaymentIntent id on success, or None for the dev-stub path
+    (Stripe not configured, or no payment method supplied -- preserves the historical
+    ledger-only behavior so internal/seed callers without a PM still work).
+
+    Raises HTTPException(402) on a declined card / processor error / non-succeeded
+    terminal status so the caller (deposit_funds) never credits the balance.
+
+    stripe-mock nuance: the local stripe-mock cannot truly confirm an off_session
+    intent, so when stripe_api_base is overridden we accept the created intent
+    unless it is canceled/payment_failed; a real Stripe (no api_base override)
+    still requires status == "succeeded" and a real decline surfaces as CardError.
+    """
+    if not getattr(S, "stripe_secret_key", "") or not payment_method_id:
+        return None
+    from fastapi import HTTPException
+    from app.routers.billing import ensure_stripe_configured, get_or_create_customer
+    import stripe
+
+    ensure_stripe_configured()
+    customer_id = get_or_create_customer(owner_sub or account_id)
+    try:
+        pi = stripe.PaymentIntent.create(
+            amount=int(amount_cents),
+            currency="usd",
+            customer=customer_id,
+            payment_method=payment_method_id,
+            off_session=True,
+            confirm=True,
+            description="Ad account deposit",
+            metadata={
+                "app_user_id": owner_sub,
+                "purpose": "ad_deposit",
+                "account_id": account_id,
+            },
+            idempotency_key=f"addep:{account_id}:{amount_cents}:{payment_method_id}",
+        )
+    except stripe.error.CardError as exc:
+        logger.info("ad deposit declined for account=%s: %s", account_id, exc)
+        raise HTTPException(402, {"code": "payment_failed", "message": str(exc)})
+    except stripe.error.StripeError as exc:
+        logger.warning("ad deposit stripe error for account=%s: %s", account_id, exc)
+        raise HTTPException(402, {"code": "payment_failed",
+                                  "message": "Deposit charge failed at the payment processor."})
+
+    status = (pi.get("status") or "").lower()
+    charged_ok = status == "succeeded" or (
+        bool(getattr(S, "stripe_api_base", "")) and status not in ("canceled", "payment_failed")
+    )
+    if not charged_ok:
+        raise HTTPException(
+            402,
+            {"code": "payment_failed",
+             "message": f"Deposit charge did not succeed (status={status})."},
+        )
+    return pi.get("id")
 
 
 def charge_impression(
@@ -108,12 +198,37 @@ def _process_charge(
     *, account_id: str, campaign_id: str, entry_type: str,
     charge_cents: int, creator_id: str, reason: str, meta: dict,
 ) -> dict:
-    """Process a charge: debit advertiser, split revenue, check budget."""
+    """Process a charge: debit advertiser, split revenue, check budget.
+
+    ADV-102: the balance debit is now a CONDITIONAL write
+    (attribute_exists(balance_cents) AND balance_cents >= :amt) executed FIRST.
+    If the account cannot cover the charge the debit is rejected and NOTHING else
+    is written (no ledger row, no campaign-spend bump, no revenue split) -- the
+    balance can never go negative and concurrent charges never oversell.
+    """
     ts = now_ts()
     entry_id = f"chg_{uuid.uuid4().hex[:12]}"
     month_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
 
-    # 1. Write charge to ad_billing ledger
+    # 1. Debit advertiser balance FIRST, funds-guarded so it can never go negative.
+    try:
+        T.ad_accounts.update_item(
+            Key={"pk": f"ACCT#{account_id}", "sk": "META"},
+            UpdateExpression="SET balance_cents = balance_cents - :amt, "
+                             "lifetime_spend_cents = if_not_exists(lifetime_spend_cents, :z) + :amt",
+            ConditionExpression="attribute_exists(balance_cents) AND balance_cents >= :amt",
+            ExpressionAttributeValues={":amt": charge_cents, ":z": 0},
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            logger.info(
+                "ad_charge_insufficient_funds account=%s campaign=%s amount=%s",
+                account_id, campaign_id, charge_cents,
+            )
+            return {"ok": False, "reason": "insufficient_funds", "charge_cents": charge_cents}
+        raise
+
+    # 2. Write charge to ad_billing ledger (only after a successful debit)
     T.ad_billing.put_item(Item={
         "pk": f"ACCT#{account_id}",
         "sk": f"LEDGER#{ts}#{entry_id}",
@@ -128,14 +243,6 @@ def _process_charge(
         "month_key": month_key,
         "created_at": ts,
     })
-
-    # 2. Debit advertiser account balance
-    T.ad_accounts.update_item(
-        Key={"pk": f"ACCT#{account_id}", "sk": "META"},
-        UpdateExpression="SET balance_cents = balance_cents - :amt, "
-                         "lifetime_spend_cents = if_not_exists(lifetime_spend_cents, :z) + :amt",
-        ExpressionAttributeValues={":amt": charge_cents, ":z": 0},
-    )
 
     # 3. Increment campaign spend
     T.ad_campaigns.update_item(
