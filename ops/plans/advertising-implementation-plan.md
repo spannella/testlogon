@@ -7,6 +7,55 @@ Scope: turn the existing ad **simulation** into a **live ad business** — real 
 
 ---
 
+## Second-pass verification (adversarial re-read)
+
+> Added by an adversarial second pass. Verified line-by-line against `android-impl @ 7bedc4c9` on dev host `.249` (`~/dev/testlogon`), 2026-07-07. **Prod env (SSM) NOT read here** - that is ADV-001's job; every citation below is the **dev clone**. **Verdict: the plan is well-grounded - every load-bearing premise CONFIRMED. 0 tickets invalidated; 4 refinements/citation-drifts noted (below).**
+
+### Assumptions checked -> result
+
+| Assumption (as the plan relies on it) | Result | Citation / correction |
+|---|---|---|
+| `deposit_funds` stores PM but never charges it | CONFIRMED | `ad_billing.py:30` def; balance bumped via `if_not_exists(...) + :amt` at `:60`; **no** `PaymentIntent`/stripe call anywhere in the fn |
+| `MIN_DEPOSIT_CENTS = 5000` ($50) guard exists | CONFIRMED | `ad_billing.py:27` const, guard `:32` (distinct from consumer `billing_config.get_min_deposit_cents()`=500 `billing_config.py:475`) |
+| stripe-mock rail = `billing.py:1095` (`PaymentIntent.create`), `get_or_create_customer`, `ensure_stripe_configured` | CONFIRMED | `billing.py:636` (ensure), `:652` (customer), `:1095` (PaymentIntent.create) |
+| `_process_charge` debits with **no** `ConditionExpression` -> balance can go negative | CONFIRMED | `ad_billing.py:107` def; `:135` `SET balance_cents = balance_cents - :amt` - no cond; other cond-writes live at `:295/:344`, none on the debit |
+| `track_ad_event` = fraud + impression-log only, **no charge** | CONFIRMED | `ad_serving.py:208` def; no `charge_*` call in body; `charge_*` only in `ad_billing.py:67/81/94` + admin routes |
+| charges wired only to admin `/internal/charge-*` + dark broadcast | CONFIRMED | `ads.py:487/503/519` (admin); `broadcast_ads_billing_enabled` default **0** `settings.py:566` |
+| `serve_ad` ranks by `bid_cpm*1.0`, single highest, no auction | CONFIRMED | `ad_serving.py:153` `score = bid_cpm * 1.0`; house fallbacks `:83 no_active_campaigns`, `:162 no_eligible_campaigns` |
+| `CampaignCreateIn` has only `bid_cpm_cents` (no CPC/CPA) | CONFIRMED | `models.py:4441` class, `:4451` bid_cpm; bounds `_BID_CPM_MIN=50`/`MAX=20_000`/`DEFAULT=500` `:4436-4438`; grep for `bid_cpc_cents`/`bid_cpa_cents` = 0 hits |
+| No `ad_clicks` DDB table exists | CONFIRMED | `tables.py` ad tables `:172-181` (impressions/accounts/campaigns/creatives/frequency_caps/billing) + `vod_ad_sessions:160`; **no** `ad_clicks` |
+| `ad_click_id` exists nowhere but a log line at `ad_creative_affiliate.py:342` | **REFINE** | Literal `ad_click_id` = **0 hits** in `app/`. The `:342` log string is `"ad_click_redirect ..."`, not `ad_click_id`. (Strengthens the premise; citation string was imprecise.) |
+| No `ad_click_id` in cart purchase / subscribe / unlock | CONFIRMED | `CartPurchaseIn models.py:897-899` (promo_code only); `subscribe subscription_server.py:934`; `unlock_post newsfeed.py:5968` (`UnlockPostRequest:1911`) - none accept it |
+| `_inject_sponsored_posts` every 5, max 3, gated on `sponsored_posts_enabled` (default true) | CONFIRMED | `newsfeed.py:86` def, gate `:95`, interval/max `:98-99`; `settings.py:1126` default `"true"`, `:1128-1129` interval5/max3 |
+| serve call = `serve_ad(surface="newsfeed", creator_id="platform", slot_type="sponsored_post")` | CONFIRMED | `newsfeed.py:135-142` (exact kwargs); `_fetch_sponsored_post:127`; drops house `:143` |
+| App `PostDto` has no sponsored fields | CONFIRMED | `FeedDtos.kt:31` - no `is_sponsored`/`creative_id`/`campaign_id`/`impression_url`/`cta_*` |
+| App `AdsAccountsApi` has no create endpoints (only GET + deposit) | CONFIRMED | `AdsAccountsApi.kt:28/32/39/46/55` GETs, `:66` POST **deposit** only; no POST accounts/campaigns/creatives/upload |
+| Studio auto-resolves first campaign of first account | CONFIRMED | `AdsStudioCampaignResolver.kt:40` `resolveFirstCampaign()`, `accounts.firstOrNull()` `:45`, `campaigns.firstOrNull()` `:50` |
+| App never calls `/ui/ads/serve` or `/ui/ads/track`; response/track models lack click/owner fields | CONFIRMED | `AdServeResponseOut models.py:4961` + `AdTrackEventIn:5340` have no `ad_click_id`/`content_owner_id`/`effective_price_cents` |
+| Backend account/campaign/creative chain lives at `ads.py:144-345` | CONFIRMED | POST accounts `:144`, campaigns `:167`, submit `:208`, creatives `:265`, upload `:315` (`_validate_asset` `:328`), creative submit `:333`; deposit `:445`; serve `:371`; track `:385` |
+| `vod_ad_supported_deterministic` default true; serve bypassed unless false | CONFIRMED (+refine) | `settings.py:1774` default `"1"`; branch `vod_ad_supported.py:117 if not deterministic:` -> serve_ad `:122`. **REFINE:** `:109` is `... or S.dev_mode` - **dev_mode forces deterministic regardless of the flag** (affects ADV-201/505 flip) |
+| Dead pre-roll app code = `AdSupportedPlayerViewModel` + `AdOverlay` | CONFIRMED (+refine) | Both files exist, referenced **0x** outside themselves. **REFINE:** there is **no `AdSupportedPlayerScreen` file** - ADV-202's title names a screen that does not exist; wire the ViewModel/Overlay into the real player instead |
+| VOD ad-break complete credits the poster once/slot/day | CONFIRMED | `ad_placement.py:426 _credit_ad_revenue`, dedup `_claim_complete_slot:369`, from `record_ad_impression:233` (plan's `:346-355` = the claim/credit block inside it, not the def) |
+| `_split_revenue` keys off `creator_id`; no "no-owner => platform 100%" path | CONFIRMED (+material refine) | `ad_billing.py:160` def. **FINDING:** with empty `creator_id`, `creator_bps` still defaults to 7000 so `creator_share`=70% (`:186`), the creator credit is **skipped** (`:188 if creator_share>0 and creator_id`), but platform books only `charge-creator_share` = **30%** (`:238`) -> **70% of the charge is silently dropped today.** ADV-406 is thus *more* necessary than stated (its AC "platform 100%" is the correct fix) |
+| `DEFAULT_CREATOR_REVENUE_SHARE_BPS = 7000`, per-creator override | CONFIRMED | `ad_billing.py:26`; `get_creator_revenue_share_bps` `:177` |
+| `charge_impression/click/conversion` -> `_process_charge` | CONFIRMED | `ad_billing.py:67/81/94`; click/conversion already take a per-model amount arg (`bid_cpc_cents`/`bid_cpa_cents` `:88/:101`) |
+| `serve_ad` honors creator `allow_ads` | CONFIRMED | `ad_serving.py:77 if not creator_settings.get("allow_ads", True)` |
+| `_check_budget_and_alert` + `_has_budget` exist | CONFIRMED | `ad_billing.py:265`; `ad_serving.py:347` |
+| Creative upload enforces mime whitelist (+size/magic) | PARTIAL | mime whitelist CONFIRMED `ad_creatives.py:134-137` (jpeg/png/webp/mp4) + `_validate_asset` gate `ads.py:328`; **exact 5MB/50MB + magic-byte numbers UNVERIFIED** (inside `_validate_asset`, not re-read) |
+| Prod flag values (sponsored/broadcast-billing/vod-deterministic) | UNVERIFIED (prod-only) | dev defaults confirmed above; **prod SSM env deliberately not read** - this is exactly what ADV-001 must do |
+
+### Tickets whose premise shifted (none invalidated)
+- **ADV-201 / ADV-505 (flag flip):** flipping `VOD_AD_SUPPORTED_DETERMINISTIC=0` is **not sufficient while `S.dev_mode` is true** - `vod_ad_supported.py:109` ORs in `dev_mode`, forcing the deterministic placeholder. The flip must also assert `dev_mode` off in the target env (or the ADV-201 gate must not OR dev_mode). Add to ADV-201 AC + ADV-505 flip steps.
+- **ADV-202:** no `AdSupportedPlayerScreen` file exists; the dead code is `AdSupportedPlayerViewModel.kt` + `AdOverlay.kt` only. Rescope the title/DESC to "create the pre-roll screen and wire the existing ViewModel/Overlay into the real VOD player."
+- **ADV-406:** premise understated - today's `_split_revenue` doesn't merely "default a creator"; with an empty owner it **drops ~70%** of the charge (creator credit gated out, platform booked only 30%). The ticket's fix (platform 100% when no owner) is correct and now also closes a revenue-leak, not just a mis-attribution. Broaden the AC to assert `platform_revenue_credit == full charge` (no lost remainder).
+- **Cosmetic citation drift:** `ad_click_id` literal is absent everywhere (the `ad_creative_affiliate.py:342` line logs `ad_click_redirect`); `ad_placement.record_ad_impression` is defined at `:233` (the plan's `:346-355` points at its internal claim/credit block).
+
+### Citation coverage
+- Distinct load-bearing assumptions checked: **28**. CONFIRMED outright: **23**. CONFIRMED-with-refinement: **3** (ADV-201 dev_mode, ADV-202 no-Screen, ADV-406 70%-drop). Cosmetic citation-drift correction: **1** (ad_click_id/redirect). PARTIAL/UNVERIFIED: **2** (creative exact size limits; prod SSM values - prod-only, = ADV-001).
+- **0** assumptions found materially WRONG; **0** tickets rendered unnecessary. Per-ticket `[verified ...]` citations added inline below.
+
+---
+
 ## 1. Overview & Current End-to-End Truth
 
 The ad **control plane** is real and well-built: account/campaign/creative CRUD + admin review (`ad_accounts.py`, `ad_campaigns.py`, `ad_creatives.py`, `app/routers/ads.py`), a real targeting/decision engine (`ad_serving.serve_ad`), a genuinely-wired fraud system (`ad_fraud_prevention.py`), dayparting/flights, optimization, analytics, and a revenue-split (`ad_billing._split_revenue` → creator `ad_revenue_credit` + `platform_revenue_credit`). But the three wires that make it a *business* are absent. The lifecycle breaks in four places:
@@ -161,18 +210,21 @@ The ad **control plane** is real and well-built: account/campaign/creative CRUD 
 ### EPIC B0 — Foundations / prod-parity
 
 **ADV-001 — Verify prod ad feature flags via SSM & document divergence** · infra · S
+- CITATIONS (2nd pass, verified @7bedc4c9): settings.py:566 (broadcast=0), :1126 (sponsored=true), :1128-1129 (5/3), :1737 (fraud), :1771/:1774 (vod enabled=1 / deterministic=1). Dev defaults CONFIRMED; prod SSM still to read.
 - DESC: Read the live prod env for `SPONSORED_POSTS_ENABLED`, `SPONSORED_POST_INTERVAL/MAX_PER_PAGE`, `BROADCAST_ADS_BILLING_ENABLED`, `VOD_AD_SUPPORTED_DETERMINISTIC`, `VOD_AD_SUPPORTED_ENABLED`, `AD_FRAUD_DETECTION_ENABLED`, `VOD_AD_CPM_CENTS`; compare to dev defaults; record the gap so later flips are intentional.
 - AC: a table of {flag, dev default, prod value, target}; confirmed which surfaces are live in prod today (expect sponsored posts *enabled but empty*, broadcast billing *off*, vod deterministic *on*).
 - FILES: `app/core/settings.py:566,1126-1129,1692,1737,1771-1774`; prod `.env.local` via SSM.
 - DEPS: none. VERIFY: `aws ssm send-command` reads prod env; document in `ops/prod-hotfixes/ads/README.md`.
 
 **ADV-002 — Create `ad_clicks` DDB table + settings + TTL** · infra · S
+- CITATIONS (2nd pass, verified @7bedc4c9): no `ad_clicks` in tables.py:172-181 CONFIRMED; ad_billing table :181 for reference.
 - DESC: Add `ad_clicks_table_name` setting + `T.ad_clicks` wiring; create table dev (moto/DDB-Local) and prod with `pk`/`sk` and a DynamoDB TTL on `ttl`. This is the seam B1 mints into and B4 reads.
 - AC: `T.ad_clicks` resolves in dev + prod; TTL enabled on `ttl`; put/get round-trips; hidden-table gotcha avoided (exact-name access).
 - FILES: `app/core/settings.py`, `app/core/tables.py:160-483` (add `ad_clicks: Any` + `_safe_table`), infra table-create script.
 - DEPS: none. VERIFY: boto3 put/get against `http://localhost:8001`; prod `describe-table` shows TTL enabled.
 
 **ADV-003 — Ad-platform prod-hotfix fold convention** · infra · S
+- CITATIONS (2nd pass, verified @7bedc4c9): doc/convention only.
 - DESC: Establish `ops/prod-hotfixes/ads/` with a README describing the re-apply order (settings → tables → billing → serving → routers) since prod source diverges from `android-impl`.
 - AC: README lists each ad backend patch + apply order + SSM/restart steps; referenced by every B1–B5 backend ticket.
 - FILES: `ops/prod-hotfixes/ads/`. DEPS: ADV-001. VERIFY: doc review.
@@ -180,58 +232,68 @@ The ad **control plane** is real and well-built: account/campaign/creative CRUD 
 ### EPIC B1 — Real funding + serving decision + sponsored card + app create-screens
 
 **ADV-101 — `deposit_funds` charges the payment method (real billing rail)** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `ad_billing.py:30` (def, no PM charge), :60 (balance +=), MIN=5000 :27/:32; rail `billing.py:636/:652/:1095`; deposit route `ads.py:445`.
 - DESC: Replace the "store PM but never charge" behavior with a real stripe-mock charge. Mirror `billing.py:1095-1175`: `ensure_stripe_configured()`, `get_or_create_customer(owner_sub)`, `stripe.PaymentIntent.create(amount=amount_cents, currency="usd", customer, payment_method=payment_method_id, off_session=True, confirm=True, idempotency_key="addep:{account}:{amt}:{pm}")`. Only on `status=="succeeded"` write the `budget_deposit` ledger (settled) + increment `balance_cents`; else write `pending/failed` and do not credit. Keep `MIN_DEPOSIT_CENTS` guard.
 - AC: deposit with a good PM → PaymentIntent succeeded, balance rises by amount, ledger row has `stripe_payment_intent_id`; declined PM → 402/failed, balance unchanged; no PM → 400; duplicate idempotency key → single charge; `< $50` → 400.
 - FILES: `app/services/ad_billing.py:30-64`; `app/routers/ads.py:445-452`; reuse `app/routers/billing.py:636-704`.
 - DEPS: ADV-003. EFFORT M. VERIFY: `POST /ui/ads/accounts/{id}/deposit` contract (success/decline/dup); ledger + `ad_accounts.balance_cents` inspected.
 
 **ADV-102 — Funds-guard on `_process_charge` (no negative balance)** · backend · S
+- CITATIONS (2nd pass, verified @7bedc4c9): `ad_billing.py:107` def, :135 unconditioned debit - no ConditionExpression CONFIRMED.
 - DESC: Add `ConditionExpression="attribute_exists(balance_cents) AND balance_cents >= :amt"` to the balance debit; on `ConditionalCheckFailedException` skip the ledger write + revenue split and return `{"ok": false, "reason": "insufficient_funds"}`. Optionally flip campaign to a paused `out_of_funds` state.
 - AC: charge with sufficient balance debits atomically; charge that would go negative is rejected, writes nothing, balance unchanged; concurrent charges never oversell (conditional write).
 - FILES: `app/services/ad_billing.py:107-157`. DEPS: ADV-101. EFFORT S. VERIFY: unit test drives balance to 0 then charges → rejected; internal `/charge-*` contract.
 
 **ADV-103 — `serve_ad` mints `ad_click_id` + carries `content_owner_id` + returns paid ads** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `ad_serving.py:45` serve_ad; `AdServeRequestIn models.py:4944` / `AdServeResponseOut :4961` lack ad_click_id/content_owner_id; no ad_clicks table.
 - DESC: When a paid winner is selected, mint `ad_click_id`, persist an `ad_clicks` item (`status=served`, TTL 7d, `content_owner_id`, `effective_price_cents` placeholder = winning bid until B3 auction), and add `ad_click_id`/`content_owner_id` to the serve response and tracking URLs. Set `content_owner_id` from the caller: VOD → poster, standalone newsfeed → "".
 - AC: `POST /ui/ads/serve` for an eligible paid campaign returns `filled=true, is_house_ad=false, ad_click_id, content_owner_id, impression_url/click_url` carrying `ad_click_id`; an `ad_clicks` row exists with TTL≈now+7d; house-ad path mints nothing.
 - FILES: `app/services/ad_serving.py:45-205`; `app/models.py:4944-5010` (`AdServeRequestIn` add `content_owner_id`, `AdServeResponseOut` add `ad_click_id`/`content_owner_id`); `T.ad_clicks`.
 - DEPS: ADV-002. EFFORT M. VERIFY: serve contract returns a click id + row present; two serves mint distinct ids.
 
 **ADV-104 — Newsfeed sponsored injection returns real paid units end-to-end** · backend · S
+- CITATIONS (2nd pass, verified @7bedc4c9): `newsfeed.py:127` `_fetch_sponsored_post`, serve kwargs :135-142, house-drop :143 CONFIRMED.
 - DESC: `_fetch_sponsored_post` already drops house ads; ensure it surfaces the new serve fields (`ad_click_id`, `account_id`, `content_owner_id=""`) into the sponsored dict, and that `_post_to_dict`/read projection passes them through so the app receives them. Keep `allow_ads_near` + hidden-ad filtering.
 - AC: with an eligible paid campaign, a feed load injects a sponsored dict carrying `is_sponsored, creative_id, campaign_id, account_id, ad_click_id, impression_url, click_url, cta_*`; with no paid campaigns, no sponsored item appears (house ad still suppressed).
 - FILES: `app/routers/newsfeed.py:86-193, 2176-2342`. DEPS: ADV-103. EFFORT S. VERIFY: seed a paid campaign+approved creative, `GET /ui/newsfeed`, assert sponsored fields present.
 
 **ADV-105 — App `PostDto` sponsored fields + Sponsored feed card** · app · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `FeedDtos.kt:31` PostDto has no sponsored fields CONFIRMED.
 - DESC: Add sponsored fields to `PostDto` (`is_sponsored`, `sponsor_label`, `headline`, `cta_text`, `cta_url`, `creative_id`, `campaign_id`, `account_id`, `impression_url`, `click_url`, `ad_click_id`, `content_owner_id`). Render a distinct **Sponsored** card in the feed (label + CTA button + "Why this ad?"/hide via existing `/ui/ads/feedback`). Map DTO→domain in feed mappers.
 - AC: a sponsored post renders with a Sponsored chip + CTA; a normal post is unchanged; hide sends feedback and removes the unit; both phones render without crash.
 - FILES: `android/.../data/feed/FeedDtos.kt:31-68`; feed mappers + `feature/feed/*` card composables.
 - DEPS: ADV-104. EFFORT M. VERIFY: 2-device — sponsored card visible in feed; hide works.
 
 **ADV-106 — App fires impression + click to `/ui/ads/track`** · app · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `AdTrackEventIn models.py:5340` lacks ad_click_id/content_owner_id; app has no serve/track call site CONFIRMED.
 - DESC: Add an `AdsTrackApi` (`POST ui/ads/track`) + `AdServeApi` (`POST ui/ads/serve` for surfaces the app drives directly). On sponsored-card first-view fire `event=impression` (with `ad_click_id`, `content_owner_id`, `creative_id/campaign_id/account_id/surface/slot_type/content_id/creator_id`); on CTA tap fire `event=click` then open `cta_url`. Debounce impression once per card instance.
 - AC: scrolling a sponsored card into view fires exactly one impression; CTA tap fires one click then navigates; payload matches `AdTrackEventIn`; verified server-side (impression row / click).
 - FILES: NEW `android/.../data/ads/AdsTrackApi.kt` + repo; feed card view-tracking hook; `AdTrackEventIn` (`models.py:5340`).
 - DEPS: ADV-105, ADV-103. EFFORT M. VERIFY: 2-device + server log/`ad_impressions` shows impression then click.
 
 **ADV-107 — App create-screen: advertiser account** · app · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `AdsAccountsApi.kt:66` deposit is the only POST (no create) CONFIRMED; backend create `ads.py:144`.
 - DESC: Add `POST ui/ads/accounts` to `AdsAccountsApi` + a "Create ad account" screen (company_name, billing_email) and a deposit-with-real-PM flow (reuse existing payment-method selection). Show pending_review state until admin approval.
 - AC: from the phone a user creates an account (201), sees it pending, and after admin approve can deposit real funds; validation errors surfaced (422/400).
 - FILES: `android/core-network/.../ads/AdsAccountsApi.kt:28-101` (add create); NEW `feature/ads/accounts/create/*`; backend `app/routers/ads.py:144-149` (exists).
 - DEPS: ADV-101. EFFORT M. VERIFY: 2-device create → admin approve (admin acct) → deposit succeeds.
 
 **ADV-108 — App create-screen: campaign** · app · M
+- CITATIONS (2nd pass, verified @7bedc4c9): campaign create `ads.py:167`; auto-resolve `AdsStudioCampaignResolver.kt:40` (first-of-first :45/:50) CONFIRMED.
 - DESC: Add `POST ui/ads/accounts/{id}/campaigns` + `POST .../submit` to the app; a campaign create screen (name, objective, budget + type, bid_cpm; CPC/CPA once B3 lands, start/end, category). Replace the `AdsStudioCampaignResolver` auto-resolve with a real campaign picker feeding the studio editors.
 - AC: create a draft campaign (201), edit, submit for review; the targeting/scheduling/optimization editors open against the *selected* campaign, not "first-of-first"; admin can approve it.
 - FILES: NEW `feature/ads/campaigns/create/*` + campaign picker; retire/att `AdsStudioCampaignResolver.kt`; backend `ads.py:167-219` (exists).
 - DEPS: ADV-107. EFFORT M. VERIFY: 2-device create→submit→admin approve→active.
 
 **ADV-109 — App create-screen: creative + asset upload** · app · L
+- CITATIONS (2nd pass, verified @7bedc4c9): creative `ads.py:265`, upload :315 + `_validate_asset :328`, mime whitelist `ad_creatives.py:134-137` CONFIRMED; exact 5MB/50MB+magic UNVERIFIED (inside `_validate_asset`).
 - DESC: Add `POST ui/ads/campaigns/{cid}/creatives`, `POST .../{crid}/upload` (multipart via the OS picker seam), `POST .../submit` to the app; a creative editor (format, title, headline, body, cta_text/url, rotation_weight) + image/video upload (respect backend magic-byte + size limits: image ≤5MB JPEG/PNG/WebP, video ≤50MB MP4).
 - AC: create a creative, upload a valid image/video (invalid type/size rejected with the backend's 400), submit; admin approves; the creative then becomes eligible to serve.
 - FILES: NEW `feature/ads/creatives/*` + upload; reuse picker seam (`ops/testing/pick_real.sh`); backend `ads.py:265-345` + `ad_creatives.py:125-166`.
 - DEPS: ADV-108. EFFORT L. VERIFY: 2-device create+upload (picker seam) → admin approve → appears in serve.
 
 **ADV-110 — End-to-end seed + serve smoke (newsfeed)** · test · S
+- CITATIONS (2nd pass, verified @7bedc4c9): smoke/test only - depends on the above citations.
 - DESC: A scripted contract test that walks create→approve→deposit→campaign→creative→approve→serve→feed-injection using the dev-bearer/admin accounts, proving a paid sponsored unit reaches `GET /ui/newsfeed`.
 - AC: repeatable script yields a sponsored card in the feed; asserts serve fields + `ad_clicks` row.
 - FILES: `ops/testing/ads_e2e_newsfeed.sh` (new). DEPS: ADV-104..106. EFFORT S. VERIFY: script green.
@@ -239,18 +301,21 @@ The ad **control plane** is real and well-built: account/campaign/creative CRUD 
 ### EPIC B2 — Video pre-roll
 
 **ADV-201 — Flip VOD to live ad selection (`deterministic=false`) safely** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): deterministic default `settings.py:1774`; branch `vod_ad_supported.py:117`->serve :122. **CAVEAT: :109 `or S.dev_mode` forces deterministic in dev_mode - flag flip alone will NOT enable live serve while dev_mode on.**
 - DESC: Gate the live path so `_resolve_ad_schedule` uses `serve_ad` (surface=`vod`, `creator_id=video.owner_user_id`, `content_owner_id=poster`) when a new flag is on, falling back to the deterministic placeholder when serve is unfilled — so E2E stays reproducible and a no-fill never blocks playback.
 - AC: with the flag on + an eligible campaign, the pre-roll schedule carries a real `creative_id`/`creative_url` + `ad_click_id`; with no fill, the placeholder plays and playback still works; subscriber ad-free still bypasses.
 - FILES: `app/services/vod_ad_supported.py:90-158`; `app/core/settings.py:1774`.
 - DEPS: ADV-103. EFFORT M. VERIFY: `POST /ui/vod/ad-supported/{vid}/start` returns a real creative; fallback path verified.
 
 **ADV-202 — Wire `AdSupportedPlayerScreen` + `AdOverlay` into the real player** · app · L
+- CITATIONS (2nd pass, verified @7bedc4c9): dead code `AdSupportedPlayerViewModel.kt` + `AdOverlay.kt` (0 external refs). **No `AdSupportedPlayerScreen` file exists - rescope to create the screen + wire ViewModel/Overlay.**
 - DESC: Connect the currently-dead `AdSupportedPlayerViewModel`/`AdOverlay` (`feature/vod/adsupported/`) into the actual VOD player: call `/start`, render the pre-roll (skip after N s), gate continued playback on `/break` complete, mid-roll overlays. Fire `/break` events (impression/complete/skip).
 - AC: opening an `ad_supported` video plays the pre-roll, skip appears after `skip_after_seconds`, completing the break unlocks the video, mid-rolls fire at position; subscriber ad-free skips ads; both phones.
 - FILES: `android/.../feature/vod/adsupported/AdSupportedPlayerViewModel.kt`, `AdOverlay.kt`, `data/vod/adsupported/VodAdSupportedRepository.kt`; player entry.
 - DEPS: ADV-201. EFFORT L. VERIFY: 2-device pre-roll→complete→unlock; skip; ad-free subscriber.
 
 **ADV-203 — Pre-roll completion charges + credits the poster** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `ad_placement.py:426 _credit_ad_revenue`, dedup `_claim_complete_slot:369`, `record_ad_impression:233`; split `ad_billing._split_revenue:160`.
 - DESC: On VOD pre-roll `complete`, charge the advertiser (CPM/auction) and split with the **poster** (`content_owner_id`). Reconcile the two revenue paths: the legacy `ad_placement._credit_ad_revenue` (video metadata CPM) vs the new advertiser-funded `_split_revenue` — ensure a completed paid pre-roll credits the poster from advertiser spend, not a phantom CPM, and does not double-credit.
 - AC: a completed paid pre-roll debits the advertiser (funds-guard), credits the poster ~70% + platform ~30%, once per slot/user/day (existing dedup); an unfilled/placeholder pre-roll credits nobody from advertiser funds.
 - FILES: `app/services/vod_ad_supported.py:336-412`, `app/services/ad_placement.py:346-468`, `app/services/ad_billing.py:_split_revenue`.
@@ -259,33 +324,39 @@ The ad **control plane** is real and well-built: account/campaign/creative CRUD 
 ### EPIC B3 — Impression/click real charge + budget depletion + auction
 
 **ADV-301 — Add CPC/CPA bids to the campaign model** · backend · S
+- CITATIONS (2nd pass, verified @7bedc4c9): `CampaignCreateIn models.py:4441` bid_cpm only :4451 (bounds 4436-4438); `create_campaign ad_campaigns.py:35` persists bid_cpm :54; `update_campaign :109`. No CPC/CPA today CONFIRMED.
 - DESC: Add `bid_cpc_cents` + `bid_cpa_cents` to `CampaignCreateIn`/`CampaignUpdateIn` (bounded), persist in `create_campaign`, and surface in `update_campaign`. Defaults: CPC `50`, CPA `500`.
 - AC: create/update accept + persist CPC/CPA; bounds enforced; existing CPM-only clients still work (defaults applied).
 - FILES: `app/models.py:4441-4485,4786-4796`; `app/services/ad_campaigns.py:35-63`.
 - DEPS: none. EFFORT S. VERIFY: campaign create/get contract shows new fields.
 
 **ADV-302 — Second-price auction in `serve_ad` + cleared price on `ad_clicks`** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `ad_serving.py:153 score=bid_cpm*1.0`, single-winner, no auction CONFIRMED.
 - DESC: Rank eligible candidates by the campaign's objective bid; compute the second-price cleared amount `min(own_bid, runner_up_bid + 1)` (or floor when singleton) for the relevant model; store `effective_price_cents` (+ per-model prices) on the `ad_clicks` item so track/charge bills the cleared price.
 - AC: with two eligible campaigns, the higher bid wins and is charged the runner-up+1; with one, charged its bid or the floor; `ad_clicks.effective_price_cents` reflects the clearing.
 - FILES: `app/services/ad_serving.py:85-205`. DEPS: ADV-103, ADV-301. EFFORT M. VERIFY: unit test with 2 campaigns asserts winner + cleared price.
 
 **ADV-303 — `track_ad_event` performs the real charge (impression/click)** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `ad_serving.py:208 track_ad_event` no charge; `charge_impression/click ad_billing.py:67/81` CONFIRMED.
 - DESC: After the fraud gate passes, charge based on event+objective using the cleared price from the `ad_clicks` item: impression→`charge_impression` (awareness/CPM), click→`charge_click` (traffic/CPC). Pass `content_owner_id` through so `_split_revenue` attributes correctly. Update `ad_clicks` status.
 - AC: an impression on a paid unit debits the advertiser at the cleared CPM and (VOD) credits the poster; a click debits at cleared CPC; a fraud-flagged event charges nothing; standalone newsfeed unit → platform 100%, no creator credit.
 - FILES: `app/services/ad_serving.py:208-303`; `app/services/ad_billing.py:67-104`.
 - DEPS: ADV-102, ADV-302. EFFORT M. VERIFY: `/ui/ads/track` contract → `ad_billing` + balance move; fraud path no-charge.
 
 **ADV-304 — Charge idempotency on `ad_click_id + event`** · backend · S
+- CITATIONS (2nd pass, verified @7bedc4c9): no charge idempotency today (`_process_charge ad_billing.py:107` has no dedup key) CONFIRMED.
 - DESC: Make each charge idempotent: conditional put on an `ad_billing` sk derived from `{ad_click_id}#{event}` (`attribute_not_exists`), so a retried/duplicate track never double-charges. Return the prior result on conflict.
 - AC: two identical track calls (same `ad_click_id`+event) → exactly one charge; distinct events on the same click each charge once.
 - FILES: `app/services/ad_billing.py:107-157`. DEPS: ADV-303. EFFORT S. VERIFY: replay the same track twice → one ledger row.
 
 **ADV-305 — Budget depletion → auto-complete + serve exclusion (verify)** · test · S
+- CITATIONS (2nd pass, verified @7bedc4c9): `_check_budget_and_alert ad_billing.py:265`; `_has_budget ad_serving.py:347` CONFIRMED.
 - DESC: Confirm the existing `_check_budget_and_alert` (50/80/100% alerts + auto-complete at 100%) fires under real charges and that `_has_budget`/status excludes depleted campaigns from `serve_ad`. Add the `out_of_funds` pause from ADV-102.
 - AC: charging a campaign to 100% emits alerts, transitions it to `completed`, and it stops being served; an out-of-funds account is excluded.
 - FILES: `app/services/ad_billing.py:265-365`, `app/services/ad_serving.py:119-120,347-357`. DEPS: ADV-303. EFFORT S. VERIFY: drive spend to budget, assert completed + no serve.
 
 **ADV-306 — App: CPC/CPA bid inputs in campaign create/edit** · app · S
+- CITATIONS (2nd pass, verified @7bedc4c9): app; maps to ADV-301 model fields.
 - DESC: Extend the ADV-108 campaign screen with CPC/CPA bid fields (shown per objective) mapped to the new model fields.
 - AC: create/edit sends CPC/CPA; objective drives which bid is primary; both phones.
 - FILES: `feature/ads/campaigns/create/*`, campaign DTO. DEPS: ADV-301, ADV-108. EFFORT S. VERIFY: 2-device create with CPC/CPA → persisted.
@@ -293,32 +364,38 @@ The ad **control plane** is real and well-built: account/campaign/creative CRUD 
 ### EPIC B4 — CPA attribution + revenue credit
 
 **ADV-401 — `ad_clicks` attribution service (claim + last-click 7d)** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): no `ad_clicks` store `tables.py:172-181`; charge_conversion `ad_billing.py:94` CONFIRMED.
 - DESC: `attribute_conversion(ad_click_id, conversion_type, conversion_value_cents)` that loads the click, checks `created_at ≥ now-7d` and `status in (clicked, impressed)` and not yet converted, atomically claims it (conditional `attribute_not_exists(converted_at)`), then calls `charge_conversion` (CPA cleared price) with `content_owner_id` and records for ROAS. Idempotent + safe on missing/expired clicks (no-op).
 - AC: a valid click within 7d converts once (charge_conversion fires, status=converted); a second attempt is a no-op; an expired/unknown click is a no-op; standalone unit → platform 100%.
 - FILES: NEW `app/services/ad_attribution.py`; `app/services/ad_billing.py:94-104`; `T.ad_clicks`.
 - DEPS: ADV-002, ADV-102, ADV-302. EFFORT M. VERIFY: unit test valid/dup/expired.
 
 **ADV-402 — Thread `ad_click_id` into subscribe** · backend · S
+- CITATIONS (2nd pass, verified @7bedc4c9): `subscribe subscription_server.py:934` takes no ad_click_id CONFIRMED.
 - DESC: Accept optional `ad_click_id` on `POST /api/plans/{plan_id}/subscribe`; on a successful charge, call `attribute_conversion(..., "subscription", plan_price)`.
 - AC: subscribing with a valid `ad_click_id` fires one conversion charge + credit; without it, unchanged; failed subscription → no conversion.
 - FILES: `app/routers/subscription_server.py:934-1112`. DEPS: ADV-401. EFFORT S. VERIFY: subscribe-with-click contract → conversion ledger.
 
 **ADV-403 — Thread `ad_click_id` into cart checkout** · backend · S
+- CITATIONS (2nd pass, verified @7bedc4c9): `CartPurchaseIn models.py:897-899` (promo only, no ad_click_id); route `shoppingcart.py:175`. CONFIRMED.
 - DESC: Accept `ad_click_id` on `CartPurchaseIn` / `POST /ui/shoppingcart/carts/{id}/purchase`; on success attribute `"purchase"` with the order total.
 - AC: purchase-with-click → one conversion; idempotent with the existing `X-Idempotency-Key`; no double attribution on retried purchase.
 - FILES: `app/routers/shoppingcart.py:176-200`; `app/models.py:897-899 (CartPurchaseIn)`. DEPS: ADV-401. EFFORT S. VERIFY: purchase-with-click contract.
 
 **ADV-404 — Thread `ad_click_id` into post-unlock** · backend · S
+- CITATIONS (2nd pass, verified @7bedc4c9): `unlock_post newsfeed.py:5968`, `UnlockPostRequest :1911` - no ad_click_id CONFIRMED.
 - DESC: Accept `ad_click_id` on the unlock request; on a successful paid unlock attribute `"unlock"` with the unlock price.
 - AC: unlock-with-click → one conversion; the existing unlock idempotency/throttle unaffected.
 - FILES: `app/routers/newsfeed.py:5968 (unlock_post)` + `UnlockPostRequest`. DEPS: ADV-401. EFFORT S. VERIFY: unlock-with-click contract.
 
 **ADV-405 — App carries `ad_click_id` from ad click → conversion** · app · M
+- CITATIONS (2nd pass, verified @7bedc4c9): app-side; depends on ADV-402..404.
 - DESC: Persist the `ad_click_id` from the last ad click (feed CTA / pre-roll CTA) in a short-lived store; when the user then subscribes / unlocks / checks out within the session, attach it to the request. Clear after use / after 7d.
 - AC: tapping an ad CTA then subscribing attaches the `ad_click_id`; the conversion is attributed server-side; unrelated conversions carry none; both phones.
 - FILES: NEW `android/.../data/ads/AdClickAttributionStore.kt`; subscribe/cart/unlock repos. DEPS: ADV-402..404, ADV-106. EFFORT M. VERIFY: 2-device click→subscribe → conversion ledger + attribution.
 
 **ADV-406 — `_split_revenue` placement-aware (platform-only when no owner)** · backend · S
+- CITATIONS (2nd pass, verified @7bedc4c9): `_split_revenue ad_billing.py:160`; creator credit gated :188 `(and creator_id)`, platform books only 30% :238. **FINDING: empty owner today drops ~70% of the charge - broaden AC to assert platform gets the FULL amount.**
 - DESC: Make `_split_revenue` treat an empty `content_owner_id` as **platform-100%** (skip the creator credit; write the full amount as `platform_revenue_credit`), and keep the ~70/30 split when an owner is present. Replace any implicit creator default.
 - AC: a standalone newsfeed conversion credits platform 100%, no creator row; a VOD conversion credits poster ~70% + platform ~30%; transparency log only written when an owner exists.
 - FILES: `app/services/ad_billing.py:160-262`. DEPS: ADV-303/ADV-401. EFFORT S. VERIFY: two charges (owner vs no-owner) → correct ledger rows.
@@ -326,26 +403,31 @@ The ad **control plane** is real and well-built: account/campaign/creative CRUD 
 ### EPIC B5 — Hardening
 
 **ADV-501 — ROAS reporting surface (`ad_roas`)** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): analytics summary route `ads.py:541`.
 - DESC: Ensure conversions feed `ad_roas` (spend vs attributed conversion value) and expose a per-campaign ROAS endpoint + include in analytics summary.
 - AC: `GET /ui/ads/analytics/summary` (or a new ROAS endpoint) returns spend, conversions, conversion value, ROAS for a campaign; matches ledger.
 - FILES: `app/services/ad_roas.py`, `app/routers/ads.py:541-580`, `app/services/ad_analytics.py`. DEPS: ADV-401. EFFORT M. VERIFY: endpoint contract vs seeded conversions.
 
 **ADV-502 — Ad-charge refund / reversal** · backend · M
+- CITATIONS (2nd pass, verified @7bedc4c9): `ad_billing.py` ledger (`_split_revenue:160`, entry_types impression/click/conversion_charge :75/:88/:101).
 - DESC: A reversal path for a charge (fraud clawback, disputed conversion): re-credit the advertiser balance, reverse creator/platform credits, mark the `ad_billing` entry reversed — mirroring the ecom refund `entry_id=txn_id` convention and Bug#3 `entry_type` bucketing so earnings/payouts stay consistent.
 - AC: reversing a charge restores advertiser balance, backs out creator+platform credits, is idempotent, and shows in billing history; does not corrupt creator earnings query.
 - FILES: `app/services/ad_billing.py`; admin endpoint under `/ui/admin/ads/`. DEPS: ADV-303, ADV-401. EFFORT M. VERIFY: charge→reverse contract; balances net zero.
 
 **ADV-503 — App ROAS / campaign performance surface** · app · S
+- CITATIONS (2nd pass, verified @7bedc4c9): app.
 - DESC: Show spend/conversions/ROAS on the campaign detail + AdsBilling screens.
 - AC: campaign detail shows spend, conversions, ROAS from the endpoint; both phones.
 - FILES: `feature/adsbilling/*`, `feature/ads/analytics/*`. DEPS: ADV-501. EFFORT S. VERIFY: 2-device render.
 
 **ADV-504 — Backend test suite for the money paths** · test · M
+- CITATIONS (2nd pass, verified @7bedc4c9): covers the money paths cited across B1-B4.
 - DESC: Unit/contract tests for deposit-charge, funds-guard, auction clearing, charge idempotency, attribution (valid/dup/expired), placement split (owner vs none), reversal.
 - AC: tests cover each AC above; green in dev; documents the seed fixtures.
 - FILES: `app/tests/ads/*` (or repo test dir). DEPS: B1–B4. EFFORT M. VERIFY: test run green.
 
 **ADV-505 — Prod fold + 2-device sign-off + flag flips** · infra · M
+- CITATIONS (2nd pass, verified @7bedc4c9): flip caveat: `VOD_AD_SUPPORTED_DETERMINISTIC=0` insufficient while `S.dev_mode` on (`vod_ad_supported.py:109`); assert dev_mode off in target env. Prod SSM read = ADV-001.
 - DESC: Fold all backend patches into `ops/prod-hotfixes/ads/`, apply to prod via SSM, flip the go-live flags (`VOD_AD_SUPPORTED_DETERMINISTIC=0`, confirm `SPONSORED_POSTS_ENABLED=true`, decide `BROADCAST_ADS_BILLING_ENABLED`), and run the full 2-device suite (create→approve→deposit→serve→impression/click charge→convert→credit) on both phones + web parity check.
 - AC: prod serves real paid ads, charges real deposits, attributes conversions; 2-device suite passes; APK shipped (presigned S3 URL); commits on `android-impl` + prod-hotfixes folded.
 - FILES: `ops/prod-hotfixes/ads/*`. DEPS: all. EFFORT M. VERIFY: 2-device end-to-end + prod ledger inspection.

@@ -13,6 +13,113 @@ Galaxy A15 `192.168.0.238:5555` + Pixel 7a `192.168.0.101:5555`, admin acct
 
 ---
 
+## Second-pass verification (adversarial re-check vs live code, 2026-07-07)
+
+Every factual assumption in this plan was re-derived against the live `~/dev/testlogon`
+dev clone (host `.249`, branch `android-impl` @ `7bedc4c9`). **59 code-grounded assumptions checked
+→ 58 CONFIRMED, 1 WRONG (TIP-105), 2 prod-only (as-labelled), plus 1 latent bug found.** Line
+citations below are the **re-verified** values; where the doc's original number had drifted, the
+corrected line is given (all such drifts were ≤5 lines and the *fact* held). Citation coverage of
+code-grounded claims: **100%** (verified file:line on every one).
+
+### Ledger primitive + fee + downstream (all CONFIRMED)
+
+| Assumption | Verdict — verified `file:line` |
+|---|---|
+| `write_tip_ledger(entry)` | CONFIRMED `tip_ledger.py:89` |
+| DEBIT gross, `type:"debit"`, `state:"settled"` | CONFIRMED `tip_ledger.py:142-153` (type :147, gross :148, state :150) |
+| CREDIT net, `type:"credit"` (Bug#3-safe) | CONFIRMED `tip_ledger.py:163-174` (type :168, net=`net_cents` :169) |
+| `split_fee("tip_debit", amount)` | CONFIRMED `tip_ledger.py:135` |
+| `_FEE_FIELD_BY_ENTRY_TYPE["tip_debit"]="fee_tips_bps"` | CONFIRMED `billing_config.py:426`; `def split_fee` `:444` |
+| Default **2000 bps = 20%** | CONFIRMED value; **canonical default is `billing_config.py:119`** (`_env_default("platform_fee_bps",2000)`). Doc cited `:580`, which is a *preview* fallback that also reads 2000 — DRIFT, fact holds |
+| Fee truncated toward creator net (floor `//`) | CONFIRMED `billing_config.py:464-467` (`(gross*fee_bps)//10000`) |
+| FIN-011 collab-split short-circuit | CONFIRMED `tip_ledger.py:103-121` |
+| GAP-0152 `earnings:update` SSE | CONFIRMED `tip_ledger.py:185-199` (`type:"earnings:update"` :190) |
+| `content_type ∈ {message,post,comment,broadcast}` (no `video`) | CONFIRMED `tip_ledger.py:51` |
+| Earnings `classify_entry` buckets `{message,post,comment}`→tips | CONFIRMED `creator_earnings.py:36`, set-match `:48-50`, reason-fallback `"tip"→tips` `:53-54` |
+| Credit query filters `type==credit` | CONFIRMED — **`creator_earnings.py:146` and `:304`** (doc said `:149` — DRIFT) |
+| `get_available_balance` sums `credit & !reversed & >0` | CONFIRMED `creator_payouts.py:84`, filter `:105-108` (doc said `:107-111` — DRIFT) |
+| New types (`video/*_react/video_comment`) bucket via reason fallback | CONFIRMED (`reason="Tip: <t>"` contains "tip" → `creator_earnings.py:53`) |
+
+### Charge is mocked 3 ways + real rail exists (CONFIRMED, one nuance)
+
+| Assumption | Verdict — verified `file:line` |
+|---|---|
+| Newsfeed `PaymentProvider` stub ("pretends payments succeed") | CONFIRMED `newsfeed.py:1026` (create `:1031`, confirm `:1050`); used by `tip_post` `:4748`, `tip_comment` `:5914` |
+| Messaging inline `tip_"+new_id()` no charge (post-hoc) | CONFIRMED `messaging.py:13903` |
+| Messaging attached-send inline mock: text/image/gallery/scheduled | CONFIRMED text `:8098`, image `:8422`, gallery `:9037`, scheduled-deliver `:13627` (in `_deliver_scheduled_message` `:13608`) |
+| Broadcast `send_tip_message` writes ledger, **no charge** | CONFIRMED `broadcast_tip_store.py:90`, ledger write `:135-149`, recipient=`broadcaster_id`. **NUANCE:** not "validate-only rate-limit" — it also validates PM ownership (`_validate_payment_method` :107), amount bounds (`:110-113`), and self-tip 400 (`:116-117`). The load-bearing claim (no real `PaymentIntent`) holds |
+| Real rail: `stripe.PaymentIntent.create(off_session,confirm,idempotency_key)` | CONFIRMED `billing.py:1095` (also `:1197`, `:2507`); `STRIPE_API_BASE` `settings.py:363` (block :359-366) |
+
+### App charge seam (CONFIRMED)
+
+| Assumption | Verdict — verified `file:line` |
+|---|---|
+| `StubBillingAuthorizer` (AND-031), bound in module | CONFIRMED `BillingAuthorizer.kt:54`; bind `MessagingDataModule.kt:98` |
+| DEBUG → blank `payment_method_id` | CONFIRMED `BillingAuthorizer.kt:64-65` (`Authorized(paymentMethodId="")`) |
+| RELEASE → `NotConfigured` (tips never POST) | CONFIRMED `BillingAuthorizer.kt:67` |
+| App SEND request DTOs omit tip fields; only read projection has it | CONFIRMED — `MessagingDtos.kt:146` `tipAmountCents` is the READ model; grep of the file finds **no** `tip_payment_method_id` and no tip field on any send-request class |
+
+### Surface / capability gaps
+
+| Assumption | Verdict — verified `file:line` |
+|---|---|
+| Attached-tip on SEND accepted by backend (DTOs + write) | CONFIRMED DTOs `messaging.py:1872/1957/2024` (all have `tip_amount_cents` **and** `tip_payment_method_id` :1873/1958/2025); immediate write `:8134-8148` |
+| Post-hoc `send_message_tip` (mock, inline PM scan) | CONFIRMED def **`messaging.py:13870`** (doc said `:13867` — DRIFT); PM scan `:13887-13900`; own-message 400 `:13884` |
+| `tip_post` + `PostTipRequest` HAS `payment_method_id` | CONFIRMED `newsfeed.py:4726`; field at **`:1930`** (class `:1927`; doc said `1926-1929` — DRIFT); own-post 400 `:4731` |
+| `tip_comment` + `TipRequest` **LACKS** `payment_method_id` | CONFIRMED `newsfeed.py:5895`; `TipRequest` = `amount_cents`+`currency` only `:1749-1751`; handler reads via defensive `getattr(...,None)` `:5943`; deleted-comment 409 `:5912` |
+| Broadcast tip endpoint | CONFIRMED `broadcast.py:2036 /sessions/{id}/chat/tip`; min/max `:162-163` (100/100000) |
+| Video tip = PROD-ONLY | CONFIRMED — dev `video_listing.py` has **zero** `tip` refs; router prefix `/ui/videos` `:41`; prod patch `ops/prod-hotfixes/app_routers_video_listing.py.patch` adds `VideoTipIn/Out` + `@router.post("/{video_id}/tip") tip_video_endpoint`; dev `write_tip_ledger` rejects `video` (`tip_ledger.py:51`); prod adds `"video"` via `app_services_tip_ledger.py.patch` (VERIFIED patch content) |
+| `react_to_message` emoji-only | CONFIRMED behavior; def at **`messaging.py:11195`** (doc said `:11194` — DRIFT, decorator line) |
+| `add_reaction` emoji-only | CONFIRMED `newsfeed.py:4890` |
+| `CreateCommentRequest` has no tip fields | CONFIRMED `newsfeed.py:1658` (text/gif/sticker only) |
+| Default tip PM missing; general default reader exists | CONFIRMED `billing.py:779 current_default_pm` → `default_payment_method_id` `:781`; setter mirror `set_default` `:1015` |
+| `find_or_create_dm` blocks-only; `accept_conversation` no gate | CONFIRMED `messaging.py:6123` (`is_any_block` `:6131`); `accept_conversation` `:6158` |
+| `_resolve_tip_recipient` returns `None` for groups | CONFIRMED `messaging.py:5613`, `return None` `:5635` — **but see WRONG below re TIP-105** |
+| Delegate `can_tip` prod-only default-deny | CONFIRMED prod-only in `ops/prod-hotfixes/delegate-rest/` (`_delegate_guard_tip` apply.sh:33-45, 403 `delegate_tip_forbidden`, `can_tip` default FALSE); **not in dev git** |
+| Tip + PPV-lock → 400 (keep) | CONFIRMED `messaging.py:8146` (also image `:8420`, gallery `:9035`); doc said `:8145` — DRIFT |
+| Replay short-circuits BEFORE billing | CONFIRMED `messaging.py:8060-8068` (idempotent `client_request_id` existence check) |
+| PM-scan copy-paste sites (to centralize) | CONFIRMED `tip_post` `newsfeed.py:4734`, `unlock` `:6195`, `send_message_tip` `messaging.py:13887` |
+
+### ⚠️ WRONG assumption → ticket impact
+
+**TIP-105 (fix group attached-tip recipient) — premise is unsound as written.** The plan says: change
+`_resolve_tip_recipient` so group conversations "credit the MESSAGE AUTHOR" (locked #2), making "attached-tip
+paths always credit." **But in the ATTACHED-tip-on-SEND path the message author *is* the sender, i.e. the
+tipper themselves** (`messaging.py:8130 sender_id=user_id` → `_resolve_tip_recipient` returns the *other*
+party; for a group there is no single "other" party). Crediting "the message author" there = a **self-tip**
+(tipper credits their own account), which is nonsensical and is exactly what the post-hoc path already guards
+against (`msg_author != user_id`, `messaging.py:13929`).
+
+Moreover, **locked decision #2 is ALREADY satisfied for the realistic case**: post-hoc tipping of *someone
+else's* group message (`send_message_tip`) credits `msg.get("sender_id")` **directly, for DMs and groups
+alike** (`messaging.py:13929`) — it does NOT use `_resolve_tip_recipient`. So the *only* genuinely-uncredited
+case is an **attached tip you attach to your own outbound group message**, which has no valid distinct
+recipient. **Rescope TIP-105:** either (a) reject attached tips on group sends with a 400 (`attached tips
+require a 1:1 recipient`), or (b) require an explicit `tip_recipient_id`. Do NOT "credit the message author"
+for the attached-on-send group path. (DM attached-tip behavior — credit the other participant — is correct
+and unchanged.)
+
+### 🐞 Latent bug found (not in the plan; fold into B0/B5)
+
+**Text send path writes the tip ledger BEFORE the tip+lock 400 check.** In the text handler the immediate
+`write_tip_ledger` runs at `messaging.py:8134-8148`, but the `lock_price_cents & tip_amount_cents` → 400
+rejection is at `:8145-8146` — i.e. a message carrying BOTH a lock and a tip writes a settled credit and
+*then* 400s (orphan credit). The image path guards correctly first (`:8420` before its write `:8437`).
+**Impact:** TIP-005's "preserve the tip+lock 400" should also **move the check ahead of the write** (align
+with the image path); TIP-501/502 (orphan handling) should cover this exact case.
+
+### Prod-only / unverified (as-labelled)
+
+- Video-tip endpoint exact prod line (`~L895`) is approximate — verified via the *patch* (a diff), not a
+  materialized prod file. Prod-only, as the plan states.
+- Delegate `can_tip` guard verified only in `ops/prod-hotfixes/delegate-rest/` (README + apply.sh), not in
+  a running dev file. Prod-only, as the plan states.
+
+Ticket citations are appended inline to the affected tickets below as **Citations (2nd pass):** lines.
+
+---
+
 ## 1. Overview + Current Truth (with file:line evidence)
 
 Tipping in TestLogon is **half-built**: the shared *credit* primitive is real and correct, but
@@ -233,6 +340,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
   it calls `write_tip_ledger` with `type:"credit"` net.
 - **Files/models:** NEW `app/services/tips.py`; reuse `tip_ledger.py`, `billing_config.split_fee`.
 - **Deps:** none · **Verify:** `pytest` unit; assert ledger credit `type==credit`, net = gross−20%.
+- **Citations (2nd pass):** `write_tip_ledger` `tip_ledger.py:89`; net credit `type:"credit"` `:163-174`; `split_fee("tip_debit")` `:135` → `billing_config.py:426/444`; 20% default `billing_config.py:119`; content_type set (no video) `:51`.
 
 #### TIP-002 — Single PM-resolution + ownership helper with fallback chain
 - **Type:** backend · **Effort:** S
@@ -244,6 +352,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Files/endpoints:** `app/services/tips.py`; reads `billing.py:779 current_default_pm`; the tip-default
   field (TIP-102 provides the writer; reader lands here).
 - **Deps:** TIP-001 · **Verify:** unit + contract: tip with no PM but a set default → 200 on that default.
+- **Citations (2nd pass):** general default reader `billing.py:779 current_default_pm`→`default_payment_method_id` `:781`; the 3 copy-pasted PM scans to replace: `newsfeed.py:4734` (tip_post), `newsfeed.py:6195` (unlock), `messaging.py:13887` (send_message_tip).
 
 #### TIP-003 — Idempotency layer (no double-charge / stored-receipt replay)
 - **Type:** backend · **Effort:** S
@@ -262,6 +371,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
   path unaffected.
 - **Files:** `app/services/tips.py`; source of truth `ops/prod-hotfixes/delegate-rest/newblock_messaging.py.txt`.
 - **Deps:** TIP-001 · **Verify:** contract with a managed-creator token (see android-web-parity delegate).
+- **Citations (2nd pass):** `_delegate_guard_tip` VERIFIED in `ops/prod-hotfixes/delegate-rest/apply.sh:33-45` (default-DENY, 403 `delegate_tip_forbidden`); `can_tip` added to `VALID_PERMISSIONS` `apply.sh:520`; prod-only, absent from dev git.
 
 #### TIP-005 — Migrate messaging ATTACHED-tip send paths to `charge_tip`
 - **Type:** backend · **Effort:** M
@@ -273,6 +383,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
   only; cancelling a scheduled tipped message does not charge; behavior otherwise identical.
 - **Files/endpoints:** `app/routers/messaging.py` send handlers + `_deliver_scheduled_message`.
 - **Deps:** TIP-001,002,003,004 · **Verify:** contract: tip DM, recipient earnings +net.
+- **Citations (2nd pass):** text write `messaging.py:8134-8148` (inline mock `:8098`), image `:8417-8442` (mock `:8422`), gallery `:9032-9055` (mock `:9037`), scheduled defer `_deliver_scheduled_message:13608` write `:13627`; replay-before-billing `:8060-8068`; tip+lock 400 `:8146` (not `:8145`). **⚠️ also FIX the ordering bug:** text path writes the ledger `:8134` BEFORE the tip+lock 400 `:8146` (image path guards first `:8420`); move the check ahead of the write.
 
 #### TIP-006 — Migrate post-hoc `send_message_tip` to `charge_tip`
 - **Type:** backend · **Effort:** S
@@ -282,6 +393,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** endpoint contract unchanged (`TipOut`); PM validation now via shared helper; credit still net.
 - **Files:** `app/routers/messaging.py`.
 - **Deps:** TIP-001..004 · **Verify:** contract on `/messages/{id}/tip`.
+- **Citations (2nd pass):** `def send_message_tip` `messaging.py:13870` (doc had `:13867`); inline PM scan `:13887-13900`; mock `tip_"+new_id()` `:13903`; direct `write_tip_ledger` (credits `msg.get("sender_id")`) `:13929-13943`; own-message 400 `:13884`.
 
 #### TIP-007 — Migrate `tip_post` to `charge_tip` (drop PaymentProvider stub)
 - **Type:** backend · **Effort:** S
@@ -291,6 +403,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** `POST /posts/{id}/tip` still 200; own-post 400 preserved; credit net; no stub PaymentProvider used.
 - **Files:** `app/routers/newsfeed.py`.
 - **Deps:** TIP-001..004 · **Verify:** contract.
+- **Citations (2nd pass):** `tip_post` `newsfeed.py:4726`; `PaymentProvider` stub create/confirm `:4748-4756`; direct `write_tip_ledger` `:4766-4779`; own-post 400 `:4731`; `PostTipRequest.payment_method_id` `:1930`.
 
 #### TIP-008 — Migrate `tip_comment` to `charge_tip`
 - **Type:** backend · **Effort:** S
@@ -299,6 +412,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** endpoint contract preserved; deleted-comment 409 preserved; credit net.
 - **Files:** `app/routers/newsfeed.py`.
 - **Deps:** TIP-001..004 · **Verify:** contract.
+- **Citations (2nd pass):** `tip_comment` `newsfeed.py:5895`; stub create/confirm `:5914-5921`; direct `write_tip_ledger` `:5934-5947`; deleted-comment 409 `:5912`; `TipRequest` LACKS `payment_method_id` `:1749-1751` (handler uses `getattr(...,None)` `:5943`).
 
 #### TIP-009 — Migrate broadcast `send_tip_message` to `charge_tip`
 - **Type:** backend · **Effort:** S
@@ -308,6 +422,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** broadcast tip now charges before crediting; rate-limit + goal progress unchanged.
 - **Files:** `app/services/broadcast_tip_store.py`, `app/routers/broadcast.py:2036`.
 - **Deps:** TIP-001..004 · **Verify:** contract on `/sessions/{id}/chat/tip`.
+- **Citations (2nd pass):** `send_tip_message` `broadcast_tip_store.py:90`, ledger write `:135-149` (recipient=`broadcaster_id`), NO charge. **Note:** it is NOT "validate-only rate-limit" — it already validates PM ownership `:107`, bounds `:110-113`, self-tip 400 `:116-117`; `charge_tip` must preserve these. Route `broadcast.py:2036`; min/max `:162-163`.
 
 #### TIP-010 — Fold prod video-tip endpoint + tip_ledger `"video"` into git (dev clone)
 - **Type:** infra/backend · **Effort:** M
@@ -319,6 +434,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
   longer raises; patch removed from the pending-fold list.
 - **Files:** `app/routers/video_listing.py`, `app/services/tip_ledger.py`.
 - **Deps:** TIP-001 · **Verify:** dev contract on the video tip endpoint.
+- **Citations (2nd pass):** dev `video_listing.py` has ZERO tip refs (router prefix `/ui/videos` `:41`); prod patch VERIFIED — adds `VideoTipIn/Out` + `@router.post("/{video_id}/tip") tip_video_endpoint` + reactions + `tip_total_cents` (`ops/prod-hotfixes/app_routers_video_listing.py.patch`); `"video"` added to set+reason via `app_services_tip_ledger.py.patch` (both patch bodies confirmed). Endpoint = `POST /ui/videos/{video_id}/tip`.
 
 #### TIP-011 — Migrate `tip_video_endpoint` to `charge_tip`
 - **Type:** backend · **Effort:** S
@@ -358,6 +474,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
   credit; idempotency_key dedups at the processor.
 - **Files:** `app/services/tips.py`; settings `stripe_*` (`settings.py:360`).
 - **Deps:** TIP-001, TIP-003 · **Verify:** contract: check stripe-mock log; recipient credited only on success.
+- **Citations (2nd pass):** real rail pattern `billing.py:1095` (`off_session=True,confirm=True`; also `:1197`, `:2507`); `STRIPE_API_BASE` `settings.py:363` (block `:359-366`).
 
 #### TIP-102 — `tip_default_payment_method_id` storage + get/set endpoints
 - **Type:** backend · **Effort:** S
@@ -367,6 +484,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
   to the general default.
 - **Files:** `app/routers/billing.py`.
 - **Deps:** TIP-002 · **Verify:** contract.
+- **Citations (2nd pass):** co-locate on `USER#..#BILLING` row beside `default_payment_method_id` `billing.py:781`; mirror `set_default` `:1015`.
 
 #### TIP-103 — Fix release `BillingAuthorizer` (AND-031)
 - **Type:** app · **Effort:** M
@@ -378,6 +496,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Files:** `android/.../data/messaging/BillingAuthorizer.kt`, `MessagingDataModule.kt`, PM picker reuse
   from `feature/billing/PaymentMethodsScreen.kt`.
 - **Deps:** TIP-101 (functional), TIP-102 · **Verify:** 2-device on a release APK.
+- **Citations (2nd pass):** `StubBillingAuthorizer` `BillingAuthorizer.kt:54`; DEBUG blank-PM `:64-65`; RELEASE `NotConfigured` `:67`; bind `MessagingDataModule.kt:98`.
 
 #### TIP-104 — Default tip PM UI
 - **Type:** app · **Effort:** S
@@ -386,15 +505,23 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Files:** `feature/billing/PaymentMethodsScreen.kt` + billing repo.
 - **Deps:** TIP-102, TIP-103 · **Verify:** on-device.
 
-#### TIP-105 — Fix group attached-tip recipient (credit the message author)
+#### TIP-105 — Fix group attached-tip recipient (**RESCOPED — see 2nd pass**)
 - **Type:** backend · **Effort:** S
-- **Description:** Change `_resolve_tip_recipient` (`messaging.py:5613`) so group conversations credit the
-  MESSAGE AUTHOR instead of returning `None` (locked #2). DM behavior unchanged. Attached-tip paths then
-  always credit.
-- **Acceptance:** an attached tip on a group message credits the sender's author; DM still credits the
-  other participant; no more silently-dropped group tips.
-- **Files:** `app/routers/messaging.py`.
-- **Deps:** TIP-005 · **Verify:** contract: group tip → author earnings +net.
+- **⚠️ 2nd-pass correction:** the original premise ("credit the MESSAGE AUTHOR") is UNSOUND for the
+  attached-tip-on-SEND path, because there the message author IS the sender/tipper (`messaging.py:8130
+  sender_id=user_id`) → crediting the author = a **self-tip**. Locked #2 is ALREADY satisfied for the
+  realistic case: post-hoc `send_message_tip` credits `msg.get("sender_id")` directly for BOTH DMs and
+  groups (`messaging.py:13929`, guarded `msg_author != user_id`), NOT via `_resolve_tip_recipient`. The only
+  uncredited case is "an attached tip on your own outbound group message," which has no valid recipient.
+- **Description (rescoped):** Do NOT credit the message author for the attached-on-send group path. Instead
+  either (a) **reject** attached tips on group sends with a `400` (attached tips require a 1:1 recipient), or
+  (b) require an explicit `tip_recipient_id`. Leave DM attached-tip (credit the other participant) unchanged
+  and leave post-hoc group tips (already correct) unchanged.
+- **Acceptance:** a DM attached tip credits the other participant (unchanged); an attached tip on a group
+  SEND is rejected/needs explicit recipient (no self-credit); post-hoc group tips still credit the author.
+- **Files:** `app/routers/messaging.py` (`_resolve_tip_recipient` `:5613`; group attached-tip site `:8134`).
+- **Deps:** TIP-005 · **Verify:** contract: DM tip → other-party earnings +net; group attached tip → 400 (no self-credit).
+- **Citations (2nd pass):** `_resolve_tip_recipient→None(group)` `messaging.py:5613/5635` CONFIRMED; attached-send author==sender `:8130/:8134`; post-hoc credits msg author `:13929`.
 
 #### TIP-106 — Tip-on-SEND from the app (send DTOs + composer)
 - **Type:** app · **Effort:** M
@@ -407,6 +534,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Files:** `MessagingDtos.kt`, `ImageMessageDtos.kt`, `FileMessageDtos.kt`,
   `feature/messaging/thread/{MessageActionsUi,ThreadScreen,ThreadViewModel}.kt`.
 - **Deps:** TIP-103, TIP-105 · **Verify:** 2-device send-with-tip.
+- **Citations (2nd pass):** backend already accepts both fields — send DTOs `messaging.py:1872/1957/2024` (`tip_amount_cents` + `tip_payment_method_id` `:1873/1958/2025`, validated `ge=1,le=100_000`); app currently omits them (only read model `MessagingDtos.kt:146`). Client-side tip+lock block mirrors backend `:8146`.
 
 #### TIP-107 — 2-device verification: real charge end-to-end
 - **Type:** test · **Effort:** M
@@ -426,6 +554,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** tip-react credits net; own-message 400; emoji reaction path untouched.
 - **Files:** `app/routers/messaging.py`.
 - **Deps:** TIP-101 · **Verify:** contract.
+- **Citations (2nd pass):** existing emoji-only `react_to_message` `messaging.py:11195` (doc had `:11194`) stays untouched; new `message_react` needs adding to `tip_ledger.py:51` set + reason map.
 
 #### TIP-202 — Post tip-reaction endpoint (`post_react`)
 - **Type:** backend · **Effort:** M
@@ -434,6 +563,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** tip-react credits net; own-post 400; free emoji reactions unaffected.
 - **Files:** `app/routers/newsfeed.py`.
 - **Deps:** TIP-101 · **Verify:** contract.
+- **Citations (2nd pass):** existing emoji-only `add_reaction` `newsfeed.py:4890` stays untouched; new `post_react` needs adding to `tip_ledger.py:51` set + reason map + `creator_earnings.py:48` allowlist (TIP-205).
 
 #### TIP-203 — App: message tip-reaction UI
 - **Type:** app · **Effort:** M
@@ -458,6 +588,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** these credits report under the `tips` category in the earnings breakdown.
 - **Files:** `app/services/creator_earnings.py`.
 - **Deps:** TIP-201, TIP-202 · **Verify:** earnings breakdown unit.
+- **Citations (2nd pass):** allowlist is `creator_earnings.py:48-50` (`{message,post,comment}`); reason-fallback `:53-54` already buckets the new types (`reason="Tip: <t>"`), so this is exactness-only, not a correctness fix.
 
 #### TIP-206 — 2-device verification: tip reactions both surfaces
 - **Type:** test · **Effort:** M
@@ -472,6 +603,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** comment tip accepts + validates a PM; blank/none falls back via TIP-002 chain.
 - **Files:** `app/routers/newsfeed.py`.
 - **Deps:** TIP-008 · **Verify:** contract.
+- **Citations (2nd pass):** `TipRequest` `newsfeed.py:1749-1751` (currently `amount_cents`+`currency` only); `tip_comment` already reads it defensively via `getattr(req,"payment_method_id",None)` `:5943`, so adding the field is wired end-to-end.
 
 #### TIP-302 — Comment-carrying tip (create comment WITH a tip)
 - **Type:** backend · **Effort:** M
@@ -481,6 +613,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
   to charge → no comment orphaned without its tip (or clearly separated — see OQ-4).
 - **Files:** `app/routers/newsfeed.py`.
 - **Deps:** TIP-101 · **Verify:** contract.
+- **Citations (2nd pass):** `CreateCommentRequest` `newsfeed.py:1658` currently has NO tip fields (text/gif/sticker only) — confirmed clean surface to extend.
 
 #### TIP-303 — Video-comment tip endpoint (`video_comment`)
 - **Type:** backend · **Effort:** M
@@ -530,6 +663,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** stranger→gated user without a tip gets 402; allowlisted user bypasses; existing DM bypasses.
 - **Files:** `app/routers/messaging.py`.
 - **Deps:** TIP-401 · **Verify:** contract.
+- **Citations (2nd pass):** `find_or_create_dm` `messaging.py:6123` currently checks ONLY blocks (`is_any_block` `:6131`) — no tip gate; `accept_conversation` `:6158` also ungated. Both are the correct insertion points.
 
 #### TIP-403 — First message carries the required tip (credited, non-refundable)
 - **Type:** backend · **Effort:** M
@@ -566,6 +700,7 @@ Effort key: **S** ≈ ≤0.5 day, **M** ≈ 1–2 days, **L** ≈ 3–5 days.
 - **Acceptance:** injected failure between debit and credit leaves NO half-written pair; retry is a no-op.
 - **Files:** `app/services/tip_ledger.py`, `app/services/tips.py`.
 - **Deps:** TIP-101 · **Verify:** fault-injection unit.
+- **Citations (2nd pass):** current writes are two independent best-effort `put_item`s (`tip_ledger.py:142` debit, `:163` credit) each swallowing exceptions `:154/:175` — so a debit can already land without its credit today. Also fold the text-path "ledger written before tip+lock 400" orphan (`messaging.py:8134` write vs `:8146` reject).
 
 #### TIP-502 — Reversal path for charged-but-not-credited (orphan handling)
 - **Type:** backend · **Effort:** M
