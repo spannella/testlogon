@@ -104,6 +104,8 @@ data class MessageEntity(
     val stickerAltText: String? = null,
     val stickerId: String? = null,
     val stickerCollectionId: String? = null,
+    // Arbitrary text-option poll snapshot JSON (kind="poll"). Null for non-poll kinds.
+    val pollJson: String? = null,
     // AND-136 — meeting-poll envelope columns (DB schema v4). Null for non-poll kinds.
     val pollId: String? = null,
     val pollTitle: String? = null,

@@ -86,6 +86,7 @@ interface GroupsRepository {
         imageUrls: List<String> = emptyList(),
         videoId: String? = null,
         unlockPriceCents: Int? = null,
+        poll: com.testlogon.android.core.network.poll.PollInputDto? = null,
     ): ApiResult<GroupFeedPost>
 
     /** GET one oldest-first page of a group post's comments (ENVELOPE {comments, next_cursor} -> mapped). */
@@ -216,6 +217,7 @@ class GroupsRepositoryImpl @Inject constructor(
         imageUrls: List<String>,
         videoId: String?,
         unlockPriceCents: Int?,
+        poll: com.testlogon.android.core.network.poll.PollInputDto?,
     ): ApiResult<GroupFeedPost> = withContext(Dispatchers.IO) {
         call {
             groupsApi.createGroupPost(
@@ -226,6 +228,7 @@ class GroupsRepositoryImpl @Inject constructor(
                     imageUrls = imageUrls.ifEmpty { null },
                     videoId = videoId?.takeIf { it.isNotBlank() },
                     unlockPriceCents = unlockPriceCents?.takeIf { it > 0 },
+                    poll = poll,
                 ),
             ).toDomain()
         }

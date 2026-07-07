@@ -10,6 +10,9 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.groups.GroupFeedPost
 import com.testlogon.android.data.feed.CommentImageUploader
 import com.testlogon.android.feature.groups.data.GroupsRepository
+import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.data.poll.ArbitraryPollRepository
+import com.testlogon.android.data.poll.PollVoter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -34,10 +37,18 @@ import javax.inject.Inject
 class GroupFeedViewModel @Inject constructor(
     private val repository: GroupsRepository,
     private val imageUploader: CommentImageUploader,
+    private val arbitraryPollRepository: ArbitraryPollRepository,
+    authStateStore: AuthStateStore,
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
     val groupId: String = checkNotNull(savedState[ARG_GROUP_ID]) { "missing $ARG_GROUP_ID nav arg" }
+
+    /** Shared arbitrary-poll vote/close client for poll posts rendered in the feed. */
+    val pollVoter: PollVoter get() = arbitraryPollRepository
+
+    /** The signed-in user id (to gate the owner-only close-poll action). */
+    val currentUserId: StateFlow<String?> = authStateStore.userSub
 
     val posts: Flow<PagingData<GroupFeedPost>> =
         repository.groupFeedPager(groupId).cachedIn(viewModelScope)

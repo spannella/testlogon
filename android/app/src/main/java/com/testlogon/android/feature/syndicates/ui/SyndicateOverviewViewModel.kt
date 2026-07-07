@@ -16,6 +16,11 @@ import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
 import com.testlogon.android.data.feed.CommentImageUploader
 import com.testlogon.android.feature.syndicates.data.SyndicateRepository
+import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.data.poll.ArbitraryPollRepository
+import com.testlogon.android.data.poll.PollVoter
+import com.testlogon.android.core.network.poll.PollInputDto
+import com.testlogon.android.feature.common.poll.PollDraft
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,11 +51,19 @@ import javax.inject.Inject
 class SyndicateOverviewViewModel @Inject constructor(
     private val repository: SyndicateRepository,
     private val imageUploader: CommentImageUploader,
+    private val arbitraryPollRepository: ArbitraryPollRepository,
+    authStateStore: AuthStateStore,
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
     val syndicateId: String =
         checkNotNull(savedState[ARG_SYNDICATE_ID]) { "missing $ARG_SYNDICATE_ID nav arg" }
+
+    /** Shared arbitrary-poll vote/close client for poll posts in the feed. */
+    val pollVoter: PollVoter get() = arbitraryPollRepository
+
+    /** The signed-in user id (to gate the owner-only close-poll action). */
+    val currentUserId: StateFlow<String?> = authStateStore.userSub
 
     private val _uiState = MutableStateFlow<SyndicateOverviewUiState>(SyndicateOverviewUiState.Loading)
     val uiState: StateFlow<SyndicateOverviewUiState> = _uiState.asStateFlow()
@@ -90,14 +103,27 @@ class SyndicateOverviewViewModel @Inject constructor(
     }
 
     fun clearImage() = _compose.update { it.copy(imageUrl = null) }
+    fun onPollEnabledChange(enabled: Boolean) = _compose.update { it.copy(pollEnabled = enabled, error = null) }
+    fun onPollDraftChange(draft: PollDraft) = _compose.update { it.copy(pollDraft = draft, error = null) }
 
     fun submitPost() {
         val form = _compose.value
-        val text = form.text.trim()
-        if (text.isEmpty() || form.sending) return
+        val poll = form.pollDraft.takeIf { form.pollEnabled && it.isValid }
+        val text = form.text.trim().ifEmpty { poll?.question?.trim().orEmpty() }
+        if ((text.isEmpty() && poll == null) || form.sending) return
         _compose.update { it.copy(sending = true, error = null) }
+        val nowSec = System.currentTimeMillis() / 1000L
+        val pollInput: PollInputDto? = poll?.let { d ->
+            PollInputDto(
+                question = d.question.trim(),
+                options = d.trimmedOptions,
+                choiceMode = if (d.multiSelect) "multi" else "single",
+                maxSelections = if (d.multiSelect) d.trimmedOptions.size else null,
+                closesAt = d.closesAtOrNull(nowSec),
+            )
+        }
         viewModelScope.launch {
-            when (val r = repository.createPost(syndicateId, text, imageUrl = form.imageUrl)) {
+            when (val r = repository.createPost(syndicateId, text, imageUrl = form.imageUrl, poll = pollInput)) {
                 is ApiResult.Success -> {
                     _compose.value = SyndicateComposeState()
                     _feedRefresh.send(Unit)
@@ -214,6 +240,8 @@ data class SyndicateComposeState(
     val uploadingImage: Boolean = false,
     val sending: Boolean = false,
     val error: String? = null,
+    val pollEnabled: Boolean = false,
+    val pollDraft: PollDraft = PollDraft(),
 )
 
 /** Batch-9 (#12) - the syndicate members tab state. */

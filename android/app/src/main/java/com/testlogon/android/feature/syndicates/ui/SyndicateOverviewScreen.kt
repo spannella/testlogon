@@ -103,6 +103,10 @@ object SyndicateOverviewTestTags {
 private enum class OverviewTab { FEED, TREASURY, SPLIT, MEMBERS }
 
 /** AND-356 - route-level overview entry; collects the paged feed + ledger and the header state. */
+/** Provides the arbitrary-poll vote client + current user id down to the feed poll cards. */
+val LocalSyndicatePollVoter = androidx.compose.runtime.compositionLocalOf<com.testlogon.android.data.poll.PollVoter?> { null }
+val LocalSyndicateCurrentUserId = androidx.compose.runtime.compositionLocalOf<String?> { null }
+
 @Composable
 fun SyndicateOverviewRoute(
     onBack: () -> Unit,
@@ -114,9 +118,14 @@ fun SyndicateOverviewRoute(
     val ledger = viewModel.ledger.collectAsLazyPagingItems()
     val compose by viewModel.compose.collectAsStateWithLifecycle()
     val members by viewModel.members.collectAsStateWithLifecycle()
+    val currentUserId by viewModel.currentUserId.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(viewModel) {
         viewModel.feedRefresh.collect { feed.refresh() }
     }
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalSyndicatePollVoter provides viewModel.pollVoter,
+        LocalSyndicateCurrentUserId provides currentUserId,
+    ) {
     SyndicateOverviewScreen(
         state = state,
         feed = feed,
@@ -137,7 +146,10 @@ fun SyndicateOverviewRoute(
         onSubmitPost = viewModel::submitPost,
         onLoadMembers = { viewModel.loadMembers() },
         onRetryMembers = { viewModel.loadMembers(force = true) },
+        onPollEnabledChange = viewModel::onPollEnabledChange,
+        onPollDraftChange = viewModel::onPollDraftChange,
     )
+    }
 }
 
 /** AND-356 - stateless 3-tab READ-ONLY syndicate overview screen. */
@@ -158,6 +170,8 @@ fun SyndicateOverviewScreen(
     onSubmitPost: () -> Unit = {},
     onLoadMembers: () -> Unit = {},
     onRetryMembers: () -> Unit = {},
+    onPollEnabledChange: (Boolean) -> Unit = {},
+    onPollDraftChange: (com.testlogon.android.feature.common.poll.PollDraft) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -223,6 +237,8 @@ fun SyndicateOverviewScreen(
                     onSubmitPost = onSubmitPost,
                     onLoadMembers = onLoadMembers,
                     onRetryMembers = onRetryMembers,
+                    onPollEnabledChange = onPollEnabledChange,
+                    onPollDraftChange = onPollDraftChange,
                     modifier = Modifier.padding(padding),
                 )
         }
@@ -243,6 +259,8 @@ private fun ContentBody(
     onSubmitPost: () -> Unit,
     onLoadMembers: () -> Unit,
     onRetryMembers: () -> Unit,
+    onPollEnabledChange: (Boolean) -> Unit = {},
+    onPollDraftChange: (com.testlogon.android.feature.common.poll.PollDraft) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var selected by rememberSaveable { mutableStateOf(OverviewTab.FEED.ordinal) }
@@ -290,6 +308,8 @@ private fun ContentBody(
                             onAttachImage = onAttachImage,
                             onClearImage = onClearImage,
                             onSubmit = onSubmitPost,
+                            onPollEnabledChange = onPollEnabledChange,
+                            onPollDraftChange = onPollDraftChange,
                         )
                         HorizontalDivider()
                     }
@@ -431,6 +451,16 @@ private fun FeedItemRow(post: SyndicateFeedItem) {
             }
             if (!post.text.isNullOrBlank()) {
                 Text(text = post.text!!, style = MaterialTheme.typography.bodyMedium)
+            }
+            val poll = post.poll
+            val voter = LocalSyndicatePollVoter.current
+            if (poll != null && voter != null) {
+                val me = LocalSyndicateCurrentUserId.current
+                com.testlogon.android.feature.common.poll.ArbitraryPollCard(
+                    initial = poll,
+                    isOwner = me != null && me == poll.owner,
+                    voter = voter,
+                )
             }
             PostImage(post.imageUrl)
         }
@@ -714,6 +744,8 @@ private fun SyndicateComposeBox(
     onAttachImage: (android.net.Uri) -> Unit,
     onClearImage: () -> Unit,
     onSubmit: () -> Unit,
+    onPollEnabledChange: (Boolean) -> Unit = {},
+    onPollDraftChange: (com.testlogon.android.feature.common.poll.PollDraft) -> Unit = {},
 ) {
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
@@ -747,6 +779,21 @@ private fun SyndicateComposeBox(
                 }
             }
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Poll", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            androidx.compose.material3.Switch(
+                checked = state.pollEnabled,
+                onCheckedChange = onPollEnabledChange,
+                modifier = Modifier.testTag("syndicate_poll_toggle"),
+            )
+        }
+        if (state.pollEnabled) {
+            com.testlogon.android.feature.common.poll.PollComposer(
+                draft = state.pollDraft,
+                onChange = onPollDraftChange,
+                enabled = !state.sending,
+            )
+        }
         val err = state.error
         if (err != null) {
             Text(text = err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -770,7 +817,7 @@ private fun SyndicateComposeBox(
             Box(modifier = Modifier.weight(1f))
             Button(
                 onClick = onSubmit,
-                enabled = state.text.isNotBlank() && !state.sending,
+                enabled = (state.text.isNotBlank() || (state.pollEnabled && state.pollDraft.isValid)) && !state.sending,
                 modifier = Modifier.testTag(SyndicateOverviewTestTags.COMPOSE_SEND),
             ) {
                 if (state.sending) {

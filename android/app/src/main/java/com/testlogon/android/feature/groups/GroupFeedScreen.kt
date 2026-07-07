@@ -94,6 +94,7 @@ fun GroupFeedRoute(
 ) {
     val posts = viewModel.posts.collectAsLazyPagingItems()
     val composeState by viewModel.composeState.collectAsStateWithLifecycle()
+    val currentUserId by viewModel.currentUserId.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
         viewModel.refreshSignal.collectLatest { posts.refresh() }
     }
@@ -101,6 +102,8 @@ fun GroupFeedRoute(
         groupId = viewModel.groupId,
         posts = posts,
         composeState = composeState,
+        pollVoter = viewModel.pollVoter,
+        currentUserId = currentUserId,
         onBack = onBack,
         onOpenHub = onOpenHub,
         onComposePost = onComposePost,
@@ -116,6 +119,8 @@ fun GroupFeedScreen(
     groupId: String,
     posts: LazyPagingItems<GroupFeedPost>,
     composeState: GroupComposeState,
+    pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
+    currentUserId: String? = null,
     onBack: () -> Unit,
     onOpenHub: () -> Unit,
     onComposePost: () -> Unit = {},
@@ -205,7 +210,12 @@ fun GroupFeedScreen(
                             key = { index -> posts[index]?.postId ?: "post_$index" },
                         ) { index ->
                             val post = posts[index] ?: return@items
-                            GroupPostRow(post, onOpenComments = { commentsForPost = post.postId })
+                            GroupPostRow(
+                                post = post,
+                                pollVoter = pollVoter,
+                                currentUserId = currentUserId,
+                                onOpenComments = { commentsForPost = post.postId },
+                            )
                             HorizontalDivider()
                         }
                     }
@@ -305,7 +315,12 @@ private fun ComposeBox(
 }
 
 @Composable
-private fun GroupPostRow(post: GroupFeedPost, onOpenComments: () -> Unit) {
+private fun GroupPostRow(
+    post: GroupFeedPost,
+    pollVoter: com.testlogon.android.data.poll.PollVoter?,
+    currentUserId: String?,
+    onOpenComments: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -343,6 +358,15 @@ private fun GroupPostRow(post: GroupFeedPost, onOpenComments: () -> Unit) {
             )
         } else if (!text.isNullOrBlank()) {
             Text(text = text, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        val poll = post.poll
+        if (poll != null && pollVoter != null) {
+            com.testlogon.android.feature.common.poll.ArbitraryPollCard(
+                initial = poll,
+                isOwner = currentUserId != null && currentUserId == post.authorId,
+                voter = pollVoter,
+            )
         }
 
         // Multi-image grid (newsfeed parity): show up to 4 thumbnails in a row.

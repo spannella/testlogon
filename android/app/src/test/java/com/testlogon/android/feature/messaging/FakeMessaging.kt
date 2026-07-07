@@ -793,6 +793,16 @@ class FakeMessagingRepository : MessagingRepository {
         return r
     }
 
+    override suspend fun sendArbitraryPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        multiSelect: Boolean,
+        maxSelections: Int?,
+        closesAt: Long?,
+        text: String?,
+    ): ApiResult<Unit> = ApiResult.Success(Unit)
+
     override suspend fun refreshMeetingPoll(
         conversationId: String,
         pollId: String,

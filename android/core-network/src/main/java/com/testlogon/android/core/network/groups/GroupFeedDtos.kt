@@ -1,6 +1,8 @@
 package com.testlogon.android.core.network.groups
 
 import com.squareup.moshi.Json
+import com.testlogon.android.core.network.poll.PollInputDto
+import com.testlogon.android.core.network.poll.PollSnapshotDto
 
 /**
  * Batch-8 (#11) - transport DTOs for the GROUP FEED surface (GROUP-002 group_feed router).
@@ -24,6 +26,8 @@ data class GroupPostCreateIn(
     @Json(name = "video_id") val videoId: String? = null,
     @Json(name = "audience") val audience: String = "public",
     @Json(name = "unlock_price_cents") val unlockPriceCents: Int? = null,
+    // Arbitrary text-option poll attached to the post (question + 2..N text options, single/multi).
+    @Json(name = "poll") val poll: PollInputDto? = null,
 )
 
 /**
@@ -48,6 +52,7 @@ data class GroupFeedPostDto(
     @Json(name = "tip_total_cents") val tipTotalCents: Int? = 0,
     @Json(name = "comment_count") val commentCount: Int? = 0,
     @Json(name = "created_at") val createdAt: Long? = 0,
+    @Json(name = "poll") val poll: PollSnapshotDto? = null,
 )
 
 /** The feed page envelope { posts, cursor, has_more }. A null/blank cursor terminates pagination. */

@@ -8,6 +8,11 @@ import com.testlogon.android.core.model.groups.Group
 import com.testlogon.android.data.feed.FeedRefreshBus
 import com.testlogon.android.data.feed.PostComposeRepository
 import com.testlogon.android.data.feed.PostVisibility
+import com.testlogon.android.data.feed.NewsfeedPollDataReq
+import com.testlogon.android.data.feed.NewsfeedPollQuestionReq
+import com.testlogon.android.data.feed.NewsfeedPollOptionReq
+import com.testlogon.android.core.network.poll.PollInputDto
+import com.testlogon.android.feature.common.poll.PollDraft
 import com.testlogon.android.data.videos.VideoUploadRepository
 import com.testlogon.android.feature.groups.data.GroupsRepository
 import com.testlogon.android.navigation.ComposePostDest
@@ -56,6 +61,9 @@ data class ComposePostUiState(
     val error: String? = null,
     /** Flipped true on a successful post so the screen can pop back. */
     val posted: Boolean = false,
+    /** Arbitrary text-option poll: enabled + its draft (question + 2..N options + single/multi + close). */
+    val pollEnabled: Boolean = false,
+    val pollDraft: PollDraft = PollDraft(),
 ) {
     /** #2 — video ids of the FULLY-uploaded videos (the ones the post can reference). */
     val uploadedVideoIds: List<String> get() = videos.mapNotNull { it.videoId }
@@ -63,8 +71,10 @@ data class ComposePostUiState(
     /** True while ANY picked video is still uploading. */
     val uploadingVideo: Boolean get() = videos.any { it.uploading }
 
+    val pollValid: Boolean get() = pollEnabled && pollDraft.isValid
+
     val canPost: Boolean
-        get() = (body.isNotBlank() || imageUrls.isNotEmpty() || videos.isNotEmpty()) &&
+        get() = (body.isNotBlank() || imageUrls.isNotEmpty() || videos.isNotEmpty() || pollValid) &&
             !submitting && !uploadingMedia && !uploadingVideo
 }
 
@@ -120,6 +130,8 @@ class ComposePostViewModel @Inject constructor(
     fun onVisibilityChange(v: PostVisibility) = _state.update { it.copy(visibility = v) }
     fun onLockPriceChange(text: String) = _state.update { it.copy(lockPriceInput = text) }
     fun onScheduleChange(epochSeconds: Long?) = _state.update { it.copy(publishAtEpochSeconds = epochSeconds) }
+    fun onPollEnabledChange(enabled: Boolean) = _state.update { it.copy(pollEnabled = enabled, error = null) }
+    fun onPollDraftChange(draft: PollDraft) = _state.update { it.copy(pollDraft = draft, error = null) }
     fun removeImage(url: String) = _state.update { it.copy(imageUrls = it.imageUrls - url) }
 
     /** #2 — remove a picked video by its local uri (works whether or not it finished uploading). */
@@ -178,6 +190,31 @@ class ComposePostViewModel @Inject constructor(
         viewModelScope.launch {
             val cents = parseDollarsToCents(s.lockPriceInput)
             val group = s.targetGroup
+            val nowSec = System.currentTimeMillis() / 1000L
+            val poll = s.pollDraft.takeIf { s.pollEnabled && it.isValid }
+            val choiceMode = if (poll?.multiSelect == true) "multi" else "single"
+            val groupPoll: PollInputDto? = poll?.let { d ->
+                PollInputDto(
+                    question = d.question.trim(),
+                    options = d.trimmedOptions,
+                    choiceMode = choiceMode,
+                    maxSelections = if (d.multiSelect) d.trimmedOptions.size else null,
+                    closesAt = d.closesAtOrNull(nowSec),
+                )
+            }
+            val newsfeedPoll: NewsfeedPollDataReq? = poll?.let { d ->
+                NewsfeedPollDataReq(
+                    questions = listOf(
+                        NewsfeedPollQuestionReq(
+                            text = d.question.trim(),
+                            choiceMode = choiceMode,
+                            options = d.trimmedOptions.map { NewsfeedPollOptionReq(it) },
+                            maxSelections = if (d.multiSelect) d.trimmedOptions.size else null,
+                        ),
+                    ),
+                    closesAt = d.closesAtOrNull(nowSec),
+                )
+            }
             // #4 (B-GROUPUNIFY) — a group audience posts to the group store (the backend bridges it into
             // the unified feed + my-posts); the personal feed uses POST /posts. Same composer, same fields.
             val result: ApiResult<Unit> = if (group != null) {
@@ -185,17 +222,19 @@ class ComposePostViewModel @Inject constructor(
                 // sends a single space (matching the existing group composer behavior).
                 when (val gr = groupsRepository.createGroupPost(
                     groupId = group.id,
-                    text = s.body.trim().ifEmpty { " " },
+                    text = s.body.trim().ifEmpty { poll?.question?.trim()?.ifEmpty { " " } ?: " " },
                     imageUrls = s.imageUrls,
                     videoId = s.uploadedVideoIds.firstOrNull(),
                     unlockPriceCents = cents?.toInt(),
+                    poll = groupPoll,
                 )) {
                     is ApiResult.Success -> ApiResult.Success(Unit)
                     is ApiResult.Failure -> ApiResult.Failure(gr.error)
                     is ApiResult.NetworkError -> ApiResult.NetworkError(gr.cause, gr.isTimeout)
                 }
             } else {
-                repository.createPost(s.body.trim(), s.visibility, cents, s.publishAtEpochSeconds, s.imageUrls, s.uploadedVideoIds)
+                val bodyOut = s.body.trim().ifEmpty { if (newsfeedPoll != null) poll?.question?.trim().orEmpty() else "" }
+                repository.createPost(bodyOut, s.visibility, cents, s.publishAtEpochSeconds, s.imageUrls, s.uploadedVideoIds, newsfeedPoll)
             }
             when (result) {
                 is ApiResult.Success -> {

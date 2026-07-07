@@ -50,6 +50,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Ballot
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Schedule
@@ -358,6 +359,10 @@ fun ThreadRoute(
         onOpenPollComposer = viewModel::onOpenPollComposer,
         onDismissPollComposer = viewModel::onDismissPollComposer,
         onCreatePoll = viewModel::onCreatePoll,
+        onOpenTextPollComposer = viewModel::onOpenTextPollComposer,
+        onDismissTextPollComposer = viewModel::onDismissTextPollComposer,
+        onSendArbitraryPoll = viewModel::onSendArbitraryPoll,
+        pollVoter = viewModel.pollVoter,
         onPollVote = viewModel::onPollVote,
         onPollConfirm = viewModel::onPollConfirm,
         onAttachCountdown = viewModel::onOpenCountdownPicker,
@@ -868,6 +873,10 @@ fun ThreadScreen(
     onOpenPollComposer: () -> Unit,
     onDismissPollComposer: () -> Unit,
     onCreatePoll: (com.testlogon.android.data.messaging.MeetingPollDraft) -> Unit,
+    onOpenTextPollComposer: () -> Unit = {},
+    onDismissTextPollComposer: () -> Unit = {},
+    onSendArbitraryPoll: (com.testlogon.android.feature.common.poll.PollDraft) -> Unit = {},
+    pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
     onPollVote: (String, String, com.testlogon.android.data.messaging.SlotVote?) -> Unit,
     onPollConfirm: (String, String) -> Unit,
     onAttachCountdown: () -> Unit,
@@ -1114,6 +1123,7 @@ fun ThreadScreen(
                         onRecordVoice = onRecordVoice,
                         onAttachMedia = onOpenMediaPicker,
                         onAttachPoll = onOpenPollComposer,
+                        onAttachTextPoll = onOpenTextPollComposer,
                         onAttachCountdown = onAttachCountdown,
                         onAttachLottery = onAttachLottery,
                         onAttachFindDateTime = onAttachFindDateTime,
@@ -1194,6 +1204,7 @@ fun ThreadScreen(
                     onAction = onAction,
                     onMessageLongPress = { actionTarget = it },
                     onJumpToMessage = onJumpToMessage,
+                    pollVoter = pollVoter,
                     nowSeconds = nowSeconds,
                 )
             }
@@ -1245,6 +1256,13 @@ fun ThreadScreen(
             initialSlots = defaultPollSlots(),
             onSubmit = onCreatePoll,
             onDismiss = onDismissPollComposer,
+        )
+    }
+
+    if (state.textPollComposerVisible) {
+        TextPollComposerSheet(
+            onSubmit = onSendArbitraryPoll,
+            onDismiss = onDismissTextPollComposer,
         )
     }
 
@@ -1349,6 +1367,7 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
         is MessageMedia.Voicemail -> "[voicemail]"
         is MessageMedia.Gif -> "[GIF]"
         is MessageMedia.Sticker -> "[sticker]"
+        is MessageMedia.Poll -> "[poll]"
         is MessageMedia.MeetingPoll, is MessageMedia.FindDateTime -> "[poll]"
         is MessageMedia.Countdown -> "[countdown]"
         is MessageMedia.CalendarEvent, is MessageMedia.CalendarShare -> "[calendar]"
@@ -1378,6 +1397,7 @@ private fun ThreadList(
     onAction: (ThreadAction) -> Unit,
     onMessageLongPress: (ThreadMessageUi) -> Unit,
     onJumpToMessage: (String) -> Unit = {},
+    pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
     nowSeconds: Long,
 ) {
     // reverseLayout: index 0 is the newest message at the visual bottom.
@@ -1427,6 +1447,7 @@ private fun ThreadList(
                     onOpenEncrypted = { onOpenEncrypted(message.key) },
                     onOpenViewOnce = { onOpenViewOnce(message.key) },
                     onAddToCalendar = onAddToCalendar,
+                    pollVoter = pollVoter,
                     onLongPress = { onMessageLongPress(message) },
                     onToggleReaction = { emoji -> onAction(ThreadAction.ToggleReaction(message.key, emoji)) },
                     onSeeWhoReacted = { onAction(ThreadAction.OpenReactionDetails(message.key)) },
@@ -1487,6 +1508,7 @@ private fun MessageBubble(
     voicePlayback: com.testlogon.android.feature.messaging.voice.VoicePlaybackState,
     polls: Map<String, MeetingPollCardUiState>,
     unlock: UnlockUiState,
+    pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
     onRetry: () -> Unit,
     onOpenImage: (String) -> Unit,
     onOpenGalleryVideo: (String) -> Unit = {},
@@ -1738,6 +1760,17 @@ private fun MessageBubble(
                 // indicator. The receiver must unlock (pay) first; decrypting alone reveals nothing.
                 isEncrypted = message.isEncrypted,
             )
+            is MessageMedia.Poll -> {
+                val voter = pollVoter
+                if (voter != null) {
+                    com.testlogon.android.feature.common.poll.ArbitraryPollCard(
+                        initial = media.poll,
+                        isOwner = message.isOwn,
+                        voter = voter,
+                        modifier = Modifier.widthIn(max = 300.dp),
+                    )
+                }
+            }
             is MessageMedia.MeetingPoll -> {
                 val pollState = polls[media.pollId]
                 if (pollState != null) {
@@ -2238,6 +2271,7 @@ private fun MessageComposer(
     onRecordVoice: () -> Unit,
     onAttachMedia: () -> Unit,
     onAttachPoll: () -> Unit,
+    onAttachTextPoll: () -> Unit = {},
     onAttachCountdown: () -> Unit,
     onAttachLottery: () -> Unit = {},
     onAttachFindDateTime: () -> Unit = {},
@@ -2339,6 +2373,12 @@ private fun MessageComposer(
                         modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_POLL),
                     ) {
                         Icon(Icons.Filled.Poll, contentDescription = stringResource(R.string.composer_add_poll), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachTextPoll() },
+                        modifier = Modifier.size(44.dp).testTag("composer_add_text_poll"),
+                    ) {
+                        Icon(Icons.Filled.Ballot, contentDescription = "Create a text poll", tint = MaterialTheme.colorScheme.primary)
                     }
                     IconButton(
                         onClick = { actionsExpanded = false; onAttachCountdown() },

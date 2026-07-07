@@ -1,4 +1,5 @@
 package com.testlogon.android.data.messaging
+import com.testlogon.android.data.poll.toDomain
 
 /**
  * AND-120..AND-124 — domain models for the messaging feature (no Moshi/Room leakage past the
@@ -155,6 +156,15 @@ sealed interface MessageMedia {
         val creatorId: String,
         val status: String,
         val confirmedSlotId: String?,
+    ) : MessageMedia
+
+    /**
+     * Arbitrary text-option poll (custom question + 2..N text options, single OR multi-select) embedded
+     * in a message. Distinct from [MeetingPoll] / [FindDateTime] (time-based). Votes/results go through
+     * the surface-agnostic /ui/polls client; the card re-renders from the returned snapshot.
+     */
+    data class Poll(
+        val poll: com.testlogon.android.core.model.poll.ArbitraryPoll,
     ) : MessageMedia
 
     /**
@@ -767,6 +777,7 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         stickerId = stickerId,
         collectionId = stickerCollectionId,
     )
+    poll != null -> MessageMedia.Poll(poll.toDomain())
     meetingPoll != null -> MessageMedia.MeetingPoll(
         pollId = meetingPoll.pollId,
         title = meetingPoll.title,

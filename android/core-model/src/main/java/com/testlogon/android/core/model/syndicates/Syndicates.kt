@@ -59,6 +59,7 @@ data class SyndicateFeedItem(
     val reactionCount: Int? = null,
     val commentCount: Int? = null,
     val tipCount: Int? = null,
+    val poll: com.testlogon.android.core.model.poll.ArbitraryPoll? = null,
 )
 
 /** The treasury summary. All amounts are *_cents (Int); [currency] is an UPPER-cased ISO code. */

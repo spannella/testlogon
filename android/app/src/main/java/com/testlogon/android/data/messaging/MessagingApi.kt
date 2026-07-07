@@ -299,6 +299,14 @@ interface MessagingApi {
         @Body body: CreateMeetingPollReq,
     ): MessageDto
 
+    /** Arbitrary text-option poll message (kind="poll"); returns MessageOut with a poll snapshot. */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/poll")
+    suspend fun createPollMessage(
+        @Path("id") id: String,
+        @Body body: CreatePollMessageReq,
+    ): MessageDto
+
     /** AND-136 — authoritative poll state (per-slot counts + my_vote). Idempotent GET. */
     @GET("messaging/conversations/{id}/polls/{pollId}")
     suspend fun getMeetingPoll(

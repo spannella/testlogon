@@ -104,6 +104,8 @@ fun ComposePostRoute(
         onTargetGroupChange = viewModel::onTargetGroupChange,
         onLockPriceChange = viewModel::onLockPriceChange,
         onScheduleChange = viewModel::onScheduleChange,
+        onPollEnabledChange = viewModel::onPollEnabledChange,
+        onPollDraftChange = viewModel::onPollDraftChange,
         onAddPhotos = {
             pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
@@ -129,6 +131,8 @@ fun ComposePostScreen(
     onTargetGroupChange: (Group?) -> Unit,
     onLockPriceChange: (String) -> Unit,
     onScheduleChange: (Long?) -> Unit,
+    onPollEnabledChange: (Boolean) -> Unit = {},
+    onPollDraftChange: (com.testlogon.android.feature.common.poll.PollDraft) -> Unit = {},
     onAddPhotos: () -> Unit,
     onAddVideo: () -> Unit,
     onRemoveImage: (String) -> Unit,
@@ -282,6 +286,23 @@ fun ComposePostScreen(
                 placeholder = { Text("e.g. 4.99") },
                 singleLine = true,
             )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Poll", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                androidx.compose.material3.Switch(
+                    checked = state.pollEnabled,
+                    onCheckedChange = onPollEnabledChange,
+                    modifier = Modifier.testTag("compose_post_poll_toggle"),
+                )
+            }
+            if (state.pollEnabled) {
+                com.testlogon.android.feature.common.poll.PollComposer(
+                    draft = state.pollDraft,
+                    onChange = onPollDraftChange,
+                    enabled = !state.submitting,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
 
             Text("Schedule (optional)", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -247,6 +247,7 @@ class FakeSyndicateRepo(
         syndicateId: String,
         text: String,
         imageUrl: String?,
+        poll: com.testlogon.android.core.network.poll.PollInputDto?,
     ): ApiResult<com.testlogon.android.core.model.syndicates.SyndicateFeedItem> =
         ApiResult.Success(
             com.testlogon.android.core.model.syndicates.SyndicateFeedItem(

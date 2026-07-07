@@ -93,6 +93,7 @@ class FakeGroupsRepo(
         imageUrls: List<String>,
         videoId: String?,
         unlockPriceCents: Int?,
+        poll: com.testlogon.android.core.network.poll.PollInputDto?,
     ): ApiResult<GroupFeedPost> {
         createGroupPostArgs += groupId to text
         return groupFeedResult

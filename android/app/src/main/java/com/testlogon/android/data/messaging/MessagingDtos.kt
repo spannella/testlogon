@@ -2,6 +2,7 @@ package com.testlogon.android.data.messaging
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import com.testlogon.android.core.network.poll.PollSnapshotDto
 
 /**
  * AND-120 — wire DTOs for the TestLogon messaging domain.
@@ -58,6 +59,17 @@ data class ParticipantDto(
  * MessageOut. Required: conversation_id, message_id, sender_id, created_at, kind.
  * `text` is null for non-text kinds; `preview` is a server-rendered single-line summary.
  */
+/** Create body for POST /messaging/conversations/{id}/messages/poll (arbitrary text-option poll). */
+@JsonClass(generateAdapter = true)
+data class CreatePollMessageReq(
+    @Json(name = "question") val question: String,
+    @Json(name = "options") val options: List<String>,
+    @Json(name = "choice_mode") val choiceMode: String = "single",
+    @Json(name = "max_selections") val maxSelections: Int? = null,
+    @Json(name = "closes_at") val closesAt: Long? = null,
+    @Json(name = "text") val text: String? = null,
+)
+
 @JsonClass(generateAdapter = true)
 data class MessageDto(
     @Json(name = "message_id") val messageId: String,
@@ -111,6 +123,8 @@ data class MessageDto(
     @Json(name = "sticker_alt_text") val stickerAltText: String? = null,
     /** AND-136 — present on kind="meeting_poll": the poll envelope (slots come from the polls GET). */
     @Json(name = "meeting_poll") val meetingPoll: MeetingPollAttachmentDto? = null,
+    /** Arbitrary text-option poll snapshot present on kind="poll" (distinct from meeting_poll). */
+    @Json(name = "poll") val poll: PollSnapshotDto? = null,
     /** AND-137 — FLAT countdown fields present on kind="countdown". target_datetime is UTC seconds. */
     @Json(name = "countdown_title") val countdownTitle: String? = null,
     @Json(name = "target_datetime") val targetDatetime: Long? = null,

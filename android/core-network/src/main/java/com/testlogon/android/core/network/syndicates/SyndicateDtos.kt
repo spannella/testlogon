@@ -1,6 +1,8 @@
 package com.testlogon.android.core.network.syndicates
 
 import com.squareup.moshi.Json
+import com.testlogon.android.core.network.poll.PollInputDto
+import com.testlogon.android.core.network.poll.PollSnapshotDto
 
 /**
  * AND-356 - transport DTOs for the READ-ONLY syndicate overview surface (Feed / Treasury / Revenue-split).
@@ -61,6 +63,7 @@ data class SyndicatePostOut(
     @Json(name = "reaction_count") val reactionCount: Int? = null,
     @Json(name = "comment_count") val commentCount: Int? = null,
     @Json(name = "tip_count") val tipCount: Int? = null,
+    @Json(name = "poll") val poll: PollSnapshotDto? = null,
 )
 
 /**
@@ -210,6 +213,7 @@ data class SyndicatePostCreateIn(
     @Json(name = "text") val text: String,
     @Json(name = "visibility") val visibility: String = "public",
     @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "poll") val poll: PollInputDto? = null,
 )
 
 /** Batch-9 (#12) - one syndicate member row (GET ui/syndicates/{id}/members, a bare array). */

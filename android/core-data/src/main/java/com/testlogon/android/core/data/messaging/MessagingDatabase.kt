@@ -32,7 +32,7 @@ import javax.inject.Singleton
         DraftEntity::class,
         ParticipantEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -321,6 +321,13 @@ abstract class MessagingDatabase : RoomDatabase() {
             }
         }
 
+        // Arbitrary text-option poll: persist the poll snapshot JSON for kind="poll" messages.
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN pollJson TEXT")
+            }
+        }
+
     }
 }
 
@@ -352,6 +359,7 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_13_14,
             MessagingDatabase.MIGRATION_14_15,
             MessagingDatabase.MIGRATION_15_16,
+            MessagingDatabase.MIGRATION_16_17,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()

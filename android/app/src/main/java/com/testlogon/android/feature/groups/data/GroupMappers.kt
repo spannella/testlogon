@@ -9,6 +9,7 @@ import com.testlogon.android.core.network.groups.GroupCommentDto
 import com.testlogon.android.core.network.groups.GroupFeedPostDto
 import com.testlogon.android.core.network.groups.GroupMemberDto
 import com.testlogon.android.core.network.groups.UserGroupDto
+import com.testlogon.android.data.poll.toDomain
 
 /**
  * AND-355 - DTO -> domain mappers for the social-groups surface.
@@ -70,6 +71,7 @@ fun GroupFeedPostDto.toDomain(): GroupFeedPost {
         tipTotalCents = tipTotalCents ?: 0,
         commentCount = commentCount ?: 0,
         createdAt = createdAt ?: 0,
+        poll = poll?.toDomain(),
     )
 }
 

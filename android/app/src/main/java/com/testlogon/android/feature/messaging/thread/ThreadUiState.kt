@@ -46,6 +46,7 @@ data class ThreadUiState(
     val polls: Map<String, MeetingPollCardUiState> = emptyMap(),
     /** AND-136 — meeting-poll composer sheet (hidden until opened). */
     val pollComposerVisible: Boolean = false,
+    val textPollComposerVisible: Boolean = false,
     /** AND-137 — countdown picker sheet state (hidden until opened). */
     val countdownPicker: CountdownPickerState = CountdownPickerState(),
     /** AND-139 — per-message unlock phase (FIXED or LOTTERY), keyed by message key. */

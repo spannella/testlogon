@@ -572,6 +572,17 @@ interface MessagingRepository {
         draft: MeetingPollDraft,
     ): ApiResult<MeetingPoll>
 
+    /** Send an arbitrary text-option poll message (kind="poll"); inserts it into the thread. */
+    suspend fun sendArbitraryPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        multiSelect: Boolean,
+        maxSelections: Int?,
+        closesAt: Long?,
+        text: String?,
+    ): ApiResult<Unit>
+
     /** AND-136 — refresh authoritative poll state (idempotent GET) into Room. */
     suspend fun refreshMeetingPoll(conversationId: String, pollId: String): ApiResult<MeetingPoll>
 
@@ -2698,6 +2709,38 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun sendArbitraryPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        multiSelect: Boolean,
+        maxSelections: Int?,
+        closesAt: Long?,
+        text: String?,
+    ): ApiResult<Unit> = withContext(io) {
+        val create = apiCall {
+            api.createPollMessage(
+                conversationId,
+                CreatePollMessageReq(
+                    question = question,
+                    options = options,
+                    choiceMode = if (multiSelect) "multi" else "single",
+                    maxSelections = if (multiSelect) maxSelections else null,
+                    closesAt = closesAt,
+                    text = text?.takeIf { it.isNotBlank() },
+                ),
+            )
+        }
+        when (create) {
+            is ApiResult.Success -> {
+                messageDao.upsert(create.data.toDomain().toEntity(clientId = null))
+                ApiResult.Success(Unit)
+            }
+            is ApiResult.Failure -> ApiResult.Failure(create.error)
+            is ApiResult.NetworkError -> ApiResult.NetworkError(create.cause, create.isTimeout)
+        }
+    }
+
     override suspend fun refreshMeetingPoll(
         conversationId: String,
         pollId: String,
@@ -3385,6 +3428,7 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         imageWidth = image?.width,
         imageHeight = image?.height,
         galleryImagesJson = gallery?.images?.let(::galleryToJson),
+        pollJson = (media as? MessageMedia.Poll)?.poll?.let(::arbitraryPollToJson),
         videoId = video?.videoId,
         videoTitle = video?.title,
         videoThumbnailUrl = video?.thumbnailUrl,
@@ -3524,6 +3568,84 @@ internal fun waveformToJson(values: List<Float>): String =
  * newline). Kept JVM-test-safe (no org.json, which is unmocked in :app unit tests).
  */
 private const val GALLERY_RECORD_SEP = "\n"
+
+/** Codegen-adapter persistence shape for an arbitrary poll snapshot (Room cache round-trip). */
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+data class PersistedPollDto(
+    val pollId: String,
+    val question: String,
+    val owner: String?,
+    val closed: Boolean,
+    val closesAt: Long?,
+    val totalVotes: Int,
+    val questions: List<PersistedPollQuestionDto>,
+)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+data class PersistedPollQuestionDto(
+    val id: String,
+    val text: String,
+    val multiSelect: Boolean,
+    val maxSelections: Int?,
+    val options: List<PersistedPollOptionDto>,
+    val myVoteOptionIds: List<String>,
+)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+data class PersistedPollOptionDto(
+    val id: String,
+    val text: String,
+    val count: Int,
+)
+
+private val arbitraryPollAdapter by lazy { lsvMoshi.adapter(PersistedPollDto::class.java) }
+
+internal fun arbitraryPollToJson(p: com.testlogon.android.core.model.poll.ArbitraryPoll): String =
+    arbitraryPollAdapter.toJson(
+        PersistedPollDto(
+            pollId = p.pollId,
+            question = p.question,
+            owner = p.owner,
+            closed = p.closed,
+            closesAt = p.closesAtEpochSeconds,
+            totalVotes = p.totalVotes,
+            questions = p.questions.map { q ->
+                PersistedPollQuestionDto(
+                    id = q.id,
+                    text = q.text,
+                    multiSelect = q.multiSelect,
+                    maxSelections = q.maxSelections,
+                    options = q.options.map { PersistedPollOptionDto(it.id, it.text, it.count) },
+                    myVoteOptionIds = q.myVoteOptionIds,
+                )
+            },
+        ),
+    )
+
+internal fun arbitraryPollFromJson(json: String?): com.testlogon.android.core.model.poll.ArbitraryPoll? {
+    if (json.isNullOrBlank()) return null
+    val dto = runCatching { arbitraryPollAdapter.fromJson(json) }.getOrNull() ?: return null
+    return com.testlogon.android.core.model.poll.ArbitraryPoll(
+        pollId = dto.pollId,
+        question = dto.question,
+        owner = dto.owner,
+        closed = dto.closed,
+        closesAtEpochSeconds = dto.closesAt,
+        totalVotes = dto.totalVotes,
+        questions = dto.questions.map { q ->
+            com.testlogon.android.core.model.poll.ArbitraryPollQuestion(
+                id = q.id,
+                text = q.text,
+                multiSelect = q.multiSelect,
+                maxSelections = q.maxSelections,
+                options = q.options.map {
+                    com.testlogon.android.core.model.poll.ArbitraryPollOption(it.id, it.text, it.count)
+                },
+                myVoteOptionIds = q.myVoteOptionIds,
+            )
+        },
+    )
+}
 
 internal fun galleryToJson(images: List<MessageMedia.GalleryImage>): String =
     // #8/#12 — persist isVideo + posterUrl so a mixed gallery keeps each item's media kind across the
@@ -3779,6 +3901,7 @@ internal fun MessageEntity.toDomain(): Message = Message(
             stickerId = stickerId,
             collectionId = stickerCollectionId,
         )
+        "poll" -> arbitraryPollFromJson(pollJson)?.let { MessageMedia.Poll(it) } ?: MessageMedia.None
         "meeting_poll" -> MessageMedia.MeetingPoll(
             pollId = pollId.orEmpty(),
             title = pollTitle.orEmpty(),

@@ -22,6 +22,7 @@ import com.testlogon.android.core.network.syndicates.SyndicateProfileOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryLedgerEntryOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryOut
 import java.util.Locale
+import com.testlogon.android.data.poll.toDomain
 
 /**
  * AND-356 - DTO -> domain mappers for the syndicate-overview surface.
@@ -77,6 +78,7 @@ fun SyndicatePostOut.toDomain(): SyndicateFeedItem = SyndicateFeedItem(
     reactionCount = reactionCount,
     commentCount = commentCount,
     tipCount = tipCount,
+    poll = poll?.toDomain(),
 )
 
 /** Maps the treasury DTO's summary fields to the domain [TreasurySummary] (currency upper-cased). */

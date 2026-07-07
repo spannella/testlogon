@@ -36,6 +36,12 @@ object FeedApiModule {
     fun providePollApi(retrofit: Retrofit): PollApi =
         retrofit.create(PollApi::class.java)
 
+    /** Arbitrary text-option poll vote and close client (ui polls routes) shared across surfaces. */
+    @Provides
+    @Singleton
+    fun provideArbitraryPollApi(retrofit: Retrofit): com.testlogon.android.data.poll.ArbitraryPollApi =
+        retrofit.create(com.testlogon.android.data.poll.ArbitraryPollApi::class.java)
+
     /** FD1 — current-user identity (GET /ui/me) for the "Your posts" author filter. */
     @Provides
     @Singleton

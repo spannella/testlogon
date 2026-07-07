@@ -97,6 +97,7 @@ interface SyndicateRepository {
         syndicateId: String,
         text: String,
         imageUrl: String? = null,
+        poll: com.testlogon.android.core.network.poll.PollInputDto? = null,
     ): ApiResult<SyndicateFeedItem>
 
     /** Batch-9 (#12) - GET the syndicate member roster (bare array -> mapped). */
@@ -185,11 +186,16 @@ class SyndicateRepositoryImpl @Inject constructor(
         syndicateId: String,
         text: String,
         imageUrl: String?,
+        poll: com.testlogon.android.core.network.poll.PollInputDto?,
     ): ApiResult<SyndicateFeedItem> = withContext(Dispatchers.IO) {
         call {
             api.createPost(
                 syndicateId,
-                SyndicatePostCreateIn(text = text, imageUrl = imageUrl?.takeIf { it.isNotBlank() }),
+                SyndicatePostCreateIn(
+                    text = text,
+                    imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+                    poll = poll,
+                ),
             ).toDomain()
         }
     }

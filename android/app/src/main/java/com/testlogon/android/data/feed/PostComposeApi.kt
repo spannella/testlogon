@@ -51,6 +51,31 @@ data class CreatePostReq(
     // #2 (B-FEEDMEDIA) — multiple videos in one post (mixed media: images AND videos coexist). The
     // backend merges a legacy single video_id into video_ids[0]; we send the full list here.
     @Json(name = "video_ids") val videoIds: List<String>? = null,
+    // Arbitrary text-option poll: post_type="poll" + poll_data (question/options/choice_mode).
+    @Json(name = "post_type") val postType: String? = null,
+    @Json(name = "poll_data") val pollData: NewsfeedPollDataReq? = null,
+)
+
+/** Arbitrary poll create payload for POST /posts (post_type="poll"). Mirrors backend PollDataIn. */
+@JsonClass(generateAdapter = true)
+data class NewsfeedPollDataReq(
+    @Json(name = "questions") val questions: List<NewsfeedPollQuestionReq>,
+    @Json(name = "closes_at") val closesAt: Long? = null,
+    @Json(name = "anonymous") val anonymous: Boolean = true,
+    @Json(name = "allow_vote_change") val allowVoteChange: Boolean = true,
+)
+
+@JsonClass(generateAdapter = true)
+data class NewsfeedPollQuestionReq(
+    @Json(name = "text") val text: String,
+    @Json(name = "choice_mode") val choiceMode: String = "single",
+    @Json(name = "options") val options: List<NewsfeedPollOptionReq>,
+    @Json(name = "max_selections") val maxSelections: Int? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class NewsfeedPollOptionReq(
+    @Json(name = "text") val text: String,
 )
 
 @JsonClass(generateAdapter = true)
@@ -167,6 +192,8 @@ class PostComposeRepository @Inject constructor(
         // #2 — 0..n attached video ids (mixed media). First id is also sent as the legacy video_id for
         // back-compat with older servers; the new server reads video_ids.
         videoIds: List<String> = emptyList(),
+        // Arbitrary text-option poll data; when non-null the post is created as post_type="poll".
+        pollData: NewsfeedPollDataReq? = null,
     ): ApiResult<Unit> = call {
         val tz = if (publishAtEpochSeconds != null) TimeZone.getDefault().id else null
         val localStr = publishAtEpochSeconds?.let {
@@ -186,6 +213,8 @@ class PostComposeRepository @Inject constructor(
                 imageUrls = imageUrls.ifEmpty { null },
                 videoId = videoIds.firstOrNull(),
                 videoIds = videoIds.ifEmpty { null },
+                postType = if (pollData != null) "poll" else null,
+                pollData = pollData,
             ),
         )
         Unit

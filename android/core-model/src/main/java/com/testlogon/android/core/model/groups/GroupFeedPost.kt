@@ -24,4 +24,5 @@ data class GroupFeedPost(
     val tipTotalCents: Int = 0,
     val commentCount: Int = 0,
     val createdAt: Long = 0,
+    val poll: com.testlogon.android.core.model.poll.ArbitraryPoll? = null,
 )

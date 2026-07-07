@@ -98,6 +98,7 @@ class ThreadViewModel @Inject constructor(
     private val recorderFactory: VoiceRecorderFactory,
     private val playerFactory: VoicePlayerFactory,
     private val billing: BillingAuthorizer,
+    private val arbitraryPollRepository: com.testlogon.android.data.poll.ArbitraryPollRepository,
     private val draftRepository: com.testlogon.android.data.messaging.DraftRepository,
     private val typingRepository: TypingRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
@@ -1670,6 +1671,30 @@ class ThreadViewModel @Inject constructor(
 
     fun onOpenPollComposer() { _state.update { it.copy(pollComposerVisible = true) } }
     fun onDismissPollComposer() { _state.update { it.copy(pollComposerVisible = false) } }
+
+    /** Shared arbitrary-poll vote/close client for poll message bubbles. */
+    val pollVoter: com.testlogon.android.data.poll.PollVoter get() = arbitraryPollRepository
+
+    fun onOpenTextPollComposer() { _state.update { it.copy(textPollComposerVisible = true) } }
+    fun onDismissTextPollComposer() { _state.update { it.copy(textPollComposerVisible = false) } }
+
+    /** Send an arbitrary text-option poll message (distinct from the meeting-time / find-a-time pickers). */
+    fun onSendArbitraryPoll(draft: com.testlogon.android.feature.common.poll.PollDraft) {
+        if (!draft.isValid) return
+        _state.update { it.copy(textPollComposerVisible = false) }
+        viewModelScope.launch {
+            repository.sendArbitraryPoll(
+                conversationId = conversationId,
+                question = draft.question.trim(),
+                options = draft.trimmedOptions,
+                multiSelect = draft.multiSelect,
+                maxSelections = draft.trimmedOptions.size,
+                closesAt = draft.closesAtOrNull(),
+                text = null,
+            )
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
 
     fun onCreatePoll(draft: MeetingPollDraft) {
         _state.update { it.copy(pollComposerVisible = false) }
