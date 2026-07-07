@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.core.network.delegates.DelegateRoutingStore
 import com.testlogon.android.data.messaging.AssociatedEventType
 import com.testlogon.android.data.messaging.BillingAuthorizer
 import com.testlogon.android.data.messaging.BillingResult
@@ -93,6 +94,7 @@ class ThreadViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
     private val repository: MessagingRepository,
     private val authStateStore: AuthStateStore,
+    private val delegateRoutingStore: DelegateRoutingStore,
     private val eventStream: MessagingEventStream,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
     private val recorderFactory: VoiceRecorderFactory,
@@ -103,6 +105,15 @@ class ThreadViewModel @Inject constructor(
     private val typingRepository: TypingRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
 ) : ViewModel() {
+
+    /**
+     * DELEGATE-REST cosmetic C1: the acting identity for self/other alignment + receipts. In
+     * manage-as-creator (delegate) mode the principal sends AS the creator, so the CREATOR sub is
+     * treated as "self" (sent-as-creator bubbles render RIGHT-aligned); otherwise it is the
+     * logged-in user_sub. Reads the volatile creator id the interceptor also routes on.
+     */
+    private fun selfSub(): String? =
+        delegateRoutingStore.activeCreatorId ?: authStateStore.userSub.value
 
     /**
      * AND-133 — lifecycle-scoped recorder/player, created PER-VM on first use (not eagerly) and
@@ -256,7 +267,7 @@ class ThreadViewModel @Inject constructor(
      */
     private fun observePeerPhoto() {
         // Resolve MY own profile (name+photo) once for the #15 overlapping DM avatar pair.
-        authStateStore.userSub.value?.let { displayNames.resolve(it) }
+        selfSub()?.let { displayNames.resolve(it) }
         viewModelScope.launch {
             _state.collect { st ->
                 val peer = st.peerUserSub ?: return@collect
@@ -268,7 +279,7 @@ class ThreadViewModel @Inject constructor(
             // Re-resolve names so the peer title fills in even if only the name (not photo) arrives.
             displayNames.names.collect { names ->
                 val st = _state.value
-                val self = authStateStore.userSub.value
+                val self = selfSub()
                 val peerName = st.peerUserSub?.let { names[it] }
                 val myName = self?.let { names[it] }
                 if ((peerName != null && st.title.isBlank()) ||
@@ -286,7 +297,7 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             displayNames.photos.collect { photos ->
                 val st = _state.value
-                val self = authStateStore.userSub.value
+                val self = selfSub()
                 val peerPhoto = st.peerUserSub?.let { photos[it] }
                 val myPhoto = self?.let { photos[it] }
                 if ((peerPhoto != null && st.peerPhotoUrl != peerPhoto) ||
@@ -310,9 +321,9 @@ class ThreadViewModel @Inject constructor(
 
     private fun observeThread() {
         viewModelScope.launch {
-            val currentUser = authStateStore.userSub.value
+            val currentUser = selfSub()
             repository.observeThread(conversationId).collect { messages ->
-                val self = authStateStore.userSub.value ?: currentUser
+                val self = selfSub() ?: currentUser
                 // AND-140 — hidden-for-me messages are dropped from the rendered thread.
                 // MSG — a consumed view-once message is permanently hidden for the recipient (not the sender).
                 val visible = messages.filterNot { m ->
@@ -450,7 +461,7 @@ class ThreadViewModel @Inject constructor(
 
     /** AND-147 — re-derive receipts from the current messages + the latest viewer map. */
     private fun recomputeReceiptsNow() {
-        val self = authStateStore.userSub.value
+        val self = selfSub()
         // Re-derive from the domain rows the repository last emitted (mirrored in receipts keys).
         _state.update { st ->
             val updated = st.receipts.mapValues { (id, prior) ->
@@ -1639,7 +1650,7 @@ class ThreadViewModel @Inject constructor(
     private fun observePollsInThread() {
         viewModelScope.launch {
             state.collect { st ->
-                val me = authStateStore.userSub.value
+                val me = selfSub()
                 st.messages.forEach { ui ->
                     val poll = ui.media as? MessageMedia.MeetingPoll ?: return@forEach
                     if (poll.pollId.isNotBlank() && pollObservers.add(poll.pollId)) {
@@ -2332,7 +2343,7 @@ class ThreadViewModel @Inject constructor(
     private fun openPinsList() {
         updateActions { it.copy(pinned = Async.Loading, pinsSheetVisible = true) }
         viewModelScope.launch {
-            val self = authStateStore.userSub.value
+            val self = selfSub()
             when (val r = repository.pinnedMessages(conversationId)) {
                 is ApiResult.Success ->
                     updateActions { it.copy(pinned = Async.Success(r.data.map { m -> m.toUi(self) })) }
@@ -2693,7 +2704,7 @@ class ThreadViewModel @Inject constructor(
                         // excluding self-echo.
                         is MessagingEvent.Typing ->
                             if (event.conversationId == conversationId &&
-                                event.userId != authStateStore.userSub.value
+                                event.userId != selfSub()
                             ) {
                                 applyTyping(event)
                             }
@@ -2701,7 +2712,7 @@ class ThreadViewModel @Inject constructor(
                         // marker for THIS conversation, excluding self-echo (FR-3/FR-6 / AC-1).
                         is MessagingEvent.MessageViewed ->
                             if (event.conversationId == conversationId &&
-                                event.viewerId != authStateStore.userSub.value
+                                event.viewerId != selfSub()
                             ) {
                                 applyViewed(event)
                             }
@@ -2717,7 +2728,7 @@ class ThreadViewModel @Inject constructor(
      * the tested [ReceiptReducer.applyViewed]) and re-derive the seen marker without a refetch (AC-1).
      */
     private fun applyViewed(event: MessagingEvent.MessageViewed) {
-        val self = authStateStore.userSub.value
+        val self = selfSub()
         val merged = ReceiptReducer.applyViewed(viewersByMessage[event.messageId].orEmpty(), event, self)
         viewersByMessage[event.messageId] = merged
         _state.update { st ->

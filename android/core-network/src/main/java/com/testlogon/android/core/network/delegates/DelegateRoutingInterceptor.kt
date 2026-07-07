@@ -65,6 +65,23 @@ class DelegateRoutingInterceptor @Inject constructor(
             return listOf("messaging", "delegate", creator, "messages", "lottery")
         }
 
+        // messaging/events/poll  (DELEGATE REALTIME: inbound arrives live projected for the creator)
+        if (method == "GET" &&
+            segments.size == 3 &&
+            segments[0] == "messaging" && segments[1] == "events" && segments[2] == "poll"
+        ) {
+            return listOf("messaging", "delegate", creator, "events", "poll")
+        }
+
+        // messaging/messages/find-datetime/{poll_id}/{availability|close}  (poll_id-scoped)
+        if (method == "POST" &&
+            segments.size == 5 &&
+            segments[0] == "messaging" && segments[1] == "messages" && segments[2] == "find-datetime" &&
+            (segments[4] == "availability" || segments[4] == "close")
+        ) {
+            return listOf("messaging", "delegate", creator) + segments.drop(1)
+        }
+
         // messaging/conversations/{cid}/<tail...>
         if (segments.size < 4 || segments[0] != "messaging" || segments[1] != "conversations") return null
         val tail = segments.drop(3) // everything after {cid}
@@ -77,10 +94,28 @@ class DelegateRoutingInterceptor @Inject constructor(
             tail == listOf("messages", "video-share") && method == "POST" -> true
             tail == listOf("messages", "file") && method == "POST" -> true
             tail == listOf("messages", "countdown") && method == "POST" -> true
+            // remaining kinds (DELEGATE-REST): voice / voicemail / gif / sticker / poll /
+            // calendar-event / calendar-share / find-datetime.
+            tail == listOf("messages", "gif") && method == "POST" -> true
+            tail == listOf("messages", "sticker") && method == "POST" -> true
+            tail == listOf("messages", "poll") && method == "POST" -> true
+            tail == listOf("messages", "calendar-event") && method == "POST" -> true
+            tail == listOf("messages", "calendar-share") && method == "POST" -> true
+            tail == listOf("messages", "find-datetime") && method == "POST" -> true
+            tail == listOf("voice-message") && method == "POST" -> true
+            tail == listOf("voice-message", "presign") && method == "POST" -> true
+            tail == listOf("voicemail") && method == "POST" -> true
+            tail == listOf("voicemail", "presign") && method == "POST" -> true
+            // message ACTIONS: mark-read (receipts) / typing.
+            tail == listOf("read") && method == "POST" -> true
+            tail == listOf("typing") && method == "POST" -> true
             // messages/{mid}/reactions
             tail.size == 3 && tail[0] == "messages" && tail[2] == "reactions" && method == "POST" -> true
-            // messages/{mid} (edit) - PATCH only; DELETE (delete/revoke) has NO delegate route.
-            tail.size == 2 && tail[0] == "messages" && method == "PATCH" -> true
+            // messages/{mid}/{pin|hide}  (POST set, DELETE unset)
+            tail.size == 3 && tail[0] == "messages" && (tail[2] == "pin" || tail[2] == "hide") &&
+                (method == "POST" || method == "DELETE") -> true
+            // messages/{mid}: PATCH = edit, DELETE = delete-for-me (NOT .../revoke, which has no route).
+            tail.size == 2 && tail[0] == "messages" && (method == "PATCH" || method == "DELETE") -> true
             else -> false
         }
         if (!supported) return null
