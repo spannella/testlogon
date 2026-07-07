@@ -579,10 +579,13 @@ data class MessageOptions(
     val countdownTitle: String? = null,
     val countdownRevealText: String? = null,
     val countdownRevealImage: com.testlogon.android.data.messaging.LotteryImageRef? = null,
+    /** TIP-106 - attach a tip (cents) to the next text message on send; null = no tip. DM-only, and
+     *  mutually exclusive with [lockPriceCents] (mirrors the backend 400). */
+    val tipAmountCents: Long? = null,
 ) {
     val isActive: Boolean
         get() = encrypted || viewOnce || lockPriceCents != null || scheduledAtEpochSeconds != null ||
-            expiresInSeconds != null || countdownTargetEpochSeconds != null
+            expiresInSeconds != null || countdownTargetEpochSeconds != null || tipAmountCents != null
 
     /** Short summary chip text, or null when no option is set. */
     val summary: String?
@@ -594,6 +597,7 @@ data class MessageOptions(
                 if (scheduledAtEpochSeconds != null) add("Scheduled")
                 expiresInSeconds?.let { add("Expires in " + expiryLabel(it)) }
                 if (countdownTargetEpochSeconds != null) add("Countdown")
+                tipAmountCents?.let { add("Tip $" + "%.2f".format(it / 100.0)) }
             }
             return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
         }

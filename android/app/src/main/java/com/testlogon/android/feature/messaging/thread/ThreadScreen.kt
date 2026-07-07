@@ -475,8 +475,10 @@ fun ThreadRoute(
         MessageOptionsSheet(
             options = state.composer.options,
             nowSeconds = rememberNowTicker(),
+            isDm = state.isDm,
             onViewOnceChange = viewModel::setViewOnce,
             onLockPriceChange = viewModel::setLockPrice,
+            onAttachTipChange = viewModel::setAttachTip,
             onScheduleChange = viewModel::setScheduledAt,
             onScheduleTzChange = viewModel::setScheduledTimeZone,
             onExpiresChange = viewModel::setExpiresIn,
@@ -653,8 +655,10 @@ fun ThreadRoute(
 private fun MessageOptionsSheet(
     options: MessageOptions,
     nowSeconds: Long,
+    isDm: Boolean,
     onViewOnceChange: (Boolean) -> Unit,
     onLockPriceChange: (String) -> Unit,
+    onAttachTipChange: (String) -> Unit,
     onScheduleChange: (Long?) -> Unit,
     onScheduleTzChange: (String) -> Unit,
     onExpiresChange: (Long?) -> Unit,
@@ -664,6 +668,9 @@ private fun MessageOptionsSheet(
 ) {
     var lockInput by remember {
         mutableStateOf(options.lockPriceCents?.let { "%.2f".format(it / 100.0) } ?: "")
+    }
+    var tipInput by remember {
+        mutableStateOf(options.tipAmountCents?.let { "%.2f".format(it / 100.0) } ?: "")
     }
     ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("thread_options_sheet").semantics { testTagsAsResourceId = true }) {
         Column(
@@ -730,6 +737,27 @@ private fun MessageOptionsSheet(
                 placeholder = { Text("e.g. 4.99") },
                 singleLine = true,
             )
+            // TIP-106 - attach a tip on send (DM only; not combinable with a lock price, mirroring the
+            // backend 400). The payment method is resolved at send time via the BillingAuthorizer.
+            if (isDm) {
+                Text("Attach a tip", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 12.dp))
+                OutlinedTextField(
+                    value = tipInput,
+                    onValueChange = { tipInput = it; onAttachTipChange(it) },
+                    enabled = options.lockPriceCents == null,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("thread_option_tip"),
+                    label = { Text("Tip amount (USD)") },
+                    placeholder = { Text("e.g. 5.00") },
+                    singleLine = true,
+                )
+                if (options.lockPriceCents != null) {
+                    Text(
+                        "Remove the unlock price to attach a tip",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             // Scheduled send — arbitrary date + time + timezone (#21)
             Text("Schedule send", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 12.dp))
             com.testlogon.android.feature.common.TimeZonePicker(

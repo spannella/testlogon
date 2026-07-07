@@ -579,6 +579,9 @@ class ThreadViewModel @Inject constructor(
         val clientId = UUID.randomUUID().toString()
         val replyToId = composer.replyingTo?.messageId
         val opts = composer.options
+        // TIP-106 - attached tips are DM-only (a group send requires an explicit recipient the composer
+        // does not collect; the backend 400s otherwise).
+        val isDm = _state.value.isDm
         // AND-146 — sending the message ends the typing signal.
         typingController.onInput(TypingInput.Sent)
         // Clear the composer + the persisted draft immediately (AND-141 FR-4).
@@ -598,6 +601,24 @@ class ThreadViewModel @Inject constructor(
                     replyToMessageId = replyToId,
                 )
             } else {
+                // TIP-106 - resolve a payment method for an attached tip BEFORE sending (money-path).
+                // DM-only and not combinable with a lock price. If no PM can be authorized, we send the
+                // message plain and surface a transient hint rather than dropping the message.
+                var attachTipCents: Long? = null
+                var attachTipPm: String? = null
+                val wantTip = opts.tipAmountCents?.takeIf { it > 0 && opts.lockPriceCents == null && isDm }
+                if (wantTip != null) {
+                    when (val auth = billing.authorize(wantTip, TIP_CURRENCY)) {
+                        is BillingResult.Authorized -> {
+                            attachTipCents = wantTip
+                            attachTipPm = auth.paymentMethodId
+                        }
+                        is BillingResult.Declined ->
+                            _state.update { it.copy(transientMessage = "Tip declined — sent without a tip") }
+                        else ->
+                            _state.update { it.copy(transientMessage = "Add a payment method to attach a tip") }
+                    }
+                }
                 repository.sendOutbox(
                     conversationId, clientId, body, replyToId,
                     viewOnce = opts.viewOnce,
@@ -610,6 +631,8 @@ class ThreadViewModel @Inject constructor(
                     countdownTitle = opts.countdownTitle,
                     countdownRevealText = opts.countdownRevealText,
                     countdownRevealImage = opts.countdownRevealImage,
+                    tipAmountCents = attachTipCents,
+                    tipPaymentMethodId = attachTipPm,
                 )
             }
             // AND-141 — clear the draft on a successful send.
@@ -655,6 +678,25 @@ class ThreadViewModel @Inject constructor(
                     options = it.composer.options.copy(
                         lockPriceCents = cents,
                         lockDescription = if (cents != null) "Unlock to view" else null,
+                        // TIP-106 - lock and tip are mutually exclusive (backend 400); setting a lock clears the tip.
+                        tipAmountCents = if (cents != null) null else it.composer.options.tipAmountCents,
+                    ),
+                ),
+            )
+        }
+    }
+
+    /** TIP-106 - attach/update a tip (dollars) on the next text send; setting a tip clears any lock. */
+    fun setAttachTip(dollars: String) {
+        val cents = parseDollarsToCents(dollars)
+        _state.update {
+            val opts = it.composer.options
+            it.copy(
+                composer = it.composer.copy(
+                    options = opts.copy(
+                        tipAmountCents = cents,
+                        lockPriceCents = if (cents != null) null else opts.lockPriceCents,
+                        lockDescription = if (cents != null) null else opts.lockDescription,
                     ),
                 ),
             )

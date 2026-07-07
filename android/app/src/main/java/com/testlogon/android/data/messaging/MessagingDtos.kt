@@ -262,6 +262,12 @@ data class SendTextMessageReq(
     @Json(name = "countdown_title") val countdownTitle: String? = null,
     @Json(name = "countdown_reveal_text") val countdownRevealText: String? = null,
     @Json(name = "countdown_reveal_image") val countdownRevealImage: CountdownRevealImageReq? = null,
+    // TIP-106 - attach a tip to this message on send (money-path via charge_tip on the backend).
+    // tip_recipient_id is required only for a GROUP attached tip (backend 400 otherwise); a DM
+    // resolves the other participant server-side. Not combinable with lock_price_cents (backend 400).
+    @Json(name = "tip_amount_cents") val tipAmountCents: Long? = null,
+    @Json(name = "tip_payment_method_id") val tipPaymentMethodId: String? = null,
+    @Json(name = "tip_recipient_id") val tipRecipientId: String? = null,
 )
 
 /**

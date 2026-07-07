@@ -70,6 +70,14 @@ interface BillingApi {
     @DELETE("ui/billing/payment-methods/{payment_method_id}")
     suspend fun deletePaymentMethod(@Path("payment_method_id") paymentMethodId: String): OkRespDto
 
+    /** TIP-102 - the per-user tip-default payment method (distinct from the general default). */
+    @GET("ui/billing/payment-methods/tip-default")
+    suspend fun getTipDefault(): TipDefaultDto
+
+    /** TIP-102/104 - set the tip-default PM (same body shape as set-default). Returns OkResp. */
+    @POST("ui/billing/payment-methods/tip-default")
+    suspend fun setTipDefault(@Body body: SetDefaultReqDto): OkRespDto
+
     @POST("ui/billing/checkout_session")
     suspend fun createCheckoutSession(@Body body: CheckoutSessionRequestDto): CheckoutSessionDto
 
@@ -204,6 +212,12 @@ data class CheckoutSessionDto(
 @JsonClass(generateAdapter = true)
 data class SetDefaultReqDto(
     @Json(name = "payment_method_id") val paymentMethodId: String,
+)
+
+/** TIP-102 - GET tip-default response: the tip-default PM id (null when unset). */
+@JsonClass(generateAdapter = true)
+data class TipDefaultDto(
+    @Json(name = "tip_default_payment_method_id") val tipDefaultPaymentMethodId: String? = null,
 )
 
 /** OkResp (types.ts L2840). Generic mutation envelope. */

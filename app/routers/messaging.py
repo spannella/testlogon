@@ -1871,6 +1871,7 @@ class SendTextMessageIn(BaseModel):
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)  # e.g. 500 = $5.00
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)  # 10s–7d
     view_once: bool = False
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
@@ -1956,6 +1957,7 @@ class CreateImageMessageIn(BaseModel):
     lock_description: Optional[str] = Field(default=None, max_length=200)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
     encryption: Optional[MessageEncryptionEnvelope] = None
     # Blurred preview for locked images — small pixelated thumbnail shown before unlock
@@ -2023,6 +2025,7 @@ class CreateGalleryMessageIn(BaseModel):
     send_at: Optional[int] = None
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
 
     @model_validator(mode="after")
     def validate_gallery(self):
@@ -5634,6 +5637,55 @@ def _resolve_tip_recipient(conversation_id: str, sender_id: str) -> Optional[str
     return None  # Group chat or error
 
 
+def _resolve_attached_tip_recipient(
+    conversation_id: str, sender_id: str, explicit_recipient_id: Optional[str] = None
+) -> str:
+    """TIP-105: resolve the recipient for an attached-on-SEND tip.
+
+    DM    -> the other participant (unchanged behavior).
+    Group -> REJECT with 400 tip_not_allowed_in_group UNLESS an explicit
+             tip_recipient_id names a DISTINCT group participant, then credit them.
+
+    Never returns None: it returns a valid non-self recipient or raises. An
+    attached-on-send tip that credited the sender would be a self-tip, so a group
+    tip with no (valid) explicit recipient is rejected rather than silently dropped
+    (the pre-TIP-105 behavior stored the tip but never charged/credited). Post-hoc
+    tipping of someone else's group message is unaffected (it credits the message
+    author directly and does not use this helper).
+    """
+    try:
+        resp = tbl_parts.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(conversation_id),
+            Limit=50,
+        )
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+    other_ids = [
+        p.get("user_id")
+        for p in participants
+        if p.get("user_id") and p.get("user_id") != sender_id
+    ]
+    if explicit_recipient_id:
+        if explicit_recipient_id == sender_id:
+            raise HTTPException(400, {"code": "cannot_tip_self", "message": "Cannot tip yourself."})
+        if explicit_recipient_id not in other_ids:
+            raise HTTPException(
+                400,
+                {"code": "tip_recipient_not_in_conversation",
+                 "message": "tip_recipient_id must name a participant of this conversation."},
+            )
+        return explicit_recipient_id
+    if len(other_ids) == 1:
+        return other_ids[0]  # DM: the unambiguous other participant
+    raise HTTPException(
+        400,
+        {"code": "tip_not_allowed_in_group",
+         "message": "Attached tips in a group require an explicit tip_recipient_id naming a participant."},
+    )
+
+
 def _raise_encrypted_edit_unsupported() -> None:
     raise HTTPException(
         status_code=409,
@@ -8132,7 +8184,8 @@ def send_text_message(
             # Write billing immediately only for messages delivered right now.
             # Scheduled messages defer billing to _deliver_scheduled_message so
             # that cancelling a scheduled tipped message does not charge the sender.
-            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            recipient_id = _resolve_attached_tip_recipient(conversation_id, user_id, inp.tip_recipient_id)
+            item["tip_recipient_id"] = recipient_id
             if recipient_id:
                 from app.services.tips import charge_tip
                 charge_tip(
@@ -8433,7 +8486,8 @@ def create_image_message(
         if not is_scheduled_img:
             # Write billing immediately only for messages delivered right now.
             # Scheduled messages defer billing to _deliver_scheduled_message.
-            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            recipient_id = _resolve_attached_tip_recipient(conversation_id, user_id, inp.tip_recipient_id)
+            item["tip_recipient_id"] = recipient_id
             if recipient_id:
                 from app.services.tips import charge_tip
                 charge_tip(
@@ -9047,7 +9101,8 @@ def create_gallery_message(
         if inp.tip_payment_method_id:
             item["tip_payment_method_id"] = inp.tip_payment_method_id
         if not is_scheduled_gal:
-            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            recipient_id = _resolve_attached_tip_recipient(conversation_id, user_id, inp.tip_recipient_id)
+            item["tip_recipient_id"] = recipient_id
             if recipient_id:
                 from app.services.tips import charge_tip
                 charge_tip(

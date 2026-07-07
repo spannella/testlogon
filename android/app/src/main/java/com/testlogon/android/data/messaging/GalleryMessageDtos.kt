@@ -35,6 +35,12 @@ data class CreateGalleryMessageReq(
     @Json(name = "text") val text: String? = null,
     @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
     @Json(name = "send_at") val sendAt: Long? = null,
+    // TIP-106 - attach a tip to this message on send (money-path via charge_tip on the backend).
+    // tip_recipient_id is required only for a GROUP attached tip (backend 400 otherwise); a DM
+    // resolves the other participant server-side. Not combinable with lock_price_cents (backend 400).
+    @Json(name = "tip_amount_cents") val tipAmountCents: Long? = null,
+    @Json(name = "tip_payment_method_id") val tipPaymentMethodId: String? = null,
+    @Json(name = "tip_recipient_id") val tipRecipientId: String? = null,
 )
 
 /** One item projected back on a kind="gallery" MessageOut (url is server-relative in dev). */

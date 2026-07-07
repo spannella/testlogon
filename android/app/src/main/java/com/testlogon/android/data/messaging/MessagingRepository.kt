@@ -95,6 +95,10 @@ interface MessagingRepository {
         countdownTitle: String? = null,
         countdownRevealText: String? = null,
         countdownRevealImage: LotteryImageRef? = null,
+        // TIP-106 - attach a tip to this text message on send (DM resolves recipient server-side).
+        tipAmountCents: Long? = null,
+        tipPaymentMethodId: String? = null,
+        tipRecipientId: String? = null,
     ): ApiResult<Message>
 
     /** Apply an inbound realtime new-message event to the caches. */
@@ -977,6 +981,9 @@ class MessagingRepositoryImpl @Inject constructor(
         countdownTitle: String?,
         countdownRevealText: String?,
         countdownRevealImage: LotteryImageRef?,
+        tipAmountCents: Long?,
+        tipPaymentMethodId: String?,
+        tipRecipientId: String?,
     ): ApiResult<Message> = withContext(io) {
         val req = SendTextMessageReq(
             text = text,
@@ -999,6 +1006,10 @@ class MessagingRepositoryImpl @Inject constructor(
                     height = it.height,
                 )
             },
+            // TIP-106 - a blank payment id is dropped so the dev backend mock-charges; a real id POSTs.
+            tipAmountCents = tipAmountCents,
+            tipPaymentMethodId = tipPaymentMethodId?.takeIf { it.isNotBlank() },
+            tipRecipientId = tipRecipientId,
         )
         when (val result = apiCall { api.sendMessage(conversationId, req) }) {
             is ApiResult.Success -> {

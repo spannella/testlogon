@@ -72,6 +72,8 @@ object PaymentMethodsTestTags {
     const val EMPTY = "payment_methods_empty"
     const val ERROR = "payment_methods_error"
     const val ROW_SPINNER = "payment_methods_row_spinner"
+    const val SET_TIP_DEFAULT = "payment_methods_set_tip_default"
+    const val TIP_DEFAULT_BADGE = "payment_methods_tip_default_badge"
 }
 
 /** AND-224 — route-level Payment Methods entry, reached from the More hub. */
@@ -109,12 +111,14 @@ fun PaymentMethodsRoute(
 
     val removedMsg = stringResource(R.string.payment_methods_removed)
     val defaultMsg = stringResource(R.string.payment_methods_default_set)
+    val tipDefaultMsg = "Tip default updated"
     val resources = LocalContext.current.resources
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             val message = when (event) {
                 is PaymentMethodsEvent.Removed -> removedMsg
                 is PaymentMethodsEvent.DefaultSet -> defaultMsg
+                is PaymentMethodsEvent.TipDefaultSet -> tipDefaultMsg
                 is PaymentMethodsEvent.Failure -> event.message.resolve(resources)
             }
             snackbarHostState.showSnackbar(message)
@@ -126,6 +130,7 @@ fun PaymentMethodsRoute(
         snackbarHostState = snackbarHostState,
         onAdd = onAddCard,
         onSetDefault = viewModel::setDefault,
+        onSetTipDefault = viewModel::setTipDefault,
         onRemove = viewModel::remove,
         onRetry = viewModel::retry,
         onBack = onBack,
@@ -140,6 +145,7 @@ fun PaymentMethodsScreen(
     snackbarHostState: SnackbarHostState,
     onAdd: () -> Unit,
     onSetDefault: (String) -> Unit,
+    onSetTipDefault: (String) -> Unit,
     onRemove: (String) -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
@@ -185,8 +191,10 @@ fun PaymentMethodsScreen(
                         PaymentMethodsList(
                             methods = load.methods,
                             rowInFlight = state.rowInFlight,
+                            tipDefaultId = state.tipDefaultId,
                             onAdd = onAdd,
                             onSetDefault = onSetDefault,
+                            onSetTipDefault = onSetTipDefault,
                             onRemove = { pendingRemoval = it },
                         )
                     }
@@ -218,8 +226,10 @@ fun PaymentMethodsScreen(
 private fun PaymentMethodsList(
     methods: List<PaymentMethod>,
     rowInFlight: Set<String>,
+    tipDefaultId: String?,
     onAdd: () -> Unit,
     onSetDefault: (String) -> Unit,
+    onSetTipDefault: (String) -> Unit,
     onRemove: (PaymentMethod) -> Unit,
 ) {
     LazyColumn(
@@ -229,7 +239,9 @@ private fun PaymentMethodsList(
             PaymentMethodRow(
                 method = method,
                 inFlight = method.id in rowInFlight,
+                isTipDefault = method.id == tipDefaultId,
                 onSetDefault = { onSetDefault(method.id) },
+                onSetTipDefault = { onSetTipDefault(method.id) },
                 onRemove = { onRemove(method) },
             )
             HorizontalDivider()
@@ -250,7 +262,9 @@ private fun PaymentMethodsList(
 private fun PaymentMethodRow(
     method: PaymentMethod,
     inFlight: Boolean,
+    isTipDefault: Boolean,
     onSetDefault: () -> Unit,
+    onSetTipDefault: () -> Unit,
     onRemove: () -> Unit,
 ) {
     val label = method.displayLabel()
@@ -289,15 +303,32 @@ private fun PaymentMethodRow(
             CircularProgressIndicator(
                 modifier = Modifier.size(24.dp).testTag(PaymentMethodsTestTags.ROW_SPINNER),
             )
-        } else if (method.isDefault) {
-            AssistChip(
-                onClick = {},
-                enabled = false,
-                label = { Text(stringResource(R.string.payment_methods_default_badge)) },
-            )
         } else {
-            TextButton(onClick = onSetDefault, modifier = Modifier.testTag(PaymentMethodsTestTags.SET_DEFAULT)) {
-                Text(stringResource(R.string.payment_methods_set_default))
+            Column(horizontalAlignment = Alignment.End) {
+                if (method.isDefault) {
+                    AssistChip(
+                        onClick = {},
+                        enabled = false,
+                        label = { Text(stringResource(R.string.payment_methods_default_badge)) },
+                    )
+                } else {
+                    TextButton(onClick = onSetDefault, modifier = Modifier.testTag(PaymentMethodsTestTags.SET_DEFAULT)) {
+                        Text(stringResource(R.string.payment_methods_set_default))
+                    }
+                }
+                // TIP-104 - mark this method as the tip default (used for tips when no explicit PM is given).
+                if (isTipDefault) {
+                    AssistChip(
+                        onClick = {},
+                        enabled = false,
+                        label = { Text("Tip default") },
+                        modifier = Modifier.testTag(PaymentMethodsTestTags.TIP_DEFAULT_BADGE),
+                    )
+                } else {
+                    TextButton(onClick = onSetTipDefault, modifier = Modifier.testTag(PaymentMethodsTestTags.SET_TIP_DEFAULT)) {
+                        Text("Set tip default")
+                    }
+                }
             }
         }
         Spacer(Modifier.width(4.dp))

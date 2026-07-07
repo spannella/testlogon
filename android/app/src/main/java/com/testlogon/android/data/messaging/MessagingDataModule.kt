@@ -90,10 +90,11 @@ abstract class MessagingDataModule {
     abstract fun bindAttachmentDownloader(impl: DefaultAttachmentDownloader): AttachmentDownloader
 
     /**
-     * AND-139 — billing seam. Defaults to [StubBillingAuthorizer] (NotConfigured, no faked charge)
-     * until AND-031 supplies a real vendor-backed implementation; swap this @Binds then.
+     * TIP-103 (AND-031/AND-139) — billing seam. Bound to [RealBillingAuthorizer], which in a RELEASE
+     * build resolves a real payment_method_id (tip-default -> general default -> first saved method)
+     * so tips POST for real; in DEBUG it keeps the dev/demo blank-PM mock-charge path.
      */
     @Binds
     @Singleton
-    abstract fun bindBillingAuthorizer(impl: StubBillingAuthorizer): BillingAuthorizer
+    abstract fun bindBillingAuthorizer(impl: RealBillingAuthorizer): BillingAuthorizer
 }

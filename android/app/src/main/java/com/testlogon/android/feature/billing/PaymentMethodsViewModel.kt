@@ -39,6 +39,8 @@ data class PaymentMethodsUiState(
     val load: PaymentMethodsLoadState = PaymentMethodsLoadState.Loading,
     val rowInFlight: Set<String> = emptySet(),
     val isRefreshing: Boolean = false,
+    /** TIP-104 - the id of the method marked as the tip default (null = none), for the row badge. */
+    val tipDefaultId: String? = null,
 ) {
     val methods: List<PaymentMethod> get() = (load as? PaymentMethodsLoadState.Loaded)?.methods.orEmpty()
     val isEmpty: Boolean get() = load is PaymentMethodsLoadState.Loaded && methods.isEmpty()
@@ -48,6 +50,9 @@ data class PaymentMethodsUiState(
 sealed interface PaymentMethodsEvent {
     data object Removed : PaymentMethodsEvent
     data object DefaultSet : PaymentMethodsEvent
+
+    /** TIP-104 - a card was marked as the tip default. */
+    data object TipDefaultSet : PaymentMethodsEvent
 
     /** AND-232 — failure snackbar carries a mapped, localizable [BillingError] message. */
     data class Failure(val error: BillingError) : PaymentMethodsEvent {
@@ -84,6 +89,15 @@ class PaymentMethodsViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(load = repository.getPaymentMethods().toLoadState()) }
         }
+        loadTipDefault()
+    }
+
+    /** TIP-104 - the tip-default id is a separate read; a failure is non-fatal (no badge shown). */
+    private fun loadTipDefault() {
+        viewModelScope.launch {
+            val r = repository.getTipDefaultPaymentMethodId()
+            if (r is ApiResult.Success) _state.update { it.copy(tipDefaultId = r.data) }
+        }
     }
 
     fun retry() = load()
@@ -91,6 +105,7 @@ class PaymentMethodsViewModel @Inject constructor(
     fun refresh() {
         if (_state.value.isRefreshing) return
         _state.update { it.copy(isRefreshing = true) }
+        loadTipDefault()
         viewModelScope.launch {
             val result = repository.getPaymentMethods()
             _state.update {
@@ -140,6 +155,27 @@ class PaymentMethodsViewModel @Inject constructor(
                     }
                     _events.send(PaymentMethodsEvent.Failure(errorMapper.map(r)))
                 }
+            }
+        }
+    }
+
+    /** TIP-104 - mark [id] as the tip default; row-locked, reconciled to the re-fetched list. */
+    fun setTipDefault(id: String) {
+        if (id in _state.value.rowInFlight) return
+        _state.update { it.copy(rowInFlight = it.rowInFlight + id) }
+        viewModelScope.launch {
+            when (val r = repository.setTipDefaultPaymentMethod(id)) {
+                is ApiResult.Success -> {
+                    _state.update {
+                        it.copy(
+                            load = PaymentMethodsLoadState.Loaded(r.data),
+                            tipDefaultId = id,
+                            rowInFlight = it.rowInFlight - id,
+                        )
+                    }
+                    _events.send(PaymentMethodsEvent.TipDefaultSet)
+                }
+                else -> failRow(id, errorMapper.map(r))
             }
         }
     }

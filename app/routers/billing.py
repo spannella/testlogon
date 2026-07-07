@@ -1027,6 +1027,37 @@ def set_default(body: SetDefaultReq, req: Request = None, ctx=Depends(require_ui
     return {"ok": True}
 
 
+
+def set_tip_default_pm(user_id: str, pm_id: Optional[str]) -> None:
+    """TIP-102: per-user tip-routing default PM, distinct from the subscription
+    default_payment_method_id. charge_tip.resolve_tip_payment_method falls back to
+    this BEFORE the general default. App-side routing preference only -- it does NOT
+    change the Stripe customer's invoice default."""
+    pk = user_pk(user_id)
+    if not ddb_get(T.billing, pk, "BILLING"):
+        ddb_put(T.billing, {"pk": pk, "sk": "BILLING", "autopay_enabled": False, "currency": "usd", "default_payment_method_id": None, "tip_default_payment_method_id": pm_id})
+    else:
+        ddb_update(T.billing, pk, "BILLING", "SET tip_default_payment_method_id = :pm", {":pm": pm_id})
+
+
+@dual_route("GET", "/billing/payment-methods/tip-default")
+def get_tip_default(ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Optional[str]]:
+    user_id = _billing_read_user_sub(ctx, user_sub, actor)
+    billing = ddb_get(T.billing, user_pk(user_id), "BILLING") or {}
+    return {"tip_default_payment_method_id": billing.get("tip_default_payment_method_id")}
+
+
+@dual_route("POST", "/billing/payment-methods/tip-default")
+def set_tip_default(body: SetDefaultReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, bool]:
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+    pk = user_pk(user_id)
+    if not ddb_get(T.billing, pk, pm_sk(body.payment_method_id)):
+        raise HTTPException(404, "Payment method not found")
+    set_tip_default_pm(user_id, body.payment_method_id)
+    audit_event("billing_tip_default_set", user_id, req, outcome="success", payment_method_id=body.payment_method_id, **admin_tags)
+    return {"ok": True}
+
+
 @dual_route("DELETE", "/billing/payment-methods/{payment_method_id}")
 def remove_payment_method(payment_method_id: str, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, bool]:
     ensure_stripe_configured()
