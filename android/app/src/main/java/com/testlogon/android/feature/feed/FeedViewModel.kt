@@ -9,6 +9,8 @@ import androidx.paging.cachedIn
 import androidx.paging.filter
 import androidx.paging.map
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.ads.AdEvent
+import com.testlogon.android.data.ads.AdTrackRepository
 import com.testlogon.android.data.bookmarks.FeedBookmarkRepository
 import com.testlogon.android.data.feed.FeedPost
 import com.testlogon.android.data.feed.FeedRefreshBus
@@ -66,6 +68,7 @@ class FeedViewModel @Inject constructor(
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     private val currentUser: CurrentUserRepository,
     private val feedRefreshBus: FeedRefreshBus,
+    private val adTracker: AdTrackRepository,
 ) : ViewModel() {
 
     /** author id (email/user_sub) -> display name, resolved lazily for visible posts. */
@@ -360,6 +363,26 @@ class FeedViewModel @Inject constructor(
                 else -> Unit // best-effort refresh; the card reveals locally from the snapshot it holds
             }
         }
+    }
+
+    // ---- ADV-106: sponsored-unit impression / click tracking ----
+
+    // Impression is fired at most once per served unit (keyed on the per-serve ad_click_id, falling back
+    // to the creative id) so a scroll-away/return or a recomposition never double-counts.
+    private val impressedAds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Fire an impression the first time a sponsored card becomes visible. Best-effort (never throws). */
+    fun onSponsoredImpression(post: FeedPost) {
+        val ad = post.sponsored ?: return
+        val key = ad.adClickId?.takeIf { it.isNotBlank() } ?: ad.creativeId
+        if (!impressedAds.add(key)) return
+        viewModelScope.launch { adTracker.track(AdEvent.IMPRESSION, ad) }
+    }
+
+    /** Fire a click when the viewer taps the sponsored card / its CTA. Best-effort (never throws). */
+    fun onSponsoredClick(post: FeedPost) {
+        val ad = post.sponsored ?: return
+        viewModelScope.launch { adTracker.track(AdEvent.CLICK, ad) }
     }
 
     private companion object {

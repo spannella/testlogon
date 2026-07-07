@@ -44,9 +44,36 @@ data class FeedPost(
      * unlock price in cents (null = locked with no fixed price, e.g. a tip-lottery).
      */
     val authorLock: AuthorLock? = null,
+    /**
+     * ADV-105 — non-null when this row is a server-injected SPONSORED (paid) unit (newsfeed sponsored
+     * path, ADV-104). Carries the ad label/CTA + the serving+attribution ids used to render the
+     * distinct Sponsored card and to fire impression/click tracking (ADV-106). Organic posts leave it
+     * null. A sponsored unit is never locked, so [body]/[media] populate normally.
+     */
+    val sponsored: SponsoredInfo? = null,
 ) {
     val isLocked: Boolean get() = paywall is Paywall.Locked
 }
+
+/**
+ * ADV-105 — the paid-unit payload for a sponsored feed row. [creativeId]/[campaignId]/[accountId]
+ * identify the ad for billing; [adClickId] is the per-serve CPA id (ADV-103). [surface]/[slotType]/
+ * [creatorId]/[contentId] round-trip back to /ui/ads/track unchanged (ADV-106).
+ */
+data class SponsoredInfo(
+    val label: String,
+    val headline: String?,
+    val ctaText: String?,
+    val ctaUrl: String?,
+    val adClickId: String?,
+    val creativeId: String,
+    val campaignId: String,
+    val accountId: String,
+    val surface: String,
+    val slotType: String,
+    val creatorId: String,
+    val contentId: String,
+)
 
 /** #3 — raw lock info used to badge a locked post on its AUTHOR's own (un-redacted) view. */
 data class AuthorLock(
@@ -136,6 +163,33 @@ internal fun PostDto.toDomain(): FeedPost {
         } else {
             null
         },
+        sponsored = toSponsored(),
+    )
+}
+
+/**
+ * ADV-105 — build [SponsoredInfo] when the wire post is a sponsored unit. Requires the creative + the
+ * campaign id (a sponsored row without them can't be rendered/tracked, so it degrades to a plain post).
+ * surface/slot_type/creator_id/content_id fall back to the newsfeed sponsored-slot constants so the
+ * track call is always well-formed even if an older server omits them.
+ */
+internal fun PostDto.toSponsored(): SponsoredInfo? {
+    if (!isSponsored) return null
+    val creative = creativeId?.takeIf { it.isNotBlank() } ?: return null
+    val campaign = campaignId?.takeIf { it.isNotBlank() } ?: return null
+    return SponsoredInfo(
+        label = sponsorLabel?.takeIf { it.isNotBlank() } ?: "Sponsored",
+        headline = headline?.takeIf { it.isNotBlank() },
+        ctaText = ctaText?.takeIf { it.isNotBlank() },
+        ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
+        adClickId = adClickId?.takeIf { it.isNotBlank() },
+        creativeId = creative,
+        campaignId = campaign,
+        accountId = accountId?.takeIf { it.isNotBlank() } ?: "",
+        surface = surface?.takeIf { it.isNotBlank() } ?: "newsfeed",
+        slotType = slotType?.takeIf { it.isNotBlank() } ?: "sponsored_post",
+        creatorId = creatorId?.takeIf { it.isNotBlank() } ?: "platform",
+        contentId = contentId?.takeIf { it.isNotBlank() } ?: postId,
     )
 }
 

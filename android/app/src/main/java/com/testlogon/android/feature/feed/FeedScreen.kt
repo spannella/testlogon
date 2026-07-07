@@ -214,6 +214,12 @@ fun FeedRoute(
             if (!ok) coroutineScope.launch { snackbarHostState.showSnackbar(shareNoTargetLabel) }
         },
         onTip = { post -> tipViewModel.open(post.id) },
+        // ADV-106 — sponsored-unit tracking. Impression on first-visible; click also opens the ad's CTA url.
+        onSponsoredImpression = viewModel::onSponsoredImpression,
+        onSponsoredClick = { post ->
+            viewModel.onSponsoredClick(post)
+            post.sponsored?.ctaUrl?.let { onLinkClick(it) }
+        },
         onEnsurePoll = viewModel::ensurePollState,
         authorNames = authorNames,
         authorPhotos = authorPhotos,
@@ -265,6 +271,8 @@ fun FeedScreen(
     onToggleBookmark: (FeedPost) -> Unit = {},
     onShare: (FeedPost) -> Unit = {},
     onTip: (FeedPost) -> Unit = {},
+    onSponsoredImpression: (FeedPost) -> Unit = {},
+    onSponsoredClick: (FeedPost) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit = {},
     authorNames: Map<String, String> = emptyMap(),
     authorPhotos: Map<String, String> = emptyMap(),
@@ -359,6 +367,8 @@ fun FeedScreen(
                         onToggleBookmark = onToggleBookmark,
                         onShare = onShare,
                         onTip = onTip,
+                        onSponsoredImpression = onSponsoredImpression,
+                        onSponsoredClick = onSponsoredClick,
                         onEnsurePoll = onEnsurePoll,
                         authorNames = authorNames,
                         authorPhotos = authorPhotos,
@@ -444,6 +454,8 @@ private fun FeedList(
     onToggleBookmark: (FeedPost) -> Unit,
     onShare: (FeedPost) -> Unit,
     onTip: (FeedPost) -> Unit,
+    onSponsoredImpression: (FeedPost) -> Unit = {},
+    onSponsoredClick: (FeedPost) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit,
     authorNames: Map<String, String>,
     authorPhotos: Map<String, String>,
@@ -482,6 +494,8 @@ private fun FeedList(
                     onToggleBookmark = onToggleBookmark,
                     onShare = onShare,
                     onTip = onTip,
+                    onSponsoredImpression = onSponsoredImpression,
+                    onSponsoredClick = onSponsoredClick,
                     showTip = !(currentUserSub != null && item.authorId == currentUserSub),
                     // #3 — show the priced "Locked · $X" badge on the viewer's own locked posts.
                     isOwnPost = currentUserSub != null && item.authorId == currentUserSub,

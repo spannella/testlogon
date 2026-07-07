@@ -59,6 +59,25 @@ data class PostDto(
     @Json(name = "unlock_count") val unlockCount: Int? = null,
     @Json(name = "unlock_limit_reached") val unlockLimitReached: Boolean? = null,
     @Json(name = "lock_expired") val lockExpired: Boolean? = null,
+    // --- ADV-105 sponsored (paid) unit fields (injected by newsfeed sponsored path; ADV-104) ---
+    // A server-injected sponsored post carries is_sponsored=true plus the creative + serving metadata.
+    // All defaulted so an organic post (no sponsored keys) maps cleanly.
+    @Json(name = "is_sponsored") val isSponsored: Boolean = false,
+    @Json(name = "sponsor_label") val sponsorLabel: String? = null,
+    @Json(name = "headline") val headline: String? = null,
+    @Json(name = "cta_text") val ctaText: String? = null,
+    @Json(name = "cta_url") val ctaUrl: String? = null,
+    // Serving/attribution ids: creative_id + campaign_id + account_id identify the paid unit; ad_click_id
+    // is the per-serve CPA id (ADV-103) echoed on the track call. surface/slot_type/creator_id/content_id
+    // mirror what serve_ad used, so the client can round-trip them to /ui/ads/track unchanged.
+    @Json(name = "creative_id") val creativeId: String? = null,
+    @Json(name = "campaign_id") val campaignId: String? = null,
+    @Json(name = "account_id") val accountId: String? = null,
+    @Json(name = "ad_click_id") val adClickId: String? = null,
+    @Json(name = "surface") val surface: String? = null,
+    @Json(name = "slot_type") val slotType: String? = null,
+    @Json(name = "creator_id") val creatorId: String? = null,
+    @Json(name = "content_id") val contentId: String? = null,
     // --- AND-179 embedded poll (present for post_type "poll"/"survey") ---
     @Json(name = "poll_data") val pollData: PollDataDto? = null,
     @Json(name = "poll_vote_counts") val pollVoteCounts: Map<String, Map<String, Int>>? = null,

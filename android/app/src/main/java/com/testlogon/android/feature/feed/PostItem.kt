@@ -16,10 +16,12 @@ import androidx.compose.material.icons.outlined.Group
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.testlogon.android.data.feed.FeedPost
 import com.testlogon.android.data.feed.Paywall
+import com.testlogon.android.data.feed.SponsoredInfo
 
 /** Stable test tags for a feed post row (AND-099). */
 object PostItemTestTags {
@@ -37,6 +40,13 @@ object PostItemTestTags {
     const val HEADER = "post_header"
     const val BODY = "post_body"
     const val LOCKED_BADGE = "post_locked_badge"
+}
+
+/** ADV-105 — test tags for the sponsored (paid) feed card. */
+object SponsoredItemTestTags {
+    const val ITEM = "sponsored_item"
+    const val LABEL = "sponsored_label"
+    const val CTA = "sponsored_cta"
 }
 
 /**
@@ -91,7 +101,24 @@ fun PostItem(
     // Write-in polls: submit a voter write-in / page the remaining options.
     onPollWriteIn: (postId: String, questionId: String, text: String) -> Unit = { _, _, _ -> },
     onPollShowMore: (postId: String, questionId: String, offset: Int) -> Unit = { _, _, _ -> },
+    // ADV-106 — sponsored-unit tracking. Impression fires when the card becomes viewport-visible; click
+    // fires on the CTA/card tap. No-ops for organic posts (never invoked when post.sponsored == null).
+    onSponsoredImpression: (FeedPost) -> Unit = {},
+    onSponsoredClick: (FeedPost) -> Unit = {},
 ) {
+    // ADV-105 — a server-injected sponsored (paid) unit renders as a DISTINCT card (label + CTA), not a
+    // normal author post. It is never locked, so body/media come straight off the FeedPost.
+    val sponsored = post.sponsored
+    if (sponsored != null) {
+        SponsoredPostItem(
+            post = post,
+            info = sponsored,
+            modifier = modifier,
+            onImpression = onSponsoredImpression,
+            onClick = onSponsoredClick,
+        )
+        return
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -307,4 +334,89 @@ internal fun monogram(authorId: String): String {
     val cleaned = authorId.trim().filter { !it.isWhitespace() }
     if (cleaned.isEmpty()) return "?"
     return cleaned.take(2).uppercase()
+}
+
+/**
+ * ADV-105 / ADV-106 — the distinct SPONSORED card. Differs from an organic post: a "Sponsored" pill
+ * (in place of the author monogram/timestamp), the advertiser/sponsor label, optional headline, the ad
+ * body + media, and a primary CTA button. There is no like/comment/tip action bar.
+ *
+ * Tracking: an impression is fired ONCE when this card first enters composition. A LazyColumn only
+ * composes rows at/near the viewport, so first composition is a good proxy for "became viewport-visible";
+ * de-duplication (so a scroll-away/return doesn't double-count) is handled by the ViewModel keyed on the
+ * ad_click_id. A click fires on the CTA button and on tapping the card/media.
+ */
+@Composable
+private fun SponsoredPostItem(
+    post: FeedPost,
+    info: SponsoredInfo,
+    modifier: Modifier = Modifier,
+    onImpression: (FeedPost) -> Unit,
+    onClick: (FeedPost) -> Unit,
+) {
+    LaunchedEffect(info.adClickId ?: info.creativeId) { onImpression(post) }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onClick(post) }
+            .testTag(SponsoredItemTestTags.ITEM),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // "Sponsored" pill — the disclosure that this is a paid unit.
+            Surface(
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                shape = RoundedCornerShape(50),
+                modifier = Modifier.testTag(SponsoredItemTestTags.LABEL),
+            ) {
+                Text(
+                    text = "Sponsored",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+            // Advertiser / sponsor label.
+            Text(
+                text = info.label,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            info.headline?.let { headline ->
+                Text(
+                    text = headline,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            post.body?.takeIf { it.isNotBlank() }?.let { body ->
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (post.media.isNotEmpty()) {
+                FeedMediaGrid(
+                    media = post.media,
+                    onItemClick = { onClick(post) },
+                )
+            }
+            Button(
+                onClick = { onClick(post) },
+                modifier = Modifier.testTag(SponsoredItemTestTags.CTA),
+            ) {
+                Text(info.ctaText ?: "Learn more")
+            }
+        }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
