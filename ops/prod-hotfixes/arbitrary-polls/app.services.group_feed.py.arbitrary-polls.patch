@@ -1,0 +1,62 @@
+--- app/services/group_feed.py.bak_polls_1783435257	2026-07-07 14:40:57.977736289 +0000
++++ app/services/group_feed.py	2026-07-07 14:40:58.010935924 +0000
+@@ -80,6 +80,7 @@
+     unlock_price_cents: int | None = None,
+     image_urls: list | None = None,
+     video_id: str | None = None,
++    poll: dict | None = None,
+ ) -> Dict[str, Any]:
+     # Verify group exists and is active
+     group = get_group(group_id)
+@@ -96,6 +97,17 @@
+     post_id = _new_post_id()
+     locked = unlock_price_cents is not None and unlock_price_cents > 0
+ 
++    _poll_id = None
++    if poll:
++        from app.services import arbitrary_polls as _ap
++        _poll_snap = _ap.create_poll(
++            owner=user_id, question=poll.get("question"), options=poll.get("options") or [],
++            choice_mode=poll.get("choice_mode", "single"),
++            max_selections=poll.get("max_selections"), closes_at=poll.get("closes_at"),
++            allow_vote_change=poll.get("allow_vote_change", True),
++            anonymous=poll.get("anonymous", True), surface="group", ref_id=group_id)
++        _poll_id = _poll_snap["poll_id"]
++
+     tbl = _get_app_table()
+ 
+     # Write post record
+@@ -109,6 +121,7 @@
+         "image_url": image_url,
+         "image_urls": list(image_urls) if image_urls else ([image_url] if image_url else []),
+         "video_id": video_id,
++        "poll_id": _poll_id,
+         "group_id": group_id,
+         "audience": audience,
+         "pinned": False,
+@@ -500,6 +513,17 @@
+             break
+ 
+ 
++def _group_poll_snapshot(post, viewer_id=None):
++    pid = post.get("poll_id")
++    if not pid:
++        return None
++    try:
++        from app.services import arbitrary_polls as _ap
++        return _ap.get_snapshot(pid, viewer_id)
++    except Exception:
++        return None
++
++
+ def _post_out(post: Dict[str, Any], viewer_id: str | None = None) -> Dict[str, Any]:
+     """Map a DDB post item to the GroupFeedPostOut shape."""
+     is_locked = bool(post.get("locked"))
+@@ -533,6 +557,7 @@
+         "comment_count": int(post.get("comment_count", 0)),
+         "created_at": int(post.get("created_at", 0)),
+         "updated_at": int(post["updated_at"]) if post.get("updated_at") else None,
++        "poll": _group_poll_snapshot(post, viewer_id),
+     }
+ 
+ 
