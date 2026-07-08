@@ -20,6 +20,8 @@ data class VideoUploadUiState(
     val description: String = "",
     val uploading: Boolean = false,
     val error: String? = null,
+    /** ADV - creator opts this video into the ad-supported tier (pre-roll ads) on publish. */
+    val allowAds: Boolean = false,
     /** Non-null on success = the new video id; the screen pops back. */
     val uploadedVideoId: String? = null,
 ) {
@@ -40,18 +42,24 @@ class VideoUploadViewModel @Inject constructor(
     fun onTitleChange(text: String) = _state.update { it.copy(title = text, error = null) }
     fun onDescriptionChange(text: String) = _state.update { it.copy(description = text) }
 
+    /** ADV - toggle "Allow ads / Monetize" for this upload. */
+    fun onToggleAllowAds(enabled: Boolean) = _state.update { it.copy(allowAds = enabled) }
+
     fun upload() {
         val s = _state.value
         if (!s.canUpload) return
         val uri = Uri.parse(s.pickedUri)
-        runUpload { repository.upload(uri, s.title, s.description) }
-    }
-
-    private fun runUpload(block: suspend () -> ApiResult<String>) {
         _state.update { it.copy(uploading = true, error = null) }
         viewModelScope.launch {
-            when (val r = block()) {
-                is ApiResult.Success -> _state.update { it.copy(uploading = false, uploadedVideoId = r.data.ifBlank { "uploaded" }) }
+            when (val r = repository.upload(uri, s.title, s.description)) {
+                is ApiResult.Success -> {
+                    // ADV - if the creator opted in, flip the new video to the ad_supported tier and
+                    // enable their ads so it serves a pre-roll (best-effort; upload already succeeded).
+                    if (s.allowAds && r.data.isNotBlank()) {
+                        repository.enableAds(r.data)
+                    }
+                    _state.update { it.copy(uploading = false, uploadedVideoId = r.data.ifBlank { "uploaded" }) }
+                }
                 is ApiResult.Failure -> _state.update { it.copy(uploading = false, error = r.error.message) }
                 is ApiResult.NetworkError -> _state.update { it.copy(uploading = false, error = "Upload failed. Check your connection and try again.") }
             }

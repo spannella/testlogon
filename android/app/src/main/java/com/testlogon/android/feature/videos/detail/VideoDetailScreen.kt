@@ -156,11 +156,16 @@ fun VideoDetailRoute(
             // While fullscreen, the inline slot collapses to the poster backdrop (the Dialog owns the
             // single PlayerView) so the one ExoPlayer is never bound to two surfaces at once.
             if (!isFullscreen) {
-                VideoPlayer(
+                // ADV — ad-aware surface: plays the pre-roll creative + AdOverlay for an ad_supported
+                // title, then the SAME controller streams the content once the pre-roll is reported.
+                DetailAdAwarePlayer(
+                    state = state,
                     controller = viewModel.controller,
-                    modifier = playerModifier.testTag(VideoDetailTestTags.PLAYER),
-                    isFullscreen = false,
+                    onAdPosition = viewModel::onAdPosition,
+                    onAdCompleted = viewModel::onAdCompleted,
+                    onSkipAd = viewModel::onSkipAd,
                     onFullscreenToggle = { isFullscreen = true },
+                    modifier = playerModifier,
                 )
             } else {
                 androidx.compose.foundation.layout.Box(

@@ -17,7 +17,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 import retrofit2.http.Body
+import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.Path
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.security.MessageDigest
@@ -70,7 +72,34 @@ interface VideoUploadApi {
 
     @POST("ui/videos/upload/complete")
     suspend fun complete(@Body body: VodCompleteReq): VodCompleteResp
+
+    /** ADV — opt a video into the ad-supported tier (creator monetization toggle). */
+    @PATCH("ui/videos/{video_id}/pricing")
+    suspend fun setPricing(@Path("video_id") videoId: String, @Body body: VodPricingReq): MonetizeAck
+
+    /** ADV — enable ads for the creator so their ad_supported videos actually serve a pre-roll. */
+    @PATCH("ui/ads/creator/ad-settings")
+    suspend fun updateCreatorAdSettings(@Body body: CreatorAdSettingsReq): MonetizeAck
 }
+
+/** PATCH /ui/videos/{video_id}/pricing — set access_mode=ad_supported. */
+@JsonClass(generateAdapter = true)
+data class VodPricingReq(
+    @Json(name = "access_mode") val accessMode: String,
+)
+
+/** PATCH /ui/ads/creator/ad-settings — allow_ads=true. */
+@JsonClass(generateAdapter = true)
+data class CreatorAdSettingsReq(
+    @Json(name = "allow_ads") val allowAds: Boolean,
+)
+
+/** Tolerant ack for the monetization PATCHes (extra fields ignored). */
+@JsonClass(generateAdapter = true)
+data class MonetizeAck(
+    @Json(name = "video_id") val videoId: String? = null,
+    val ok: Boolean = false,
+)
 
 /** Orchestrates the VOD upload: presign -> PUT (cookieless) -> complete. */
 @Singleton
@@ -127,6 +156,25 @@ class VideoUploadRepository @Inject constructor(
                 ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
             }
         }
+
+    /**
+     * ADV - opt a freshly uploaded (or existing) video into the ad-supported tier: set the video
+     * access_mode=ad_supported AND enable the creator's ads so a pre-roll actually serves. Best-effort
+     * pair; a failure is surfaced but does not undo the upload.
+     */
+    suspend fun enableAds(videoId: String): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            api.setPricing(videoId, VodPricingReq(accessMode = "ad_supported"))
+            api.updateCreatorAdSettings(CreatorAdSettingsReq(allowAds = true))
+            ApiResult.Success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Failure(errorParser.from(e))
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
 
     private companion object {
         const val CONTENT_TYPE = "video/mp4"

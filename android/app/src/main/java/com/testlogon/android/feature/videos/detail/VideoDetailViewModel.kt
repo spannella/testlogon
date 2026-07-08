@@ -14,6 +14,11 @@ import com.testlogon.android.data.videos.VideoReactionState
 import com.testlogon.android.data.videos.VideosRepository
 import com.testlogon.android.feature.player.MediaSourceSpec
 import com.testlogon.android.feature.player.VideoPlayerController
+import com.testlogon.android.data.vod.adsupported.AdBreak
+import com.testlogon.android.data.vod.adsupported.AdBreakScheduler
+import com.testlogon.android.data.vod.adsupported.AdSupportedSession
+import com.testlogon.android.data.vod.adsupported.VodAdSupportedApi
+import com.testlogon.android.data.vod.adsupported.VodAdSupportedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +48,16 @@ data class VideoDetailUiState(
     val tipTotalCents: Int = 0,
     // True when the current viewer owns this video (hide the tip action, like the feed does on own posts).
     val isMine: Boolean = false,
+    // ADV — pre-roll ad-supported playback woven into the NORMAL detail player. While [contentGated]
+    // the main content is NOT prepared/played; the pre-roll creative + [AdOverlay] own the surface.
+    val adActive: Boolean = false,
+    val adBreak: AdBreak? = null,
+    val adRemainingMs: Long = 0L,
+    val adSkipEnabled: Boolean = false,
+    val adSkipCountdownMs: Long = 0L,
+    val adBreaksCompleted: Int = 0,
+    val adBreaksTotal: Int = 0,
+    val contentGated: Boolean = false,
 )
 
 /** The emoji reaction set the server allows on a video (mirrors ALLOWED_VIDEO_REACTION_EMOJIS). */
@@ -68,6 +83,7 @@ class VideoDetailViewModel @Inject constructor(
     private val controllerProvider: VideoControllerProvider,
     private val authStateProvider: AuthStateProvider,
     private val authStateStore: AuthStateStore,
+    private val vodAdRepo: VodAdSupportedRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -170,6 +186,8 @@ class VideoDetailViewModel @Inject constructor(
      */
     fun setPlaybackSource() {
         val url = _uiState.value.playbackUrl ?: return
+        // Pre-roll must play first on an ad_supported video: the ad flow binds content itself.
+        if (_uiState.value.contentGated) return
         if (sourcePrepared) return
         sourcePrepared = true
         controller.setMedia(
@@ -196,8 +214,13 @@ class VideoDetailViewModel @Inject constructor(
         }
         val playable = if (granted && block == null) detail.playbackUrl else null
         val me = authStateStore.userSub.value
+        val isMine = me != null && me == detail.ownerUserId
+        // Weave the pre-roll into the normal player: gate content when this is an ad_supported
+        // title the viewer can watch and does not own (owners preview their own content ad-free).
+        val adGated = detail.accessMode == "ad_supported" && playable != null && !isMine
         _uiState.update {
             it.copy(
+                contentGated = adGated,
                 isLoading = false,
                 detail = detail,
                 playbackUrl = playable,
@@ -207,10 +230,11 @@ class VideoDetailViewModel @Inject constructor(
                 reactions = detail.reactions,
                 myReactions = detail.myReactions,
                 tipTotalCents = detail.tipTotalCents,
-                isMine = me != null && me == detail.ownerUserId,
+                isMine = isMine,
             )
         }
         loadLikeAndRelated()
+        if (adGated) startPreRoll()
     }
 
     /** Maps a non-Granted entitlement onto the screen's coarse PlaybackBlock affordance. */
@@ -238,6 +262,114 @@ class VideoDetailViewModel @Inject constructor(
         403 -> DetailError(FORBIDDEN_MESSAGE, retryable = false)
         // 5xx / unexpected statuses may be transient on the flaky dev host.
         else -> DetailError(error.message, retryable = error.status >= 500)
+    }
+
+    // ─── ADV: pre-roll integrated into the NORMAL detail player ────────────────────────────────────
+    // Mirrors AdSupportedPlayerViewModel but scoped to a single PRE-ROLL that gates the main content,
+    // reusing the ONE lifecycle-scoped controller for both the ad creative and the content. The whole
+    // detail screen (comments, likes, reactions, tip, engagement) stays composed throughout the ad.
+
+    private var adScheduler: AdBreakScheduler? = null
+    private var adSession: AdSupportedSession? = null
+    private var adAdvancing = false
+
+    /** Requests the ad-supported session; on a live pre-roll, enters the ad phase (content stays gated). */
+    private fun startPreRoll() {
+        viewModelScope.launch {
+            when (val r = vodAdRepo.start(videoId)) {
+                is ApiResult.Success -> onAdSessionStarted(r.data)
+                // Fail-open to content (no ad shown, no charge) so a serve failure never blocks playback.
+                else -> playContentPassively()
+            }
+        }
+    }
+
+    private fun onAdSessionStarted(session: AdSupportedSession) {
+        adSession = session
+        val scheduler = AdBreakScheduler(session.adSchedule)
+        adScheduler = scheduler
+        val preRoll = if (session.adsFree) null else scheduler.preRoll()?.takeIf { !it.completed }
+        if (preRoll == null) {
+            playContentPassively()
+        } else {
+            enterAd(preRoll)
+        }
+    }
+
+    private fun enterAd(br: AdBreak) {
+        // Fire the impression (best-effort); the completion report is what charges (backend ADV-203).
+        viewModelScope.launch { vodAdRepo.reportBreak(videoId, br.breakId, VodAdSupportedApi.EVENT_IMPRESSION) }
+        _uiState.update {
+            it.copy(
+                adActive = true,
+                contentGated = true,
+                adBreak = br,
+                adRemainingMs = br.durationMs,
+                adSkipEnabled = false,
+                adSkipCountdownMs = br.skipAfterMs,
+                adBreaksTotal = (adSession?.breaksTotal ?: 1).coerceAtLeast(1),
+                adBreaksCompleted = adSession?.breaksCompleted ?: 0,
+            )
+        }
+    }
+
+    /** Position ticks from the screen while the pre-roll plays; enables Skip after the skip offset. */
+    fun onAdPosition(ms: Long) {
+        val st = _uiState.value
+        if (!st.adActive) return
+        val br = st.adBreak ?: return
+        val remaining = (br.durationMs - ms).coerceAtLeast(0L)
+        val skipCd = (br.skipAfterMs - ms).coerceAtLeast(0L)
+        val skipEnabled = br.isSkippable && ms >= br.skipAfterMs
+        _uiState.update {
+            it.copy(adRemainingMs = remaining, adSkipCountdownMs = skipCd, adSkipEnabled = skipEnabled)
+        }
+    }
+
+    fun onSkipAd() { _uiState.value.adBreak?.let { reportAndAdvance(it, VodAdSupportedApi.EVENT_SKIP) } }
+    fun onAdCompleted() { _uiState.value.adBreak?.let { reportAndAdvance(it, VodAdSupportedApi.EVENT_COMPLETE) } }
+
+    private fun reportAndAdvance(br: AdBreak, eventType: String) {
+        if (adAdvancing) return
+        adAdvancing = true
+        viewModelScope.launch {
+            // Report complete|skip (complete charges the advertiser + credits the poster server-side),
+            // then lift the gate and play the content on the SAME controller.
+            vodAdRepo.reportBreak(videoId, br.breakId, eventType)
+            adScheduler?.markWatched(br.breakId)
+            finishAdAndPlayContent()
+            adAdvancing = false
+        }
+    }
+
+    /** Ends the ad phase and starts the gated content (autoplay — the viewer already committed to watch). */
+    private fun finishAdAndPlayContent() {
+        _uiState.update {
+            it.copy(
+                adActive = false,
+                adBreak = null,
+                contentGated = false,
+                adRemainingMs = 0L,
+                adSkipEnabled = false,
+                adSkipCountdownMs = 0L,
+            )
+        }
+        playContent(autoPlay = true)
+    }
+
+    /** No pre-roll (ads-free / serve miss): lift the gate and prepare content the normal way (no autoplay). */
+    private fun playContentPassively() {
+        _uiState.update { it.copy(adActive = false, contentGated = false) }
+        setPlaybackSource()
+    }
+
+    private fun playContent(autoPlay: Boolean) {
+        val url = _uiState.value.playbackUrl ?: return
+        sourcePrepared = true
+        controller.setMedia(
+            MediaSourceSpec(uri = url, title = _uiState.value.detail?.title),
+            autoPlay = autoPlay,
+        )
     }
 
     override fun onCleared() {

@@ -24,6 +24,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -105,6 +106,7 @@ fun VideoUploadRoute(
         onBrowseFiles = { browseVideo.launch(arrayOf("video/*")) },
         onTitleChange = viewModel::onTitleChange,
         onDescriptionChange = viewModel::onDescriptionChange,
+        onToggleAllowAds = viewModel::onToggleAllowAds,
         onUpload = viewModel::upload,
     )
 }
@@ -118,6 +120,7 @@ fun VideoUploadScreen(
     onBrowseFiles: () -> Unit = {},
     onTitleChange: (String) -> Unit,
     onDescriptionChange: (String) -> Unit,
+    onToggleAllowAds: (Boolean) -> Unit = {},
     onUpload: () -> Unit,
 ) {
     Scaffold(
@@ -194,6 +197,30 @@ fun VideoUploadScreen(
                 label = { Text("Description") },
                 minLines = 3,
             )
+
+            // ADV - creator monetization: opt this video into the ad-supported tier so viewers see a
+            // skippable pre-roll (backend sets access_mode=ad_supported + enables the creator's ads).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("video_monetize_toggle"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Monetize with ads", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Allow a skippable pre-roll ad on this video and earn a share of the revenue.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = state.allowAds,
+                    onCheckedChange = onToggleAllowAds,
+                    modifier = Modifier.testTag("allow_ads_toggle"),
+                )
+            }
 
             state.error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
