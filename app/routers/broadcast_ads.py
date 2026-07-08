@@ -77,6 +77,7 @@ class PreRollOut(BaseModel):
     cta_url: Optional[str] = None
     skip_after_seconds: int = 5
     ad_click_id: str = ""
+    ctas: list = []
     impression_url: str
     click_url: str
     skip_url: str
@@ -90,6 +91,7 @@ class MidRollOut(BaseModel):
     cta_url: Optional[str] = None
     skip_after_seconds: int = 15
     ad_click_id: str = ""
+    ctas: list = []
     impression_url: str
     click_url: str
     skip_url: str

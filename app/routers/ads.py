@@ -15,6 +15,7 @@ from app.models import (
     AdFeedbackIn,
     AdServeRequestIn,
     AdTrackEventIn,
+    CtaClickIn,
     CampaignCreateIn,
     CampaignReviewIn,
     CampaignUpdateIn,
@@ -22,7 +23,7 @@ from app.models import (
     CreativeReviewIn,
     CreativeUpdateIn,
 )
-from app.services.ad_serving import serve_ad, track_ad_event, get_serving_stats
+from app.services.ad_serving import serve_ad, track_ad_event, get_serving_stats, record_cta_click
 from app.services.ad_accounts import (
     create_ad_account,
     get_ad_account,
@@ -404,6 +405,27 @@ async def track_ad_event_endpoint(body: AdTrackEventIn, request: Request, ctx=De
         view_time_ms=body.view_time_ms,
         geo_country=body.geo_country,
         ad_click_id=getattr(body, "ad_click_id", "") or "",
+    )
+
+
+@router.post("/cta-click")
+async def cta_click_endpoint(body: CtaClickIn, request: Request, ctx=Depends(require_ui_session)):
+    """ADV2-201/E2: a structured CTA tap. Charges CPC to the advertiser
+    (funds-guarded, idempotent per ad_click_id+cta_type) EXCEPT tip (no
+    advertiser charge; a tip credits the creator only). Records the tap for
+    last-click attribution so a resulting purchase/subscribe fires CPA via the
+    existing conversion path."""
+    ip_address = request.client.host if request.client else ""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        ip_address = fwd.split(",")[0].strip()
+    return record_cta_click(
+        ad_click_id=body.ad_click_id,
+        cta_type=body.cta_type,
+        target_id=body.target_id,
+        viewer_sub=ctx["user_sub"],
+        ip_address=ip_address,
+        user_agent=request.headers.get("user-agent", ""),
     )
 
 

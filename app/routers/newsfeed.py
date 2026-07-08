@@ -161,6 +161,7 @@ def _fetch_sponsored_post(
             "body": ad.get("body_text", ""),
             "cta_text": ad.get("cta_text"),
             "cta_url": ad.get("cta_url"),
+            "ctas": ad.get("ctas") or [],
             "image_urls": [ad["image_url"]] if ad.get("image_url") else [],
             "impression_url": ad.get("impression_url"),
             "click_url": ad.get("click_url"),

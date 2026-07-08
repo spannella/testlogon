@@ -57,6 +57,8 @@ def create_creative(campaign_id: str, account_id: str, data: CreativeCreateIn) -
         if val is not None:
             item[field_name] = val
 
+    if getattr(data, "ctas", None):
+        item["ctas"] = [c.model_dump() for c in data.ctas]
     T.ad_creatives.put_item(Item=item)
     logger.info("creative_created creative_id=%s campaign_id=%s format=%s", creative_id, campaign_id, data.format)
     return item

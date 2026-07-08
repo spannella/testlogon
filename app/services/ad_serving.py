@@ -262,6 +262,7 @@ def serve_ad(
         "body_text": creative.get("body_text"),
         "cta_text": creative.get("cta_text"),
         "cta_url": creative.get("cta_url"),
+        "ctas": creative.get("ctas") or [],
         "image_url": creative.get("image_url"),
         "video_url": creative.get("video_url"),
         "thumbnail_url": creative.get("thumbnail_url"),
@@ -276,6 +277,101 @@ def serve_ad(
         "content_owner_id": content_owner_id or "",
         "promo_code_id": creative.get("promo_code_id"),
         "affiliate_link_id": creative.get("affiliate_link_id"),
+    }
+
+
+# --- ADV2-201/E2: structured CTA click-through targets ----------------------
+# A CTA tap charges CPC to the advertiser (funds-guarded, idempotent per
+# ad_click_id + cta_type) via ad_billing.charge_click and records the tap on the
+# AdClicks row for last-click attribution. A resulting purchase/subscribe then
+# fires CPA through the existing ad_attribution path (which reads the same row).
+# TIP is NOT an advertiser conversion: a tip CTA deep-links to the creator tip
+# flow and fires NO advertiser charge (the viewer tips the creator as normal
+# creator earnings). Placement split is unchanged (content_owner present ->
+# creator share; standalone -> platform).
+CTA_TYPES = frozenset({"buy_product", "view_product", "tip", "subscribe", "subscribe_other"})
+CTA_NO_ADVERTISER_CHARGE = frozenset({"tip"})
+
+
+def record_cta_click(
+    *,
+    ad_click_id: str,
+    cta_type: str,
+    viewer_sub: str = "",
+    target_id: str = "",
+    ip_address: str = "",
+    user_agent: str = "",
+) -> Dict[str, Any]:
+    """Record a CTA tap and charge CPC (except tip). Idempotent per
+    (ad_click_id, cta_type)."""
+    if cta_type not in CTA_TYPES:
+        return {"ok": False, "reason": "invalid_cta_type", "cta_type": cta_type}
+    if not ad_click_id:
+        return {"ok": False, "reason": "missing_ad_click_id"}
+
+    try:
+        row = T.ad_clicks.get_item(Key={"ad_click_id": ad_click_id}).get("Item") or {}
+    except Exception:
+        row = {}
+    if not row:
+        return {"ok": False, "reason": "unknown_click", "ad_click_id": ad_click_id}
+
+    content_owner_sub = str(row.get("content_owner_sub", "") or "")
+
+    # Record the tap on the click row (best-effort) for attribution/analytics.
+    try:
+        T.ad_clicks.update_item(
+            Key={"ad_click_id": ad_click_id},
+            UpdateExpression=(
+                "SET last_cta_type = :ct, last_cta_target = :tg, cta_clicked_at = :ts"
+            ),
+            ExpressionAttributeValues={
+                ":ct": cta_type, ":tg": target_id or "", ":ts": now_ts(),
+            },
+        )
+    except Exception:
+        logger.warning("cta_click_record_failed click=%s", ad_click_id)
+
+    charged = False
+    charge_cents = 0
+    reason = ""
+    if cta_type in CTA_NO_ADVERTISER_CHARGE:
+        # Tip CTA: NO advertiser charge. The tip credits the creator only.
+        reason = "tip_no_advertiser_charge"
+    else:
+        try:
+            from app.services import ad_billing
+            from app.services.ad_campaigns import get_campaign
+            account_id = str(row.get("account_id", "") or "")
+            campaign_id = str(row.get("campaign_id", "") or "")
+            cpc = row.get("bid_cpc_cents")
+            if cpc is None:
+                cpc = (get_campaign(account_id, campaign_id) or {}).get("bid_cpc_cents", 50)
+            res = ad_billing.charge_click(
+                account_id=account_id, campaign_id=campaign_id,
+                creative_id=str(row.get("creative_id", "") or ""),
+                creator_id=content_owner_sub,
+                content_id=str(row.get("content_id", "") or ""),
+                bid_cpc_cents=int(cpc or 50),
+                idempotency_key="%s#cta#%s" % (ad_click_id, cta_type),
+            )
+            charged = bool(res.get("ok"))
+            charge_cents = int(res.get("charge_cents", 0) or 0)
+            reason = str(res.get("reason", "") or "")
+        except Exception:
+            logger.warning("cta_click_charge_failed click=%s cta=%s", ad_click_id, cta_type)
+            reason = "charge_error"
+
+    return {
+        "ok": True,
+        "ad_click_id": ad_click_id,
+        "cta_type": cta_type,
+        "target_id": target_id or "",
+        "content_owner_sub": content_owner_sub,
+        "campaign_id": str(row.get("campaign_id", "") or ""),
+        "charged": charged,
+        "charge_cents": charge_cents,
+        "reason": reason,
     }
 
 

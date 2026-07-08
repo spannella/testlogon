@@ -119,6 +119,7 @@ def _resolve_ad_schedule(*, video: Any, user_id: str) -> List[Dict[str, Any]]:
         creative_type = slot.get("creative_type", "video")
 
         ad_click_id = ""
+        ctas: List[Dict[str, Any]] = []
 
         if not deterministic:
             # ADV-201: wire the LIVE ad engine for pre-roll creative selection.
@@ -148,6 +149,7 @@ def _resolve_ad_schedule(*, video: Any, user_id: str) -> List[Dict[str, Any]]:
                         creative_url = served.get("image_url")
                         creative_type = "image"
                     ad_click_id = served.get("ad_click_id", "") or ""
+                    ctas = served.get("ctas") or []
             except Exception:
                 logger.warning(
                     "vod_ad_supported_serve_failed video=%s user=%s",
@@ -167,6 +169,7 @@ def _resolve_ad_schedule(*, video: Any, user_id: str) -> List[Dict[str, Any]]:
                 "skip_after_seconds": int(slot.get("skip_after_seconds", 5)),
                 "slot_index": int(slot.get("slot_index", 0)),
                 "ad_click_id": ad_click_id,
+                "ctas": ctas,
                 "completed": False,
             }
         )
@@ -256,6 +259,8 @@ def _session_to_dict(item: Dict[str, Any]) -> Dict[str, Any]:
                 "creative_type": b.get("creative_type", "video"),
                 "skip_after_seconds": int(b.get("skip_after_seconds", 0)),
                 "slot_index": int(b.get("slot_index", 0)),
+                "ad_click_id": b.get("ad_click_id", "") or "",
+                "ctas": b.get("ctas", []) or [],
                 "completed": bool(b.get("completed", False)),
             }
         )

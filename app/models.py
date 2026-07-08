@@ -4831,6 +4831,31 @@ class CampaignReviewIn(BaseModel):
 # ── Ad Creatives (ADS-002) ─────────────────────────────────────────────
 
 
+class CtaActionIn(BaseModel):
+    """ADV2-201: one structured click-through CTA target on an ad creative.
+
+    cta_type routes the in-app destination; target_id names the product /
+    creator / account; label is the button text. buy_product / view_product need
+    a product target; subscribe_other needs an account/creator target; tip and
+    subscribe (this creator) may omit target_id (resolved to the placement
+    content owner at tap time).
+    """
+    cta_type: str = Field(
+        ..., pattern="^(buy_product|view_product|tip|subscribe|subscribe_other)$"
+    )
+    target_id: str = Field(default="", max_length=200)
+    label: str = Field(..., min_length=1, max_length=40)
+
+
+class CtaClickIn(BaseModel):
+    """ADV2-201: body for POST /ui/ads/cta-click (a CTA tap)."""
+    ad_click_id: str = Field(..., min_length=1)
+    cta_type: str = Field(
+        ..., pattern="^(buy_product|view_product|tip|subscribe|subscribe_other)$"
+    )
+    target_id: str = Field(default="", max_length=200)
+
+
 class CreativeCreateIn(BaseModel):
     format: str = Field(..., pattern="^(native_post|image|video|carousel)$")
     title: str = Field(..., min_length=1, max_length=200)
@@ -4846,6 +4871,7 @@ class CreativeCreateIn(BaseModel):
     rotation_weight: int = Field(default=50, ge=0, le=100)
     promo_code_id: Optional[str] = None
     affiliate_link_id: Optional[str] = None
+    ctas: Optional[List[CtaActionIn]] = Field(default=None, max_length=8)
 
     @field_validator("cta_url")
     @classmethod
@@ -4885,6 +4911,7 @@ class CreativeUpdateIn(BaseModel):
     skip_after_seconds: Optional[int] = Field(default=None, ge=0, le=30)
     promo_code_id: Optional[str] = None
     affiliate_link_id: Optional[str] = None
+    ctas: Optional[List[CtaActionIn]] = Field(default=None, max_length=8)
 
     @field_validator("cta_url")
     @classmethod
@@ -4997,6 +5024,7 @@ class AdServeResponseOut(BaseModel):
     body_text: Optional[str] = None
     cta_text: Optional[str] = None
     cta_url: Optional[str] = None
+    ctas: List[Dict[str, Any]] = Field(default_factory=list)
     image_url: Optional[str] = None
     video_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
@@ -11398,6 +11426,8 @@ class VodAdBreak(BaseModel):
     creative_type: str  # "video" | "image"
     skip_after_seconds: int
     slot_index: int
+    ad_click_id: str = ""
+    ctas: List[Dict[str, Any]] = Field(default_factory=list)
     completed: bool = False
 
 
@@ -12123,6 +12153,7 @@ class SyndicatePostOut(BaseModel):
     body: str = ""
     cta_text: Optional[str] = None
     cta_url: Optional[str] = None
+    ctas: List[Dict[str, Any]] = Field(default_factory=list)
     image_urls: List[str] = Field(default_factory=list)
     impression_url: Optional[str] = None
     click_url: Optional[str] = None
