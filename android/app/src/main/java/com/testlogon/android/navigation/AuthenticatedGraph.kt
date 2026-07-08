@@ -161,6 +161,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         vodCatalogDestination(navController)
         // AND-190: video detail + reusable player (shared by library, VOD, and discover recs).
         videoDetailDestination(navController)
+        // ADV-202: video pre-roll (AVOD) player - plays a live pre-roll ad before the gated video.
+        adSupportedPlayerDestination(navController)
         // AND-196: clips vertical pager (gallery feed) + public single-clip viewer (deep link).
         clipsFeedDestination(navController)
         publicClipDestination(navController)

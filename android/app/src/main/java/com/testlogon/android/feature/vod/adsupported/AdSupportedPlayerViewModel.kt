@@ -9,6 +9,8 @@ import com.testlogon.android.data.vod.adsupported.AdBreakScheduler
 import com.testlogon.android.data.vod.adsupported.AdSupportedSession
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedApi
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedRepository
+import com.testlogon.android.feature.player.VideoPlayerController
+import com.testlogon.android.feature.videos.detail.VideoControllerProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,8 +48,16 @@ sealed interface AdSupportedUiState {
 @HiltViewModel
 class AdSupportedPlayerViewModel @Inject constructor(
     private val repo: VodAdSupportedRepository,
+    private val controllerProvider: VideoControllerProvider,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    // ADV-202 — lifecycle-scoped player reused for BOTH the pre-roll video creative and the gated
+    // main content (one ExoPlayer, never eager). Created lazily on first access, released in onCleared
+    // (mirrors VideoDetailViewModel). Image creatives don't touch it (rendered by the screen + a timer).
+    private var controllerOrNull: VideoPlayerController? = null
+    val controller: VideoPlayerController
+        get() = controllerOrNull ?: controllerProvider.create().also { controllerOrNull = it }
 
     private val videoId: String = checkNotNull(savedStateHandle[ARG_VIDEO_ID]) { "missing videoId arg" }
 
@@ -212,6 +222,12 @@ class AdSupportedPlayerViewModel @Inject constructor(
             breaksTotal = s?.breaksTotal ?: 0,
             adsFree = s?.adsFree ?: false,
         )
+    }
+
+    override fun onCleared() {
+        controllerOrNull?.release()
+        controllerOrNull = null
+        super.onCleared()
     }
 
     companion object {

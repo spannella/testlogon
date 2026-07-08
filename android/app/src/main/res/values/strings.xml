@@ -1344,6 +1344,7 @@
     <string name="avod_skip_in">Skip in %1$d</string>
     <string name="avod_skip_ad">Skip Ad</string>
     <string name="avod_ad_remaining">%1$d seconds remaining</string>
+    <string name="avod_title">Video</string>
     <string name="avod_error">Couldn\'t start ad-supported playback</string>
     <string name="avod_retry">Retry</string>
     <string name="avod_skip_cd">Skip the ad</string>

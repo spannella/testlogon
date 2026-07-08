@@ -9,6 +9,7 @@ import com.testlogon.android.data.vod.adsupported.AdBreakReport
 import com.testlogon.android.data.vod.adsupported.AdSupportedSession
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedApi
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedRepository
+import com.testlogon.android.feature.videos.detail.VideoControllerProvider
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -39,7 +40,10 @@ class AdSupportedPlayerViewModelTest {
     val mainRule = MainDispatcherRule()
 
     private val repo = FakeAdRepo()
-    private fun vm() = AdSupportedPlayerViewModel(repo, SavedStateHandle(mapOf("videoId" to "v1")))
+    // ADV-202 - the controller is lazily created only by the screen (position/media glue); these VM
+    // unit tests never touch it, so a throwing provider keeps ExoPlayer out of the JVM tests.
+    private val controllerProvider = VideoControllerProvider { error("controller unused in unit test") }
+    private fun vm() = AdSupportedPlayerViewModel(repo, controllerProvider, SavedStateHandle(mapOf("videoId" to "v1")))
 
     private fun session(adsFree: Boolean = false, breaks: List<AdBreak>) = AdSupportedSession(
         sessionId = "s1", videoId = "v1", status = "active", playbackUrl = "https://cdn/m.m3u8",

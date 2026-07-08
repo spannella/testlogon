@@ -146,6 +146,17 @@
                     android:host="broadcast" />
             </intent-filter>
 
+            <!-- ADV-202: video pre-roll (AVOD) player custom-scheme deep link.
+                 testlogon://avod/{videoId} -> plays a live pre-roll ad, then the gated video. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="avod" />
+            </intent-filter>
+
             <!-- AND-100: read-only post detail App Link on the production host (HTTPS, auto-verified).
                  Requires /.well-known/assetlinks.json with the release cert fingerprint (web/ops). -->
             <intent-filter android:autoVerify="true">

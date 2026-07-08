@@ -71,8 +71,10 @@ fun NavGraphBuilder.videosLibraryDestination(navController: NavHostController) {
 fun NavGraphBuilder.vodCatalogDestination(navController: NavHostController) {
     composable(VodCatalogDest.ROUTE) {
         VodCatalogRoute(
+            // ADV-202 - the on-demand (AVOD) surface opens the pre-roll player: a live pre-roll ad
+            // (serve_ad surface=preroll) plays before the gated title, then the video plays inline.
             onVodClick = { id ->
-                navController.navigate(VideoDetailDest.build(id)) { launchSingleTop = true }
+                navController.navigate(AdSupportedPlayerDest.build(id)) { launchSingleTop = true }
             },
             onBack = { navController.popBackStack() },
         )
