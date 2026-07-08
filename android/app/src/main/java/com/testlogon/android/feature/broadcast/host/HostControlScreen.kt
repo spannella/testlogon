@@ -52,6 +52,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.data.broadcast.BroadcastSession
+import com.testlogon.android.feature.broadcast.host.ads.AdControlViewModel
 import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
 import com.testlogon.android.data.broadcast.BroadcastSessionStatus
 import com.testlogon.android.data.broadcast.HealthLevel
@@ -110,6 +111,11 @@ object HostControlTestTags {
     const val MANAGE_ADS = "host_manage_ads"
     const val MANAGE_QA = "host_manage_qa"
 
+    /** ADV2-106 - the primary-screen Start ad break / End early control + its countdown card. */
+    const val AD_BREAK_CARD = "host_ad_break_card"
+    const val AD_BREAK_START = "host_ad_break_start"
+    const val AD_BREAK_END = "host_ad_break_end"
+
     /** #7c — the live self-view PIP of the host's own camera while managing. */
     const val SELF_VIEW = "host_self_view"
 
@@ -156,6 +162,9 @@ fun HostControlRoute(
         // keyed by this broadcast session id, so the host can READ the live chat and POST messages
         // (not just moderate). Only shown once the session id resolves.
         chatPanel = { state.session?.id?.let { sid -> HostLiveChatSection(sessionId = sid) } },
+        // ADV2-106 - Start ad break (+ countdown / End early) on the PRIMARY live screen. Shares the host
+        // route's NavBackStackEntry (same sessionId arg) so AdControlViewModel resolves without extra wiring.
+        adBreakControls = { HostAdBreakSection() },
         onStart = viewModel::onStart,
         onStop = viewModel::onStop,
         onConfirmStop = viewModel::onConfirmStopDialog,
@@ -191,6 +200,8 @@ fun HostControlScreen(
     // Bidirectional live-chat panel slot (host read + compose). Defaulted empty so existing call
     // sites / Compose tests that render the stateless surface without Hilt are unaffected.
     chatPanel: @Composable () -> Unit = {},
+    // ADV2-106 - the Start ad break / countdown / End early control slot on the primary live screen.
+    adBreakControls: @Composable () -> Unit = {},
     onStop: () -> Unit,
     onConfirmStop: (Boolean) -> Unit,
     onResume: () -> Unit,
@@ -274,6 +285,9 @@ fun HostControlScreen(
                 onResume = onResume,
                 onReschedule = onReschedule,
             )
+
+            // ADV2-106 - Start ad break (+ live countdown / End early) on the PRIMARY live host screen.
+            adBreakControls()
 
             // Bidirectional live chat (read + compose) for the host, alongside the moderation controls.
             chatPanel()
@@ -747,5 +761,70 @@ private fun HostLiveChatSection(sessionId: String) {
                 .fillMaxWidth()
                 .testTag(HostControlTestTags.LIVE_CHAT),
         )
+    }
+}
+
+/**
+ * ADV2-106 - the "Start ad break" control (+ live countdown / End early) surfaced on the PRIMARY live host
+ * screen, reusing [AdControlViewModel.triggerAdBreak]/[endAdBreak]. The VM shares the host route's
+ * NavBackStackEntry (same "sessionId" arg), so no extra nav wiring is needed. Backend guardrails (min
+ * interval + max breaks/session, ADV2-104) surface as a transient error under the button.
+ */
+@Composable
+private fun HostAdBreakSection(vm: AdControlViewModel = hiltViewModel()) {
+    val s by vm.uiState.collectAsStateWithLifecycle()
+    Card(modifier = Modifier.fillMaxWidth().testTag(HostControlTestTags.AD_BREAK_CARD)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.host_ad_break_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            if (s.adBreakActive) {
+                Text(
+                    text = stringResource(R.string.host_ad_break_active, s.remainingSeconds),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                OutlinedButton(
+                    onClick = vm::endAdBreak,
+                    enabled = !s.mutationInFlight,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(HostControlTestTags.AD_BREAK_END),
+                ) {
+                    if (s.mutationInFlight) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    } else {
+                        Text(stringResource(R.string.host_ad_break_end))
+                    }
+                }
+            } else {
+                Button(
+                    onClick = vm::triggerAdBreak,
+                    enabled = !s.mutationInFlight && !s.loading,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(HostControlTestTags.AD_BREAK_START),
+                ) {
+                    if (s.mutationInFlight) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    } else {
+                        Text(stringResource(R.string.host_ad_break_start))
+                    }
+                }
+            }
+            s.error?.let { msg ->
+                Text(
+                    text = msg,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }

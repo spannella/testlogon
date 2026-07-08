@@ -51,6 +51,19 @@ sealed interface ViewerUiState {
         val skipCountdownMs: Long,
     ) : ViewerUiState
 
+    /**
+     * ADV2-105 - the MID-ROLL ad phase shown OVER the (paused) live stream during a host-triggered break.
+     * [live] is the Ready snapshot the viewer resumes to on complete/skip; the ad fields mirror [PreRoll].
+     */
+    data class MidRoll(
+        val live: Ready,
+        val ad: com.testlogon.android.data.broadcast.BroadcastPreRoll,
+        val durationMs: Long,
+        val remainingMs: Long,
+        val skipEnabled: Boolean,
+        val skipCountdownMs: Long,
+    ) : ViewerUiState
+
     data class Ready(
         val sessionId: String,
         val title: String,

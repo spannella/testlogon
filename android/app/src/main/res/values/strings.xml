@@ -2225,6 +2225,11 @@
     <string name="viewer_unavailable_generic">This broadcast isn\'t available right now.</string>
     <string name="viewer_go_live">Go live</string>
     <string name="viewer_loading">Connecting to broadcast…</string>
+    <!-- ADV2-105/106: broadcast mid-roll ad break (host-triggered) -->
+    <string name="host_ad_break_title">Ad break</string>
+    <string name="host_ad_break_start">Start ad break</string>
+    <string name="host_ad_break_end">End ad break</string>
+    <string name="host_ad_break_active">Ad break running · %1$d s left</string>
 
     <!-- AND-281: live chat -->
     <string name="live_chat_title">Live chat</string>

@@ -38,6 +38,7 @@ import coil.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.broadcast.BroadcastPreRoll
 import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
 import com.testlogon.android.feature.broadcast.qna.LiveQaPanel
 import com.testlogon.android.feature.broadcast.shelf.ProductsShelfPanel
@@ -96,15 +97,37 @@ fun ViewerScreen(
                     ViewerUiState.Loading ->
                         LoadingState(message = stringResource(R.string.viewer_loading))
                     // ADV FEATURE 1 — mandatory pre-roll ad gates the live join.
-                    is ViewerUiState.PreRoll ->
+                    is ViewerUiState.PreRoll -> {
+                        val s = state as ViewerUiState.PreRoll
                         BroadcastPreRollPlayer(
-                            state = state as ViewerUiState.PreRoll,
+                            ad = s.ad,
+                            durationMs = s.durationMs,
+                            remainingMs = s.remainingMs,
+                            skipEnabled = s.skipEnabled,
+                            skipCountdownMs = s.skipCountdownMs,
                             controller = viewModel.controller,
                             onAdPosition = viewModel::onPreRollPosition,
                             onAdCompleted = viewModel::onPreRollCompleted,
                             onSkipAd = viewModel::onPreRollSkip,
                             modifier = Modifier.fillMaxSize(),
                         )
+                    }
+                    // ADV2-105 - mid-roll ad painted over the paused live stream during a host break.
+                    is ViewerUiState.MidRoll -> {
+                        val s = state as ViewerUiState.MidRoll
+                        BroadcastPreRollPlayer(
+                            ad = s.ad,
+                            durationMs = s.durationMs,
+                            remainingMs = s.remainingMs,
+                            skipEnabled = s.skipEnabled,
+                            skipCountdownMs = s.skipCountdownMs,
+                            controller = viewModel.controller,
+                            onAdPosition = viewModel::onMidRollPosition,
+                            onAdCompleted = viewModel::onMidRollCompleted,
+                            onSkipAd = viewModel::onMidRollSkip,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                     is ViewerUiState.Ready ->
                         VideoPlayer(controller = viewModel.controller, modifier = Modifier.fillMaxSize())
                     is ViewerUiState.Unavailable ->
@@ -182,14 +205,17 @@ fun ViewerScreen(
  */
 @Composable
 private fun BroadcastPreRollPlayer(
-    state: ViewerUiState.PreRoll,
+    ad: BroadcastPreRoll,
+    durationMs: Long,
+    remainingMs: Long,
+    skipEnabled: Boolean,
+    skipCountdownMs: Long,
     controller: VideoPlayerController,
     onAdPosition: (Long) -> Unit,
     onAdCompleted: () -> Unit,
     onSkipAd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val ad = state.ad
     val isImage = ad.isImage
 
     // Bind the video creative to the reused controller once; an image creative has no player media.
@@ -208,7 +234,7 @@ private fun BroadcastPreRollPlayer(
             while (true) {
                 val elapsed = System.currentTimeMillis() - startedAt
                 onAdPosition(elapsed)
-                if (elapsed >= state.durationMs) {
+                if (elapsed >= durationMs) {
                     onAdCompleted()
                     break
                 }
@@ -246,9 +272,9 @@ private fun BroadcastPreRollPlayer(
                 contentUrl = "",
                 phase = PlaybackPhase.AD,
                 currentBreak = null,
-                adRemainingMs = state.remainingMs,
-                skipEnabled = state.skipEnabled,
-                skipCountdownMs = state.skipCountdownMs,
+                adRemainingMs = remainingMs,
+                skipEnabled = skipEnabled,
+                skipCountdownMs = skipCountdownMs,
                 playbackUnlocked = false,
                 nextRequiredBreakId = null,
                 breaksCompleted = 0,

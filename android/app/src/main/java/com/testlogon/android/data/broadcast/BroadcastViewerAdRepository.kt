@@ -35,7 +35,14 @@ interface BroadcastViewerAdRepository {
         event: String,
         adClickId: String,
         viewTimeMs: Int = 0,
+        slotType: String = BroadcastAdEvents.SLOT_PRE_ROLL,
     ): ApiResult<Unit>
+
+    /** ADV2-103 — read the current live ad-break state (drives the viewer interrupt poll). */
+    suspend fun adBreakState(sessionId: String): ApiResult<BroadcastAdBreakState>
+
+    /** ADV2-101 — serve a per-viewer mid-roll creative during an active break (mints the ad_click_id). */
+    suspend fun serveMidRoll(sessionId: String): ApiResult<BroadcastMidRollServe>
 }
 
 /** A served broadcast pre-roll + the ad-free flag (domain projection of BroadcastJoinOut). */
@@ -57,10 +64,30 @@ data class BroadcastPreRoll(
     val adClickId: String,
 )
 
+/** ADV2-103 — the poll-detectable live ad-break state (domain projection of AdBreakStateOut). */
+data class BroadcastAdBreakState(
+    val adBreakActive: Boolean,
+    val adBreakStartedAt: Long?,
+    val remainingSeconds: Int,
+    val totalAdBreaks: Int,
+    val skipAfterSeconds: Int,
+)
+
+/** ADV2-101 — a per-viewer mid-roll serve: the creative (reusing [BroadcastPreRoll]) + ad-free + remaining. */
+data class BroadcastMidRollServe(
+    val ad: BroadcastPreRoll?,
+    val adFree: Boolean,
+    val remainingSeconds: Int,
+)
+
 object BroadcastAdEvents {
     const val IMPRESSION = "impression"
     const val COMPLETE = "complete"
     const val SKIP = "skip"
+
+    /** Track slot_type values the backend maps to the charge surface (broadcast_preroll / broadcast_midroll). */
+    const val SLOT_PRE_ROLL = "pre_roll"
+    const val SLOT_MID_ROLL = "mid_roll"
 }
 
 @Singleton
@@ -90,6 +117,7 @@ class BroadcastViewerAdRepositoryImpl @Inject constructor(
         event: String,
         adClickId: String,
         viewTimeMs: Int,
+        slotType: String,
     ): ApiResult<Unit> = withContext(io) {
         if (creativeId.isBlank() || adClickId.isBlank()) return@withContext ApiResult.Success(Unit)
         try {
@@ -98,9 +126,34 @@ class BroadcastViewerAdRepositoryImpl @Inject constructor(
                 creativeId = creativeId,
                 event = event,
                 adClickId = adClickId,
+                slotType = slotType,
                 viewTimeMs = viewTimeMs,
             )
             ApiResult.Success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Failure(errorParser.from(e))
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
+    override suspend fun adBreakState(sessionId: String): ApiResult<BroadcastAdBreakState> = withContext(io) {
+        try {
+            ApiResult.Success(api.adBreakState(sessionId).toDomain())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Failure(errorParser.from(e))
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
+    override suspend fun serveMidRoll(sessionId: String): ApiResult<BroadcastMidRollServe> = withContext(io) {
+        try {
+            ApiResult.Success(api.serveMidRoll(sessionId).toDomain())
         } catch (e: CancellationException) {
             throw e
         } catch (e: HttpException) {
@@ -119,6 +172,34 @@ private fun BroadcastAdJoinDto.toDomain(): BroadcastAdJoin = BroadcastAdJoin(
 )
 
 private fun BroadcastPreRollDto.toDomain(): BroadcastPreRoll {
+    val hasVideo = !videoUrl.isNullOrBlank()
+    val isImage = format != "video" || !hasVideo
+    return BroadcastPreRoll(
+        creativeId = creativeId,
+        isImage = isImage,
+        imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+        videoUrl = videoUrl?.takeIf { it.isNotBlank() },
+        ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
+        skipAfterSeconds = skipAfterSeconds.coerceAtLeast(0),
+        adClickId = adClickId,
+    )
+}
+
+private fun BroadcastAdBreakStateDto.toDomain(): BroadcastAdBreakState = BroadcastAdBreakState(
+    adBreakActive = adBreakActive,
+    adBreakStartedAt = adBreakStartedAt,
+    remainingSeconds = remainingSeconds.coerceAtLeast(0),
+    totalAdBreaks = totalAdBreaks,
+    skipAfterSeconds = skipAfterSeconds.coerceAtLeast(0),
+)
+
+private fun BroadcastMidRollServeDto.toDomain(): BroadcastMidRollServe = BroadcastMidRollServe(
+    ad = midRoll?.takeIf { it.creativeId.isNotBlank() }?.toDomain(),
+    adFree = adFree,
+    remainingSeconds = remainingSeconds.coerceAtLeast(0),
+)
+
+private fun BroadcastMidRollDto.toDomain(): BroadcastPreRoll {
     val hasVideo = !videoUrl.isNullOrBlank()
     val isImage = format != "video" || !hasVideo
     return BroadcastPreRoll(

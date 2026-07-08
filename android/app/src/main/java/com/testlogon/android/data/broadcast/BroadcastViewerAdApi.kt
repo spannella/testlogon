@@ -2,6 +2,7 @@ package com.testlogon.android.data.broadcast
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -36,6 +37,14 @@ interface BroadcastViewerAdApi {
         @Query("slot_type") slotType: String = "pre_roll",
         @Query("view_time_ms") viewTimeMs: Int = 0,
     ): BroadcastAdEventOutDto
+
+    /** ADV2-101 — per-viewer mid-roll serve during an active break: mints ad_click_id + returns a creative. */
+    @POST("broadcast/sessions/{sessionId}/ad-break/serve")
+    suspend fun serveMidRoll(@Path("sessionId") sessionId: String): BroadcastMidRollServeDto
+
+    /** ADV2-103 — light poll-detectable ad-break state (drives the viewer interrupt poll). */
+    @GET("broadcast/sessions/{sessionId}/ad-break/state")
+    suspend fun adBreakState(@Path("sessionId") sessionId: String): BroadcastAdBreakStateDto
 }
 
 /** BroadcastJoinOut — the viewer ad-join envelope. */
@@ -67,4 +76,37 @@ data class BroadcastAdEventOutDto(
     @Json(name = "event_id") val eventId: String = "",
     @Json(name = "event_type") val eventType: String = "",
     @Json(name = "fraud_flagged") val fraudFlagged: Boolean = false,
+)
+
+/** ADV2-101 — MidRollServeOut: the per-viewer serve envelope (creative + ad-free + break remaining). */
+@JsonClass(generateAdapter = true)
+data class BroadcastMidRollServeDto(
+    @Json(name = "session_id") val sessionId: String = "",
+    @Json(name = "mid_roll") val midRoll: BroadcastMidRollDto? = null,
+    @Json(name = "ad_free") val adFree: Boolean = false,
+    @Json(name = "remaining_seconds") val remainingSeconds: Int = 0,
+)
+
+/** ADV2-101 — MidRollOut: one served mid-roll creative + its per-serve attribution id. */
+@JsonClass(generateAdapter = true)
+data class BroadcastMidRollDto(
+    @Json(name = "creative_id") val creativeId: String = "",
+    @Json(name = "format") val format: String = "image",
+    @Json(name = "video_url") val videoUrl: String? = null,
+    @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "cta_url") val ctaUrl: String? = null,
+    @Json(name = "skip_after_seconds") val skipAfterSeconds: Int = 15,
+    @Json(name = "ad_click_id") val adClickId: String = "",
+    @Json(name = "remaining_seconds") val remainingSeconds: Int = 0,
+)
+
+/** ADV2-103 — AdBreakStateOut: the light poll-detectable live ad-break state. */
+@JsonClass(generateAdapter = true)
+data class BroadcastAdBreakStateDto(
+    @Json(name = "session_id") val sessionId: String = "",
+    @Json(name = "ad_break_active") val adBreakActive: Boolean = false,
+    @Json(name = "ad_break_started_at") val adBreakStartedAt: Long? = null,
+    @Json(name = "remaining_seconds") val remainingSeconds: Int = 0,
+    @Json(name = "total_ad_breaks") val totalAdBreaks: Int = 0,
+    @Json(name = "skip_after_seconds") val skipAfterSeconds: Int = 15,
 )
