@@ -10,6 +10,7 @@ import com.testlogon.android.core.model.ads.AdCreative
 import com.testlogon.android.core.network.ads.AdAccountCreateIn
 import com.testlogon.android.core.network.ads.AdCampaignCreateIn
 import com.testlogon.android.core.network.ads.AdCreativeCreateIn
+import com.testlogon.android.core.network.ads.AdCtaActionCreateDto
 import com.testlogon.android.core.network.ads.AdsAccountsApi
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
@@ -78,6 +79,7 @@ interface AdsCreateRepository {
         ctaText: String?,
         ctaUrl: String?,
         rotationWeight: Int,
+        ctas: List<AdCtaActionCreateDto> = emptyList(),
     ): ApiResult<AdCreative>
 
     /** ADV-109 - upload the creative image/video asset (multipart); returns the stored asset URL. */
@@ -161,6 +163,7 @@ class AdsCreateRepositoryImpl @Inject constructor(
         ctaText: String?,
         ctaUrl: String?,
         rotationWeight: Int,
+        ctas: List<AdCtaActionCreateDto>,
     ): ApiResult<AdCreative> = withContext(Dispatchers.IO) {
         call {
             api.createCreative(
@@ -173,6 +176,7 @@ class AdsCreateRepositoryImpl @Inject constructor(
                     ctaText = ctaText,
                     ctaUrl = ctaUrl,
                     rotationWeight = rotationWeight,
+                    ctas = ctas.ifEmpty { null },
                 ),
             ).toDomain()
         }

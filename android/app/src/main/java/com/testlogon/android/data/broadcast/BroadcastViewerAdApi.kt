@@ -1,6 +1,7 @@
 package com.testlogon.android.data.broadcast
 
 import com.squareup.moshi.Json
+import com.testlogon.android.data.ads.CtaActionDto
 import com.squareup.moshi.JsonClass
 import retrofit2.http.GET
 import retrofit2.http.POST
@@ -67,6 +68,8 @@ data class BroadcastPreRollDto(
     @Json(name = "cta_url") val ctaUrl: String? = null,
     @Json(name = "skip_after_seconds") val skipAfterSeconds: Int = 5,
     @Json(name = "ad_click_id") val adClickId: String = "",
+    // ADV2-207 (F2) — structured click-through CTA targets served with the pre-roll.
+    @Json(name = "ctas") val ctas: List<CtaActionDto>? = null,
 )
 
 /** AdEventOut — the track ack. */
@@ -97,6 +100,8 @@ data class BroadcastMidRollDto(
     @Json(name = "cta_url") val ctaUrl: String? = null,
     @Json(name = "skip_after_seconds") val skipAfterSeconds: Int = 15,
     @Json(name = "ad_click_id") val adClickId: String = "",
+    // ADV2-207 (F2) — structured click-through CTA targets served with the mid-roll.
+    @Json(name = "ctas") val ctas: List<CtaActionDto>? = null,
     @Json(name = "remaining_seconds") val remainingSeconds: Int = 0,
 )
 

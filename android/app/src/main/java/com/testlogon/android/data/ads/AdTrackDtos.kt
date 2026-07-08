@@ -35,3 +35,26 @@ data class AdTrackResultDto(
     @Json(name = "flagged") val flagged: Boolean = false,
     @Json(name = "fraud_score") val fraudScore: Int = 0,
 )
+
+
+/**
+ * ADV2-207 (F2) — wire DTOs for POST /ui/ads/cta-click (op cta_click_endpoint, CtaClickIn). A
+ * structured CTA tap. The backend charges CPC to the advertiser (funds-guarded, idempotent per
+ * {ad_click_id}#cta#{cta_type}) EXCEPT tip (no advertiser charge). ad_click_id + cta_type are
+ * required; target_id is optional (subscribe/tip resolve to the placement content owner server-side).
+ */
+@JsonClass(generateAdapter = true)
+data class CtaClickDto(
+    @Json(name = "ad_click_id") val adClickId: String,
+    @Json(name = "cta_type") val ctaType: String,
+    @Json(name = "target_id") val targetId: String = "",
+)
+
+/** Response mirrors record_cta_click; all fields defaulted so a partial body never crashes the parse. */
+@JsonClass(generateAdapter = true)
+data class CtaClickResultDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "charged") val charged: Boolean = false,
+    @Json(name = "charge_cents") val chargeCents: Int = 0,
+    @Json(name = "reason") val reason: String = "",
+)

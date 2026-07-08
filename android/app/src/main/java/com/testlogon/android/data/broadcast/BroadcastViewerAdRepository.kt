@@ -1,6 +1,8 @@
 package com.testlogon.android.data.broadcast
 
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.data.ads.toCtaActions
 import com.testlogon.android.core.network.error.ApiErrorParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -62,6 +64,8 @@ data class BroadcastPreRoll(
     val ctaUrl: String?,
     val skipAfterSeconds: Int,
     val adClickId: String,
+    /** ADV2-207 (F2) — structured click-through CTA targets served with this broadcast ad (AdCtaBar). */
+    val ctas: List<CtaAction> = emptyList(),
 )
 
 /** ADV2-103 — the poll-detectable live ad-break state (domain projection of AdBreakStateOut). */
@@ -182,6 +186,7 @@ private fun BroadcastPreRollDto.toDomain(): BroadcastPreRoll {
         ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
         skipAfterSeconds = skipAfterSeconds.coerceAtLeast(0),
         adClickId = adClickId,
+        ctas = ctas.toCtaActions(),
     )
 }
 
@@ -210,5 +215,6 @@ private fun BroadcastMidRollDto.toDomain(): BroadcastPreRoll {
         ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
         skipAfterSeconds = skipAfterSeconds.coerceAtLeast(0),
         adClickId = adClickId,
+        ctas = ctas.toCtaActions(),
     )
 }

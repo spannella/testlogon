@@ -46,6 +46,10 @@ import com.testlogon.android.feature.broadcast.tips.TipsGoalsPanel
 import com.testlogon.android.feature.player.VideoPlayer
 import com.testlogon.android.feature.player.VideoPlayerController
 import com.testlogon.android.feature.player.PlaybackPhase as PlayerPlaybackPhase
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.feature.ads.cta.AdCtaBar
+import com.testlogon.android.feature.ads.cta.AdCtaRouter
+import com.testlogon.android.feature.ads.cta.CtaDestination
 import com.testlogon.android.feature.vod.adsupported.AdOverlay
 import com.testlogon.android.feature.vod.adsupported.AdOverlayTestTags
 import com.testlogon.android.feature.vod.adsupported.AdSupportedUiState
@@ -65,6 +69,7 @@ import kotlinx.coroutines.delay
 fun ViewerScreen(
     onBack: () -> Unit,
     onBuyProduct: (categoryId: String, itemId: String) -> Unit = { _, _ -> },
+    onCtaNavigate: (CtaDestination) -> Unit = {},
     viewModel: ViewerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -109,6 +114,11 @@ fun ViewerScreen(
                             onAdPosition = viewModel::onPreRollPosition,
                             onAdCompleted = viewModel::onPreRollCompleted,
                             onSkipAd = viewModel::onPreRollSkip,
+                            ctas = s.ad.ctas,
+                            onCta = { action ->
+                                viewModel.onCtaTap(action)
+                                onCtaNavigate(AdCtaRouter.destinationFor(action, ""))
+                            },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -125,6 +135,11 @@ fun ViewerScreen(
                             onAdPosition = viewModel::onMidRollPosition,
                             onAdCompleted = viewModel::onMidRollCompleted,
                             onSkipAd = viewModel::onMidRollSkip,
+                            ctas = s.ad.ctas,
+                            onCta = { action ->
+                                viewModel.onCtaTap(action)
+                                onCtaNavigate(AdCtaRouter.destinationFor(action, ""))
+                            },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -214,6 +229,8 @@ private fun BroadcastPreRollPlayer(
     onAdPosition: (Long) -> Unit,
     onAdCompleted: () -> Unit,
     onSkipAd: () -> Unit,
+    ctas: List<CtaAction> = emptyList(),
+    onCta: (CtaAction) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val isImage = ad.isImage
@@ -283,6 +300,16 @@ private fun BroadcastPreRollPlayer(
             ),
             onSkip = onSkipAd,
             modifier = Modifier.fillMaxSize().testTag(AdOverlayTestTags.SKIP + "_container"),
+        )
+        // ADV2-211 (F2) - the structured click-through CTA bar over the live ad. Buy/subscribe taps
+        // fire CPC + stash the ad_click_id for CPA; tip deep-links with no advertiser charge.
+        AdCtaBar(
+            ctas = ctas,
+            onCta = onCta,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, bottom = 64.dp),
         )
     }
 }

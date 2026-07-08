@@ -3665,7 +3665,13 @@
     <string name="create_creative_body_label">Body text</string>
     <string name="create_creative_cta_text_label">Call to action text</string>
     <string name="create_creative_cta_url_label">Call to action URL</string>
-    <string name="create_creative_image_preview">Selected creative image</string>
+
+    <string name="create_creative_ctas_label">Click-through CTAs</string>
+    <string name="create_creative_cta_type_label">CTA type</string>
+    <string name="create_creative_cta_target_label">Target ID (product "category/item", creator or account)</string>
+    <string name="create_creative_cta_label_label">Button label</string>
+    <string name="create_creative_cta_add">Add CTA</string>
+    <string name="create_creative_cta_remove">Remove CTA</string>    <string name="create_creative_image_preview">Selected creative image</string>
     <string name="create_creative_pick_image">Add image</string>
     <string name="create_creative_change_image">Change image</string>
     <string name="create_creative_submit">Create creative</string>

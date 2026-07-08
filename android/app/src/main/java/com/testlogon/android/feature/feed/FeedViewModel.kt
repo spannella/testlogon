@@ -10,6 +10,8 @@ import androidx.paging.filter
 import androidx.paging.map
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.ads.AdClickAttributionStore
+import com.testlogon.android.data.ads.AdCtaClicker
+import com.testlogon.android.data.ads.CtaAction
 import com.testlogon.android.data.ads.AdEvent
 import com.testlogon.android.data.ads.AdTrackRepository
 import com.testlogon.android.data.bookmarks.FeedBookmarkRepository
@@ -71,6 +73,7 @@ class FeedViewModel @Inject constructor(
     private val feedRefreshBus: FeedRefreshBus,
     private val adTracker: AdTrackRepository,
     private val adAttribution: AdClickAttributionStore,
+    private val adCtaClicker: AdCtaClicker,
 ) : ViewModel() {
 
     /** author id (email/user_sub) -> display name, resolved lazily for visible posts. */
@@ -401,6 +404,17 @@ class FeedViewModel @Inject constructor(
         // attributes the conversion back to it (backend ad_attribution.attribute_conversion).
         adAttribution.record(ad.adClickId)
         viewModelScope.launch { adTracker.track(AdEvent.CLICK, ad) }
+    }
+
+    /**
+     * ADV2-209 (F2) — a structured CTA tap on a sponsored unit. Money side via the shared [AdCtaClicker]:
+     * a NON-tip CTA fires the CPC charge (funds-guarded, idempotent) + stashes the ad_click_id so a
+     * resulting purchase/subscribe attributes CPA; a tip fires NO advertiser charge. Routing is the
+     * screen's concern (AdCtaRouter).
+     */
+    fun onCtaTap(post: FeedPost, action: CtaAction) {
+        val ad = post.sponsored ?: return
+        adCtaClicker.onTap(viewModelScope, ad.adClickId, action)
     }
 
     private companion object {

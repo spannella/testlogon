@@ -10,12 +10,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.testlogon.android.R
+import com.testlogon.android.data.ads.CtaType
 import com.testlogon.android.core.model.ads.AdAccountSummary
 import com.testlogon.android.core.model.ads.AdCampaign
 
@@ -59,6 +63,9 @@ object CreateCreativeTestTags {
     const val FORMAT = "create_creative_format"
     const val TITLE = "create_creative_title"
     const val CTA_URL = "create_creative_cta_url"
+    const val CTA_EDITOR = "create_creative_cta_editor"
+    const val CTA_TYPE = "create_creative_cta_type_"
+    const val CTA_ADD = "create_creative_cta_add"
     const val PICK_IMAGE = "create_creative_pick_image"
     const val SUBMIT = "create_creative_submit"
     const val SUCCESS = "create_creative_success"
@@ -82,6 +89,7 @@ fun CreateCreativeRoute(
     val body by viewModel.body.collectAsStateWithLifecycle()
     val ctaText by viewModel.ctaText.collectAsStateWithLifecycle()
     val ctaUrl by viewModel.ctaUrl.collectAsStateWithLifecycle()
+    val ctas by viewModel.ctas.collectAsStateWithLifecycle()
     val imageUri by viewModel.imageUri.collectAsStateWithLifecycle()
     val imageProcessing by viewModel.imageProcessing.collectAsStateWithLifecycle()
     val createState by viewModel.createState.collectAsStateWithLifecycle()
@@ -115,6 +123,12 @@ fun CreateCreativeRoute(
         onBody = viewModel::onBody,
         onCtaText = viewModel::onCtaText,
         onCtaUrl = viewModel::onCtaUrl,
+        ctas = ctas,
+        onAddCta = viewModel::onAddCta,
+        onRemoveCta = viewModel::onRemoveCta,
+        onCtaType = viewModel::onCtaType,
+        onCtaTarget = viewModel::onCtaTarget,
+        onCtaLabel = viewModel::onCtaLabel,
         onPickImage = {
             picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
@@ -151,6 +165,12 @@ fun CreateCreativeScreen(
     onBody: (String) -> Unit,
     onCtaText: (String) -> Unit,
     onCtaUrl: (String) -> Unit,
+    ctas: List<CreateCreativeViewModel.CtaDraft> = emptyList(),
+    onAddCta: () -> Unit = {},
+    onRemoveCta: (Long) -> Unit = {},
+    onCtaType: (Long, CtaType) -> Unit = { _, _ -> },
+    onCtaTarget: (Long, String) -> Unit = { _, _ -> },
+    onCtaLabel: (Long, String) -> Unit = { _, _ -> },
     onPickImage: () -> Unit,
     onSubmit: () -> Unit,
     onSubmitForReview: () -> Unit,
@@ -266,6 +286,17 @@ fun CreateCreativeScreen(
                 enabled = !submitting,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth().testTag(CreateCreativeTestTags.CTA_URL),
+            )
+
+            // ADV2-212 (F2) - structured click-through CTA editor (buy/view/tip/subscribe/subscribe_other).
+            CtaEditorSection(
+                ctas = ctas,
+                enabled = !submitting,
+                onAddCta = onAddCta,
+                onRemoveCta = onRemoveCta,
+                onCtaType = onCtaType,
+                onCtaTarget = onCtaTarget,
+                onCtaLabel = onCtaLabel,
             )
 
             if (imageUri != null) {
@@ -417,3 +448,98 @@ private fun AdAccountSummary.label(): String {
 }
 
 private fun AdCampaign.label(): String = name ?: campaignId
+
+/**
+ * ADV2-212 (F2) — the multi-CTA authoring editor. Each row picks a cta_type (buy_product / view_product
+ * / tip / subscribe / subscribe_other), an optional target id (product / creator / account — resolved
+ * to the placement content owner server-side for tip / subscribe this-creator) and the button label
+ * shown by the in-app CTA bar. Rows with a blank label are dropped at submit; the whole section is
+ * optional (a creative with no rows keeps its legacy single cta_text/cta_url).
+ */
+@Composable
+private fun CtaEditorSection(
+    ctas: List<CreateCreativeViewModel.CtaDraft>,
+    enabled: Boolean,
+    onAddCta: () -> Unit,
+    onRemoveCta: (Long) -> Unit,
+    onCtaType: (Long, CtaType) -> Unit,
+    onCtaTarget: (Long, String) -> Unit,
+    onCtaLabel: (Long, String) -> Unit,
+) {
+    val typeOptions: List<Pair<String, String>> = remember {
+        CtaType.entries.map { it.wire to ctaTypeLabel(it) }
+    }
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().testTag(CreateCreativeTestTags.CTA_EDITOR),
+    ) {
+        Text(
+            text = stringResource(R.string.create_creative_ctas_label),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        ctas.forEach { row ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            LabeledDropdown(
+                                label = stringResource(R.string.create_creative_cta_type_label),
+                                selectedLabel = ctaTypeLabel(row.ctaType),
+                                options = typeOptions,
+                                onSelect = { wire ->
+                                    CtaType.fromWire(wire)?.let { onCtaType(row.id, it) }
+                                },
+                                enabled = enabled,
+                                testTag = CreateCreativeTestTags.CTA_TYPE + row.id,
+                            )
+                        }
+                        IconButton(onClick = { onRemoveCta(row.id) }, enabled = enabled) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = stringResource(R.string.create_creative_cta_remove),
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = row.targetId,
+                        onValueChange = { onCtaTarget(row.id, it) },
+                        label = { Text(stringResource(R.string.create_creative_cta_target_label)) },
+                        singleLine = true,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = row.label,
+                        onValueChange = { onCtaLabel(row.id, it) },
+                        label = { Text(stringResource(R.string.create_creative_cta_label_label)) },
+                        singleLine = true,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+        OutlinedButton(
+            onClick = onAddCta,
+            enabled = enabled && ctas.size < 8,
+            modifier = Modifier.fillMaxWidth().testTag(CreateCreativeTestTags.CTA_ADD),
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
+            Text(stringResource(R.string.create_creative_cta_add))
+        }
+    }
+}
+
+private fun ctaTypeLabel(type: CtaType): String = when (type) {
+    CtaType.BUY_PRODUCT -> "Buy product"
+    CtaType.VIEW_PRODUCT -> "View product"
+    CtaType.TIP -> "Tip creator"
+    CtaType.SUBSCRIBE -> "Subscribe (this creator)"
+    CtaType.SUBSCRIBE_OTHER -> "Subscribe (another account)"
+}

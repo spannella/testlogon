@@ -1,5 +1,6 @@
 package com.testlogon.android.navigation
 
+import com.testlogon.android.feature.ads.cta.navigateCta
 import android.net.Uri
 import androidx.navigation.NavDeepLink
 import androidx.navigation.NavGraphBuilder
@@ -104,6 +105,8 @@ fun NavGraphBuilder.videoDetailDestination(navController: NavHostController) {
             onOpenVideo = { id ->
                 navController.navigate(VideoDetailDest.build(id)) { launchSingleTop = true }
             },
+            // ADV2-210 (F2): route a pre-roll CTA tap to the existing product/cart/subscribe/profile dests.
+            onCtaNavigate = { dest -> navController.navigateCta(dest) },
         )
     }
 }

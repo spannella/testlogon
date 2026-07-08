@@ -15,4 +15,8 @@ interface AdTrackApi {
     /** Record one ad event (impression|click|...) for a served sponsored unit. */
     @POST("ui/ads/track")
     suspend fun track(@Body body: AdTrackEventDto): AdTrackResultDto
+
+    /** ADV2-207 (F2) — record a structured CTA tap; charges CPC to the advertiser (except tip). */
+    @POST("ui/ads/cta-click")
+    suspend fun ctaClick(@Body body: CtaClickDto): CtaClickResultDto
 }

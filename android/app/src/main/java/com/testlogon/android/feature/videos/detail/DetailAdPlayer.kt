@@ -1,14 +1,20 @@
 package com.testlogon.android.feature.videos.detail
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import coil.compose.AsyncImage
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.feature.ads.cta.AdCtaBar
 import com.testlogon.android.feature.player.VideoPlayer
 import com.testlogon.android.feature.player.VideoPlayerController
 import com.testlogon.android.feature.vod.adsupported.AdOverlay
@@ -44,6 +50,7 @@ fun DetailAdAwarePlayer(
     onAdCompleted: () -> Unit,
     onSkipAd: () -> Unit,
     onFullscreenToggle: () -> Unit,
+    onCta: (CtaAction) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val br = state.adBreak
@@ -131,6 +138,16 @@ fun DetailAdAwarePlayer(
                 ),
                 onSkip = onSkipAd,
                 modifier = Modifier.fillMaxSize().testTag(AdOverlayTestTags.SKIP + "_container"),
+            )
+            // ADV2-210 (F2) — the structured click-through CTA bar over the pre-roll. Buy/subscribe
+            // taps fire CPC + stash the ad_click_id for CPA; tip deep-links with no advertiser charge.
+            AdCtaBar(
+                ctas = br.ctas,
+                onCta = onCta,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 64.dp),
             )
         }
     }

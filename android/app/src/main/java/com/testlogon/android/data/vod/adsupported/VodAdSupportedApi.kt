@@ -1,6 +1,7 @@
 package com.testlogon.android.data.vod.adsupported
 
 import com.squareup.moshi.Json
+import com.testlogon.android.data.ads.CtaActionDto
 import com.squareup.moshi.JsonClass
 import retrofit2.http.Body
 import retrofit2.http.GET
@@ -61,6 +62,9 @@ data class VodAdBreakDto(
     @Json(name = "creative_type") val creativeType: String,
     @Json(name = "skip_after_seconds") val skipAfterSeconds: Int,
     @Json(name = "slot_index") val slotIndex: Int,
+    // ADV2-207 (F2) — per-serve attribution id + structured CTA targets (backend now surfaces both).
+    @Json(name = "ad_click_id") val adClickId: String = "",
+    @Json(name = "ctas") val ctas: List<CtaActionDto>? = null,
     @Json(name = "completed") val completed: Boolean = false,
 )
 

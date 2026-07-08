@@ -1,6 +1,7 @@
 package com.testlogon.android.core.network.ads
 
 import com.squareup.moshi.Json
+import com.squareup.moshi.JsonClass
 
 /**
  * ADV-107/108/109 - transport DTOs for the MUTATING advertiser create flow (create ad account -> create
@@ -65,6 +66,20 @@ data class AdCreativeCreateIn(
     @Json(name = "cta_text") val ctaText: String? = null,
     @Json(name = "cta_url") val ctaUrl: String? = null,
     @Json(name = "rotation_weight") val rotationWeight: Int = 50,
+    // ADV2-212 (F2) — structured click-through CTA targets (max 8). Null/empty for a legacy single-CTA
+    // creative (which still uses cta_text/cta_url). Mirrors the backend CtaActionIn.
+    @Json(name = "ctas") val ctas: List<AdCtaActionCreateDto>? = null,
+)
+
+/**
+ * ADV2-212 (F2) — one structured click-through CTA target on a creative-create request. cta_type is one
+ * of buy_product / view_product / tip / subscribe / subscribe_other; target_id names the product /
+ * creator / account (optional for tip / subscribe this-creator); label is the button text.
+ */
+data class AdCtaActionCreateDto(
+    @Json(name = "cta_type") val ctaType: String,
+    @Json(name = "target_id") val targetId: String = "",
+    @Json(name = "label") val label: String,
 )
 
 /**

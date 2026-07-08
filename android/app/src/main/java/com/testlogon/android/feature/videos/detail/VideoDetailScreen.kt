@@ -2,6 +2,8 @@
 
 package com.testlogon.android.feature.videos.detail
 
+import com.testlogon.android.feature.ads.cta.AdCtaRouter
+import com.testlogon.android.feature.ads.cta.CtaDestination
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -104,6 +106,7 @@ object VideoDetailTestTags {
 fun VideoDetailRoute(
     onBack: () -> Unit,
     onOpenVideo: (videoId: String) -> Unit,
+    onCtaNavigate: (CtaDestination) -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: VideoDetailViewModel = hiltViewModel(),
     rentalViewModel: VodRentalViewModel = hiltViewModel(),
@@ -165,6 +168,17 @@ fun VideoDetailRoute(
                     onAdCompleted = viewModel::onAdCompleted,
                     onSkipAd = viewModel::onSkipAd,
                     onFullscreenToggle = { isFullscreen = true },
+                    onCta = { action ->
+                        // ADV2-210 (F2): money side (CPC + CPA stash / tip = no charge) then route.
+                        viewModel.onCtaTap(action)
+                        if (action.isTip) {
+                            state.detail?.id?.let { tipViewModel.open(it) }
+                        } else {
+                            onCtaNavigate(
+                                AdCtaRouter.destinationFor(action, state.detail?.ownerUserId ?: ""),
+                            )
+                        }
+                    },
                     modifier = playerModifier,
                 )
             } else {

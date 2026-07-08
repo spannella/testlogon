@@ -1,5 +1,6 @@
 package com.testlogon.android.data.feed
 
+import com.testlogon.android.data.ads.CtaActionDto
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
@@ -87,6 +88,8 @@ data class PostDto(
     @Json(name = "ad_click_id") val adClickId: String? = null,
     @Json(name = "surface") val surface: String? = null,
     @Json(name = "slot_type") val slotType: String? = null,
+    // ADV2-207 (F2) — structured click-through CTA targets served with the sponsored unit.
+    @Json(name = "ctas") val ctas: List<CtaActionDto>? = null,
     @Json(name = "creator_id") val creatorId: String? = null,
     @Json(name = "content_id") val contentId: String? = null,
     // --- AND-179 embedded poll (present for post_type "poll"/"survey") ---

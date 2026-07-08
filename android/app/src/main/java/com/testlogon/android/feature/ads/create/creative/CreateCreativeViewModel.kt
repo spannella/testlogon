@@ -8,6 +8,8 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdAccountSummary
 import com.testlogon.android.core.model.ads.AdCampaign
 import com.testlogon.android.core.model.ads.AdCreative
+import com.testlogon.android.core.network.ads.AdCtaActionCreateDto
+import com.testlogon.android.data.ads.CtaType
 import com.testlogon.android.feature.ads.create.data.AdsCreateRepository
 import com.testlogon.android.feature.ads.create.data.AdsStudioSelection
 import com.testlogon.android.feature.profile.media.ProfileImageProcessor
@@ -99,6 +101,13 @@ class CreateCreativeViewModel @Inject constructor(
     private val _ctaUrl = MutableStateFlow("")
     val ctaUrl: StateFlow<String> = _ctaUrl.asStateFlow()
 
+    // ADV2-212 (F2) — structured click-through CTA editor. Each row is a typed target (type + optional
+    // target id + button label) mapped to the backend CtaActionIn at submit; empty list => legacy
+    // single cta_text/cta_url creative.
+    private var nextCtaId = 0L
+    private val _ctas = MutableStateFlow<List<CtaDraft>>(emptyList())
+    val ctas: StateFlow<List<CtaDraft>> = _ctas.asStateFlow()
+
     /** Preview uri of the picked image (null until picked). */
     private val _imageUri = MutableStateFlow<Uri?>(null)
     val imageUri: StateFlow<Uri?> = _imageUri.asStateFlow()
@@ -174,6 +183,34 @@ class CreateCreativeViewModel @Inject constructor(
     fun onCtaText(text: String) { _ctaText.value = text }
     fun onCtaUrl(text: String) { _ctaUrl.value = text; clearError() }
 
+    /** ADV2-212 — one editable structured-CTA row. [id] is a stable UI key for edit/remove. */
+    data class CtaDraft(
+        val id: Long,
+        val ctaType: CtaType = CtaType.BUY_PRODUCT,
+        val targetId: String = "",
+        val label: String = "",
+    )
+
+    /** Add a blank CTA row (capped at the backend max of 8). */
+    fun onAddCta() {
+        if (_ctas.value.size >= 8) return
+        _ctas.value = _ctas.value + CtaDraft(id = nextCtaId++)
+    }
+
+    fun onRemoveCta(id: Long) { _ctas.value = _ctas.value.filterNot { it.id == id } }
+
+    fun onCtaType(id: Long, type: CtaType) {
+        _ctas.value = _ctas.value.map { if (it.id == id) it.copy(ctaType = type) else it }
+    }
+
+    fun onCtaTarget(id: Long, target: String) {
+        _ctas.value = _ctas.value.map { if (it.id == id) it.copy(targetId = target) else it }
+    }
+
+    fun onCtaLabel(id: Long, label: String) {
+        _ctas.value = _ctas.value.map { if (it.id == id) it.copy(label = label) else it }
+    }
+
     /** Decodes/processes the picked image to JPEG bytes off the main thread; holds it for upload. */
     fun onImagePicked(uri: Uri) {
         _imageProcessing.value = true
@@ -217,6 +254,15 @@ class CreateCreativeViewModel @Inject constructor(
                 ctaText = _ctaText.value.trim().ifBlank { null },
                 ctaUrl = _ctaUrl.value.trim().ifBlank { null },
                 rotationWeight = DEFAULT_ROTATION_WEIGHT,
+                ctas = _ctas.value
+                    .filter { it.label.isNotBlank() }
+                    .map {
+                        AdCtaActionCreateDto(
+                            ctaType = it.ctaType.wire,
+                            targetId = it.targetId.trim(),
+                            label = it.label.trim(),
+                        )
+                    },
             )
             when (created) {
                 is ApiResult.Success -> {

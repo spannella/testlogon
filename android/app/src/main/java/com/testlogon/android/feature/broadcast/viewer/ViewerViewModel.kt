@@ -11,6 +11,8 @@ import com.testlogon.android.data.analytics.PlaybackTarget
 import com.testlogon.android.data.broadcast.BroadcastAdEvents
 import com.testlogon.android.data.broadcast.BroadcastPreRoll
 import com.testlogon.android.data.broadcast.BroadcastRepository
+import com.testlogon.android.data.ads.AdCtaClicker
+import com.testlogon.android.data.ads.CtaAction
 import com.testlogon.android.data.broadcast.BroadcastViewerAdRepository
 import com.testlogon.android.data.broadcast.BroadcastViewerCountRepository
 import com.testlogon.android.data.broadcast.ViewerPresence
@@ -51,6 +53,7 @@ class ViewerViewModel @Inject constructor(
     private val presence: ViewerPresence,
     private val viewerCountRepo: BroadcastViewerCountRepository,
     private val clock: Clock,
+    private val adCtaClicker: AdCtaClicker,
 ) : ViewModel() {
 
     val sessionId: String = requireNotNull(savedStateHandle[ARG_SESSION_ID]) {
@@ -351,6 +354,21 @@ class ViewerViewModel @Inject constructor(
         val s = _uiState.value as? ViewerUiState.MidRoll ?: return
         trackMidRoll(s.ad, BroadcastAdEvents.SKIP, 0)
         resumeLiveFromMidRoll(s)
+    }
+
+    /**
+     * ADV2-211 (F2) - a CTA tap on the pre-roll / mid-roll CTA bar. Money side via the shared
+     * [AdCtaClicker]: a NON-tip CTA fires the CPC charge (funds-guarded, idempotent) + stashes the
+     * served ad_click_id so a resulting purchase/subscribe attributes CPA; a tip fires NO advertiser
+     * charge. Navigation is the screen's concern (AdCtaRouter).
+     */
+    fun onCtaTap(action: CtaAction) {
+        val ad = when (val st = _uiState.value) {
+            is ViewerUiState.PreRoll -> st.ad
+            is ViewerUiState.MidRoll -> st.ad
+            else -> return
+        }
+        adCtaClicker.onTap(viewModelScope, ad.adClickId, action)
     }
 
     private fun trackMidRoll(ad: BroadcastPreRoll, event: String, viewTimeMs: Int) {

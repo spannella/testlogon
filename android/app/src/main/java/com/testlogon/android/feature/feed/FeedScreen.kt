@@ -1,5 +1,8 @@
 package com.testlogon.android.feature.feed
 
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.feature.ads.cta.AdCtaRouter
+import com.testlogon.android.feature.ads.cta.CtaDestination
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -84,6 +87,7 @@ fun FeedRoute(
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onOpenStory: (userId: String) -> Unit = {},
+    onCtaNavigate: (CtaDestination) -> Unit = {},
     viewModel: FeedViewModel = hiltViewModel(),
     paywallViewModel: PaywallViewModel = hiltViewModel(),
     tipViewModel: TipViewModel = hiltViewModel(),
@@ -222,6 +226,11 @@ fun FeedRoute(
             viewModel.onSponsoredClick(post)
             post.sponsored?.ctaUrl?.let { onLinkClick(it) }
         },
+        // ADV2-209 (F2): a structured CTA tap → CPC + CPA-stash (or tip = no charge), then route.
+        onSponsoredCta = { post, action ->
+            viewModel.onCtaTap(post, action)
+            onCtaNavigate(AdCtaRouter.destinationFor(action, post.sponsored?.creatorId ?: ""))
+        },
         onEnsurePoll = viewModel::ensurePollState,
         authorNames = authorNames,
         authorPhotos = authorPhotos,
@@ -277,6 +286,7 @@ fun FeedScreen(
     onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onSponsoredImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
+    onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
     onEnsurePoll: (FeedPost) -> Unit = {},
     authorNames: Map<String, String> = emptyMap(),
     authorPhotos: Map<String, String> = emptyMap(),
@@ -374,6 +384,7 @@ fun FeedScreen(
                         onTipReact = onTipReact,
                         onSponsoredImpression = onSponsoredImpression,
                         onSponsoredClick = onSponsoredClick,
+                        onSponsoredCta = onSponsoredCta,
                         onEnsurePoll = onEnsurePoll,
                         authorNames = authorNames,
                         authorPhotos = authorPhotos,
@@ -462,6 +473,7 @@ private fun FeedList(
     onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onSponsoredImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
+    onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
     onEnsurePoll: (FeedPost) -> Unit,
     authorNames: Map<String, String>,
     authorPhotos: Map<String, String>,
@@ -503,6 +515,7 @@ private fun FeedList(
                     onTipReact = onTipReact,
                     onSponsoredImpression = onSponsoredImpression,
                     onSponsoredClick = onSponsoredClick,
+                    onSponsoredCta = onSponsoredCta,
                     showTip = !(currentUserSub != null && item.authorId == currentUserSub),
                     // #3 — show the priced "Locked · $X" badge on the viewer's own locked posts.
                     isOwnPost = currentUserSub != null && item.authorId == currentUserSub,

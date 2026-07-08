@@ -32,7 +32,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.testlogon.android.data.feed.FeedPost
 import com.testlogon.android.data.feed.Paywall
+import com.testlogon.android.data.ads.CtaAction
 import com.testlogon.android.data.feed.SponsoredInfo
+import com.testlogon.android.feature.ads.cta.AdCtaBar
 
 /** Stable test tags for a feed post row (AND-099). */
 object PostItemTestTags {
@@ -106,6 +108,8 @@ fun PostItem(
     // fires on the CTA/card tap. No-ops for organic posts (never invoked when post.sponsored == null).
     onSponsoredImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
+    // ADV2-209 (F2) — a structured CTA tap on a sponsored unit (buy/view/tip/subscribe/subscribe_other).
+    onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
 ) {
     // ADV-105 — a server-injected sponsored (paid) unit renders as a DISTINCT card (label + CTA), not a
     // normal author post. It is never locked, so body/media come straight off the FeedPost.
@@ -117,6 +121,7 @@ fun PostItem(
             modifier = modifier,
             onImpression = onSponsoredImpression,
             onClick = onSponsoredClick,
+            onCta = onSponsoredCta,
         )
         return
     }
@@ -356,6 +361,7 @@ private fun SponsoredPostItem(
     modifier: Modifier = Modifier,
     onImpression: (FeedPost) -> Unit,
     onClick: (FeedPost) -> Unit,
+    onCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
 ) {
     SponsoredFeedCard(
         label = info.label,
@@ -363,6 +369,8 @@ private fun SponsoredPostItem(
         body = post.body,
         ctaText = info.ctaText,
         impressionKey = info.adClickId ?: info.creativeId,
+        ctas = info.ctas,
+        onCta = { action -> onCta(post, action) },
         modifier = modifier,
         onImpression = { onImpression(post) },
         onClick = { onClick(post) },
@@ -398,6 +406,8 @@ fun SponsoredFeedCard(
     ctaText: String?,
     impressionKey: String,
     modifier: Modifier = Modifier,
+    ctas: List<CtaAction> = emptyList(),
+    onCta: (CtaAction) -> Unit = {},
     onImpression: () -> Unit = {},
     onClick: () -> Unit = {},
     media: @Composable () -> Unit = {},
@@ -453,11 +463,17 @@ fun SponsoredFeedCard(
                 )
             }
             media()
-            Button(
-                onClick = { onClick() },
-                modifier = Modifier.testTag(SponsoredItemTestTags.CTA),
-            ) {
-                Text(ctaText?.takeIf { it.isNotBlank() } ?: "Learn more")
+            // ADV2-209 (F2): structured multi-CTA bar (buy/view/tip/subscribe/subscribe_other) when the
+            // creative carries typed CTAs; otherwise the legacy single-CTA button (back-compat).
+            if (ctas.isNotEmpty()) {
+                AdCtaBar(ctas = ctas, onCta = onCta)
+            } else {
+                Button(
+                    onClick = { onClick() },
+                    modifier = Modifier.testTag(SponsoredItemTestTags.CTA),
+                ) {
+                    Text(ctaText?.takeIf { it.isNotBlank() } ?: "Learn more")
+                }
             }
         }
     }

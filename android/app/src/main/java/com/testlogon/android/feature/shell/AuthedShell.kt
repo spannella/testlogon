@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.shell
 
+import com.testlogon.android.feature.ads.cta.navigateCta
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -156,6 +157,8 @@ fun AuthedShellScreen(
                     onOpenStory = { userId ->
                         onOpenRoute(com.testlogon.android.navigation.StoryViewerDest.build(userId))
                     },
+                    // ADV2-209 (F2): route a sponsored-unit CTA tap to product/cart/subscribe/profile.
+                    onCtaNavigate = { dest -> tabNav.navigateCta(dest) },
                 )
             }
             // AND-182/AND-184: Discover (curated creators/tags + "for you" recommendations).

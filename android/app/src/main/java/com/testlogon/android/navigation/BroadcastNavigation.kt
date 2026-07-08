@@ -33,6 +33,7 @@ import com.testlogon.android.feature.broadcasthost.manage.GoalsProductsViewModel
 import com.testlogon.android.feature.broadcasthost.manage.ManageRoute
 import com.testlogon.android.feature.broadcast.audioroom.AudioRoomRoute
 import com.testlogon.android.feature.broadcast.audioroom.AudioRoomViewModel
+import com.testlogon.android.feature.ads.cta.navigateCta
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
 import com.testlogon.android.feature.guest.GuestAcceptRoute
@@ -415,6 +416,8 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onBuyProduct = { categoryId, itemId ->
                 navController.navigate(ProductDetailDest.build(categoryId, itemId)) { launchSingleTop = true }
             },
+            // ADV2-211 (F2): route a live ad CTA tap to product/cart/subscribe/profile dests.
+            onCtaNavigate = { dest -> navController.navigateCta(dest) },
         )
     }
 }

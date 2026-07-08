@@ -28,6 +28,13 @@ enum class AdEvent(val wire: String) {
  */
 interface AdTrackRepository {
     suspend fun track(event: AdEvent, ad: SponsoredInfo): ApiResult<Unit>
+
+    /**
+     * ADV2-207 (F2) — record a structured CTA tap (POST /ui/ads/cta-click). The backend charges CPC to
+     * the advertiser (funds-guarded, idempotent per {ad_click_id}#cta#{cta_type}) EXCEPT tip. Best-effort
+     * / fire-and-forget: a failed beacon never surfaces to the viewer or blocks the CTA navigation.
+     */
+    suspend fun clickCta(adClickId: String, action: CtaAction): ApiResult<Unit>
 }
 
 @Singleton
@@ -58,6 +65,26 @@ class AdTrackRepositoryImpl @Inject constructor(
         )
         try {
             api.track(body)
+            ApiResult.Success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Failure(errorParser.from(e))
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
+    override suspend fun clickCta(adClickId: String, action: CtaAction): ApiResult<Unit> = withContext(io) {
+        if (adClickId.isBlank()) return@withContext ApiResult.Success(Unit)
+        try {
+            api.ctaClick(
+                CtaClickDto(
+                    adClickId = adClickId,
+                    ctaType = action.ctaType.wire,
+                    targetId = action.targetId,
+                )
+            )
             ApiResult.Success(Unit)
         } catch (e: CancellationException) {
             throw e

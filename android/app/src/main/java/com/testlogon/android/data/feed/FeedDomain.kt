@@ -1,5 +1,8 @@
 package com.testlogon.android.data.feed
 
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.data.ads.toCtaActions
+
 /**
  * AND-097 / AND-099 / AND-101 — domain model + mapping for the newsfeed (framework-free, JVM-unit-test
  * safe). No android.* / java.time(API26) here so the mapper is minSdk24-safe and pure-unit-testable;
@@ -75,6 +78,10 @@ data class SponsoredInfo(
     val slotType: String,
     val creatorId: String,
     val contentId: String,
+    /** ADV2-207 (F2) — structured click-through CTA targets served with this unit (empty for a legacy
+     *  single-CTA creative, which still renders its [ctaText]/[ctaUrl]). Rendered by AdCtaBar +
+     *  routed by AdCtaRouter (buy_product/view_product/tip/subscribe/subscribe_other). */
+    val ctas: List<CtaAction> = emptyList(),
 )
 
 /** #3 — raw lock info used to badge a locked post on its AUTHOR's own (un-redacted) view. */
@@ -195,6 +202,7 @@ internal fun PostDto.toSponsored(): SponsoredInfo? {
         slotType = slotType?.takeIf { it.isNotBlank() } ?: "sponsored_post",
         creatorId = creatorId?.takeIf { it.isNotBlank() } ?: "platform",
         contentId = contentId?.takeIf { it.isNotBlank() } ?: postId,
+        ctas = ctas.toCtaActions(),
     )
 }
 

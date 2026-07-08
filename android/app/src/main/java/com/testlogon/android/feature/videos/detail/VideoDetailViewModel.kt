@@ -17,6 +17,8 @@ import com.testlogon.android.feature.player.VideoPlayerController
 import com.testlogon.android.data.vod.adsupported.AdBreak
 import com.testlogon.android.data.vod.adsupported.AdBreakScheduler
 import com.testlogon.android.data.vod.adsupported.AdSupportedSession
+import com.testlogon.android.data.ads.AdCtaClicker
+import com.testlogon.android.data.ads.CtaAction
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedApi
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -84,6 +86,7 @@ class VideoDetailViewModel @Inject constructor(
     private val authStateProvider: AuthStateProvider,
     private val authStateStore: AuthStateStore,
     private val vodAdRepo: VodAdSupportedRepository,
+    private val adCtaClicker: AdCtaClicker,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -328,6 +331,17 @@ class VideoDetailViewModel @Inject constructor(
 
     fun onSkipAd() { _uiState.value.adBreak?.let { reportAndAdvance(it, VodAdSupportedApi.EVENT_SKIP) } }
     fun onAdCompleted() { _uiState.value.adBreak?.let { reportAndAdvance(it, VodAdSupportedApi.EVENT_COMPLETE) } }
+
+    /**
+     * ADV2-210 (F2) - a CTA tap on the pre-roll CTA bar. Delegates the money side to the shared
+     * [AdCtaClicker]: a NON-tip CTA fires the CPC charge (funds-guarded, idempotent) + stashes the
+     * break's ad_click_id so a resulting purchase/subscribe attributes CPA; a tip fires NO advertiser
+     * charge. Navigation to the CTA target is the screen's concern (AdCtaRouter).
+     */
+    fun onCtaTap(action: CtaAction) {
+        val br = _uiState.value.adBreak ?: return
+        adCtaClicker.onTap(viewModelScope, br.adClickId, action)
+    }
 
     private fun reportAndAdvance(br: AdBreak, eventType: String) {
         if (adAdvancing) return
