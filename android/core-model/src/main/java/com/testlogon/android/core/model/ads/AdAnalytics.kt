@@ -109,3 +109,28 @@ data class DateRange(val from: String, val to: String) {
         }
     }
 }
+
+/**
+ * ADV-501/503 - ROAS (return on ad spend) report for an account: per-account [totals] plus a
+ * per-[campaigns] breakdown. Sourced from the ad_billing ledger (GET /ui/ads/roas). MONEY = *_cents Long;
+ * *Pct already a percentage; [roas] is a ratio (conversion value / spend).
+ */
+data class AdRoasReport(
+    val accountId: String? = null,
+    val days: Int? = null,
+    val totals: AdCampaignRoas,
+    val campaigns: List<AdCampaignRoas> = emptyList(),
+)
+
+/** ADV-501/503 - ROAS figures for one campaign (or the account total, [campaignId] null). */
+data class AdCampaignRoas(
+    val campaignId: String? = null,
+    val impressions: Long = 0,
+    val clicks: Long = 0,
+    val conversions: Long = 0,
+    val spendCents: Long = 0,
+    val conversionValueCents: Long = 0,
+    val ctrPct: Double = 0.0,
+    val cpaCents: Double = 0.0,
+    val roas: Double = 0.0,
+)

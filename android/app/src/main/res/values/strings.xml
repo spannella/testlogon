@@ -3704,6 +3704,11 @@
     <string name="ad_analytics_breakdown_clicks">%1$d clicks</string>
     <string name="ad_analytics_empty_title">No analytics yet</string>
     <string name="ad_analytics_empty_body">There is no campaign activity for this date range.</string>
+    <string name="ad_roas_header">Return on ad spend</string>
+    <string name="ad_roas_totals">All campaigns</string>
+    <string name="ad_roas_campaign_unknown">Campaign</string>
+    <string name="ad_roas_roas_value">%1$sx</string>
+    <string name="ad_roas_line">Spend %1$s • Value %2$s • %3$d conv • %4$d impr • %5$d clk • CTR %6$s • CPA %7$s</string>
 
     <!-- AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). -->
     <string name="more_entry_tickets">Support tickets</string>

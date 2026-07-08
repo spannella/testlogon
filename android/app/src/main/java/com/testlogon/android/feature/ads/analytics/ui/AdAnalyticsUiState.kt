@@ -3,6 +3,7 @@ package com.testlogon.android.feature.ads.analytics.ui
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ads.AdAnalyticsSummary
 import com.testlogon.android.core.model.ads.AdBreakdownEntry
+import com.testlogon.android.core.model.ads.AdRoasReport
 import com.testlogon.android.core.model.ads.AdTimeSeriesPoint
 import com.testlogon.android.core.model.ads.DateRangePreset
 
@@ -27,6 +28,7 @@ sealed interface AdAnalyticsUiState {
         val timeseries: List<AdTimeSeriesPoint>,
         val breakdown: List<AdBreakdownEntry>,
         val range: DateRangePreset,
+        val roas: AdRoasReport? = null,
         val isStale: Boolean = false,
         val isRefreshing: Boolean = false,
     ) : AdAnalyticsUiState

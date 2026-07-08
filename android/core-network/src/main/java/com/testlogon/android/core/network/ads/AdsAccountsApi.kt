@@ -154,4 +154,16 @@ interface AdsAccountsApi {
         @Path("campaignId") campaignId: String,
         @Path("creativeId") creativeId: String,
     ): AdSubmitAckDto
+
+    /**
+     * ADV-501/503 - GET the ROAS report for an account (optionally scoped to one [campaignId]) over the last
+     * [days] days: per-account totals + per-campaign spend/impressions/clicks/CTR/conversions/CPA/ROAS.
+     * account_id is a QUERY param (mirrors the analytics reads). Idempotent GET.
+     */
+    @GET("ui/ads/roas")
+    suspend fun getRoas(
+        @Query("account_id") accountId: String,
+        @Query("campaign_id") campaignId: String? = null,
+        @Query("days") days: Int = 30,
+    ): AdRoasReportDto
 }

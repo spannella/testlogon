@@ -7,6 +7,7 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdAnalyticsSummary
 import com.testlogon.android.core.model.ads.AdBreakdownEntry
+import com.testlogon.android.core.model.ads.AdRoasReport
 import com.testlogon.android.core.model.ads.AdTimeSeriesPoint
 import com.testlogon.android.core.model.ads.BreakdownDimension
 import com.testlogon.android.core.model.ads.DateRange
@@ -99,7 +100,11 @@ class AdAnalyticsViewModel @Inject constructor(
                         as? ApiResult.Success)?.data ?: emptyList()
                     val breakdown = (repository.getBreakdown(accountId, DIMENSION, range)
                         as? ApiResult.Success)?.data ?: emptyList()
-                    _uiState.value = contentOrEmpty(summaryResult.data, timeseries, breakdown, preset)
+                    // ADV-503: best-effort ROAS (spend vs attributed conversion value); a failure
+                    // simply omits the ROAS card and never fails the dashboard.
+                    val roas = (repository.getRoas(accountId, preset.days)
+                        as? ApiResult.Success)?.data
+                    _uiState.value = contentOrEmpty(summaryResult.data, timeseries, breakdown, roas, preset)
                 }
                 is ApiResult.Failure -> keepStaleOrTerminal(prior, summaryResult.error, preset)
                 is ApiResult.NetworkError -> keepStaleOrTerminal(
@@ -130,6 +135,7 @@ class AdAnalyticsViewModel @Inject constructor(
         summary: AdAnalyticsSummary,
         timeseries: List<AdTimeSeriesPoint>,
         breakdown: List<AdBreakdownEntry>,
+        roas: AdRoasReport?,
         preset: DateRangePreset,
     ): AdAnalyticsUiState {
         val noData = summary.impressions == 0L &&
@@ -145,6 +151,7 @@ class AdAnalyticsViewModel @Inject constructor(
                 timeseries = timeseries,
                 breakdown = breakdown,
                 range = preset,
+                roas = roas,
                 isStale = false,
                 isRefreshing = false,
             )
