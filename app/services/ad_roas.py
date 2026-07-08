@@ -127,3 +127,89 @@ def calculate_campaign_roas(
         "days": days,
         "computed_at": now_ts(),
     }
+
+
+def roas_report(account_id, campaign_id=None, days: int = 30):
+    """ADV-501: per-account + per-campaign ROAS report sourced from the ad_billing
+    ledger (the single money-path source of truth).
+
+    Aggregates impression/click/conversion CHARGES (spend) and the attributed
+    conversion VALUE (recorded on conversion_charge rows as
+    meta.conversion_value_cents) then derives impressions, clicks, CTR,
+    conversions, CPA and ROAS (= conversion value / spend). When campaign_id is
+    given the report is scoped to that campaign; otherwise the account total plus
+    a per-campaign breakdown is returned. Returns:
+        {account_id, campaign_id, days, computed_at, totals:{...}, campaigns:[...]}
+    """
+    from boto3.dynamodb.conditions import Key as _Key
+
+    since_ts = now_ts() - days * 86400
+    buckets: Dict[str, Dict[str, int]] = {}
+
+    def _bucket(cid: str) -> Dict[str, int]:
+        return buckets.setdefault(cid, {
+            "impressions": 0, "clicks": 0, "conversions": 0,
+            "spend_cents": 0, "conversion_value_cents": 0,
+        })
+
+    kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": (
+            _Key("pk").eq(f"ACCT#{account_id}") & _Key("sk").begins_with("LEDGER#")
+        ),
+    }
+    while True:
+        resp = T.ad_billing.query(**kwargs)
+        for it in resp.get("Items", []):
+            if int(it.get("created_at", 0) or 0) < since_ts:
+                continue
+            et = it.get("entry_type", "")
+            if et not in ("impression_charge", "click_charge", "conversion_charge"):
+                continue
+            cid = str(it.get("campaign_id", "") or "unknown")
+            if campaign_id and cid != campaign_id:
+                continue
+            b = _bucket(cid)
+            b["spend_cents"] += int(it.get("amount_cents", 0) or 0)
+            if et == "impression_charge":
+                b["impressions"] += 1
+            elif et == "click_charge":
+                b["clicks"] += 1
+            elif et == "conversion_charge":
+                b["conversions"] += 1
+                b["conversion_value_cents"] += int(
+                    (it.get("meta", {}) or {}).get("conversion_value_cents", 0) or 0
+                )
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+
+    def _derive(cid, b: Dict[str, int]) -> Dict[str, Any]:
+        imp, clk, conv = b["impressions"], b["clicks"], b["conversions"]
+        spend, value = b["spend_cents"], b["conversion_value_cents"]
+        row = {
+            "impressions": imp, "clicks": clk, "conversions": conv,
+            "spend_cents": spend, "conversion_value_cents": value,
+            "ctr_pct": round(clk / imp * 100, 2) if imp > 0 else 0.0,
+            "cpa_cents": round(spend / conv, 2) if conv > 0 else 0.0,
+            "roas": round(value / spend, 4) if spend > 0 else 0.0,
+        }
+        if cid is not None:
+            row = {"campaign_id": cid, **row}
+        return row
+
+    per_campaign = [_derive(cid, b) for cid, b in sorted(buckets.items())]
+    tot = {"impressions": 0, "clicks": 0, "conversions": 0,
+           "spend_cents": 0, "conversion_value_cents": 0}
+    for b in buckets.values():
+        for k in tot:
+            tot[k] += b[k]
+
+    return {
+        "account_id": account_id,
+        "campaign_id": campaign_id,
+        "days": days,
+        "computed_at": now_ts(),
+        "totals": _derive(None, tot),
+        "campaigns": per_campaign,
+    }

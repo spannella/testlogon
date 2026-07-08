@@ -534,6 +534,22 @@ async def internal_charge_conversion(
     )
 
 
+@admin_router.post("/charges/reverse")
+async def internal_reverse_charge(
+    body: dict,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """ADV-502: idempotently reverse an ad charge (fraud clawback / dispute)."""
+    from app.services.ad_billing import reverse_ad_charge
+    actor = getattr(user, "sub", "") or getattr(user, "user_id", "") or ""
+    return reverse_ad_charge(
+        account_id=body["account_id"],
+        entry_id=body["entry_id"],
+        reason=body.get("reason", "admin_reversal"),
+        actor=actor,
+    )
+
+
 # ── Ad Analytics (ADS-008) ──────────────────────────────────────────
 
 _VALID_GRANULARITIES = {"hourly", "daily", "weekly", "monthly"}
@@ -550,6 +566,20 @@ async def analytics_summary_endpoint(
     from app.services.ad_analytics import get_summary
     _require_account_owner(account_id, ctx["user_sub"])
     return get_summary(account_id, campaign_id, days)
+
+
+@router.get("/roas")
+async def roas_report_endpoint(
+    account_id: str = Query(...),
+    campaign_id: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=365),
+    ctx=Depends(require_ui_session),
+):
+    """ADV-501: per-account + per-campaign ROAS (spend / impressions / clicks /
+    CTR / conversions / CPA / ROAS) sourced from the ad_billing ledger."""
+    from app.services.ad_roas import roas_report
+    _require_account_owner(account_id, ctx["user_sub"])
+    return roas_report(account_id, campaign_id, days)
 
 
 @router.get("/analytics/timeseries")

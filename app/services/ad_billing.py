@@ -188,14 +188,22 @@ def charge_click(
 def charge_conversion(
     *, account_id: str, campaign_id: str, creative_id: str,
     creator_id: str, content_id: str, bid_cpa_cents: int,
-    idempotency_key: str = "",
+    idempotency_key: str = "", conversion_value_cents: int = 0,
 ) -> dict:
-    """Charge advertiser for one conversion (CPA model)."""
+    """Charge advertiser for one conversion (CPA model).
+
+    ADV-501: conversion_value_cents (the revenue the conversion drove -- e.g. the
+    subscription/purchase price) is recorded on the ledger meta so the ROAS
+    report can aggregate attributed value straight from the money path.
+    """
     return _process_charge(
         account_id=account_id, campaign_id=campaign_id,
         entry_type="conversion_charge", charge_cents=bid_cpa_cents,
         creator_id=creator_id, reason="Ad conversion",
-        meta={"creative_id": creative_id, "content_id": content_id, "model": "cpa"},
+        meta={
+            "creative_id": creative_id, "content_id": content_id, "model": "cpa",
+            "conversion_value_cents": int(conversion_value_cents or 0),
+        },
         idempotency_key=idempotency_key,
     )
 
@@ -267,7 +275,32 @@ def _process_charge(
             return {"ok": False, "reason": "insufficient_funds", "charge_cents": charge_cents}
         raise
 
-    # 2. Write charge to ad_billing ledger (only after a successful debit)
+    # 2. Increment campaign spend
+    T.ad_campaigns.update_item(
+        Key={"pk": f"ACCT#{account_id}", "sk": f"CAMPAIGN#{campaign_id}"},
+        UpdateExpression="SET spent_today_cents = if_not_exists(spent_today_cents, :z) + :amt, "
+                         "lifetime_spent_cents = if_not_exists(lifetime_spent_cents, :z) + :amt",
+        ExpressionAttributeValues={":z": 0, ":amt": charge_cents},
+    )
+
+    # 3. Revenue split. Returns the split detail (per-party shares + credit-row
+    #    pointers) so it can be denormalized onto the charge ledger row -> the
+    #    ADV-502 reversal can back the split out precisely + self-contained.
+    split = _split_revenue(
+        charge_cents=charge_cents, creator_id=creator_id,
+        account_id=account_id, meta=meta, ts=ts,
+    ) or {}
+
+    # 4. Write charge to ad_billing ledger (only after a successful debit).
+    ledger_meta = {
+        **meta,
+        "creator_id": creator_id,
+        "creator_share_cents": int(split.get("creator_share_cents", 0)),
+        "platform_share_cents": int(split.get("platform_share_cents", 0)),
+        "creator_credit_sk": split.get("creator_credit_sk", ""),
+        "creator_credit_ts": int(split.get("creator_credit_ts", 0)),
+        "platform_entry_sk": split.get("platform_entry_sk", ""),
+    }
     T.ad_billing.put_item(Item={
         "pk": f"ACCT#{account_id}",
         "sk": f"LEDGER#{ts}#{entry_id}",
@@ -278,24 +311,10 @@ def _process_charge(
         "amount_cents": charge_cents,
         "state": "settled",
         "reason": reason,
-        "meta": meta,
+        "meta": ledger_meta,
         "month_key": month_key,
         "created_at": ts,
     })
-
-    # 3. Increment campaign spend
-    T.ad_campaigns.update_item(
-        Key={"pk": f"ACCT#{account_id}", "sk": f"CAMPAIGN#{campaign_id}"},
-        UpdateExpression="SET spent_today_cents = if_not_exists(spent_today_cents, :z) + :amt, "
-                         "lifetime_spent_cents = if_not_exists(lifetime_spent_cents, :z) + :amt",
-        ExpressionAttributeValues={":z": 0, ":amt": charge_cents},
-    )
-
-    # 4. Revenue split
-    _split_revenue(
-        charge_cents=charge_cents, creator_id=creator_id,
-        account_id=account_id, meta=meta, ts=ts,
-    )
 
     # 5. Budget check + spending alerts
     _check_budget_and_alert(account_id, campaign_id)
@@ -305,7 +324,7 @@ def _process_charge(
 
 def _split_revenue(
     *, charge_cents: int, creator_id: str, meta: dict, ts: int, account_id: str = "",
-) -> None:
+) -> dict:
     """Split ad revenue between platform and creator.
 
     Uses the creator's negotiated per-creator revenue share (basis points) rather
@@ -335,6 +354,12 @@ def _split_revenue(
         (platform_share * 100) // charge_cents if charge_cents > 0 else PLATFORM_REVENUE_SHARE_PCT
     )
 
+    # ADV-502: capture the credit-row pointers so a later reversal can back them
+    # out precisely (creator clawback + platform reversal).
+    creator_credit_sk = ""
+    creator_credit_ts = 0
+    platform_entry_sk = ""
+
     # Credit creator via existing billing ledger
     if creator_share > 0 and creator_id:
         try:
@@ -355,6 +380,8 @@ def _split_revenue(
                 },
             )
             T.billing.put_item(Item=credit_item)
+            creator_credit_sk = _sk
+            creator_credit_ts = int(credit_item.get("ts", ts))
         except Exception:
             logger.warning("ad_revenue_creator_credit_failed", extra={"creator_id": creator_id})
 
@@ -393,9 +420,10 @@ def _split_revenue(
         try:
             entry_id = f"rev_{uuid.uuid4().hex[:12]}"
             month_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
+            platform_entry_sk = f"LEDGER#{ts}#{entry_id}"
             T.ad_billing.put_item(Item={
                 "pk": "PLATFORM#revenue",
-                "sk": f"LEDGER#{ts}#{entry_id}",
+                "sk": platform_entry_sk,
                 "entry_id": entry_id,
                 "entry_type": "platform_revenue_credit",
                 "amount_cents": platform_share,
@@ -414,6 +442,16 @@ def _split_revenue(
             })
         except Exception:
             logger.warning("ad_revenue_platform_credit_failed", extra={"charge_cents": charge_cents})
+
+    return {
+        "creator_id": creator_id,
+        "creator_share_cents": creator_share,
+        "platform_share_cents": platform_share,
+        "creator_credit_sk": creator_credit_sk,
+        "creator_credit_ts": creator_credit_ts,
+        "platform_entry_sk": platform_entry_sk,
+        "revenue_share_bps": creator_bps,
+    }
 
 
 def _check_budget_and_alert(account_id: str, campaign_id: str) -> None:
@@ -595,3 +633,214 @@ def _get_balance(account_id: str) -> int:
     resp = T.ad_accounts.get_item(Key={"pk": f"ACCT#{account_id}", "sk": "META"})
     item = resp.get("Item")
     return int(item.get("balance_cents", 0)) if item else 0
+
+
+# ---------------------------------------------------------------------------
+# ADV-502 -- ad-charge refund / reversal (fraud clawback / dispute).
+# ---------------------------------------------------------------------------
+_REVERSIBLE_ENTRY_TYPES = ("impression_charge", "click_charge", "conversion_charge")
+
+
+def _find_charge_entry(account_id: str, entry_id: str) -> Optional[dict]:
+    """Locate a settled charge ledger row by entry_id under an account (paginated)."""
+    kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": (
+            Key("pk").eq(f"ACCT#{account_id}") & Key("sk").begins_with("LEDGER#")
+        ),
+        "FilterExpression": Attr("entry_id").eq(entry_id),
+    }
+    while True:
+        resp = T.ad_billing.query(**kwargs)
+        items = resp.get("Items", [])
+        if items:
+            return items[0]
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            return None
+        kwargs["ExclusiveStartKey"] = lek
+
+
+def reverse_ad_charge(
+    *, account_id: str, entry_id: str, reason: str = "admin_reversal",
+    actor: str = "", entry: Optional[dict] = None,
+) -> dict:
+    """ADV-502: idempotently reverse a settled ad charge.
+
+    Refunds the advertiser balance, backs the charge out of campaign spend, writes
+    a ``charge_reversal`` row to the ad_billing ledger, and reverses the revenue
+    split: the creator credit is clawed back with entry_type != "credit" (so it can
+    NEVER inflate creator earnings -- creator_earnings only sums type=="credit") and
+    the original credit row is flipped to state="reversed"; the platform revenue
+    record is reversed too. A ``REVERSAL#{entry_id}`` marker (claimed with
+    attribute_not_exists) makes it idempotent + guards double-reversal: a second
+    call is a no-op returning the stored receipt. Mirrors the TIP-502 pattern.
+    """
+    from fastapi import HTTPException
+
+    entry = entry or _find_charge_entry(account_id, entry_id)
+    if not entry:
+        raise HTTPException(404, {"code": "charge_not_found",
+                                  "message": f"No ad charge {entry_id} on account {account_id}."})
+    etype = str(entry.get("entry_type", ""))
+    if etype not in _REVERSIBLE_ENTRY_TYPES:
+        raise HTTPException(400, {"code": "not_reversible",
+                                  "message": f"Entry {entry_id} ({etype}) is not a reversible charge."})
+
+    amount_cents = int(entry.get("amount_cents", 0) or 0)
+    campaign_id = str(entry.get("campaign_id", "") or "")
+    emeta = entry.get("meta", {}) or {}
+    creator_id = str(emeta.get("creator_id", "") or "")
+    creator_share = int(emeta.get("creator_share_cents", 0) or 0)
+    platform_share = int(emeta.get("platform_share_cents", 0) or 0)
+    creator_credit_sk = str(emeta.get("creator_credit_sk", "") or "")
+    platform_entry_sk = str(emeta.get("platform_entry_sk", "") or "")
+
+    ts = now_ts()
+    reversal_entry_id = f"rev_{uuid.uuid4().hex[:12]}"
+    month_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
+
+    def _receipt(replay: bool) -> dict:
+        return {
+            "ok": True, "reversed": True, "entry_id": entry_id,
+            "reversal_entry_id": reversal_entry_id, "account_id": account_id,
+            "campaign_id": campaign_id, "refunded_cents": amount_cents,
+            "creator_clawback_cents": creator_share if creator_id else 0,
+            "platform_reversal_cents": platform_share,
+            "idempotent_replay": replay,
+        }
+
+    # 1. Claim the reversal marker FIRST -> idempotency + double-reversal guard
+    #    (kept out of the LEDGER# history query; mirrors the IDEMP# marker).
+    try:
+        T.ad_billing.put_item(
+            Item={
+                "pk": f"ACCT#{account_id}", "sk": f"REVERSAL#{entry_id}",
+                "entry_type": "charge_reversal_marker", "reversal_of": entry_id,
+                "reversal_entry_id": reversal_entry_id, "amount_cents": amount_cents,
+                "creator_clawback_cents": creator_share if creator_id else 0,
+                "platform_reversal_cents": platform_share, "campaign_id": campaign_id,
+                "created_at": ts,
+            },
+            ConditionExpression="attribute_not_exists(sk)",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            prior = T.ad_billing.get_item(
+                Key={"pk": f"ACCT#{account_id}", "sk": f"REVERSAL#{entry_id}"}
+            ).get("Item", {}) or {}
+            logger.info("ad_charge_reversal_duplicate account=%s entry=%s", account_id, entry_id)
+            return {
+                "ok": True, "reversed": True, "entry_id": entry_id,
+                "reversal_entry_id": str(prior.get("reversal_entry_id", "")),
+                "account_id": account_id, "campaign_id": str(prior.get("campaign_id", "")),
+                "refunded_cents": int(prior.get("amount_cents", 0) or 0),
+                "creator_clawback_cents": int(prior.get("creator_clawback_cents", 0) or 0),
+                "platform_reversal_cents": int(prior.get("platform_reversal_cents", 0) or 0),
+                "idempotent_replay": True,
+            }
+        raise
+
+    # 2. Refund the advertiser balance + back the charge out of lifetime spend.
+    try:
+        T.ad_accounts.update_item(
+            Key={"pk": f"ACCT#{account_id}", "sk": "META"},
+            UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt, "
+                             "lifetime_spend_cents = if_not_exists(lifetime_spend_cents, :z) - :amt",
+            ExpressionAttributeValues={":z": 0, ":amt": amount_cents},
+        )
+    except ClientError:
+        try:
+            T.ad_billing.delete_item(
+                Key={"pk": f"ACCT#{account_id}", "sk": f"REVERSAL#{entry_id}"}
+            )
+        except Exception:
+            pass
+        raise
+
+    # 3. Back the charge out of campaign spend (best-effort).
+    if campaign_id:
+        try:
+            T.ad_campaigns.update_item(
+                Key={"pk": f"ACCT#{account_id}", "sk": f"CAMPAIGN#{campaign_id}"},
+                UpdateExpression="SET spent_today_cents = if_not_exists(spent_today_cents, :z) - :amt, "
+                                 "lifetime_spent_cents = if_not_exists(lifetime_spent_cents, :z) - :amt",
+                ExpressionAttributeValues={":z": 0, ":amt": amount_cents},
+            )
+        except Exception:
+            logger.warning("ad_reversal_campaign_backout_failed campaign=%s", campaign_id)
+
+    # 4. Write the reversal row to the ad_billing ledger (audit/history).
+    T.ad_billing.put_item(Item={
+        "pk": f"ACCT#{account_id}", "sk": f"LEDGER#{ts}#{reversal_entry_id}",
+        "entry_id": reversal_entry_id, "account_id": account_id,
+        "campaign_id": campaign_id, "entry_type": "charge_reversal",
+        "amount_cents": amount_cents, "state": "settled",
+        "reason": f"Charge reversal ({reason})",
+        "meta": {
+            "reversal_of": entry_id, "reversal_reason": reason, "reversal_actor": actor,
+            "original_entry_type": etype, "creator_id": creator_id,
+            "creator_clawback_cents": creator_share if creator_id else 0,
+            "platform_reversal_cents": platform_share,
+        },
+        "month_key": month_key, "created_at": ts,
+    })
+
+    # 5. Claw back the creator revenue credit WITHOUT inflating earnings:
+    #    entry_type != "credit" (creator_earnings only sums type=="credit"), and
+    #    flip the original credit row to state="reversed".
+    if creator_id and creator_share > 0:
+        try:
+            _sk, clawback_item = new_ledger_entry(
+                key_name="pk", key_value=user_pk(creator_id),
+                entry_type="ad_revenue_reversal",  # != "credit"
+                amount_cents=creator_share, state="settled",
+                reason="Ad revenue reversal",
+                meta={"reversal_of": entry_id, "reversal_reason": reason,
+                      "account_id": account_id, "campaign_id": campaign_id},
+            )
+            T.billing.put_item(Item=clawback_item)
+        except Exception:
+            logger.warning("ad_reversal_creator_clawback_failed creator=%s", creator_id)
+        if creator_credit_sk:
+            try:
+                T.billing.update_item(
+                    Key={"pk": user_pk(creator_id), "sk": creator_credit_sk},
+                    UpdateExpression="SET #s = :r",
+                    ConditionExpression="attribute_exists(sk)",
+                    ExpressionAttributeNames={"#s": "state"},
+                    ExpressionAttributeValues={":r": "reversed"},
+                )
+            except Exception:
+                logger.warning("ad_reversal_credit_flip_failed creator=%s", creator_id)
+
+    # 6. Reverse the platform revenue record (audit symmetry).
+    if platform_share > 0:
+        try:
+            prev_id = f"rev_{uuid.uuid4().hex[:12]}"
+            T.ad_billing.put_item(Item={
+                "pk": "PLATFORM#revenue", "sk": f"LEDGER#{ts}#{prev_id}",
+                "entry_id": prev_id, "entry_type": "platform_revenue_reversal",
+                "amount_cents": platform_share, "state": "settled",
+                "reason": f"Platform ad revenue reversal ({reason})",
+                "meta": {"reversal_of": entry_id, "account_id": account_id,
+                         "campaign_id": campaign_id},
+                "month_key": month_key, "created_at": ts,
+            })
+        except Exception:
+            logger.warning("ad_reversal_platform_backout_failed")
+        if platform_entry_sk:
+            try:
+                T.ad_billing.update_item(
+                    Key={"pk": "PLATFORM#revenue", "sk": platform_entry_sk},
+                    UpdateExpression="SET #s = :r",
+                    ExpressionAttributeNames={"#s": "state"},
+                    ExpressionAttributeValues={":r": "reversed"},
+                )
+            except Exception:
+                pass
+
+    logger.info(
+        "ad_charge_reversed account=%s entry=%s amount=%s creator=%s clawback=%s",
+        account_id, entry_id, amount_cents, creator_id or "-", creator_share,
+    )
+    return _receipt(False)

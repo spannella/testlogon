@@ -173,6 +173,7 @@ def attribute_conversion(
                 creator_id=content_owner_sub,
                 content_id=str(row.get("content_id", "") or ""),
                 bid_cpa_cents=bid_cpa_cents,
+                conversion_value_cents=int(conversion_value_cents or 0),
                 idempotency_key="%s#conversion" % resolved_click_id,
             )
             result["charge"] = charge

@@ -42,6 +42,22 @@ HOUSE_AD: Dict[str, Any] = {
 # ── Public API ──────────────────────────────────────────────────────
 
 
+# ADV-302/504: reserve floor for a lone-bidder second-price clear.
+_CPM_FLOOR = 50
+
+
+def clear_second_price(win_cpm, runner_up_cpm, floor=_CPM_FLOOR):
+    """Second-price clearing: the winner pays the runner-up bid + 1c, capped at
+    its own bid; a lone bidder (runner_up_cpm is None) clears at the reserve
+    floor. Always >= 1c and never above the winner's own bid. Behaviour-identical
+    to the prior inline logic -- extracted so ADV-504 can assert it directly."""
+    if runner_up_cpm is None:
+        cleared = floor
+    else:
+        cleared = min(int(win_cpm), int(runner_up_cpm) + 1)
+    return max(1, min(cleared, int(win_cpm)))
+
+
 def serve_ad(
     *,
     surface: str,
@@ -170,15 +186,10 @@ def serve_ad(
     # the reserve floor. cleared_cpm is what track_ad_event bills, so an advertiser
     # never pays more than the next-highest rival would have. CPC/CPA carried for
     # the click/conversion charge.
-    _CPM_FLOOR = 50
     _CPM_DEF, _CPC_DEF, _CPA_DEF = 500, 50, 500
     win_cpm = int(winner["campaign"].get("bid_cpm_cents", _CPM_DEF) or _CPM_DEF)
-    if len(candidates) > 1:
-        runner_up_cpm = int(round(candidates[1]["score"]))
-        cleared_cpm = min(win_cpm, runner_up_cpm + 1)
-    else:
-        cleared_cpm = _CPM_FLOOR
-    cleared_cpm = max(1, min(cleared_cpm, win_cpm))
+    runner_up_cpm = int(round(candidates[1]["score"])) if len(candidates) > 1 else None
+    cleared_cpm = clear_second_price(win_cpm, runner_up_cpm, _CPM_FLOOR)
     win_cpc = int(winner["campaign"].get("bid_cpc_cents", _CPC_DEF) or _CPC_DEF)
     win_cpa = int(winner["campaign"].get("bid_cpa_cents", _CPA_DEF) or _CPA_DEF)
 
