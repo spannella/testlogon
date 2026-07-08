@@ -2,6 +2,7 @@ package com.testlogon.android.feature.ads.studio.data
 
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdCampaign
+import com.testlogon.android.feature.ads.create.data.AdsStudioSelection
 import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,6 +22,7 @@ import javax.inject.Singleton
 @Singleton
 class AdsStudioCampaignResolver @Inject constructor(
     private val billing: AdsBillingRepository,
+    private val selection: AdsStudioSelection,
 ) {
 
     /** Sentinel error message surfaced when there is no account / no campaign to edit. */
@@ -42,12 +44,19 @@ class AdsStudioCampaignResolver @Inject constructor(
             is ApiResult.Success -> r.data
             else -> return Resolution.Failed(r)
         }
-        val accountId = accounts.firstOrNull()?.accountId ?: return Resolution.NoCampaign
+        // ADV-108: honor an explicit account/campaign chosen via the real create/picker screens
+        // (AdsStudioSelection) before falling back to the legacy first-of-first auto-resolve.
+        val picked = selection.current
+        val accountId = picked.accountId?.takeIf { id -> accounts.any { it.accountId == id } }
+            ?: accounts.firstOrNull()?.accountId
+            ?: return Resolution.NoCampaign
         val campaigns = when (val r = billing.getCampaigns(accountId)) {
             is ApiResult.Success -> r.data
             else -> return Resolution.Failed(r)
         }
-        val campaign = campaigns.firstOrNull() ?: return Resolution.NoCampaign
+        if (campaigns.isEmpty()) return Resolution.NoCampaign
+        val campaign = campaigns.firstOrNull { it.campaignId == picked.campaignId }
+            ?: campaigns.first()
         return Resolution.Found(campaign)
     }
 }

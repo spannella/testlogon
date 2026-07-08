@@ -258,6 +258,12 @@ object MoreRoutes {
     // so the JVM MoreCatalog integrity test stays Android-free).
     const val ADS_CAMPAIGNS = AdsCampaignsDest.STUB_ROUTE
 
+    // ADV-107/108/109: advertiser CREATE flow (create ad account -> campaign -> creative + upload +
+    // submit-for-review). No nav arg: the pickers/steps carry the account/campaign via AdsStudioSelection.
+    const val ADS_CREATE_ACCOUNT = CreateAdAccountDest.ROUTE
+    const val ADS_CREATE_CAMPAIGN = CreateCampaignDest.ROUTE
+    const val ADS_CREATE_CREATIVE = CreateCreativeDest.ROUTE
+
     // Web-parity ads STUDIO editors. Each VM self-resolves the caller's first account then campaign
     // (no campaign-picker nav yet), so the hub registers the plain route constants directly.
     const val ADS_TARGETING = AdTargetingDest.ROUTE
@@ -522,6 +528,9 @@ object MoreRoutes {
             ADS_BILLING,
             AD_ANALYTICS,
             ADS_CAMPAIGNS,
+            ADS_CREATE_ACCOUNT,
+            ADS_CREATE_CAMPAIGN,
+            ADS_CREATE_CREATIVE,
             ADS_TARGETING,
             ADS_SCHEDULING,
             ADS_OPTIMIZATION,

@@ -22,6 +22,8 @@ import androidx.compose.material.icons.outlined.EditCalendar
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.AddBusiness
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.CreditCard
@@ -1239,6 +1241,33 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_ads_campaigns,
             icon = Icons.Outlined.Campaign,
             route = MoreRoutes.ADS_CAMPAIGNS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // ADV-107: create an advertiser ACCOUNT (company + billing email) -> pending admin review.
+        MoreEntry(
+            id = "ads_create_account",
+            labelRes = R.string.more_entry_ads_create_account,
+            icon = Icons.Outlined.AddBusiness,
+            route = MoreRoutes.ADS_CREATE_ACCOUNT,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // ADV-108: create a CAMPAIGN (objective/budget/bid) under a chosen account + submit for review.
+        MoreEntry(
+            id = "ads_create_campaign",
+            labelRes = R.string.more_entry_ads_create_campaign,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.ADS_CREATE_CAMPAIGN,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // ADV-109: create a CREATIVE (copy + CTA) + image upload under a chosen campaign + submit for review.
+        MoreEntry(
+            id = "ads_create_creative",
+            labelRes = R.string.more_entry_ads_create_creative,
+            icon = Icons.Outlined.Image,
+            route = MoreRoutes.ADS_CREATE_CREATIVE,
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),

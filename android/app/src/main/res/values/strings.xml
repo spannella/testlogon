@@ -3599,6 +3599,60 @@
     <string name="more_entry_content_ad_controls">Content ad controls</string>
     <string name="more_entry_boosts">Boosts</string>
     <string name="ads_campaigns_title">Ad campaigns</string>
+
+    <!-- ADV-107/108/109 advertiser create flow -->
+    <string name="more_entry_ads_create_account">Create ad account</string>
+    <string name="more_entry_ads_create_campaign">Create ad campaign</string>
+    <string name="more_entry_ads_create_creative">Create ad creative</string>
+    <string name="ads_create_back">Back</string>
+
+    <string name="create_ad_account_title">Create ad account</string>
+    <string name="create_ad_account_subtitle">Set up an advertiser account. It is reviewed by an admin before you can add funds and run campaigns.</string>
+    <string name="create_ad_account_company_label">Company name</string>
+    <string name="create_ad_account_email_label">Billing email</string>
+    <string name="create_ad_account_submit">Create account</string>
+    <string name="create_ad_account_success_title">Account created</string>
+    <string name="create_ad_account_success_body">%1$s is now %2$s. An admin will review it before you can deposit funds.</string>
+    <string name="create_ad_account_continue">Continue to campaign</string>
+
+    <string name="create_campaign_title">Create campaign</string>
+    <string name="create_campaign_account_label">Ad account</string>
+    <string name="create_campaign_account_hint">Select an account</string>
+    <string name="create_campaign_account_loading">Loading accounts…</string>
+    <string name="create_campaign_account_none">No ad accounts yet</string>
+    <string name="create_campaign_name_label">Campaign name</string>
+    <string name="create_campaign_objective_label">Objective</string>
+    <string name="create_campaign_budget_type_label">Budget type</string>
+    <string name="create_campaign_budget_label">Budget (USD)</string>
+    <string name="create_campaign_bid_label">Bid CPM (USD)</string>
+    <string name="create_campaign_bid_hint">Cost per 1,000 impressions. $0.50–$200.</string>
+    <string name="create_campaign_submit">Create campaign</string>
+    <string name="create_campaign_success_title">Campaign created (draft)</string>
+    <string name="create_campaign_success_body">Submit it for review so an admin can approve it, then add a creative.</string>
+    <string name="create_campaign_review">Submit for review</string>
+    <string name="create_campaign_review_done">Submitted — status: %1$s</string>
+    <string name="create_campaign_continue">Add a creative</string>
+
+    <string name="create_creative_title">Create creative</string>
+    <string name="create_creative_account_label">Ad account</string>
+    <string name="create_creative_campaign_label">Campaign</string>
+    <string name="create_creative_campaign_hint">Select a campaign</string>
+    <string name="create_creative_campaign_none">No campaigns under this account</string>
+    <string name="create_creative_format_label">Format</string>
+    <string name="create_creative_title_label">Title (internal)</string>
+    <string name="create_creative_headline_label">Headline</string>
+    <string name="create_creative_body_label">Body text</string>
+    <string name="create_creative_cta_text_label">Call to action text</string>
+    <string name="create_creative_cta_url_label">Call to action URL</string>
+    <string name="create_creative_image_preview">Selected creative image</string>
+    <string name="create_creative_pick_image">Add image</string>
+    <string name="create_creative_change_image">Change image</string>
+    <string name="create_creative_submit">Create creative</string>
+    <string name="create_creative_success_title">Creative created (draft)</string>
+    <string name="create_creative_success_body">Submit it for review so an admin can approve it. Once approved it becomes eligible to serve.</string>
+    <string name="create_creative_review">Submit for review</string>
+    <string name="create_creative_review_done">Submitted — status: %1$s</string>
+    <string name="create_creative_done">Done</string>
     <string name="ads_campaigns_back">Back</string>
     <string name="ads_campaigns_name_unknown">Untitled campaign</string>
     <string name="ads_campaigns_budget_label">Budget: %1$s</string>

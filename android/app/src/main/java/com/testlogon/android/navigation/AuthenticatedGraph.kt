@@ -134,6 +134,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // (name/status/budget/spend). Route reachable via navigateToAdsCampaigns(accountId); the More-hub
         // uses a sample account id (no ads-accounts list yet).
         adsCampaignsDestination(navController)
+        // ADV-107/108/109: advertiser CREATE flow (create ad account -> create campaign -> create
+        // creative + asset upload -> submit-for-review). Real account/campaign pickers feed the studio
+        // editors via AdsStudioSelection (replacing the first-of-first auto-resolve).
+        adsCreateDestinations(navController)
         // Web-parity ads STUDIO editors (targeting / scheduling / optimization). Each VM self-resolves
         // the caller's first ad account then first campaign (no campaign-picker nav yet); routes reachable
         // via navigateToAdTargeting / navigateToAdScheduling / navigateToAdOptimization.

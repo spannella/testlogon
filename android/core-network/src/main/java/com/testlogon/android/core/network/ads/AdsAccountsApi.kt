@@ -5,6 +5,10 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
+import retrofit2.http.Multipart
+import retrofit2.http.Part
 
 /**
  * AND-363 - Retrofit interface for the platform ads accounts control plane (ui/ads/accounts). Transport
@@ -104,4 +108,50 @@ interface AdsAccountsApi {
         @Query("from") from: String,
         @Query("to") to: String,
     ): List<AdBreakdownEntryDto>
+    // ── ADV-107/108/109 : MUTATING create flow (account -> campaign -> creative + upload -> submit) ──
+
+    /** ADV-107 - POST create a new advertiser account (company_name, billing_email) -> 201 pending_review. */
+    @POST("ui/ads/accounts")
+    suspend fun createAdsAccount(@Body body: AdAccountCreateIn): AdAccountMutationDto
+
+    /** ADV-108 - POST create a draft campaign under [accountId] (account must be active) -> 201 draft. */
+    @POST("ui/ads/accounts/{accountId}/campaigns")
+    suspend fun createCampaign(
+        @Path("accountId") accountId: String,
+        @Body body: AdCampaignCreateIn,
+    ): AdCampaignDto
+
+    /** ADV-108 - POST submit a draft campaign for admin review (draft -> pending_review). */
+    @POST("ui/ads/accounts/{accountId}/campaigns/{campaignId}/submit")
+    suspend fun submitCampaign(
+        @Path("accountId") accountId: String,
+        @Path("campaignId") campaignId: String,
+    ): AdSubmitAckDto
+
+    /** ADV-109 - POST create a draft creative under [campaignId] -> 201 draft. */
+    @POST("ui/ads/campaigns/{campaignId}/creatives")
+    suspend fun createCreative(
+        @Path("campaignId") campaignId: String,
+        @Body body: AdCreativeCreateIn,
+    ): AdCreativeDto
+
+    /**
+     * ADV-109 - POST the creative image/video asset (multipart). `file` is the binary part; `asset_type`
+     * is the backend Form field (default "image"). Server enforces the mime whitelist + size/magic bytes.
+     */
+    @Multipart
+    @POST("ui/ads/campaigns/{campaignId}/creatives/{creativeId}/upload")
+    suspend fun uploadCreativeAsset(
+        @Path("campaignId") campaignId: String,
+        @Path("creativeId") creativeId: String,
+        @Part file: MultipartBody.Part,
+        @Part("asset_type") assetType: RequestBody,
+    ): AdAssetUploadDto
+
+    /** ADV-109 - POST submit a draft creative for admin review (draft -> pending_review). */
+    @POST("ui/ads/campaigns/{campaignId}/creatives/{creativeId}/submit")
+    suspend fun submitCreative(
+        @Path("campaignId") campaignId: String,
+        @Path("creativeId") creativeId: String,
+    ): AdSubmitAckDto
 }
