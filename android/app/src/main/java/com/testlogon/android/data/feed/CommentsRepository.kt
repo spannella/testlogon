@@ -42,6 +42,9 @@ interface CommentsRepository {
         /** #4 — optional uploaded image URL to attach alongside the text (text+image comment). */
         imageUrl: String? = null,
         imageAltText: String? = null,
+        /** TIP-302 — optional CARRYING tip (cents) charged to the post author on comment create. */
+        tipAmountCents: Int? = null,
+        tipPaymentMethodId: String? = null,
     ): ApiResult<Comment>
 
     /** Post a GIF comment (kind="gif"). */
@@ -70,8 +73,8 @@ interface CommentsRepository {
         parentId: String? = null,
     ): ApiResult<Comment>
 
-    /** Tip a comment (amount in integer cents). 2xx ack. */
-    suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit>
+    /** TIP-301 — tip a comment (amount in integer cents); [paymentMethodId] picks an explicit/tip-default PM. 2xx ack. */
+    suspend fun tipComment(postId: String, commentId: String, amountCents: Int, paymentMethodId: String? = null): ApiResult<Unit>
 
     /** #23 — toggle an emoji reaction on a comment. [add] true => react, false => unreact. 2xx ack. */
     suspend fun setCommentReaction(
@@ -126,6 +129,8 @@ class CommentsRepositoryImpl @Inject constructor(
         parentId: String?,
         imageUrl: String?,
         imageAltText: String?,
+        tipAmountCents: Int?,
+        tipPaymentMethodId: String?,
     ): ApiResult<Comment> = withContext(io) {
         val me = authStateStore.userSub.first()
         // #4 — when an image is attached the backend (B-COMMENT2) validates it on a kind="text" comment,
@@ -140,6 +145,10 @@ class CommentsRepositoryImpl @Inject constructor(
                     kind = kind,
                     imageUrl = imageUrl,
                     imageAltText = imageAltText,
+                    // TIP-302 — carry the tip; backend charges (recipient = post author) then stamps the comment.
+                    tipAmountCents = tipAmountCents,
+                    tipCurrency = if (tipAmountCents != null) "usd" else null,
+                    tipPaymentMethodId = tipPaymentMethodId,
                 ),
             )
         }.map { it.toDomain(me) }
@@ -206,8 +215,16 @@ class CommentsRepositoryImpl @Inject constructor(
         }.map { it.toDomain(me) }
     }
 
-    override suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit> =
-        withContext(io) { ackCall { api.tipComment(postId, commentId, TipRequest(amountCents = amountCents)) } }
+    override suspend fun tipComment(postId: String, commentId: String, amountCents: Int, paymentMethodId: String?): ApiResult<Unit> =
+        withContext(io) {
+            ackCall {
+                api.tipComment(
+                    postId,
+                    commentId,
+                    TipRequest(amountCents = amountCents, paymentMethodId = paymentMethodId),
+                )
+            }
+        }
 
     override suspend fun setCommentReaction(
         postId: String,

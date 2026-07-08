@@ -69,6 +69,11 @@ data class CreateCommentRequest(
     // #24 — image comment (kind="image"); image_url must be a platform upload URL or https.
     @Json(name = "image_url") val imageUrl: String? = null,
     @Json(name = "image_alt_text") val imageAltText: String? = null,
+    // TIP-302 — comment-CARRYING tip: when tipAmountCents is present the backend charges the tip
+    // (content_type="comment", recipient = the post author) BEFORE writing the comment, then stamps it.
+    @Json(name = "tip_amount_cents") val tipAmountCents: Int? = null,
+    @Json(name = "tip_currency") val tipCurrency: String? = null,
+    @Json(name = "tip_payment_method_id") val tipPaymentMethodId: String? = null,
 )
 
 /** POST /posts/{id}/reactions and /posts/{id}/comments/{cid}/reactions request — a single emoji. */
@@ -82,6 +87,8 @@ data class ReactionRequest(
 data class TipRequest(
     @Json(name = "amount_cents") val amountCents: Int,
     @Json(name = "currency") val currency: String = "USD",
+    // TIP-301 — name an explicit / tip-default payment method so charge_tip can resolve the tippers PM.
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
 )
 
 /**

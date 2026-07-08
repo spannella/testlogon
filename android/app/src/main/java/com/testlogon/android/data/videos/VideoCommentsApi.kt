@@ -70,6 +70,17 @@ interface VideoCommentsApi {
         @Path("video_id") videoId: String,
         @Path("comment_id") commentId: String,
     )
+
+    /**
+     * TIP-303/305 — tip a VIDEO COMMENT. Routes through charge_tip(content_type="video_comment");
+     * recipient = the comment's author. 2xx returns the new running comment tip total.
+     */
+    @POST("ui/videos/{video_id}/comments/{comment_id}/tip")
+    suspend fun tip(
+        @Path("video_id") videoId: String,
+        @Path("comment_id") commentId: String,
+        @Body body: VideoCommentTipReq,
+    ): VideoCommentTipResp
 }
 
 // Unknown JSON keys are ignored by Moshi codegen; we keep the fields the UI consumes.
@@ -108,6 +119,20 @@ data class EditVideoCommentReq(@Json(name = "text") val text: String)
 
 @JsonClass(generateAdapter = true)
 data class VideoCommentReactionReq(@Json(name = "emoji") val emoji: String)
+
+/** TIP-305 — POST /ui/videos/{id}/comments/{cid}/tip request. amount_cents min 1; PM optional (tip-default). */
+@JsonClass(generateAdapter = true)
+data class VideoCommentTipReq(
+    @Json(name = "amount_cents") val amountCents: Int,
+    @Json(name = "currency") val currency: String = "usd",
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class VideoCommentTipResp(
+    @Json(name = "ok") val ok: Boolean? = null,
+    @Json(name = "tip_total_cents") val tipTotalCents: Int? = null,
+)
 
 /** Framework-free domain model for a video comment (feed-parity fields). */
 data class VideoComment(
@@ -185,6 +210,22 @@ class VideoCommentsRepository @Inject constructor(
 
     suspend fun delete(videoId: String, commentId: String): ApiResult<Unit> = withContext(io) {
         call { api.delete(videoId, commentId) }
+    }
+
+    /** TIP-305 — tip a video comment; [paymentMethodId] picks an explicit/tip-default PM. Returns new total. */
+    suspend fun tipComment(
+        videoId: String,
+        commentId: String,
+        amountCents: Int,
+        paymentMethodId: String?,
+    ): ApiResult<Int?> = withContext(io) {
+        call {
+            api.tip(
+                videoId,
+                commentId,
+                VideoCommentTipReq(amountCents = amountCents, paymentMethodId = paymentMethodId),
+            ).tipTotalCents
+        }
     }
 
     private fun VideoCommentDto.toDomain(me: String?): VideoComment {

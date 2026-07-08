@@ -30,11 +30,14 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -53,6 +56,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.feature.feed.TipEffect
+import com.testlogon.android.feature.feed.TipSheet
+import com.testlogon.android.feature.feed.TipViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
@@ -77,6 +83,8 @@ object GroupFeedTestTags {
 
     fun row(postId: String) = "group_feed_post_$postId"
     fun comments(postId: String) = "group_feed_comments_$postId"
+    // TIP-306 — per-post group tip button (reuses the feed TipViewModel + shared TipSheet).
+    fun tip(postId: String) = "tip_group_post_$postId"
 }
 
 /**
@@ -129,12 +137,22 @@ fun GroupFeedScreen(
     onRemoveImage: (String) -> Unit,
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
+    tipViewModel: TipViewModel = hiltViewModel(),
 ) {
     // The post whose comments sheet is open (null = closed).
     var commentsForPost by remember { mutableStateOf<String?>(null) }
+    // TIP-306 — shared feed tip machine drives the group-post tip sheet + confirmation snackbar.
+    val tipState by tipViewModel.state.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(tipViewModel) {
+        tipViewModel.effects.collect { e ->
+            if (e is TipEffect.ShowSnackbar) snackbarHostState.showSnackbar(e.message)
+        }
+    }
 
     Scaffold(
         modifier = modifier.testTag(GroupFeedTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.group_feed_title)) },
@@ -215,6 +233,7 @@ fun GroupFeedScreen(
                                 pollVoter = pollVoter,
                                 currentUserId = currentUserId,
                                 onOpenComments = { commentsForPost = post.postId },
+                                onTip = { tipViewModel.open(post.postId) },
                             )
                             HorizontalDivider()
                         }
@@ -233,6 +252,15 @@ fun GroupFeedScreen(
             onCountChanged = { /* count refreshes on next feed load */ },
         )
     }
+
+    // TIP-306 — shared TipSheet for a group post; routes through the same POST /posts/{id}/tip money-path.
+    TipSheet(
+        state = tipState,
+        onSelectPreset = tipViewModel::selectPreset,
+        onCustomAmount = tipViewModel::setCustomAmount,
+        onSend = tipViewModel::send,
+        onDismiss = tipViewModel::dismiss,
+    )
 }
 
 @Composable
@@ -320,6 +348,7 @@ private fun GroupPostRow(
     pollVoter: com.testlogon.android.data.poll.PollVoter?,
     currentUserId: String?,
     onOpenComments: () -> Unit,
+    onTip: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -415,6 +444,22 @@ private fun GroupPostRow(
                     modifier = Modifier.padding(start = 6.dp),
                     style = MaterialTheme.typography.labelLarge,
                 )
+            }
+            // TIP-306 — tip a group post's author (newsfeed parity). Hidden on your OWN post so you never
+            // self-tip; the backend also rejects a self-tip with 400 cannot_tip_self.
+            val canTip = post.authorId.isNotBlank() && currentUserId != null && post.authorId != currentUserId
+            if (canTip) {
+                IconButton(
+                    onClick = onTip,
+                    modifier = Modifier.size(44.dp).testTag(GroupFeedTestTags.tip(post.postId)),
+                ) {
+                    Icon(
+                        Icons.Outlined.Paid,
+                        contentDescription = stringResource(R.string.tip_action),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }

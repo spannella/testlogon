@@ -168,15 +168,19 @@ class FakeCommentsRepository(
     }
 
     val addImageWithTextCalls = mutableListOf<String?>()
+    val tipCarryCalls = mutableListOf<Int?>()
     override suspend fun addComment(
         postId: String,
         body: String,
         parentId: String?,
         imageUrl: String?,
         imageAltText: String?,
+        tipAmountCents: Int?,
+        tipPaymentMethodId: String?,
     ): ApiResult<Comment> {
         addCalls += Triple(postId, body, parentId)
         addImageWithTextCalls += imageUrl
+        tipCarryCalls += tipAmountCents
         return addResult ?: ApiResult.Success(
             comment(id = "srv_${addCalls.size}", postId = postId, body = body, parentId = parentId)
                 .copy(imageUrl = imageUrl),
@@ -234,7 +238,7 @@ class FakeCommentsRepository(
         )
     }
 
-    override suspend fun tipComment(postId: String, commentId: String, amountCents: Int): ApiResult<Unit> {
+    override suspend fun tipComment(postId: String, commentId: String, amountCents: Int, paymentMethodId: String?): ApiResult<Unit> {
         tipCalls += Triple(postId, commentId, amountCents)
         return ApiResult.Success(Unit)
     }

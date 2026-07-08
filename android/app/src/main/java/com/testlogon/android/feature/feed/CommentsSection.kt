@@ -83,6 +83,13 @@ object CommentsTestTags {
     const val PICKER = "comments_media_picker"
     const val GIF_SEARCH = "comments_gif_search"
     const val TIP_SHEET = "comment_tip_sheet"
+    // TIP-304 — comment-tip affordances (tip an existing comment + attach a tip to a new comment).
+    const val TIP_COMMENT_OPEN = "tip_comment_open"
+    const val TIP_COMMENT_SHEET = "tip_comment_sheet"
+    fun tipCommentSheetPreset(cents: Int) = "tip_comment_sheet_$cents"
+    const val TIP_COMMENT_ATTACH = "tip_comment_attach"
+    const val TIP_COMMENT_ATTACH_CLEAR = "tip_comment_attach_clear"
+    fun tipCommentAttachPreset(cents: Int) = "tip_comment_attach_$cents"
     fun row(localKey: String) = "comment_$localKey"
 }
 
@@ -184,6 +191,7 @@ fun CommentsSection(
             },
             onClearStagedImage = viewModel::clearStagedImage,
             onRemoveEditImage = viewModel::removeEditImage,
+            onAttachTip = viewModel::attachTip,
             onCancelReply = viewModel::cancelReply,
             onCancelEdit = {
                 draft = ""
@@ -422,7 +430,7 @@ private fun CommentRow(
             // Tip another member's comment (creator monetization). #25 — hidden on your own post
             // (you can't tip yourself) and on your own comment.
             if (!comment.canDelete && !isOwnPost && !comment.pending && !comment.failed) {
-                TextButton(onClick = { onTip(comment) }, modifier = Modifier.testTag(CommentsTestTags.TIP)) {
+                TextButton(onClick = { onTip(comment) }, modifier = Modifier.testTag(CommentsTestTags.TIP_COMMENT_OPEN)) {
                     Icon(
                         Icons.Filled.AttachMoney,
                         contentDescription = null,
@@ -533,6 +541,7 @@ private fun CommentComposer(
     onPickImage: () -> Unit,
     onClearStagedImage: () -> Unit = {},
     onRemoveEditImage: () -> Unit = {},
+    onAttachTip: (Int?) -> Unit = {},
     onCancelReply: () -> Unit,
     onCancelEdit: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -584,6 +593,52 @@ private fun CommentComposer(
                 onRemove = onRemoveEditImage,
                 tag = "comments_edit_image",
             )
+        }
+        // TIP-304 — attach a CARRYING tip to this comment (charged to the post author on send). Hidden
+        // while editing (you can only tip on a new comment). The amount rides with the next send().
+        if (!state.isEditing) {
+            var tipPickerOpen by remember { mutableStateOf(false) }
+            val tipPresets = listOf(100, 500, 1000)
+            val attached = state.tipAmountCents
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (attached == null) {
+                    TextButton(
+                        onClick = { tipPickerOpen = !tipPickerOpen },
+                        modifier = Modifier.testTag(CommentsTestTags.TIP_COMMENT_ATTACH),
+                    ) {
+                        Icon(Icons.Filled.AttachMoney, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text("Add a tip")
+                    }
+                } else {
+                    androidx.compose.material3.AssistChip(
+                        onClick = { tipPickerOpen = !tipPickerOpen },
+                        label = { Text("Tipping $" + "%.2f".format(attached / 100.0)) },
+                        trailingIcon = {
+                            Icon(
+                                Icons.Outlined.Close,
+                                contentDescription = "Remove tip",
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .testTag(CommentsTestTags.TIP_COMMENT_ATTACH_CLEAR)
+                                    .clickable { onAttachTip(null); tipPickerOpen = false },
+                            )
+                        },
+                        modifier = Modifier.testTag(CommentsTestTags.TIP_COMMENT_ATTACH),
+                    )
+                }
+            }
+            if (tipPickerOpen) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    tipPresets.forEach { cents ->
+                        androidx.compose.material3.FilterChip(
+                            selected = attached == cents,
+                            onClick = { onAttachTip(cents); tipPickerOpen = false },
+                            label = { Text("$" + "%.2f".format(cents / 100.0)) },
+                            modifier = Modifier.testTag(CommentsTestTags.tipCommentAttachPreset(cents)),
+                        )
+                    }
+                }
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             // GIF / sticker picker is text-comment only (not while editing).
@@ -789,13 +844,17 @@ private fun CommentTipSheet(
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
         Column(
-            Modifier.fillMaxWidth().padding(16.dp).testTag(CommentsTestTags.TIP_SHEET),
+            Modifier.fillMaxWidth().padding(16.dp).testTag(CommentsTestTags.TIP_COMMENT_SHEET),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Send a tip", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.presetsCents.forEach { cents ->
-                    OutlinedButton(onClick = { onConfirm(cents) }, enabled = !state.submitting) {
+                    OutlinedButton(
+                        onClick = { onConfirm(cents) },
+                        enabled = !state.submitting,
+                        modifier = Modifier.testTag(CommentsTestTags.tipCommentSheetPreset(cents)),
+                    ) {
                         Text("$" + "%.2f".format(cents / 100.0))
                     }
                 }

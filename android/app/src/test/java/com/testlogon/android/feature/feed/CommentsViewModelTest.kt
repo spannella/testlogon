@@ -26,6 +26,11 @@ class CommentsViewModelTest {
             com.testlogon.android.feature.messaging.FakeMessagingRepository(),
             fakeDisplayNameResolver(),
             FakeCommentImageUploader(),
+            // Debug-parity billing: authorizes with a blank PM id (matches StubBillingAuthorizer in debug).
+            object : com.testlogon.android.data.messaging.BillingAuthorizer {
+                override suspend fun authorize(amountMinorUnits: Long, currency: String, memo: String?) =
+                    com.testlogon.android.data.messaging.BillingResult.Authorized(paymentMethodId = "", authorizedMinorUnits = amountMinorUnits)
+            },
             SavedStateHandle(mapOf(PostDetailDest.ARG_POST_ID to "post_1")),
         )
 

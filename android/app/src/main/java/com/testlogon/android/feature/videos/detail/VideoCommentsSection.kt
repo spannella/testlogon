@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddReaction
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.CircularProgressIndicator
@@ -23,9 +24,13 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +56,8 @@ import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import com.testlogon.android.BuildConfig
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.messaging.BillingAuthorizer
+import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.data.profile.DisplayNameResolver
 import com.testlogon.android.data.videos.VideoComment
 import com.testlogon.android.data.videos.VideoCommentsRepository
@@ -73,6 +80,7 @@ class VideoCommentsViewModel @Inject constructor(
     private val repository: VideoCommentsRepository,
     private val displayNames: DisplayNameResolver,
     private val imageUploader: com.testlogon.android.data.feed.CommentImageUploader,
+    private val billing: BillingAuthorizer,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -91,6 +99,10 @@ class VideoCommentsViewModel @Inject constructor(
         // #2 feed-parity — an image staged to send ALONGSIDE the comment text, + its upload progress.
         val pendingImageUrl: String? = null,
         val imageUploading: Boolean = false,
+        // TIP-305 — the video comment whose tip sheet is open (null = closed), + submit/error state.
+        val tipTarget: VideoComment? = null,
+        val tipSubmitting: Boolean = false,
+        val tipError: String? = null,
     )
 
     private val _state = MutableStateFlow(State())
@@ -196,6 +208,43 @@ class VideoCommentsViewModel @Inject constructor(
         viewModelScope.launch {
             if (repository.delete(videoId, comment.id) is ApiResult.Success) load()
         }
+    }
+
+    // ---- TIP-305 — video-comment tipping (recipient = the comment author) ----
+
+    val tipPresets: List<Int> = listOf(100, 500, 1000)
+
+    fun openTip(comment: VideoComment) {
+        _state.update { it.copy(tipTarget = comment, tipSubmitting = false, tipError = null) }
+    }
+
+    fun dismissTip() {
+        _state.update { it.copy(tipTarget = null, tipSubmitting = false, tipError = null) }
+    }
+
+    fun confirmTip(amountCents: Int) {
+        val target = _state.value.tipTarget ?: return
+        if (_state.value.tipSubmitting) return
+        _state.update { it.copy(tipSubmitting = true, tipError = null) }
+        viewModelScope.launch {
+            // Resolve a PM via the shared billing seam (debug => blank id -> backend tip-default; release => unavailable).
+            val pmId: String? = when (val auth = billing.authorize(amountCents.toLong(), "USD")) {
+                is BillingResult.Authorized -> auth.paymentMethodId
+                BillingResult.NotConfigured -> { failTip("Payments are unavailable right now."); return@launch }
+                BillingResult.Cancelled -> { _state.update { it.copy(tipSubmitting = false) }; return@launch }
+                is BillingResult.Declined -> { failTip(auth.reason); return@launch }
+                is BillingResult.Failed -> { failTip("Couldn't send tip. Try again."); return@launch }
+            }
+            when (val r = repository.tipComment(videoId, target.id, amountCents, pmId)) {
+                is ApiResult.Success -> { _state.update { it.copy(tipTarget = null, tipSubmitting = false) }; load() }
+                is ApiResult.Failure -> failTip(r.error.message)
+                is ApiResult.NetworkError -> failTip("You're offline. Try again.")
+            }
+        }
+    }
+
+    private fun failTip(message: String) {
+        _state.update { it.copy(tipSubmitting = false, tipError = message) }
     }
 }
 
@@ -343,6 +392,17 @@ fun VideoCommentsSection(
                     tint = if (state.draft.isNotBlank() || state.pendingImageUrl != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+
+        // TIP-305 — the video-comment tip sheet (opens when a comment's Tip button is tapped).
+        if (state.tipTarget != null) {
+            VideoCommentTipSheet(
+                presets = viewModel.tipPresets,
+                submitting = state.tipSubmitting,
+                error = state.tipError,
+                onConfirm = viewModel::confirmTip,
+                onDismiss = viewModel::dismissTip,
+            )
         }
     }
 }
@@ -495,6 +555,57 @@ private fun CommentRow(
                     modifier = Modifier.size(18.dp),
                 )
             }
+            // TIP-305 — tip this comment's author. Hidden on your OWN comment (canDelete == mine) so you
+            // never self-tip (the backend also rejects a self-tip with 400 cannot_tip_self).
+            if (!comment.canDelete) {
+                IconButton(
+                    onClick = { viewModel.openTip(comment) },
+                    modifier = Modifier.size(32.dp).testTag("tip_video_comment_open"),
+                ) {
+                    Icon(
+                        Icons.Outlined.Paid,
+                        contentDescription = "Tip comment",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** TIP-305 — preset-amount tip bottom sheet for a VIDEO comment (mirrors the feed comment tip sheet). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VideoCommentTipSheet(
+    presets: List<Int>,
+    submitting: Boolean,
+    error: String?,
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(
+            Modifier.fillMaxWidth().padding(16.dp).testTag("tip_video_comment_sheet"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Send a tip", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                presets.forEach { cents ->
+                    OutlinedButton(
+                        onClick = { onConfirm(cents) },
+                        enabled = !submitting,
+                        modifier = Modifier.testTag("tip_video_comment_sheet_$cents"),
+                    ) {
+                        Text("$" + "%.2f".format(cents / 100.0))
+                    }
+                }
+            }
+            if (submitting) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            if (error != null) {
+                Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            Box(Modifier.fillMaxWidth().size(16.dp))
         }
     }
 }

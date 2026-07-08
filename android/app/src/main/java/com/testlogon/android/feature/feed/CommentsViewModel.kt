@@ -13,6 +13,8 @@ import com.testlogon.android.data.feed.Comment
 import com.testlogon.android.data.feed.CommentsRepository
 import com.testlogon.android.data.feed.reactedByMe
 import com.testlogon.android.data.feed.toggledReaction
+import com.testlogon.android.data.messaging.BillingAuthorizer
+import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.data.messaging.GifResult
 import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.StickerUi
@@ -43,6 +45,8 @@ data class ComposerState(
     val editImageUrl: String? = null,
     /** #5 — true once the image was changed while editing (replaced/removed) so PATCH sends it. */
     val editImageDirty: Boolean = false,
+    /** TIP-302 — an optional tip (cents) ATTACHED to this comment; charged to the post author on send. */
+    val tipAmountCents: Int? = null,
 ) {
     /** Can send with text OR a staged/edited image, and not mid-send. */
     val canSend: Boolean
@@ -93,6 +97,7 @@ class CommentsViewModel @Inject constructor(
     private val stickerCatalog: MessagingRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     private val imageUploader: com.testlogon.android.data.feed.CommentImageUploader,
+    private val billing: BillingAuthorizer,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -298,21 +303,36 @@ class CommentsViewModel @Inject constructor(
         if (_tip.value.submitting) return
         _tip.update { it.copy(submitting = true) }
         viewModelScope.launch {
-            when (val r = repository.tipComment(postId, target.id, amountCents)) {
+            // TIP-301 — resolve a payment_method_id via the shared billing seam (debug => blank id so the
+            // dev tip path completes + backend falls back to tip-default; release => payments unavailable).
+            val pmId: String? = when (val auth = billing.authorize(amountCents.toLong(), CURRENCY_USD)) {
+                is BillingResult.Authorized -> auth.paymentMethodId
+                BillingResult.NotConfigured -> { failTip(ERR_PAYMENTS_UNAVAILABLE); return@launch }
+                BillingResult.Cancelled -> { _tip.update { it.copy(submitting = false) }; return@launch }
+                is BillingResult.Declined -> { failTip(auth.reason); return@launch }
+                is BillingResult.Failed -> { failTip(ERR_GENERIC); return@launch }
+            }
+            when (val r = repository.tipComment(postId, target.id, amountCents, pmId)) {
                 is ApiResult.Success -> {
                     _tip.update { CommentTipState() }
                     _refreshSignal.value = _refreshSignal.value + 1L
                 }
-                is ApiResult.Failure -> {
-                    _tip.update { it.copy(submitting = false) }
-                    _effects.trySend(CommentsEffect.ShowError(r.error.message))
-                }
-                is ApiResult.NetworkError -> {
-                    _tip.update { it.copy(submitting = false) }
-                    _effects.trySend(CommentsEffect.ShowError(OFFLINE_MESSAGE))
-                }
+                is ApiResult.Failure -> failTip(r.error.message)
+                is ApiResult.NetworkError -> failTip(OFFLINE_MESSAGE)
             }
         }
+    }
+
+    private fun failTip(message: String) {
+        _tip.update { it.copy(submitting = false) }
+        _effects.trySend(CommentsEffect.ShowError(message))
+    }
+
+    // ---- Comment-CARRYING tip (TIP-302): attach a tip to the comment being written ----
+
+    /** Attach (or clear, with null) a tip amount to the composer; sent with the next comment. */
+    fun attachTip(cents: Int?) {
+        _composer.update { it.copy(tipAmountCents = cents) }
     }
 
     // ---- Comment emoji reactions (#23) ----
@@ -432,6 +452,7 @@ class CommentsViewModel @Inject constructor(
         }
         if (body.isEmpty() && stagedImage == null) return
         val parentId = current.replyTo?.id?.takeIf { repliesSupported }
+        val tipCents = current.tipAmountCents // TIP-302 — carry the attached tip, if any.
         val localKey = UUID.randomUUID().toString()
         val optimistic = Comment(
             id = localKey,
@@ -446,18 +467,20 @@ class CommentsViewModel @Inject constructor(
             pending = true,
             localKey = localKey,
         )
+        if (tipCents != null) pendingTips[localKey] = tipCents
         pending.update { listOf(optimistic) + it }
-        _composer.value = ComposerState() // clear text + reply + staged image, keep sending=false
-        postComment(localKey, body, parentId, isReply = parentId != null, imageUrl = stagedImage)
+        _composer.value = ComposerState() // clear text + reply + staged image + attached tip, keep sending=false
+        postComment(localKey, body, parentId, isReply = parentId != null, imageUrl = stagedImage, tipCents = tipCents)
     }
 
     fun retry(localKey: String) {
         val entry = pending.value.firstOrNull { it.localKey == localKey } ?: return
         pending.update { list -> list.map { if (it.localKey == localKey) it.copy(pending = true, failed = false) else it } }
-        postComment(localKey, entry.body, entry.parentId, isReply = entry.parentId != null, imageUrl = entry.imageUrl)
+        postComment(localKey, entry.body, entry.parentId, isReply = entry.parentId != null, imageUrl = entry.imageUrl, tipCents = pendingTips[localKey])
     }
 
     fun discard(localKey: String) {
+        pendingTips.remove(localKey)
         pending.update { list -> list.filterNot { it.localKey == localKey } }
     }
 
@@ -475,10 +498,39 @@ class CommentsViewModel @Inject constructor(
         }
     }
 
-    private fun postComment(localKey: String, body: String, parentId: String?, isReply: Boolean, imageUrl: String? = null) {
+    /** Side-map of localKey -> attached tip cents so a Retry re-charges the same carrying tip (TIP-302). */
+    private val pendingTips = mutableMapOf<String, Int>()
+
+    private fun postComment(
+        localKey: String,
+        body: String,
+        parentId: String?,
+        isReply: Boolean,
+        imageUrl: String? = null,
+        tipCents: Int? = null,
+    ) {
         viewModelScope.launch {
-            when (val result = repository.addComment(postId, body, parentId, imageUrl)) {
+            // TIP-302 — a carrying tip is money-moving: resolve a PM first. On no-PM / decline the whole
+            // action fails (intent preserved, OQ-4) — the comment flips to failed with Retry/Discard.
+            var tipPmId: String? = null
+            if (tipCents != null) {
+                when (val auth = billing.authorize(tipCents.toLong(), CURRENCY_USD)) {
+                    is BillingResult.Authorized -> tipPmId = auth.paymentMethodId
+                    BillingResult.NotConfigured -> { markFailed(localKey, ERR_PAYMENTS_UNAVAILABLE); return@launch }
+                    BillingResult.Cancelled -> {
+                        // User backed out of paying: revert to a plain, unsent comment kept in the composer.
+                        pendingTips.remove(localKey)
+                        pending.update { list -> list.filterNot { it.localKey == localKey } }
+                        _composer.update { it.copy(text = body, tipAmountCents = null) }
+                        return@launch
+                    }
+                    is BillingResult.Declined -> { markFailed(localKey, auth.reason); return@launch }
+                    is BillingResult.Failed -> { markFailed(localKey, ERR_GENERIC); return@launch }
+                }
+            }
+            when (val result = repository.addComment(postId, body, parentId, imageUrl, tipAmountCents = tipCents, tipPaymentMethodId = tipPmId)) {
                 is ApiResult.Success -> {
+                    pendingTips.remove(localKey)
                     pending.update { list -> list.filterNot { it.localKey == localKey } }
                     if (!isReply) _effects.trySend(CommentsEffect.CommentCountChanged(+1))
                     _refreshSignal.value = _refreshSignal.value + 1L
@@ -500,5 +552,8 @@ class CommentsViewModel @Inject constructor(
         const val PAGE_SIZE = 20
         const val PREFETCH_DISTANCE = 5
         const val OFFLINE_MESSAGE = "You're offline. Try again."
+        const val CURRENCY_USD = "USD"
+        const val ERR_PAYMENTS_UNAVAILABLE = "Payments are unavailable right now."
+        const val ERR_GENERIC = "Couldn't send tip. Try again."
     }
 }
