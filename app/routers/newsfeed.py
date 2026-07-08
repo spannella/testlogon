@@ -1924,6 +1924,8 @@ class PresignUploadResponse(BaseModel):
 class UnlockPostRequest(BaseModel):
     post_id: str
     payment_method_id: Optional[str] = None
+    # ADV-404: optional last-click CPA attribution handle carried from an ad CTA.
+    ad_click_id: Optional[str] = None
     idempotency_key: Optional[str] = Field(
         default=None,
         min_length=1,
@@ -6460,6 +6462,19 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep, _kyc: object = Depen
         advance_progress(user_id, "unlock_count")
     except Exception:
         logger.debug("achievement hook: unlock_count", exc_info=True)
+
+    # ADV-404: attribute this paid unlock to the unlocker's last ad click
+    # (explicit ad_click_id or last-click 7d) and charge the CPA bid. Best-effort.
+    try:
+        from app.services.ad_attribution import attribute_conversion
+        attribute_conversion(
+            viewer_sub=user_id,
+            conversion_type="unlock",
+            conversion_value_cents=int(price or 0),
+            ad_click_id=getattr(req, "ad_click_id", "") or "",
+        )
+    except Exception:
+        logger.warning("ad_conversion_attribution_failed unlock post=%s", req.post_id, exc_info=True)
 
     return UnlockPostResponse(post_id=req.post_id, payment_intent=pi)
 

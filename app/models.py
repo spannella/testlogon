@@ -897,6 +897,8 @@ class ShoppingCartTotalOut(BaseModel):
 class CartPurchaseIn(BaseModel):
     promo_code: Optional[str] = None
     promo_code_id: Optional[str] = None
+    # ADV-403: optional last-click CPA attribution handle carried from an ad CTA.
+    ad_click_id: Optional[str] = None
 
 
 class ShoppingCartPurchaseOut(BaseModel):

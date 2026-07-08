@@ -341,7 +341,10 @@ def _split_revenue(
             _sk, credit_item = new_ledger_entry(
                 key_name="pk",
                 key_value=user_pk(creator_id),
-                entry_type="ad_revenue_credit",
+                # ADV-406: type "credit" so ad-revenue share shows in creator
+                # earnings/payouts (creator_earnings filters type=="credit"),
+                # Bug#3-safe. Aligns the dev clone with prod.
+                entry_type="credit",
                 amount_cents=creator_share,
                 state="settled",
                 reason="Ad revenue share",

@@ -357,6 +357,8 @@ class PlanOut(BaseModel):
 
 class SubscribeIn(BaseModel):
     subscriber_id: Optional[str] = None
+    # ADV-402: optional last-click CPA attribution handle carried from an ad CTA.
+    ad_click_id: Optional[str] = None
     interval: Optional[Literal["month", "year"]] = None
     discount_code: Optional[str] = None
     # GAP-0342: promo_code is the platform-wide promo/coupon system
@@ -1188,6 +1190,21 @@ async def subscribe(
         check_milestone(plan["creator_id"], "subscribers", new_count)
     except Exception:
         logger.warning("check_milestone failed on subscription signup", exc_info=True)
+
+    # ADV-402: attribute this subscription to the subscriber's last ad click
+    # (explicit ad_click_id or last-click within 7d) and charge the CPA bid.
+    # Only on a real charge (not a free trial). Best-effort: never break signup.
+    if status != "trialing":
+        try:
+            from app.services.ad_attribution import attribute_conversion
+            attribute_conversion(
+                viewer_sub=subscriber_id,
+                conversion_type="subscription",
+                conversion_value_cents=int(sub.get("price_cents") or 0),
+                ad_click_id=getattr(body, "ad_click_id", "") or "",
+            )
+        except Exception:
+            logger.warning("ad_conversion_attribution_failed subscribe sub=%s", subscriber_id, exc_info=True)
 
     refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
