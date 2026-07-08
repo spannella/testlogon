@@ -1660,6 +1660,12 @@ def _validate_sticker_url(url: str) -> str:
 
 class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
+    # TIP-302: a comment can CARRY a tip. When tip_amount_cents is present the
+    # create-comment handler charges it (recipient = the POST author) via
+    # charge_tip BEFORE the comment row is written, then stamps tip_total_cents.
+    tip_amount_cents: Optional[int] = Field(default=None, ge=1)
+    tip_currency: str = "usd"
+    tip_payment_method_id: Optional[str] = None
     # FEED-004: emoji/GIF/sticker comments. `kind` selects the content type.
     # For kind="text" the existing ContentFieldsMixin body_* fields are used.
     kind: Literal["text", "gif", "sticker"] = "text"
@@ -1752,6 +1758,10 @@ class CommentResponse(BaseModel):
 class TipRequest(BaseModel):
     amount_cents: int = Field(..., ge=1)
     currency: str = "usd"
+    # TIP-301: name an explicit / tip-default payment method for the comment
+    # tip so charge_tip can resolve the tipper's saved PM (falls back to
+    # tip-default -> default when None).
+    payment_method_id: Optional[str] = None
 
 
 class UnfollowRequest(BaseModel):
@@ -5679,6 +5689,26 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
     created_at = now_iso()
     parent = req.parent_comment_id
 
+    # TIP-302: comment-CARRYING tip. Charge FIRST (recipient = the POST author)
+    # so a declined/failed charge raises BEFORE any comment row is written --
+    # no orphan comment, no orphan stamp, no ledger. A tip on your OWN post
+    # self-tips -> charge_tip raises 400 cannot_tip_self.
+    comment_tip_total = 0
+    if getattr(req, "tip_amount_cents", None):
+        from app.services.tips import charge_tip
+        charge_tip(
+            tipper_id=user_id,
+            recipient_id=post_author,
+            amount_cents=int(req.tip_amount_cents),
+            currency=(getattr(req, "tip_currency", "usd") or "usd"),
+            payment_method_id=getattr(req, "tip_payment_method_id", None),
+            content_type="comment",
+            content_id=comment_id,
+            meta={"post_id": post_id, "comment_id": comment_id, "carried": True},
+            idempotency_key=new_id("cmtcarry"),
+        )
+        comment_tip_total = int(req.tip_amount_cents)
+
     # FEED-004: media comments (gif/sticker) carry no body content; text comments
     # use the existing ContentFieldsMixin envelope.
     if req.kind == "text":
@@ -5720,7 +5750,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         **content,
         **media_fields,
         "version": 1,
-        "tip_total_cents": 0,
+        "tip_total_cents": comment_tip_total,
         "GSI2PK": pk_post_comments(post_id),
         "GSI2SK": f"{created_at}#CMT#{comment_id}",
     }
@@ -5849,7 +5879,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         body_format=content["body_format"],
         body_version=content["body_version"],
         version=1,
-        tip_total_cents=0,
+        tip_total_cents=comment_tip_total,
         kind=req.kind,
         gif_url=req.gif_url,
         gif_alt_text=req.gif_alt_text,
@@ -6010,16 +6040,12 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
     # charge_tip seam (called below). Keep a stub-shaped receipt for the response.
     pi = {"provider": "stub", "payment_intent_id": None, "status": "succeeded"}
 
-    key = {"pk": target["pk"], "sk": target["sk"]}
-    updated = ddb_update_item(
-        key=key,
-        update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
-        expr_vals={":z": 0, ":amt": req.amount_cents},
-    )
+    comment_author = target.get("user_id")
 
-    comment_author = updated.get("user_id")
-
-    # Write billing ledger debit + credit entries for comment tip (best-effort)
+    # TIP-301: charge via the centralized charge_tip seam BEFORE stamping the
+    # comment, so a declined/failed charge (402) leaves NO tip_total bump and
+    # NO ledger. payment_method_id now flows from TipRequest (explicit ->
+    # tip-default -> default fallback inside charge_tip).
     if comment_author and comment_author != tipper_id:
         from app.services.tips import charge_tip
         _ct = charge_tip(
@@ -6034,6 +6060,13 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
             idempotency_key=new_id("cmttip"),
         )
         pi["payment_intent_id"] = _ct.tip_payment_id
+
+    key = {"pk": target["pk"], "sk": target["sk"]}
+    updated = ddb_update_item(
+        key=key,
+        update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
+        expr_vals={":z": 0, ":amt": req.amount_cents},
+    )
 
     if comment_author and comment_author != tipper_id:
         put_notification(
