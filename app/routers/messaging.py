@@ -8535,7 +8535,7 @@ def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id:
         # In DEV_MODE, moto presigned URLs point to inaccessible AWS endpoints.
         # Return a path-relative URL so the browser routes through the Vite proxy
         # to the in-app mock S3 PUT handler (see s3_mock.py, mounted at /mock/s3).
-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_url_quote(key, safe='/')}"
+        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_url_quote(key, safe='/')}"
     else:
         upload_url = s3.generate_presigned_url(
             ClientMethod="put_object",
@@ -8567,6 +8567,17 @@ def create_image_message(
             require_subscription_access(user_id, pid)
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
+
+    # TIP-B5 pay-to-message gate extension (TIP-402/403): the FIRST image/gallery
+    # message to a gated DM recipient must carry a tip >= min_tip_cents, matching
+    # the text send path. Bypassed for allowlist / mutual-follow / established
+    # conversation. A gated recipient cannot be first-contacted with an un-tipped image.
+    if convo.get("type") == "dm":
+        _gate_tip_recipient = _resolve_tip_recipient(conversation_id, user_id)
+        if _gate_tip_recipient:
+            _gate_min_c = _dm_tip_gate_required(user_id, _gate_tip_recipient, conversation_id, inp.tip_amount_cents)
+            if _gate_min_c is not None:
+                raise HTTPException(402, {"code": "tip_required", "min_tip_cents": _gate_min_c, "recipient": _gate_tip_recipient})
 
     # Validate send_at: must be in the future (at least 5 seconds from now)
     ts = now_ts()
@@ -8799,7 +8810,7 @@ def presign_voice_message(
         ext = "wav"
     s3_key = f"voice-messages/{conversation_id}/{msg_id}.{ext}"
     if S.dev_mode:
-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vm_pq(s3_key, safe='/')}"
+        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_vm_pq(s3_key, safe='/')}"
     else:
         upload_url = s3.generate_presigned_url(
             ClientMethod="put_object",
@@ -9010,7 +9021,7 @@ def presign_voicemail(
 
     from urllib.parse import quote as _vml_pq
     if S.dev_mode:
-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vml_pq(s3_key, safe='/')}"
+        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_vml_pq(s3_key, safe='/')}"
     else:
         upload_url = s3.generate_presigned_url(
             ClientMethod="put_object",
@@ -9187,6 +9198,17 @@ def create_gallery_message(
         if pid and pid != user_id:
             require_subscription_access(user_id, pid)
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
+
+    # TIP-B5 pay-to-message gate extension (TIP-402/403): the FIRST image/gallery
+    # message to a gated DM recipient must carry a tip >= min_tip_cents, matching
+    # the text send path. Bypassed for allowlist / mutual-follow / established
+    # conversation. A gated recipient cannot be first-contacted with an un-tipped image.
+    if convo.get("type") == "dm":
+        _gate_tip_recipient = _resolve_tip_recipient(conversation_id, user_id)
+        if _gate_tip_recipient:
+            _gate_min_c = _dm_tip_gate_required(user_id, _gate_tip_recipient, conversation_id, inp.tip_amount_cents)
+            if _gate_min_c is not None:
+                raise HTTPException(402, {"code": "tip_required", "min_tip_cents": _gate_min_c, "recipient": _gate_tip_recipient})
 
     ts = now_ts()
     deliver_at_gal: Optional[int] = None
