@@ -657,6 +657,18 @@ interface MessagingRepository {
         paymentMethodId: String?,
     ): ApiResult<TipReceipt>
 
+    /**
+     * TIP-203 - money-REACTION tip on a message (charge_tip content_type message_react). Distinct from
+     * [tipMessage]: credits the message author, stores a tip-reaction badge, fans a realtime event.
+     */
+    suspend fun tipReactMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        emoji: String?,
+        paymentMethodId: String?,
+    ): ApiResult<TipReactReceipt>
+
     // ---- MSG: new in-app composers ----
 
     /** Lottery DM (conversation_id in BODY). Outcomes default-split weights to sum 10000. */
@@ -813,6 +825,15 @@ data class TipReceipt(
     val tipPaymentId: String?,
     val amountCents: Long,
     val currency: String,
+)
+
+/** TIP-203 - the receipt returned by a successful message tip-REACTION. */
+data class TipReactReceipt(
+    val tipPaymentId: String?,
+    val chargedCents: Long,
+    val netCents: Long,
+    val recipientId: String?,
+    val emoji: String?,
 )
 
 /** AND-135 — a GIF the user picked from search/trending, sent verbatim. */
@@ -2949,6 +2970,40 @@ class MessagingRepositoryImpl @Inject constructor(
         ) {
             is ApiResult.Success -> ApiResult.Success(
                 TipReceipt(r.data.tipPaymentId, r.data.amountCents, r.data.currency),
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun tipReactMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        emoji: String?,
+        paymentMethodId: String?,
+    ): ApiResult<TipReactReceipt> = withContext(io) {
+        when (
+            val r = apiCall {
+                api.tipReactMessage(
+                    conversationId,
+                    messageId,
+                    TipReactReq(
+                        amountCents = amountCents,
+                        emoji = emoji,
+                        paymentMethodId = paymentMethodId,
+                    ),
+                )
+            }
+        ) {
+            is ApiResult.Success -> ApiResult.Success(
+                TipReactReceipt(
+                    tipPaymentId = r.data.tipPaymentId,
+                    chargedCents = r.data.chargedCents,
+                    netCents = r.data.netCents,
+                    recipientId = r.data.recipientId,
+                    emoji = r.data.emoji,
+                ),
             )
             is ApiResult.Failure -> r
             is ApiResult.NetworkError -> r

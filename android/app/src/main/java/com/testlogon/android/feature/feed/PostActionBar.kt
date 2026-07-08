@@ -64,7 +64,13 @@ object PostActionTestTags {
     const val BOOKMARK = "post_bookmark"
     const val SHARE = "post_share"
     const val TIP = "post_tip"
+    // TIP-204 - money-reaction (tip) affordances.
+    const val TIP_REACT = "tip_react_post_open"
+    const val TIP_REACT_CHIPS = "tip_react_post_chips"
 }
+
+/** TIP-204 - the money-reaction glyph used for the post tip-react affordance + chip. */
+private const val TIP_REACT_EMOJI = "💰"
 
 /**
  * AND-173 / AND-174 / AND-175 — the like + comment + overflow action row beneath a post's content.
@@ -95,6 +101,9 @@ fun PostActionBar(
     // #20 — full emoji reactions (distinct from the like toggle).
     reactions: List<com.testlogon.android.data.feed.ReactionTally> = emptyList(),
     onToggleReaction: (String) -> Unit = {},
+    // TIP-204 - money-REACTION: tip option in the reaction picker + money-reaction chips on the post.
+    tipReactions: List<com.testlogon.android.data.feed.TipReactionBadge> = emptyList(),
+    onTipReact: (String) -> Unit = {},
 ) {
     var reactionPickerOpen by remember { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxWidth()) {
@@ -123,11 +132,19 @@ fun PostActionBar(
                     onToggleReaction(it)
                     reactionPickerOpen = false
                 },
+                onTipReact = {
+                    onTipReact(it)
+                    reactionPickerOpen = false
+                },
             )
         }
         // #20 — under-post reaction chips (emoji + count; tap to toggle).
         if (reactions.isNotEmpty()) {
             PostReactionChips(reactions = reactions, onToggle = onToggleReaction)
+        }
+        // TIP-204 - money-reaction (tip) chips on the post, distinct from the free emoji chips.
+        if (tipReactions.isNotEmpty()) {
+            PostTipReactionChips(tipReactions = tipReactions)
         }
     }
 }
@@ -149,6 +166,7 @@ private fun ReactButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
 private fun PostEmojiPicker(
     selected: Set<String>,
     onPick: (String) -> Unit,
+    onTipReact: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     androidx.compose.foundation.layout.FlowRow(
@@ -160,6 +178,35 @@ private fun PostEmojiPicker(
                 selected = emoji in selected,
                 onClick = { onPick(emoji) },
                 label = { Text(emoji) },
+            )
+        }
+        // TIP-204 - money-REACTION: opens the shared TipSheet (amount + a money glyph); on confirm
+        // POSTs the post tip-react. Distinct from the free emoji reactions and the direct Tip action.
+        androidx.compose.material3.AssistChip(
+            onClick = { onTipReact(TIP_REACT_EMOJI) },
+            label = { Text(TIP_REACT_EMOJI + " " + stringResource(R.string.post_tip_react)) },
+            modifier = Modifier.testTag(PostActionTestTags.TIP_REACT),
+        )
+    }
+}
+
+/** TIP-204 - under-post MONEY-reaction chip row (tip reactions); glyph + amount, non-toggling. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PostTipReactionChips(
+    tipReactions: List<com.testlogon.android.data.feed.TipReactionBadge>,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth().padding(start = 8.dp, top = 2.dp, bottom = 4.dp).testTag(PostActionTestTags.TIP_REACT_CHIPS),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        tipReactions.forEach { t ->
+            val amount = String.format(java.util.Locale.US, "$%.2f", t.amountCents / 100.0)
+            val glyph = t.emoji.ifBlank { TIP_REACT_EMOJI }
+            androidx.compose.material3.AssistChip(
+                onClick = {},
+                label = { Text(glyph + " " + amount) },
             )
         }
     }

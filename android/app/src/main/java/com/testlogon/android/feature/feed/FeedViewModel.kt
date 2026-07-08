@@ -110,6 +110,10 @@ class FeedViewModel @Inject constructor(
 
     // #20 — optimistic emoji-reaction overlay (post id -> tallies), applied like the like overlay.
     private val reactionOverrides = MutableStateFlow<Map<String, List<com.testlogon.android.data.feed.ReactionTally>>>(emptyMap())
+
+    // TIP-204 - money-reaction (tip) overlay (post id -> tip badges), applied like the reaction overlay
+    // so a tip-react shows a money-reaction chip immediately (before a feed refetch).
+    private val tipReactionOverrides = MutableStateFlow<Map<String, List<com.testlogon.android.data.feed.TipReactionBadge>>>(emptyMap())
     private val reactionJobs = mutableMapOf<String, Job>()
 
     // AND-176 — per-post bookmark toggle serialization (last-write-wins).
@@ -135,12 +139,13 @@ class FeedViewModel @Inject constructor(
             .cachedIn(viewModelScope)
 
     val items: Flow<PagingData<FeedPost>> =
-        combine(pager, likeOverrides, actions.suppressed, reactionOverrides) { data, overrides, suppressed, reactions ->
+        combine(pager, likeOverrides, actions.suppressed, reactionOverrides, tipReactionOverrides) { data, overrides, suppressed, reactions, tipReactions ->
             data
                 .filter { it.id !in suppressed }
                 .map { post ->
                     val withLike = overrides[post.id]?.let { post.applyLike(it) } ?: post
-                    reactions[post.id]?.let { withLike.copy(reactions = it) } ?: withLike
+                    val withReactions = reactions[post.id]?.let { withLike.copy(reactions = it) } ?: withLike
+                    tipReactions[post.id]?.let { withReactions.copy(tipReactions = it) } ?: withReactions
                 }
         }
 
@@ -222,6 +227,14 @@ class FeedViewModel @Inject constructor(
         }
         reactionJobs[post.id] = job
         job.invokeOnCompletion { if (reactionJobs[post.id] === job) reactionJobs.remove(post.id) }
+    }
+
+    /**
+     * TIP-204 - record a successful post tip-REACTION so the money-reaction chip renders immediately
+     * (overlay). The authoritative badge lands on the next feed refetch.
+     */
+    fun applyTipReactionBadge(postId: String, badge: com.testlogon.android.data.feed.TipReactionBadge) {
+        tipReactionOverrides.update { it + (postId to (it[postId].orEmpty() + badge)) }
     }
 
     // ---- AND-175: hide / not-interested ----

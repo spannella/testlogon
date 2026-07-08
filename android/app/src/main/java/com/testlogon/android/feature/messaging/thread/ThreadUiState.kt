@@ -236,6 +236,8 @@ data class EditTarget(
  */
 sealed interface ThreadAction {
     data class ToggleReaction(val messageId: String, val emoji: String) : ThreadAction
+    /** TIP-203 - open the shared tip sheet in money-REACTION mode for [messageId] with [emoji]. */
+    data class TipReact(val messageId: String, val emoji: String) : ThreadAction
     data class OpenReactionDetails(val messageId: String) : ThreadAction
     data class SetPinned(val messageId: String, val pinned: Boolean) : ThreadAction
     data object OpenPinsList : ThreadAction
@@ -321,6 +323,10 @@ data class TipSheetState(
     val note: String = "",
     val amountError: String? = null,
     val submitting: Boolean = false,
+    /** TIP-203 - when true, confirm hits the message tip-REACTION endpoint (badge) not the direct tip. */
+    val isReaction: Boolean = false,
+    /** TIP-203 - the money-reaction glyph carried into the tip-react POST (null for a direct tip). */
+    val emoji: String? = null,
 ) {
     /** Effective amount in cents from the selected preset or the parsed custom input. */
     val amountCents: Long? get() = selectedCents ?: parseDollarsToCents(customInput)
@@ -457,6 +463,8 @@ data class ThreadMessageUi(
      * overlay strip below the bubble. Ticks live and reveals its payload at the target.
      */
     val countdown: com.testlogon.android.data.messaging.MessageCountdown? = null,
+    /** TIP-203 - money-reaction (tip) badges on this message; distinct from [reactions]. */
+    val tipReactions: List<com.testlogon.android.data.messaging.TipReaction> = emptyList(),
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING

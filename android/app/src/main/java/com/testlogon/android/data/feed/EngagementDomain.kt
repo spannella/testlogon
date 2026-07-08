@@ -27,6 +27,17 @@ data class ReactionTally(
 )
 
 /**
+ * TIP-203/204 - a money-reaction (tip) badge on a post/message; distinct from the free emoji
+ * [ReactionTally]. [tipperId] may be null (server may omit it); [amountCents] is the gross tip in
+ * minor units for the chip label.
+ */
+data class TipReactionBadge(
+    val tipperId: String?,
+    val emoji: String,
+    val amountCents: Int,
+)
+
+/**
  * Builds the display chip list (only non-zero counts, ordered by [REACTION_EMOJIS]) from the wire
  * `reactions_counts` + `my_reactions`.
  */

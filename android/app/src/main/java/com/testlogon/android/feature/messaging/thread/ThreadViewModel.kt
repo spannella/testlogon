@@ -210,6 +210,9 @@ class ThreadViewModel @Inject constructor(
         // MSG — receiver-side decrypted plaintext for encrypted messages, keyed by message UI key
     // (transient; never persisted). Set after a correct passphrase.
     private val decryptedMessages = mutableMapOf<String, String>()
+    // TIP-203 - optimistic money-reaction overlay (message key -> badges) so a tip-react chip renders
+    // instantly; merged with server-hydrated tip_reactions and de-duped by tip_payment_id on refetch.
+    private val tipReactionOverlay = mutableMapOf<String, List<com.testlogon.android.data.messaging.TipReaction>>()
     // MSG — view-once messages consumed locally this session (hidden immediately on close, even before
     // the server reflects the consumption). Keyed by message UI key.
     private val locallyConsumed = mutableSetOf<String>()
@@ -346,7 +349,10 @@ class ThreadViewModel @Inject constructor(
                     prior.copy(
                         messages = visible.map { msg ->
                             val ui = msg.toUi(self)
-                            ui.copy(decryptedText = decryptedMessages[ui.key])
+                            ui.copy(
+                                decryptedText = decryptedMessages[ui.key],
+                                tipReactions = mergeTipReactions(ui.tipReactions, tipReactionOverlay[ui.key]),
+                            )
                         },
                         receipts = computeReceipts(visible, self),
                         peerUserSub = prior.peerUserSub ?: otherSenders.firstOrNull(),
@@ -2248,6 +2254,15 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    /** TIP-203 - open the tip sheet in money-REACTION mode (badge). Never for your own message. */
+    fun onTipReactOpen(messageKey: String, emoji: String) {
+        val msg = _state.value.messages.firstOrNull { it.key == messageKey } ?: return
+        if (msg.isOwn) return // self-tip guard (backend also rejects with 400).
+        _state.update {
+            it.copy(tipSheet = TipSheetState(messageId = messageKey, isReaction = true, emoji = emoji))
+        }
+    }
+
     fun onTipOpen(messageKey: String) {
         val msg = _state.value.messages.firstOrNull { it.key == messageKey } ?: return
         if (msg.isOwn) return // FR-10: never tip your own message.
@@ -2286,6 +2301,38 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             when (val auth = billing.authorize(cents, TIP_CURRENCY)) {
                 is BillingResult.Authorized -> {
+                    if (sheet.isReaction) {
+                        val reactEmoji = sheet.emoji ?: TIP_REACT_DEFAULT_EMOJI
+                        when (
+                            val rr = repository.tipReactMessage(
+                                conversationId, messageId, cents, reactEmoji,
+                                paymentMethodId = auth.paymentMethodId,
+                            )
+                        ) {
+                            is ApiResult.Success -> {
+                                val badge = com.testlogon.android.data.messaging.TipReaction(
+                                    tipperId = selfSub(),
+                                    emoji = rr.data.emoji ?: reactEmoji,
+                                    amountCents = cents,
+                                    tipPaymentId = rr.data.tipPaymentId,
+                                )
+                                tipReactionOverlay[messageId] = tipReactionOverlay[messageId].orEmpty() + badge
+                                _state.update { st ->
+                                    st.copy(
+                                        tipSheet = TipSheetState(),
+                                        transientMessage = "Tip reaction sent",
+                                        messages = st.messages.map {
+                                            if (it.key == messageId) it.copy(tipReactions = it.tipReactions + badge) else it
+                                        },
+                                    )
+                                }
+                            }
+                            else -> _state.update {
+                                it.copy(tipSheet = it.tipSheet.copy(submitting = false, amountError = "Couldn't send tip reaction. Try again"))
+                            }
+                        }
+                        return@launch
+                    }
                     val result = repository.tipMessage(
                         conversationId, messageId, cents, TIP_CURRENCY,
                         note = sheet.note.takeIf { it.isNotBlank() },
@@ -2322,6 +2369,7 @@ class ThreadViewModel @Inject constructor(
     fun onAction(action: ThreadAction) {
         when (action) {
             is ThreadAction.ToggleReaction -> toggleReaction(action.messageId, action.emoji)
+            is ThreadAction.TipReact -> onTipReactOpen(action.messageId, action.emoji)
             is ThreadAction.OpenReactionDetails -> openReactionDetails(action.messageId)
             is ThreadAction.SetPinned -> setPinned(action.messageId, action.pinned)
             ThreadAction.OpenPinsList -> openPinsList()
@@ -2822,6 +2870,9 @@ class ThreadViewModel @Inject constructor(
         /** AND-139 — tip currency (USD per the SendTipIn default; future: per-conversation currency). */
         private const val TIP_CURRENCY = "USD"
 
+        /** TIP-203 - default money-reaction glyph when the picker does not specify one. */
+        private const val TIP_REACT_DEFAULT_EMOJI = "💰"
+
         /** AND-140 — HTTP 403 (revoke window expired / not allowed). */
         private const val HTTP_FORBIDDEN = 403
 
@@ -2871,6 +2922,19 @@ internal fun buildDemoEncryptionEnvelope(plaintext: String): com.testlogon.andro
     )
 }
 
+/**
+ * TIP-203 - union the server-hydrated tip-reaction badges with the optimistic overlay, de-duped by
+ * tip_payment_id so a badge does not double after the next refetch hydrates it. Pure / JVM-testable.
+ */
+internal fun mergeTipReactions(
+    hydrated: List<com.testlogon.android.data.messaging.TipReaction>,
+    overlay: List<com.testlogon.android.data.messaging.TipReaction>?,
+): List<com.testlogon.android.data.messaging.TipReaction> {
+    if (overlay.isNullOrEmpty()) return hydrated
+    val seen = hydrated.mapNotNull { it.tipPaymentId }.toSet()
+    return hydrated + overlay.filter { it.tipPaymentId == null || it.tipPaymentId !in seen }
+}
+
 internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMessageUi(
     key = id ?: clientId,
     text = text,
@@ -2880,6 +2944,7 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     sendStatus = sendStatus,
     media = media,
     reactions = reactions,
+    tipReactions = tipReactions,
     isPinned = isPinned,
     lifecycle = lifecycle,
     isEdited = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.EDITED || editedAtEpochSeconds != null,

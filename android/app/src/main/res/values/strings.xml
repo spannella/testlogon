@@ -742,6 +742,7 @@
     <string name="msg_action_hide">Hide</string>
     <string name="msg_action_unhide">Unhide</string>
     <string name="msg_action_tip">Send a tip</string>
+    <string name="msg_tip_react">Tip a reaction</string>
     <string name="msg_action_who_reacted">See who reacted</string>
     <string name="msg_reaction_you_reacted">You reacted</string>
     <string name="msg_reaction_chip_cd">%1$s reacted by %2$d people</string>
@@ -1230,6 +1231,7 @@
 
     <!-- Feed: tips on posts (AND-178) -->
     <string name="tip_action">Tip</string>
+    <string name="post_tip_react">Tip</string>
     <string name="tip_sheet_title">Send a tip</string>
     <!-- tip_custom_amount + tip_send already defined for messaging tips (AND-139); reused here. -->
     <string name="tip_sending">Sending</string>

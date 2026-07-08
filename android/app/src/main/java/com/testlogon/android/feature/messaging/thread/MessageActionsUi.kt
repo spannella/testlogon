@@ -68,6 +68,10 @@ import kotlinx.coroutines.launch
 /** AND-140 — test tags for the message-action UI (used by Compose UI tests). */
 object MessageActionTestTags {
     const val ACTIONS_SHEET = "msg_actions_sheet"
+    // TIP-203 - money-reaction (tip) affordances.
+    const val TIP_REACT_OPEN = "tip_react_message_open"
+    const val TIP_REACT_CHIPS = "tip_react_message_chips"
+    fun tipReactChip(key: String): String = "tip_react_message_chip_" + key
     const val EMOJI_PICKER = "msg_emoji_picker"
     const val REACTION_CHIPS = "msg_reaction_chips"
     const val REACTION_DETAILS_SHEET = "msg_reaction_details_sheet"
@@ -86,6 +90,8 @@ object MessageActionTestTags {
 }
 
 /** AND-140 — curated quick-reaction emoji row (matches common chat clients). */
+internal const val TIP_REACT_EMOJI = "💰"
+
 internal val QUICK_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
 
 /**
@@ -118,6 +124,18 @@ fun MessageActionsSheet(
                         onAction(ThreadAction.ToggleReaction(message.key, emoji))
                         onDismiss()
                     },
+                )
+                Divider()
+            }
+
+            // TIP-203 - money-REACTION: opens the shared tip sheet (amount + a money glyph) and, on
+            // confirm, POSTs the message tip-react. Distinct from the free emoji reactions above and
+            // the direct "Send a tip" action below. Not offered on your own message (self-tip 400).
+            if (!message.isTombstone && !message.isOwn) {
+                AssistChip(
+                    onClick = { onAction(ThreadAction.TipReact(message.key, TIP_REACT_EMOJI)); onDismiss() },
+                    label = { Text(TIP_REACT_EMOJI + "  " + stringResource(R.string.msg_tip_react)) },
+                    modifier = Modifier.padding(horizontal = 12.dp).testTag(MessageActionTestTags.TIP_REACT_OPEN),
                 )
                 Divider()
             }
@@ -299,6 +317,33 @@ fun ReactionChipsRow(
             label = { Text(stringResource(R.string.msg_action_who_reacted)) },
             colors = AssistChipDefaults.assistChipColors(),
         )
+    }
+}
+
+/**
+ * TIP-203 - under-bubble MONEY-reaction chip row (tip reactions), visually distinct from the free
+ * emoji [ReactionChipsRow]. Each chip shows the tip glyph + amount (e.g. money + "$5.00").
+ */
+@Composable
+fun TipReactionChipsRow(
+    tipReactions: List<com.testlogon.android.data.messaging.TipReaction>,
+    modifier: Modifier = Modifier,
+) {
+    if (tipReactions.isEmpty()) return
+    FlowRow(
+        modifier = modifier.padding(top = 4.dp).testTag(MessageActionTestTags.TIP_REACT_CHIPS),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        tipReactions.forEach { t ->
+            val amount = String.format(java.util.Locale.US, "$%.2f", t.amountCents / 100.0)
+            val glyph = t.emoji.ifBlank { TIP_REACT_EMOJI }
+            AssistChip(
+                onClick = {},
+                label = { Text(glyph + " " + amount) },
+                colors = AssistChipDefaults.assistChipColors(),
+                modifier = Modifier.testTag(MessageActionTestTags.tipReactChip(t.tipPaymentId ?: t.emoji)),
+            )
+        }
     }
 }
 

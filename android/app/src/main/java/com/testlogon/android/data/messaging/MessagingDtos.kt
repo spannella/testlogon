@@ -95,6 +95,8 @@ data class MessageDto(
     // AND-140 — reaction summary on the message itself: emoji -> count, plus the emojis I reacted with.
     @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
     @Json(name = "my_reactions") val myReactions: List<String>? = null,
+    // TIP-203 - money-reaction badges on this message (distinct from the free reactions_counts).
+    @Json(name = "tip_reactions") val tipReactions: List<TipReactionDto>? = null,
     // AND-140 — revoke ("unsend") markers (epoch-INTEGER seconds). edited_at above doubles as the edit marker.
     @Json(name = "revoked_at") val revokedAt: Long? = null,
     @Json(name = "revoked_by") val revokedBy: String? = null,

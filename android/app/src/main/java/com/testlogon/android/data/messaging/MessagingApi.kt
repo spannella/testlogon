@@ -378,6 +378,19 @@ interface MessagingApi {
     ): TipOutDto
 
     /**
+     * TIP-203 - money-REACTION tip on a message (distinct from [tipMessage]). Routes server-side
+     * through charge_tip(content_type="message_react"); credits the message author, stores a
+     * tip-reaction badge, fans a reaction:tip realtime event. Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/{messageId}/reactions/tip")
+    suspend fun tipReactMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: TipReactReq,
+    ): TipReactOutDto
+
+    /**
      * AND-139 — single atomic lottery draw+reveal. EMPTY body (no schema). Conversation is NOT in
      * the path. Returns LotteryUnlockOut {selected_outcome, lock_state, unlocked_at}.
      */

@@ -85,6 +85,7 @@ fun PostItem(
     onToggleBookmark: (FeedPost) -> Unit = {},
     onShare: (FeedPost) -> Unit = {},
     onTip: (FeedPost) -> Unit = {},
+    onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     // FD13 — hide the Tip action when this is the viewer's own post (can't tip yourself).
     showTip: Boolean = true,
     // #3 — true when the viewer authored this post; surfaces the "Locked · $X" badge on the author's own
@@ -209,6 +210,8 @@ fun PostItem(
                     onEdit = onEdit?.let { edit -> { edit(post) } },
                     reactions = post.reactions,
                     onToggleReaction = { emoji -> onToggleReaction(post, emoji) },
+                    tipReactions = post.tipReactions,
+                    onTipReact = { emoji -> onTipReact(post, emoji) },
                 )
             }
         }

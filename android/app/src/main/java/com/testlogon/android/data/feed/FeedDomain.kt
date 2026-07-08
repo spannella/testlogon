@@ -32,6 +32,8 @@ data class FeedPost(
     val groupId: String? = null,
     /** #20 — full emoji reaction tallies (empty when none); distinct from the like toggle. */
     val reactions: List<ReactionTally> = emptyList(),
+    /** TIP-204 - money-reaction (tip) badges on this post; distinct from [reactions]. Overlay-supplied. */
+    val tipReactions: List<TipReactionBadge> = emptyList(),
     /** Never null at domain level; derived from the flat lock fields. */
     val paywall: Paywall,
     /** AND-179 — embedded poll, or null when the post carries no poll_data. */

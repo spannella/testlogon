@@ -31,6 +31,18 @@ interface TipApi {
         @Path("post_id") postId: String,
         @Body body: TipRequestDto,
     ): TipResultDto
+
+    /**
+     * TIP-204 - money-REACTION tip on a post (distinct from [tipPost]). Routes server-side through
+     * charge_tip(content_type post_react); credits the post author, stores a tip-reaction badge,
+     * emits a post_tip social alert. Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("posts/{post_id}/reactions/tip")
+    suspend fun tipReactPost(
+        @Path("post_id") postId: String,
+        @Body body: PostTipReactRequestDto,
+    ): PostTipReactResultDto
 }
 
 @JsonClass(generateAdapter = true)
@@ -43,5 +55,29 @@ data class TipRequestDto(
 @JsonClass(generateAdapter = true)
 data class TipResultDto(
     @Json(name = "ok") val ok: Boolean? = null,
+    @Json(name = "tip_total_cents") val tipTotalCents: Int? = null,
+)
+
+/**
+ * TIP-204 - post tip-REACTION request. Body for POST /posts/{post_id}/reactions/tip. amount_cents min
+ * 1; currency defaults usd; emoji optional (money-reaction glyph); payment_method_id optional.
+ */
+@JsonClass(generateAdapter = true)
+data class PostTipReactRequestDto(
+    @Json(name = "amount_cents") val amountCents: Int,
+    @Json(name = "currency") val currency: String? = "usd",
+    @Json(name = "emoji") val emoji: String? = null,
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+)
+
+/** TIP-204 - post tip-reaction receipt. */
+@JsonClass(generateAdapter = true)
+data class PostTipReactResultDto(
+    @Json(name = "ok") val ok: Boolean? = null,
+    @Json(name = "tip_payment_id") val tipPaymentId: String? = null,
+    @Json(name = "charged_cents") val chargedCents: Int? = null,
+    @Json(name = "net_cents") val netCents: Int? = null,
+    @Json(name = "recipient_id") val recipientId: String? = null,
+    @Json(name = "emoji") val emoji: String? = null,
     @Json(name = "tip_total_cents") val tipTotalCents: Int? = null,
 )

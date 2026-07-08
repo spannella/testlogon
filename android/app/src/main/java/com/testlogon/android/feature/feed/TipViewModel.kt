@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.data.tip.TipConfig
 import com.testlogon.android.data.tip.TipOutcome
+import com.testlogon.android.data.tip.TipReactOutcome
 import com.testlogon.android.data.tip.TipReceipt
 import com.testlogon.android.data.tip.TipRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -45,6 +46,18 @@ class TipViewModel @Inject constructor(
         )
     }
 
+    /** TIP-204 - open the tip sheet as a money-REACTION (badge) for [postId] with [emoji]. */
+    fun openReaction(postId: String, emoji: String) {
+        _state.value = TipSheetState.Entry(
+            postId = postId,
+            config = tips.config(),
+            selectedCents = null,
+            customAmountText = "",
+            emoji = emoji,
+            isReaction = true,
+        )
+    }
+
     fun selectPreset(cents: Int) {
         val entry = currentEntry() ?: return
         _state.value = entry.copy(selectedCents = cents, customAmountText = "", error = null)
@@ -62,6 +75,24 @@ class TipViewModel @Inject constructor(
         if (!entry.canSend) return
         _state.value = TipSheetState.Submitting(entry.postId, cents)
         viewModelScope.launch {
+            if (entry.isReaction) {
+                when (val outcome = tips.tipReact(entry.postId, cents, entry.emoji ?: DEFAULT_REACT_EMOJI)) {
+                    is TipReactOutcome.Success -> {
+                        _effects.trySend(TipEffect.ReactionBadge(entry.postId, outcome.badge))
+                        _state.value = TipSheetState.Confirmed(
+                            TipReceipt(postId = entry.postId, amountCents = cents, tipTotalCents = outcome.tipTotalCents),
+                        )
+                        _effects.trySend(TipEffect.ShowSnackbar(SNACKBAR_SENT))
+                    }
+                    TipReactOutcome.PaymentsUnavailable ->
+                        _state.value = entry.copy(error = ERR_PAYMENTS_UNAVAILABLE)
+                    TipReactOutcome.Cancelled ->
+                        _state.value = entry
+                    is TipReactOutcome.Failure ->
+                        _state.value = entry.copy(error = outcome.message)
+                }
+                return@launch
+            }
             when (val outcome = tips.tip(entry.postId, cents)) {
                 is TipOutcome.Success -> {
                     _state.value = TipSheetState.Confirmed(outcome.receipt)
@@ -88,6 +119,7 @@ class TipViewModel @Inject constructor(
     private companion object {
         const val SNACKBAR_SENT = "Tip sent"
         const val ERR_PAYMENTS_UNAVAILABLE = "Payments are unavailable right now."
+        const val DEFAULT_REACT_EMOJI = "💰"
     }
 }
 
@@ -101,6 +133,9 @@ sealed interface TipSheetState {
         val selectedCents: Int?,
         val customAmountText: String,
         val error: String? = null,
+        /** TIP-204 - non-null + [isReaction] when opened as a money-REACTION (badge) not a direct tip. */
+        val emoji: String? = null,
+        val isReaction: Boolean = false,
     ) : TipSheetState {
         /** The amount that will be sent: a preset or a parsed custom amount. */
         val effectiveCents: Int? get() = selectedCents
@@ -118,6 +153,8 @@ sealed interface TipSheetState {
 /** AND-178 — one-shot tip effects. */
 sealed interface TipEffect {
     data class ShowSnackbar(val message: String) : TipEffect
+    /** TIP-204 - a successful post tip-reaction; the host forwards the badge to the feed overlay. */
+    data class ReactionBadge(val postId: String, val badge: com.testlogon.android.data.feed.TipReactionBadge) : TipEffect
 }
 
 /**

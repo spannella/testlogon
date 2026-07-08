@@ -156,6 +156,7 @@ fun FeedRoute(
         tipViewModel.effects.collect { effect ->
             when (effect) {
                 is TipEffect.ShowSnackbar -> snackbarHostState.showSnackbar(effect.message)
+                is TipEffect.ReactionBadge -> viewModel.applyTipReactionBadge(effect.postId, effect.badge)
             }
         }
     }
@@ -214,6 +215,7 @@ fun FeedRoute(
             if (!ok) coroutineScope.launch { snackbarHostState.showSnackbar(shareNoTargetLabel) }
         },
         onTip = { post -> tipViewModel.open(post.id) },
+        onTipReact = { post, emoji -> tipViewModel.openReaction(post.id, emoji) },
         // ADV-106 — sponsored-unit tracking. Impression on first-visible; click also opens the ad's CTA url.
         onSponsoredImpression = viewModel::onSponsoredImpression,
         onSponsoredClick = { post ->
@@ -271,6 +273,7 @@ fun FeedScreen(
     onToggleBookmark: (FeedPost) -> Unit = {},
     onShare: (FeedPost) -> Unit = {},
     onTip: (FeedPost) -> Unit = {},
+    onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onSponsoredImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit = {},
@@ -367,6 +370,7 @@ fun FeedScreen(
                         onToggleBookmark = onToggleBookmark,
                         onShare = onShare,
                         onTip = onTip,
+                        onTipReact = onTipReact,
                         onSponsoredImpression = onSponsoredImpression,
                         onSponsoredClick = onSponsoredClick,
                         onEnsurePoll = onEnsurePoll,
@@ -454,6 +458,7 @@ private fun FeedList(
     onToggleBookmark: (FeedPost) -> Unit,
     onShare: (FeedPost) -> Unit,
     onTip: (FeedPost) -> Unit,
+    onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onSponsoredImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit,
@@ -494,6 +499,7 @@ private fun FeedList(
                     onToggleBookmark = onToggleBookmark,
                     onShare = onShare,
                     onTip = onTip,
+                    onTipReact = onTipReact,
                     onSponsoredImpression = onSponsoredImpression,
                     onSponsoredClick = onSponsoredClick,
                     showTip = !(currentUserSub != null && item.authorId == currentUserSub),

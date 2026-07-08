@@ -1965,6 +1965,8 @@ private fun MessageBubble(
             onToggle = onToggleReaction,
             onSeeWhoReacted = onSeeWhoReacted,
         )
+        // TIP-203 - money-reaction (tip) chips, distinct from the free emoji chips above.
+        TipReactionChipsRow(tipReactions = message.tipReactions)
     }
 }
 

@@ -410,6 +410,18 @@ internal fun String?.toSharePermission(): SharePermission = when (this) {
  */
 data class Reaction(val emoji: String, val count: Int, val reactedByMe: Boolean)
 
+/**
+ * TIP-203 - a money-reaction badge on a message (distinct from the free emoji [Reaction]). One entry
+ * per tip-react: who tipped, the glyph, the gross amount (minor units), and the tip payment id (used
+ * to de-dup the optimistic overlay against the server-hydrated list).
+ */
+data class TipReaction(
+    val tipperId: String?,
+    val emoji: String,
+    val amountCents: Long,
+    val tipPaymentId: String? = null,
+)
+
 /** AND-140 — a reactor row for the reaction-details sheet (flattened from emoji -> reactor list). */
 data class Reactor(
     val userSub: String,
@@ -545,6 +557,11 @@ data class Message(
      * Room-persisted — re-derived on every refetch, like the receipt counts).
      */
     val countdown: MessageCountdown? = null,
+    /**
+     * TIP-203 - money-reaction (tip) badges on this message. Transient (re-derived from the wire
+     * tip_reactions on each fetch, like the receipt counts); never Room-persisted.
+     */
+    val tipReactions: List<TipReaction> = emptyList(),
 )
 
 /** A conversation summary for the inbox list. */
@@ -611,6 +628,7 @@ internal fun MessageDto.toDomain(
         kind = kind,
         media = mappedMedia,
         reactions = toReactions(),
+        tipReactions = toTipReactions(),
         lifecycle = deriveLifecycle(),
         editedAtEpochSeconds = editedAt,
         // AND-147 — receipt counts ride the message payload (not persisted to Room; recomputed on fetch).
@@ -689,6 +707,19 @@ internal fun MessageDto.toReactions(): List<Reaction> {
         .map { (emoji, count) -> Reaction(emoji, count, reactedByMe = emoji in mine) }
         .sortedWith(compareByDescending<Reaction> { it.count }.thenBy { it.emoji })
 }
+
+/**
+ * TIP-203 - maps the wire tip_reactions list into the domain money-reaction badges. Pure / JVM-testable.
+ */
+internal fun MessageDto.toTipReactions(): List<TipReaction> =
+    tipReactions.orEmpty().map { d ->
+        TipReaction(
+            tipperId = d.tipperId,
+            emoji = d.emoji.orEmpty(),
+            amountCents = d.amountCents,
+            tipPaymentId = d.tipPaymentId,
+        )
+    }
 
 /**
  * AND-140 — derives [MessageLifecycle] from the wire markers (there is no `state` field): a non-null

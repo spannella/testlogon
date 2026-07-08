@@ -134,6 +134,39 @@ data class TipOutDto(
     @Json(name = "currency") val currency: String = "USD",
 )
 
+/**
+ * TIP-203 - message tip-REACTION request (distinct from SendTipReq direct tip). Body for
+ * POST /messaging/conversations/{cid}/messages/{mid}/reactions/tip. amount_cents min 1; emoji optional
+ * (money-reaction glyph); payment_method_id optional (falls back to the tip-default PM server-side).
+ */
+@JsonClass(generateAdapter = true)
+data class TipReactReq(
+    @Json(name = "amount_cents") val amountCents: Long,
+    @Json(name = "emoji") val emoji: String? = null,
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+)
+
+/** TIP-203 - message tip-reaction receipt. */
+@JsonClass(generateAdapter = true)
+data class TipReactOutDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "tip_payment_id") val tipPaymentId: String? = null,
+    @Json(name = "charged_cents") val chargedCents: Long = 0L,
+    @Json(name = "net_cents") val netCents: Long = 0L,
+    @Json(name = "recipient_id") val recipientId: String? = null,
+    @Json(name = "emoji") val emoji: String? = null,
+)
+
+/** TIP-203 - one money-reaction badge stored on a message (wire shape of the backend tip_reactions). */
+@JsonClass(generateAdapter = true)
+data class TipReactionDto(
+    @Json(name = "tipper_id") val tipperId: String? = null,
+    @Json(name = "emoji") val emoji: String? = null,
+    @Json(name = "amount_cents") val amountCents: Long = 0L,
+    @Json(name = "tip_payment_id") val tipPaymentId: String? = null,
+    @Json(name = "created_at") val createdAt: Long? = null,
+)
+
 // ─── MSG: new composers (lottery create / find-datetime / calendar-event / calendar-share) ───
 
 /** LotteryOutcomeIn — one possible draw outcome. weight_bps 1..10000 (sum to 10000 across outcomes). */
