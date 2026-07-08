@@ -50,6 +50,8 @@ object CreateCampaignTestTags {
     const val BUDGET_TYPE = "create_campaign_budget_type"
     const val BUDGET = "create_campaign_budget"
     const val BID = "create_campaign_bid"
+    const val BID_CPC = "create_campaign_bid_cpc"
+    const val BID_CPA = "create_campaign_bid_cpa"
     const val SUBMIT = "create_campaign_submit"
     const val SUCCESS = "create_campaign_success"
     const val REVIEW = "create_campaign_review"
@@ -70,6 +72,8 @@ fun CreateCampaignRoute(
     val budgetType by viewModel.budgetType.collectAsStateWithLifecycle()
     val budget by viewModel.budgetUsd.collectAsStateWithLifecycle()
     val bid by viewModel.bidCpmUsd.collectAsStateWithLifecycle()
+    val bidCpc by viewModel.bidCpcUsd.collectAsStateWithLifecycle()
+    val bidCpa by viewModel.bidCpaUsd.collectAsStateWithLifecycle()
     val submit by viewModel.submitState.collectAsStateWithLifecycle()
     val review by viewModel.reviewState.collectAsStateWithLifecycle()
 
@@ -81,6 +85,8 @@ fun CreateCampaignRoute(
         budgetType = budgetType,
         budgetUsd = budget,
         bidCpmUsd = bid,
+        bidCpcUsd = bidCpc,
+        bidCpaUsd = bidCpa,
         submitState = submit,
         reviewState = review,
         canSubmit = viewModel.canSubmit,
@@ -90,6 +96,8 @@ fun CreateCampaignRoute(
         onBudgetType = viewModel::onBudgetType,
         onBudget = viewModel::onBudgetUsd,
         onBid = viewModel::onBidCpmUsd,
+        onBidCpc = viewModel::onBidCpcUsd,
+        onBidCpa = viewModel::onBidCpaUsd,
         onSubmit = viewModel::submit,
         onSubmitForReview = viewModel::submitForReview,
         onContinue = onCreated,
@@ -107,6 +115,8 @@ fun CreateCampaignScreen(
     budgetType: String,
     budgetUsd: String,
     bidCpmUsd: String,
+    bidCpcUsd: String,
+    bidCpaUsd: String,
     submitState: CreateCampaignViewModel.SubmitState,
     reviewState: CreateCampaignViewModel.ReviewState,
     canSubmit: Boolean,
@@ -116,6 +126,8 @@ fun CreateCampaignScreen(
     onBudgetType: (String) -> Unit,
     onBudget: (String) -> Unit,
     onBid: (String) -> Unit,
+    onBidCpc: (String) -> Unit,
+    onBidCpa: (String) -> Unit,
     onSubmit: () -> Unit,
     onSubmitForReview: () -> Unit,
     onContinue: (campaignId: String) -> Unit,
@@ -226,6 +238,30 @@ fun CreateCampaignScreen(
                 enabled = !submitting,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.BID),
+            )
+
+            OutlinedTextField(
+                value = bidCpcUsd,
+                onValueChange = onBidCpc,
+                label = { Text(stringResource(R.string.create_campaign_bid_cpc_label)) },
+                prefix = { Text("$") },
+                supportingText = { Text(stringResource(R.string.create_campaign_bid_cpc_hint)) },
+                singleLine = true,
+                enabled = !submitting,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.BID_CPC),
+            )
+
+            OutlinedTextField(
+                value = bidCpaUsd,
+                onValueChange = onBidCpa,
+                label = { Text(stringResource(R.string.create_campaign_bid_cpa_label)) },
+                prefix = { Text("$") },
+                supportingText = { Text(stringResource(R.string.create_campaign_bid_cpa_hint)) },
+                singleLine = true,
+                enabled = !submitting,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.BID_CPA),
             )
 
             (submitState as? CreateCampaignViewModel.SubmitState.Error)?.let {

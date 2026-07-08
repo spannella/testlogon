@@ -74,6 +74,13 @@ class CreateCampaignViewModel @Inject constructor(
     private val _bidCpmUsd = MutableStateFlow(DEFAULT_BID_USD)
     val bidCpmUsd: StateFlow<String> = _bidCpmUsd.asStateFlow()
 
+    // ADV-301 - advertiser-set CPC / CPA bids (USD entry -> integer cents; server defaults 50c / 500c).
+    private val _bidCpcUsd = MutableStateFlow(DEFAULT_CPC_USD)
+    val bidCpcUsd: StateFlow<String> = _bidCpcUsd.asStateFlow()
+
+    private val _bidCpaUsd = MutableStateFlow(DEFAULT_CPA_USD)
+    val bidCpaUsd: StateFlow<String> = _bidCpaUsd.asStateFlow()
+
     private val _submitState = MutableStateFlow<SubmitState>(SubmitState.Idle)
     val submitState: StateFlow<SubmitState> = _submitState.asStateFlow()
 
@@ -109,19 +116,25 @@ class CreateCampaignViewModel @Inject constructor(
     fun onBudgetType(value: String) { _budgetType.value = value }
     fun onBudgetUsd(text: String) { _budgetUsd.value = text; clearError() }
     fun onBidCpmUsd(text: String) { _bidCpmUsd.value = text; clearError() }
+    fun onBidCpcUsd(text: String) { _bidCpcUsd.value = text; clearError() }
+    fun onBidCpaUsd(text: String) { _bidCpaUsd.value = text; clearError() }
 
     /** True when an account is selected, a name is present, and budget/bid parse into their valid ranges. */
     val canSubmit: Boolean
         get() = _selectedAccountId.value != null &&
             _name.value.isNotBlank() &&
             (parseCents(_budgetUsd.value)?.let { it >= MIN_BUDGET_CENTS } == true) &&
-            (parseCents(_bidCpmUsd.value)?.let { it in MIN_BID_CENTS..MAX_BID_CENTS } == true)
+            (parseCents(_bidCpmUsd.value)?.let { it in MIN_BID_CENTS..MAX_BID_CENTS } == true) &&
+            (parseCents(_bidCpcUsd.value)?.let { it in MIN_CPC_CENTS..MAX_CPC_CENTS } == true) &&
+            (parseCents(_bidCpaUsd.value)?.let { it in MIN_CPA_CENTS..MAX_CPA_CENTS } == true)
 
     fun submit() {
         if (_submitState.value is SubmitState.Submitting) return
         val accountId = _selectedAccountId.value ?: return
         val budget = parseCents(_budgetUsd.value)?.takeIf { it >= MIN_BUDGET_CENTS } ?: return
         val bid = parseCents(_bidCpmUsd.value)?.takeIf { it in MIN_BID_CENTS..MAX_BID_CENTS } ?: return
+        val cpc = parseCents(_bidCpcUsd.value)?.takeIf { it in MIN_CPC_CENTS..MAX_CPC_CENTS } ?: return
+        val cpa = parseCents(_bidCpaUsd.value)?.takeIf { it in MIN_CPA_CENTS..MAX_CPA_CENTS } ?: return
         if (_name.value.isBlank()) return
 
         _submitState.value = SubmitState.Submitting
@@ -133,6 +146,8 @@ class CreateCampaignViewModel @Inject constructor(
                 budgetCents = budget,
                 budgetType = _budgetType.value,
                 bidCpmCents = bid.toInt(),
+                bidCpcCents = cpc.toInt(),
+                bidCpaCents = cpa.toInt(),
                 category = null,
                 startDate = null,
                 endDate = null,
@@ -190,6 +205,14 @@ class CreateCampaignViewModel @Inject constructor(
         const val MIN_BID_CENTS = 50L
         const val MAX_BID_CENTS = 20_000L
         const val DEFAULT_BID_USD = "5.00"
+
+        // ADV-301 - CPC/CPA bounds mirror the server (bid_cpc_cents 1..10000, bid_cpa_cents 1..100000).
+        const val MIN_CPC_CENTS = 1L
+        const val MAX_CPC_CENTS = 10_000L
+        const val MIN_CPA_CENTS = 1L
+        const val MAX_CPA_CENTS = 100_000L
+        const val DEFAULT_CPC_USD = "0.50"
+        const val DEFAULT_CPA_USD = "5.00"
 
         private const val HTTP_FORBIDDEN = 403
         private const val OFFLINE = "Couldn't reach the server. Try again."

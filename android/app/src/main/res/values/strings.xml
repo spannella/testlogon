@@ -3587,6 +3587,8 @@
     <string name="deposit_sheet_subtitle">Deposit funds into this ad account. Your wallet or saved payment method is charged.</string>
     <string name="deposit_amount_label">Amount (USD)</string>
     <string name="deposit_amount_helper">Minimum $50.00, maximum $100,000.00.</string>
+    <string name="deposit_payment_method_label">Payment method</string>
+    <string name="deposit_payment_method_wallet">No saved card — your account wallet will be charged.</string>
     <string name="deposit_amount_range_error">Enter an amount between $50.00 and $100,000.00.</string>
     <string name="deposit_confirm">Confirm deposit</string>
     <string name="deposit_success">Deposit successful.</string>
@@ -3628,6 +3630,10 @@
     <string name="create_campaign_budget_type_label">Budget type</string>
     <string name="create_campaign_budget_label">Budget (USD)</string>
     <string name="create_campaign_bid_label">Bid CPM (USD)</string>
+    <string name="create_campaign_bid_cpc_label">Bid CPC (USD)</string>
+    <string name="create_campaign_bid_cpc_hint">Cost per click. $0.01–$100.</string>
+    <string name="create_campaign_bid_cpa_label">Bid CPA (USD)</string>
+    <string name="create_campaign_bid_cpa_hint">Cost per action/conversion. $0.01–$1,000.</string>
     <string name="create_campaign_bid_hint">Cost per 1,000 impressions. $0.50–$200.</string>
     <string name="create_campaign_submit">Create campaign</string>
     <string name="create_campaign_success_title">Campaign created (draft)</string>

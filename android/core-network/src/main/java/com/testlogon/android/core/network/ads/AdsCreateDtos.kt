@@ -35,7 +35,9 @@ data class AdAccountMutationDto(
 /**
  * ADV-108 - create-campaign request body. Mirrors backend CampaignCreateIn: name, objective
  * (awareness|traffic|conversions), budget_cents (>=100), budget_type (daily|lifetime), optional epoch
- * start/end dates, bid_cpm_cents (50..20000), category (default "general" applied server-side when null).
+ * start/end dates, bid_cpm_cents (50..20000), and the ADV-301 advertiser-set bid_cpc_cents (1..10000) /
+ * bid_cpa_cents (1..100000) — nullable so CPM-only clients omit them and the server applies its defaults
+ * (50 / 500). category (default "general" applied server-side when null).
  */
 data class AdCampaignCreateIn(
     @Json(name = "name") val name: String,
@@ -43,6 +45,8 @@ data class AdCampaignCreateIn(
     @Json(name = "budget_cents") val budgetCents: Long,
     @Json(name = "budget_type") val budgetType: String,
     @Json(name = "bid_cpm_cents") val bidCpmCents: Int,
+    @Json(name = "bid_cpc_cents") val bidCpcCents: Int? = null,
+    @Json(name = "bid_cpa_cents") val bidCpaCents: Int? = null,
     @Json(name = "category") val category: String? = null,
     @Json(name = "start_date") val startDate: Long? = null,
     @Json(name = "end_date") val endDate: Long? = null,

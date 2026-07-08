@@ -15,18 +15,25 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -44,6 +51,7 @@ import com.testlogon.android.core.ui.input.TlTextField
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.core.ui.state.StaleBanner
+import com.testlogon.android.data.billing.PaymentMethod
 
 /** AND-367 - stable testTags for the ads-account billing screen + deposit sheet. */
 object AdsBillingTestTags {
@@ -52,6 +60,7 @@ object AdsBillingTestTags {
     const val INVOICE = "ads_invoice"
     const val ADD_FUNDS = "ads_add_funds"
     const val DEPOSIT_AMOUNT = "ads_deposit_amount"
+    const val DEPOSIT_PM = "ads_deposit_payment_method"
     const val DEPOSIT_CONFIRM = "ads_deposit_confirm"
     const val DEPOSIT_SUCCESS = "ads_deposit_success"
     const val ERROR_RETRY = "ads_error_retry"
@@ -74,17 +83,22 @@ fun AdsBillingRoute(
     val depositState by viewModel.depositState.collectAsStateWithLifecycle()
     val depositSheetVisible by viewModel.depositSheetVisible.collectAsStateWithLifecycle()
     val amountText by viewModel.amountText.collectAsStateWithLifecycle()
+    val paymentMethods by viewModel.paymentMethods.collectAsStateWithLifecycle()
+    val selectedPaymentMethodId by viewModel.selectedPaymentMethodId.collectAsStateWithLifecycle()
     AdsBillingScreen(
         state = state,
         depositState = depositState,
         depositSheetVisible = depositSheetVisible,
         amountText = amountText,
+        paymentMethods = paymentMethods,
+        selectedPaymentMethodId = selectedPaymentMethodId,
         canSubmitDeposit = viewModel.canSubmitDeposit,
         onBack = onBack,
         onRetry = viewModel::onRetry,
         onOpenDeposit = viewModel::openDeposit,
         onDismissDeposit = viewModel::dismissDeposit,
         onAmountChanged = viewModel::onAmountChanged,
+        onPaymentMethodSelected = viewModel::onPaymentMethodSelected,
         onConfirmDeposit = { viewModel.deposit() },
     )
 }
@@ -96,12 +110,15 @@ fun AdsBillingScreen(
     depositState: DepositState,
     depositSheetVisible: Boolean,
     amountText: String,
+    paymentMethods: List<PaymentMethod>,
+    selectedPaymentMethodId: String?,
     canSubmitDeposit: Boolean,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onOpenDeposit: () -> Unit,
     onDismissDeposit: () -> Unit,
     onAmountChanged: (String) -> Unit,
+    onPaymentMethodSelected: (String) -> Unit,
     onConfirmDeposit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -146,9 +163,12 @@ fun AdsBillingScreen(
         DepositSheet(
             depositState = depositState,
             amountText = amountText,
+            paymentMethods = paymentMethods,
+            selectedPaymentMethodId = selectedPaymentMethodId,
             canSubmitDeposit = canSubmitDeposit,
             onDismiss = onDismissDeposit,
             onAmountChanged = onAmountChanged,
+            onPaymentMethodSelected = onPaymentMethodSelected,
             onConfirm = onConfirmDeposit,
         )
     }
@@ -324,9 +344,12 @@ private fun InvoiceSection(invoice: AdInvoice) {
 private fun DepositSheet(
     depositState: DepositState,
     amountText: String,
+    paymentMethods: List<PaymentMethod>,
+    selectedPaymentMethodId: String?,
     canSubmitDeposit: Boolean,
     onDismiss: () -> Unit,
     onAmountChanged: (String) -> Unit,
+    onPaymentMethodSelected: (String) -> Unit,
     onConfirm: () -> Unit,
 ) {
     // The sheet is open whenever a deposit interaction is in progress (Idle once opened, Submitting,
@@ -366,6 +389,13 @@ private fun DepositSheet(
                 modifier = Modifier.testTag(AdsBillingTestTags.DEPOSIT_AMOUNT),
             )
 
+            PaymentMethodPicker(
+                paymentMethods = paymentMethods,
+                selectedPaymentMethodId = selectedPaymentMethodId,
+                enabled = !submitting,
+                onSelect = onPaymentMethodSelected,
+            )
+
             when (depositState) {
                 is DepositState.Error -> Text(
                     text = depositState.message,
@@ -394,6 +424,70 @@ private fun DepositSheet(
             )
         }
     }
+}
+
+/**
+ * ADV-306 - the deposit card picker. When the caller has saved methods it charges a CARD (the deposit posts
+ * the selected payment_method_id); with none saved it tells the user the account WALLET is used (the deposit
+ * posts no id and the server credits from the wallet).
+ */
+@Composable
+private fun PaymentMethodPicker(
+    paymentMethods: List<PaymentMethod>,
+    selectedPaymentMethodId: String?,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    if (paymentMethods.isEmpty()) {
+        Text(
+            text = stringResource(R.string.deposit_payment_method_wallet),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag(AdsBillingTestTags.DEPOSIT_PM),
+        )
+        return
+    }
+    val selected = paymentMethods.firstOrNull { it.id == selectedPaymentMethodId } ?: paymentMethods.first()
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = it },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        OutlinedTextField(
+            value = selected.pickerLabel(),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.deposit_payment_method_label)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            enabled = enabled,
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+                .testTag(AdsBillingTestTags.DEPOSIT_PM),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            paymentMethods.forEach { method ->
+                DropdownMenuItem(
+                    text = { Text(method.pickerLabel()) },
+                    onClick = {
+                        onSelect(method.id)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** A human label for a saved payment method (custom label, else brand/type + last4, + a default marker). */
+private fun PaymentMethod.pickerLabel(): String {
+    val head = label?.takeIf { it.isNotBlank() }
+        ?: listOfNotNull(
+            (rawBrand ?: methodType).replaceFirstChar { it.uppercase() },
+            last4?.let { "card ending $it" },
+        ).joinToString(" ")
+    return if (isDefault) "$head (default)" else head
 }
 
 @Composable
