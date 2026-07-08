@@ -157,6 +157,7 @@ def _charge_deposit(*, owner_sub: str, account_id: str, amount_cents: int,
 def charge_impression(
     *, account_id: str, campaign_id: str, creative_id: str,
     creator_id: str, content_id: str, bid_cpm_cents: int,
+    idempotency_key: str = "",
 ) -> dict:
     """Charge advertiser for one impression (CPM model)."""
     charge_cents = max(1, bid_cpm_cents // 1000)
@@ -165,6 +166,7 @@ def charge_impression(
         entry_type="impression_charge", charge_cents=charge_cents,
         creator_id=creator_id, reason="Ad impression",
         meta={"creative_id": creative_id, "content_id": content_id, "model": "cpm"},
+        idempotency_key=idempotency_key,
     )
 
 
@@ -197,6 +199,7 @@ def charge_conversion(
 def _process_charge(
     *, account_id: str, campaign_id: str, entry_type: str,
     charge_cents: int, creator_id: str, reason: str, meta: dict,
+    idempotency_key: str = "",
 ) -> dict:
     """Process a charge: debit advertiser, split revenue, check budget.
 
@@ -209,6 +212,31 @@ def _process_charge(
     ts = now_ts()
     entry_id = f"chg_{uuid.uuid4().hex[:12]}"
     month_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
+
+    # ADV-203: idempotency guard. When an idempotency_key is supplied (e.g. a VOD
+    # pre-roll completion keyed on ad_click_id) claim a marker BEFORE the debit so
+    # a duplicate completion never double-charges. The marker omits campaign_id /
+    # month_key so it stays out of the sparse ByCampaign/ByMonth GSIs and the
+    # LEDGER# history query. On insufficient funds it is released so a later retry
+    # (after the account is funded) can still charge exactly once.
+    if idempotency_key:
+        try:
+            T.ad_billing.put_item(
+                Item={
+                    "pk": f"ACCT#{account_id}",
+                    "sk": f"IDEMP#{idempotency_key}",
+                    "entry_type": "charge_idempotency",
+                    "created_at": ts,
+                },
+                ConditionExpression="attribute_not_exists(sk)",
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                logger.info(
+                    "ad_charge_duplicate account=%s key=%s", account_id, idempotency_key
+                )
+                return {"ok": True, "reason": "duplicate", "charge_cents": 0}
+            raise
 
     # 1. Debit advertiser balance FIRST, funds-guarded so it can never go negative.
     try:
@@ -225,6 +253,13 @@ def _process_charge(
                 "ad_charge_insufficient_funds account=%s campaign=%s amount=%s",
                 account_id, campaign_id, charge_cents,
             )
+            if idempotency_key:
+                try:
+                    T.ad_billing.delete_item(
+                        Key={"pk": f"ACCT#{account_id}", "sk": f"IDEMP#{idempotency_key}"}
+                    )
+                except Exception:
+                    pass
             return {"ok": False, "reason": "insufficient_funds", "charge_cents": charge_cents}
         raise
 

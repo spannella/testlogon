@@ -238,6 +238,10 @@ def record_ad_impression(
     slot_index: int,
     creative_id: str = "",
     event_type: str = "impression",  # "impression" | "complete" | "skip"
+    # ADV-203: when False, suppress the legacy phantom-CPM creator credit (used
+    # for advertiser-funded paid pre-rolls, where the poster is credited from
+    # real ad spend via ad_billing._split_revenue instead — no double-credit).
+    credit_revenue: bool = True,
     # Fraud-signal fields (GAP-0006). Optional for backwards compatibility.
     ip_address: str = "",
     user_agent: str = "",
@@ -343,7 +347,7 @@ def record_ad_impression(
     # means the slot was already credited today → skip the credit (non-billable
     # duplicate). The atomic check-and-insert avoids any race between concurrent
     # requests. Same DDB path in dev (moto / DDB Local) and prod (SECOPS-007).
-    if event_type == "complete":
+    if event_type == "complete" and credit_revenue:
         if _claim_complete_slot(
             date_str=_date_str(ts),
             user_id=user_id,

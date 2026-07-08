@@ -106,7 +106,11 @@ def _resolve_ad_schedule(*, video: Any, user_id: str) -> List[Dict[str, Any]]:
     ad_config = video.ad_config or get_default_ad_config(duration)
     slots = calculate_ad_slots(duration, ad_config)
 
-    deterministic = bool(getattr(S, "vod_ad_supported_deterministic", True)) or S.dev_mode
+    # ADV-201: decouple the pre-roll gate from dev_mode. The platform runs
+    # DEV_MODE=1 (moto S3 / stripe-mock) everywhere, so ORing dev_mode forced
+    # the deterministic placeholder forever. Gate on the flag ONLY, so setting
+    # vod_ad_supported_deterministic=false enables the LIVE serve_ad path.
+    deterministic = bool(getattr(S, "vod_ad_supported_deterministic", True))
 
     schedule: List[Dict[str, Any]] = []
     for slot in slots:
@@ -114,30 +118,40 @@ def _resolve_ad_schedule(*, video: Any, user_id: str) -> List[Dict[str, Any]]:
         creative_url = slot.get("creative_url", "")
         creative_type = slot.get("creative_type", "video")
 
+        ad_click_id = ""
+
         if not deterministic:
-            # Wire the live ad engine for actual creative selection.
+            # ADV-201: wire the LIVE ad engine for pre-roll creative selection.
+            # surface="preroll" so the minted AdClicks row carries the pre-roll
+            # surface and content_owner_sub = the VIDEO creator (the poster);
+            # ADV-203 reads that row on completion to charge the advertiser and
+            # credit the poster. A house/unfilled response falls back to the
+            # deterministic placeholder so a no-fill never blocks playback.
             try:
                 from app.services.ad_serving import serve_ad
 
                 served = serve_ad(
-                    surface="vod",
+                    surface="preroll",
                     content_type="vod",
                     creator_id=video.owner_user_id,
-                    content_id=video.video_id,
+                    content_id=video.id,
                     slot_type=slot.get("type", "pre_roll"),
                     user_id=user_id,
+                    content_owner_id=video.owner_user_id,
                 )
-                if served.get("filled"):
+                if served.get("filled") and not served.get("is_house_ad"):
                     creative_id = served.get("creative_id", creative_id) or creative_id
-                    creative_url = (
-                        served.get("video_url")
-                        or served.get("image_url")
-                        or creative_url
-                    )
+                    if served.get("video_url"):
+                        creative_url = served.get("video_url")
+                        creative_type = "video"
+                    elif served.get("image_url"):
+                        creative_url = served.get("image_url")
+                        creative_type = "image"
+                    ad_click_id = served.get("ad_click_id", "") or ""
             except Exception:
                 logger.warning(
                     "vod_ad_supported_serve_failed video=%s user=%s",
-                    video.video_id,
+                    video.id,
                     user_id,
                 )
 
@@ -152,6 +166,7 @@ def _resolve_ad_schedule(*, video: Any, user_id: str) -> List[Dict[str, Any]]:
                 "creative_type": creative_type,
                 "skip_after_seconds": int(slot.get("skip_after_seconds", 5)),
                 "slot_index": int(slot.get("slot_index", 0)),
+                "ad_click_id": ad_click_id,
                 "completed": False,
             }
         )
@@ -333,6 +348,84 @@ def start_session(
 # ─── Report an ad break ──────────────────────────────────────────────────────
 
 
+def _charge_preroll_completion(
+    *, target: Dict[str, Any], video_id: str
+) -> Optional[Dict[str, Any]]:
+    """ADV-203: charge the advertiser for a completed paid pre-roll + credit poster.
+
+    Reads the AdClicks row minted at serve time (authoritative account /
+    campaign / content-owner / cleared price) and runs the funds-guarded
+    ``ad_billing._process_charge``, which debits the advertiser balance and,
+    via ``_split_revenue``, credits the video's ORIGINAL POSTER
+    (``content_owner_sub``) their share (~70%) plus the platform (~30%).
+
+    Idempotent per ``ad_click_id`` (``_process_charge`` idempotency marker), so
+    a duplicate completion never double-charges. Returns the charge result, or
+    None when there is nothing to charge (no ad_click_id / missing click row).
+    """
+    ad_click_id = target.get("ad_click_id", "")
+    if not ad_click_id:
+        return None
+    try:
+        row = T.ad_clicks.get_item(Key={"ad_click_id": ad_click_id}).get("Item")
+    except Exception:
+        logger.warning("vod_ad_preroll_click_read_failed ad_click_id=%s", ad_click_id)
+        return None
+    if not row:
+        logger.warning("vod_ad_preroll_click_missing ad_click_id=%s", ad_click_id)
+        return None
+
+    account_id = row.get("account_id", "")
+    campaign_id = row.get("campaign_id", "")
+    if not account_id or not campaign_id:
+        return None
+    creative_id = row.get("creative_id", "") or target.get("creative_id", "")
+    content_owner = row.get("content_owner_sub", "")
+    charge_cents = int(row.get("effective_price_cents", 0) or 0)
+    if charge_cents <= 0:
+        charge_cents = int(getattr(S, "vod_ad_cpm_cents", 500) or 500)
+
+    from app.services.ad_billing import _process_charge
+
+    result = _process_charge(
+        account_id=account_id,
+        campaign_id=campaign_id,
+        entry_type="impression_charge",
+        charge_cents=charge_cents,
+        creator_id=content_owner,
+        reason="VOD pre-roll impression",
+        meta={
+            "creative_id": creative_id,
+            "content_id": video_id,
+            "model": "cpm",
+            "surface": "preroll",
+            "ad_click_id": ad_click_id,
+        },
+        idempotency_key=f"preroll:{ad_click_id}",
+    )
+
+    # Best-effort audit stamp on the AdClicks row.
+    try:
+        T.ad_clicks.update_item(
+            Key={"ad_click_id": ad_click_id},
+            UpdateExpression="SET #s = :s, charged_cents = :c, completed_at = :t",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":s": "completed",
+                ":c": int(result.get("charge_cents", 0)) if result.get("ok") else 0,
+                ":t": now_ts(),
+            },
+        )
+    except Exception:
+        pass
+
+    logger.info(
+        "vod_ad_preroll_charged ad_click_id=%s account=%s campaign=%s result=%s",
+        ad_click_id, account_id, campaign_id, result,
+    )
+    return result
+
+
 def report_break(
     *,
     user_id: str,
@@ -367,6 +460,7 @@ def report_break(
     if target is None:
         raise HTTPException(status_code=404, detail="Ad break not found in session")
 
+    was_completed = bool(target.get("completed", False))
     if event_type == EVENT_COMPLETE:
         target["completed"] = True
 
@@ -389,11 +483,27 @@ def report_break(
             slot_index=int(target.get("slot_index", 0)),
             creative_id=target.get("creative_id", ""),
             event_type=event_type,
+            # ADV-203: for a paid pre-roll (ad_click_id present) the poster is
+            # credited from advertiser spend via _charge_preroll_completion, so
+            # suppress the legacy phantom-CPM credit here to avoid double-credit.
+            credit_revenue=not bool(target.get("ad_click_id")),
         )
     except Exception:
         logger.warning(
             "vod_ad_supported_track_failed video=%s break=%s", video_id, break_id
         )
+
+    # ADV-203: on a completed PAID pre-roll, charge the advertiser (CPM, funds-
+    # guarded) and credit the video POSTER their share via _split_revenue. Only
+    # fires on the completion transition (not a re-report) and only when the
+    # break carries an ad_click_id (a real paid fill, not the placeholder).
+    if event_type == EVENT_COMPLETE and not was_completed and target.get("ad_click_id"):
+        try:
+            _charge_preroll_completion(target=target, video_id=video_id)
+        except Exception:
+            logger.warning(
+                "vod_ad_preroll_charge_failed video=%s break=%s", video_id, break_id
+            )
 
     return {
         "ok": True,
