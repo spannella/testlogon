@@ -4929,6 +4929,88 @@ def add_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
     return {"ok": True}
 
 
+class PostTipReactRequest(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    currency: str = "usd"
+    emoji: Optional[str] = None
+    payment_method_id: Optional[str] = None
+
+
+@router.post("/posts/{post_id}/reactions/tip")
+def tip_react_to_post(post_id: str, req: PostTipReactRequest, user_id: UserIdDep, _kyc: object = Depends(require_kyc_tier(2))):  # GAP-0268 (inert unless enforcement flag on)
+    """TIP-202: money-reaction (tip-react) on a POST -- DISTINCT from the free emoji
+    add_reaction. Routes through the single charge_tip money-path
+    (content_type="post_react"), crediting the POST AUTHOR, rejecting a self-tip,
+    and -- only AFTER a successful charge -- recording a money-reaction badge +
+    bumping tip_total_cents + emitting a social alert."""
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    author = post.get("user_id")
+    if not author:
+        raise HTTPException(status_code=400, detail="Post has no author to tip")
+    if author == user_id:
+        raise HTTPException(status_code=400, detail="Cannot tip your own post")
+
+    emoji = (req.emoji or "\U0001F4B8").strip() or "\U0001F4B8"
+
+    # Money-path via the single funnel. A self-tip (400) or a failed charge (402)
+    # raises BEFORE any badge/ledger side effect -> no badge, no ledger on failure.
+    from app.services.tips import charge_tip
+    receipt = charge_tip(
+        tipper_id=user_id,
+        recipient_id=author,
+        amount_cents=req.amount_cents,
+        currency=req.currency,
+        payment_method_id=req.payment_method_id,
+        content_type="post_react",
+        content_id=post_id,
+        meta={"post_id": post_id, "emoji": emoji},
+        idempotency_key=new_id("postreacttip"),
+    )
+
+    # Only reached on a successful charge. Record the money-reaction badge + running
+    # tip total on the post (distinct from the free emoji `reactions` map).
+    badge = {
+        "tipper_id": user_id,
+        "emoji": emoji,
+        "amount_cents": int(req.amount_cents),
+        "tip_payment_id": receipt.tip_payment_id,
+        "created_at": now_iso(),
+    }
+    updated = ddb_update_item(
+        key={"pk": pk_post(post_id), "sk": sk_post()},
+        update_expr="SET tip_reactions = list_append(if_not_exists(tip_reactions, :empty), :new), tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
+        expr_vals={":empty": [], ":new": [badge], ":z": 0, ":amt": int(req.amount_cents)},
+    )
+
+    # GAP-0355: social alert to the post author (best-effort; never break the tip).
+    try:
+        actor_name = _post_fadt_display_name(user_id)
+        emit_social_alert(
+            recipient_user_id=author,
+            alert_type="post_tip",
+            actor_user_id=user_id,
+            actor_display_name=actor_name,
+            batch_key=BATCH_KEY_PATTERNS["post_tip"].format(post_id=post_id),
+            title=f"{actor_name} sent you a tip reaction {emoji}",
+            details={"post_id": post_id, "amount_cents": int(req.amount_cents), "emoji": emoji},
+            action_url=f"/feed/posts/{post_id}",
+        )
+    except Exception:
+        logger.warning("post tip-react social alert failed post_id=%s", post_id, exc_info=True)
+
+    return {
+        "ok": True,
+        "tip_payment_id": receipt.tip_payment_id,
+        "charged_cents": receipt.charged_cents,
+        "net_cents": receipt.net_cents,
+        "recipient_id": author,
+        "emoji": emoji,
+        "tip_total_cents": int(updated.get("tip_total_cents", 0)),
+    }
+
+
 @router.post("/posts/{post_id}/unreact")
 def remove_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})

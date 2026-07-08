@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # The set of content types `write_tip_ledger` accepts today (tip_ledger.py:51).
 # Kept in lock-step with the ledger so charge_tip never accepts a type the ledger
 # would reject. B2/B3 extend BOTH together (message_react/post_react/video_comment).
-TIP_CONTENT_TYPES = ("message", "post", "comment", "broadcast", "video")
+TIP_CONTENT_TYPES = ("message", "post", "comment", "broadcast", "video", "message_react", "post_react")
 
 
 @dataclass

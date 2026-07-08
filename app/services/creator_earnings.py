@@ -46,7 +46,7 @@ def classify_entry(entry: Dict[str, Any]) -> str:
 
     # New-format entries with content_type in meta
     content_type = meta.get("content_type", "")
-    if content_type in ("message", "post", "comment"):
+    if content_type in ("message", "post", "comment", "message_react", "post_react", "video", "video_comment"):
         return "tips"
 
     # Reason-based classification

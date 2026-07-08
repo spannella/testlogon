@@ -48,7 +48,7 @@ class TipLedgerEntry:
     ):
         if amount_cents <= 0:
             raise ValueError("amount_cents must be > 0")
-        if content_type not in ("message", "post", "comment", "broadcast", "video"):
+        if content_type not in ("message", "post", "comment", "broadcast", "video", "message_react", "post_react"):
             raise ValueError(f"Invalid content_type: {content_type}")
         self.tipper_user_id = tipper_user_id
         self.recipient_user_id = recipient_user_id
@@ -69,6 +69,8 @@ def _reason_for_content_type(content_type: str) -> str:
         "comment": "Tip: comment",
         "broadcast": "Tip: broadcast",
         "video": "Tip: video",
+        "message_react": "Tip: message reaction",
+        "post_react": "Tip: post reaction",
     }.get(content_type, f"Tip: {content_type}")
 
 

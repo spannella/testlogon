@@ -11334,6 +11334,107 @@ def react_to_message(
     return {"ok": True}
 
 
+# TIP-201: money-reaction (tip-react) on a MESSAGE -- DISTINCT from the free emoji
+# react_to_message above. Routes through the single charge_tip money-path
+# (content_type="message_react"), crediting the MESSAGE AUTHOR (group-safe: the
+# message sender), rejecting a self-tip, and -- only AFTER a successful charge --
+# recording a money-reaction badge on the message + fanning a realtime event.
+class TipReactIn(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    emoji: Optional[str] = Field(default=None, max_length=64)
+    payment_method_id: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/reactions/tip")
+def tip_react_to_message(
+    conversation_id: str,
+    message_id: str,
+    inp: TipReactIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if isinstance(msg, dict) and msg.get("revoked_at"):
+        raise HTTPException(400, "Cannot tip a revoked message")
+    author_id = msg.get("sender_id")
+    if not author_id:
+        raise HTTPException(400, "Message has no author to tip")
+    if author_id == user_id:
+        raise HTTPException(400, {"code": "cannot_tip_self", "message": "Cannot tip your own message."})
+
+    emoji = (inp.emoji or "\U0001F4B8").strip() or "\U0001F4B8"
+
+    # Money-path via the single funnel. A self-tip (400) or a failed charge (402)
+    # raises BEFORE any badge/event side effect -> no badge, no ledger on failure.
+    from app.services.tips import charge_tip
+    receipt = charge_tip(
+        tipper_id=user_id,
+        recipient_id=author_id,
+        amount_cents=inp.amount_cents,
+        currency="USD",
+        payment_method_id=inp.payment_method_id,
+        content_type="message_react",
+        content_id=message_id,
+        meta={"conversation_id": conversation_id, "emoji": emoji},
+        idempotency_key=f"msgreacttip:{message_id}:{uuid.uuid4().hex}",
+    )
+
+    ts = now_ts()
+    badge = {
+        "tipper_id": user_id,
+        "emoji": emoji,
+        "amount_cents": int(inp.amount_cents),
+        "tip_payment_id": receipt.tip_payment_id,
+        "created_at": ts,
+    }
+    try:
+        tbl_msgs.update_item(
+            Key={"conversation_id": conversation_id, "message_id": message_id},
+            UpdateExpression="SET tip_reactions = list_append(if_not_exists(tip_reactions, :empty), :new) ADD tip_amount_cents :amt",
+            ExpressionAttributeValues={":empty": [], ":new": [badge], ":amt": int(inp.amount_cents)},
+            ConditionExpression="attribute_exists(message_id)",
+        )
+    except ClientError as e:
+        # The money already moved (ledger written); a badge-write failure must not
+        # 500 the charged tip. Log + continue so the realtime event still fires.
+        logger.warning("tip-react badge write failed: %s", e)
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="reaction:tip",
+        payload={
+            "message_id": message_id,
+            "emoji": emoji,
+            "amount_cents": int(inp.amount_cents),
+            "tipper_id": user_id,
+            "recipient_id": author_id,
+            "tip_payment_id": receipt.tip_payment_id,
+            "updated_at": ts,
+        },
+        respect_mute=False,
+    )
+    audit_event(
+        "messaging_message_tip_reaction",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        emoji=emoji,
+        amount_cents=int(inp.amount_cents),
+    )
+    return {
+        "ok": True,
+        "tip_payment_id": receipt.tip_payment_id,
+        "charged_cents": receipt.charged_cents,
+        "net_cents": receipt.net_cents,
+        "recipient_id": author_id,
+        "emoji": emoji,
+    }
+
+
 # MSG-011: Reaction detail — who reacted with what (avatars + display names).
 @router.get(
     "/conversations/{conversation_id}/messages/{message_id}/reactions/details",
