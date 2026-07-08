@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.ui.i18n.UiText
+import com.testlogon.android.data.ads.AdClickAttributionStore
 import com.testlogon.android.data.messaging.BillingAuthorizer
 import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.data.subscriptions.CreatorSubscription
@@ -67,6 +68,7 @@ sealed interface SubscribeEvent {
 class SubscribeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: SubscriptionsRepository,
+    private val adAttribution: AdClickAttributionStore,
     private val billingAuthorizer: BillingAuthorizer,
     private val featureFlags: SubscriptionFeatureFlags,
     private val errorMapper: BillingErrorMapper,
@@ -127,7 +129,8 @@ class SubscribeViewModel @Inject constructor(
 
     private suspend fun runSubscribe() {
         _uiState.update { it.copy(status = SubscribeUiState.Status.Subscribing) }
-        when (val result = repository.subscribe(planId, SubscribeReqDto())) {
+        // ADV-405: attach the session last-click ad_click_id so a subscribe converts the ad (ADV-402).
+        when (val result = repository.subscribe(planId, SubscribeReqDto(adClickId = adAttribution.peek()))) {
             is ApiResult.Success -> {
                 val sub = result.data
                 _uiState.update {

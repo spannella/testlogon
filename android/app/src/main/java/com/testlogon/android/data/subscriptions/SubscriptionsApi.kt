@@ -185,6 +185,8 @@ data class SubscriptionSummaryDto(
 @JsonClass(generateAdapter = true)
 data class SubscribeReqDto(
     @Json(name = "interval") val interval: String? = null,
+    // ADV-405: last-click CPA attribution handle carried from an ad CTA (backend ADV-402 SubscribeIn).
+    @Json(name = "ad_click_id") val adClickId: String? = null,
     @Json(name = "discount_code") val discountCode: String? = null,
     @Json(name = "trial_days") val trialDays: Int? = null,
     @Json(name = "subscriber_id") val subscriberId: String? = null,

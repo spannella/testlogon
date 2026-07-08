@@ -71,6 +71,8 @@ interface CartRepository {
         idempotencyKey: String,
         promoCode: String? = null,
         promoCodeId: String? = null,
+        // ADV-405: last-click ad_click_id to attribute the checkout conversion (backend ADV-403).
+        adClickId: String? = null,
     ): ApiResult<CartPurchaseResult> =
         ApiResult.NetworkError(UnsupportedOperationException("purchase not implemented"), isTimeout = false)
 }
@@ -148,12 +150,13 @@ class CartRepositoryImpl @Inject constructor(
         idempotencyKey: String,
         promoCode: String?,
         promoCodeId: String?,
+        adClickId: String?,
     ): ApiResult<CartPurchaseResult> = withContext(io) {
         call {
             api.purchaseCart(
                 cartId = cartId,
                 idempotencyKey = idempotencyKey,
-                body = CartPurchaseInDto(promoCode = promoCode, promoCodeId = promoCodeId),
+                body = CartPurchaseInDto(promoCode = promoCode, promoCodeId = promoCodeId, adClickId = adClickId),
             )
         }.map { it.toDomain() }.also {
             // The purchased cart is consumed server-side; drop the cached handle so the next

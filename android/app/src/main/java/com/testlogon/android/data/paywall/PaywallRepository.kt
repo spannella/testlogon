@@ -3,6 +3,7 @@ package com.testlogon.android.data.paywall
 import com.testlogon.android.core.data.paywall.EntitlementDao
 import com.testlogon.android.core.data.paywall.EntitlementEntity
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.data.ads.AdClickAttributionStore
 import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.messaging.BillingAuthorizer
 import com.testlogon.android.data.messaging.BillingResult
@@ -69,6 +70,7 @@ interface PaywallRepository {
 class PaywallRepositoryImpl @Inject constructor(
     private val api: PaywallApi,
     private val billing: BillingAuthorizer,
+    private val adAttribution: AdClickAttributionStore,
     private val dao: EntitlementDao,
     private val authState: AuthStateStore,
     private val errorParser: ApiErrorParser,
@@ -114,6 +116,8 @@ class PaywallRepositoryImpl @Inject constructor(
                 UnlockPostRequestDto(
                     postId = postId,
                     paymentMethodId = paymentMethodId,
+                    // ADV-405: attach the session last-click ad_click_id so an unlock converts the ad (ADV-404).
+                    adClickId = adAttribution.peek(),
                     idempotencyKey = idemKey,
                 ),
             )

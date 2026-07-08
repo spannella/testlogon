@@ -9,6 +9,7 @@ import androidx.paging.cachedIn
 import androidx.paging.filter
 import androidx.paging.map
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.ads.AdClickAttributionStore
 import com.testlogon.android.data.ads.AdEvent
 import com.testlogon.android.data.ads.AdTrackRepository
 import com.testlogon.android.data.bookmarks.FeedBookmarkRepository
@@ -69,6 +70,7 @@ class FeedViewModel @Inject constructor(
     private val currentUser: CurrentUserRepository,
     private val feedRefreshBus: FeedRefreshBus,
     private val adTracker: AdTrackRepository,
+    private val adAttribution: AdClickAttributionStore,
 ) : ViewModel() {
 
     /** author id (email/user_sub) -> display name, resolved lazily for visible posts. */
@@ -395,6 +397,9 @@ class FeedViewModel @Inject constructor(
     /** Fire a click when the viewer taps the sponsored card / its CTA. Best-effort (never throws). */
     fun onSponsoredClick(post: FeedPost) {
         val ad = post.sponsored ?: return
+        // ADV-405: remember this serve as the session last-click so a later subscribe/unlock/checkout
+        // attributes the conversion back to it (backend ad_attribution.attribute_conversion).
+        adAttribution.record(ad.adClickId)
         viewModelScope.launch { adTracker.track(AdEvent.CLICK, ad) }
     }
 

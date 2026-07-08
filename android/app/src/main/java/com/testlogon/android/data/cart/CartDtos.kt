@@ -106,6 +106,8 @@ data class OkRespDto(
 data class CartPurchaseInDto(
     @Json(name = "promo_code") val promoCode: String? = null,
     @Json(name = "promo_code_id") val promoCodeId: String? = null,
+    // ADV-405: last-click CPA attribution handle carried from an ad CTA (backend ADV-403 CartPurchaseIn).
+    @Json(name = "ad_click_id") val adClickId: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

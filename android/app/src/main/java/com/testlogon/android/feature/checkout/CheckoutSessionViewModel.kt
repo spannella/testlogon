@@ -59,6 +59,7 @@ sealed interface CheckoutEvent {
 class CheckoutSessionViewModel @Inject constructor(
     private val checkoutRepository: CheckoutRepository,
     private val cartRepository: CartRepository,
+    private val adAttribution: com.testlogon.android.data.ads.AdClickAttributionStore,
     private val billingAuthorizer: BillingAuthorizer,
     private val savedState: SavedStateHandle,
 ) : ViewModel() {
@@ -145,7 +146,8 @@ class CheckoutSessionViewModel @Inject constructor(
         if (_placing.value) return
         _placing.update { true }
         viewModelScope.launch {
-            when (val r = cartRepository.purchase(cart, idempotencyKey)) {
+            // ADV-405: attach the session last-click ad_click_id so checkout converts the ad (ADV-403).
+            when (val r = cartRepository.purchase(cart, idempotencyKey, adClickId = adAttribution.peek())) {
                 is ApiResult.Success ->
                     _events.send(CheckoutEvent.PurchaseComplete(r.data.purchaseTxnId, r.data.orderId))
                 is ApiResult.Failure -> _events.send(CheckoutEvent.PaymentFailed(r.error.message))
