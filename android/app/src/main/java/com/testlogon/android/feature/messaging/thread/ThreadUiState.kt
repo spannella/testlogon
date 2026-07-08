@@ -87,6 +87,28 @@ data class ThreadUiState(
     val viewOnceViewer: ViewOnceViewerState = ViewOnceViewerState(),
     /** #8 — scheduled-messages manager (list + edit/remove of pending scheduled sends). */
     val scheduledManager: ScheduledManagerUiState = ScheduledManagerUiState(),
+    /**
+     * TIP-405 — pay-to-message gate prompt. Non-null when the last first-message send to a gated
+     * recipient came back 402 tip_required; the user adds a tip >= min and we resend the message.
+     */
+    val tipRequiredPrompt: TipRequiredPromptState? = null,
+)
+
+/**
+ * TIP-405 — "add a tip to message" prompt state for the pay-to-message gate. Seeded from the 402
+ * `tip_required` body ([minTipCents]); [tipDollars] is the editable amount (defaults to the minimum).
+ * [pendingClientId]/[pendingText]/[pendingReplyToId] carry the original send so it can be resent WITH
+ * the tip (reusing the same optimistic outbox row).
+ */
+data class TipRequiredPromptState(
+    val minTipCents: Long,
+    val recipient: String,
+    val pendingClientId: String,
+    val pendingText: String,
+    val pendingReplyToId: String? = null,
+    val tipDollars: String,
+    val submitting: Boolean = false,
+    val error: String? = null,
 )
 
 /**

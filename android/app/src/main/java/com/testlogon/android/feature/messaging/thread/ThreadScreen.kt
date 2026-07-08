@@ -111,6 +111,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -453,6 +455,17 @@ fun ThreadRoute(
         FullScreenImageViewer(url = url, onClose = { imageViewer.close() })
     }
 
+    // TIP-405 — pay-to-message gate: the first message to a gated recipient returned 402 tip_required.
+    // Prompt for a tip >= the minimum, then resend the first message WITH the tip attached.
+    state.tipRequiredPrompt?.let { prompt ->
+        TipRequiredPromptDialog(
+            prompt = prompt,
+            onAmountChange = viewModel::onTipRequiredAmountChange,
+            onConfirm = viewModel::onTipRequiredConfirm,
+            onDismiss = viewModel::onTipRequiredDismiss,
+        )
+    }
+
     // AND-163 — report sheet + one-shot confirmation snackbar.
     com.testlogon.android.feature.messaging.report.ReportSheet(
         state = reportState,
@@ -647,6 +660,65 @@ fun ThreadRoute(
             onToggleRemoveMedia = viewModel::onEditToggleRemoveMedia,
         )
     }
+}
+
+/**
+ * TIP-405 — "add a tip to message" prompt shown when a first message to a pay-to-message-gated
+ * recipient returns 402 tip_required. Seeded with the minimum tip; confirming resends the message
+ * WITH the tip (the backend charges it to the recipient as non-refundable creator earnings).
+ */
+@Composable
+private fun TipRequiredPromptDialog(
+    prompt: TipRequiredPromptState,
+    onAmountChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val minDollars = "%.2f".format(prompt.minTipCents / 100.0)
+    AlertDialog(
+        onDismissRequest = { if (!prompt.submitting) onDismiss() },
+        modifier = Modifier.testTag("tip_required_dialog"),
+        title = { Text("Add a tip to message") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "This person requires a tip of at least \$$minDollars to receive your first message. " +
+                        "The tip is credited to them as earnings and is non-refundable.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = prompt.tipDollars,
+                    onValueChange = onAmountChange,
+                    label = { Text("Tip ($)") },
+                    singleLine = true,
+                    enabled = !prompt.submitting,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth().testTag("tip_required_amount_input"),
+                )
+                prompt.error?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = !prompt.submitting,
+                modifier = Modifier.testTag("tip_required_confirm"),
+            ) {
+                Text(if (prompt.submitting) "Sending…" else "Tip & send")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !prompt.submitting,
+                modifier = Modifier.testTag("tip_required_cancel"),
+            ) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 /** Bottom sheet to set send-time options (view-once / locked / scheduled / expiring) on the next message. */

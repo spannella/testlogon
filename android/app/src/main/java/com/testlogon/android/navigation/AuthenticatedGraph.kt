@@ -22,6 +22,7 @@ import com.testlogon.android.feature.settings.hub.SettingsHubRoute
 import com.testlogon.android.feature.settings.language.LanguagePickerRoute
 import com.testlogon.android.feature.settings.media.MediaPreferencesRoute
 import com.testlogon.android.feature.settings.callrate.CallRateRoute
+import com.testlogon.android.feature.settings.msgprivacy.MessagePrivacyRoute
 import com.testlogon.android.feature.settings.emojis.CustomEmojiRoute
 import com.testlogon.android.feature.settings.geo.GeoSettingsRoute
 import com.testlogon.android.feature.settings.misc.PrivacySettingsScreen
@@ -503,6 +504,9 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
     }
     composable(MainDest.SettingsCallRate.route) {
         CallRateRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsMessagePrivacy.route) {
+        MessagePrivacyRoute(onBack = { navController.popBackStack() })
     }
     composable(MainDest.SettingsAppearance.route) {
         AppearanceSettingsRoute(onBack = { navController.popBackStack() })

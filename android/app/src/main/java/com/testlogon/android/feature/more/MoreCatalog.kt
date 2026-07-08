@@ -1460,6 +1460,15 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.WALLET,
             section = MoreSection.ACCOUNT,
         ),
+        // TIP-B4: message privacy — pay-to-message gate + tip-free allowlist (Inbox / Account).
+        MoreEntry(
+            id = "message_privacy",
+            labelRes = R.string.more_entry_message_privacy,
+            icon = Icons.Outlined.Shield,
+            route = MoreRoutes.MESSAGE_PRIVACY,
+            hub = MoreHub.INBOX,
+            section = MoreSection.ACCOUNT,
+        ),
         MoreEntry(
             id = "sessions",
             labelRes = R.string.more_entry_sessions,

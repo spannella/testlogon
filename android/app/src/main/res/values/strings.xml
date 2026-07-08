@@ -3954,6 +3954,7 @@
     <string name="more_entry_custom_emojis">Custom emojis</string>
     <string name="more_entry_geo_rules">Geo-blocking</string>
     <string name="more_entry_call_rate">Call rate</string>
+    <string name="more_entry_message_privacy">Message privacy</string>
     <string name="more_entry_vod_rentals">My rentals</string>
     <!-- VOD rentals ("My Rentals" list; web VodRentalsPage parity) -->
     <string name="vod_rentals_title">My Rentals</string>

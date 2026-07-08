@@ -435,6 +435,9 @@ object MoreRoutes {
     // Settings: call rate (paid-calls per-minute rate). Web parity: settings/call-rate.
     val CALL_RATE: String get() = MainDest.SettingsCallRate.route
 
+    // Settings: message privacy (TIP-B4 pay-to-message gate + tip-free allowlist).
+    val MESSAGE_PRIVACY: String get() = MainDest.SettingsMessagePrivacy.route
+
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
@@ -605,6 +608,7 @@ object MoreRoutes {
             CUSTOM_EMOJIS,
             GEO_RULES,
             CALL_RATE,
+            MESSAGE_PRIVACY,
             SETTINGS,
             HELP,
             ABOUT,

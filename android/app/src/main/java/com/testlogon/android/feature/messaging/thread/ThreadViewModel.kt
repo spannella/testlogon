@@ -104,6 +104,8 @@ class ThreadViewModel @Inject constructor(
     private val draftRepository: com.testlogon.android.data.messaging.DraftRepository,
     private val typingRepository: TypingRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
+    // TIP-405 — decode the 402 tip_required detail body (min_tip_cents/recipient) off a failed send.
+    private val apiErrorParser: com.testlogon.android.core.network.error.ApiErrorParser,
 ) : ViewModel() {
 
     /**
@@ -649,6 +651,125 @@ class ThreadViewModel @Inject constructor(
             }
             // AND-141 — clear the draft on a successful send.
             if (result is ApiResult.Success) draftRepository.clearDraft(conversationId)
+            // TIP-405 — a first message to a pay-to-message-gated recipient comes back 402 tip_required;
+            // surface the "add a tip to message" prompt (plaintext sends only; encrypted has no body to resend).
+            maybeShowTipRequired(result, clientId, body, replyToId, opts.encrypted)
+        }
+    }
+
+    // ---- TIP-405: pay-to-message gate prompt ----
+
+    /**
+     * TIP-405 — inspect a send result for the pay-to-message gate (402 `tip_required`). On a match,
+     * parse min_tip_cents/recipient off the error body and open the "add a tip to message" prompt,
+     * carrying the original send so it can be resent WITH the tip once the user confirms.
+     */
+    private fun maybeShowTipRequired(
+        result: ApiResult<*>,
+        clientId: String,
+        body: String,
+        replyToId: String?,
+        encrypted: Boolean,
+    ) {
+        if (encrypted || body.isBlank()) return
+        val error = (result as? ApiResult.Failure)?.error ?: return
+        if (error.status != 402 || error.code != "tip_required") return
+        val detail = apiErrorParser.parseDetail(error.raw as? String) as? Map<*, *>
+        val minCents = (detail?.get("min_tip_cents") as? Number)?.toLong() ?: 0L
+        val recipient = (detail?.get("recipient") as? String).orEmpty()
+        _state.update {
+            it.copy(
+                tipRequiredPrompt = com.testlogon.android.feature.messaging.thread.TipRequiredPromptState(
+                    minTipCents = minCents,
+                    recipient = recipient,
+                    pendingClientId = clientId,
+                    pendingText = body,
+                    pendingReplyToId = replyToId,
+                    tipDollars = if (minCents > 0) (minCents / 100.0).toString() else "1.0",
+                ),
+            )
+        }
+    }
+
+    /** TIP-405 — update the editable tip amount on the pay-to-message prompt. */
+    fun onTipRequiredAmountChange(dollars: String) {
+        _state.update { st ->
+            st.tipRequiredPrompt?.let { st.copy(tipRequiredPrompt = it.copy(tipDollars = dollars, error = null)) } ?: st
+        }
+    }
+
+    /** TIP-405 — dismiss the pay-to-message prompt without sending. */
+    fun onTipRequiredDismiss() {
+        _state.update { it.copy(tipRequiredPrompt = null) }
+    }
+
+    /**
+     * TIP-405 — confirm the prompt: authorize a tip >= min via the TIP-106 billing path, then resend
+     * the first message carrying the tip (charged to the gated recipient as non-refundable creator
+     * earnings by the backend). Reuses the same optimistic outbox row (pendingClientId).
+     */
+    fun onTipRequiredConfirm() {
+        val prompt = _state.value.tipRequiredPrompt ?: return
+        if (prompt.submitting) return
+        val cents = parseDollarsToCents(prompt.tipDollars)
+        if (cents == null || cents < prompt.minTipCents) {
+            _state.update {
+                it.copy(
+                    tipRequiredPrompt = prompt.copy(
+                        error = "Add at least $" + "%.2f".format(prompt.minTipCents / 100.0) + " to message.",
+                    ),
+                )
+            }
+            return
+        }
+        _state.update { it.copy(tipRequiredPrompt = prompt.copy(submitting = true, error = null)) }
+        viewModelScope.launch {
+            val pm = when (val auth = billing.authorize(cents, TIP_CURRENCY)) {
+                is BillingResult.Authorized -> auth.paymentMethodId
+                is BillingResult.Declined -> return@launch failTipRequired("Tip declined — try another payment method.")
+                BillingResult.Cancelled -> return@launch failTipRequired(null)
+                else -> return@launch failTipRequired("Add a payment method to send a tip.")
+            }
+            repository.enqueueOptimistic(conversationId, prompt.pendingClientId, prompt.pendingText, clock())
+            _events.trySend(ThreadEvent.ScrollToBottom)
+            val res = repository.sendOutbox(
+                conversationId = conversationId,
+                clientId = prompt.pendingClientId,
+                text = prompt.pendingText,
+                replyToMessageId = prompt.pendingReplyToId,
+                viewOnce = false,
+                lockPriceCents = null,
+                lockDescription = null,
+                sendAtEpochSeconds = null,
+                expiresInSeconds = null,
+                countdownTargetEpochSeconds = null,
+                countdownTitle = null,
+                countdownRevealText = null,
+                countdownRevealImage = null,
+                tipAmountCents = cents,
+                tipPaymentMethodId = pm.takeIf { it.isNotBlank() },
+            )
+            when (res) {
+                is ApiResult.Success -> {
+                    draftRepository.clearDraft(conversationId)
+                    _state.update {
+                        it.copy(
+                            tipRequiredPrompt = null,
+                            transientMessage = "Message sent with a $" + "%.2f".format(cents / 100.0) + " tip.",
+                        )
+                    }
+                }
+                is ApiResult.Failure -> failTipRequired(res.error.message)
+                is ApiResult.NetworkError -> failTipRequired("Couldn't reach the server. Try again.")
+            }
+        }
+    }
+
+    private fun failTipRequired(message: String?) {
+        _state.update { st ->
+            st.tipRequiredPrompt?.let {
+                st.copy(tipRequiredPrompt = it.copy(submitting = false, error = message ?: it.error))
+            } ?: st
         }
     }
 
