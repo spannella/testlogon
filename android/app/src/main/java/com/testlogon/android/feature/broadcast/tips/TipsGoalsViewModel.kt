@@ -11,6 +11,7 @@ import com.testlogon.android.data.broadcast.tips.TipsRepository
 import com.testlogon.android.data.broadcast.tips.TipsSummary
 import com.testlogon.android.data.messaging.BillingAuthorizer
 import com.testlogon.android.data.messaging.BillingResult
+import com.testlogon.android.feature.common.tip.TipVisibility
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedFactory
 import dagger.assisted.AssistedInject
@@ -36,6 +37,7 @@ data class TipsGoalsUiState(
 /** AND-282 — one-shot effects (snackbars / sheet dismissal) consumed exactly once by the screen. */
 sealed interface TipsEffect {
     data object TipSent : TipsEffect
+    data object TipSentPrivate : TipsEffect
     data object PaymentsUnavailable : TipsEffect
     data class TipFailed(val message: String?) : TipsEffect
 }
@@ -112,7 +114,12 @@ class TipsGoalsViewModel @AssistedInject constructor(
      * summary/goals. Validates the amount against [MIN_TIP_CENTS]..[MAX_TIP_CENTS] and a non-empty
      * payment method. NotConfigured surfaces a payments-unavailable effect and NEVER charges/POSTs.
      */
-    fun submitTip(amountCents: Long, text: String?, currency: String = DEFAULT_CURRENCY) {
+    fun submitTip(
+        amountCents: Long,
+        text: String?,
+        currency: String = DEFAULT_CURRENCY,
+        visibility: TipVisibility = TipVisibility.Default,
+    ) {
         if (amountCents !in MIN_TIP_CENTS..MAX_TIP_CENTS) {
             _effects.trySend(TipsEffect.TipFailed(null))
             return
@@ -136,7 +143,9 @@ class TipsGoalsViewModel @AssistedInject constructor(
                         )
                         when (result) {
                             is ApiResult.Success -> {
-                                _effects.trySend(TipsEffect.TipSent)
+                                _effects.trySend(
+                                    if (visibility.isPrivate) TipsEffect.TipSentPrivate else TipsEffect.TipSent,
+                                )
                                 repo.refresh(sessionId)
                             }
                             is ApiResult.Failure -> _effects.trySend(TipsEffect.TipFailed(result.error.message))

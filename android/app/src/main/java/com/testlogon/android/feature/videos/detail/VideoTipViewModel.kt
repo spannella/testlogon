@@ -10,6 +10,7 @@ import com.testlogon.android.data.tip.TipReceipt
 import com.testlogon.android.data.videos.VideosRepository
 import com.testlogon.android.feature.feed.TipEffect
 import com.testlogon.android.feature.feed.TipSheetState
+import com.testlogon.android.feature.common.tip.TipVisibility
 import com.testlogon.android.feature.feed.parseDollarsToCents
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -66,6 +67,12 @@ class VideoTipViewModel @Inject constructor(
         _state.value = entry.copy(customAmountText = text, selectedCents = parseDollarsToCents(text), error = null)
     }
 
+    /** TIP-505 - toggle whether this video tip is public or private on the surface. */
+    fun setVisibility(visibility: TipVisibility) {
+        val entry = currentEntry() ?: return
+        _state.value = entry.copy(visibility = visibility)
+    }
+
     fun send() {
         val entry = currentEntry() ?: return
         val cents = entry.effectiveCents ?: return
@@ -84,6 +91,7 @@ class VideoTipViewModel @Inject constructor(
                 is ApiResult.Success -> {
                     _state.value = TipSheetState.Confirmed(
                         TipReceipt(postId = entry.postId, amountCents = r.data.amountCents, tipTotalCents = r.data.tipTotalCents),
+                        visibility = entry.visibility,
                     )
                     _tipTotals.trySend(r.data.tipTotalCents)
                     _effects.trySend(TipEffect.ShowSnackbar(SNACKBAR_SENT))

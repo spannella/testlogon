@@ -7,6 +7,7 @@ import com.testlogon.android.data.tip.TipOutcome
 import com.testlogon.android.data.tip.TipReactOutcome
 import com.testlogon.android.data.tip.TipReceipt
 import com.testlogon.android.data.tip.TipRepository
+import com.testlogon.android.feature.common.tip.TipVisibility
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -19,7 +20,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * AND-178 — drives the tip bottom sheet for a single post: Hidden -> Entry -> Submitting ->
+ * AND-178 - drives the tip bottom sheet for a single post: Hidden -> Entry -> Submitting ->
  * (Confirmed | Entry(error) | PaymentsUnavailable).
  *
  * A tip is money-moving and NEVER optimistic: the Confirmed state appears only after the repository
@@ -69,6 +70,12 @@ class TipViewModel @Inject constructor(
         _state.value = entry.copy(customAmountText = text, selectedCents = cents, error = null)
     }
 
+    /** TIP-505 - toggle whether this tip is public or private on the surface. */
+    fun setVisibility(visibility: TipVisibility) {
+        val entry = currentEntry() ?: return
+        _state.value = entry.copy(visibility = visibility)
+    }
+
     fun send() {
         val entry = currentEntry() ?: return
         val cents = entry.effectiveCents ?: return
@@ -81,6 +88,7 @@ class TipViewModel @Inject constructor(
                         _effects.trySend(TipEffect.ReactionBadge(entry.postId, outcome.badge))
                         _state.value = TipSheetState.Confirmed(
                             TipReceipt(postId = entry.postId, amountCents = cents, tipTotalCents = outcome.tipTotalCents),
+                            visibility = entry.visibility,
                         )
                         _effects.trySend(TipEffect.ShowSnackbar(SNACKBAR_SENT))
                     }
@@ -95,7 +103,7 @@ class TipViewModel @Inject constructor(
             }
             when (val outcome = tips.tip(entry.postId, cents)) {
                 is TipOutcome.Success -> {
-                    _state.value = TipSheetState.Confirmed(outcome.receipt)
+                    _state.value = TipSheetState.Confirmed(outcome.receipt, visibility = entry.visibility)
                     _effects.trySend(TipEffect.ShowSnackbar(SNACKBAR_SENT))
                 }
                 TipOutcome.PaymentsUnavailable ->
@@ -123,7 +131,7 @@ class TipViewModel @Inject constructor(
     }
 }
 
-/** AND-178 — tip sheet state machine (scoped to one post). */
+/** AND-178 - tip sheet state machine (scoped to one post). */
 sealed interface TipSheetState {
     data object Hidden : TipSheetState
 
@@ -136,6 +144,8 @@ sealed interface TipSheetState {
         /** TIP-204 - non-null + [isReaction] when opened as a money-REACTION (badge) not a direct tip. */
         val emoji: String? = null,
         val isReaction: Boolean = false,
+        /** TIP-505 - public/private visibility for this tip. */
+        val visibility: TipVisibility = TipVisibility.Default,
     ) : TipSheetState {
         /** The amount that will be sent: a preset or a parsed custom amount. */
         val effectiveCents: Int? get() = selectedCents
@@ -147,10 +157,13 @@ sealed interface TipSheetState {
     }
 
     data class Submitting(val postId: String, val amountCents: Int) : TipSheetState
-    data class Confirmed(val receipt: TipReceipt) : TipSheetState
+    data class Confirmed(
+        val receipt: TipReceipt,
+        val visibility: TipVisibility = TipVisibility.Default,
+    ) : TipSheetState
 }
 
-/** AND-178 — one-shot tip effects. */
+/** AND-178 - one-shot tip effects. */
 sealed interface TipEffect {
     data class ShowSnackbar(val message: String) : TipEffect
     /** TIP-204 - a successful post tip-reaction; the host forwards the badge to the feed overlay. */
@@ -159,7 +172,7 @@ sealed interface TipEffect {
 
 /**
  * Parses a user-typed dollar amount ("5", "5.50") to whole cents, or null if invalid/empty.
- * Pure / JVM-unit-testable; locale-agnostic (accepts '.' as the decimal separator).
+ * Pure / JVM-testable; locale-agnostic (accepts '.' as the decimal separator).
  */
 internal fun parseDollarsToCents(text: String): Int? {
     val trimmed = text.trim()

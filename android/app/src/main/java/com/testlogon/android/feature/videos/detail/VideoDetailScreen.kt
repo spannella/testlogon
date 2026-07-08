@@ -211,6 +211,7 @@ fun VideoDetailRoute(
         onCustomAmount = tipViewModel::setCustomAmount,
         onSend = tipViewModel::send,
         onDismiss = tipViewModel::dismiss,
+        onVisibility = tipViewModel::setVisibility,
     )
 
     // #6 — full-screen overlay reusing the SAME controller; dismiss returns to the inline surface.

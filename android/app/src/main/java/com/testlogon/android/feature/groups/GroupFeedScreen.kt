@@ -260,6 +260,7 @@ fun GroupFeedScreen(
         onCustomAmount = tipViewModel::setCustomAmount,
         onSend = tipViewModel::send,
         onDismiss = tipViewModel::dismiss,
+        onVisibility = tipViewModel::setVisibility,
     )
 }
 

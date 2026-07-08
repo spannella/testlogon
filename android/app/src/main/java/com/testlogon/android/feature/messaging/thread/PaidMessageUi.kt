@@ -822,7 +822,8 @@ fun LotterySenderDetail(
     }
 }
 
-/** AND-139 — tip sheet: preset chips + custom amount + optional note. Amounts are integer cents. */
+/** AND-139 / TIP-504 — tip sheet: now renders the SHARED tip composer (preset chips + custom amount +
+ * optional note) so the DM tip UX matches feed/video/broadcast. Amounts are integer cents. */
 @Composable
 fun TipSheet(
     state: TipSheetState,
@@ -835,45 +836,22 @@ fun TipSheet(
     ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(PaidMessageTestTags.TIP_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
             Text(stringResource(R.string.tip_title), style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                state.presetsCents.forEach { cents ->
-                    FilterChip(
-                        selected = state.selectedCents == cents,
-                        onClick = { onPreset(cents) },
-                        label = { Text(formatMoney(cents, "USD")) },
-                    )
-                }
-            }
-            OutlinedTextField(
-                value = state.customInput,
-                onValueChange = onCustomChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.tip_custom_amount)) },
-                singleLine = true,
-                isError = state.amountError != null,
+            com.testlogon.android.feature.common.tip.TipComposerContent(
+                presetsCents = state.presetsCents,
+                selectedCents = state.selectedCents,
+                customText = state.customInput,
+                canSend = state.isConfirmEnabled,
+                inFlight = state.submitting,
+                onSelectPreset = onPreset,
+                onCustomAmount = onCustomChange,
+                onSend = onConfirm,
+                currency = "USD",
+                error = state.amountError,
+                note = state.note,
+                onNote = onNoteChange,
+                maxNoteLen = TipSheetState.MAX_NOTE_LENGTH,
+                modifier = Modifier.padding(top = 8.dp),
             )
-            OutlinedTextField(
-                value = state.note,
-                onValueChange = onNoteChange,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                label = { Text(stringResource(R.string.tip_note)) },
-                supportingText = { Text("${state.note.length} / ${TipSheetState.MAX_NOTE_LENGTH}") },
-                isError = state.note.length > TipSheetState.MAX_NOTE_LENGTH,
-            )
-            state.amountError?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
-            }
-            Button(
-                onClick = onConfirm,
-                enabled = state.isConfirmEnabled,
-                modifier = Modifier.padding(top = 12.dp),
-            ) {
-                if (state.submitting) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp))
-                } else {
-                    Text(stringResource(R.string.tip_send))
-                }
-            }
         }
     }
 }

@@ -727,6 +727,13 @@
     <string name="tip_custom_amount">Custom amount</string>
     <string name="tip_note">Note (optional)</string>
     <string name="tip_send">Send tip</string>
+    <!-- TIP-505 shared tip composer visibility toggle -->
+    <string name="tip_visibility_label">Tip visibility</string>
+    <string name="tip_visibility_public">Public</string>
+    <string name="tip_visibility_private">Private</string>
+    <string name="tip_visibility_public_hint">Your name and amount are shown on this tip.</string>
+    <string name="tip_visibility_private_hint">Only you and the recipient can see this tip.</string>
+    <string name="tip_sent_private">Tip sent privately</string>
 
     <!-- AND-140 — message actions (reactions / pins / edits / delete / revoke / hide) -->
     <string name="action_cancel">Cancel</string>
