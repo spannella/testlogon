@@ -213,6 +213,9 @@ class ThreadViewModel @Inject constructor(
     // TIP-203 - optimistic money-reaction overlay (message key -> badges) so a tip-react chip renders
     // instantly; merged with server-hydrated tip_reactions and de-duped by tip_payment_id on refetch.
     private val tipReactionOverlay = mutableMapOf<String, List<com.testlogon.android.data.messaging.TipReaction>>()
+    // TIP-B2 - server-hydrated tip_reactions captured from loadHistory (NOT Room-persisted), so the
+    // AUTHOR (who has no optimistic overlay) also renders the money-reaction chip. Keyed by message id.
+    private val tipReactionHydration = mutableMapOf<String, List<com.testlogon.android.data.messaging.TipReaction>>()
     // MSG — view-once messages consumed locally this session (hidden immediately on close, even before
     // the server reflects the consumption). Keyed by message UI key.
     private val locallyConsumed = mutableSetOf<String>()
@@ -351,7 +354,7 @@ class ThreadViewModel @Inject constructor(
                             val ui = msg.toUi(self)
                             ui.copy(
                                 decryptedText = decryptedMessages[ui.key],
-                                tipReactions = mergeTipReactions(ui.tipReactions, tipReactionOverlay[ui.key]),
+                                tipReactions = mergeTipReactions(mergeTipReactions(ui.tipReactions, tipReactionHydration[ui.key]), tipReactionOverlay[ui.key]),
                             )
                         },
                         receipts = computeReceipts(visible, self),
@@ -491,6 +494,8 @@ class ThreadViewModel @Inject constructor(
             when (val result = repository.loadHistory(conversationId, before = null, limit = PAGE_SIZE)) {
                 is ApiResult.Success -> {
                     oldestLoadedId = result.data.minByOrNull { it.createdAtEpochSeconds }?.id ?: oldestLoadedId
+                    result.data.forEach { m -> m.id?.let { id -> if (m.tipReactions.isNotEmpty()) tipReactionHydration[id] = m.tipReactions } }
+                    _state.update { st -> st.copy(messages = st.messages.map { mu -> tipReactionHydration[mu.key]?.let { h -> mu.copy(tipReactions = mergeTipReactions(h, tipReactionOverlay[mu.key])) } ?: mu }) }
                     _state.update {
                         it.copy(
                             isLoadingInitial = false,
@@ -515,6 +520,7 @@ class ThreadViewModel @Inject constructor(
                 is ApiResult.Success -> {
                     val newOldest = result.data.minByOrNull { it.createdAtEpochSeconds }?.id
                     if (newOldest != null) oldestLoadedId = newOldest
+                    result.data.forEach { m -> m.id?.let { id -> if (m.tipReactions.isNotEmpty()) tipReactionHydration[id] = m.tipReactions } }
                     _state.update {
                         it.copy(isLoadingOlder = false, endOfHistory = result.data.size < PAGE_SIZE)
                     }

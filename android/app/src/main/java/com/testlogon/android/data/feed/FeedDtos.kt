@@ -28,6 +28,15 @@ data class FeedPageDto(
 )
 
 @JsonClass(generateAdapter = true)
+data class TipReactionBadgeDto(
+    @Json(name = "tipper_id") val tipperId: String? = null,
+    @Json(name = "emoji") val emoji: String? = null,
+    @Json(name = "amount_cents") val amountCents: Int = 0,
+    @Json(name = "tip_payment_id") val tipPaymentId: String? = null,
+    @Json(name = "created_at") val createdAt: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
 data class PostDto(
     @Json(name = "post_id") val postId: String,
     @Json(name = "author_id") val authorId: String = "",
@@ -50,6 +59,8 @@ data class PostDto(
     // #20 — full emoji reactions (distinct from like). Per-emoji counts + the viewer's own reactions.
     @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
     @Json(name = "my_reactions") val myReactions: List<String>? = null,
+    // TIP-204 - money-reaction (tip) badges surfaced by the backend feed/post serializer.
+    @Json(name = "tip_reactions") val tipReactions: List<TipReactionBadgeDto>? = null,
     // --- flat lock / paywall fields (mirror FeedPost) ---
     @Json(name = "locked") val locked: Boolean = false,
     @Json(name = "unlocked") val unlocked: Boolean = false,

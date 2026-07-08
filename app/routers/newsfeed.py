@@ -2283,6 +2283,13 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "like_count": int(post.get("like_count", 0)),
         "comment_count": int(post.get("comment_count", 0)),
         "tip_total_cents": int(post.get("tip_total_cents", 0)),
+        "tip_reactions": [
+            {"tipper_id": _r.get("tipper_id"), "emoji": _r.get("emoji"),
+             "amount_cents": int(_r.get("amount_cents") or 0),
+             "tip_payment_id": _r.get("tip_payment_id"),
+             "created_at": _r.get("created_at")}
+            for _r in (post.get("tip_reactions") or [])
+        ],
         "liked_by_me": liked_by_me,
         "reactions_counts": reactions_counts,
         "my_reactions": my_reactions,
@@ -2367,6 +2374,13 @@ def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
         "body_version": _body_version,
         "version": int(it.get("version", 1)),
         "tip_total_cents": int(it.get("tip_total_cents", 0)),
+        "tip_reactions": [
+            {"tipper_id": _r.get("tipper_id"), "emoji": _r.get("emoji"),
+             "amount_cents": int(_r.get("amount_cents") or 0),
+             "tip_payment_id": _r.get("tip_payment_id"),
+             "created_at": _r.get("created_at")}
+            for _r in (it.get("tip_reactions") or [])
+        ],
         # FEED-004: emoji/GIF/sticker comments (additive — legacy items lack these)
         "kind": it.get("kind", "text"),
         "gif_url": it.get("gif_url"),

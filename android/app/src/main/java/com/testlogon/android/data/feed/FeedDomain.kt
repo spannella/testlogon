@@ -147,6 +147,9 @@ internal fun PostDto.toDomain(): FeedPost {
         likedByMe = likedByMe,
         groupId = groupId?.takeIf { it.isNotBlank() },
         reactions = reactionTallies(reactionsCounts, myReactions),
+        tipReactions = tipReactions.orEmpty().map {
+            TipReactionBadge(it.tipperId, it.emoji?.ifBlank { "\uD83D\uDCB0" } ?: "\uD83D\uDCB0", it.amountCents)
+        },
         paywall = paywall,
         // Polls are content, not protected media: only surface when the post is not locked.
         poll = if (locked) null else toPoll(),

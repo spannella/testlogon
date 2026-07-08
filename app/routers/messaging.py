@@ -2508,6 +2508,7 @@ class MessageOut(BaseModel):
     tip_amount_cents: Optional[int] = None
     tip_currency: Optional[str] = None
     tip_payment_id: Optional[str] = None
+    tip_reactions: list = []  # TIP-B2: money-reaction badges (author-side chip hydration)
 
     # Expiry
     expires_at: Optional[int] = None      # absolute Unix timestamp when it expires
@@ -4252,6 +4253,13 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         tip_amount_cents=int(merged_item["tip_amount_cents"]) if merged_item.get("tip_amount_cents") else None,
         tip_currency=merged_item.get("tip_currency"),
         tip_payment_id=merged_item.get("tip_payment_id"),
+        tip_reactions=[
+            {"tipper_id": _r.get("tipper_id"), "emoji": _r.get("emoji"),
+             "amount_cents": int(_r.get("amount_cents") or 0),
+             "tip_payment_id": _r.get("tip_payment_id"),
+             "created_at": int(_r["created_at"]) if _r.get("created_at") is not None else None}
+            for _r in (merged_item.get("tip_reactions") or [])
+        ],
         expires_at=int(merged_item["expires_at"]) if merged_item.get("expires_at") else None,
         view_once=bool(merged_item.get("view_once")),
         expired=expired,
