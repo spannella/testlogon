@@ -223,6 +223,15 @@ def list_group_feed(
         last = index_records[-1]
         next_cursor = encode_cursor({"pk": last["pk"], "sk": last["sk"]})
 
+    if viewer_id:
+        try:
+            from app.services.sponsored_feed import inject_sponsored
+            sorted_posts = inject_sponsored(
+                sorted_posts, viewer_id, surface="group_feed",
+                content_prefix="group_%s" % group_id,
+            )
+        except Exception:
+            pass
     return {
         "posts": sorted_posts,
         "cursor": next_cursor,

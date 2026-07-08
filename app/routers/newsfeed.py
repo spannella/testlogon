@@ -4756,6 +4756,8 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("is_sponsored"):
+        raise HTTPException(status_code=400, detail={"code": "tip_not_allowed_on_ad", "message": "Tipping is not available on sponsored posts."})
     if post.get("user_id") == user_id:
         raise HTTPException(status_code=400, detail="Cannot tip your own post")
 
@@ -4972,6 +4974,8 @@ def tip_react_to_post(post_id: str, req: PostTipReactRequest, user_id: UserIdDep
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("is_sponsored"):
+        raise HTTPException(status_code=400, detail={"code": "tip_not_allowed_on_ad", "message": "Tipping is not available on sponsored posts."})
     author = post.get("user_id")
     if not author:
         raise HTTPException(status_code=400, detail="Post has no author to tip")

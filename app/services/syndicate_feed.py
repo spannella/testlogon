@@ -212,6 +212,14 @@ def list_syndicate_posts(
             extra={"syndicate_id": syndicate_id, "viewer_id": viewer_sub, "filtered_count": filtered_count},
         )
 
+    if viewer_sub:
+        try:
+            from app.services.sponsored_feed import inject_sponsored_syndicate
+            posts = inject_sponsored_syndicate(
+                posts, viewer_sub, syndicate_id=syndicate_id
+            )
+        except Exception:
+            pass
     return {
         "posts": posts,
         "next_cursor": next_cursor,

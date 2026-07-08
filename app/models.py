@@ -12115,6 +12115,22 @@ class SyndicatePostOut(BaseModel):
     comment_count: int = 0
     reaction_counts: Dict[str, int] = Field(default_factory=dict)
     tip_total_cents: int = 0
+    # ADV syndicate-feed ads: optional sponsored-unit fields so an injected
+    # standalone sponsored unit serializes through this response model.
+    is_sponsored: bool = False
+    sponsor_label: str = ""
+    headline: Optional[str] = None
+    body: str = ""
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    image_urls: List[str] = Field(default_factory=list)
+    impression_url: Optional[str] = None
+    click_url: Optional[str] = None
+    creative_id: str = ""
+    campaign_id: str = ""
+    account_id: str = ""
+    ad_click_id: str = ""
+    content_owner_id: str = ""
 
 
 class SyndicateFeedOut(BaseModel):

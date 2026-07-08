@@ -80,6 +80,7 @@ def serve_broadcast_ad(
             content_id=content_id,
             slot_type=slot_type,
             user_id=user_id,
+            content_owner_id=creator_id,
         )
         if result.get("filled"):
             return result
@@ -127,7 +128,7 @@ def build_pre_roll(session, viewer_id: str) -> Dict[str, Any]:
         return {"pre_roll": None, "ad_free": True}
 
     ad = serve_broadcast_ad(
-        surface="broadcast",
+        surface="broadcast_preroll",
         creator_id=session.created_by,
         content_id=session.id,
         slot_type="broadcast_preroll",
@@ -145,6 +146,7 @@ def build_pre_roll(session, viewer_id: str) -> Dict[str, Any]:
         "image_url": ad.get("image_url"),
         "cta_url": ad.get("cta_url"),
         "skip_after_seconds": PRE_ROLL_SKIP_AFTER_SECONDS,
+        "ad_click_id": ad.get("ad_click_id", ""),
         "impression_url": ad["impression_url"],
         "click_url": ad["click_url"],
         "skip_url": ad["skip_url"],
@@ -213,6 +215,61 @@ async def schedule_ad_break_end(session_id: str, duration: int) -> None:
 _VALID_EVENTS = {"impression", "skip", "complete", "click"}
 
 
+def _charge_broadcast_preroll_completion(*, ad_click_id, session_id):
+    # Charge advertiser for a completed broadcast pre-roll + credit the
+    # BROADCASTER 70/30 via ad_billing._process_charge. Reads the AdClicks row
+    # minted at serve time (content_owner_sub=broadcaster). Funds-guarded +
+    # idempotent per ad_click_id. Returns the charge result or None.
+    if not ad_click_id:
+        return None
+    try:
+        row = T.ad_clicks.get_item(Key={"ad_click_id": ad_click_id}).get("Item")
+    except Exception:
+        return None
+    if not row:
+        return None
+    account_id = row.get("account_id", "")
+    campaign_id = row.get("campaign_id", "")
+    if not account_id or not campaign_id:
+        return None
+    creative_id = row.get("creative_id", "")
+    content_owner = row.get("content_owner_sub", "")
+    charge_cents = int(row.get("effective_price_cents", 0) or 0)
+    if charge_cents <= 0:
+        charge_cents = int(getattr(S, "vod_ad_cpm_cents", 500) or 500)
+    from app.services.ad_billing import _process_charge
+    result = _process_charge(
+        account_id=account_id,
+        campaign_id=campaign_id,
+        entry_type="impression_charge",
+        charge_cents=charge_cents,
+        creator_id=content_owner,
+        reason="Broadcast pre-roll impression",
+        meta={
+            "creative_id": creative_id,
+            "content_id": session_id,
+            "model": "cpm",
+            "surface": "broadcast_preroll",
+            "ad_click_id": ad_click_id,
+        },
+        idempotency_key="broadcast_preroll:%s" % ad_click_id,
+    )
+    try:
+        T.ad_clicks.update_item(
+            Key={"ad_click_id": ad_click_id},
+            UpdateExpression="SET #s = :s, charged_cents = :c, completed_at = :t",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":s": "completed",
+                ":c": int(result.get("charge_cents", 0)) if result.get("ok") else 0,
+                ":t": now_ts(),
+            },
+        )
+    except Exception:
+        pass
+    return result
+
+
 def record_ad_event(
     *,
     session_id: str,
@@ -225,6 +282,7 @@ def record_ad_event(
     campaign_id: str = "",
     creator_id: str = "",
     bid_cpm_cents: int = 0,
+    ad_click_id: str = "",
     # Fraud context.
     ip_address: str = "",
     user_agent: str = "",
@@ -278,28 +336,24 @@ def record_ad_event(
         except Exception:  # pragma: no cover - fraud check must never block playback
             pass
 
-    # ── Billing (impression charges, gated by flag, never for fraud) ───
+    # Billing (broadcast pre-roll charge, gated by flag, never for fraud).
+    # GAP-0071/0072: charge the ADVERTISER + credit the BROADCASTER 70/30 from
+    # the authoritative AdClicks row (surface=broadcast_preroll,
+    # content_owner_sub=broadcaster). Funds-guarded + idempotent per
+    # ad_click_id so impression AND complete never double-charge.
     charge_id = None
     if (
         S.broadcast_ads_billing_enabled
         and not fraud_flagged
-        and event_type == "impression"
-        and account_id
-        and campaign_id
-        and bid_cpm_cents > 0
+        and event_type in ("impression", "complete")
+        and ad_click_id
     ):
         try:
-            from app.services.ad_billing import charge_impression
-
-            charge_result = charge_impression(
-                account_id=account_id,
-                campaign_id=campaign_id,
-                creative_id=creative_id,
-                creator_id=creator_id,
-                content_id=session_id,
-                bid_cpm_cents=bid_cpm_cents,
+            _res = _charge_broadcast_preroll_completion(
+                ad_click_id=ad_click_id, session_id=session_id
             )
-            charge_id = charge_result.get("entry_id")
+            if _res and _res.get("ok"):
+                charge_id = _res.get("entry_id")
         except Exception:  # pragma: no cover - billing must never break playback
             pass
 

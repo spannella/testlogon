@@ -73,6 +73,7 @@ class PreRollOut(BaseModel):
     image_url: Optional[str] = None
     cta_url: Optional[str] = None
     skip_after_seconds: int = 5
+    ad_click_id: str = ""
     impression_url: str
     click_url: str
     skip_url: str
@@ -260,6 +261,7 @@ def track_ad_event_route(
     campaign_id: str = Query(default=""),
     creator_id: str = Query(default=""),
     bid_cpm_cents: int = Query(default=0),
+    ad_click_id: str = Query(default=""),
     view_time_ms: int = Query(default=0),
     ctx: dict = Depends(_ctx),
 ):
@@ -279,6 +281,7 @@ def track_ad_event_route(
         campaign_id=campaign_id,
         creator_id=creator_id,
         bid_cpm_cents=bid_cpm_cents,
+        ad_click_id=ad_click_id,
         view_time_ms=view_time_ms,
         ip_address=request.client.host if request.client else "",
         user_agent=request.headers.get("user-agent", ""),
