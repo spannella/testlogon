@@ -154,6 +154,65 @@ def build_pre_roll(session, viewer_id: str) -> Dict[str, Any]:
     return {"pre_roll": pre_roll, "ad_free": False}
 
 
+def _break_remaining_seconds(session) -> int:
+    """Seconds left in the active ad break (0 when not active)."""
+    if not session.ad_break_active or not session.ad_break_started_at:
+        return 0
+    duration = int(session.mid_roll_ad_break_duration_seconds)
+    elapsed = now_ts() - int(session.ad_break_started_at)
+    return max(0, duration - elapsed)
+
+
+def build_mid_roll(session, viewer_id: str) -> Dict[str, Any]:
+    """Per-viewer mid-roll payload during an active ad break (ADV2-101).
+
+    Mirrors ``build_pre_roll`` but surface/slot ``broadcast_midroll``. Returns
+    ``{"mid_roll": <obj|None>, "ad_free": bool, "remaining_seconds": int}``. An
+    ad NEVER blocks the live stream: disabled / no-fill / ad-free all return
+    ``mid_roll=None`` so the viewer keeps watching live.
+    """
+    remaining = _break_remaining_seconds(session)
+
+    # Global platform kill-switch for mid-roll.
+    if not S.broadcast_midroll_enabled:
+        return {"mid_roll": None, "ad_free": True, "remaining_seconds": remaining}
+
+    # Only serve while a break is actually active.
+    if not session.ad_break_active:
+        return {"mid_roll": None, "ad_free": False, "remaining_seconds": 0}
+
+    # Ad-free subscribers (and the broadcaster themself) are never interrupted.
+    if is_ad_free(viewer_id, session.created_by):
+        return {"mid_roll": None, "ad_free": True, "remaining_seconds": remaining}
+
+    ad = serve_broadcast_ad(
+        surface="broadcast_midroll",
+        creator_id=session.created_by,
+        content_id=session.id,
+        slot_type="broadcast_midroll",
+        user_id=viewer_id,
+    )
+    if not ad.get("filled"):
+        # No-fill -> stay live (ad_free stays False; an ad could have shown).
+        return {"mid_roll": None, "ad_free": False, "remaining_seconds": remaining}
+
+    mid_roll = {
+        "creative_id": ad["creative_id"],
+        "format": ad["format"],
+        "video_url": ad.get("video_url"),
+        "image_url": ad.get("image_url"),
+        "cta_url": ad.get("cta_url"),
+        "skip_after_seconds": int(session.mid_roll_skip_after_seconds),
+        "ad_click_id": ad.get("ad_click_id", ""),
+        "impression_url": ad["impression_url"],
+        "click_url": ad["click_url"],
+        "skip_url": ad["skip_url"],
+        "remaining_seconds": remaining,
+    }
+    return {"mid_roll": mid_roll, "ad_free": False, "remaining_seconds": remaining}
+
+
+
 # ─── Ad-break state ─────────────────────────────────────────────────
 
 
@@ -173,6 +232,7 @@ def start_ad_break(session) -> Dict[str, Any]:
             "ad_break_active": True,
             "ad_break_started_at": ts,
             "total_ad_breaks": int(session.total_ad_breaks) + 1,
+            "last_ad_break_at": ts,
         },
     )
 
@@ -215,7 +275,7 @@ async def schedule_ad_break_end(session_id: str, duration: int) -> None:
 _VALID_EVENTS = {"impression", "skip", "complete", "click"}
 
 
-def _charge_broadcast_preroll_completion(*, ad_click_id, session_id):
+def _charge_broadcast_completion(*, ad_click_id, session_id, surface="broadcast_preroll"):
     # Charge advertiser for a completed broadcast pre-roll + credit the
     # BROADCASTER 70/30 via ad_billing._process_charge. Reads the AdClicks row
     # minted at serve time (content_owner_sub=broadcaster). Funds-guarded +
@@ -234,6 +294,10 @@ def _charge_broadcast_preroll_completion(*, ad_click_id, session_id):
         return None
     creative_id = row.get("creative_id", "")
     content_owner = row.get("content_owner_sub", "")
+    # ADV2-102: authoritative surface = the one minted at serve time (falls
+    # back to the caller hint) so pre-roll and mid-roll bill under distinct
+    # idempotency namespaces (broadcast_preroll:{id} vs broadcast_midroll:{id}).
+    surface = str(row.get("surface", "") or "") or surface
     charge_cents = int(row.get("effective_price_cents", 0) or 0)
     if charge_cents <= 0:
         charge_cents = int(getattr(S, "vod_ad_cpm_cents", 500) or 500)
@@ -244,15 +308,16 @@ def _charge_broadcast_preroll_completion(*, ad_click_id, session_id):
         entry_type="impression_charge",
         charge_cents=charge_cents,
         creator_id=content_owner,
-        reason="Broadcast pre-roll impression",
+        reason="Broadcast %s impression"
+        % ("mid-roll" if surface == "broadcast_midroll" else "pre-roll"),
         meta={
             "creative_id": creative_id,
             "content_id": session_id,
             "model": "cpm",
-            "surface": "broadcast_preroll",
+            "surface": surface,
             "ad_click_id": ad_click_id,
         },
-        idempotency_key="broadcast_preroll:%s" % ad_click_id,
+        idempotency_key="%s:%s" % (surface, ad_click_id),
     )
     try:
         T.ad_clicks.update_item(
@@ -268,6 +333,11 @@ def _charge_broadcast_preroll_completion(*, ad_click_id, session_id):
     except Exception:
         pass
     return result
+
+
+# Backward-compatible alias: the row's own surface is authoritative, so this
+# name keeps charging correctly for both pre-roll and mid-roll click rows.
+_charge_broadcast_preroll_completion = _charge_broadcast_completion
 
 
 def record_ad_event(
@@ -349,8 +419,14 @@ def record_ad_event(
         and ad_click_id
     ):
         try:
-            _res = _charge_broadcast_preroll_completion(
-                ad_click_id=ad_click_id, session_id=session_id
+            _res = _charge_broadcast_completion(
+                ad_click_id=ad_click_id,
+                session_id=session_id,
+                surface=(
+                    "broadcast_midroll"
+                    if slot_type in ("broadcast_midroll", "mid_roll")
+                    else "broadcast_preroll"
+                ),
             )
             if _res and _res.get("ok"):
                 charge_id = _res.get("entry_id")

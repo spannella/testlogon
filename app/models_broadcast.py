@@ -103,6 +103,7 @@ class BroadcastSessionModel(BaseModel):
     ad_break_active: bool = False
     ad_break_started_at: Optional[int] = None
     total_ad_breaks: int = 0
+    last_ad_break_at: Optional[int] = None  # ADV2-104 min-interval guardrail
 
 
 class BroadcastOutputModel(BaseModel):

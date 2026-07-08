@@ -564,6 +564,9 @@ class Settings:
     # split for broadcast ad events. Default off (money-moving code; keeps dev/test
     # deterministic). Enable explicitly in production after smoke testing.
     broadcast_ads_billing_enabled: bool = os.environ.get("BROADCAST_ADS_BILLING_ENABLED", "1") not in ("0", "false", "False")
+    # ADV2-104: mid-roll ad-break anti-abuse guardrails (config-driven).
+    broadcast_midroll_min_interval_seconds: int = int(os.environ.get("BROADCAST_MIDROLL_MIN_INTERVAL_SECONDS", "300"))
+    broadcast_midroll_max_breaks_per_session: int = int(os.environ.get("BROADCAST_MIDROLL_MAX_BREAKS", "4"))
     # Broadcast Q&A (ENGAGE-003)
     broadcast_qa_enabled: bool = os.environ.get("BROADCAST_QA_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     broadcast_qa_questions_table_name: str = os.environ.get("DDB_BROADCAST_QA_QUESTIONS", "broadcast_qa_questions")

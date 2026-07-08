@@ -168,6 +168,7 @@ def session_to_item(session: BroadcastSessionModel) -> Dict[str, Any]:
         "ad_break_active": session.ad_break_active,
         "ad_break_started_at": session.ad_break_started_at,
         "total_ad_breaks": session.total_ad_breaks,
+        "last_ad_break_at": session.last_ad_break_at,
     }
     # Remove None values to avoid DynamoDB issues with GSI sort keys
     return {k: v for k, v in item.items() if v is not None}
@@ -232,6 +233,7 @@ def session_from_item(item: Dict[str, Any]) -> BroadcastSessionModel:
         ad_break_active=bool(item.get("ad_break_active", False)),
         ad_break_started_at=int(item["ad_break_started_at"]) if item.get("ad_break_started_at") is not None else None,
         total_ad_breaks=int(item.get("total_ad_breaks", 0) or 0),
+        last_ad_break_at=int(item["last_ad_break_at"]) if item.get("last_ad_break_at") is not None else None,
     )
 
 

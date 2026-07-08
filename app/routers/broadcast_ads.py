@@ -25,6 +25,8 @@ from app.services.broadcast_store import get_session, update_session_fields
 from app.services.broadcast_ads import (
     ALLOWED_MIDROLL_DURATIONS,
     build_pre_roll,
+    build_mid_roll,
+    _break_remaining_seconds,
     end_ad_break,
     record_ad_event,
     schedule_ad_break_end,
@@ -64,6 +66,7 @@ class BroadcastAdConfigOut(BaseModel):
     ad_break_active: bool
     ad_break_started_at: Optional[int] = None
     total_ad_breaks: int
+    remaining_seconds: int = 0
 
 
 class PreRollOut(BaseModel):
@@ -77,6 +80,36 @@ class PreRollOut(BaseModel):
     impression_url: str
     click_url: str
     skip_url: str
+
+
+class MidRollOut(BaseModel):
+    creative_id: str
+    format: str
+    video_url: Optional[str] = None
+    image_url: Optional[str] = None
+    cta_url: Optional[str] = None
+    skip_after_seconds: int = 15
+    ad_click_id: str = ""
+    impression_url: str
+    click_url: str
+    skip_url: str
+    remaining_seconds: int = 0
+
+
+class MidRollServeOut(BaseModel):
+    session_id: str
+    mid_roll: Optional[MidRollOut] = None
+    ad_free: bool = False
+    remaining_seconds: int = 0
+
+
+class AdBreakStateOut(BaseModel):
+    session_id: str
+    ad_break_active: bool = False
+    ad_break_started_at: Optional[int] = None
+    remaining_seconds: int = 0
+    total_ad_breaks: int = 0
+    skip_after_seconds: int = 15
 
 
 class BroadcastJoinOut(BaseModel):
@@ -110,6 +143,7 @@ def _config_out(session) -> BroadcastAdConfigOut:
         ad_break_active=session.ad_break_active,
         ad_break_started_at=session.ad_break_started_at,
         total_ad_breaks=session.total_ad_breaks,
+        remaining_seconds=_break_remaining_seconds(session),
     )
 
 
@@ -217,6 +251,33 @@ async def trigger_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
             detail={"code": "AD_BREAK_ACTIVE", "detail": "Ad break already active"},
         )
 
+    # ADV2-104: anti-abuse guardrails (config-driven).
+    max_breaks = int(getattr(S, "broadcast_midroll_max_breaks_per_session", 4) or 4)
+    if int(session.total_ad_breaks) >= max_breaks:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "MAX_BREAKS_REACHED",
+                "detail": "Maximum ad breaks for this session reached",
+                "max_breaks": max_breaks,
+            },
+        )
+    min_interval = int(getattr(S, "broadcast_midroll_min_interval_seconds", 300) or 300)
+    last_at = getattr(session, "last_ad_break_at", None)
+    if last_at:
+        from app.core.time import now_ts as _now_ts
+
+        elapsed = _now_ts() - int(last_at)
+        if elapsed < min_interval:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "AD_BREAK_TOO_SOON",
+                    "detail": "Too soon since the last ad break",
+                    "retry_after_seconds": max(0, min_interval - elapsed),
+                },
+            )
+
     payload = start_ad_break(session)
 
     # Schedule auto-end after the configured duration.
@@ -245,6 +306,41 @@ def end_ad_break_route(session_id: str, ctx: dict = Depends(_ctx)):
         )
     end_ad_break(session_id, ended_by="manual")
     return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/ad-break/serve", response_model=MidRollServeOut)
+def serve_mid_roll_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """Per-viewer mid-roll serve during an active ad break (ADV2-101).
+
+    Mints an ad_click_id + returns a creative when the viewer is billable and
+    a break is active; returns mid_roll=None (stay-live) otherwise. An ad never
+    blocks the broadcast.
+    """
+    session = get_session(session_id)
+    result = build_mid_roll(session, ctx["user_sub"])
+    mid = result["mid_roll"]
+    return MidRollServeOut(
+        session_id=session.id,
+        mid_roll=MidRollOut(**mid) if mid else None,
+        ad_free=result["ad_free"],
+        remaining_seconds=result["remaining_seconds"],
+    )
+
+
+@router.get("/sessions/{session_id}/ad-break/state", response_model=AdBreakStateOut)
+def ad_break_state_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """Light poll-detectable ad-break state (ADV2-103)."""
+    _ = ctx
+    session = get_session(session_id)
+    return AdBreakStateOut(
+        session_id=session.id,
+        ad_break_active=session.ad_break_active,
+        ad_break_started_at=session.ad_break_started_at,
+        remaining_seconds=_break_remaining_seconds(session),
+        total_ad_breaks=session.total_ad_breaks,
+        skip_after_seconds=session.mid_roll_skip_after_seconds,
+    )
+
 
 
 # ─── Ad event tracking ───────────────────────────────────────────────
