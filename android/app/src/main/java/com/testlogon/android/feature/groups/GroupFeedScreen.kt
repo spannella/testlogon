@@ -56,6 +56,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.feature.feed.SponsoredFeedCard
 import com.testlogon.android.feature.feed.TipEffect
 import com.testlogon.android.feature.feed.TipSheet
 import com.testlogon.android.feature.feed.TipViewModel
@@ -119,6 +120,8 @@ fun GroupFeedRoute(
         onAttachImage = viewModel::attachImage,
         onRemoveImage = viewModel::removeImage,
         onSubmit = viewModel::submit,
+        onSponsoredImpression = viewModel::onSponsoredImpression,
+        onSponsoredClick = viewModel::onSponsoredClick,
     )
 }
 
@@ -136,6 +139,8 @@ fun GroupFeedScreen(
     onAttachImage: (android.net.Uri) -> Unit,
     onRemoveImage: (String) -> Unit,
     onSubmit: () -> Unit,
+    onSponsoredImpression: (GroupFeedPost) -> Unit = {},
+    onSponsoredClick: (GroupFeedPost) -> Unit = {},
     modifier: Modifier = Modifier,
     tipViewModel: TipViewModel = hiltViewModel(),
 ) {
@@ -234,6 +239,8 @@ fun GroupFeedScreen(
                                 currentUserId = currentUserId,
                                 onOpenComments = { commentsForPost = post.postId },
                                 onTip = { tipViewModel.open(post.postId) },
+                                onSponsoredImpression = onSponsoredImpression,
+                                onSponsoredClick = onSponsoredClick,
                             )
                             HorizontalDivider()
                         }
@@ -350,7 +357,39 @@ private fun GroupPostRow(
     currentUserId: String?,
     onOpenComments: () -> Unit,
     onTip: () -> Unit = {},
+    onSponsoredImpression: (GroupFeedPost) -> Unit = {},
+    onSponsoredClick: (GroupFeedPost) -> Unit = {},
 ) {
+    // ADV group-feed ads — a server-injected sponsored (paid) unit renders as the shared, NON-tippable
+    // Sponsored card (no comment/tip action row); FEATURE 2 (no tip on sponsored) holds here by omission.
+    val ad = post.sponsored
+    if (ad != null) {
+        SponsoredFeedCard(
+            label = ad.label,
+            headline = ad.headline,
+            body = ad.body,
+            ctaText = ad.ctaText,
+            impressionKey = ad.impressionKey,
+            modifier = Modifier.testTag(GroupFeedTestTags.row(post.postId)),
+            onImpression = { onSponsoredImpression(post) },
+            onClick = { onSponsoredClick(post) },
+            media = {
+                if (ad.imageUrls.isNotEmpty()) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(ad.imageUrls.take(8), key = { it }) { url ->
+                            AsyncImage(
+                                model = url,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(120.dp).clip(RoundedCornerShape(8.dp)),
+                            )
+                        }
+                    }
+                }
+            },
+        )
+        return
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()

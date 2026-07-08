@@ -357,11 +357,56 @@ private fun SponsoredPostItem(
     onImpression: (FeedPost) -> Unit,
     onClick: (FeedPost) -> Unit,
 ) {
-    LaunchedEffect(info.adClickId ?: info.creativeId) { onImpression(post) }
+    SponsoredFeedCard(
+        label = info.label,
+        headline = info.headline,
+        body = post.body,
+        ctaText = info.ctaText,
+        impressionKey = info.adClickId ?: info.creativeId,
+        modifier = modifier,
+        onImpression = { onImpression(post) },
+        onClick = { onClick(post) },
+        media = {
+            if (post.media.isNotEmpty()) {
+                FeedMediaGrid(
+                    media = post.media,
+                    onItemClick = { onClick(post) },
+                )
+            }
+        },
+    )
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+}
+
+/**
+ * ADV — the SHARED, reusable Sponsored (paid) card, rendered identically across the newsfeed, the group
+ * feed and the syndicate feed. It is a DISTINCT card (a "Sponsored" disclosure pill + advertiser label +
+ * optional headline + ad body + a [media] slot + a primary CTA) and DELIBERATELY has NO like/comment/TIP
+ * action bar — an ad is never tippable (FEATURE 2: "no tip on sponsored posts"), on ANY feed. The
+ * trailing divider is the caller's concern (feeds differ), so this composable renders only the card.
+ *
+ * Tracking: an impression fires ONCE when the card first enters composition (a LazyColumn only composes
+ * rows at/near the viewport, so first composition ≈ "became visible"); de-dup across scroll-away/return is
+ * the ViewModel's job, keyed on [impressionKey] (the per-serve ad_click_id). A click fires on the CTA and
+ * on tapping the card/media.
+ */
+@Composable
+fun SponsoredFeedCard(
+    label: String,
+    headline: String?,
+    body: String?,
+    ctaText: String?,
+    impressionKey: String,
+    modifier: Modifier = Modifier,
+    onImpression: () -> Unit = {},
+    onClick: () -> Unit = {},
+    media: @Composable () -> Unit = {},
+) {
+    LaunchedEffect(impressionKey) { onImpression() }
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clickable { onClick(post) }
+            .clickable { onClick() }
             .testTag(SponsoredItemTestTags.ITEM),
     ) {
         Column(
@@ -387,39 +432,33 @@ private fun SponsoredPostItem(
             }
             // Advertiser / sponsor label.
             Text(
-                text = info.label,
+                text = label,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            info.headline?.let { headline ->
+            headline?.takeIf { it.isNotBlank() }?.let { h ->
                 Text(
-                    text = headline,
+                    text = h,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            post.body?.takeIf { it.isNotBlank() }?.let { body ->
+            body?.takeIf { it.isNotBlank() }?.let { b ->
                 Text(
-                    text = body,
+                    text = b,
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            if (post.media.isNotEmpty()) {
-                FeedMediaGrid(
-                    media = post.media,
-                    onItemClick = { onClick(post) },
-                )
-            }
+            media()
             Button(
-                onClick = { onClick(post) },
+                onClick = { onClick() },
                 modifier = Modifier.testTag(SponsoredItemTestTags.CTA),
             ) {
-                Text(info.ctaText ?: "Learn more")
+                Text(ctaText?.takeIf { it.isNotBlank() } ?: "Learn more")
             }
         }
     }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }

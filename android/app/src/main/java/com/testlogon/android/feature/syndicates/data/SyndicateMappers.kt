@@ -68,18 +68,46 @@ fun SyndicateProfileOut.toDomain(currentUserId: String?): SyndicateOverview = Sy
 )
 
 /** Maps a feed-post DTO to the domain [SyndicateFeedItem]; created_at stays a Long epoch. */
-fun SyndicatePostOut.toDomain(): SyndicateFeedItem = SyndicateFeedItem(
-    postId = postId,
-    authorName = authorName,
-    authorAvatarUrl = authorAvatarUrl,
-    createdAt = createdAt,
-    text = text,
-    imageUrl = imageUrl,
-    reactionCount = reactionCount,
-    commentCount = commentCount,
-    tipCount = tipCount,
-    poll = poll?.toDomain(),
-)
+fun SyndicatePostOut.toDomain(): SyndicateFeedItem {
+    val images = imageUrls ?: (imageUrl?.let { listOf(it) } ?: emptyList())
+    // ADV syndicate-feed ads — a server-injected sponsored (paid) unit renders as a distinct, non-tippable
+    // Sponsored card. Requires a creative id (a sponsored row without one can't render/track -> degrade).
+    val sponsoredAd = if (isSponsored) {
+        creativeId?.takeIf { it.isNotBlank() }?.let { creative ->
+            com.testlogon.android.core.model.ads.SponsoredAd(
+                label = sponsorLabel?.takeIf { it.isNotBlank() } ?: authorName?.takeIf { it.isNotBlank() } ?: "Sponsored",
+                headline = headline?.takeIf { it.isNotBlank() },
+                body = (body ?: text)?.takeIf { it.isNotBlank() },
+                ctaText = ctaText?.takeIf { it.isNotBlank() },
+                ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
+                imageUrls = images,
+                adClickId = adClickId?.takeIf { it.isNotBlank() },
+                creativeId = creative,
+                campaignId = campaignId?.takeIf { it.isNotBlank() } ?: "",
+                accountId = accountId?.takeIf { it.isNotBlank() } ?: "",
+                surface = "syndicate_feed",
+                slotType = "sponsored_post",
+                creatorId = contentOwnerId?.takeIf { it.isNotBlank() } ?: "platform",
+                contentId = postId,
+            )
+        }
+    } else {
+        null
+    }
+    return SyndicateFeedItem(
+        postId = postId,
+        authorName = authorName,
+        authorAvatarUrl = authorAvatarUrl,
+        createdAt = createdAt,
+        text = text,
+        imageUrl = imageUrl,
+        reactionCount = reactionCount,
+        commentCount = commentCount,
+        tipCount = tipCount,
+        poll = poll?.toDomain(),
+        sponsored = sponsoredAd,
+    )
+}
 
 /** Maps the treasury DTO's summary fields to the domain [TreasurySummary] (currency upper-cased). */
 fun SyndicateTreasuryOut.toSummary(): TreasurySummary = TreasurySummary(

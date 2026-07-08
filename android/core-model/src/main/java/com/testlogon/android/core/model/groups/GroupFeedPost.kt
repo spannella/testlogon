@@ -25,4 +25,10 @@ data class GroupFeedPost(
     val commentCount: Int = 0,
     val createdAt: Long = 0,
     val poll: com.testlogon.android.core.model.poll.ArbitraryPoll? = null,
+    /**
+     * ADV group-feed ads — non-null when this row is a server-injected SPONSORED (paid) unit. When set,
+     * the UI renders the distinct (non-tippable) Sponsored card instead of a normal author post.
+     */
+    val sponsored: com.testlogon.android.core.model.ads.SponsoredAd? = null,
 )
+

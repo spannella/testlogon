@@ -36,7 +36,9 @@ data class GroupPostCreateIn(
  */
 data class GroupFeedPostDto(
     @Json(name = "post_id") val postId: String,
-    @Json(name = "user_id") val userId: String,
+    // NOTE: defaulted to "" (was required) so a server-injected SPONSORED unit — which carries author_id
+    // (blank) instead of user_id — still deserializes cleanly (ADV group-feed ads).
+    @Json(name = "user_id") val userId: String = "",
     @Json(name = "user_display_name") val userDisplayName: String? = null,
     @Json(name = "user_avatar_url") val userAvatarUrl: String? = null,
     @Json(name = "text") val text: String? = null,
@@ -53,6 +55,19 @@ data class GroupFeedPostDto(
     @Json(name = "comment_count") val commentCount: Int? = 0,
     @Json(name = "created_at") val createdAt: Long? = 0,
     @Json(name = "poll") val poll: PollSnapshotDto? = null,
+    // --- ADV group-feed ads: a server-injected sponsored (paid) unit (sponsored_feed.build_sponsored_unit).
+    // Standalone (no content owner) -> platform-100% money-path. All defaulted so organic posts map cleanly.
+    @Json(name = "is_sponsored") val isSponsored: Boolean = false,
+    @Json(name = "sponsor_label") val sponsorLabel: String? = null,
+    @Json(name = "headline") val headline: String? = null,
+    @Json(name = "body") val body: String? = null,
+    @Json(name = "cta_text") val ctaText: String? = null,
+    @Json(name = "cta_url") val ctaUrl: String? = null,
+    @Json(name = "creative_id") val creativeId: String? = null,
+    @Json(name = "campaign_id") val campaignId: String? = null,
+    @Json(name = "account_id") val accountId: String? = null,
+    @Json(name = "ad_click_id") val adClickId: String? = null,
+    @Json(name = "content_owner_id") val contentOwnerId: String? = null,
 )
 
 /** The feed page envelope { posts, cursor, has_more }. A null/blank cursor terminates pagination. */

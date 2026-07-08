@@ -14,6 +14,8 @@ import com.testlogon.android.data.broadcast.BroadcastScheduledPage
 import com.testlogon.android.data.broadcast.BroadcastSession
 import com.testlogon.android.data.broadcast.BroadcastSessionPage
 import com.testlogon.android.data.broadcast.BroadcastSessionStatus
+import com.testlogon.android.data.broadcast.BroadcastAdJoin
+import com.testlogon.android.data.broadcast.BroadcastViewerAdRepository
 import com.testlogon.android.data.broadcast.BroadcastViewerCountApi
 import com.testlogon.android.data.broadcast.BroadcastViewerCountRepository
 import com.testlogon.android.data.broadcast.ViewerCountDto
@@ -44,6 +46,20 @@ class ViewerViewModelTest {
     private val noopReporter = object : PlaybackReporter {
         override fun attach(player: androidx.media3.common.Player, target: PlaybackTarget, owner: LifecycleOwner) = Unit
         override fun detach() = Unit
+    }
+
+    // ADV FEATURE 1 — no-pre-roll / ad-free ad repo so these baseline tests reach Ready unchanged (the
+    // pre-roll gate is a no-op when ad-join returns no creative).
+    private val noAdRepo = object : BroadcastViewerAdRepository {
+        override suspend fun adJoin(sessionId: String): ApiResult<BroadcastAdJoin> =
+            ApiResult.Success(BroadcastAdJoin(sessionId = sessionId, streamUrl = null, preRoll = null, adFree = false))
+        override suspend fun track(
+            sessionId: String,
+            creativeId: String,
+            event: String,
+            adClickId: String,
+            viewTimeMs: Int,
+        ): ApiResult<Unit> = ApiResult.Success(Unit)
     }
 
     private fun session(status: BroadcastSessionStatus) = BroadcastSession(
@@ -135,6 +151,7 @@ class ViewerViewModelTest {
         return ViewerViewModel(
             savedStateHandle = SavedStateHandle(mapOf(ViewerViewModel.ARG_SESSION_ID to "s1")),
             repo = repo,
+            adRepo = noAdRepo,
             playerFactory = factory,
             reporter = noopReporter,
             presence = presence,

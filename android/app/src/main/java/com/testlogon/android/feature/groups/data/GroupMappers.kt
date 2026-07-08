@@ -56,6 +56,31 @@ fun GroupMemberDto.toDomain(): GroupMember = GroupMember(
 fun GroupFeedPostDto.toDomain(): GroupFeedPost {
     val price = unlockPriceCents
     val isUnlocked = unlocked ?: true
+    val images = imageUrls ?: (imageUrl?.let { listOf(it) } ?: emptyList())
+    // ADV group-feed ads — a server-injected sponsored (paid) unit renders as a distinct, non-tippable
+    // Sponsored card. Requires a creative id (a sponsored row without one can't render/track -> degrade).
+    val sponsoredAd = if (isSponsored) {
+        creativeId?.takeIf { it.isNotBlank() }?.let { creative ->
+            com.testlogon.android.core.model.ads.SponsoredAd(
+                label = sponsorLabel?.takeIf { it.isNotBlank() } ?: "Sponsored",
+                headline = headline?.takeIf { it.isNotBlank() },
+                body = (body ?: text)?.takeIf { it.isNotBlank() },
+                ctaText = ctaText?.takeIf { it.isNotBlank() },
+                ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
+                imageUrls = images,
+                adClickId = adClickId?.takeIf { it.isNotBlank() },
+                creativeId = creative,
+                campaignId = campaignId?.takeIf { it.isNotBlank() } ?: "",
+                accountId = accountId?.takeIf { it.isNotBlank() } ?: "",
+                surface = "group_feed",
+                slotType = "sponsored_post",
+                creatorId = contentOwnerId?.takeIf { it.isNotBlank() } ?: "platform",
+                contentId = postId,
+            )
+        }
+    } else {
+        null
+    }
     return GroupFeedPost(
         postId = postId,
         authorId = userId,
@@ -63,7 +88,7 @@ fun GroupFeedPostDto.toDomain(): GroupFeedPost {
         authorAvatarUrl = userAvatarUrl,
         text = text,
         imageUrl = imageUrl,
-        imageUrls = imageUrls ?: (imageUrl?.let { listOf(it) } ?: emptyList()),
+        imageUrls = images,
         videoId = videoId,
         pinned = pinned ?: false,
         locked = price != null && price > 0 && !isUnlocked,
@@ -72,6 +97,7 @@ fun GroupFeedPostDto.toDomain(): GroupFeedPost {
         commentCount = commentCount ?: 0,
         createdAt = createdAt ?: 0,
         poll = poll?.toDomain(),
+        sponsored = sponsoredAd,
     )
 }
 

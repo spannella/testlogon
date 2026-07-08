@@ -8,6 +8,10 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.groups.GroupFeedPost
+import com.testlogon.android.data.ads.AdClickAttributionStore
+import com.testlogon.android.data.ads.AdEvent
+import com.testlogon.android.data.ads.AdTrackRepository
+import com.testlogon.android.data.ads.toSponsoredInfo
 import com.testlogon.android.data.feed.CommentImageUploader
 import com.testlogon.android.feature.groups.data.GroupsRepository
 import com.testlogon.android.data.auth.AuthStateStore
@@ -38,6 +42,8 @@ class GroupFeedViewModel @Inject constructor(
     private val repository: GroupsRepository,
     private val imageUploader: CommentImageUploader,
     private val arbitraryPollRepository: ArbitraryPollRepository,
+    private val adTracker: AdTrackRepository,
+    private val adAttribution: AdClickAttributionStore,
     authStateStore: AuthStateStore,
     savedState: SavedStateHandle,
 ) : ViewModel() {
@@ -109,6 +115,25 @@ class GroupFeedViewModel @Inject constructor(
                     _composeState.update { it.copy(sending = false, error = OFFLINE_FALLBACK) }
             }
         }
+    }
+
+    // ---- ADV group-feed ads: sponsored-unit impression / click tracking (newsfeed parity) ----
+
+    // Fire an impression at most once per served unit (keyed on the per-serve ad_click_id / creative).
+    private val impressedAds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Fire an impression the first time a sponsored group-feed card becomes visible. Best-effort. */
+    fun onSponsoredImpression(post: GroupFeedPost) {
+        val ad = post.sponsored ?: return
+        if (!impressedAds.add(ad.impressionKey)) return
+        viewModelScope.launch { adTracker.track(AdEvent.IMPRESSION, ad.toSponsoredInfo()) }
+    }
+
+    /** Fire a click when the viewer taps a sponsored group-feed card / its CTA. Best-effort. */
+    fun onSponsoredClick(post: GroupFeedPost) {
+        val ad = post.sponsored ?: return
+        adAttribution.record(ad.adClickId)
+        viewModelScope.launch { adTracker.track(AdEvent.CLICK, ad.toSponsoredInfo()) }
     }
 
     companion object {

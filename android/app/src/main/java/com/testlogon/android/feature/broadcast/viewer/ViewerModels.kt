@@ -35,6 +35,22 @@ fun BroadcastSessionStatus.toPlaybackState(): SessionPlaybackState = when (this)
 /** AND-280 — the viewer screen view-state. */
 sealed interface ViewerUiState {
     data object Loading : ViewerUiState
+
+    /**
+     * ADV FEATURE 1 — the mandatory pre-roll AD phase, shown BEFORE the live stream is minted/joined. The
+     * live join is GATED until the pre-roll is completed / skipped. [ad] is the served creative;
+     * [remainingMs]/[skipEnabled]/[skipCountdownMs] drive the reused AdOverlay countdown + skip affordance.
+     */
+    data class PreRoll(
+        val sessionId: String,
+        val title: String,
+        val ad: com.testlogon.android.data.broadcast.BroadcastPreRoll,
+        val durationMs: Long,
+        val remainingMs: Long,
+        val skipEnabled: Boolean,
+        val skipCountdownMs: Long,
+    ) : ViewerUiState
+
     data class Ready(
         val sessionId: String,
         val title: String,

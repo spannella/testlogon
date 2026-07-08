@@ -34,12 +34,21 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
 import com.testlogon.android.feature.broadcast.qna.LiveQaPanel
 import com.testlogon.android.feature.broadcast.shelf.ProductsShelfPanel
 import com.testlogon.android.feature.broadcast.tips.TipsGoalsPanel
 import com.testlogon.android.feature.player.VideoPlayer
+import com.testlogon.android.feature.player.VideoPlayerController
+import com.testlogon.android.feature.player.PlaybackPhase as PlayerPlaybackPhase
+import com.testlogon.android.feature.vod.adsupported.AdOverlay
+import com.testlogon.android.feature.vod.adsupported.AdOverlayTestTags
+import com.testlogon.android.feature.vod.adsupported.AdSupportedUiState
+import com.testlogon.android.feature.vod.adsupported.PlaybackPhase
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.delay
@@ -86,6 +95,16 @@ fun ViewerScreen(
                 when (state) {
                     ViewerUiState.Loading ->
                         LoadingState(message = stringResource(R.string.viewer_loading))
+                    // ADV FEATURE 1 — mandatory pre-roll ad gates the live join.
+                    is ViewerUiState.PreRoll ->
+                        BroadcastPreRollPlayer(
+                            state = state as ViewerUiState.PreRoll,
+                            controller = viewModel.controller,
+                            onAdPosition = viewModel::onPreRollPosition,
+                            onAdCompleted = viewModel::onPreRollCompleted,
+                            onSkipAd = viewModel::onPreRollSkip,
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     is ViewerUiState.Ready ->
                         VideoPlayer(controller = viewModel.controller, modifier = Modifier.fillMaxSize())
                     is ViewerUiState.Unavailable ->
@@ -150,6 +169,95 @@ fun ViewerScreen(
                 )
             }
         }
+    }
+}
+
+/**
+ * ADV FEATURE 1 — the pre-roll ad surface shown BEFORE the live stream joins, reusing the VOD pre-roll
+ * pattern (DetailAdAwarePlayer): the image creative renders via Coil on a wall-clock countdown; a video
+ * creative plays on the SAME reused [VideoPlayerController] and completes on ENDED. The reused [AdOverlay]
+ * draws the "Ad" badge + remaining time + skip-after-N button. The live playback stays GATED (the VM does
+ * not mint the live URL) until [onAdCompleted] / [onSkipAd] fires. There is deliberately NO tip / chat /
+ * shelf during the ad — those compose only in [ViewerUiState.Ready].
+ */
+@Composable
+private fun BroadcastPreRollPlayer(
+    state: ViewerUiState.PreRoll,
+    controller: VideoPlayerController,
+    onAdPosition: (Long) -> Unit,
+    onAdCompleted: () -> Unit,
+    onSkipAd: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val ad = state.ad
+    val isImage = ad.isImage
+
+    // Bind the video creative to the reused controller once; an image creative has no player media.
+    LaunchedEffect(ad.creativeId, isImage) {
+        if (!isImage && ad.videoUrl != null) {
+            controller.setMediaUri(ad.videoUrl, autoPlay = true)
+        } else {
+            controller.pause()
+        }
+    }
+
+    // Drive the countdown. Image → wall clock to durationMs; video → shared controller position + ENDED.
+    LaunchedEffect(ad.creativeId, isImage) {
+        if (isImage) {
+            val startedAt = System.currentTimeMillis()
+            while (true) {
+                val elapsed = System.currentTimeMillis() - startedAt
+                onAdPosition(elapsed)
+                if (elapsed >= state.durationMs) {
+                    onAdCompleted()
+                    break
+                }
+                delay(200L)
+            }
+        } else {
+            while (true) {
+                val ps = controller.state.value
+                onAdPosition(ps.positionMs)
+                if (ps.phase == PlayerPlaybackPhase.ENDED) {
+                    onAdCompleted()
+                    break
+                }
+                delay(200L)
+            }
+        }
+    }
+
+    Box(modifier = modifier) {
+        if (isImage) {
+            AsyncImage(
+                model = ad.imageUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().testTag("broadcast_preroll_image"),
+            )
+        } else {
+            VideoPlayer(
+                controller = controller,
+                modifier = Modifier.fillMaxSize().testTag("broadcast_preroll_video"),
+            )
+        }
+        AdOverlay(
+            state = AdSupportedUiState.Ready(
+                contentUrl = "",
+                phase = PlaybackPhase.AD,
+                currentBreak = null,
+                adRemainingMs = state.remainingMs,
+                skipEnabled = state.skipEnabled,
+                skipCountdownMs = state.skipCountdownMs,
+                playbackUnlocked = false,
+                nextRequiredBreakId = null,
+                breaksCompleted = 0,
+                breaksTotal = 1,
+                adsFree = false,
+            ),
+            onSkip = onSkipAd,
+            modifier = Modifier.fillMaxSize().testTag(AdOverlayTestTags.SKIP + "_container"),
+        )
     }
 }
 

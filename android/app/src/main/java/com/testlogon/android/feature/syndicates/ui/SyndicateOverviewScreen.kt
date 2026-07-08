@@ -107,6 +107,14 @@ private enum class OverviewTab { FEED, TREASURY, SPLIT, MEMBERS }
 val LocalSyndicatePollVoter = androidx.compose.runtime.compositionLocalOf<com.testlogon.android.data.poll.PollVoter?> { null }
 val LocalSyndicateCurrentUserId = androidx.compose.runtime.compositionLocalOf<String?> { null }
 
+/**
+ * ADV syndicate-feed ads — impression / click callbacks for a sponsored feed unit, provided down to the
+ * (otherwise deeply-nested, stateless) [FeedItemRow]. Mirrors the poll-voter CompositionLocal pattern so
+ * the many intermediate feed composables need not thread two extra parameters.
+ */
+val LocalSyndicateSponsoredImpression = androidx.compose.runtime.compositionLocalOf<(SyndicateFeedItem) -> Unit> { {} }
+val LocalSyndicateSponsoredClick = androidx.compose.runtime.compositionLocalOf<(SyndicateFeedItem) -> Unit> { {} }
+
 @Composable
 fun SyndicateOverviewRoute(
     onBack: () -> Unit,
@@ -125,6 +133,8 @@ fun SyndicateOverviewRoute(
     androidx.compose.runtime.CompositionLocalProvider(
         LocalSyndicatePollVoter provides viewModel.pollVoter,
         LocalSyndicateCurrentUserId provides currentUserId,
+        LocalSyndicateSponsoredImpression provides viewModel::onSponsoredImpression,
+        LocalSyndicateSponsoredClick provides viewModel::onSponsoredClick,
     ) {
     SyndicateOverviewScreen(
         state = state,
@@ -419,6 +429,27 @@ private fun FeedTab(
 
 @Composable
 private fun FeedItemRow(post: SyndicateFeedItem) {
+    // ADV syndicate-feed ads — a server-injected sponsored (paid) unit renders as the shared, NON-tippable
+    // Sponsored card (the syndicate feed has no tip affordance either, so FEATURE 2 holds by construction).
+    val ad = post.sponsored
+    if (ad != null) {
+        val onImpression = LocalSyndicateSponsoredImpression.current
+        val onClick = LocalSyndicateSponsoredClick.current
+        com.testlogon.android.feature.feed.SponsoredFeedCard(
+            label = ad.label,
+            headline = ad.headline,
+            body = ad.body,
+            ctaText = ad.ctaText,
+            impressionKey = ad.impressionKey,
+            modifier = Modifier.testTag(SyndicateOverviewTestTags.feedItem(post.postId)),
+            onImpression = { onImpression(post) },
+            onClick = { onClick(post) },
+            media = {
+                ad.imageUrls.firstOrNull()?.let { url -> PostImage(url) }
+            },
+        )
+        return
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()

@@ -8,7 +8,10 @@ import androidx.lifecycle.LifecycleOwner
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.analytics.PlaybackReporter
 import com.testlogon.android.data.analytics.PlaybackTarget
+import com.testlogon.android.data.broadcast.BroadcastAdEvents
+import com.testlogon.android.data.broadcast.BroadcastPreRoll
 import com.testlogon.android.data.broadcast.BroadcastRepository
+import com.testlogon.android.data.broadcast.BroadcastViewerAdRepository
 import com.testlogon.android.data.broadcast.BroadcastViewerCountRepository
 import com.testlogon.android.data.broadcast.ViewerPresence
 import com.testlogon.android.feature.player.MediaSourceSpec
@@ -39,6 +42,7 @@ import javax.inject.Inject
 class ViewerViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repo: BroadcastRepository,
+    private val adRepo: BroadcastViewerAdRepository,
     private val playerFactory: VideoPlayerFactory,
     private val reporter: PlaybackReporter,
     private val presence: ViewerPresence,
@@ -97,7 +101,7 @@ class ViewerViewModel @Inject constructor(
                             _uiState.value = ViewerUiState.Unavailable(PlaybackUnavailable.SESSION_ENDED)
                         SessionPlaybackState.SCHEDULED ->
                             _uiState.value = ViewerUiState.Unavailable(PlaybackUnavailable.NOT_STARTED)
-                        SessionPlaybackState.LIVE -> acquireAndPlay(title)
+                        SessionPlaybackState.LIVE -> adGateThenPlay(title)
                     }
                 }
                 is ApiResult.Failure -> _uiState.value = session.error.toUnavailableOrError()
@@ -180,6 +184,85 @@ class ViewerViewModel @Inject constructor(
         controllerOrNull = null
     }
 
+    // ─── ADV FEATURE 1 — broadcast pre-roll gate ─────────────────────────────
+
+    /**
+     * Serves + gates a pre-roll ad before the live join. Calls POST .../ad-join; if a pre-roll is served
+     * AND the viewer is not ad-free (subscriber / the broadcaster themselves — self-exclusion is enforced
+     * server-side in serve_ad), enter the [ViewerUiState.PreRoll] AD phase and DEFER the live mint until
+     * the ad completes/skips. Any ad-join failure / no-fill / ad-free viewer -> play live immediately
+     * (an ad problem must NEVER block the broadcast).
+     */
+    private suspend fun adGateThenPlay(title: String) {
+        val join = adRepo.adJoin(sessionId)
+        val pre = (join as? ApiResult.Success)?.data?.preRoll
+        val adFree = (join as? ApiResult.Success)?.data?.adFree ?: false
+        if (pre != null && !adFree) {
+            enterPreRoll(title, pre)
+        } else {
+            acquireAndPlay(title)
+        }
+    }
+
+    private fun enterPreRoll(title: String, pre: BroadcastPreRoll) {
+        val skipMs = pre.skipAfterSeconds * 1000L
+        // Image creative: hold for skip-after + a short tail (auto-completes -> charge). Video creative:
+        // completion is driven by the player ENDED; the cap only bounds the countdown display.
+        val durationMs = if (pre.isImage) skipMs + PREROLL_IMAGE_HOLD_MS else skipMs + PREROLL_VIDEO_CAP_MS
+        _uiState.value = ViewerUiState.PreRoll(
+            sessionId = sessionId,
+            title = title,
+            ad = pre,
+            durationMs = durationMs,
+            remainingMs = if (pre.isImage) durationMs else skipMs,
+            skipEnabled = false,
+            skipCountdownMs = skipMs,
+        )
+        // Impression fires once at the start of the pre-roll (charges advertiser + credits broadcaster;
+        // funds-guarded + idempotent per broadcast_preroll:{ad_click_id} on the backend).
+        trackPreRoll(pre, BroadcastAdEvents.IMPRESSION, 0)
+    }
+
+    /** Composable-driven ad clock: [elapsedMs] since the pre-roll started. Updates remaining / skip state. */
+    fun onPreRollPosition(elapsedMs: Long) {
+        val s = _uiState.value as? ViewerUiState.PreRoll ?: return
+        val skipMs = s.ad.skipAfterSeconds * 1000L
+        val skipCountdown = (skipMs - elapsedMs).coerceAtLeast(0L)
+        val remaining = if (s.ad.isImage) (s.durationMs - elapsedMs).coerceAtLeast(0L) else skipCountdown
+        _uiState.update {
+            (it as? ViewerUiState.PreRoll)?.copy(
+                remainingMs = remaining,
+                skipCountdownMs = skipCountdown,
+                skipEnabled = elapsedMs >= skipMs,
+            ) ?: it
+        }
+    }
+
+    /** The pre-roll finished (image hold elapsed / video ENDED) — charge complete, then join live. */
+    fun onPreRollCompleted() {
+        val s = _uiState.value as? ViewerUiState.PreRoll ?: return
+        trackPreRoll(s.ad, BroadcastAdEvents.COMPLETE, s.durationMs.toInt())
+        proceedToLive(s.title)
+    }
+
+    /** The viewer skipped the pre-roll — record skip (no charge), then join live. */
+    fun onPreRollSkip() {
+        val s = _uiState.value as? ViewerUiState.PreRoll ?: return
+        trackPreRoll(s.ad, BroadcastAdEvents.SKIP, 0)
+        proceedToLive(s.title)
+    }
+
+    private fun proceedToLive(title: String) {
+        _uiState.value = ViewerUiState.Loading
+        viewModelScope.launch { acquireAndPlay(title) }
+    }
+
+    private fun trackPreRoll(pre: BroadcastPreRoll, event: String, viewTimeMs: Int) {
+        viewModelScope.launch {
+            adRepo.track(sessionId, pre.creativeId, event, pre.adClickId, viewTimeMs)
+        }
+    }
+
     private suspend fun acquireAndPlay(title: String) {
         when (val mint = repo.mintPlaybackUrl(sessionId)) {
             is ApiResult.Success -> {
@@ -232,6 +315,12 @@ class ViewerViewModel @Inject constructor(
     companion object {
         const val ARG_SESSION_ID = "sessionId"
         const val DEFAULT_TITLE = "Live broadcast"
+
+        /** ADV FEATURE 1 — image pre-roll auto-completes this long after the skip-after point. */
+        const val PREROLL_IMAGE_HOLD_MS = 3_000L
+
+        /** ADV FEATURE 1 — upper bound on the video pre-roll countdown display (completion is via ENDED). */
+        const val PREROLL_VIDEO_CAP_MS = 60_000L
 
         /** Below this remaining window the web client skips scheduling a refresh (≤10s). */
         const val MIN_REMAINING_MS = 10_000L

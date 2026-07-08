@@ -14,6 +14,10 @@ import com.testlogon.android.core.model.syndicates.SyndicateMember
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
+import com.testlogon.android.data.ads.AdClickAttributionStore
+import com.testlogon.android.data.ads.AdEvent
+import com.testlogon.android.data.ads.AdTrackRepository
+import com.testlogon.android.data.ads.toSponsoredInfo
 import com.testlogon.android.data.feed.CommentImageUploader
 import com.testlogon.android.feature.syndicates.data.SyndicateRepository
 import com.testlogon.android.data.auth.AuthStateStore
@@ -52,6 +56,8 @@ class SyndicateOverviewViewModel @Inject constructor(
     private val repository: SyndicateRepository,
     private val imageUploader: CommentImageUploader,
     private val arbitraryPollRepository: ArbitraryPollRepository,
+    private val adTracker: AdTrackRepository,
+    private val adAttribution: AdClickAttributionStore,
     authStateStore: AuthStateStore,
     savedState: SavedStateHandle,
 ) : ViewModel() {
@@ -212,6 +218,25 @@ class SyndicateOverviewViewModel @Inject constructor(
                 isStale = false,
             )
         }
+    }
+
+    // ---- ADV syndicate-feed ads: sponsored-unit impression / click tracking (newsfeed parity) ----
+
+    // Fire an impression at most once per served unit (keyed on the per-serve ad_click_id / creative).
+    private val impressedAds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Fire an impression the first time a sponsored syndicate-feed card becomes visible. Best-effort. */
+    fun onSponsoredImpression(post: SyndicateFeedItem) {
+        val ad = post.sponsored ?: return
+        if (!impressedAds.add(ad.impressionKey)) return
+        viewModelScope.launch { adTracker.track(AdEvent.IMPRESSION, ad.toSponsoredInfo()) }
+    }
+
+    /** Fire a click when the viewer taps a sponsored syndicate-feed card / its CTA. Best-effort. */
+    fun onSponsoredClick(post: SyndicateFeedItem) {
+        val ad = post.sponsored ?: return
+        adAttribution.record(ad.adClickId)
+        viewModelScope.launch { adTracker.track(AdEvent.CLICK, ad.toSponsoredInfo()) }
     }
 
     private fun <T> ApiResult<T>.toTabState(): TabState<T> = when (this) {

@@ -60,6 +60,11 @@ data class SyndicateFeedItem(
     val commentCount: Int? = null,
     val tipCount: Int? = null,
     val poll: com.testlogon.android.core.model.poll.ArbitraryPoll? = null,
+    /**
+     * ADV syndicate-feed ads — non-null when this row is a server-injected SPONSORED (paid) unit. When set,
+     * the UI renders the distinct (non-tippable) Sponsored card instead of a normal feed post.
+     */
+    val sponsored: com.testlogon.android.core.model.ads.SponsoredAd? = null,
 )
 
 /** The treasury summary. All amounts are *_cents (Int); [currency] is an UPPER-cased ISO code. */
