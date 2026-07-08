@@ -4436,6 +4436,14 @@ class AdAccountCreateIn(BaseModel):
 _BID_CPM_MIN = 50
 _BID_CPM_MAX = 20_000
 _BID_CPM_DEFAULT = 500  # $5.00 CPM default
+# ADV-301: CPC/CPA bid bounds (cents). CPC $0.01..$100 default $0.50;
+# CPA $0.01..$1000 default $5.00.
+_BID_CPC_MIN = 1
+_BID_CPC_MAX = 10_000
+_BID_CPC_DEFAULT = 50
+_BID_CPA_MIN = 1
+_BID_CPA_MAX = 100_000
+_BID_CPA_DEFAULT = 500
 
 
 class CampaignCreateIn(BaseModel):
@@ -4450,6 +4458,13 @@ class CampaignCreateIn(BaseModel):
     # keep working; bounded to a sane range to prevent garbage bids.
     bid_cpm_cents: int = Field(
         default=_BID_CPM_DEFAULT, ge=_BID_CPM_MIN, le=_BID_CPM_MAX
+    )
+    # ADV-301: advertiser-set CPC/CPA bids (traffic/conversion objectives + auction).
+    bid_cpc_cents: int = Field(
+        default=_BID_CPC_DEFAULT, ge=_BID_CPC_MIN, le=_BID_CPC_MAX
+    )
+    bid_cpa_cents: int = Field(
+        default=_BID_CPA_DEFAULT, ge=_BID_CPA_MIN, le=_BID_CPA_MAX
     )
     # Ad category for the campaign. Validated against the same VALID_AD_CATEGORIES
     # taxonomy that creators use for allowed_ad_categories (see CreatorAdSettingsIn)
@@ -4486,6 +4501,9 @@ class CampaignOut(BaseModel):
     # GAP-0044: surface the auction bid so advertisers can audit their CPM.
     # Defaults to $5.00 for legacy items written before this attribute existed.
     bid_cpm_cents: int = _BID_CPM_DEFAULT
+    # ADV-301: surface CPC/CPA bids for advertiser audit.
+    bid_cpc_cents: int = _BID_CPC_DEFAULT
+    bid_cpa_cents: int = _BID_CPA_DEFAULT
 
 
 # -- Delegates (DELEGATE-001) --
@@ -4792,6 +4810,13 @@ class CampaignUpdateIn(BaseModel):
     # GAP-0044: bound the bid range on update to match creation validation.
     bid_cpm_cents: Optional[int] = Field(
         default=None, ge=_BID_CPM_MIN, le=_BID_CPM_MAX
+    )
+    # ADV-301: bound CPC/CPA on update to match creation validation.
+    bid_cpc_cents: Optional[int] = Field(
+        default=None, ge=_BID_CPC_MIN, le=_BID_CPC_MAX
+    )
+    bid_cpa_cents: Optional[int] = Field(
+        default=None, ge=_BID_CPA_MIN, le=_BID_CPA_MAX
     )
 
 
@@ -5353,6 +5378,9 @@ class AdTrackEventIn(BaseModel):
     view_time_ms: int = Field(default=0, ge=0)
     user_agent: str = ""
     geo_country: str = ""
+    # ADV-303: per-serve ad_click_id minted by serve_ad; carries the cleared
+    # auction price + content owner so track can bill the impression/click.
+    ad_click_id: str = ""
 
 
 class AdTrackEventOut(BaseModel):

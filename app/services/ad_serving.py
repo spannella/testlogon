@@ -162,9 +162,25 @@ def serve_ad(
     if not candidates:
         return _house_ad_response("no_eligible_campaigns")
 
-    # 4. Select winner (highest score)
+    # 4. Select winner (highest score) + ADV-302 second-price auction.
     candidates.sort(key=lambda c: c["score"], reverse=True)
     winner = candidates[0]
+    # ADV-302: rank by effective bid (bid_cpm x relevance=1.0). The winner clears
+    # at the runner-up bid + 1c (capped at its own bid); a lone bidder clears at
+    # the reserve floor. cleared_cpm is what track_ad_event bills, so an advertiser
+    # never pays more than the next-highest rival would have. CPC/CPA carried for
+    # the click/conversion charge.
+    _CPM_FLOOR = 50
+    _CPM_DEF, _CPC_DEF, _CPA_DEF = 500, 50, 500
+    win_cpm = int(winner["campaign"].get("bid_cpm_cents", _CPM_DEF) or _CPM_DEF)
+    if len(candidates) > 1:
+        runner_up_cpm = int(round(candidates[1]["score"]))
+        cleared_cpm = min(win_cpm, runner_up_cpm + 1)
+    else:
+        cleared_cpm = _CPM_FLOOR
+    cleared_cpm = max(1, min(cleared_cpm, win_cpm))
+    win_cpc = int(winner["campaign"].get("bid_cpc_cents", _CPC_DEF) or _CPC_DEF)
+    win_cpa = int(winner["campaign"].get("bid_cpa_cents", _CPA_DEF) or _CPA_DEF)
 
     # 5. Select creative — prefer campaign-level creative_weights (set by
     # reallocate_budget recommendations) then fall back to per-creative
@@ -178,7 +194,6 @@ def serve_ad(
     # purchase/subscribe can resolve the last click. effective_price_cents is the
     # winning bid as a placeholder until the B3 auction sets a cleared price.
     ad_click_id = uuid.uuid4().hex
-    _bid_cpm_win = int(winner["campaign"].get("bid_cpm_cents", 500) or 500)
     try:
         _now = now_ts()
         T.ad_clicks.put_item(Item={
@@ -192,7 +207,11 @@ def serve_ad(
             "slot_type": slot_type,
             "content_id": content_id,
             "status": "served",
-            "effective_price_cents": _bid_cpm_win,
+            "effective_price_cents": cleared_cpm,
+            "effective_cpm_cents": cleared_cpm,
+            "bid_cpc_cents": win_cpc,
+            "bid_cpa_cents": win_cpa,
+            "gross_bid_cpm_cents": win_cpm,
             "created_at": _now,
             "expires_at": _now + 604800,
         })
@@ -253,6 +272,7 @@ def track_ad_event(
     user_agent: str = "",
     view_time_ms: int = 0,
     geo_country: str = "",
+    ad_click_id: str = "",
 ) -> Dict[str, Any]:
     """Record an ad event and process billing.
 
@@ -333,7 +353,76 @@ def track_ad_event(
     if event == "impression":
         _increment_frequency_cap(user_id, campaign_id)
 
-    return {"ok": True, "event_id": event_id, "flagged": False, "fraud_score": fraud_score}
+    # -- ADV-303/304: real charge on a NEWSFEED impression/click --------
+    # After the fraud gate passes, debit the advertiser via the funds-guarded
+    # _process_charge. Surface-gated: the pre-roll surface already charges on
+    # video-completion (broadcast_ads) so it is skipped here to avoid a double
+    # charge. Idempotent per (ad_click_id, event) so a retried track never
+    # double-bills. Revenue split via _split_revenue -> content owner when
+    # present, else platform-only (standalone feed unit).
+    charged = False
+    charge_cents = 0
+    charge_reason = ""
+    _billable = (
+        event in ("impression", "click")
+        and surface not in ("preroll", "pre_roll", "midroll", "postroll")
+        and bool(ad_click_id)
+    )
+    if _billable:
+        try:
+            from app.services import ad_billing
+            from app.services.ad_campaigns import get_campaign
+            click_row = {}
+            try:
+                _r = T.ad_clicks.get_item(Key={"ad_click_id": ad_click_id})
+                click_row = _r.get("Item") or {}
+            except Exception:
+                click_row = {}
+            content_owner_sub = str(click_row.get("content_owner_sub", "") or "")
+            idem = "%s#%s" % (ad_click_id, event)
+            if event == "impression":
+                cpm = click_row.get("effective_price_cents")
+                if cpm is None:
+                    cpm = (get_campaign(account_id, campaign_id) or {}).get("bid_cpm_cents", 500)
+                res = ad_billing.charge_impression(
+                    account_id=account_id, campaign_id=campaign_id,
+                    creative_id=creative_id, creator_id=content_owner_sub,
+                    content_id=content_id, bid_cpm_cents=int(cpm or 500),
+                    idempotency_key=idem,
+                )
+            else:
+                cpc = click_row.get("bid_cpc_cents")
+                if cpc is None:
+                    cpc = (get_campaign(account_id, campaign_id) or {}).get("bid_cpc_cents", 50)
+                res = ad_billing.charge_click(
+                    account_id=account_id, campaign_id=campaign_id,
+                    creative_id=creative_id, creator_id=content_owner_sub,
+                    content_id=content_id, bid_cpc_cents=int(cpc or 50),
+                    idempotency_key=idem,
+                )
+            charged = bool(res.get("ok"))
+            charge_cents = int(res.get("charge_cents", 0) or 0)
+            charge_reason = str(res.get("reason", "") or "")
+            if charged and charge_cents > 0:
+                try:
+                    T.ad_clicks.update_item(
+                        Key={"ad_click_id": ad_click_id},
+                        UpdateExpression="SET #s = :s",
+                        ExpressionAttributeNames={"#s": "status"},
+                        ExpressionAttributeValues={
+                            ":s": "clicked" if event == "click" else "impressed"
+                        },
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            logger.warning("ad_track_charge_failed event=%s click=%s", event, ad_click_id)
+
+    return {
+        "ok": True, "event_id": event_id, "flagged": False,
+        "fraud_score": fraud_score, "charged": charged,
+        "charge_cents": charge_cents, "charge_reason": charge_reason,
+    }
 
 
 def get_serving_stats(campaign_id: str) -> Dict[str, Any]:

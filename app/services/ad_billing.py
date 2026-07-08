@@ -173,6 +173,7 @@ def charge_impression(
 def charge_click(
     *, account_id: str, campaign_id: str, creative_id: str,
     creator_id: str, content_id: str, bid_cpc_cents: int,
+    idempotency_key: str = "",
 ) -> dict:
     """Charge advertiser for one click (CPC model)."""
     return _process_charge(
@@ -180,12 +181,14 @@ def charge_click(
         entry_type="click_charge", charge_cents=bid_cpc_cents,
         creator_id=creator_id, reason="Ad click",
         meta={"creative_id": creative_id, "content_id": content_id, "model": "cpc"},
+        idempotency_key=idempotency_key,
     )
 
 
 def charge_conversion(
     *, account_id: str, campaign_id: str, creative_id: str,
     creator_id: str, content_id: str, bid_cpa_cents: int,
+    idempotency_key: str = "",
 ) -> dict:
     """Charge advertiser for one conversion (CPA model)."""
     return _process_charge(
@@ -193,6 +196,7 @@ def charge_conversion(
         entry_type="conversion_charge", charge_cents=bid_cpa_cents,
         creator_id=creator_id, reason="Ad conversion",
         meta={"creative_id": creative_id, "content_id": content_id, "model": "cpa"},
+        idempotency_key=idempotency_key,
     )
 
 
@@ -320,7 +324,12 @@ def _split_revenue(
         except Exception:
             logger.warning("revenue_share_bps_lookup_failed", extra={"creator_id": creator_id})
 
-    creator_share = max(0, (charge_cents * creator_bps) // 10000)
+    # ADV-303/406: a standalone unit (no content owner) books platform-100%;
+    # split with a creator only when the ad ran in front of their content.
+    if creator_id:
+        creator_share = max(0, (charge_cents * creator_bps) // 10000)
+    else:
+        creator_share = 0
     platform_share = charge_cents - creator_share
     platform_share_pct = (
         (platform_share * 100) // charge_cents if charge_cents > 0 else PLATFORM_REVENUE_SHARE_PCT

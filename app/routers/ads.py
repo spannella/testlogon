@@ -403,6 +403,7 @@ async def track_ad_event_endpoint(body: AdTrackEventIn, request: Request, ctx=De
         user_agent=body.user_agent or request.headers.get("user-agent", ""),
         view_time_ms=body.view_time_ms,
         geo_country=body.geo_country,
+        ad_click_id=getattr(body, "ad_click_id", "") or "",
     )
 
 

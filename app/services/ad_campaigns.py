@@ -52,6 +52,8 @@ def create_campaign(account_id: str, data: CampaignCreateIn) -> dict:
         "status": "draft",
         "category": data.category,
         "bid_cpm_cents": data.bid_cpm_cents,
+        "bid_cpc_cents": data.bid_cpc_cents,
+        "bid_cpa_cents": data.bid_cpa_cents,
         "created_at": ts,
         "updated_at": ts,
     }
