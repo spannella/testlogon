@@ -51,3 +51,43 @@ route 200 with creative.
 Cosmetic residual (pre-existing, shared with pre-roll): the AdClicks row
 `charged_cents` writes 0 (result key mismatch in the post-charge row update);
 the actual advertiser debit + broadcaster credit are correct. Not a regression.
+
+## ADV2-108 - 2-device on-prod verification (2026-07-08)
+Real app on prod (tl-api.bitbazaar.cc), app build c9e7190b, BUILD_EXIT=0,
+installed + launched crash-free on both phones. Host = Bella (broadcaster) on
+Pixel 7a 32281JEHN13840; viewer = demo.viewer on SM-A156U R5CX821TA9R
+(record device). Live session f8a09592-... created for Bella; viewer deep-linked
+testlogon://broadcast/viewer/{sid} (reaches Ready + arms the ~2s state poll even
+though the seeded stream has no real media); host deep-linked
+testlogon://broadcast/ingest/{sid} -> Go Live -> Manage broadcast ->
+HostControlScreen "Start ad break" (host_ad_break_start).
+
+Real-app okhttp evidence (single break):
+- HOST tap -> POST /broadcast/sessions/{sid}/ad-break 200.
+- VIEWER poll GET /ad-break/state -> ad_break_active:true ->
+  POST /ad-break/serve 200 (creative cr_0226a669cf66, image) ->
+  track event=impression slot_type=mid_roll ad_click_id=fc0ff8e8... 200 ->
+  event=complete view_time_ms=8000 200 -> resumed to live (poll re-armed,
+  same break NOT re-served).
+
+Money (prod DDB, surface=broadcast_midroll, ad_click_id fc0ff8e8...):
+- advertiser debit T.ad_billing ACCT#adacct_416cea3bdad4 LEDGER chg_b1d1f3d930a2
+  entry_type=impression_charge amount 20001 state=settled;
+- broadcaster (Bella) T.billing credit 14000 [70pct] meta surface=broadcast_midroll
+  model=cpm; platform_share 6001 [30pct]; 14000+6001=20001;
+- idempotency marker IDEMP#broadcast_midroll:fc0ff8e8... present -> the app's
+  duplicate impression+complete collapsed to ONE charge (idempotent on-device);
+- ad-free/self [fresh active break]: normal viewer served=true; self-broadcaster
+  mid_roll=null/ad_free=true; active subscriber mid_roll=null/ad_free=true [NOT
+  interrupted]. Guardrails: too-soon 429 AD_BREAK_TOO_SOON, max-breaks 429
+  MAX_BREAKS_REACHED. Auction winner was a competing prod advertiser
+  [adacct_416cea3bdad4, eff_price 20001] - seeded Acme lost the second-price
+  auction [Acme balance unchanged = correctly NOT charged]. An ad never blocks
+  the live stream [fail-open].
+
+Mid-roll overlay captured on the A15 [2nd session a38f6847-...]: AdOverlay renders
+the ad creative over the still-running live viewer with Ad badge + skip
+countdown + seconds-remaining.
+
+APK: s3://testlogon-apk-749211675678/adv2-e1/testlogon-adv2e1-midroll-c9e7190b-1783549379-debug.apk
+[7-day presigned, emailed spannella@gmail.com, subject "Updated TestLogon - ADV2-E1 live-stream ad breaks"].
