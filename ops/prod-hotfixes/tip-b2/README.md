@@ -67,3 +67,14 @@ Runner: `seed_verify_tipb2.py` (in-process TestClient, two identities A=tipper B
   post, tip_total_cents=800.
 - P2 self-tip on own post: 400.
 - E1 classify_entry(message_react)/(post_react) -> "tips".
+
+## TIP-B2 follow-up (author-side chip hydration) — apply_tipb2_hydrate.py
+Surfaces the stored `tip_reactions` money-reaction badges in the wire payloads so the
+message/post AUTHOR (not just the tipper) renders the money-reaction chip:
+- `app/routers/messaging.py`: adds `tip_reactions` to the `MessageOut` model + `_message_to_out`
+  serializer (Decimal-safe int coercion).
+- `app/routers/newsfeed.py`: adds `tip_reactions` to both post serializers (single-post + feed-item).
+Anchor-count-guarded (each anchor == 1), py_compile-checked, idempotent. Applied LIVE on prod
+(.bak_tipb2_hydrate_<ts>), restarted, openapi 200; message/post/feed payloads now carry tip_reactions.
+Paired app change: `PostDto.tip_reactions` parse + `FeedPost.tipReactions` map, and a ThreadViewModel
+server-hydration overlay (tip_reactions are not Room-persisted).
