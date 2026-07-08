@@ -564,6 +564,15 @@ def create_app() -> FastAPI:
     app.include_router(s3_mock_router, prefix="/mock/s3")
     # Also register GET /mock/s3 (no trailing slash) for boto3 list_buckets
     app.add_api_route("/mock/s3", _s3_list_buckets, methods=["GET"], include_in_schema=False)
+    # Dev/mock GIF endpoint: serves a local demo GIF for the messaging /mock/gifs
+    # picker. Path is resolved package-relative (portable across dev/prod hosts);
+    # the asset is a gitignored dev artifact so a missing file simply 404s.
+    from fastapi.responses import FileResponse as _FileResponseGif
+    import os as _os_mockgif
+    _demo_gif_path = _os_mockgif.path.join(_os_mockgif.path.dirname(__file__), "static", "demo.gif")
+    def _mock_gif_serve(name: str):
+        return _FileResponseGif(_demo_gif_path, media_type="image/gif")
+    app.add_api_route("/mock/gifs/{name}", _mock_gif_serve, methods=["GET"], include_in_schema=False)
     app.include_router(paypal_router)
     app.include_router(billing_router)
     app.include_router(account_state_router)

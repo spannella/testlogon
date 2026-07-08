@@ -18,3 +18,9 @@ logs/
 .claude/worktrees/
 wt/
 google-services.json
+
+# Dev demo/mock artifacts (throwaway; not part of the app) — keep working tree clean
+/app/static/demo.gif
+/app/static_demo.gif
+/bcast_*.png
+/ing_at_*.png
