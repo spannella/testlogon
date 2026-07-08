@@ -104,6 +104,17 @@ def serve_ad(
     for campaign in active_campaigns:
         account_id = campaign["account_id"]
 
+        # Self-ad exclusion (money-path safety): never serve an advertiser their
+        # OWN campaign. The viewer must not be shown, charged for, or credited by an
+        # ad from an account they own. Skip when the ad-account owner == viewer.
+        try:
+            from app.services.ad_accounts import get_ad_account
+            _acct = get_ad_account(account_id)
+            if _acct and str(_acct.get("owner_sub", "") or "") == str(user_id or ""):
+                continue
+        except Exception:
+            pass
+
         # Fraud suspension check (ADS-014): suspended accounts serve no ads.
         try:
             from app.services.ad_fraud_prevention import is_account_suspended
