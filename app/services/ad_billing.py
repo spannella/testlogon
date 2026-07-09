@@ -300,6 +300,11 @@ def _process_charge(
         "creator_credit_sk": split.get("creator_credit_sk", ""),
         "creator_credit_ts": int(split.get("creator_credit_ts", 0)),
         "platform_entry_sk": split.get("platform_entry_sk", ""),
+        "member_share_cents": int(split.get("member_share_cents", 0)),
+        "syndicate_treasury_share_cents": int(split.get("syndicate_treasury_share_cents", 0)),
+        "syndicate_id": split.get("syndicate_id", ""),
+        "is_syndicate_split": bool(split.get("is_syndicate_split")),
+        "treasury_credit_sk": split.get("treasury_credit_sk", ""),
     }
     T.ad_billing.put_item(Item={
         "pk": f"ACCT#{account_id}",
@@ -354,6 +359,46 @@ def _split_revenue(
         (platform_share * 100) // charge_cents if charge_cents > 0 else PLATFORM_REVENUE_SHARE_PCT
     )
 
+    # -- ADV2-704/705 (F7): syndicate-aware 3-way placement split resolution ----
+    # DEFAULT (external / non-syndicate advertiser): the content owner keeps the
+    # FULL creator_share and the syndicate earns nothing (member_share_cents ==
+    # creator_share, treasury_share_cents == 0) -- membership NEVER skims a
+    # member's external-ad earnings. SYNDICATE-OWNED ad (the paying account has
+    # owner_type=="syndicate") served in front of a CURRENT member's content: the
+    # content-owner share is split between the member (configured member_share_bps)
+    # and the syndicate treasury (the remainder). Platform's 30% is untouched. The
+    # 3-way fires ONLY here (is_syndicate_split).
+    member_share_cents = creator_share
+    treasury_share_cents = 0
+    split_syndicate_id = ""
+    if creator_share > 0 and creator_id and account_id:
+        try:
+            from app.services.ad_accounts import get_ad_account as _get_acct_for_split
+            _acct_for_split = _get_acct_for_split(account_id) or {}
+        except Exception:
+            _acct_for_split = {}
+        if str(_acct_for_split.get("owner_type", "")) == "syndicate":
+            _synd_for_split = str(_acct_for_split.get("owner_syndicate_id", "") or "")
+            _is_mem_for_split = False
+            if _synd_for_split:
+                try:
+                    from app.services.syndicates import is_member as _is_member_for_split
+                    _is_mem_for_split = bool(_is_member_for_split(_synd_for_split, creator_id))
+                except Exception:
+                    _is_mem_for_split = False
+            if _synd_for_split and _is_mem_for_split:
+                try:
+                    from app.services.syndicate_revenue_split import (
+                        get_ad_placement_member_share_bps as _member_bps_for_split,
+                    )
+                    _bps_for_split = int(_member_bps_for_split(_synd_for_split))
+                except Exception:
+                    _bps_for_split = 7000
+                _bps_for_split = max(0, min(10000, _bps_for_split))
+                member_share_cents = (creator_share * _bps_for_split) // 10000
+                treasury_share_cents = creator_share - member_share_cents
+                split_syndicate_id = _synd_for_split
+
     # ADV-502: capture the credit-row pointers so a later reversal can back them
     # out precisely (creator clawback + platform reversal).
     creator_credit_sk = ""
@@ -370,7 +415,7 @@ def _split_revenue(
                 # earnings/payouts (creator_earnings filters type=="credit"),
                 # Bug#3-safe. Aligns the dev clone with prod.
                 entry_type="credit",
-                amount_cents=creator_share,
+                amount_cents=member_share_cents,
                 state="settled",
                 reason="Ad revenue share",
                 meta={
@@ -406,12 +451,33 @@ def _split_revenue(
                 month=month,
                 impressions=1 if model == "cpm" else 0,
                 clicks=1 if model == "cpc" else 0,
-                revenue_cents=creator_share,
+                revenue_cents=member_share_cents,
             )
         except Exception:
             logger.warning(
                 "transparency_record_failed",
                 extra={"creator_id": creator_id, "account_id": account_id},
+            )
+
+    # ADV2-705 (F7): credit the syndicate TREASURY its share of the content-owner
+    # split (type:"credit"). Fires ONLY for a syndicate-owned ad on a member; for
+    # an external advertiser treasury_share_cents == 0 so nothing is written.
+    treasury_credit_sk = ""
+    if treasury_share_cents > 0 and split_syndicate_id:
+        try:
+            from app.services import syndicate_treasury as _treasury_for_split
+            _tres_res = _treasury_for_split.credit_placement_earning(
+                syndicate_id=split_syndicate_id,
+                amount_cents=treasury_share_cents,
+                member_user_id=creator_id,
+                account_id=account_id,
+                campaign_id=str(meta.get("campaign_id", "") or ""),
+            )
+            treasury_credit_sk = str(_tres_res.get("ledger_entry_id", "") or "")
+        except Exception:
+            logger.warning(
+                "ad_revenue_syndicate_treasury_credit_failed",
+                extra={"syndicate_id": split_syndicate_id, "amount_cents": treasury_share_cents},
             )
 
     # Write platform revenue record to ad_billing table so the platform's
@@ -451,6 +517,11 @@ def _split_revenue(
         "creator_credit_ts": creator_credit_ts,
         "platform_entry_sk": platform_entry_sk,
         "revenue_share_bps": creator_bps,
+        "member_share_cents": member_share_cents,
+        "syndicate_treasury_share_cents": treasury_share_cents,
+        "syndicate_id": split_syndicate_id,
+        "is_syndicate_split": bool(split_syndicate_id),
+        "treasury_credit_sk": treasury_credit_sk,
     }
 
 

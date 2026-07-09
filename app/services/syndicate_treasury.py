@@ -410,6 +410,61 @@ def spend_on_advertising(
     }
 
 
+def credit_placement_earning(
+    *,
+    syndicate_id: str,
+    amount_cents: int,
+    member_user_id: str = "",
+    account_id: str = "",
+    campaign_id: str = "",
+) -> Dict[str, Any]:
+    """ADV2-705 (F7): credit the syndicate treasury its share of a syndicate-owned
+    ad placement served in front of a member's content. Mirrors the credit half of
+    refund_advertising (balance ADD + one treasury ledger row, type/direction
+    'credit'). The MEMBER is credited separately by the ad-billing split; this only
+    moves the treasury's cut. No-op for a non-positive amount."""
+    if amount_cents <= 0:
+        return {"ok": True, "amount_cents": 0, "ledger_entry_id": ""}
+    pk_treasury = _treasury_pk(syndicate_id)
+    ts = now_ts()
+    T.syndicate_treasury.update_item(
+        Key={"pk": pk_treasury, "sk": BALANCE_SK},
+        UpdateExpression=(
+            "SET balance_cents = if_not_exists(balance_cents, :z) + :amt, "
+            "total_ad_earnings_cents = if_not_exists(total_ad_earnings_cents, :z) + :amt, "
+            "updated_at = :t, syndicate_id = :sid"
+        ),
+        ExpressionAttributeValues={
+            ":z": 0, ":amt": int(amount_cents), ":t": ts, ":sid": syndicate_id,
+        },
+    )
+    entry_id = _gen_id()
+    T.syndicate_treasury.put_item(Item={
+        "pk": pk_treasury,
+        "sk": ledger_sk(ts, entry_id),
+        "entry_id": entry_id,
+        "ts": ts,
+        "direction": "credit",
+        "type": "credit",
+        "amount_cents": int(amount_cents),
+        "reason": "Syndicate ad placement earnings",
+        "actor_user_id": "",
+        "counterparty_user_id": member_user_id,
+        "account_id": account_id,
+        "campaign_id": campaign_id,
+        "source_type": "ad_placement",
+        "currency": "usd",
+        "created_at": ts,
+    })
+    balance = get_treasury_balance(syndicate_id)
+    return {
+        "ok": True,
+        "amount_cents": int(amount_cents),
+        "ledger_entry_id": entry_id,
+        "new_treasury_balance_cents": balance["balance_cents"],
+    }
+
+
 def refund_advertising(
     *,
     syndicate_id: str,

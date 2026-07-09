@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form, Body
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_or_root
@@ -983,3 +983,37 @@ async def list_syndicate_ad_accounts_endpoint(
     from app.services.syndicates import _require_admin
     _require_admin(syndicate_id, ctx["user_sub"])
     return list_syndicate_ad_accounts(syndicate_id, ctx["user_sub"])
+
+
+# -- Syndicate ad-placement split config (ADV2-705) -------------------------
+# The per-syndicate member_share: when the syndicate ITSELF advertises in front
+# of a member's content, member_share_bps = the member's cut of the content-owner
+# (creator) share; the remainder goes to the syndicate treasury. Platform 30% is
+# unchanged. Admin-gated. Default 7000 bps (member keeps 70% of the 70%). This
+# never applies to an external advertiser on a member (no skim).
+
+@router.get("/syndicates/{syndicate_id}/ad-placement-config")
+async def get_syndicate_ad_placement_config_endpoint(
+    syndicate_id: str, ctx=Depends(require_ui_session)
+):
+    from app.services.syndicates import _require_admin
+    from app.services.syndicate_revenue_split import get_ad_placement_config
+    _require_admin(syndicate_id, ctx["user_sub"])
+    return get_ad_placement_config(syndicate_id)
+
+
+@router.put("/syndicates/{syndicate_id}/ad-placement-config")
+async def set_syndicate_ad_placement_config_endpoint(
+    syndicate_id: str, member_share_bps: int = Body(..., embed=True),
+    ctx=Depends(require_ui_session),
+):
+    from app.services.syndicates import _require_admin
+    from app.services.syndicate_revenue_split import set_ad_placement_member_share_bps
+    _require_admin(syndicate_id, ctx["user_sub"])
+    try:
+        return set_ad_placement_member_share_bps(
+            syndicate_id=syndicate_id, admin_sub=ctx["user_sub"],
+            member_share_bps=member_share_bps,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
