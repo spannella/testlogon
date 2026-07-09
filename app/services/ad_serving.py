@@ -101,19 +101,63 @@ def serve_ad(
 
     # 3. Filter + score candidates
     candidates: List[Dict[str, Any]] = []
+    # ADV2-302 (F3): self-promo buckets -- a creator's free "promote my content"
+    # campaigns, split by fill mode. Precedence (D2): always_win self-promo >
+    # paid > fill_only self-promo > house ad. A self-promo is eligible ONLY on the
+    # creator's OWN content slot (account.owner_sub == content_owner_id) and
+    # bypasses self-ad-exclusion / min-CPM / budget / category for that case.
+    self_promo_always: List[Dict[str, Any]] = []
+    self_promo_fill: List[Dict[str, Any]] = []
     for campaign in active_campaigns:
         account_id = campaign["account_id"]
+
+        # Resolve the ad-account owner once (used by both self-ad-exclusion and
+        # the self-promo own-content eligibility test).
+        _acct = None
+        try:
+            from app.services.ad_accounts import get_ad_account
+            _acct = get_ad_account(account_id)
+        except Exception:
+            _acct = None
+        _owner_sub = str((_acct or {}).get("owner_sub", "") or "")
+
+        # ADV2-302 (F3): self-promo campaign branch. Eligible ONLY when the slot
+        # is the creator's OWN content (content_owner_id == the campaign's ad
+        # account owner). Bypasses self-ad-exclusion, min-CPM floor, budget, and
+        # category; fraud-suspension + frequency cap still apply. It NEVER serves
+        # on another creator's content nor as a standalone unit (empty
+        # content_owner_id -> skipped).
+        if bool(campaign.get("is_self_promo")):
+            if not (content_owner_id and _owner_sub and _owner_sub == str(content_owner_id)):
+                continue
+            try:
+                from app.services.ad_fraud_prevention import is_account_suspended
+                if is_account_suspended(account_id):
+                    continue
+            except Exception:
+                pass
+            if _is_frequency_capped(user_id, campaign["campaign_id"]):
+                continue
+            sp_creatives = list_approved_creatives(campaign["campaign_id"])
+            if not sp_creatives:
+                # ADV2-304: a free own-content promo may auto-serve unmoderated
+                # creatives -- fall back to all creatives when none are approved.
+                from app.services.ad_creatives import list_creatives as _list_all_creatives
+                sp_creatives = _list_all_creatives(campaign["campaign_id"])
+            if not sp_creatives:
+                continue
+            _entry = {"campaign": campaign, "creatives": sp_creatives, "score": 0}
+            if str(campaign.get("self_promo_mode", "fill_only")) == "always_win":
+                self_promo_always.append(_entry)
+            else:
+                self_promo_fill.append(_entry)
+            continue
 
         # Self-ad exclusion (money-path safety): never serve an advertiser their
         # OWN campaign. The viewer must not be shown, charged for, or credited by an
         # ad from an account they own. Skip when the ad-account owner == viewer.
-        try:
-            from app.services.ad_accounts import get_ad_account
-            _acct = get_ad_account(account_id)
-            if _acct and str(_acct.get("owner_sub", "") or "") == str(user_id or ""):
-                continue
-        except Exception:
-            pass
+        if _owner_sub and _owner_sub == str(user_id or ""):
+            continue
 
         # Fraud suspension check (ADS-014): suspended accounts serve no ads.
         try:
@@ -186,23 +230,44 @@ def serve_ad(
             "score": score,
         })
 
-    if not candidates:
+    if not candidates and not self_promo_always and not self_promo_fill:
         return _house_ad_response("no_eligible_campaigns")
 
-    # 4. Select winner (highest score) + ADV-302 second-price auction.
-    candidates.sort(key=lambda c: c["score"], reverse=True)
-    winner = candidates[0]
-    # ADV-302: rank by effective bid (bid_cpm x relevance=1.0). The winner clears
-    # at the runner-up bid + 1c (capped at its own bid); a lone bidder clears at
-    # the reserve floor. cleared_cpm is what track_ad_event bills, so an advertiser
-    # never pays more than the next-highest rival would have. CPC/CPA carried for
-    # the click/conversion charge.
+    # 4. Select winner with D2 precedence (ADV2-302):
+    #   always_win self-promo  >  paid auction  >  fill_only self-promo  >  house
+    # A self-promo win clears at price 0 (free) and NEVER runs the paid auction.
     _CPM_DEF, _CPC_DEF, _CPA_DEF = 500, 50, 500
-    win_cpm = int(winner["campaign"].get("bid_cpm_cents", _CPM_DEF) or _CPM_DEF)
-    runner_up_cpm = int(round(candidates[1]["score"])) if len(candidates) > 1 else None
-    cleared_cpm = clear_second_price(win_cpm, runner_up_cpm, _CPM_FLOOR)
-    win_cpc = int(winner["campaign"].get("bid_cpc_cents", _CPC_DEF) or _CPC_DEF)
-    win_cpa = int(winner["campaign"].get("bid_cpa_cents", _CPA_DEF) or _CPA_DEF)
+    is_self_win = False
+    if self_promo_always:
+        winner = self_promo_always[0]
+        is_self_win = True
+    elif candidates:
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        winner = candidates[0]
+    elif self_promo_fill:
+        winner = self_promo_fill[0]
+        is_self_win = True
+    else:
+        return _house_ad_response("no_eligible_campaigns")
+
+    if is_self_win:
+        # Free self-promo: zero clearing price + zero bids. The charge path
+        # short-circuits on the self_promo flag minted below (no ledger / debit /
+        # credit on impression / click / conversion / completion).
+        cleared_cpm = 0
+        win_cpm = 0
+        win_cpc = 0
+        win_cpa = 0
+    else:
+        # ADV-302: rank by effective bid (bid_cpm x relevance=1.0). The winner
+        # clears at the runner-up bid + 1c (capped at its own bid); a lone bidder
+        # clears at the reserve floor. cleared_cpm is what track_ad_event bills, so
+        # an advertiser never pays more than the next-highest rival would have.
+        win_cpm = int(winner["campaign"].get("bid_cpm_cents", _CPM_DEF) or _CPM_DEF)
+        runner_up_cpm = int(round(candidates[1]["score"])) if len(candidates) > 1 else None
+        cleared_cpm = clear_second_price(win_cpm, runner_up_cpm, _CPM_FLOOR)
+        win_cpc = int(winner["campaign"].get("bid_cpc_cents", _CPC_DEF) or _CPC_DEF)
+        win_cpa = int(winner["campaign"].get("bid_cpa_cents", _CPA_DEF) or _CPA_DEF)
 
     # 5. Select creative — prefer campaign-level creative_weights (set by
     # reallocate_budget recommendations) then fall back to per-creative
@@ -229,6 +294,7 @@ def serve_ad(
             "slot_type": slot_type,
             "content_id": content_id,
             "status": "served",
+            "self_promo": is_self_win,
             "effective_price_cents": cleared_cpm,
             "effective_cpm_cents": cleared_cpm,
             "bid_cpc_cents": win_cpc,
@@ -271,6 +337,7 @@ def serve_ad(
         "click_url": f"{tracking_base}?event=click&{tracking_params}",
         "skip_url": f"{tracking_base}?event=skip&{tracking_params}",
         "is_house_ad": False,
+        "is_self_promo": is_self_win,
         "campaign_id": winner["campaign"]["campaign_id"],
         "account_id": winner["campaign"]["account_id"],
         "ad_click_id": ad_click_id,
@@ -338,6 +405,9 @@ def record_cta_click(
     if cta_type in CTA_NO_ADVERTISER_CHARGE:
         # Tip CTA: NO advertiser charge. The tip credits the creator only.
         reason = "tip_no_advertiser_charge"
+    elif row.get("self_promo"):
+        # ADV2-303 (F3): self-promo unit -> tap recorded, NO advertiser charge.
+        reason = "self_promo_no_charge"
     else:
         try:
             from app.services import ad_billing
@@ -497,6 +567,14 @@ def track_ad_event(
             except Exception:
                 click_row = {}
             content_owner_sub = str(click_row.get("content_owner_sub", "") or "")
+            # ADV2-303 (F3): self-promo unit -> record analytics only, NO charge
+            # (no ledger row, debit nobody, credit nobody).
+            if click_row.get("self_promo"):
+                return {
+                    "ok": True, "event_id": event_id, "flagged": False,
+                    "fraud_score": fraud_score, "charged": False,
+                    "charge_cents": 0, "charge_reason": "self_promo_no_charge",
+                }
             idem = "%s#%s" % (ad_click_id, event)
             if event == "impression":
                 cpm = click_row.get("effective_price_cents")

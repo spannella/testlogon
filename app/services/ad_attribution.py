@@ -164,7 +164,12 @@ def attribute_conversion(
         "content_owner_sub": content_owner_sub,
         "campaign_id": str(row.get("campaign_id", "") or ""),
     }
-    if bid_cpa_cents > 0:
+    if row.get("self_promo"):
+        # ADV2-303 (F3): self-promo conversion -> attributed for analytics only,
+        # NO advertiser CPA charge (no ledger row, credit nobody).
+        result["charge"] = {"ok": True, "reason": "self_promo", "charge_cents": 0}
+        result["self_promo"] = True
+    elif bid_cpa_cents > 0:
         try:
             charge = ad_billing.charge_conversion(
                 account_id=str(row.get("account_id", "") or ""),

@@ -379,6 +379,10 @@ def _charge_preroll_completion(
     if not row:
         logger.warning("vod_ad_preroll_click_missing ad_click_id=%s", ad_click_id)
         return None
+    # ADV2-303 (F3): free self-promo -> no advertiser charge, no ledger, no
+    # poster credit. Short-circuit BEFORE the 500c completion floor.
+    if row.get("self_promo"):
+        return {"ok": True, "reason": "self_promo", "charge_cents": 0}
 
     account_id = row.get("account_id", "")
     campaign_id = row.get("campaign_id", "")

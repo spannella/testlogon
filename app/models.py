@@ -4451,7 +4451,7 @@ _BID_CPA_DEFAULT = 500
 class CampaignCreateIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     objective: str = Field(..., pattern=r"^(awareness|traffic|conversions)$")
-    budget_cents: int = Field(..., ge=100)  # Minimum $1
+    budget_cents: int = Field(..., ge=0)  # Minimum $1 for paid; 0 allowed for self-promo (ADV2-301)
     budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
     start_date: Optional[int] = None  # Unix timestamp
     end_date: Optional[int] = None    # Unix timestamp
@@ -4483,6 +4483,25 @@ class CampaignCreateIn(BaseModel):
             raise ValueError(f"Unknown ad category: {v}")
         return v
 
+    # ADV2-301 (F3): free "promote my content" self-advertising toggle. A
+    # self-promo campaign costs 0 (no charge / debit / credit), needs no funding,
+    # and serves ONLY in front of the creator's own content. self_promo_mode:
+    # fill_only (serve only when no paying ad is eligible for the own slot) vs
+    # always_win (always win the own-content slot, may displace a paid ad).
+    is_self_promo: bool = False
+    self_promo_mode: str = Field(default="fill_only", pattern=r"^(fill_only|always_win)$")
+
+    @model_validator(mode="after")
+    def _validate_self_promo(self):
+        if self.is_self_promo:
+            # Free own-content promo: force all bids to 0, budget optional (no funding).
+            self.bid_cpm_cents = 0
+            self.bid_cpc_cents = 0
+            self.bid_cpa_cents = 0
+        elif self.budget_cents < 100:
+            raise ValueError("budget_cents must be >= 100 for a paid campaign")
+        return self
+
 
 class CampaignOut(BaseModel):
     campaign_id: str
@@ -4506,6 +4525,9 @@ class CampaignOut(BaseModel):
     # ADV-301: surface CPC/CPA bids for advertiser audit.
     bid_cpc_cents: int = _BID_CPC_DEFAULT
     bid_cpa_cents: int = _BID_CPA_DEFAULT
+    # ADV2-301: surface the self-promo flavor.
+    is_self_promo: bool = False
+    self_promo_mode: str = "fill_only"
 
 
 # -- Delegates (DELEGATE-001) --
@@ -4820,6 +4842,9 @@ class CampaignUpdateIn(BaseModel):
     bid_cpa_cents: Optional[int] = Field(
         default=None, ge=_BID_CPA_MIN, le=_BID_CPA_MAX
     )
+    # ADV2-301: allow toggling the self-promo flavor/mode on update.
+    is_self_promo: Optional[bool] = None
+    self_promo_mode: Optional[str] = Field(default=None, pattern=r"^(fill_only|always_win)$")
 
 
 class CampaignReviewIn(BaseModel):

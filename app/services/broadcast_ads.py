@@ -290,6 +290,10 @@ def _charge_broadcast_completion(*, ad_click_id, session_id, surface="broadcast_
         return None
     if not row:
         return None
+    # ADV2-303 (F3): free self-promo -> no advertiser charge, no ledger, no
+    # broadcaster credit. Short-circuit BEFORE the 500c completion floor.
+    if row.get("self_promo"):
+        return {"ok": True, "reason": "self_promo", "charge_cents": 0}
     account_id = row.get("account_id", "")
     campaign_id = row.get("campaign_id", "")
     if not account_id or not campaign_id:

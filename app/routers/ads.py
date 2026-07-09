@@ -170,7 +170,10 @@ async def create_campaign_endpoint(
     account_id: str, body: CampaignCreateIn, ctx=Depends(require_ui_session)
 ):
     acct = _require_account_owner(account_id, ctx["user_sub"])
-    if acct.get("status") != "active":
+    # ADV2-301 (F3): a free self-promo campaign needs no funded/active ad account
+    # (the creator promotes their OWN content for free); paid campaigns still
+    # require an active account.
+    if not getattr(body, "is_self_promo", False) and acct.get("status") != "active":
         raise HTTPException(status_code=403, detail="Account is not active")
     return create_campaign(account_id, body)
 
