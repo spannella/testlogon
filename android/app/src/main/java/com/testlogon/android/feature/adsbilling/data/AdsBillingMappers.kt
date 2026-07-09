@@ -30,10 +30,11 @@ import com.testlogon.android.core.network.ads.AdInvoiceDto
  */
 fun AdAccountDto.toBillingSummary(): AdAccountSummary = AdAccountSummary(
     accountId = accountId,
-    companyName = name,
+    companyName = companyName ?: name,
     status = status.token,
     balanceCents = balanceCents,
     lifetimeSpendCents = lifetimeSpendCents,
+    isSyndicate = ownerType == "syndicate" || !ownerSyndicateId.isNullOrBlank(),
 )
 
 /**
@@ -79,10 +80,11 @@ fun AdDepositOut.toDomain(): DepositResult = DepositResult(
  */
 fun AdAccountDto.toAccountSummary(): AdAccountSummary = AdAccountSummary(
     accountId = accountId,
-    companyName = name,
+    companyName = companyName ?: name,
     status = status.token,
     balanceCents = balanceCents,
     lifetimeSpendCents = lifetimeSpendCents,
+    isSyndicate = ownerType == "syndicate" || !ownerSyndicateId.isNullOrBlank(),
 )
 
 /**

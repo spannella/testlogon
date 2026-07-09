@@ -40,6 +40,12 @@ import com.squareup.moshi.Json
 data class AdAccountDto(
     @Json(name = "account_id") val accountId: String,
     @Json(name = "name") val name: String? = null,
+    // ADV2-R5: the backend account item labels the account with `company_name` (NOT `name`), so the
+    // picker label was blank. Read company_name as the primary display name; `name` stays a lenient
+    // fallback for any older/alternate wire. owner_type / owner_syndicate_id flag a SYNDICATE account.
+    @Json(name = "company_name") val companyName: String? = null,
+    @Json(name = "owner_type") val ownerType: String? = null,
+    @Json(name = "owner_syndicate_id") val ownerSyndicateId: String? = null,
     @Json(name = "status") val status: AdAccountStatus = AdAccountStatus.UNKNOWN,
     @Json(name = "balance_cents") val balanceCents: Long,
     @Json(name = "lifetime_spend_cents") val lifetimeSpendCents: Long,

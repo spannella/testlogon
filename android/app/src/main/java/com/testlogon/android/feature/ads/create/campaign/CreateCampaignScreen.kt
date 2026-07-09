@@ -464,6 +464,10 @@ private fun LabeledDropdown(
 
 private fun AdAccountSummary.pickerLabel(): String {
     val name = companyName ?: accountId ?: "account"
-    val status = status?.takeIf { it.isNotBlank() }
-    return if (status != null) "$name ($status)" else name
+    // ADV2-R5: a syndicate ad account is clearly hinted ("Syndicate") so the admin picks the right one.
+    val tags = buildList {
+        if (isSyndicate) add("Syndicate")
+        status?.takeIf { it.isNotBlank() }?.let { add(it) }
+    }
+    return if (tags.isEmpty()) name else "$name (" + tags.joinToString(" · ") + ")"
 }

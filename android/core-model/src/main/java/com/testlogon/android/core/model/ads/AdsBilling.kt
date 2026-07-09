@@ -24,6 +24,9 @@ data class AdAccountSummary(
     val status: String? = null,
     val balanceCents: Long,
     val lifetimeSpendCents: Long,
+    // ADV2-R5: true when this ad account is SYNDICATE-owned (owner_type == "syndicate"); the picker
+    // appends a "Syndicate" hint so the admin can tell a syndicate account apart from a personal one.
+    val isSyndicate: Boolean = false,
 )
 
 /**
