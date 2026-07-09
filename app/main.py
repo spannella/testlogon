@@ -171,6 +171,7 @@ from app.routers.account_deletion import (
 )
 from app.services.deletion_scheduler import start_deletion_scheduler_task
 from app.services.dmca_claims import start_dmca_timer_task
+from app.services.moderation_lifecycle import start_hold_sweep_task
 from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
 from app.routers.promo_codes import router as promo_codes_router
 from app.routers.affiliate_links import router as affiliate_links_router
@@ -655,6 +656,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", _seed_notification_templates_on_startup)
     app.add_event_handler("startup", start_deletion_scheduler_task)
     app.add_event_handler("startup", start_dmca_timer_task)
+    app.add_event_handler("startup", start_hold_sweep_task)  # MODAB MOD-A6
     app.add_event_handler("startup", start_kyc_sla_checker_task)
     app.add_event_handler("startup", kyc_monitoring_startup)  # GAP-0276
     app.add_event_handler("startup", start_kyc_liveness_expiry_task)

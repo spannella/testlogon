@@ -1609,6 +1609,13 @@ class Settings:
     dmca_timer_interval_seconds: int = int(
         os.environ.get("DMCA_TIMER_INTERVAL_SECONDS", "3600")
     )
+    # MODAB (MOD-A6): precise scheduled 30-day content-hold expiry sweep.
+    moderation_hold_sweep_enabled: bool = os.environ.get(
+        "MODERATION_HOLD_SWEEP_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    moderation_hold_sweep_interval_seconds: int = int(
+        os.environ.get("MODERATION_HOLD_SWEEP_INTERVAL_SECONDS", "900")
+    )
     dmca_max_claims_per_claimant_per_day: int = int(
         os.environ.get("DMCA_MAX_CLAIMS_PER_CLAIMANT_PER_DAY", "20")
     )

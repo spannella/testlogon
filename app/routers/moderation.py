@@ -28,7 +28,7 @@ RATE_LIMIT_USER_WINDOW_SECONDS = int(os.environ.get("MODERATION_REPORT_RATE_LIMI
 RATE_LIMIT_USER_MAX = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_USER_MAX", "8"))
 RATE_LIMIT_IP_WINDOW_SECONDS = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_IP_WINDOW_SECONDS", "60"))
 RATE_LIMIT_IP_MAX = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_IP_MAX", "20"))
-ALLOWED_TOPICS = {"sexual", "extortion", "criminal", "spam", "racist", "harassment", "hate", "violence_threats", "other"}
+ALLOWED_TOPICS = {"sexual", "extortion", "criminal", "spam", "racist", "harassment", "hate", "violence_threats", "other", "licensing_ip"}
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +284,10 @@ def _create_report(inp: CreateModerationReportIn, ctx: Dict[str, str], request: 
     )
     _run_anti_spam_heuristics(reporter_user_id=reporter_user_id, inp=inp, request=request)
 
+    # MODAB (MOD-B1): licensing/IP reports go to the DMCA auto-hide pipeline, not a general ticket.
+    if "licensing_ip" in inp.topics:
+        return _route_licensing_report_to_dmca(inp, reporter_user_id, now_ts)
+
     duplicate = _find_recent_duplicate(
         reporter_user_id=reporter_user_id,
         content_type=inp.content_type,
@@ -397,3 +401,111 @@ def create_moderation_report(inp: CreateModerationReportIn, request: Request, ct
 @compat_router.post("/reports", response_model=CreateModerationReportOut)
 def create_moderation_report_compat(inp: CreateModerationReportIn, request: Request, ctx=Depends(require_ui_session)):
     return _create_report(inp, ctx, request=request)
+
+
+# ── MODAB (MOD-B1): route a licensing/IP report to the DMCA auto-hide pipeline ──
+def _route_licensing_report_to_dmca(inp: "CreateModerationReportIn", reporter_user_id: str, now_ts: int) -> "CreateModerationReportOut":
+    from app.services.dmca_claims import file_dmca_claim
+
+    ct = inp.content_type
+    dmca_ct = ct
+    content_id = inp.content_id
+    if ct in ("feed_media", "feed_post"):
+        dmca_ct = "feed_post"
+        content_id = (getattr(inp, "post_id", None) or inp.content_id) if ct == "feed_media" else inp.content_id
+    elif ct in ("message", "message_media"):
+        dmca_ct = "message_media"
+
+    claim_input = {
+        "claimant_name": reporter_user_id,
+        "claimant_email": f"{reporter_user_id}@reporter.testlogon",
+        "content_type": dmca_ct,
+        "content_id": content_id,
+        "original_work_description": inp.reason_text,
+        "sworn_statement": True,
+        "good_faith_belief": True,
+        "signature": reporter_user_id,
+    }
+    result = file_dmca_claim(claim_input, reporter_user_id)
+    claim_id = str(result.get("claim_id") or "")
+    write_moderation_audit_event(
+        action="report_routed_to_dmca",
+        actor_user_id=reporter_user_id,
+        ticket_id=claim_id,
+        content_type=inp.content_type,
+        content_id=inp.content_id,
+        metadata={"claim_id": claim_id, "strike_number": result.get("strike_number")},
+    )
+    write_alert(
+        reporter_user_id,
+        event="moderation_report_received",
+        outcome="success",
+        title="Report received",
+        details={"report_id": claim_id, "ticket_id": claim_id, "status": "submitted", "routed": "dmca_licensing"},
+    )
+    return CreateModerationReportOut(ok=True, report_id=claim_id, ticket_id=claim_id, status="submitted", created_at=now_ts)
+
+
+# ── MODAB (MOD-A5): poster response to a 30-day content hold ──
+class HoldRespondIn(BaseModel):
+    statement: str = Field(min_length=1, max_length=2000)
+
+
+class HoldActionOut(BaseModel):
+    ok: bool
+    case_id: str
+    state: str
+
+
+def _hold_respond(case_id: str, ctx: Dict[str, str], inp: HoldRespondIn) -> HoldActionOut:
+    uid = str(ctx.get("user_sub") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    from app.services import moderation_lifecycle as _life
+    try:
+        res = _life.poster_respond(case_id=case_id, owner_user_id=uid, statement=inp.statement)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="not the content owner")
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "case_not_found":
+            raise HTTPException(status_code=404, detail="case not found") from exc
+        raise HTTPException(status_code=409, detail=msg) from exc
+    return HoldActionOut(ok=True, case_id=case_id, state=str(res.get("state") or ""))
+
+
+def _hold_close(case_id: str, ctx: Dict[str, str]) -> HoldActionOut:
+    uid = str(ctx.get("user_sub") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    from app.services import moderation_lifecycle as _life
+    try:
+        res = _life.poster_close(case_id=case_id, owner_user_id=uid)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="not the content owner")
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "case_not_found":
+            raise HTTPException(status_code=404, detail="case not found") from exc
+        raise HTTPException(status_code=409, detail=msg) from exc
+    return HoldActionOut(ok=True, case_id=case_id, state=str(res.get("state") or ""))
+
+
+@router.post("/holds/{case_id}/respond", response_model=HoldActionOut)
+def hold_respond(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_session)):
+    return _hold_respond(case_id, ctx, inp)
+
+
+@compat_router.post("/holds/{case_id}/respond", response_model=HoldActionOut)
+def hold_respond_compat(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_session)):
+    return _hold_respond(case_id, ctx, inp)
+
+
+@router.post("/holds/{case_id}/close", response_model=HoldActionOut)
+def hold_close(case_id: str, ctx=Depends(require_ui_session)):
+    return _hold_close(case_id, ctx)
+
+
+@compat_router.post("/holds/{case_id}/close", response_model=HoldActionOut)
+def hold_close_compat(case_id: str, ctx=Depends(require_ui_session)):
+    return _hold_close(case_id, ctx)

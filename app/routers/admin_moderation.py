@@ -970,3 +970,190 @@ def resolve_moderation_ticket(
 
     updated = _get_ticket_or_404(ticket_id)
     return _to_ticket_out(updated)
+
+
+# ── MODAB (MOD-A4): moderation_case triage — dismiss / confirm-30d-hold / final-call ──
+class _CaseActionOut(BaseModel):
+    ok: bool
+    ticket_id: str
+    case_id: str
+    state: str
+    hidden: bool = False
+    hold_until: int | None = None
+    owner_user_id: str | None = None
+    enforcement_id: str | None = None
+
+
+class _FinalCallIn(BaseModel):
+    action: Literal["reinstate", "delete"]
+    note: str | None = Field(default=None, max_length=2000)
+    ban: bool = False
+    ban_duration_days: int | None = Field(default=None, ge=0, le=3650)
+    second_approver_admin_user_id: str | None = Field(default=None, max_length=256)
+
+
+def _modab_case_and_meta(ticket_id: str):
+    from app.services import moderation_case as _mc
+    ticket = _get_ticket_or_404(ticket_id)
+    reports = _linked_reports(ticket_id)
+    snapshot = _content_snapshot(ticket, reports)
+    ct = str(ticket.get("content_type") or "")
+    cid = str(ticket.get("content_id") or "")
+    meta = (reports[0].get("metadata") if reports else {}) or {}
+    case = _mc.get_case_for_content(ct, cid)
+    if not case:
+        owner = _infer_offender_user_id(ticket, snapshot)
+        case = _mc.aggregate_report(
+            content_type=ct,
+            content_id=cid,
+            categories=_to_topic_list(ticket.get("aggregated_topics")),
+            owner_user_id=owner,
+            ticket_id=ticket_id,
+            metadata=meta,
+        )
+    return ticket, case, meta
+
+
+def _modab_tag_ticket(ticket_id: str, *, status: str, admin_sub: str, case_state: str, resolution: str | None = None, hold_until: int | None = None) -> None:
+    now = str(int(time.time()))
+    names = {"#s": "status", "#ua": "updated_at", "#cs": "moderation_case_state"}
+    vals: dict[str, Any] = {":s": status, ":ua": now, ":cs": case_state}
+    sets = ["#s = :s", "#ua = :ua", "#cs = :cs"]
+    if resolution is not None:
+        names["#r"] = "resolution"; vals[":r"] = resolution; sets.append("#r = :r")
+        names["#ra"] = "resolved_at"; vals[":ra"] = now; sets.append("#ra = :ra")
+        names["#rb"] = "resolved_by_admin_user_id"; vals[":rb"] = admin_sub; sets.append("#rb = :rb")
+    if hold_until is not None:
+        names["#hu"] = "hold_until"; vals[":hu"] = hold_until; sets.append("#hu = :hu")
+    T.moderation_tickets.update_item(
+        Key={"ticket_id": ticket_id},
+        UpdateExpression="SET " + ", ".join(sets),
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=vals,
+    )
+
+
+@router.post("/tickets/{ticket_id}/dismiss", response_model=_CaseActionOut)
+def dismiss_moderation_case(
+    ticket_id: str,
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> _CaseActionOut:
+    ensure_admin_actions_enabled(admin)
+    from app.services import moderation_lifecycle as _life
+    ticket, case, meta = _modab_case_and_meta(ticket_id)
+    res = _life.admin_dismiss(case=case, metadata=meta, admin_user_id=admin.sub)
+    _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="no_violation")
+    write_moderation_audit_event(
+        action="content_case_dismissed",
+        actor_user_id=admin.sub,
+        ticket_id=ticket_id,
+        content_type=str(ticket.get("content_type") or ""),
+        content_id=str(ticket.get("content_id") or ""),
+        target_user_id=str(res.get("owner_user_id") or ""),
+        metadata={"case_id": case["case_id"], "state": res["state"]},
+    )
+    return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=False, owner_user_id=res.get("owner_user_id"))
+
+
+@router.post("/tickets/{ticket_id}/confirm", response_model=_CaseActionOut)
+def confirm_moderation_case(
+    ticket_id: str,
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> _CaseActionOut:
+    ensure_admin_actions_enabled(admin)
+    from app.services import moderation_lifecycle as _life
+    ticket, case, meta = _modab_case_and_meta(ticket_id)
+    res = _life.admin_confirm_hold(case=case, metadata=meta, admin_user_id=admin.sub)
+    _modab_tag_ticket(ticket_id, status="open", admin_sub=admin.sub, case_state=res["state"], hold_until=res.get("hold_until"))
+    write_moderation_audit_event(
+        action="content_violation_confirmed",
+        actor_user_id=admin.sub,
+        ticket_id=ticket_id,
+        content_type=str(ticket.get("content_type") or ""),
+        content_id=str(ticket.get("content_id") or ""),
+        target_user_id=str(res.get("owner_user_id") or ""),
+        metadata={"case_id": case["case_id"], "hold_until": res.get("hold_until")},
+    )
+    return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=True, hold_until=res.get("hold_until"), owner_user_id=res.get("owner_user_id"))
+
+
+@router.post("/tickets/{ticket_id}/final-call", response_model=_CaseActionOut)
+def final_call_moderation_case(
+    ticket_id: str,
+    inp: _FinalCallIn,
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> _CaseActionOut:
+    ensure_admin_actions_enabled(admin)
+    from app.services import moderation_lifecycle as _life
+    ticket, case, meta = _modab_case_and_meta(ticket_id)
+    note = str(inp.note or "").strip()
+
+    if inp.action == "reinstate":
+        res = _life.admin_final_reinstate(case=case, metadata=meta, admin_user_id=admin.sub)
+        _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="no_violation")
+        write_moderation_audit_event(
+            action="content_case_reinstated",
+            actor_user_id=admin.sub,
+            ticket_id=ticket_id,
+            content_type=str(ticket.get("content_type") or ""),
+            content_id=str(ticket.get("content_id") or ""),
+            target_user_id=str(res.get("owner_user_id") or ""),
+            metadata={"case_id": case["case_id"]},
+        )
+        return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=False, owner_user_id=res.get("owner_user_id"))
+
+    # action == "delete"
+    permanent = bool(inp.ban) and int(inp.ban_duration_days or 0) <= 0
+    if permanent:
+        _require_senior_moderation_for_permanent_ban(admin=admin)
+        ensure_permanent_ban_scope_rollout(admin)
+        _require_dual_approval_for_permanent_ban(admin=admin, second_approver_admin_user_id=inp.second_approver_admin_user_id)
+
+    res = _life.admin_final_delete(case=case, metadata=meta, admin_user_id=admin.sub, source_ticket_id=ticket_id, note=note or "admin_final_delete")
+    owner = str(res.get("owner_user_id") or "")
+
+    if inp.ban and owner:
+        ban_enf_id = f"enf_{uuid.uuid4().hex[:20]}"
+        now = str(int(time.time()))
+        T.user_enforcement_history.put_item(
+            Item={
+                "user_id": owner,
+                "enforcement_id": ban_enf_id,
+                "entity_type": "user_enforcement",
+                "status": "active",
+                "enforcement_type": "ban",
+                "source_ticket_id": ticket_id,
+                "created_at": now,
+                "created_by_admin_user_id": admin.sub,
+                "note": note,
+                "duration_days": int(inp.ban_duration_days or 0),
+            }
+        )
+        apply_ban(
+            offender_user_id=owner,
+            ticket_id=ticket_id,
+            admin_user_id=admin.sub,
+            note=note,
+            duration_days=inp.ban_duration_days,
+            policy_category="content_violation",
+            enforcement_id=ban_enf_id,
+        )
+        write_moderation_audit_event(
+            action="enforcement_banned",
+            actor_user_id=admin.sub,
+            ticket_id=ticket_id,
+            target_user_id=owner,
+            metadata={"duration_days": int(inp.ban_duration_days or 0), "permanent": permanent},
+        )
+
+    _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="content_removed")
+    write_moderation_audit_event(
+        action="content_case_deleted",
+        actor_user_id=admin.sub,
+        ticket_id=ticket_id,
+        content_type=str(ticket.get("content_type") or ""),
+        content_id=str(ticket.get("content_id") or ""),
+        target_user_id=owner,
+        metadata={"case_id": case["case_id"], "enforcement_id": res.get("enforcement_id"), "banned": bool(inp.ban)},
+    )
+    return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=True, owner_user_id=owner, enforcement_id=res.get("enforcement_id"))
