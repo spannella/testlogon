@@ -4735,4 +4735,62 @@
     <string name="pmideas_session_expired_title">Session expired</string>
     <string name="pmideas_session_expired_body">Please sign in again to continue.</string>
 
+    <!-- ADV2-E5 (F5+F6): ad-messaging (sponsored mass-messaging + advertiser direct mass-DM). -->
+    <string name="admsg_back">Back</string>
+    <string name="admsg_compose_title">Sponsor a message</string>
+    <string name="admsg_compose_subtitle">Draft a message for a creator to send to their own audience, in their own voice. Nothing sends until the creator approves it.</string>
+    <string name="admsg_compose_creator_label">Creator (user id)</string>
+    <string name="admsg_compose_body_label">Message text</string>
+    <string name="admsg_compose_cta_label">Call-to-action link (optional)</string>
+    <string name="admsg_compose_billing_header">Billing</string>
+    <string name="admsg_compose_account_label">Ad account id</string>
+    <string name="admsg_compose_campaign_label">Campaign id</string>
+    <string name="admsg_compose_label_label">Sponsor label (optional)</string>
+    <string name="admsg_compose_submit">Send to creator</string>
+    <string name="admsg_compose_footnote">You are billed per recipient from your funded ad account once the creator approves: 2¢ on delivery, +5¢ on open, +10¢ on click. The creator earns 70%% of each charge.</string>
+    <string name="admsg_compose_sent_title">Offer sent</string>
+    <string name="admsg_compose_sent_body">The creator will see it in their approval queue. It sends only if they approve.</string>
+    <string name="admsg_compose_done">Done</string>
+    <string name="admsg_queue_title">Sponsored message requests</string>
+    <string name="admsg_queue_from">From %1$s</string>
+    <string name="admsg_queue_advertiser_unknown">an advertiser</string>
+    <string name="admsg_queue_cta_link">Link: %1$s</string>
+    <string name="admsg_queue_send_hint">Approving sends this to your audience as your own message — you earn 70%% of every delivery, open and click.</string>
+    <string name="admsg_queue_approve">Approve &amp; send</string>
+    <string name="admsg_queue_reject">Reject</string>
+    <string name="admsg_queue_empty_title">No sponsored message requests</string>
+    <string name="admsg_queue_empty_body">When a brand drafts a message for you to send, it will appear here to approve or reject.</string>
+    <plurals name="admsg_queue_sent_snackbar">
+        <item quantity="one">Sent to %1$d recipient.</item>
+        <item quantity="other">Sent to %1$d recipients.</item>
+    </plurals>
+    <string name="admsg_massdm_title">Message your audience</string>
+    <string name="admsg_massdm_subtitle">Send a direct message to people who follow or subscribe to you. Only existing relationships receive it, and anyone who opted out of promotional messages is excluded.</string>
+    <string name="admsg_massdm_body_label">Message text</string>
+    <string name="admsg_massdm_send">Send mass message</string>
+    <string name="admsg_massdm_footnote">You are billed per recipient from your funded ad account: 2¢ on delivery, +5¢ on open, +10¢ on click. Sending stops if your balance runs out.</string>
+    <string name="admsg_massdm_audience_title">Audience</string>
+    <string name="admsg_massdm_audience_explainer">Followers and subscribers who have not opted out of promotional messages.</string>
+    <string name="admsg_massdm_audience_retry">Retry</string>
+    <string name="admsg_massdm_paused_funds">Your balance ran out mid-send, so some recipients were not reached.</string>
+    <plurals name="admsg_massdm_reachable">
+        <item quantity="one">%1$d person reachable</item>
+        <item quantity="other">%1$d people reachable</item>
+    </plurals>
+    <plurals name="admsg_massdm_excluded_optout">
+        <item quantity="one">%1$d follower opted out and was excluded.</item>
+        <item quantity="other">%1$d followers opted out and were excluded.</item>
+    </plurals>
+    <plurals name="admsg_massdm_sent_title">
+        <item quantity="one">Sent to %1$d recipient</item>
+        <item quantity="other">Sent to %1$d recipients</item>
+    </plurals>
+    <string name="admsg_prefs_title">Promotional messages</string>
+    <string name="admsg_prefs_body">Creators and brands you follow or subscribe to can send you promotional (ad) messages. Turn this off to stop receiving them — you will still receive normal messages.</string>
+    <string name="admsg_prefs_switch_label">Allow promotional messages</string>
+    <string name="more_entry_ad_message_compose">Sponsor a message</string>
+    <string name="more_entry_ad_message_queue">Sponsored message requests</string>
+    <string name="more_entry_ad_mass_dm">Message your audience</string>
+    <string name="thread_ad_sponsored_label">Sponsored</string>
+    <string name="thread_ad_learn_more">Learn more</string>
 </resources>

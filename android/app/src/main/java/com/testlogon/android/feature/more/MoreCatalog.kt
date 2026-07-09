@@ -1235,6 +1235,33 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // ADV2-E5 (F5): advertiser "propose a sponsored message to a creator" composer.
+        MoreEntry(
+            id = "ad_message_compose",
+            labelRes = R.string.more_entry_ad_message_compose,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.AD_MESSAGE_COMPOSE,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // ADV2-E5 (F5): creator APPROVAL QUEUE for advertiser-drafted sponsored MESSAGES.
+        MoreEntry(
+            id = "ad_message_queue",
+            labelRes = R.string.more_entry_ad_message_queue,
+            icon = Icons.Outlined.FactCheck,
+            route = MoreRoutes.AD_MESSAGE_QUEUE,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // ADV2-E5 (F6): advertiser DIRECT mass-DM composer (eligible relationships only).
+        MoreEntry(
+            id = "ad_mass_dm",
+            labelRes = R.string.more_entry_ad_mass_dm,
+            icon = Icons.Outlined.Sms,
+            route = MoreRoutes.AD_MASS_DM,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // AND-367: ads-account billing (balance/lifetime-spend + ledger + invoice) + DEPOSIT add-funds.
         MoreEntry(
             id = "ads_billing",

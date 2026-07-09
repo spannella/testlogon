@@ -46,6 +46,10 @@ import java.util.Locale
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.ui.platform.LocalUriHandler
+import com.testlogon.android.feature.admessaging.ui.AdMessageThreadReportViewModel
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -313,6 +317,20 @@ fun ThreadRoute(
         if (shouldLoadOlder) viewModel.loadOlder()
     }
 
+    // ADV2-E5 (F5+F6) — recipient-side ad-message engagement (open/click) reporter + CTA opener.
+    val adReportViewModel: AdMessageThreadReportViewModel = hiltViewModel()
+    val adUriHandler = LocalUriHandler.current
+    LaunchedEffect(state.messages) {
+        // Showing the thread == the recipient opened these ad DMs -> report open (idempotent + deduped).
+        state.messages.forEach { m ->
+            if (m.isAdMessage && !m.isOwn) adReportViewModel.reportOpen(m.adClickId)
+        }
+    }
+    val onAdCtaTap: (ThreadMessageUi) -> Unit = { m ->
+        adReportViewModel.reportClick(m.adClickId)
+        m.adCtaUrl?.takeIf { it.isNotBlank() }?.let { runCatching { adUriHandler.openUri(it) } }
+    }
+
     ThreadScreen(
         state = state,
         listState = listState,
@@ -402,6 +420,7 @@ fun ThreadRoute(
         nowSeconds = rememberNowTicker(),
         onUnlock = viewModel::onUnlockClick,
         onTip = viewModel::onTipOpen,
+        onAdCta = onAdCtaTap,
         onOpenEncrypted = viewModel::openEncryptUnlock,
         onOpenViewOnce = viewModel::openViewOnce,
         onAddToCalendar = { event ->
@@ -1023,6 +1042,7 @@ fun ThreadScreen(
     onTipNoteChange: (String) -> Unit,
     onTipConfirm: () -> Unit,
     onTipDismiss: () -> Unit,
+    onAdCta: (ThreadMessageUi) -> Unit = {},
     onAction: (ThreadAction) -> Unit = {},
     onJumpToPinned: (String) -> Unit = {},
     onJumpToMessage: (String) -> Unit = {},
@@ -1298,6 +1318,7 @@ fun ThreadScreen(
                     onPollConfirm = onPollConfirm,
                     onUnlock = onUnlock,
                     onTip = onTip,
+                    onAdCta = onAdCta,
                     onOpenEncrypted = onOpenEncrypted,
                     onOpenViewOnce = onOpenViewOnce,
                     onAddToCalendar = onAddToCalendar,
@@ -1495,6 +1516,7 @@ private fun ThreadList(
     onOpenViewOnce: (String) -> Unit,
     onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
     onAction: (ThreadAction) -> Unit,
+    onAdCta: (ThreadMessageUi) -> Unit = {},
     onMessageLongPress: (ThreadMessageUi) -> Unit,
     onJumpToMessage: (String) -> Unit = {},
     pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
@@ -1544,6 +1566,7 @@ private fun ThreadList(
                     onPollConfirm = onPollConfirm,
                     onUnlock = { onUnlock(message.key) },
                     onTip = { onTip(message.key) },
+                    onAdCta = { onAdCta(message) },
                     onOpenEncrypted = { onOpenEncrypted(message.key) },
                     onOpenViewOnce = { onOpenViewOnce(message.key) },
                     onAddToCalendar = onAddToCalendar,
@@ -1600,6 +1623,43 @@ private fun rememberNowTicker(periodMs: Long = 15_000L): Long {
     return now
 }
 
+/**
+ * ADV2-E5 (F5+F6) — the sponsored-message disclosure + CTA rendered under a received ad DM. Shows the
+ * sponsor label (or a default "Sponsored") and, when the ad carries a CTA link, a tonal button that
+ * reports the CLICK (+10c to the advertiser, once) and opens the link.
+ */
+@Composable
+private fun AdMessageFooter(message: ThreadMessageUi, onAdCta: () -> Unit) {
+    Column(
+        modifier = Modifier.widthIn(max = 280.dp).padding(top = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Outlined.Campaign,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = message.sponsorLabel?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.thread_ad_sponsored_label),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(start = 4.dp),
+            )
+        }
+        if (!message.adCtaUrl.isNullOrBlank()) {
+            FilledTonalButton(
+                onClick = onAdCta,
+                modifier = Modifier.testTag("thread_ad_cta"),
+            ) {
+                Text(stringResource(R.string.thread_ad_learn_more))
+            }
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
@@ -1619,6 +1679,7 @@ private fun MessageBubble(
     onPollConfirm: (String, String) -> Unit,
     onUnlock: () -> Unit,
     onTip: () -> Unit,
+    onAdCta: () -> Unit = {},
     onOpenEncrypted: () -> Unit = {},
     onOpenViewOnce: () -> Unit = {},
     onAddToCalendar: (MessageMedia.CalendarEvent) -> Unit,
@@ -1976,6 +2037,11 @@ private fun MessageBubble(
         // manual refresh. Gated/teaser bubbles still gate first; a still-locked message keeps no overlay.
         message.countdown?.let { cd ->
             CountdownOverlay(countdown = cd, isOwn = message.isOwn)
+        }
+        // ADV2-E5 (F5+F6) — a delivered sponsored ad message shows a sponsor label + a CTA; the recipient
+        // opening the thread reports OPEN (route-level LaunchedEffect) and tapping the CTA reports CLICK.
+        if (message.isAdMessage && !message.isOwn && !message.isTombstone) {
+            AdMessageFooter(message = message, onAdCta = onAdCta)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (message.isFailed) {

@@ -218,6 +218,9 @@ class ThreadViewModel @Inject constructor(
     // TIP-B2 - server-hydrated tip_reactions captured from loadHistory (NOT Room-persisted), so the
     // AUTHOR (who has no optimistic overlay) also renders the money-reaction chip. Keyed by message id.
     private val tipReactionHydration = mutableMapOf<String, List<com.testlogon.android.data.messaging.TipReaction>>()
+    // ADV2-E5 (F5+F6) - server-hydrated ad-message fields captured from loadHistory (NOT
+    // Room-persisted), so a delivered sponsored DM renders the sponsor footer + fires open/click.
+    private val adMessageHydration = mutableMapOf<String, Message>()
     // MSG — view-once messages consumed locally this session (hidden immediately on close, even before
     // the server reflects the consumption). Keyed by message UI key.
     private val locallyConsumed = mutableSetOf<String>()
@@ -357,7 +360,7 @@ class ThreadViewModel @Inject constructor(
                             ui.copy(
                                 decryptedText = decryptedMessages[ui.key],
                                 tipReactions = mergeTipReactions(mergeTipReactions(ui.tipReactions, tipReactionHydration[ui.key]), tipReactionOverlay[ui.key]),
-                            )
+                            ).let { base -> adMessageHydration[ui.key]?.let { h -> base.copy(isAdMessage = h.isAdMessage, adClickId = h.adClickId, adCtaUrl = h.adCtaUrl, sponsorLabel = h.sponsorLabel) } ?: base }
                         },
                         receipts = computeReceipts(visible, self),
                         peerUserSub = prior.peerUserSub ?: otherSenders.firstOrNull(),
@@ -496,8 +499,9 @@ class ThreadViewModel @Inject constructor(
             when (val result = repository.loadHistory(conversationId, before = null, limit = PAGE_SIZE)) {
                 is ApiResult.Success -> {
                     oldestLoadedId = result.data.minByOrNull { it.createdAtEpochSeconds }?.id ?: oldestLoadedId
-                    result.data.forEach { m -> m.id?.let { id -> if (m.tipReactions.isNotEmpty()) tipReactionHydration[id] = m.tipReactions } }
+                    result.data.forEach { m -> m.id?.let { id -> if (m.tipReactions.isNotEmpty()) tipReactionHydration[id] = m.tipReactions; if (m.isAdMessage) adMessageHydration[id] = m } }
                     _state.update { st -> st.copy(messages = st.messages.map { mu -> tipReactionHydration[mu.key]?.let { h -> mu.copy(tipReactions = mergeTipReactions(h, tipReactionOverlay[mu.key])) } ?: mu }) }
+                    _state.update { st -> st.copy(messages = st.messages.map { mu -> adMessageHydration[mu.key]?.let { h -> mu.copy(isAdMessage = h.isAdMessage, adClickId = h.adClickId, adCtaUrl = h.adCtaUrl, sponsorLabel = h.sponsorLabel) } ?: mu }) }
                     _state.update {
                         it.copy(
                             isLoadingInitial = false,
@@ -522,7 +526,7 @@ class ThreadViewModel @Inject constructor(
                 is ApiResult.Success -> {
                     val newOldest = result.data.minByOrNull { it.createdAtEpochSeconds }?.id
                     if (newOldest != null) oldestLoadedId = newOldest
-                    result.data.forEach { m -> m.id?.let { id -> if (m.tipReactions.isNotEmpty()) tipReactionHydration[id] = m.tipReactions } }
+                    result.data.forEach { m -> m.id?.let { id -> if (m.tipReactions.isNotEmpty()) tipReactionHydration[id] = m.tipReactions; if (m.isAdMessage) adMessageHydration[id] = m } }
                     _state.update {
                         it.copy(isLoadingOlder = false, endOfHistory = result.data.size < PAGE_SIZE)
                     }
@@ -3088,4 +3092,9 @@ internal fun Message.toUi(currentUserSub: String?): ThreadMessageUi = ThreadMess
     lockCurrency = lockCurrency,
     // #6 (B-COUNTDOWN3) — pass the countdown attribute through so the bubble can overlay the ticker/reveal.
     countdown = countdown,
+    // ADV2-E5 (F5+F6) — pass the sponsored ad-message fields to the bubble (sponsor label + CTA + open/click).
+    isAdMessage = isAdMessage,
+    adClickId = adClickId,
+    adCtaUrl = adCtaUrl,
+    sponsorLabel = sponsorLabel,
 )

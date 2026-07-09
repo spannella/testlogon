@@ -487,6 +487,11 @@ data class ThreadMessageUi(
     val countdown: com.testlogon.android.data.messaging.MessageCountdown? = null,
     /** TIP-203 - money-reaction (tip) badges on this message; distinct from [reactions]. */
     val tipReactions: List<com.testlogon.android.data.messaging.TipReaction> = emptyList(),
+    /** ADV2-E5 (F5+F6) — a delivered sponsored ad-message: render the sponsor label + CTA, report open/click. */
+    val isAdMessage: Boolean = false,
+    val adClickId: String? = null,
+    val adCtaUrl: String? = null,
+    val sponsorLabel: String? = null,
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING

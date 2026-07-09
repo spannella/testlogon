@@ -161,6 +161,13 @@ data class MessageDto(
     val scheduled: Boolean? = null,
     /** #8 — epoch SECONDS the scheduled message is due to be delivered (null when not scheduled). */
     @Json(name = "deliver_at") val deliverAt: Long? = null,
+    /** ADV2-E5 (F5+F6) — sponsored ad-message fields (present on a delivered ad DM; kind stays "text"). */
+    @Json(name = "ad_message") val adMessage: Boolean? = null,
+    @Json(name = "ad_click_id") val adClickId: String? = null,
+    @Json(name = "cta_url") val ctaUrl: String? = null,
+    @Json(name = "ad_image_url") val adImageUrl: String? = null,
+    @Json(name = "sponsor_label") val sponsorLabel: String? = null,
+    @Json(name = "content_owner_sub") val contentOwnerSub: String? = null,
 )
 
 /** #31 — countdown reveal payload (revealed once the target passes). media[] may mix images + videos. */

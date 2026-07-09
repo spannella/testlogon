@@ -251,6 +251,18 @@ object MoreRoutes {
     // approve publishes a normal creator post carrying the DISTINCT paid_partnership flag / reject).
     const val SPONSORED_POST_QUEUE = SponsoredPostQueueDest.ROUTE
 
+    // ADV2-E5 (F5): advertiser "propose a sponsored MESSAGE to a creator" composer (draft body + billing
+    // linkage -> POST an offer; nothing sends until the creator approves — then it sends AS the creator).
+    const val AD_MESSAGE_COMPOSE = AdMessageComposeDest.ROUTE
+
+    // ADV2-E5 (F5): creator APPROVAL QUEUE for advertiser-drafted sponsored MESSAGES (pending offers ->
+    // approve SENDS the message to the creator's audience as the creator / reject).
+    const val AD_MESSAGE_QUEUE = AdMessageQueueDest.ROUTE
+
+    // ADV2-E5 (F6): advertiser DIRECT mass-DM composer (compose + send AS the advertiser to eligible
+    // relationships only — followers/subscribers minus ad opt-outs; platform-100%).
+    const val AD_MASS_DM = AdMassDmComposeDest.ROUTE
+
     // AND-367: ads-account billing read view (balance/lifetime-spend + ledger + monthly invoice) + the
     // DEPOSIT add-funds sheet. No ads-accounts list yet, so the hub opens a known sample account id (plain
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
@@ -538,6 +550,9 @@ object MoreRoutes {
             SPONSORSHIPS,
             SPONSORED_POST_COMPOSE,
             SPONSORED_POST_QUEUE,
+            AD_MESSAGE_COMPOSE,
+            AD_MESSAGE_QUEUE,
+            AD_MASS_DM,
             ADS_BILLING,
             AD_ANALYTICS,
             ADS_CAMPAIGNS,

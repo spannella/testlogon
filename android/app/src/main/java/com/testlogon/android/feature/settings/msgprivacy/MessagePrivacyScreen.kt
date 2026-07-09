@@ -38,6 +38,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.feature.admessaging.ui.AdMessagePrefsSection
 
 /** TIP-B4 (TIP-404) — route-level entry for the message-privacy (pay-to-message) settings screen. */
 @Composable
@@ -233,5 +234,8 @@ private fun Content(
                 }
             }
         }
+
+        // ADV2-E5 (F5+F6): per-user "Allow promotional messages" opt-out (self-contained VM).
+        AdMessagePrefsSection()
     }
 }

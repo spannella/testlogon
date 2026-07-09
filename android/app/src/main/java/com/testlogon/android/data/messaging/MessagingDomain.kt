@@ -562,6 +562,16 @@ data class Message(
      * tip_reactions on each fetch, like the receipt counts); never Room-persisted.
      */
     val tipReactions: List<TipReaction> = emptyList(),
+    /**
+     * ADV2-E5 (F5+F6) — sponsored ad-message metadata (transient; re-derived from the wire on each
+     * fetch). [isAdMessage] marks a delivered sponsored DM; [adClickId] is the per-recipient billing
+     * handle the recipient round-trips to report open/click; [ctaUrl] is the CTA link; [sponsorLabel]
+     * is the disclosure label to render.
+     */
+    val isAdMessage: Boolean = false,
+    val adClickId: String? = null,
+    val adCtaUrl: String? = null,
+    val sponsorLabel: String? = null,
 )
 
 /** A conversation summary for the inbox list. */
@@ -668,6 +678,11 @@ internal fun MessageDto.toDomain(
         // the server surfaces target_datetime + countdown_title + countdown_reveal on the message
         // itself. Map it to the transient attribute whenever a target is present.
         countdown = toMessageCountdown(),
+        // ADV2-E5 (F5+F6) — carry the sponsored ad-message fields through to the thread UI.
+        isAdMessage = adMessage == true,
+        adClickId = adClickId,
+        adCtaUrl = ctaUrl,
+        sponsorLabel = sponsorLabel,
     )
 }
 

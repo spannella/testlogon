@@ -397,6 +397,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // creator post carrying the DISTINCT paid_partnership flag / reject). Distinct from the ADS-013
         // brand-deal sponsorship inbox above.
         sponsoredPostDestinations(navController)
+        // ADV2-E5 (F5+F6): ad-messaging — the advertiser sponsored-message COMPOSER + the creator
+        // APPROVAL QUEUE (approve SENDS as the creator) + the advertiser direct mass-DM composer.
+        adMessagingDestinations(navController)
         // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> a space's ticket
         // list (Paging-3 over the AND-371 next_cursor) -> a ticket thread (embedded messages, mine-vs-other).
         // Composing / replying / member or status edits are AND-373 and OUT OF SCOPE.
