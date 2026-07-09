@@ -36,12 +36,13 @@ router = APIRouter(prefix="/v1/moderation", tags=["moderation"])
 
 
 class CreateModerationReportIn(BaseModel):
-    content_type: Literal["feed_post", "feed_comment", "feed_media", "message", "message_media", "profile_photo"]
+    content_type: Literal["feed_post", "feed_comment", "feed_media", "message", "message_media", "video", "video_comment", "profile_photo"]
     content_id: str = Field(min_length=1, max_length=256)
     topics: List[str] = Field(min_length=1, max_length=5)
     reason_text: str = Field(min_length=5, max_length=2000)
     post_id: Optional[str] = Field(default=None, max_length=256)
     conversation_id: Optional[str] = Field(default=None, max_length=256)
+    video_id: Optional[str] = Field(default=None, max_length=256)
     media_index: Optional[int] = Field(default=None, ge=0)
 
     @field_validator("topics")
@@ -137,6 +138,32 @@ def _validate_content_exists(inp: CreateModerationReportIn) -> None:
         if not inp.conversation_id:
             raise HTTPException(status_code=400, detail="conversation_id is required for message content")
         if not _message_exists(inp.conversation_id, inp.content_id):
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "video":
+        # MODVIDEO: whole-video report; content_id is the video_id.
+        try:
+            _v = T.video_metadata.get_item(Key={"video_id": inp.content_id}).get("Item")
+        except Exception:
+            _v = True
+        if not _v:
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "video_comment":
+        # MODVIDEO: comment on a video; video_id carries the parent.
+        if not inp.video_id:
+            raise HTTPException(status_code=400, detail="video_id is required for video_comment")
+        try:
+            from app.services.video_comments import get_comment
+            try:
+                _vc = get_comment(video_id=inp.video_id, comment_id=inp.content_id)
+            except TypeError:
+                _vc = get_comment(inp.video_id, inp.content_id)
+        except Exception:
+            _vc = None
+        if not _vc:
             raise HTTPException(status_code=404, detail="content not found")
         return
 
@@ -509,3 +536,100 @@ def hold_close(case_id: str, ctx=Depends(require_ui_session)):
 @compat_router.post("/holds/{case_id}/close", response_model=HoldActionOut)
 def hold_close_compat(case_id: str, ctx=Depends(require_ui_session)):
     return _hold_close(case_id, ctx)
+
+
+# ── MOD-D2: poster lists their OWN moderation cases (My content under review) ──
+class MyModerationCaseOut(BaseModel):
+    case_id: str
+    content_type: str = ""
+    content_id: str = ""
+    state: str = ""
+    categories: List[str] = []
+    report_count: int = 0
+    hold_until: Optional[int] = None
+    days_remaining: Optional[int] = None
+    poster_response: Optional[str] = None
+    responded_at: Optional[int] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class MyModerationCasesOut(BaseModel):
+    cases: List[MyModerationCaseOut]
+
+
+# States surfaced on the poster's "My content under review" screen.
+_MY_REVIEW_STATES = {"under_review", "hold", "awaiting_final"}
+
+
+def _mod_coerce_int(v: Any) -> Optional[int]:
+    try:
+        return None if v is None else int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _case_to_my_out(item: Dict[str, Any], *, now_ts: int) -> "MyModerationCaseOut":
+    cats_raw = item.get("categories") or []
+    if isinstance(cats_raw, (set, frozenset)):
+        cats = sorted(str(c) for c in cats_raw)
+    elif isinstance(cats_raw, (list, tuple)):
+        cats = [str(c) for c in cats_raw]
+    else:
+        cats = [str(cats_raw)]
+    state = str(item.get("state") or "")
+    hold_until = _mod_coerce_int(item.get("hold_until"))
+    days_remaining = None
+    if state == "hold" and hold_until:
+        days_remaining = max(0, (int(hold_until) - int(now_ts) + 86399) // 86400)
+    resp_txt = item.get("poster_response")
+    return MyModerationCaseOut(
+        case_id=str(item.get("case_id") or ""),
+        content_type=str(item.get("content_type") or ""),
+        content_id=str(item.get("content_id") or ""),
+        state=state,
+        categories=cats,
+        report_count=_mod_coerce_int(item.get("report_count")) or 0,
+        hold_until=hold_until,
+        days_remaining=days_remaining,
+        poster_response=(str(resp_txt) if resp_txt else None),
+        responded_at=_mod_coerce_int(item.get("responded_at")),
+        created_at=_mod_coerce_int(item.get("created_at")) or 0,
+        updated_at=_mod_coerce_int(item.get("updated_at")) or 0,
+    )
+
+
+def _list_my_cases(ctx: Dict[str, str]) -> "MyModerationCasesOut":
+    uid = str(ctx.get("user_sub") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    now = int(time.time())
+    out: List[MyModerationCaseOut] = []
+    try:
+        scan_kwargs: Dict[str, Any] = {"FilterExpression": Attr("owner_user_id").eq(uid)}
+        pages = 0
+        while True:
+            resp = T.moderation_cases.scan(**scan_kwargs)
+            for it in resp.get("Items", []) or []:
+                if str(it.get("state") or "") in _MY_REVIEW_STATES:
+                    out.append(_case_to_my_out(it, now_ts=now))
+            lek = resp.get("LastEvaluatedKey")
+            pages += 1
+            if not lek or pages >= 20:
+                break
+            scan_kwargs["ExclusiveStartKey"] = lek
+    except ClientError:
+        logger.exception("moderation._list_my_cases scan failed for %s", uid)
+        raise HTTPException(status_code=503, detail="unavailable")
+    out.sort(key=lambda c: c.updated_at, reverse=True)
+    return MyModerationCasesOut(cases=out)
+
+
+@router.get("/cases/mine", response_model=MyModerationCasesOut)
+def list_my_cases(ctx=Depends(require_ui_session)):
+    return _list_my_cases(ctx)
+
+
+@compat_router.get("/cases/mine", response_model=MyModerationCasesOut)
+def list_my_cases_compat(ctx=Depends(require_ui_session)):
+    return _list_my_cases(ctx)

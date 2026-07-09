@@ -232,6 +232,19 @@ def resolve_owner(*, content_type: str, content_id: str, metadata: Optional[Dict
                 Key={"conversation_id": str(md.get("conversation_id") or ""), "message_id": content_id}
             ).get("Item") or {}
             return item.get("sender_id")
+        if content_type == "video":
+            # MODVIDEO
+            _vid = str(md.get("video_id") or content_id)
+            _it = T.video_metadata.get_item(Key={"video_id": _vid}).get("Item") or {}
+            return _it.get("owner_sub") or _it.get("user_id") or _it.get("creator_id")
+        if content_type == "video_comment":
+            # MODVIDEO
+            from app.services.video_comments import get_comment
+            try:
+                _row = get_comment(video_id=str(md.get("video_id") or ""), comment_id=content_id)
+            except TypeError:
+                _row = get_comment(str(md.get("video_id") or ""), content_id)
+            return (_row or {}).get("user_id")
     except Exception:
         logger.exception("moderation_hide.resolve_owner failed")
     return None
