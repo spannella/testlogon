@@ -12,24 +12,34 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.testlogon.android.R
 import com.testlogon.android.data.feed.FeedPost
 import com.testlogon.android.data.feed.Paywall
 import com.testlogon.android.data.ads.CtaAction
@@ -42,6 +52,10 @@ object PostItemTestTags {
     const val HEADER = "post_header"
     const val BODY = "post_body"
     const val LOCKED_BADGE = "post_locked_badge"
+    // MOD-5 — the compact report overflow shown in the header on read-only surfaces (no action bar),
+    // e.g. the tag / discovery post list, so another user's post can still be reported there.
+    const val REPORT_OVERFLOW = "post_header_report_overflow"
+    const val REPORT_MENU_ITEM = "post_header_report_item"
 }
 
 /** ADV-105 — test tags for the sponsored (paid) feed card. */
@@ -146,6 +160,11 @@ fun PostItem(
                 // #3 — the author's own locked post shows a priced badge (the body is visible to them).
                 ownerLock = if (isOwnPost) post.authorLock else null,
                 onClick = { onAuthorClick(post.authorId) },
+                // MOD-5 — when there is no engagement action bar (read-only discovery / tag surfaces) but a
+                // report handler is wired, surface Report via a compact header overflow instead. On surfaces
+                // WITH the action bar, Report already lives in that bar's overflow, so keep this null there
+                // to avoid a duplicate affordance.
+                onReport = if (!showActionBar) onReport?.let { report -> { report(post) } } else null,
             )
 
             // #4 (B-GROUPUNIFY) — group posts are bridged into the unified feed + "Your posts"; badge them
@@ -237,6 +256,9 @@ private fun PostAuthorHeader(
     // #3 — non-null when the viewer authored this (locked) post: show a priced "Locked · $X" badge.
     ownerLock: com.testlogon.android.data.feed.AuthorLock?,
     onClick: () -> Unit,
+    // MOD-5 — non-null only on read-only surfaces (no action bar) that still allow reporting this post;
+    // renders a compact overflow with a single Report item at the trailing edge of the header.
+    onReport: (() -> Unit)? = null,
 ) {
     val label = authorName?.takeIf { it.isNotBlank() } ?: authorId
     val relative = relativeTime(createdAtEpochSeconds)
@@ -303,6 +325,45 @@ private fun PostAuthorHeader(
                     )
                 }
             }
+        }
+        // MOD-5 — read-only surfaces (tag / discovery) have no action bar, so the only place to report
+        // another user's post is here in the header.
+        if (onReport != null) {
+            PostHeaderReportOverflow(onReport = onReport)
+        }
+    }
+}
+
+/**
+ * MOD-5 — a compact, report-only overflow for read-only post surfaces (the tag page / discovery list)
+ * that don't render the full engagement action bar. Mirrors the PostActionBar overflow's Report item so
+ * the report affordance is consistent everywhere; opening it drives the same ContentReportSheetHost via
+ * the caller's onReport → ReportTarget.Content(id, "feed_post").
+ */
+@Composable
+private fun PostHeaderReportOverflow(onReport: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(
+            onClick = { expanded = true },
+            modifier = Modifier.size(40.dp).testTag(PostItemTestTags.REPORT_OVERFLOW),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.MoreVert,
+                contentDescription = stringResource(R.string.feed_action_more),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.msg_action_report)) },
+                leadingIcon = { Icon(Icons.Outlined.Flag, contentDescription = null) },
+                onClick = {
+                    expanded = false
+                    onReport()
+                },
+                modifier = Modifier.testTag(PostItemTestTags.REPORT_MENU_ITEM),
+            )
         }
     }
 }

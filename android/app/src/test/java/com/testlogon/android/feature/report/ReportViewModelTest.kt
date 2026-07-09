@@ -82,7 +82,7 @@ class ReportViewModelTest {
     fun submit_deduplicated_mapsToAlreadyReported() = runTest {
         repo.result = ApiResult.Success(ReportResult("rpt_2", alreadyReported = true))
         val viewModel = vm()
-        viewModel.onTopicToggled(ReportReason.CRIMINAL, true)
+        viewModel.onTopicToggled(ReportReason.HARASSMENT, true)
         viewModel.onReasonTextChanged("already flagged this")
         viewModel.submit()
         advanceUntilIdle()
@@ -120,7 +120,7 @@ class ReportViewModelTest {
     fun terminal401_isNonRetryableSignIn_andCallsRepoOnce() = runTest {
         repo.result = ApiResult.Failure(ApiError(401, "unauthorized"))
         val viewModel = vm()
-        viewModel.onTopicToggled(ReportReason.RACIST, true)
+        viewModel.onTopicToggled(ReportReason.HATE, true)
         viewModel.onReasonTextChanged("hate speech here")
         viewModel.submit()
         advanceUntilIdle()

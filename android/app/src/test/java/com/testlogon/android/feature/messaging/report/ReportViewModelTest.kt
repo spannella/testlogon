@@ -105,7 +105,7 @@ class ReportViewModelTest {
     fun submit_networkError_showsOfflineMessage() = runTest {
         repo.result = ApiResult.NetworkError(java.io.IOException("down"))
         val viewModel = vm()
-        viewModel.onReasonSelected(ReportReason.CRIMINAL)
+        viewModel.onReasonSelected(ReportReason.HARASSMENT)
         viewModel.onStatementChanged("illegal stuff")
         viewModel.submit()
         advanceUntilIdle()

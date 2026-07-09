@@ -64,7 +64,7 @@ class AdsAccountsApiTest {
         server.enqueue(
             jsonResponse(
                 """[
-                    {"account_id":"acc_1","name":"Acme Ads","status":"active",
+                    {"account_id":"acc_1","company_name":"Acme Ads","status":"active",
                      "balance_cents":12345,"lifetime_spend_cents":99999},
                     {"account_id":"acc_2","balance_cents":0,"lifetime_spend_cents":0}
                 ]""",
@@ -80,7 +80,9 @@ class AdsAccountsApiTest {
         assertEquals("acc_1", accounts[0].accountId)
         assertEquals(AdAccountStatus.ACTIVE, accounts[0].status)
         assertEquals(12345L, accounts[0].balanceCents)
-        // sparse row: status defaults to UNKNOWN, name null
+        // ADV-fixtures — the picker label comes off the real wire key `company_name` (not `name`).
+        assertEquals("Acme Ads", accounts[0].companyName)
+        // sparse row: status defaults to UNKNOWN, companyName null
         assertEquals(AdAccountStatus.UNKNOWN, accounts[1].status)
     }
 
@@ -90,7 +92,7 @@ class AdsAccountsApiTest {
     fun getAdsAccount_substitutesAccountIdPath_decodesSingle() = runTest {
         server.enqueue(
             jsonResponse(
-                """{"account_id":"acc_1","name":"Acme Ads","status":"suspended",
+                """{"account_id":"acc_1","company_name":"Acme Ads","status":"suspended",
                     "balance_cents":500,"lifetime_spend_cents":7000,"created_at":1700000000}""",
             ),
         )

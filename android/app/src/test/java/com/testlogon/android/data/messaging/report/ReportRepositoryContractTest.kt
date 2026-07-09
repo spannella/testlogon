@@ -66,11 +66,11 @@ class ReportRepositoryContractTest {
         backend.enqueue(
             Fixtures.okBody(
                 """{"ok":true,"report_id":"r","conversation_id":"c1","message_id":"m1",
-                   "reason_code":"racist","status":"submitted","created_at":1}""",
+                   "reason_code":"hate","status":"submitted","created_at":1}""",
             ),
         )
-        repo().reportMessage("c1", "m1", ReportReason.RACIST, "hate speech here")
-        assertEquals("racist", backend.takeRequest().bodyJson()["reason_code"])
+        repo().reportMessage("c1", "m1", ReportReason.HATE, "hate speech here")
+        assertEquals("hate", backend.takeRequest().bodyJson()["reason_code"])
     }
 
     @Test
@@ -112,7 +112,7 @@ class ReportRepositoryContractTest {
     fun reportMessage_disconnect_isNetworkError_andRollsBack() = runTest {
         backend.enqueue(Fixtures.disconnect())
         val repo = repo()
-        val r = repo.reportMessage("c1", "m1", ReportReason.CRIMINAL, "illegal")
+        val r = repo.reportMessage("c1", "m1", ReportReason.HARASSMENT, "illegal")
         assertTrue(r is ApiResult.NetworkError)
         assertEquals(ReportStatus.NONE, repo.observeStatus("m1").first())
     }
@@ -123,11 +123,12 @@ class ReportRepositoryContractTest {
     }
 
     @Test
-    fun reasonCatalog_isHardCodedFiveTopics() {
+    fun reasonCatalog_isHardCodedSixTopics() {
+        // MOD-4 — the current six live moderation categories (retired: extortion/criminal/racist).
         assertEquals(
-            listOf("sexual", "extortion", "criminal", "spam", "racist"),
+            listOf("spam", "harassment", "hate", "sexual", "violence_threats", "other"),
             repo().reasonCatalog().map { it.code },
         )
-        assertNull(ReportReason.entries.firstOrNull { it.code == "harassment" }) // old enum gone
+        assertNull(ReportReason.entries.firstOrNull { it.code == "racist" }) // old enum gone
     }
 }

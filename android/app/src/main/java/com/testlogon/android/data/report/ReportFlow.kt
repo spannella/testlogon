@@ -7,7 +7,8 @@ import com.testlogon.android.data.messaging.report.ReportReason
  *
  * Generalizes AND-163's message-only report into one reusable flow that targets a USER (profile photo),
  * a CONTENT item (feed post / comment / media) or a MESSAGE. The topic taxonomy is REUSED verbatim from
- * AND-163 ([ReportReason]: sexual / extortion / criminal / spam / racist) - it is intentionally NOT
+ * AND-163 ([ReportReason]: the six live categories spam / harassment / hate / sexual / violence_threats /
+ * other; retired: extortion / criminal / racist) - it is intentionally NOT
  * duplicated into a second enum, so the two report surfaces cannot drift. Multi-select topics are
  * represented as a Set<ReportReason>; the message-scoped endpoint takes a single `reason_code`, for which
  * the first selected topic is sent (mirrors the web client `reason_code: topics[0]`).

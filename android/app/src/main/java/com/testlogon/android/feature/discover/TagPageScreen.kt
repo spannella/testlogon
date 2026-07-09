@@ -22,6 +22,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -38,7 +42,9 @@ import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.feed.FeedPost
+import com.testlogon.android.data.report.ReportTarget
 import com.testlogon.android.feature.feed.PostItem
+import com.testlogon.android.feature.report.ContentReportSheetHost
 
 /** AND-183 — stable test tags. */
 object TagPageTestTags {
@@ -85,6 +91,10 @@ fun TagPageScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // MOD-5 — these are OTHER users' posts (a public tag/discovery surface), so they must be reportable.
+    // Same call-site pattern as the feed: hold the target, host the sheet once, open it from the post's
+    // report overflow with a feed_post content ref.
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     Scaffold(
         modifier = modifier.testTag(TagPageTestTags.SCREEN),
         topBar = {
@@ -125,10 +135,13 @@ fun TagPageScreen(
                         items = items,
                         onPostClick = onPostClick,
                         onAuthorClick = onAuthorClick,
+                        onReport = { post -> reportTarget = ReportTarget.Content(post.id, "feed_post") },
                     )
                 }
             }
         }
+        // MOD-5 — one host renders the six-category report sheet (+ licensing -> DMCA route) for this list.
+        ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
     }
 }
 
@@ -137,6 +150,7 @@ private fun TagPostList(
     items: LazyPagingItems<FeedPost>,
     onPostClick: (postId: String) -> Unit,
     onAuthorClick: (authorId: String) -> Unit,
+    onReport: (FeedPost) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize().testTag(TagPageTestTags.LIST)) {
         items(count = items.itemCount, key = { index -> items.peek(index)?.id ?: index }) { index ->
@@ -149,6 +163,8 @@ private fun TagPostList(
                     onMediaClick = { _, _ -> onPostClick(post.id) },
                     // Read-only discovery surface: no engagement action bar here.
                     showActionBar = false,
+                    // MOD-5 — still allow reporting another user's post via the compact header overflow.
+                    onReport = { onReport(post) },
                 )
             }
         }

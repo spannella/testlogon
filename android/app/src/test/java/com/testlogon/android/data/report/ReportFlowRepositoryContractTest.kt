@@ -68,7 +68,7 @@ class ReportFlowRepositoryContractTest {
         )
         val r = repo(csrfClient()).submit(
             target = ReportTarget.Content(id = "post_8131", contentType = "feed_post"),
-            topics = setOf(ReportReason.SPAM, ReportReason.CRIMINAL),
+            topics = setOf(ReportReason.SPAM, ReportReason.HARASSMENT),
             reasonText = "repeated spam links",
         )
         assertTrue(r is ApiResult.Success)
@@ -85,7 +85,7 @@ class ReportFlowRepositoryContractTest {
         assertEquals("post_8131", body["post_id"])
         assertEquals("repeated spam links", body["reason_text"])
         @Suppress("UNCHECKED_CAST")
-        assertEquals(listOf("criminal", "spam"), (body["topics"] as List<String>).sorted())
+        assertEquals(listOf("harassment", "spam"), (body["topics"] as List<String>).sorted())
     }
 
     // TC-AND-383-07 (USER variant — profile_photo + profile_user_id)
@@ -98,7 +98,7 @@ class ReportFlowRepositoryContractTest {
         )
         val r = repo(csrfClient()).submit(
             target = ReportTarget.User(id = "user_42", displayName = "Bob"),
-            topics = setOf(ReportReason.RACIST),
+            topics = setOf(ReportReason.HATE),
             reasonText = "abusive profile photo",
         )
         assertTrue(r is ApiResult.Success)
@@ -204,13 +204,14 @@ class ReportFlowRepositoryContractTest {
     }
 
     @Test
-    fun topics_taxonomy_isFiveStableWireCodes() {
+    fun topics_taxonomy_isSixStableWireCodes() {
+        // MOD-4 — the current six live moderation categories (retired: extortion/criminal/racist).
         assertEquals(
-            listOf("sexual", "extortion", "criminal", "spam", "racist"),
+            listOf("spam", "harassment", "hate", "sexual", "violence_threats", "other"),
             ReportTopics.ALL.map { it.code },
         )
         assertEquals(ReportTopics.ALL, ReportTopics.forKind(ReportKind.USER))
-        assertNull(ReportReason.entries.firstOrNull { it.code == "other" })
+        assertNull(ReportReason.entries.firstOrNull { it.code == "criminal" })
     }
 
     companion object {
