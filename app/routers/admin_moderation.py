@@ -422,15 +422,20 @@ def _offender_history_summary(offender_user_id: str | None, reports: list[dict[s
     if not offender_user_id:
         return OffenderHistorySummaryOut(offender_user_id=None, total_tickets=0, open_tickets=0, total_reports=len(reports))
 
-    # Best-effort summary from moderation tickets table (future: dedicated offender index).
-    scanned = T.moderation_tickets.scan(FilterExpression=Attr("offender_user_id").eq(offender_user_id)).get("Items", [])
-    ticket_rows = [r for r in scanned if r.get("entity_type") == "moderation_ticket"]
-    open_tickets = sum(1 for r in ticket_rows if str(r.get("status") or "") == "open")
+    # MOD-F1: replaced the unbounded full-table moderation_tickets scan with a
+    # bounded Key query on user_enforcement_history (keyed by user_id). The
+    # offender's prior tickets are the distinct source tickets that produced an
+    # enforcement record; "open" counts currently-active enforcements.
+    history = _query_enforcement_history(offender_user_id, limit=100)
+    distinct_tickets = {str(h.get("source_ticket_id") or "") for h in history if h.get("source_ticket_id")}
+    active_enforcements = sum(
+        1 for h in history if str(h.get("status") or "").lower() in ("active", "banned", "open")
+    )
 
     return OffenderHistorySummaryOut(
         offender_user_id=offender_user_id,
-        total_tickets=len(ticket_rows),
-        open_tickets=open_tickets,
+        total_tickets=len(distinct_tickets),
+        open_tickets=active_enforcements,
         total_reports=len(reports),
     )
 

@@ -134,6 +134,19 @@ def _delete_profile_photo(user_sub: str) -> Optional[str]:
     return user_sub
 
 
+def _delete_syndicate_post(syndicate_id: str, post_id: str) -> Optional[str]:
+    # MOD-SYND: terminal hard-delete in the syndicate's own store.
+    if not syndicate_id or not post_id:
+        return None
+    key = {"pk": f"SYND#{syndicate_id}", "sk": f"POST#{post_id}"}
+    item = T.syndicate_posts.get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    owner = item.get("author_id")
+    T.syndicate_posts.delete_item(Key=key)
+    return owner
+
+
 def delete_content(*, content_type: str, content_id: str, metadata: Optional[Dict[str, Any]] = None, case_id: Optional[str] = None) -> Optional[str]:
     """Hard-delete content for a terminal moderation case. Returns owner id."""
     md = metadata or {}
@@ -151,6 +164,8 @@ def delete_content(*, content_type: str, content_id: str, metadata: Optional[Dic
             return _delete_video(str(md.get("video_id") or content_id))
         if content_type == "video_comment":
             return _delete_video_comment(str(md.get("video_id") or ""), content_id)
+        if content_type == "syndicate_post":
+            return _delete_syndicate_post(str(md.get("syndicate_id") or ""), str(md.get("post_id") or content_id))
         if content_type == "profile_photo":
             return _delete_profile_photo(content_id)
     except Exception:

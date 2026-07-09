@@ -36,7 +36,7 @@ router = APIRouter(prefix="/v1/moderation", tags=["moderation"])
 
 
 class CreateModerationReportIn(BaseModel):
-    content_type: Literal["feed_post", "feed_comment", "feed_media", "message", "message_media", "video", "video_comment", "profile_photo"]
+    content_type: Literal["feed_post", "feed_comment", "feed_media", "message", "message_media", "video", "video_comment", "syndicate_post", "profile_photo"]
     content_id: str = Field(min_length=1, max_length=256)
     topics: List[str] = Field(min_length=1, max_length=5)
     reason_text: str = Field(min_length=5, max_length=2000)
@@ -44,6 +44,7 @@ class CreateModerationReportIn(BaseModel):
     conversation_id: Optional[str] = Field(default=None, max_length=256)
     video_id: Optional[str] = Field(default=None, max_length=256)
     media_index: Optional[int] = Field(default=None, ge=0)
+    syndicate_id: Optional[str] = Field(default=None, max_length=256)
 
     @field_validator("topics")
     @classmethod
@@ -164,6 +165,18 @@ def _validate_content_exists(inp: CreateModerationReportIn) -> None:
         except Exception:
             _vc = None
         if not _vc:
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "syndicate_post":
+        if not inp.syndicate_id:
+            raise HTTPException(status_code=400, detail="syndicate_id is required for syndicate_post")
+        try:
+            from app.services.syndicate_feed import _get_post as _syn_get_post
+            _sp = _syn_get_post(inp.syndicate_id, inp.content_id)
+        except Exception:
+            _sp = None
+        if not _sp:
             raise HTTPException(status_code=404, detail="content not found")
         return
 
@@ -398,6 +411,7 @@ def _create_report(inp: CreateModerationReportIn, ctx: Dict[str, str], request: 
                 "conversation_id": inp.conversation_id,
                 "media_index": inp.media_index,
                 "video_id": getattr(inp, "video_id", None),
+                "syndicate_id": getattr(inp, "syndicate_id", None),
             },
             now_ts=now_ts,
         )

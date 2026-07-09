@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
+
+from fastapi import HTTPException
 
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.alerts import write_alert
+
+logger = logging.getLogger(__name__)
 
 
 BAN_STATUS = "banned"
@@ -113,14 +119,32 @@ def apply_ban(
     }
 
 
+# MOD-F1: statuses that gate the authenticated request path. ``banned`` is the
+# ban model; ``suspended`` is an admin-imposed hold. Both are enforced; timed
+# entries auto-expire via ``ban_until``.
+ENFORCED_BLOCK_STATUSES = {BAN_STATUS, "suspended"}
+
+
+def _load_account_state_or_fail_closed(user_sub: str) -> dict[str, Any]:
+    # MOD-F1 (fail-CLOSED): a transient DDB read error must NOT admit a possibly
+    # -banned user. Retry briefly, then DENY the request with a 503 rather than
+    # silently returning "not banned" (the previous fail-OPEN behavior).
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            return T.account_state.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+        except Exception as exc:  # noqa: BLE001 - transient DDB error
+            last_exc = exc
+            time.sleep(0.05 * (attempt + 1))
+    logger.error("account_state read failed for %s; failing CLOSED", user_sub, exc_info=last_exc)
+    raise HTTPException(status_code=503, detail="account state temporarily unavailable")
+
+
 def is_user_currently_banned(user_sub: str) -> bool:
     if not user_sub:
         return False
-    try:
-        item = T.account_state.get_item(Key={"user_sub": user_sub}).get("Item") or {}
-    except Exception:
-        return False
-    if str(item.get("status") or "") != BAN_STATUS:
+    item = _load_account_state_or_fail_closed(user_sub)
+    if str(item.get("status") or "") not in ENFORCED_BLOCK_STATUSES:
         return False
 
     ban_until = _coerce_int(item.get("ban_until"), 0)

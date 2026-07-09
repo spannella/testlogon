@@ -184,6 +184,27 @@ def _hide_video_comment(*, video_id: str, comment_id: str, case_id: str, state: 
     return row.get("user_id")
 
 
+def _syndicate_post_key(syndicate_id: str, post_id: str) -> Dict[str, str]:
+    return {"pk": f"SYND#{syndicate_id}", "sk": f"POST#{post_id}"}
+
+
+def _hide_syndicate_post(*, syndicate_id: str, post_id: str, case_id: str, state: str, hidden: bool) -> Optional[str]:
+    # MOD-SYND: syndicate posts live in their OWN store (T.syndicate_posts), keyed
+    # SYND#{sid}/POST#{pid}. Non-destructive flag write over the intact row so a
+    # later reinstate restores it byte-for-byte.
+    if not syndicate_id or not post_id:
+        return None
+    item = T.syndicate_posts.get_item(Key=_syndicate_post_key(syndicate_id, post_id)).get("Item") or {}
+    if not item:
+        return None
+    T.syndicate_posts.update_item(
+        Key=_syndicate_post_key(syndicate_id, post_id),
+        UpdateExpression=_SET_EXPR,
+        ExpressionAttributeValues=_flag_values(case_id, state, hidden),
+    )
+    return item.get("author_id")
+
+
 def _apply(*, content_type: str, content_id: str, metadata: Dict[str, Any], case_id: str, state: str, hidden: bool) -> Optional[str]:
     md = metadata or {}
     if content_type == "feed_post":
@@ -199,6 +220,8 @@ def _apply(*, content_type: str, content_id: str, metadata: Dict[str, Any], case
         return _hide_video(video_id=str(md.get("video_id") or content_id), case_id=case_id, state=state, hidden=hidden)
     if content_type == "video_comment":
         return _hide_video_comment(video_id=str(md.get("video_id") or ""), comment_id=content_id, case_id=case_id, state=state, hidden=hidden)
+    if content_type == "syndicate_post":
+        return _hide_syndicate_post(syndicate_id=str(md.get("syndicate_id") or ""), post_id=str(md.get("post_id") or content_id), case_id=case_id, state=state, hidden=hidden)
     if content_type == "profile_photo":
         # Profile photos already have a dedicated non-destructive revert path; no flag write here.
         return content_id
@@ -245,6 +268,14 @@ def resolve_owner(*, content_type: str, content_id: str, metadata: Optional[Dict
             except TypeError:
                 _row = get_comment(str(md.get("video_id") or ""), content_id)
             return (_row or {}).get("user_id")
+        if content_type == "syndicate_post":
+            # MOD-SYND
+            _sid = str(md.get("syndicate_id") or "")
+            _pid = str(md.get("post_id") or content_id)
+            if not _sid:
+                return None
+            _it = T.syndicate_posts.get_item(Key={"pk": f"SYND#{_sid}", "sk": f"POST#{_pid}"}).get("Item") or {}
+            return _it.get("author_id")
     except Exception:
         logger.exception("moderation_hide.resolve_owner failed")
     return None
