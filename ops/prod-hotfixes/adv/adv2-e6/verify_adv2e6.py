@@ -127,10 +127,12 @@ set_status(acct_E, ext_camp, "active"); tag_category(acct_E, ext_camp, ECAT)
 ext_cr = approved_creative(ext_camp, "External Creative")
 
 # ── AD_SETTINGS (category whitelist isolates the auction) ───────────────────
-# M allows BOTH categories; NM allows ONLY the syndicate category (SCAT) so the
-# NON-member test is a clean "syndicate campaign excluded -> house ad".
+# For a DETERMINISTIC T1 (no equal-bid auction tie against a competing prod/ext
+# creative), M initially allows ONLY the syndicate category (SCAT); ECAT is
+# re-enabled for M just before T3. NM allows ONLY SCAT so the NON-member test is
+# a clean "syndicate campaign excluded -> house ad".
 T.billing.put_item(Item={"pk": f"USER#{M}", "sk": "AD_SETTINGS", "allow_ads": True,
-    "min_cpm_cents": 0, "allowed_ad_categories": [SCAT, ECAT]})
+    "min_cpm_cents": 0, "allowed_ad_categories": [SCAT]})
 T.billing.put_item(Item={"pk": f"USER#{NM}", "sk": "AD_SETTINGS", "allow_ads": True,
     "min_cpm_cents": 0, "allowed_ad_categories": [SCAT]})
 
@@ -163,6 +165,8 @@ check("T2: NON-member click (if any) is not syndicate-tagged",
       (not c2) or (not c2.get("is_syndicate_ad") and not c2.get("syndicate_id")),
       f"click={ {k: c2.get(k) for k in ('is_syndicate_ad','syndicate_id')} if c2 else {} }")
 
+T.billing.put_item(Item={"pk": f"USER#{M}", "sk": "AD_SETTINGS", "allow_ads": True,
+    "min_cpm_cents": 0, "allowed_ad_categories": [SCAT, ECAT]})
 # ── T3: EXTERNAL campaign is UNAFFECTED on the member slot (no membership gate,
 #        no skim) -- deactivate the syndicate campaign so the external one wins.
 set_status(acct_S, synd_camp, "paused")
