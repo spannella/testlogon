@@ -1200,6 +1200,17 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.COMMUNITY,
             section = MoreSection.ACCOUNT,
         ),
+        // ADV2-709/710/711: SYNDICATE-ADS management (create/fund a syndicate ad account + campaign +
+        // creative reusing the ads create flow, plus the per-syndicate placement split). Opens a known
+        // sample syndicate id (no syndicate-admin picker this wave); real entry is the overview action.
+        MoreEntry(
+            id = "syndicate_ads",
+            labelRes = R.string.more_entry_syndicate_ads,
+            icon = Icons.Outlined.AccountBalance,
+            route = MoreRoutes.SYNDICATE_ADS,
+            hub = MoreHub.COMMUNITY,
+            section = MoreSection.ACCOUNT,
+        ),
         MoreEntry(
             id = "collaborations",
             labelRes = R.string.more_entry_collaborations,

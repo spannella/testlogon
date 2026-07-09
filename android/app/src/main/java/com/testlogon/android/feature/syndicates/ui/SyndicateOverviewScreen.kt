@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Policy
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -93,6 +94,7 @@ object SyndicateOverviewTestTags {
     const val NOT_MEMBER = "syndicate_not_member"
     const val STALE = "syndicate_stale"
     const val OPEN_LICENSING_ACTION = "syndicate_open_licensing_action"
+    const val MANAGE_ADS_ACTION = "syndicate_manage_ads_action"
 
     fun feedItem(postId: String) = "syndicate_feed_item_$postId"
     fun ledgerItem(index: Int) = "syndicate_ledger_item_$index"
@@ -119,6 +121,7 @@ val LocalSyndicateSponsoredClick = androidx.compose.runtime.compositionLocalOf<(
 fun SyndicateOverviewRoute(
     onBack: () -> Unit,
     onOpenLicensing: () -> Unit,
+    onManageAds: () -> Unit = {},
     viewModel: SyndicateOverviewViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -144,6 +147,7 @@ fun SyndicateOverviewRoute(
         members = members,
         onBack = onBack,
         onOpenLicensing = onOpenLicensing,
+        onManageAds = onManageAds,
         onRetry = viewModel::onRetry,
         onRefresh = {
             viewModel.refresh()
@@ -172,6 +176,7 @@ fun SyndicateOverviewScreen(
     members: SyndicateMembersState = SyndicateMembersState(),
     onBack: () -> Unit,
     onOpenLicensing: () -> Unit,
+    onManageAds: () -> Unit = {},
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     onComposeTextChange: (String) -> Unit = {},
@@ -198,6 +203,18 @@ fun SyndicateOverviewScreen(
                     }
                 },
                 actions = {
+                    // ADV2-709 (F7) - admin-only entry to SYNDICATE-ADS management.
+                    if ((state as? SyndicateOverviewUiState.Content)?.overview?.isAdmin == true) {
+                        IconButton(
+                            onClick = onManageAds,
+                            modifier = Modifier.testTag(SyndicateOverviewTestTags.MANAGE_ADS_ACTION),
+                        ) {
+                            Icon(
+                                Icons.Outlined.Campaign,
+                                contentDescription = stringResource(R.string.syndicate_ads_title),
+                            )
+                        }
+                    }
                     // AND-357 - entry point to the open-licensing sub-screen.
                     IconButton(
                         onClick = onOpenLicensing,

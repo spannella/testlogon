@@ -4453,6 +4453,35 @@
 
     <!-- Web-parity: syndicate-advertising campaign detail. -->
     <string name="more_entry_syndicate_campaign">Syndicate Campaign</string>
+    <!-- ADV2-709/710/711 (F7) syndicate-ads management -->
+    <string name="more_entry_syndicate_ads">Syndicate Ads</string>
+    <string name="syndicate_ads_title">Syndicate Ads</string>
+    <string name="syndicate_ads_subtitle">Advertise across your members. A syndicate ad on a member splits the 70%% owner share between the member and the treasury; the platform keeps 30%%.</string>
+    <string name="syndicate_ads_split_title">Placement split</string>
+    <string name="syndicate_ads_split_summary">Member keeps %1$d%% of the 70%% owner share • treasury %2$d%%</string>
+    <string name="syndicate_ads_edit_split">Edit split ratio</string>
+    <string name="syndicate_ads_create_title">Create syndicate ad account</string>
+    <string name="syndicate_ads_company_label">Company / brand name</string>
+    <string name="syndicate_ads_email_label">Billing email</string>
+    <string name="syndicate_ads_create_submit">Create account</string>
+    <string name="syndicate_ads_created">Account created (%1$s) and selected. Fund it, then create a campaign.</string>
+    <string name="syndicate_ads_accounts_title">Ad accounts</string>
+    <string name="syndicate_ads_empty">No syndicate ad accounts yet. Create one above.</string>
+    <string name="syndicate_ads_forbidden">Only a syndicate admin can manage its ads.</string>
+    <string name="syndicate_ads_retry">Retry</string>
+    <string name="syndicate_ads_fund">Fund</string>
+    <string name="syndicate_ads_new_campaign">New campaign</string>
+    <string name="syndicate_ads_new_creative">New creative</string>
+    <string name="syndicate_ads_earnings">Earnings / ROAS</string>
+    <string name="syndicate_ads_balance">Balance %1$s • %2$s</string>
+    <string name="syndicate_ad_split_title">Ad placement split</string>
+    <string name="syndicate_ad_split_desc">When your syndicate advertises in front of a member content, the 70%% content-owner share splits between the member and the treasury. The platform 30%% is unchanged. External advertisers never trigger this split.</string>
+    <string name="syndicate_ad_split_member">Member share: %1$d%% of the 70%% owner cut</string>
+    <string name="syndicate_ad_split_treasury">Treasury: %1$d%%</string>
+    <string name="syndicate_ad_split_net">On a \$1.00 ad: member %1$s, treasury %2$s, platform \$0.30</string>
+    <string name="syndicate_ad_split_reset">Reset to default (%1$d%%)</string>
+    <string name="syndicate_ad_split_saved">Split updated</string>
+    <string name="syndicate_ad_split_save">Save split</string>
     <string name="campaign_detail_title">Campaign</string>
     <string name="campaign_back">Back</string>
     <string name="campaign_stat_impressions">Impressions</string>

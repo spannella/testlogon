@@ -76,6 +76,7 @@ fun NavGraphBuilder.syndicateDestinations(navController: NavHostController) {
             onOpenLicensing = {
                 navController.navigate(SyndicateOpenLicensingDest.build(syndicateId))
             },
+            onManageAds = { navController.navigateToSyndicateAds(syndicateId) },
         )
     }
     composable(

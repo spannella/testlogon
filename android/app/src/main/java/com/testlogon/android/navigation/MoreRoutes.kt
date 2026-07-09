@@ -236,6 +236,12 @@ object MoreRoutes {
     // integrity test stays Android-free).
     const val SYNDICATE_CAMPAIGN = CampaignDetailDest.STUB_ROUTE
 
+    // ADV2-709/710/711 (F7): SYNDICATE-ADS management (create/fund a syndicate ad account + campaign
+    // + creative + the placement split). No syndicate-admin picker this wave, so the hub opens a known
+    // sample syndicate id (plain constant, no Uri.encode, so the JVM MoreCatalog integrity test stays
+    // Android-free).
+    const val SYNDICATE_ADS = SyndicateAdsDest.STUB_ROUTE
+
     // AND-358: READ-ONLY collaborations (Paging-3 list -> detail; two parties + status + revenue split).
     const val COLLABORATIONS = CollaborationsListDest.ROUTE
 
@@ -546,6 +552,7 @@ object MoreRoutes {
             SYNDICATES,
             MY_BUNDLES,
             SYNDICATE_CAMPAIGN,
+            SYNDICATE_ADS,
             COLLABORATIONS,
             SPONSORSHIPS,
             SPONSORED_POST_COMPOSE,

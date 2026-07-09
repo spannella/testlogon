@@ -63,5 +63,15 @@ object AdsNetworkModule {
     @Singleton
     fun provideContentAdControlsApi(retrofit: Retrofit): ContentAdControlsApi =
         retrofit.create(ContentAdControlsApi::class.java)
+
+    /**
+     * ADV2-709/710/711 (F7) — the SYNDICATE-owned advertiser transport ([SyndicateAdsApi]) from the shared
+     * singleton [Retrofit]. Its DTOs decode reflectively (raw String status, no custom enum), so no
+     * provideMoshi change is needed. Folded here (same ads surface) rather than a separate module.
+     */
+    @Provides
+    @Singleton
+    fun provideSyndicateAdsApi(retrofit: Retrofit): SyndicateAdsApi =
+        retrofit.create(SyndicateAdsApi::class.java)
 }
 

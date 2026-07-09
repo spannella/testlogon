@@ -379,6 +379,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-356: READ-ONLY syndicate overview (Feed / Treasury / Revenue-split tabs over /ui/syndicates/*).
         // Single screen keyed by {syndicateId}; write actions + open-licensing are downstream / OUT OF SCOPE.
         syndicateDestinations(navController)
+        // ADV2-709/710/711 (F7): SYNDICATE-ADS management — a syndicate admin creates/funds a
+        // syndicate-owned ad account + campaign/creative (reusing the ads create flow via
+        // AdsStudioSelection) and edits the per-syndicate placement split (member_share_bps).
+        syndicateAdsDestinations(navController)
         // Web-parity: My Bundles (the caller's active syndicate bundle subscriptions + per-bundle cancel)
         // over GET /ui/syndicates/my-bundles + the subscription cancel endpoint.
         myBundlesDestinations(navController)
