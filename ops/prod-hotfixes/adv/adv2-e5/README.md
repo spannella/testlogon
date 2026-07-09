@@ -63,3 +63,18 @@ paused_insufficient_funds / balance never negative.
 ## Prod deploy record
 - `.bak_adv2e5_1783567298` on `app/routers/ads.py` (ad_messaging.py net-new).
 - Restart openapi 200; 9 routes live.
+
+## ADV2-E5 ad-message HYDRATION follow-up (apply_adv2e5_hydrate.py)
+The delivered sponsored DM row stores ad_message/ad_click_id/cta_url/sponsor_label/
+content_owner_sub/ad_image_url, but the message READ-path serializer
+(`_message_out_from_item` -> `MessageOut`, which also feeds the realtime event via
+`_serialize_message_event_payload`) dropped them, so a real recipient device never
+saw the sponsor footer and could not fire the open(+5c)/click(+10c) money beacons.
+`apply_adv2e5_hydrate.py` (idempotent, marker `# ADV2-E5 ad-message hydration`) adds
+the six fields to MessageOut + the serializer. Mirrors the TIP-B2 tip_reactions
+hydration. LIVE prod hotfix (`.bak_adv2e5hydrate_*` on messaging.py), restart
+openapi 200. The APP side needed the twin fix: the thread renders from Room (which
+drops these fields), so ThreadViewModel now overlays the ad fields from loadHistory
+(mirroring the tip_reactions overlay) — without it `isAdMessage` stayed false and
+neither the footer nor the beacons fired. 2-device verified: open/click POST 200,
+funnel-stack 17c, F5 creator 70% / F6 platform 100%.

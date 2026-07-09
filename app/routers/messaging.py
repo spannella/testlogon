@@ -2526,6 +2526,12 @@ class MessageOut(BaseModel):
     tip_currency: Optional[str] = None
     tip_payment_id: Optional[str] = None
     tip_reactions: list = []  # TIP-B2: money-reaction badges (author-side chip hydration)
+    ad_message: Optional[bool] = None  # ADV2-E5 ad-message hydration
+    ad_click_id: Optional[str] = None
+    cta_url: Optional[str] = None
+    ad_image_url: Optional[str] = None
+    sponsor_label: Optional[str] = None
+    content_owner_sub: Optional[str] = None
 
     # Expiry
     expires_at: Optional[int] = None      # absolute Unix timestamp when it expires
@@ -4277,6 +4283,12 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
              "created_at": int(_r["created_at"]) if _r.get("created_at") is not None else None}
             for _r in (merged_item.get("tip_reactions") or [])
         ],
+        ad_message=True if merged_item.get("ad_message") else None,  # ADV2-E5 ad-message hydration
+        ad_click_id=merged_item.get("ad_click_id") or None,
+        cta_url=merged_item.get("cta_url") or None,
+        ad_image_url=merged_item.get("ad_image_url") or None,
+        sponsor_label=merged_item.get("sponsor_label") or None,
+        content_owner_sub=merged_item.get("content_owner_sub") or None,
         expires_at=int(merged_item["expires_at"]) if merged_item.get("expires_at") else None,
         view_once=bool(merged_item.get("view_once")),
         expired=expired,
