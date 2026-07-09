@@ -2504,6 +2504,7 @@ class MessageOut(BaseModel):
     edited_by: Optional[str] = None
     revoked_at: Optional[int] = None
     revoked_by: Optional[str] = None
+    under_review: Optional[bool] = None  # MOD-2: True on the moderation "under review" placeholder
     delivered_to_count: Optional[int] = None
     delivered_to_user_ids: Optional[List[str]] = None
     read_by_count: Optional[int] = None
@@ -3924,7 +3925,57 @@ def _lottery_projection_for_viewer(message_item: dict, viewer_user_id: str) -> O
     }
 
 
+def _under_review_placeholder_message_out(message_item: dict, viewer_user_id: str) -> MessageOut:
+    """MOD-2: the stripped "under review" placeholder shown to non-sender members
+    for a moderation-hidden message (media / reactions / tips / ad payload all
+    omitted -- nothing leaks)."""
+    conversation_id = str(message_item.get("conversation_id") or "")
+    projected_sender_id = _project_message_sender_id(
+        message_item=message_item,
+        viewer_user_id=viewer_user_id,
+        conversation_id=conversation_id,
+    )
+    return MessageOut(
+        conversation_id=conversation_id,
+        message_id=str(message_item.get("message_id") or ""),
+        sender_id=projected_sender_id,
+        created_at=int(message_item.get("created_at") or 0),
+        kind="text",
+        text="Message under review",
+        reply_to_message_id=message_item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=message_item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=message_item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=message_item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
+        under_review=True,
+    )
+
+
+def _should_render_under_review_placeholder(message_item: dict, user_id: str) -> bool:
+    """MOD-2: True iff _filter_message_visible rejected this message SOLELY because
+    it is moderation-hidden for a non-sender -> the thread keeps it as a visible
+    "under review" placeholder instead of dropping the row. Revoked / scheduled /
+    deleted-for-viewer messages stay filtered out."""
+    if not (message_item.get("moderation_hidden") or message_item.get("moderation_removed_at")):
+        return False
+    if message_item.get("sender_id") == user_id:
+        return False
+    if message_item.get("revoked_at"):
+        return False
+    if message_item.get("status") == "scheduled":
+        return False
+    if user_id in set(message_item.get("deleted_for", []) or []):
+        return False
+    return True
+
+
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
+    # MOD-2 / D-MESSAGE-HIDE: a moderation-hidden message is shown to NON-SENDER
+    # members as a VISIBLE "under review" placeholder (real text / media / reactions
+    # stripped); the SENDER keeps owner-view (real content). On unhide the moderation
+    # flags clear (non-destructive) so the real content returns byte-for-byte.
+    if (message_item.get("moderation_hidden") or message_item.get("moderation_removed_at")) \
+            and message_item.get("sender_id") != viewer_user_id:
+        return _under_review_placeholder_message_out(message_item, viewer_user_id)
     merged_item = _merge_consumption_state(message_item, viewer_user_id)
     lottery_out = _lottery_projection_for_viewer(merged_item, viewer_user_id)
 
@@ -7511,7 +7562,8 @@ def list_messages(
         if m.get("message_id") in hidden_ids:
             continue
         if not _filter_message_visible(m, user_id):
-            continue
+            if not _should_render_under_review_placeholder(m, user_id):
+                continue
         msg = _message_out_from_item(m, user_id)
         out.append(_apply_message_receipts(msg, m, parts))
     return out
@@ -7881,7 +7933,8 @@ def list_thread_messages(
         if raw.get("message_id") in hidden_ids:
             continue
         if not _filter_message_visible(raw, user_id):
-            continue
+            if not _should_render_under_review_placeholder(raw, user_id):
+                continue
         msg = _message_out_from_item(raw, user_id)
         items.append(_apply_message_receipts(msg, raw, parts))
 

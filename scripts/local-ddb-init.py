@@ -660,6 +660,15 @@ def _table_defs() -> List[TableDef]:
                     "partition_key": "source_ticket_id",
                     "sort_key": "created_at",
                 },
+                {
+                    # MOD-1: complete offender history (all enforcement records for a
+                    # user, newest-first) for the admin offender summary / detail.
+                    # Hashes on the existing user_id (the offender) so every row is
+                    # auto-indexed with no new attribute / backfill.
+                    "index_name": "ByOffenderCreatedAt",
+                    "partition_key": "user_id",
+                    "sort_key": "created_at",
+                },
             ],
         ),
         TableDef(

@@ -139,6 +139,7 @@ class OffenderHistorySummaryOut(BaseModel):
     total_tickets: int = 0
     open_tickets: int = 0
     total_reports: int = 0
+    total_enforcements: int = 0  # MOD-1: precise count of ALL enforcement records
 
 
 class ModerationTicketDetailOut(BaseModel):
@@ -434,20 +435,82 @@ def _query_enforcement_history(user_id: str, *, limit: int = 25) -> list[dict[st
     return out[:limit]
 
 
+def _project_enforcement_row(row: dict[str, Any], fallback_user_id: str) -> dict[str, Any]:
+    return {
+        "user_id": str(row.get("user_id") or fallback_user_id),
+        "enforcement_id": str(row.get("enforcement_id") or ""),
+        "enforcement_type": str(row.get("enforcement_type") or ""),
+        "status": str(row.get("status") or ""),
+        "source_ticket_id": str(row.get("source_ticket_id") or ""),
+        "created_at": _parse_int(row.get("created_at"), 0),
+        "created_by_admin_user_id": str(row.get("created_by_admin_user_id") or "") or None,
+        "duration_days": _parse_int(row.get("duration_days"), 0),
+        "note": str(row.get("note") or ""),
+    }
+
+
+def _query_enforcement_history_by_offender(offender_user_id: str, *, cap: int | None = None) -> list[dict[str, Any]]:
+    """MOD-1: COMPLETE query of ALL enforcement records for an offender. Prefers the
+    ByOffenderCreatedAt GSI (user_id HASH -- the offender -- + created_at RANGE, so the
+    DB returns them newest-first); falls back to a COMPLETE paginated base-table Query
+    (also keyed on user_id) whenever the index is not queryable, so the admin offender
+    summary counts are ALWAYS precise -- never Limit-truncated like the old bounded
+    query, and never dependent on index availability."""
+    if not offender_user_id:
+        return []
+    raw_rows: list[dict[str, Any]] = []
+    try:
+        exclusive_start_key: dict[str, Any] | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "IndexName": "ByOffenderCreatedAt",
+                "KeyConditionExpression": Key("user_id").eq(offender_user_id),
+                "ScanIndexForward": False,
+            }
+            if exclusive_start_key:
+                kwargs["ExclusiveStartKey"] = exclusive_start_key
+            resp = T.user_enforcement_history.query(**kwargs)
+            raw_rows.extend(resp.get("Items", []))
+            exclusive_start_key = resp.get("LastEvaluatedKey")
+            if not exclusive_start_key:
+                break
+    except ClientError:
+        # Index missing / not ACTIVE -> COMPLETE base-table query (user_id is the HASH
+        # key, so this returns every enforcement record for the offender).
+        raw_rows = []
+        exclusive_start_key = None
+        while True:
+            kwargs = {"KeyConditionExpression": Key("user_id").eq(offender_user_id)}
+            if exclusive_start_key:
+                kwargs["ExclusiveStartKey"] = exclusive_start_key
+            resp = T.user_enforcement_history.query(**kwargs)
+            raw_rows.extend(resp.get("Items", []))
+            exclusive_start_key = resp.get("LastEvaluatedKey")
+            if not exclusive_start_key:
+                break
+    out: list[dict[str, Any]] = [
+        _project_enforcement_row(row, offender_user_id)
+        for row in raw_rows
+        if row.get("entity_type") == "user_enforcement"
+    ]
+    out.sort(key=lambda i: (int(i.get("created_at") or 0), str(i.get("enforcement_id") or "")), reverse=True)
+    return out[:cap] if cap else out
+
+
 def _prior_enforcement_history(offender_user_id: str | None) -> list[dict[str, Any]]:
     if not offender_user_id:
         return []
-    return _query_enforcement_history(offender_user_id, limit=25)
+    return _query_enforcement_history_by_offender(offender_user_id, cap=25)
 
 def _offender_history_summary(offender_user_id: str | None, reports: list[dict[str, Any]]) -> OffenderHistorySummaryOut:
     if not offender_user_id:
         return OffenderHistorySummaryOut(offender_user_id=None, total_tickets=0, open_tickets=0, total_reports=len(reports))
 
-    # MOD-F1: replaced the unbounded full-table moderation_tickets scan with a
-    # bounded Key query on user_enforcement_history (keyed by user_id). The
-    # offender's prior tickets are the distinct source tickets that produced an
-    # enforcement record; "open" counts currently-active enforcements.
-    history = _query_enforcement_history(offender_user_id, limit=100)
+    # MOD-1: COMPLETE indexed query over the ByOffenderCreatedAt GSI -- EVERY
+    # enforcement record for the offender, not a Limit-bounded base-table page --
+    # so total_tickets (distinct source tickets), open_tickets (active
+    # enforcements) and total_enforcements are PRECISE counts.
+    history = _query_enforcement_history_by_offender(offender_user_id)
     distinct_tickets = {str(h.get("source_ticket_id") or "") for h in history if h.get("source_ticket_id")}
     active_enforcements = sum(
         1 for h in history if str(h.get("status") or "").lower() in ("active", "banned", "open")
@@ -458,6 +521,7 @@ def _offender_history_summary(offender_user_id: str | None, reports: list[dict[s
         total_tickets=len(distinct_tickets),
         open_tickets=active_enforcements,
         total_reports=len(reports),
+        total_enforcements=len(history),
     )
 
 
@@ -559,7 +623,7 @@ def get_user_enforcement_history(
     _admin: AuthenticatedUser = Depends(require_content_moderation_admin),
 ) -> UserEnforcementHistoryListOut:
     ensure_admin_board_enabled(_admin)
-    items = _query_enforcement_history(user_id, limit=limit)
+    items = _query_enforcement_history_by_offender(user_id, cap=limit)
     return UserEnforcementHistoryListOut(items=[UserEnforcementHistoryOut(**row) for row in items])
 
 
