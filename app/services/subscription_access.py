@@ -69,6 +69,41 @@ def has_active_subscription(subscriber_id: str, creator_id: str) -> bool:
     return False
 
 
+def list_active_subscriber_ids(creator_id: str) -> List[str]:
+    """ADV2 R4: enumerate the user_ids of users with an ACTIVE subscription to
+    ``creator_id``. Reads the creator-index partition (``CREATOR#{creator_id}``,
+    ``SUB#`` items) written by ``subscription_server.save_subscription`` -- the
+    same index ``count_active_subscribers`` trusts -- so NO GSI/backfill is
+    required. Deduped, active/trialing/past_due only. Best-effort (returns what
+    it has on error)."""
+    subs: List[str] = []
+    seen: set = set()
+    last = None
+    try:
+        while True:
+            kwargs: Dict[str, Any] = {
+                "KeyConditionExpression": Key("pk").eq(_pk_creator(creator_id))
+                & Key("sk").begins_with("SUB#"),
+            }
+            if last:
+                kwargs["ExclusiveStartKey"] = last
+            resp = T.subscriptions.query(**kwargs)
+            for it in resp.get("Items", []):
+                status = (it.get("status") or "").lower()
+                if status not in {"active", "trialing", "past_due"}:
+                    continue
+                sub = str(it.get("subscriber_id") or "")
+                if sub and sub not in seen:
+                    seen.add(sub)
+                    subs.append(sub)
+            last = resp.get("LastEvaluatedKey")
+            if not last:
+                break
+    except Exception:
+        return subs
+    return subs
+
+
 def can_access_creator(subscriber_id: str, creator_id: str) -> bool:
     if subscriber_id == creator_id:
         return True

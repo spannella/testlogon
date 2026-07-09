@@ -141,12 +141,11 @@ def serve_ad(
                 pass
             if _is_frequency_capped(user_id, campaign["campaign_id"]):
                 continue
+            # ADV2 R3: a self-promo serves ONLY approved (moderated) creatives
+            # -- same moderation/fraud gate as a paid ad. If the creator has no
+            # approved self-promo creative there is simply no self-promo fill; we
+            # NEVER auto-serve an unmoderated/rejected creative.
             sp_creatives = list_approved_creatives(campaign["campaign_id"])
-            if not sp_creatives:
-                # ADV2-304: a free own-content promo may auto-serve unmoderated
-                # creatives -- fall back to all creatives when none are approved.
-                from app.services.ad_creatives import list_creatives as _list_all_creatives
-                sp_creatives = _list_all_creatives(campaign["campaign_id"])
             if not sp_creatives:
                 continue
             _entry = {"campaign": campaign, "creatives": sp_creatives, "score": 0}

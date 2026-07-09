@@ -16,15 +16,14 @@ a broad cold-DM. The relationship AND the opt-out are RE-VERIFIED at the send
 moment (ADV2-606) so an unfollow/opt-out between resolve and dispatch DROPS the
 destination (no charge, no send).
 
-Subscriber enumeration: ``subscriptions`` has no ByCreator GSI (DEC-2) so a
-pure-subscriber (subscribes but does not follow) cannot be ENUMERATED into the
-audience yet; followers are fully enumerable via GSI5. Per the plan note we pick
-the simplest reliable path -- enumerate FOLLOWERS (each RE-VERIFIED as a live
-relationship + non-opted-out) and log the cap; the subscriber-only slice is
-deferred to the DEC-2 GSI/snapshot decision. NOTE: a subscriber who is ALSO a
-follower is still reached, and the send-time gate ``is_recipient_eligible``
-already accepts an active subscription, so once enumeration lands no billing
-change is needed.
+Subscriber enumeration (ADV2 R4): the audience is followers UNION active
+SUBSCRIBERS of the advertiser (a pure-subscriber who does NOT follow is now
+reached too), MINUS the per-user ad opt-outs. Followers enumerate via GSI5;
+subscribers enumerate via the existing ``CREATOR#{advertiser}`` index partition
+(SUB# items -- the same index ``count_active_subscribers`` reads), so NO new
+GSI/backfill was required. Every candidate is RE-VERIFIED as a live relationship
+(``_has_relationship`` accepts a follow OR an active subscription) and the
+send-time re-gate (ADV2-606) still drops any edge/opt-out change before dispatch.
 """
 
 from __future__ import annotations
@@ -118,6 +117,34 @@ def resolve_advertiser_audience(
                 break
         if capped or not cursor or pages > 200:
             break
+    # ADV2 R4: subscriber enumeration -- UNION active SUBSCRIBERS of the
+    # advertiser (who may NOT follow) into the audience. Reads the CREATOR#
+    # index partition (no GSI needed). Each is re-verified via _has_relationship
+    # (which accepts an active subscription) + opt-out filtered + deduped against
+    # followers, honoring the same cap. The send-time re-gate still applies.
+    subscribers_added = 0
+    if not capped:
+        try:
+            from app.services import subscription_access as _subacc
+            _sub_ids = _subacc.list_active_subscriber_ids(advertiser_sub)
+        except Exception:
+            _sub_ids = []
+        for sub in _sub_ids:
+            sub = str(sub or "")
+            if not sub or sub == advertiser_sub or sub in seen:
+                continue
+            seen.add(sub)
+            if not _has_relationship(advertiser_sub, sub):
+                excluded_non_relationship.append(sub)
+                continue
+            if not _admsg.user_accepts_ad_messages(sub):
+                excluded_optout.append(sub)
+                continue
+            recipients.append(sub)
+            subscribers_added += 1
+            if len(recipients) >= max_recipients:
+                capped = True
+                break
     if capped:
         logger.info("ad_dm_audience_capped advertiser=%s cap=%s", advertiser_sub, max_recipients)
     return {
@@ -129,7 +156,8 @@ def resolve_advertiser_audience(
         "excluded_non_relationship": excluded_non_relationship,
         "excluded_non_relationship_count": len(excluded_non_relationship),
         "capped": capped,
-        "subscriber_enumeration": "deferred_dec2_followers_only",
+        "subscriber_enumeration": "creator_index_partition",
+        "subscribers_added": subscribers_added,
     }
 
 

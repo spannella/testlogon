@@ -52,3 +52,59 @@ python verify_adv2res.py                            # in-process on prod DDB
 Backup convention on prod: `app/services/<f>.py.bak_adv2res_<ts>`.
 Files: ad_billing.py, ad_serving.py, ad_attribution.py, vod_ad_supported.py,
 broadcast_ads.py, syndicate_treasury.py.
+
+---
+
+# ADV2 residuals R3 + R4 — self-promo moderation + F6 subscriber enumeration
+
+LIVE PROD HOTFIX (SSM), mirrored to the dev clone. Anchored + idempotent
+(`apply_adv2res_r3r4.py`), in-process prod-DDB verify
+(`verify_adv2res_r3r4.py`, **10/10 ALL_PASS** on prod). Prod files backed up
+`*.bak_adv2res_r3r4_1783605666`. Restart → openapi 200. No app change (no APK).
+
+## R3 — self-promo serves ONLY approved (moderated) creatives (`ad_serving.serve_ad`)
+Before: a self-promo (`is_self_promo`) with **no approved creative** fell back to
+`list_creatives` (ALL creatives, incl. `pending`/`rejected`) and served an
+UNMODERATED unit. Now the fallback is removed — a self-promo uses only
+`list_approved_creatives` (`status == "approved"`); if the creator has **no
+approved self-promo creative there is simply no self-promo fill** (the loop
+`continue`s, buckets stay empty → house ad / no fill). Same moderation/fraud gate
+as a paid ad; an unmoderated/rejected creative is NEVER auto-served.
+
+Verify: a self-promo whose only creatives are `pending`+`rejected` → does NOT
+fill self-promo (falls to `house_ad_001`, neither unmoderated creative served);
+adding an `approved` creative → self-promo serves that approved creative.
+
+## R4 — F6 mass-DM audience = followers UNION active subscribers (`ad_dm_audience.resolve_advertiser_audience`)
+Before: audience was **followers-only** (DEC-2 — no ByCreator enumeration).
+Now active SUBSCRIBERS of the advertiser are UNION'd in.
+
+**No GSI/backfill was added.** Subscriptions already maintain a first-class
+`CREATOR#{creator_id}` index partition (`SUB#` items carrying
+`subscriber_id`/`status`, written by `subscription_server.save_subscription` —
+the SAME index `count_active_subscribers` reads), so subscribers enumerate via a
+native primary-key partition query. New helper
+`subscription_access.list_active_subscriber_ids(creator_id)` (paginated,
+`active`/`trialing`/`past_due`, deduped). This is cleaner + more reliable than a
+new GSI (no eventual-consistency backfill, no throughput config).
+
+`resolve_advertiser_audience` now, after the follower loop, unions the active
+subscribers — each RE-VERIFIED via `_has_relationship` (accepts a follow OR an
+active subscription), opt-out filtered (`allow_ad_messages`), deduped against
+followers, honoring the same cap. The send-time re-gate (ADV2-606,
+`is_recipient_eligible`) is unchanged and still drops any unfollow/opt-out
+between resolve and dispatch. Return dict: `subscriber_enumeration` flips from
+`deferred_dec2_followers_only` → `creator_index_partition` + adds
+`subscribers_added`.
+
+Verify: an active subscriber who does NOT follow → INCLUDED; an opted-out
+subscriber → EXCLUDED (`excluded_optout`, never sent); a non-relationship
+non-subscriber → never enumerated; a follower still included; send-time re-gate
+consistent (subscriber eligible / opted-out + non-rel not).
+
+## Apply / verify
+```
+ROOT=/home/ubuntu/testlogon python3 apply_adv2res_r3r4.py   # idempotent, anchored
+# in the ubuntu venv with .env.local sourced:
+.venv/bin/python verify_adv2res_r3r4.py                      # OVERALL ALL_PASS 10/10
+```
