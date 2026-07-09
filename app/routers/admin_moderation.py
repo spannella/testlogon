@@ -147,6 +147,9 @@ class ModerationTicketDetailOut(BaseModel):
     linked_reports: list[LinkedReportOut] = Field(default_factory=list)
     offender_history_summary: OffenderHistorySummaryOut
     prior_enforcement_history: list[dict[str, Any]] = Field(default_factory=list)
+    case_state: str = ""
+    hold_until: int | None = None
+    owner_user_id: str | None = None
 
 
 class ModerationDecisionIn(BaseModel):
@@ -368,6 +371,24 @@ def _content_snapshot(ticket: dict[str, Any], reports: list[dict[str, Any]]) -> 
             "user_id": content_id,
             "author_user_id": content_id,
             "profile_photo_url": str((profile.get("profile") or {}).get("profile_photo_url") or "") or None,
+        }
+
+    if content_type == "syndicate_post":
+        from app.services import syndicate_feed as _sf
+        from app.services import moderation_case as _mc2
+        syndicate_id = str(meta.get("syndicate_id") or "")
+        if not syndicate_id:
+            _c = _mc2.get_case_for_content(content_type, content_id) or {}
+            syndicate_id = str((_c.get("content_metadata") or {}).get("syndicate_id") or "")
+        post = (_sf._get_post(syndicate_id, content_id) if syndicate_id else None) or {}
+        return {
+            "kind": content_type,
+            "exists": bool(post),
+            "post_id": content_id,
+            "syndicate_id": syndicate_id,
+            "author_user_id": str(post.get("author_id") or "") or None,
+            "text": str(post.get("text") or ""),
+            "created_at": _parse_int(post.get("created_at"), 0),
         }
 
     return {"kind": content_type, "exists": False}
@@ -619,9 +640,19 @@ def get_moderation_ticket_detail(
     snapshot = _content_snapshot(ticket_item, reports)
     offender_user_id = _infer_offender_user_id(ticket_item, snapshot)
 
+    from app.services import moderation_case as _mc
+    _case = _mc.get_case_for_content(str(ticket_item.get("content_type") or ""), str(ticket_item.get("content_id") or "")) or {}
+    _case_state = str(_case.get("state") or ticket_item.get("moderation_case_state") or "")
+    _hold_until_raw = _case.get("hold_until") if _case.get("hold_until") is not None else ticket_item.get("hold_until")
+    _hold_until = _parse_int(_hold_until_raw, 0) or None
+    _owner = str(_case.get("owner_user_id") or offender_user_id or "") or None
+
     return ModerationTicketDetailOut(
         ticket=_to_ticket_out(ticket_item),
         content_snapshot=snapshot,
+        case_state=_case_state,
+        hold_until=_hold_until,
+        owner_user_id=_owner,
         linked_reports=[
             LinkedReportOut(
                 report_id=str(r.get("report_id") or ""),

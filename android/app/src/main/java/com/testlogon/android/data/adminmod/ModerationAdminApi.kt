@@ -62,6 +62,21 @@ interface ModerationAdminApi {
         @Path("id") ticketId: String,
         @Body body: ModerationResolveReq,
     ): ModerationTicketDto
+
+    // MOD-E1: NEW state-machine case actions (admin_moderation.py:1041-1170).
+    // dismiss = no violation -> un-hide (visible); confirm = violation -> 30d hold (hidden);
+    // final-call {reinstate|delete} on a hold/awaiting_final case (delete supports +ban).
+    @POST("v1/admin/moderation/tickets/{id}/dismiss")
+    suspend fun dismiss(@Path("id") ticketId: String): ModerationCaseActionDto
+
+    @POST("v1/admin/moderation/tickets/{id}/confirm")
+    suspend fun confirm(@Path("id") ticketId: String): ModerationCaseActionDto
+
+    @POST("v1/admin/moderation/tickets/{id}/final-call")
+    suspend fun finalCall(
+        @Path("id") ticketId: String,
+        @Body body: ModerationFinalCallReq,
+    ): ModerationCaseActionDto
 }
 
 // ---- DTOs (verified 1:1 against api/endpoints/moderation.ts) ----
@@ -106,10 +121,67 @@ data class ModerationOffenderHistoryDto(
 )
 
 @JsonClass(generateAdapter = true)
+data class ModerationContentSnapshotDto(
+    @Json(name = "kind") val kind: String = "",
+    @Json(name = "exists") val exists: Boolean = false,
+    @Json(name = "text") val text: String = "",
+    @Json(name = "author_user_id") val authorUserId: String? = null,
+    @Json(name = "post_id") val postId: String? = null,
+    @Json(name = "comment_id") val commentId: String? = null,
+    @Json(name = "conversation_id") val conversationId: String? = null,
+    @Json(name = "message_id") val messageId: String? = null,
+    @Json(name = "syndicate_id") val syndicateId: String? = null,
+    @Json(name = "profile_photo_url") val profilePhotoUrl: String? = null,
+    @Json(name = "image_urls") val imageUrls: List<String> = emptyList(),
+    @Json(name = "created_at") val createdAt: Long = 0L,
+)
+
+/** MOD-E2: one prior enforcement record on the offender (user_enforcement_history). */
+@JsonClass(generateAdapter = true)
+data class ModerationEnforcementHistoryDto(
+    @Json(name = "enforcement_id") val enforcementId: String = "",
+    @Json(name = "enforcement_type") val enforcementType: String = "",
+    @Json(name = "status") val status: String = "",
+    @Json(name = "duration_days") val durationDays: Int = 0,
+    @Json(name = "source_ticket_id") val sourceTicketId: String = "",
+    @Json(name = "note") val note: String = "",
+    @Json(name = "created_at") val createdAt: Long = 0L,
+)
+
+@JsonClass(generateAdapter = true)
 data class ModerationTicketDetailDto(
     @Json(name = "ticket") val ticket: ModerationTicketDto,
     @Json(name = "linked_reports") val linkedReports: List<ModerationLinkedReportDto> = emptyList(),
     @Json(name = "offender_history_summary") val offenderHistory: ModerationOffenderHistoryDto? = null,
+    // MOD-E1: NEW state-machine fields (additive backend detail; admin_moderation.py detail endpoint).
+    @Json(name = "content_snapshot") val contentSnapshot: ModerationContentSnapshotDto? = null,
+    @Json(name = "case_state") val caseState: String = "",
+    @Json(name = "hold_until") val holdUntil: Long? = null,
+    @Json(name = "owner_user_id") val ownerUserId: String? = null,
+    @Json(name = "prior_enforcement_history") val priorEnforcement: List<ModerationEnforcementHistoryDto> = emptyList(),
+)
+
+/** MOD-E1: response of dismiss/confirm/final-call (admin_moderation.py _CaseActionOut). */
+@JsonClass(generateAdapter = true)
+data class ModerationCaseActionDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "ticket_id") val ticketId: String = "",
+    @Json(name = "case_id") val caseId: String = "",
+    @Json(name = "state") val state: String = "",
+    @Json(name = "hidden") val hidden: Boolean = false,
+    @Json(name = "hold_until") val holdUntil: Long? = null,
+    @Json(name = "owner_user_id") val ownerUserId: String? = null,
+    @Json(name = "enforcement_id") val enforcementId: String? = null,
+)
+
+/** MOD-E2: final-call body. action=reinstate|delete; delete may ban (ban_duration_days=0 => permanent). */
+@JsonClass(generateAdapter = true)
+data class ModerationFinalCallReq(
+    @Json(name = "action") val action: String,
+    @Json(name = "note") val note: String? = null,
+    @Json(name = "ban") val ban: Boolean = false,
+    @Json(name = "ban_duration_days") val banDurationDays: Int? = null,
+    @Json(name = "second_approver_admin_user_id") val secondApproverAdminUserId: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -140,6 +212,17 @@ interface ModerationAdminRepository {
         enforcementAction: String,
         note: String?,
     ): ApiResult<ModerationTicketDto>
+
+    // MOD-E1/E2 state-machine actions.
+    suspend fun dismiss(ticketId: String): ApiResult<ModerationCaseActionDto>
+    suspend fun confirm(ticketId: String): ApiResult<ModerationCaseActionDto>
+    suspend fun finalCall(
+        ticketId: String,
+        action: String,
+        note: String?,
+        ban: Boolean,
+        banDurationDays: Int?,
+    ): ApiResult<ModerationCaseActionDto>
 }
 
 @Singleton
@@ -173,6 +256,32 @@ class DefaultModerationAdminRepository @Inject constructor(
         note: String?,
     ): ApiResult<ModerationTicketDto> = withContext(io) {
         call { api.resolve(ticketId, ModerationResolveReq(resolution, enforcementAction, blankToNull(note))) }
+    }
+
+    override suspend fun dismiss(ticketId: String): ApiResult<ModerationCaseActionDto> =
+        withContext(io) { call { api.dismiss(ticketId) } }
+
+    override suspend fun confirm(ticketId: String): ApiResult<ModerationCaseActionDto> =
+        withContext(io) { call { api.confirm(ticketId) } }
+
+    override suspend fun finalCall(
+        ticketId: String,
+        action: String,
+        note: String?,
+        ban: Boolean,
+        banDurationDays: Int?,
+    ): ApiResult<ModerationCaseActionDto> = withContext(io) {
+        call {
+            api.finalCall(
+                ticketId,
+                ModerationFinalCallReq(
+                    action = action,
+                    note = blankToNull(note),
+                    ban = ban,
+                    banDurationDays = banDurationDays,
+                ),
+            )
+        }
     }
 
     private fun blankToNull(s: String?): String? = s?.trim()?.takeIf { it.isNotEmpty() }

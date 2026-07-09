@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.adminmod.ModerationAdminRepository
+import com.testlogon.android.data.adminmod.ModerationCaseActionDto
 import com.testlogon.android.data.adminmod.ModerationTicketDetailDto
 import com.testlogon.android.data.adminmod.ModerationTicketDto
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -165,6 +166,62 @@ class ModerationDetailViewModel @Inject constructor(
 
     fun resolve(resolution: String, enforcement: String, note: String?) =
         runAction { repo.resolve(ticketId, resolution, enforcement, note) }
+
+    // MOD-E1/E2 state-machine actions. Each reloads the detail on success so the
+    // case state + hold countdown + content snapshot reflect the new state.
+    fun dismissCase() = runCaseAction { repo.dismiss(ticketId) }
+
+    fun confirmCase() = runCaseAction { repo.confirm(ticketId) }
+
+    fun finalCall(action: String, note: String?, ban: Boolean, banDurationDays: Int?) =
+        runCaseAction(
+            forbiddenMessage = if (ban && (banDurationDays ?: -1) == 0) {
+                "Permanent ban requires a senior moderator and dual approval."
+            } else {
+                "You are not authorised to perform this action."
+            },
+        ) { repo.finalCall(ticketId, action, note, ban, banDurationDays) }
+
+    private fun runCaseAction(
+        forbiddenMessage: String = "You are not authorised to perform this action.",
+        block: suspend () -> ApiResult<ModerationCaseActionDto>,
+    ) {
+        val cur = _state.value
+        if (cur !is ModerationDetailUiState.Content || cur.actionInFlight) return
+        _state.value = cur.copy(actionInFlight = true, transientError = null, actionMessage = null)
+        viewModelScope.launch {
+            when (val r = block()) {
+                is ApiResult.Success -> reloadAfterAction("Applied: ${r.data.state.replace('_', ' ')}.")
+                is ApiResult.Failure -> when (r.error.status) {
+                    // An action-level 403 (e.g. permanent-ban gating) must NOT nuke the whole
+                    // screen to Forbidden - surface it as a message and keep the detail.
+                    403 -> setActionMessage(forbiddenMessage)
+                    401 -> reduceActionError(AdminOpsErrorType.AUTH)
+                    else -> reduceActionError(AdminOpsErrorType.SERVER)
+                }
+                is ApiResult.NetworkError -> reduceActionError(AdminOpsErrorType.NETWORK)
+            }
+        }
+    }
+
+    private fun setActionMessage(msg: String) {
+        val cur = _state.value as? ModerationDetailUiState.Content ?: return
+        _state.value = cur.copy(actionInFlight = false, actionMessage = msg)
+    }
+
+    private suspend fun reloadAfterAction(message: String) {
+        when (val r = repo.detail(ticketId)) {
+            is ApiResult.Success -> _state.value = ModerationDetailUiState.Content(
+                detail = r.data,
+                actionInFlight = false,
+                actionMessage = message,
+            )
+            else -> {
+                val prev = _state.value as? ModerationDetailUiState.Content ?: return
+                _state.value = prev.copy(actionInFlight = false, actionMessage = message)
+            }
+        }
+    }
 
     private fun runAction(block: suspend () -> ApiResult<ModerationTicketDto>) {
         val cur = _state.value
