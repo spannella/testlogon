@@ -3527,7 +3527,8 @@ def _filter_message_visible(message_item: dict, user_id: str) -> bool:
     if message_item.get("revoked_at"):
         return False
     if message_item.get("moderation_hidden") or message_item.get("moderation_removed_at"):
-        return False
+        if message_item.get("sender_id") != user_id:
+            return False
     # Scheduled messages are only visible to the sender until delivered
     if message_item.get("status") == "scheduled" and message_item.get("sender_id") != user_id:
         return False

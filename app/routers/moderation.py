@@ -28,7 +28,7 @@ RATE_LIMIT_USER_WINDOW_SECONDS = int(os.environ.get("MODERATION_REPORT_RATE_LIMI
 RATE_LIMIT_USER_MAX = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_USER_MAX", "8"))
 RATE_LIMIT_IP_WINDOW_SECONDS = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_IP_WINDOW_SECONDS", "60"))
 RATE_LIMIT_IP_MAX = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_IP_MAX", "20"))
-ALLOWED_TOPICS = {"sexual", "extortion", "criminal", "spam", "racist"}
+ALLOWED_TOPICS = {"sexual", "extortion", "criminal", "spam", "racist", "harassment", "hate", "violence_threats", "other"}
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +351,27 @@ def _create_report(inp: CreateModerationReportIn, ctx: Dict[str, str], request: 
         content_id=inp.content_id,
         metadata={"topics": inp.topics},
     )
+    # MOD-A3: aggregate the report onto the moderation_case, apply the guarded
+    # auto-hide (severe=1 report; lower>=3 or trusted reporter), and notify the
+    # poster when hidden. Best-effort: never breaks the report write.
+    try:
+        from app.services import moderation_case as _mod_case
+        _mod_case.on_report_filed(
+            content_type=inp.content_type,
+            content_id=inp.content_id,
+            topics=inp.topics,
+            reporter_user_id=reporter_user_id,
+            ticket_id=ticket_id,
+            metadata={
+                "post_id": inp.post_id,
+                "conversation_id": inp.conversation_id,
+                "media_index": inp.media_index,
+                "video_id": getattr(inp, "video_id", None),
+            },
+            now_ts=now_ts,
+        )
+    except Exception:
+        logger.exception("moderation_case.on_report_filed failed (report still recorded)")
     write_alert(
         reporter_user_id,
         event="moderation_report_received",

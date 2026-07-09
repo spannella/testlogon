@@ -116,6 +116,7 @@ class Tables:
     message_call_sessions: Any
     content_reports: Any
     moderation_tickets: Any
+    moderation_cases: Any
     moderation_actions: Any
     moderation_audit_log: Any
     moderation_video_queue: Any
@@ -359,6 +360,7 @@ T = Tables(
     message_call_sessions=_safe_table(S.message_call_sessions_table_name),
     content_reports=_safe_table(S.content_reports_table_name),
     moderation_tickets=_safe_table(S.moderation_tickets_table_name),
+    moderation_cases=_safe_table(getattr(S, "moderation_cases_table_name", "ModerationCases")),
     moderation_actions=_safe_table(S.moderation_actions_table_name),
     moderation_audit_log=_safe_table(S.moderation_audit_log_table_name),
     moderation_video_queue=_safe_table(S.moderation_video_queue_table_name),

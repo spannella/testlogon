@@ -621,6 +621,10 @@ class Settings:
         "DDB_MODERATION_TICKETS",
         "ModerationTickets",
     )
+    moderation_cases_table_name: str = os.environ.get(
+        "DDB_MODERATION_CASES",
+        "ModerationCases",
+    )
     moderation_actions_table_name: str = os.environ.get(
         "DDB_MODERATION_ACTIONS",
         "ModerationActions",

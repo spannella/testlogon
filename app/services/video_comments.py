@@ -78,6 +78,7 @@ def add_comment(
 def list_comments(
     *,
     video_id: str,
+    viewer_id: Optional[str] = None,
     cursor: Optional[str] = None,
     limit: int = 20,
 ) -> Dict[str, Any]:
@@ -101,6 +102,8 @@ def list_comments(
 
     comments = []
     for item in items_raw:
+        if (item.get("moderation_hidden") or item.get("moderation_removed")) and item.get("user_id") != viewer_id:
+            continue
         comments.append({
             "comment_id": item.get("comment_id", ""),
             "video_id": item.get("video_id", video_id),

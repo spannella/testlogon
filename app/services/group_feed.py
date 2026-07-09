@@ -209,6 +209,8 @@ def list_group_feed(
         post = post_map.get(pid)
         if not post:
             continue
+        if (post.get("moderation_removed") or post.get("moderation_removed_at")) and post.get("user_id") != viewer_id:
+            continue
         result_posts.append(_post_out(post, viewer_id=viewer_id))
 
     # Sort: pinned first

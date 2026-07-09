@@ -4244,6 +4244,8 @@ def get_post(post_id: str, user_id: UserIdDep):
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     author = post.get("user_id")
+    if (post.get("moderation_removed") or post.get("moderation_removed_at")) and author != user_id:
+        raise HTTPException(status_code=404, detail="Post not found")
     if author and author != user_id and not can_view_post(user_id, post):
         raise HTTPException(status_code=403, detail="Not authorized to view this post")
     locked = bool(post.get("locked"))
@@ -5432,7 +5434,7 @@ def view_feed(
                 status, _publish_at, _published_at, _schedule_timezone, _scheduled_at_local = _resolve_post_lifecycle_fields(post)
                 if status != "published":
                     continue
-                if post.get("moderation_removed") or post.get("moderation_removed_at"):
+                if (post.get("moderation_removed") or post.get("moderation_removed_at")) and post.get("user_id") != user_id:
                     continue
                 if is_hidden(user_id, post_id):
                     continue
@@ -5938,7 +5940,7 @@ def list_comments(
     items = [
         _comment_to_dict(it)
         for it in resp.get("Items", [])
-        if not it.get("moderation_removed")
+        if (not it.get("moderation_removed")) or it.get("user_id") == user_id
     ]
     return {"items": items, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
 

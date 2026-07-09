@@ -520,6 +520,16 @@ def _table_defs() -> List[TableDef]:
             "report_id",
             "message_id",
         ),
+        # Moderation Cases (MOD-A1) — one case per reported content ref; the
+        # non-destructive hide state machine. ByState GSI feeds the 30d sweep.
+        TableDef(
+            _resolve_table_name(getattr(S, "moderation_cases_table_name", "ModerationCases"), "ModerationCases"),
+            "case_id",
+            gsi=[
+                {"index_name": "ByState", "partition_key": "state", "sort_key": "hold_until"},
+            ],
+            attr_types={"hold_until": "N"},
+        ),
         TableDef(
             _resolve_table_name(S.content_reports_table_name, "ContentReports"),
             "report_id",
