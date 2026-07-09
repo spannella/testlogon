@@ -81,6 +81,15 @@ class CreateCampaignViewModel @Inject constructor(
     private val _bidCpaUsd = MutableStateFlow(DEFAULT_CPA_USD)
     val bidCpaUsd: StateFlow<String> = _bidCpaUsd.asStateFlow()
 
+    // ADV2-306 (F3) — free "promote my content" self-advertising. When on, budget/bids are hidden + not
+    // required (the campaign is free, needs no funding, and the server zeroes all bids), and the fill mode
+    // (fill_only vs always_win) governs whether it only backfills empty own-content slots or always wins them.
+    private val _isSelfPromo = MutableStateFlow(false)
+    val isSelfPromo: StateFlow<Boolean> = _isSelfPromo.asStateFlow()
+
+    private val _selfPromoMode = MutableStateFlow(SELF_PROMO_MODES.first())
+    val selfPromoMode: StateFlow<String> = _selfPromoMode.asStateFlow()
+
     private val _submitState = MutableStateFlow<SubmitState>(SubmitState.Idle)
     val submitState: StateFlow<SubmitState> = _submitState.asStateFlow()
 
@@ -118,24 +127,41 @@ class CreateCampaignViewModel @Inject constructor(
     fun onBidCpmUsd(text: String) { _bidCpmUsd.value = text; clearError() }
     fun onBidCpcUsd(text: String) { _bidCpcUsd.value = text; clearError() }
     fun onBidCpaUsd(text: String) { _bidCpaUsd.value = text; clearError() }
+    fun onSelfPromo(on: Boolean) { _isSelfPromo.value = on; clearError() }
+    fun onSelfPromoMode(mode: String) { _selfPromoMode.value = mode }
 
     /** True when an account is selected, a name is present, and budget/bid parse into their valid ranges. */
     val canSubmit: Boolean
         get() = _selectedAccountId.value != null &&
             _name.value.isNotBlank() &&
-            (parseCents(_budgetUsd.value)?.let { it >= MIN_BUDGET_CENTS } == true) &&
-            (parseCents(_bidCpmUsd.value)?.let { it in MIN_BID_CENTS..MAX_BID_CENTS } == true) &&
-            (parseCents(_bidCpcUsd.value)?.let { it in MIN_CPC_CENTS..MAX_CPC_CENTS } == true) &&
-            (parseCents(_bidCpaUsd.value)?.let { it in MIN_CPA_CENTS..MAX_CPA_CENTS } == true)
+            // A self-promo is free: no budget/bid entry is required (server zeroes bids, needs no funding).
+            (_isSelfPromo.value || (
+                (parseCents(_budgetUsd.value)?.let { it >= MIN_BUDGET_CENTS } == true) &&
+                    (parseCents(_bidCpmUsd.value)?.let { it in MIN_BID_CENTS..MAX_BID_CENTS } == true) &&
+                    (parseCents(_bidCpcUsd.value)?.let { it in MIN_CPC_CENTS..MAX_CPC_CENTS } == true) &&
+                    (parseCents(_bidCpaUsd.value)?.let { it in MIN_CPA_CENTS..MAX_CPA_CENTS } == true)
+                ))
 
     fun submit() {
         if (_submitState.value is SubmitState.Submitting) return
         val accountId = _selectedAccountId.value ?: return
-        val budget = parseCents(_budgetUsd.value)?.takeIf { it >= MIN_BUDGET_CENTS } ?: return
-        val bid = parseCents(_bidCpmUsd.value)?.takeIf { it in MIN_BID_CENTS..MAX_BID_CENTS } ?: return
-        val cpc = parseCents(_bidCpcUsd.value)?.takeIf { it in MIN_CPC_CENTS..MAX_CPC_CENTS } ?: return
-        val cpa = parseCents(_bidCpaUsd.value)?.takeIf { it in MIN_CPA_CENTS..MAX_CPA_CENTS } ?: return
         if (_name.value.isBlank()) return
+        val selfPromo = _isSelfPromo.value
+
+        // A self-promo is free: send budget 0 and OMIT all bids (null) so the server floors are not tripped
+        // and the server zeroes the bids itself. A paid campaign parses + range-validates budget/bids.
+        val budget: Long
+        val bid: Int?
+        val cpc: Int?
+        val cpa: Int?
+        if (selfPromo) {
+            budget = 0L; bid = null; cpc = null; cpa = null
+        } else {
+            budget = parseCents(_budgetUsd.value)?.takeIf { it >= MIN_BUDGET_CENTS } ?: return
+            bid = parseCents(_bidCpmUsd.value)?.takeIf { it in MIN_BID_CENTS..MAX_BID_CENTS }?.toInt() ?: return
+            cpc = parseCents(_bidCpcUsd.value)?.takeIf { it in MIN_CPC_CENTS..MAX_CPC_CENTS }?.toInt() ?: return
+            cpa = parseCents(_bidCpaUsd.value)?.takeIf { it in MIN_CPA_CENTS..MAX_CPA_CENTS }?.toInt() ?: return
+        }
 
         _submitState.value = SubmitState.Submitting
         viewModelScope.launch {
@@ -145,12 +171,14 @@ class CreateCampaignViewModel @Inject constructor(
                 objective = _objective.value,
                 budgetCents = budget,
                 budgetType = _budgetType.value,
-                bidCpmCents = bid.toInt(),
-                bidCpcCents = cpc.toInt(),
-                bidCpaCents = cpa.toInt(),
+                bidCpmCents = bid,
+                bidCpcCents = cpc,
+                bidCpaCents = cpa,
                 category = null,
                 startDate = null,
                 endDate = null,
+                isSelfPromo = selfPromo,
+                selfPromoMode = if (selfPromo) _selfPromoMode.value else null,
             )
             when (result) {
                 is ApiResult.Success -> {
@@ -200,6 +228,8 @@ class CreateCampaignViewModel @Inject constructor(
     companion object {
         val OBJECTIVES = listOf("awareness", "traffic", "conversions")
         val BUDGET_TYPES = listOf("lifetime", "daily")
+        // ADV2-306 (F3) — self-promo fill modes; fill_only is the safe default (only backfills empty slots).
+        val SELF_PROMO_MODES = listOf("fill_only", "always_win")
 
         const val MIN_BUDGET_CENTS = 100L
         const val MIN_BID_CENTS = 50L

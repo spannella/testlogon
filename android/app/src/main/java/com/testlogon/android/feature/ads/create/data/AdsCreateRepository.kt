@@ -58,12 +58,14 @@ interface AdsCreateRepository {
         objective: String,
         budgetCents: Long,
         budgetType: String,
-        bidCpmCents: Int,
+        bidCpmCents: Int?,
         bidCpcCents: Int?,
         bidCpaCents: Int?,
         category: String?,
         startDate: Long?,
         endDate: Long?,
+        isSelfPromo: Boolean = false,
+        selfPromoMode: String? = null,
     ): ApiResult<AdCampaign>
 
     /** ADV-108 - submit a draft campaign for admin review. */
@@ -121,12 +123,14 @@ class AdsCreateRepositoryImpl @Inject constructor(
         objective: String,
         budgetCents: Long,
         budgetType: String,
-        bidCpmCents: Int,
+        bidCpmCents: Int?,
         bidCpcCents: Int?,
         bidCpaCents: Int?,
         category: String?,
         startDate: Long?,
         endDate: Long?,
+        isSelfPromo: Boolean,
+        selfPromoMode: String?,
     ): ApiResult<AdCampaign> = withContext(Dispatchers.IO) {
         call {
             api.createCampaign(
@@ -142,6 +146,8 @@ class AdsCreateRepositoryImpl @Inject constructor(
                     category = category,
                     startDate = startDate,
                     endDate = endDate,
+                    isSelfPromo = isSelfPromo,
+                    selfPromoMode = selfPromoMode,
                 ),
             ).toDomain()
         }

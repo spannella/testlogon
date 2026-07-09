@@ -4,6 +4,7 @@ package com.testlogon.android.feature.ads.create.campaign
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,6 +25,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -31,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -52,6 +55,8 @@ object CreateCampaignTestTags {
     const val BID = "create_campaign_bid"
     const val BID_CPC = "create_campaign_bid_cpc"
     const val BID_CPA = "create_campaign_bid_cpa"
+    const val SELF_PROMO = "create_campaign_self_promo_toggle"
+    const val FILL_MODE = "create_campaign_fill_mode"
     const val SUBMIT = "create_campaign_submit"
     const val SUCCESS = "create_campaign_success"
     const val REVIEW = "create_campaign_review"
@@ -74,6 +79,8 @@ fun CreateCampaignRoute(
     val bid by viewModel.bidCpmUsd.collectAsStateWithLifecycle()
     val bidCpc by viewModel.bidCpcUsd.collectAsStateWithLifecycle()
     val bidCpa by viewModel.bidCpaUsd.collectAsStateWithLifecycle()
+    val isSelfPromo by viewModel.isSelfPromo.collectAsStateWithLifecycle()
+    val selfPromoMode by viewModel.selfPromoMode.collectAsStateWithLifecycle()
     val submit by viewModel.submitState.collectAsStateWithLifecycle()
     val review by viewModel.reviewState.collectAsStateWithLifecycle()
 
@@ -87,6 +94,8 @@ fun CreateCampaignRoute(
         bidCpmUsd = bid,
         bidCpcUsd = bidCpc,
         bidCpaUsd = bidCpa,
+        isSelfPromo = isSelfPromo,
+        selfPromoMode = selfPromoMode,
         submitState = submit,
         reviewState = review,
         canSubmit = viewModel.canSubmit,
@@ -98,6 +107,8 @@ fun CreateCampaignRoute(
         onBid = viewModel::onBidCpmUsd,
         onBidCpc = viewModel::onBidCpcUsd,
         onBidCpa = viewModel::onBidCpaUsd,
+        onSelfPromo = viewModel::onSelfPromo,
+        onSelfPromoMode = viewModel::onSelfPromoMode,
         onSubmit = viewModel::submit,
         onSubmitForReview = viewModel::submitForReview,
         onContinue = onCreated,
@@ -117,6 +128,8 @@ fun CreateCampaignScreen(
     bidCpmUsd: String,
     bidCpcUsd: String,
     bidCpaUsd: String,
+    isSelfPromo: Boolean,
+    selfPromoMode: String,
     submitState: CreateCampaignViewModel.SubmitState,
     reviewState: CreateCampaignViewModel.ReviewState,
     canSubmit: Boolean,
@@ -128,6 +141,8 @@ fun CreateCampaignScreen(
     onBid: (String) -> Unit,
     onBidCpc: (String) -> Unit,
     onBidCpa: (String) -> Unit,
+    onSelfPromo: (Boolean) -> Unit,
+    onSelfPromoMode: (String) -> Unit,
     onSubmit: () -> Unit,
     onSubmitForReview: () -> Unit,
     onContinue: (campaignId: String) -> Unit,
@@ -162,6 +177,7 @@ fun CreateCampaignScreen(
             (submitState as? CreateCampaignViewModel.SubmitState.Success)?.let { success ->
                 CampaignCreatedCard(
                     reviewState = reviewState,
+                    isSelfPromo = isSelfPromo,
                     onSubmitForReview = onSubmitForReview,
                     onContinue = { onContinue(success.campaign.campaignId) },
                 )
@@ -199,6 +215,53 @@ fun CreateCampaignScreen(
                 modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.NAME),
             )
 
+            // ADV2-306 (F3) — free "promote my content" self-advertising toggle. When on, the money fields
+            // (budget + all bids) are hidden (it is free, needs no funding) and only runs on your own content.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.create_campaign_self_promo_label),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        stringResource(R.string.create_campaign_self_promo_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = isSelfPromo,
+                    onCheckedChange = onSelfPromo,
+                    enabled = !submitting,
+                    modifier = Modifier.testTag(CreateCampaignTestTags.SELF_PROMO),
+                )
+            }
+
+            if (isSelfPromo) {
+                LabeledDropdown(
+                    label = stringResource(R.string.create_campaign_fill_mode_label),
+                    selectedLabel = selfPromoModeLabel(selfPromoMode),
+                    options = CreateCampaignViewModel.SELF_PROMO_MODES.map { it to selfPromoModeLabel(it) },
+                    onSelect = onSelfPromoMode,
+                    enabled = !submitting,
+                    testTag = CreateCampaignTestTags.FILL_MODE,
+                )
+                Text(
+                    stringResource(
+                        if (selfPromoMode == "always_win") {
+                            R.string.create_campaign_fill_mode_always_win_hint
+                        } else {
+                            R.string.create_campaign_fill_mode_fill_only_hint
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             LabeledDropdown(
                 label = stringResource(R.string.create_campaign_objective_label),
                 selectedLabel = objective,
@@ -217,6 +280,8 @@ fun CreateCampaignScreen(
                 testTag = CreateCampaignTestTags.BUDGET_TYPE,
             )
 
+            // Money fields are hidden for a self-promo (it is free — no budget, no bids, no funding step).
+            if (!isSelfPromo) {
             OutlinedTextField(
                 value = budgetUsd,
                 onValueChange = onBudget,
@@ -263,6 +328,7 @@ fun CreateCampaignScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.BID_CPA),
             )
+            }
 
             (submitState as? CreateCampaignViewModel.SubmitState.Error)?.let {
                 Text(it.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
@@ -283,6 +349,7 @@ fun CreateCampaignScreen(
 @Composable
 private fun CampaignCreatedCard(
     reviewState: CreateCampaignViewModel.ReviewState,
+    isSelfPromo: Boolean,
     onSubmitForReview: () -> Unit,
     onContinue: () -> Unit,
 ) {
@@ -291,15 +358,27 @@ private fun CampaignCreatedCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(stringResource(R.string.create_campaign_success_title), style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(
+                    if (isSelfPromo) R.string.create_campaign_self_promo_success_title
+                    else R.string.create_campaign_success_title,
+                ),
+                style = MaterialTheme.typography.titleMedium,
+            )
 
-            when (reviewState) {
-                is CreateCampaignViewModel.ReviewState.Done -> Text(
+            when {
+                // A self-promo auto-activates (no admin review), so it skips the review-state messaging.
+                isSelfPromo -> Text(
+                    stringResource(R.string.create_campaign_self_promo_success_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                reviewState is CreateCampaignViewModel.ReviewState.Done -> Text(
                     stringResource(R.string.create_campaign_review_done, reviewState.status),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                is CreateCampaignViewModel.ReviewState.Error -> Text(
+                reviewState is CreateCampaignViewModel.ReviewState.Error -> Text(
                     reviewState.message,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
@@ -311,15 +390,18 @@ private fun CampaignCreatedCard(
                 )
             }
 
-            val reviewing = reviewState is CreateCampaignViewModel.ReviewState.Submitting
-            val reviewed = reviewState is CreateCampaignViewModel.ReviewState.Done
-            Button(
-                onClick = onSubmitForReview,
-                enabled = !reviewing && !reviewed,
-                modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.REVIEW),
-            ) {
-                if (reviewing) CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
-                Text(stringResource(R.string.create_campaign_review))
+            // Paid campaigns need admin review; a free self-promo is already live so it skips this button.
+            if (!isSelfPromo) {
+                val reviewing = reviewState is CreateCampaignViewModel.ReviewState.Submitting
+                val reviewed = reviewState is CreateCampaignViewModel.ReviewState.Done
+                Button(
+                    onClick = onSubmitForReview,
+                    enabled = !reviewing && !reviewed,
+                    modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.REVIEW),
+                ) {
+                    if (reviewing) CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
+                    Text(stringResource(R.string.create_campaign_review))
+                }
             }
             Button(
                 onClick = onContinue,
@@ -330,6 +412,13 @@ private fun CampaignCreatedCard(
         }
     }
 }
+
+/** ADV2-306 (F3) — maps a self-promo fill mode wire value to its friendly picker label. */
+@Composable
+private fun selfPromoModeLabel(mode: String): String = stringResource(
+    if (mode == "always_win") R.string.create_campaign_fill_mode_always_win
+    else R.string.create_campaign_fill_mode_fill_only,
+)
 
 /** A labeled exposed-dropdown picker over [options] (value to label). */
 @Composable

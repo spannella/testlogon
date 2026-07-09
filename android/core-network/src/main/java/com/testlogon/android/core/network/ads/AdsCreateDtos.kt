@@ -45,12 +45,19 @@ data class AdCampaignCreateIn(
     @Json(name = "objective") val objective: String,
     @Json(name = "budget_cents") val budgetCents: Long,
     @Json(name = "budget_type") val budgetType: String,
-    @Json(name = "bid_cpm_cents") val bidCpmCents: Int,
+    // Nullable so a self-promo campaign can OMIT the CPM (the server field floor is >=50c; a self-promo
+    // sends null and the server zeroes all bids). Paid campaigns always send a value.
+    @Json(name = "bid_cpm_cents") val bidCpmCents: Int? = null,
     @Json(name = "bid_cpc_cents") val bidCpcCents: Int? = null,
     @Json(name = "bid_cpa_cents") val bidCpaCents: Int? = null,
     @Json(name = "category") val category: String? = null,
     @Json(name = "start_date") val startDate: Long? = null,
     @Json(name = "end_date") val endDate: Long? = null,
+    // ADV2-306 (F3) — free "promote my content" self-advertising. When true the server zeroes all bids,
+    // requires no funding, auto-activates, and serves ONLY on the creator own content. self_promo_mode:
+    // fill_only (serve only when no paying ad is eligible) vs always_win (always win the own-content slot).
+    @Json(name = "is_self_promo") val isSelfPromo: Boolean = false,
+    @Json(name = "self_promo_mode") val selfPromoMode: String? = null,
 )
 
 /**
