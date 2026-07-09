@@ -326,15 +326,21 @@ def _charge_broadcast_completion(*, ad_click_id, session_id, surface="broadcast_
         idempotency_key="%s:%s" % (surface, ad_click_id),
     )
     try:
+        # ADV2-RES R2: only write charged_cents on a REAL charge (>0); a
+        # duplicate completion returns charge_cents=0 and must NOT clobber the
+        # already-stamped real amount back to 0.
+        _cc = int(result.get("charge_cents", 0) or 0) if result.get("ok") else 0
+        _upd = "SET #s = :s, completed_at = :t"
+        _vals = {":s": "completed", ":t": now_ts()}
+        if _cc > 0:
+            _upd += ", charged_cents = if_not_exists(charged_cents, :z) + :cc"
+            _vals[":z"] = 0
+            _vals[":cc"] = _cc
         T.ad_clicks.update_item(
             Key={"ad_click_id": ad_click_id},
-            UpdateExpression="SET #s = :s, charged_cents = :c, completed_at = :t",
+            UpdateExpression=_upd,
             ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={
-                ":s": "completed",
-                ":c": int(result.get("charge_cents", 0)) if result.get("ok") else 0,
-                ":t": now_ts(),
-            },
+            ExpressionAttributeValues=_vals,
         )
     except Exception:
         pass

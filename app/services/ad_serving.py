@@ -460,6 +460,18 @@ def record_cta_click(
             logger.warning("cta_click_charge_failed click=%s cta=%s", ad_click_id, cta_type)
             reason = "charge_error"
 
+    # ADV2-RES R2: stamp the real charged amount on the AdClicks row (CTA).
+    # Accumulate; a duplicate CTA charge returns 0 so it never double-counts.
+    if charge_cents > 0:
+        try:
+            T.ad_clicks.update_item(
+                Key={"ad_click_id": ad_click_id},
+                UpdateExpression="SET charged_cents = if_not_exists(charged_cents, :z) + :cc",
+                ExpressionAttributeValues={":z": 0, ":cc": charge_cents},
+            )
+        except Exception:
+            logger.warning("cta_click_charged_cents_stamp_failed click=%s", ad_click_id)
+
     return {
         "ok": True,
         "ad_click_id": ad_click_id,
@@ -631,10 +643,12 @@ def track_ad_event(
                 try:
                     T.ad_clicks.update_item(
                         Key={"ad_click_id": ad_click_id},
-                        UpdateExpression="SET #s = :s",
+                        UpdateExpression="SET #s = :s, "
+                            "charged_cents = if_not_exists(charged_cents, :z) + :cc",
                         ExpressionAttributeNames={"#s": "status"},
                         ExpressionAttributeValues={
-                            ":s": "clicked" if event == "click" else "impressed"
+                            ":s": "clicked" if event == "click" else "impressed",
+                            ":z": 0, ":cc": charge_cents,
                         },
                     )
                 except Exception:

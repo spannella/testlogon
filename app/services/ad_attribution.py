@@ -182,6 +182,20 @@ def attribute_conversion(
                 idempotency_key="%s#conversion" % resolved_click_id,
             )
             result["charge"] = charge
+            # ADV2-RES R2: stamp the real CPA charge on the AdClicks row.
+            _cc = int(charge.get("charge_cents", 0) or 0) if charge.get("ok") else 0
+            if _cc > 0:
+                try:
+                    T.ad_clicks.update_item(
+                        Key={"ad_click_id": resolved_click_id},
+                        UpdateExpression="SET charged_cents = if_not_exists(charged_cents, :z) + :cc",
+                        ExpressionAttributeValues={":z": 0, ":cc": _cc},
+                    )
+                except Exception:
+                    logger.warning(
+                        "ad_conversion_charged_cents_stamp_failed click=%s",
+                        resolved_click_id,
+                    )
         except Exception:
             logger.warning("ad_conversion_charge_failed click=%s", resolved_click_id, exc_info=True)
             result["charge"] = {"ok": False, "reason": "charge_error"}
