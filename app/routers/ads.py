@@ -26,6 +26,8 @@ from app.models import (
 from app.services.ad_serving import serve_ad, track_ad_event, get_serving_stats, record_cta_click
 from app.services.ad_accounts import (
     create_ad_account,
+    create_syndicate_ad_account,
+    list_syndicate_ad_accounts,
     get_ad_account,
     list_accounts_by_owner,
     list_accounts_by_status,
@@ -955,3 +957,29 @@ async def ad_mass_dm_cancel_endpoint(send_id: str, ctx=Depends(require_ui_sessio
         return _addm.cancel_send(send_id=send_id, advertiser_sub=ctx["user_sub"])
     except _addm.AdDmError as exc:
         raise _addm_http(exc)
+
+
+# ── Syndicate-owned advertiser accounts (ADV2-701) ─────────────────────────
+# A syndicate-level advertiser: an ad account owned by a syndicate, managed by
+# its admin. Reuses the campaign/creative/funding endpoints above (owner_sub is
+# the admin). Gated by syndicates._require_admin.
+
+@router.post("/syndicates/{syndicate_id}/accounts", status_code=201)
+async def create_syndicate_ad_account_endpoint(
+    syndicate_id: str, body: AdAccountCreateIn, ctx=Depends(require_ui_session)
+):
+    from app.services.syndicates import _require_admin
+    _require_admin(syndicate_id, ctx["user_sub"])  # raises 403/404
+    try:
+        return create_syndicate_ad_account(syndicate_id, ctx["user_sub"], body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/syndicates/{syndicate_id}/accounts")
+async def list_syndicate_ad_accounts_endpoint(
+    syndicate_id: str, ctx=Depends(require_ui_session)
+):
+    from app.services.syndicates import _require_admin
+    _require_admin(syndicate_id, ctx["user_sub"])
+    return list_syndicate_ad_accounts(syndicate_id, ctx["user_sub"])

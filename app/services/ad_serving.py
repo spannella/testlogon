@@ -120,6 +120,9 @@ def serve_ad(
         except Exception:
             _acct = None
         _owner_sub = str((_acct or {}).get("owner_sub", "") or "")
+        _owner_type = str((_acct or {}).get("owner_type", "user") or "user")
+        _owner_syndicate_id = str((_acct or {}).get("owner_syndicate_id", "") or "")
+        _is_syndicate_ad = _owner_type == "syndicate" and bool(_owner_syndicate_id)
 
         # ADV2-302 (F3): self-promo campaign branch. Eligible ONLY when the slot
         # is the creator's OWN content (content_owner_id == the campaign's ad
@@ -158,6 +161,25 @@ def serve_ad(
         # ad from an account they own. Skip when the ad-account owner == viewer.
         if _owner_sub and _owner_sub == str(user_id or ""):
             continue
+
+        # ADV2-701/705 (F7): a syndicate-owned campaign is eligible ONLY when
+        # the slot's content owner is a MEMBER of that syndicate. It never
+        # serves on a non-member's content nor as a standalone unit (empty
+        # content_owner_id). An EXTERNAL (non-syndicate) campaign is unaffected
+        # and still serves everywhere as before (no membership gate, no skim).
+        if _is_syndicate_ad:
+            if not content_owner_id:
+                continue
+            try:
+                from app.services.syndicates import is_member
+                if not is_member(_owner_syndicate_id, str(content_owner_id)):
+                    continue
+            except Exception:
+                logger.warning(
+                    "syndicate_membership_check_failed synd=%s owner=%s",
+                    _owner_syndicate_id, content_owner_id,
+                )
+                continue
 
         # Fraud suspension check (ADS-014): suspended accounts serve no ads.
         try:
@@ -228,6 +250,8 @@ def serve_ad(
             "campaign": campaign,
             "creatives": creatives,
             "score": score,
+            "is_syndicate_ad": _is_syndicate_ad,
+            "syndicate_id": _owner_syndicate_id if _is_syndicate_ad else "",
         })
 
     if not candidates and not self_promo_always and not self_promo_fill:
@@ -290,6 +314,8 @@ def serve_ad(
             "account_id": winner["campaign"]["account_id"],
             "creative_id": creative["creative_id"],
             "content_owner_sub": content_owner_id or "",
+            "is_syndicate_ad": bool(winner.get("is_syndicate_ad")),
+            "syndicate_id": str(winner.get("syndicate_id") or ""),
             "surface": surface,
             "slot_type": slot_type,
             "content_id": content_id,
@@ -342,6 +368,8 @@ def serve_ad(
         "account_id": winner["campaign"]["account_id"],
         "ad_click_id": ad_click_id,
         "content_owner_id": content_owner_id or "",
+        "is_syndicate_ad": bool(winner.get("is_syndicate_ad")),
+        "syndicate_id": str(winner.get("syndicate_id") or ""),
         "promo_code_id": creative.get("promo_code_id"),
         "affiliate_link_id": creative.get("affiliate_link_id"),
     }
