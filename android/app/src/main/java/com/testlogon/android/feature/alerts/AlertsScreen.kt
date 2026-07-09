@@ -75,6 +75,8 @@ fun AlertsRoute(
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
     modifier: Modifier = Modifier,
+    // MOD-D1: tapping a moderation alert opens the "My content under review" screen.
+    onOpenModeration: () -> Unit = {},
     viewModel: AlertsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -102,10 +104,27 @@ fun AlertsRoute(
         onMarkAllRead = viewModel::onMarkAllRead,
         onToggleUnreadOnly = viewModel::onToggleUnreadOnly,
         onAlertClick = viewModel::onAlertClick,
+        onOpenModeration = onOpenModeration,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
 }
+
+/**
+ * MOD-D1 — moderation poster-alert event strings (backend `write_alert` events). Tapping one of these
+ * rows deep-links to the "My content under review" screen so the poster can respond / close.
+ */
+private val MODERATION_ALERT_EVENTS: Set<String> = setOf(
+    "moderation_content_hidden",
+    "moderation_violation_confirmed",
+    "moderation_content_reinstated",
+    "moderation_content_deleted",
+    "moderation_content_restored",
+    "dmca_claim_filed",
+)
+
+internal fun isModerationAlert(event: String?): Boolean =
+    event != null && event.trim().lowercase() in MODERATION_ALERT_EVENTS
 
 @Composable
 fun AlertsScreen(
@@ -116,6 +135,7 @@ fun AlertsScreen(
     onMarkAllRead: () -> Unit,
     onToggleUnreadOnly: () -> Unit,
     onAlertClick: (String) -> Unit,
+    onOpenModeration: () -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -213,7 +233,14 @@ fun AlertsScreen(
                                 item { OfflineBanner(onRetry = onRetry) }
                             }
                             items(alerts, key = { it.id }) { alert ->
-                                AlertRow(alert = alert, onClick = { onAlertClick(alert.id) })
+                                AlertRow(
+                                    alert = alert,
+                                    onClick = {
+                                        onAlertClick(alert.id)
+                                        // MOD-D1: moderation alerts deep-link to My content under review.
+                                        if (isModerationAlert(alert.event)) onOpenModeration()
+                                    },
+                                )
                                 HorizontalDivider()
                             }
                         }

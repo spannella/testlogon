@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddReaction
@@ -38,6 +39,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -257,6 +260,8 @@ fun VideoCommentsSection(
     val names by viewModel.authorNames.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
+    // MOD-C2 - video comment report target (reported as video_comment by its id).
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
 
     Column(
         modifier = modifier
@@ -301,6 +306,7 @@ fun VideoCommentsSection(
                     state = state,
                     viewModel = viewModel,
                     isReply = false,
+                    onReport = { c -> reportTarget = ReportTarget.Content(c.id, "video_comment") },
                 )
                 repliesByParent[root.id].orEmpty().forEach { reply ->
                     CommentRow(
@@ -309,6 +315,7 @@ fun VideoCommentsSection(
                         state = state,
                         viewModel = viewModel,
                         isReply = true,
+                        onReport = { c -> reportTarget = ReportTarget.Content(c.id, "video_comment") },
                     )
                 }
             }
@@ -405,6 +412,9 @@ fun VideoCommentsSection(
             )
         }
     }
+
+    // MOD-C2/C3 - video comment report sheet host (six categories + licensing/IP -> DMCA).
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
 }
 
 @Composable
@@ -414,6 +424,7 @@ private fun CommentRow(
     state: VideoCommentsViewModel.State,
     viewModel: VideoCommentsViewModel,
     isReply: Boolean,
+    onReport: (VideoComment) -> Unit = {},
 ) {
     LaunchedEffect(comment.authorId) { viewModel.resolveAuthor(comment.authorId) }
     var showReactionPicker by remember { mutableStateOf(false) }
@@ -565,6 +576,20 @@ private fun CommentRow(
                     Icon(
                         Icons.Outlined.Paid,
                         contentDescription = "Tip comment",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            // MOD-C2 - report another member's video comment (hidden on your own comment).
+            if (!comment.canDelete) {
+                IconButton(
+                    onClick = { onReport(comment) },
+                    modifier = Modifier.size(32.dp).testTag("video_comment_report"),
+                ) {
+                    Icon(
+                        Icons.Outlined.Flag,
+                        contentDescription = "Report comment",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )

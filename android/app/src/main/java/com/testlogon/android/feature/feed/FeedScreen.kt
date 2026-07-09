@@ -36,7 +36,11 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -305,6 +309,8 @@ fun FeedScreen(
     onPollShowMore: (postId: String, questionId: String, offset: Int) -> Unit = { _, _, _ -> },
 ) {
     val listState = rememberLazyListState()
+    // MOD-C1 - main newsfeed post report target; the sheet is hosted once below.
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     Scaffold(
         modifier = modifier.testTag(FeedTestTags.SCREEN),
         topBar = {
@@ -372,6 +378,7 @@ fun FeedScreen(
                     else -> FeedList(
                         items = items,
                         listState = listState,
+                        onReport = { post -> reportTarget = ReportTarget.Content(post.id, "feed_post") },
                         savedIds = savedIds,
                         currentUserSub = currentUserSub,
                         onEditPost = onEditPost,
@@ -407,6 +414,8 @@ fun FeedScreen(
                 }
             }
         }
+        // MOD-C1/C3 - one host renders the six-category report sheet + the licensing/IP -> DMCA route.
+        ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
     }
 }
 
@@ -462,6 +471,7 @@ private fun InlineComposerBar(onClick: () -> Unit) {
 private fun FeedList(
     items: LazyPagingItems<FeedPost>,
     listState: androidx.compose.foundation.lazy.LazyListState,
+    onReport: (FeedPost) -> Unit = {},
     savedIds: Set<String>,
     currentUserSub: String? = null,
     onEditPost: (postId: String) -> Unit = {},
@@ -535,6 +545,7 @@ private fun FeedList(
                     onEdit = if (currentUserSub != null && item.authorId == currentUserSub) {
                         { post -> onEditPost(post.id) }
                     } else null,
+                    onReport = { post -> onReport(post) },
                     unlockState = unlockStates[item.id] ?: UnlockState.Idle,
                     pollState = pollStates[item.id],
                     onPollOptionClick = onPollOptionClick,

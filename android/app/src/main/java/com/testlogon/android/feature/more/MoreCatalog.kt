@@ -758,6 +758,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.APP,
         ),
         MoreEntry(
+            id = "my_content_review",
+            labelRes = R.string.more_entry_my_content_review,
+            icon = Icons.Outlined.Policy,
+            route = MoreRoutes.MY_CONTENT_REVIEW,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
             id = "appeals",
             labelRes = R.string.more_entry_appeals,
             icon = Icons.Outlined.Gavel,

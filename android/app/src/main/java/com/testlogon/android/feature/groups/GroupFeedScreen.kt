@@ -44,6 +44,9 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.material.icons.outlined.Flag
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -146,6 +149,8 @@ fun GroupFeedScreen(
 ) {
     // The post whose comments sheet is open (null = closed).
     var commentsForPost by remember { mutableStateOf<String?>(null) }
+    // MOD-C1 - group post report target (group posts share the newsfeed POST# ids -> feed_post).
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     // TIP-306 — shared feed tip machine drives the group-post tip sheet + confirmation snackbar.
     val tipState by tipViewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -238,6 +243,7 @@ fun GroupFeedScreen(
                                 pollVoter = pollVoter,
                                 currentUserId = currentUserId,
                                 onOpenComments = { commentsForPost = post.postId },
+                                onReport = { reportTarget = ReportTarget.Content(post.postId, "feed_post") },
                                 onTip = { tipViewModel.open(post.postId) },
                                 onSponsoredImpression = onSponsoredImpression,
                                 onSponsoredClick = onSponsoredClick,
@@ -259,6 +265,9 @@ fun GroupFeedScreen(
             onCountChanged = { /* count refreshes on next feed load */ },
         )
     }
+
+    // MOD-C1/C3 - group post report sheet host (six categories + licensing/IP -> DMCA).
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
 
     // TIP-306 — shared TipSheet for a group post; routes through the same POST /posts/{id}/tip money-path.
     TipSheet(
@@ -356,6 +365,7 @@ private fun GroupPostRow(
     pollVoter: com.testlogon.android.data.poll.PollVoter?,
     currentUserId: String?,
     onOpenComments: () -> Unit,
+    onReport: () -> Unit = {},
     onTip: () -> Unit = {},
     onSponsoredImpression: (GroupFeedPost) -> Unit = {},
     onSponsoredClick: (GroupFeedPost) -> Unit = {},
@@ -496,6 +506,21 @@ private fun GroupPostRow(
                     Icon(
                         Icons.Outlined.Paid,
                         contentDescription = stringResource(R.string.tip_action),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            // MOD-C1 - report another member's group post (hidden on your own post).
+            val canReport = post.authorId.isNotBlank() && currentUserId != null && post.authorId != currentUserId
+            if (canReport) {
+                IconButton(
+                    onClick = onReport,
+                    modifier = Modifier.size(44.dp).testTag("group_post_report_" + post.postId),
+                ) {
+                    Icon(
+                        Icons.Outlined.Flag,
+                        contentDescription = stringResource(R.string.msg_action_report),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )

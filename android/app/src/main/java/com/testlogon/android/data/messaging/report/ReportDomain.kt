@@ -8,11 +8,15 @@ package com.testlogon.android.data.messaging.report
  * proposed uppercase enum (SPAM/HARASSMENT/...) is NOT what the backend/web use.
  */
 enum class ReportReason(val code: String) {
-    SEXUAL("sexual"),
-    EXTORTION("extortion"),
-    CRIMINAL("criminal"),
+    // MOD-C1 — the six live moderation categories (backend `topics`): spam, harassment, hate, sexual,
+    // violence_threats, other. Old codes (extortion/criminal/racist) are retired here; the backend keeps
+    // back-compat acceptance of the retired codes, but the app only ever offers this current six.
     SPAM("spam"),
-    RACIST("racist"),
+    HARASSMENT("harassment"),
+    HATE("hate"),
+    SEXUAL("sexual"),
+    VIOLENCE_THREATS("violence_threats"),
+    OTHER("other"),
     ;
 
     companion object {

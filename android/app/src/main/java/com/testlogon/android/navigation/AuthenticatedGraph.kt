@@ -303,6 +303,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         referralsDestination(navController)
         // Alerts (system notifications) inbox.
         alertsDestination(navController)
+        // MOD-D2: poster "My content under review" (moderation cases + respond/close).
+        moderationReviewDestination(navController)
         // Account-action appeals.
         appealsDestination(navController)
         ideasDestination(navController)
@@ -552,6 +554,8 @@ internal fun NavHostController.navigateToNotificationTarget(target: Notification
             navigate(MainDest.ActiveSessions.route) { launchSingleTop = true }
         NotificationTarget.Settings ->
             navigate(MainDest.Settings.route) { launchSingleTop = true }
+        NotificationTarget.ModerationReview ->
+            navigate(ModerationReviewDest.ROUTE) { launchSingleTop = true }
         NotificationTarget.Unknown ->
             // No first-party detail route yet for this kind — land on the Notification Center so a
             // push tap is never a dead end (AND-108 §13 R1; swap to a per-entity route on merge).

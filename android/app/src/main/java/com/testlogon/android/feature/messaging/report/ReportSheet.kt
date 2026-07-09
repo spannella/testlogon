@@ -41,11 +41,12 @@ object ReportTestTags {
 /** AND-163 — localized label for a report reason. */
 @Composable
 fun reasonLabel(reason: ReportReason): String = when (reason) {
-    ReportReason.SEXUAL -> stringResource(R.string.report_reason_sexual)
-    ReportReason.EXTORTION -> stringResource(R.string.report_reason_extortion)
-    ReportReason.CRIMINAL -> stringResource(R.string.report_reason_criminal)
     ReportReason.SPAM -> stringResource(R.string.report_reason_spam)
-    ReportReason.RACIST -> stringResource(R.string.report_reason_racist)
+    ReportReason.HARASSMENT -> stringResource(R.string.report_reason_harassment)
+    ReportReason.HATE -> stringResource(R.string.report_reason_hate)
+    ReportReason.SEXUAL -> stringResource(R.string.report_reason_sexual)
+    ReportReason.VIOLENCE_THREATS -> stringResource(R.string.report_reason_violence)
+    ReportReason.OTHER -> stringResource(R.string.report_reason_other)
 }
 
 /**

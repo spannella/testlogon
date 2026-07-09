@@ -43,6 +43,7 @@ object ReportFlowTestTags {
     const val COUNTER = "report_flow_counter"
     const val SUBMIT = "report_flow_submit"
     const val CANCEL = "report_flow_cancel"
+    const val LICENSING = "report_flow_licensing"
     const val PROGRESS = "report_flow_progress"
     const val SUCCESS = "report_flow_success"
     const val ERROR = "report_flow_error"
@@ -54,11 +55,12 @@ object ReportFlowTestTags {
 /** AND-383 - localized label for a report topic (reuses the AND-163 reason strings). */
 @Composable
 fun topicLabel(topic: ReportReason): String = when (topic) {
-    ReportReason.SEXUAL -> stringResource(R.string.report_reason_sexual)
-    ReportReason.EXTORTION -> stringResource(R.string.report_reason_extortion)
-    ReportReason.CRIMINAL -> stringResource(R.string.report_reason_criminal)
     ReportReason.SPAM -> stringResource(R.string.report_reason_spam)
-    ReportReason.RACIST -> stringResource(R.string.report_reason_racist)
+    ReportReason.HARASSMENT -> stringResource(R.string.report_reason_harassment)
+    ReportReason.HATE -> stringResource(R.string.report_reason_hate)
+    ReportReason.SEXUAL -> stringResource(R.string.report_reason_sexual)
+    ReportReason.VIOLENCE_THREATS -> stringResource(R.string.report_reason_violence)
+    ReportReason.OTHER -> stringResource(R.string.report_reason_other)
 }
 
 /**
@@ -73,6 +75,9 @@ fun ReportSheet(
     onDismiss: () -> Unit,
     onCompleted: (ReportOutcome) -> Unit,
     modifier: Modifier = Modifier,
+    // MOD-C3 - when non-null, an extra "copyright / licensing violation" entry is offered that routes to
+    // the DMCA claim flow instead of a general moderation report. Only wired for CONTENT targets.
+    onLicensing: (() -> Unit)? = null,
     viewModel: ReportViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(target) { viewModel.start(target) }
@@ -87,6 +92,7 @@ fun ReportSheet(
     ) {
         ReportSheetContent(
             state = state,
+            onLicensing = onLicensing,
             onTopicToggled = viewModel::onTopicToggled,
             onReasonTextChanged = viewModel::onReasonTextChanged,
             onSubmit = viewModel::submit,
@@ -113,12 +119,14 @@ fun ReportSheetContent(
     onRetry: () -> Unit,
     onDone: () -> Unit,
     onCancel: () -> Unit,
+    onLicensing: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         when (val phase = state.phase) {
             is ReportUiState.Phase.Success -> SuccessState(phase.alreadyReported, onDone)
             else -> EditingState(
                 state = state,
+                onLicensing = onLicensing,
                 onTopicToggled = onTopicToggled,
                 onReasonTextChanged = onReasonTextChanged,
                 onSubmit = onSubmit,
@@ -137,6 +145,7 @@ private fun EditingState(
     onSubmit: () -> Unit,
     onRetry: () -> Unit,
     onCancel: () -> Unit,
+    onLicensing: (() -> Unit)? = null,
 ) {
     val submitting = state.phase == ReportUiState.Phase.Submitting
 
@@ -213,6 +222,16 @@ private fun EditingState(
             enabled = state.canSubmit,
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportFlowTestTags.SUBMIT),
         ) { Text(stringResource(R.string.report_submit)) }
+    }
+
+    // MOD-C3 - a copyright / licensing violation is NOT a general moderation report; it routes to the
+    // DMCA claim flow (pre-filled with this content ref). Offered only when the host wired [onLicensing].
+    if (onLicensing != null) {
+        TextButton(
+            onClick = onLicensing,
+            enabled = !submitting,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportFlowTestTags.LICENSING),
+        ) { Text(stringResource(R.string.report_flow_licensing)) }
     }
 
     TextButton(

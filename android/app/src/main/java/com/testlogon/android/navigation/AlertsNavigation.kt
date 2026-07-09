@@ -16,6 +16,8 @@ fun NavGraphBuilder.alertsDestination(navController: NavHostController) {
         AlertsRoute(
             onBack = { navController.popBackStack() },
             onSessionExpired = { navController.popBackStack() },
+            // MOD-D1: a moderation alert deep-links to the poster's content-review screen.
+            onOpenModeration = { navController.navigate(ModerationReviewDest.ROUTE) },
         )
     }
 }

@@ -95,6 +95,8 @@ fun PostItem(
     isOwnPost: Boolean = false,
     // FD12 — when non-null, an Edit item appears in the post overflow (own posts only).
     onEdit: ((FeedPost) -> Unit)? = null,
+    // MOD-C1 — when non-null, a Report item appears in the post overflow (opens the report sheet).
+    onReport: ((FeedPost) -> Unit)? = null,
     // AND-177 — unlock flow state driving the paywall CTA.
     unlockState: UnlockState = UnlockState.Idle,
     // AND-179 — poll state + vote callbacks; null => render the post's embedded poll read-only.
@@ -213,6 +215,7 @@ fun PostItem(
                     onTip = { onTip(post) },
                     showTip = showTip,
                     onEdit = onEdit?.let { edit -> { edit(post) } },
+                    onReport = onReport?.let { report -> { report(post) } },
                     reactions = post.reactions,
                     onToggleReaction = { emoji -> onToggleReaction(post, emoji) },
                     tipReactions = post.tipReactions,

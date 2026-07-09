@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -65,6 +66,8 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import coil.compose.AsyncImage
 import com.testlogon.android.R
 import com.testlogon.android.data.feed.Comment
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 
 /** Stable test tags for the comments surface (AND-174). */
 object CommentsTestTags {
@@ -119,6 +122,8 @@ fun CommentsSection(
     val imageUploading by viewModel.imageUploading.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Comment?>(null) }
+    // MOD-C1 - comment report target; the sheet is hosted at the bottom of this section.
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
 
     // #24 / #3 — modern system Photo Picker (ImageOnly), matching the compose-post picker. In edit mode
     // this REPLACES the comment image; cancelling returns null (no-op) so the previously-chosen image is
@@ -158,6 +163,7 @@ fun CommentsSection(
             onRetry = viewModel::retry,
             onDiscard = viewModel::discard,
             onDelete = { pendingDelete = it },
+            onReport = { c -> reportTarget = ReportTarget.Content(c.id, "feed_comment") },
             onEdit = { c ->
                 draft = c.body
                 viewModel.startEdit(c)
@@ -236,6 +242,9 @@ fun CommentsSection(
             },
         )
     }
+
+    // MOD-C1/C3 - report a comment (six categories + licensing/IP -> DMCA), hosted once for the section.
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
 }
 
 @Composable
@@ -249,6 +258,7 @@ private fun CommentsList(
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
+    onReport: (Comment) -> Unit,
     onTip: (Comment) -> Unit,
     onToggleReaction: (Comment, String) -> Unit,
     authorNames: Map<String, String>,
@@ -292,6 +302,7 @@ private fun CommentsList(
                     onRetry = onRetry,
                     onDiscard = onDiscard,
                     onDelete = onDelete,
+                    onReport = onReport,
                     onTip = onTip,
                     onToggleReaction = onToggleReaction,
                     modifier = Modifier.testTag(CommentsTestTags.row(comment.localKey)),
@@ -326,6 +337,7 @@ private fun CommentRow(
     onRetry: (String) -> Unit,
     onDiscard: (String) -> Unit,
     onDelete: (Comment) -> Unit,
+    onReport: (Comment) -> Unit,
     onTip: (Comment) -> Unit,
     onToggleReaction: (Comment, String) -> Unit,
     modifier: Modifier = Modifier,
@@ -460,6 +472,19 @@ private fun CommentRow(
                     Icon(
                         Icons.Outlined.Delete,
                         contentDescription = stringResource(R.string.comments_delete),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // MOD-C1 - report another member's comment (hidden on your own comment + pending/failed rows).
+            if (!comment.canDelete && !comment.pending && !comment.failed) {
+                IconButton(
+                    onClick = { onReport(comment) },
+                    modifier = Modifier.size(48.dp).testTag("comment_report"),
+                ) {
+                    Icon(
+                        Icons.Outlined.Flag,
+                        contentDescription = stringResource(R.string.msg_action_report),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }

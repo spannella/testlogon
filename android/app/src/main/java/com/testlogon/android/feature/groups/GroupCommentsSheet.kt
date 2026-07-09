@@ -32,6 +32,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.outlined.Flag
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,6 +80,8 @@ fun GroupCommentsSheet(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // MOD-C1 - group comment report target (reported as feed_comment by its comment id).
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
 
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
@@ -111,7 +119,11 @@ fun GroupCommentsSheet(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(state.comments, key = { it.commentId }) { comment ->
-                            CommentRow(comment) { viewModel.delete(comment, onCountChanged) }
+                            CommentRow(
+                                comment = comment,
+                                onReport = { reportTarget = ReportTarget.Content(comment.commentId, "feed_comment") },
+                                onDelete = { viewModel.delete(comment, onCountChanged) },
+                            )
                         }
                         if (state.nextCursor != null) {
                             item {
@@ -189,10 +201,13 @@ fun GroupCommentsSheet(
             }
         }
     }
+
+    // MOD-C1/C3 - group comment report sheet (stacks above the comments sheet); licensing/IP -> DMCA.
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
 }
 
 @Composable
-private fun CommentRow(comment: GroupComment, onDelete: () -> Unit) {
+private fun CommentRow(comment: GroupComment, onReport: () -> Unit = {}, onDelete: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().testTag(GroupCommentsTestTags.row(comment.commentId)),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -216,6 +231,16 @@ private fun CommentRow(comment: GroupComment, onDelete: () -> Unit) {
                     modifier = Modifier.padding(top = 4.dp).size(120.dp).clip(RoundedCornerShape(8.dp)),
                 )
             }
+        }
+        IconButton(
+            onClick = onReport,
+            modifier = Modifier.size(32.dp).testTag("group_comment_report_" + comment.commentId),
+        ) {
+            Icon(
+                Icons.Outlined.Flag,
+                contentDescription = "Report comment",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
             Icon(

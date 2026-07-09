@@ -20,7 +20,11 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -97,6 +101,8 @@ fun PostDetailScreen(
         CommentsSection(onCommentCountChanged = it, isOwnPost = isOwnPost)
     },
 ) {
+    // MOD-C1 - post-level report target for this detail screen (comments self-host their own report).
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     Scaffold(
         modifier = modifier.testTag(PostDetailTestTags.SCREEN),
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -157,6 +163,7 @@ fun PostDetailScreen(
                             isOwnPost = isOwnPost,
                             // Comment icon on detail is a no-op (the section is already below).
                             onCommentClick = {},
+                            onReport = { post -> reportTarget = ReportTarget.Content(post.id, "feed_post") },
                         )
                         // AND-174 — embedded comments surface. Host count updates flow back up.
                         commentsContent?.invoke(onCommentCountChanged)
@@ -164,5 +171,7 @@ fun PostDetailScreen(
                 }
             }
         }
+        // MOD-C1/C3 - report sheet host (six categories + licensing/IP -> DMCA).
+        ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
     }
 }

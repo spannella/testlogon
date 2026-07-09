@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -61,6 +62,7 @@ object PostActionTestTags {
     const val MENU_HIDE = "post_menu_hide"
     const val MENU_NOT_INTERESTED = "post_menu_not_interested"
     const val MENU_EDIT = "post_menu_edit"
+    const val MENU_REPORT = "post_menu_report"
     const val BOOKMARK = "post_bookmark"
     const val SHARE = "post_share"
     const val TIP = "post_tip"
@@ -98,6 +100,8 @@ fun PostActionBar(
     onTip: () -> Unit = {},
     // FD12 — when non-null, the overflow menu shows an Edit item (own posts only).
     onEdit: (() -> Unit)? = null,
+    // MOD-C1 — when non-null, the overflow shows a Report item that opens the moderation report sheet.
+    onReport: (() -> Unit)? = null,
     // #20 — full emoji reactions (distinct from the like toggle).
     reactions: List<com.testlogon.android.data.feed.ReactionTally> = emptyList(),
     onToggleReaction: (String) -> Unit = {},
@@ -122,7 +126,7 @@ fun PostActionBar(
             BookmarkToggle(checked = bookmarked, enabled = bookmarkEnabled, onCheckedChange = { onToggleBookmark() })
             ShareButton(onClick = onShare)
             Box(modifier = Modifier.weight(1f))
-            PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested, onEdit = onEdit)
+            PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested, onEdit = onEdit, onReport = onReport)
         }
         // #20 — curated emoji picker (toggled by the React button).
         if (reactionPickerOpen) {
@@ -357,6 +361,7 @@ private fun PostOverflowMenu(
     onHide: () -> Unit,
     onNotInterested: () -> Unit,
     onEdit: (() -> Unit)? = null,
+    onReport: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -401,6 +406,18 @@ private fun PostOverflowMenu(
                 },
                 modifier = Modifier.testTag(PostActionTestTags.MENU_NOT_INTERESTED),
             )
+            // MOD-C1 - report this post (main / group / syndicate feeds share this bar via PostItem).
+            if (onReport != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.msg_action_report)) },
+                    leadingIcon = { Icon(Icons.Outlined.Flag, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onReport()
+                    },
+                    modifier = Modifier.testTag(PostActionTestTags.MENU_REPORT),
+                )
+            }
         }
     }
 }

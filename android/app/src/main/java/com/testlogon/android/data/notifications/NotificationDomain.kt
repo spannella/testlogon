@@ -12,7 +12,12 @@ package com.testlogon.android.data.notifications
  * follow, like, comment, mention, tip, message, system.
  */
 enum class NotificationType {
-    FOLLOW, LIKE, COMMENT, MENTION, TIP, MESSAGE, SYSTEM, UNKNOWN;
+    FOLLOW, LIKE, COMMENT, MENTION, TIP, MESSAGE, SYSTEM,
+    // MOD-D1 — poster moderation alerts (content hidden / violation confirmed / final call / dmca);
+    // these deep-link to the "My content under review" screen. Reserved for a future engine bridge —
+    // today moderation alerts arrive on the Alerts inbox (which deep-links via the same target).
+    MODERATION,
+    UNKNOWN;
 
     companion object {
         fun fromToken(token: String?): NotificationType =

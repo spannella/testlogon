@@ -155,6 +155,9 @@ object MoreRoutes {
     // Alerts (system notifications) inbox — mirrors web /alerts.
     const val ALERTS = AlertsDest.ROUTE
 
+    // MOD-D2: poster "My content under review" (moderation cases + respond/close).
+    const val MY_CONTENT_REVIEW = ModerationReviewDest.ROUTE
+
     // Account-action appeals - mirrors web /appeals.
     const val APPEALS = AppealsDest.ROUTE
 
@@ -511,6 +514,7 @@ object MoreRoutes {
             ANALYTICS_DASHBOARD,
             REFERRALS,
             ALERTS,
+            MY_CONTENT_REVIEW,
             APPEALS,
             IDEAS,
             LICENSES,

@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -46,6 +47,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -152,6 +155,8 @@ fun VideoDetailRoute(
     // is reused: when fullscreen is on we render the reused [VideoPlayer] in a full-screen Dialog and
     // hide the inline surface, so playback position is preserved and there is never a second player.
     var isFullscreen by remember { mutableStateOf(false) }
+    // MOD-C2 - video report target; the sheet is hosted below (video comments self-host their own).
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     VideoDetailScreen(
         state = state,
         playerContent = { playerModifier ->
@@ -219,9 +224,13 @@ fun VideoDetailRoute(
         onToggleReaction = viewModel::toggleReaction,
         onTip = { state.detail?.id?.let { tipViewModel.open(it) } },
         onOpenVideo = onOpenVideo,
+        onReport = { state.detail?.id?.let { reportTarget = ReportTarget.Content(it, "video") } },
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
+
+    // MOD-C2/C3 - video report sheet host (six categories + licensing/IP -> DMCA).
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
 
     // B-VIDSOCIAL2 — the reused feed tip sheet, pointed at the video tip endpoint.
     TipSheet(
@@ -263,6 +272,7 @@ fun VideoDetailScreen(
     modifier: Modifier = Modifier,
     onToggleReaction: (emoji: String) -> Unit = {},
     onTip: () -> Unit = {},
+    onReport: () -> Unit = {},
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     monetizationContent: @Composable () -> Unit = {},
 ) {
@@ -303,6 +313,7 @@ fun VideoDetailScreen(
                     onToggleLike = onToggleLike,
                     onToggleReaction = onToggleReaction,
                     onTip = onTip,
+                    onReport = onReport,
                     onOpenVideo = onOpenVideo,
                 )
             }
@@ -318,6 +329,7 @@ private fun DetailContent(
     onToggleLike: () -> Unit,
     onToggleReaction: (emoji: String) -> Unit,
     onTip: () -> Unit,
+    onReport: () -> Unit = {},
     onOpenVideo: (videoId: String) -> Unit,
 ) {
     val detail = state.detail ?: return
@@ -416,6 +428,15 @@ private fun DetailContent(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                // MOD-C2 - report this video (hidden on your own video).
+                if (!state.isMine) {
+                    IconButton(onClick = onReport, modifier = Modifier.testTag("video_detail_report")) {
+                        Icon(
+                            imageVector = Icons.Outlined.Flag,
+                            contentDescription = stringResource(R.string.msg_action_report),
+                        )
+                    }
                 }
             }
 

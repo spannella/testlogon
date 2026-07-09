@@ -1151,6 +1151,12 @@
     <string name="report_reason_criminal">Criminal activity</string>
     <string name="report_reason_spam">Spam</string>
     <string name="report_reason_racist">Hate / racism</string>
+    <!-- MOD-C1/C3 — the six live moderation categories + the licensing/IP entry point. -->
+    <string name="report_reason_harassment">Harassment or bullying</string>
+    <string name="report_reason_hate">Hate speech</string>
+    <string name="report_reason_violence">Violence or threats</string>
+    <string name="report_reason_other">Something else</string>
+    <string name="report_flow_licensing">Report a copyright / licensing violation</string>
 
     <!-- AND-383 — cross-cutting report flow (user / content / message) -->
     <string name="report_flow_title">Report this</string>
@@ -4156,6 +4162,12 @@
     <string name="alerts_inbox_priority_urgent">Urgent</string>
     <!-- Appeals (web /appeals parity) -->
     <string name="more_entry_appeals">Appeals</string>
+    <!-- MOD-D1/D2: poster content-moderation review -->
+    <string name="more_entry_my_content_review">My content under review</string>
+    <string name="moderation_review_load_failed">Couldn\'t refresh your content review status.</string>
+    <string name="moderation_review_response_sent">Response sent. A moderator will make the final decision.</string>
+    <string name="moderation_review_action_failed">That didn\'t work. Please try again.</string>
+    <string name="moderation_review_content_deleted">Content deleted.</string>
     <string name="appeals_title">My appeals</string>
     <string name="appeals_new">New appeal</string>
     <string name="appeals_error_generic">Something went wrong loading your appeals.</string>

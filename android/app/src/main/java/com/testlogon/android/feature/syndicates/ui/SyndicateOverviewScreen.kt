@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Campaign
@@ -49,6 +50,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -116,6 +120,8 @@ val LocalSyndicateCurrentUserId = androidx.compose.runtime.compositionLocalOf<St
  */
 val LocalSyndicateSponsoredImpression = androidx.compose.runtime.compositionLocalOf<(SyndicateFeedItem) -> Unit> { {} }
 val LocalSyndicateSponsoredClick = androidx.compose.runtime.compositionLocalOf<(SyndicateFeedItem) -> Unit> { {} }
+// MOD-C1 - report a syndicate feed post (reported as feed_post by its post id).
+val LocalSyndicateReport = androidx.compose.runtime.compositionLocalOf<(SyndicateFeedItem) -> Unit> { {} }
 
 @Composable
 fun SyndicateOverviewRoute(
@@ -133,11 +139,14 @@ fun SyndicateOverviewRoute(
     androidx.compose.runtime.LaunchedEffect(viewModel) {
         viewModel.feedRefresh.collect { feed.refresh() }
     }
+    // MOD-C1 - syndicate post report target; the sheet is hosted once in this route.
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     androidx.compose.runtime.CompositionLocalProvider(
         LocalSyndicatePollVoter provides viewModel.pollVoter,
         LocalSyndicateCurrentUserId provides currentUserId,
         LocalSyndicateSponsoredImpression provides viewModel::onSponsoredImpression,
         LocalSyndicateSponsoredClick provides viewModel::onSponsoredClick,
+        LocalSyndicateReport provides { post -> reportTarget = ReportTarget.Content(post.postId, "feed_post") },
     ) {
     SyndicateOverviewScreen(
         state = state,
@@ -163,6 +172,8 @@ fun SyndicateOverviewRoute(
         onPollEnabledChange = viewModel::onPollEnabledChange,
         onPollDraftChange = viewModel::onPollDraftChange,
     )
+    // MOD-C1/C3 - syndicate post report sheet host (six categories + licensing/IP -> DMCA).
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
     }
 }
 
@@ -494,6 +505,20 @@ private fun FeedItemRow(post: SyndicateFeedItem) {
                         text = relative,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                // MOD-C1 - report this syndicate post.
+                val onReport = LocalSyndicateReport.current
+                IconButton(
+                    onClick = { onReport(post) },
+                    modifier = Modifier.size(36.dp).testTag("syndicate_post_report_" + post.postId),
+                ) {
+                    Icon(
+                        Icons.Outlined.Flag,
+                        contentDescription = stringResource(R.string.msg_action_report),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
             }
