@@ -204,13 +204,20 @@ fun FeedRoute(
         storyTray = storyTray,
         onOpenStory = onOpenStory,
         onRefresh = { items.refresh() },
-        onPostClick = { post -> onPostClick(post.id) },
+        onPostClick = { post ->
+            // ADV2-409 (F4): opening a creator-authored paid_partnership post fires the advertiser CLICK
+            // charge (no-op for an organic post); the post itself opens normally.
+            viewModel.onPaidPartnershipClick(post)
+            onPostClick(post.id)
+        },
         onAuthorClick = onAuthorClick,
         onLinkClick = onLinkClick,
         onUnlockClick = viewModel::onUnlockClick,
         onLikeToggle = viewModel::onLikeToggle,
         onToggleReaction = viewModel::onToggleReaction,
         onCommentClick = { post -> onPostClick(post.id) },
+        // ADV2-409 (F4): impression on first-visible for a creator-authored paid_partnership post.
+        onPaidPartnershipImpression = viewModel::onPaidPartnershipImpression,
         onHide = { post, index -> viewModel.onHide(post.id, index) },
         onNotInterested = { post, index -> viewModel.onNotInterested(post.id, index) },
         onToggleBookmark = { post -> viewModel.onToggleBookmark(post.id, post.id in savedIds) },
@@ -285,6 +292,7 @@ fun FeedScreen(
     onTip: (FeedPost) -> Unit = {},
     onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onSponsoredImpression: (FeedPost) -> Unit = {},
+    onPaidPartnershipImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
     onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
     onEnsurePoll: (FeedPost) -> Unit = {},
@@ -383,6 +391,7 @@ fun FeedScreen(
                         onTip = onTip,
                         onTipReact = onTipReact,
                         onSponsoredImpression = onSponsoredImpression,
+                        onPaidPartnershipImpression = onPaidPartnershipImpression,
                         onSponsoredClick = onSponsoredClick,
                         onSponsoredCta = onSponsoredCta,
                         onEnsurePoll = onEnsurePoll,
@@ -472,6 +481,7 @@ private fun FeedList(
     onTip: (FeedPost) -> Unit,
     onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onSponsoredImpression: (FeedPost) -> Unit = {},
+    onPaidPartnershipImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
     onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
     onEnsurePoll: (FeedPost) -> Unit,
@@ -492,6 +502,9 @@ private fun FeedList(
             if (item != null) {
                 // Seed per-post poll state once the post is composed (idempotent).
                 LaunchedEffect(item.id) { if (item.poll != null) onEnsurePoll(item) }
+                // ADV2-409 (F4) — fire the advertiser IMPRESSION charge the first time a creator-authored
+                // paid_partnership post is composed/visible (deduped in the VM; no-op for organic posts).
+                LaunchedEffect(item.id) { if (item.paidPartnership) onPaidPartnershipImpression(item) }
                 // Resolve the author's display name once the post is composed (idempotent + cached).
                 LaunchedEffect(item.authorId) { onEnsureAuthorName(item.authorId) }
                 PostItem(

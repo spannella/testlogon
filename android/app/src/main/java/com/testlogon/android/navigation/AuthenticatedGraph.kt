@@ -392,6 +392,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // filter over /ui/ads/sponsorships) + a thin deal-detail placeholder. Accept / reject / negotiate
         // live in the detail (AND-366) and are OUT OF SCOPE.
         sponsorshipDestinations(navController)
+        // ADV2-E4 (F4) / ADV2-407..409: sponsored-as-creator (paid partnership) — the advertiser COMPOSER
+        // (draft + propose a post to a creator) + the creator APPROVAL QUEUE (approve publishes a normal
+        // creator post carrying the DISTINCT paid_partnership flag / reject). Distinct from the ADS-013
+        // brand-deal sponsorship inbox above.
+        sponsoredPostDestinations(navController)
         // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> a space's ticket
         // list (Paging-3 over the AND-371 next_cursor) -> a ticket thread (embedded messages, mine-vs-other).
         // Composing / replying / member or status edits are AND-373 and OUT OF SCOPE.

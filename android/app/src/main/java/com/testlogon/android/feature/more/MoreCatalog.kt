@@ -1217,6 +1217,24 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // ADV2-407 (F4): advertiser "propose a sponsored post to a creator" composer.
+        MoreEntry(
+            id = "sponsored_post_compose",
+            labelRes = R.string.more_entry_sponsored_post_compose,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.SPONSORED_POST_COMPOSE,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // ADV2-408 (F4): creator APPROVAL QUEUE for advertiser-drafted sponsored posts.
+        MoreEntry(
+            id = "sponsored_post_queue",
+            labelRes = R.string.more_entry_sponsored_post_queue,
+            icon = Icons.Outlined.FactCheck,
+            route = MoreRoutes.SPONSORED_POST_QUEUE,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // AND-367: ads-account billing (balance/lifetime-spend + ledger + invoice) + DEPOSIT add-funds.
         MoreEntry(
             id = "ads_billing",

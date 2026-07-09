@@ -3513,6 +3513,32 @@
     <string name="boost_ends_in">in %1$d min</string>
     <string name="boost_ends_passed">Ended</string>
 
+    <!-- ADV2-E4 (F4): sponsored-as-creator (paid partnership) — advertiser composer + creator queue. -->
+    <string name="more_entry_sponsored_post_compose">Propose a sponsored post</string>
+    <string name="more_entry_sponsored_post_queue">Sponsored post requests</string>
+    <string name="spcp_back">Back</string>
+    <string name="spcp_compose_title">Propose a sponsored post</string>
+    <string name="spcp_compose_subtitle">Draft a post for a creator to publish in their own voice. Nothing goes live until the creator approves it — and it appears as a normal creator post with no forced label.</string>
+    <string name="spcp_compose_creator_label">Creator (user id)</string>
+    <string name="spcp_compose_body_label">Post text</string>
+    <string name="spcp_compose_billing_header">Billing</string>
+    <string name="spcp_compose_account_label">Ad account id</string>
+    <string name="spcp_compose_campaign_label">Campaign id</string>
+    <string name="spcp_compose_label_label">Sponsor label (optional)</string>
+    <string name="spcp_compose_disclosure_label">Disclosure wording (optional)</string>
+    <string name="spcp_compose_submit">Send to creator</string>
+    <string name="spcp_compose_footnote">You are billed per engagement (impression + click) from your funded ad account once the creator approves; the creator earns the placement share.</string>
+    <string name="spcp_compose_sent_title">Proposal sent</string>
+    <string name="spcp_compose_sent_body">The creator will see it in their approval queue. It publishes only if they approve.</string>
+    <string name="spcp_compose_done">Done</string>
+    <string name="spcp_queue_title">Sponsored post requests</string>
+    <string name="spcp_queue_from">From %1$s</string>
+    <string name="spcp_queue_advertiser_unknown">an advertiser</string>
+    <string name="spcp_queue_publish_hint">Approving publishes this as your own post — you can still be tipped on it.</string>
+    <string name="spcp_queue_approve">Approve &amp; publish</string>
+    <string name="spcp_queue_reject">Reject</string>
+    <string name="spcp_queue_empty_title">No sponsored post requests</string>
+    <string name="spcp_queue_empty_body">When a brand drafts a post for you to publish, it will appear here to approve or reject.</string>
     <!-- AND-365: READ-ONLY sponsorship inbox (inbound brand deals + client-side status filter). -->
     <string name="more_entry_sponsorships">Sponsorships</string>
     <string name="sponsorship_inbox_title">Sponsorships</string>

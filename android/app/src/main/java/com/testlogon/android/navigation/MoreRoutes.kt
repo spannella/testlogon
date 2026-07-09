@@ -243,6 +243,14 @@ object MoreRoutes {
     // filter -> deal-detail placeholder; the real detail is AND-366).
     const val SPONSORSHIPS = SponsorshipInboxDest.ROUTE
 
+    // ADV2-407 (F4): advertiser "propose a sponsored post to a creator" composer (draft body + billing
+    // linkage -> POST a proposal; nothing publishes until the creator approves).
+    const val SPONSORED_POST_COMPOSE = SponsoredPostComposeDest.ROUTE
+
+    // ADV2-408 (F4): creator APPROVAL QUEUE for advertiser-drafted sponsored posts (pending proposals ->
+    // approve publishes a normal creator post carrying the DISTINCT paid_partnership flag / reject).
+    const val SPONSORED_POST_QUEUE = SponsoredPostQueueDest.ROUTE
+
     // AND-367: ads-account billing read view (balance/lifetime-spend + ledger + monthly invoice) + the
     // DEPOSIT add-funds sheet. No ads-accounts list yet, so the hub opens a known sample account id (plain
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
@@ -528,6 +536,8 @@ object MoreRoutes {
             SYNDICATE_CAMPAIGN,
             COLLABORATIONS,
             SPONSORSHIPS,
+            SPONSORED_POST_COMPOSE,
+            SPONSORED_POST_QUEUE,
             ADS_BILLING,
             AD_ANALYTICS,
             ADS_CAMPAIGNS,

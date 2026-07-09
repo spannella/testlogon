@@ -56,6 +56,16 @@ data class FeedPost(
      * null. A sponsored unit is never locked, so [body]/[media] populate normally.
      */
     val sponsored: SponsoredInfo? = null,
+    /**
+     * ADV2-409 (F4) — true when this post is a creator-authored SPONSORED-AS-CREATOR (paid partnership)
+     * post: the advertiser drafted it, the creator approved it, and it publishes in the creator's own voice.
+     * DISTINCT from [sponsored] (the standalone is_sponsored ad unit): the post renders as a NORMAL creator
+     * post (tippable/likeable/commentable, no forced label) — this flag only drives advertiser engagement
+     * BILLING (impression/click via the placement mint). [paidPartnershipDisclosure] is an OPTIONAL creator-
+     * authored disclosure line (D3: never forced), shown inline when present.
+     */
+    val paidPartnership: Boolean = false,
+    val paidPartnershipDisclosure: String? = null,
 ) {
     val isLocked: Boolean get() = paywall is Paywall.Locked
 }
@@ -176,6 +186,11 @@ internal fun PostDto.toDomain(): FeedPost {
             null
         },
         sponsored = toSponsored(),
+        // ADV2-409 (F4) — a creator-authored paid_partnership post renders as a NORMAL post (sponsored is
+        // deliberately null: the backend does NOT set is_sponsored on it); this flag drives ONLY the
+        // advertiser engagement billing. Never surfaced when the post is a standalone ad unit.
+        paidPartnership = paidPartnership && !isSponsored,
+        paidPartnershipDisclosure = paidPartnershipDisclosure?.takeIf { it.isNotBlank() },
     )
 }
 

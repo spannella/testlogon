@@ -74,6 +74,10 @@ class FeedViewModel @Inject constructor(
     private val adTracker: AdTrackRepository,
     private val adAttribution: AdClickAttributionStore,
     private val adCtaClicker: AdCtaClicker,
+    // ADV2-409 (F4): billing for creator-authored paid_partnership posts (advertiser charged per
+    // impression/click via the ad ledger; creator credited the placement share). Distinct from the
+    // standalone is_sponsored unit above — the post itself stays a normal tippable creator post.
+    private val sponsoredPostRepo: com.testlogon.android.feature.sponsoredpost.data.SponsoredPostRepository,
 ) : ViewModel() {
 
     /** author id (email/user_sub) -> display name, resolved lazily for visible posts. */
@@ -404,6 +408,33 @@ class FeedViewModel @Inject constructor(
         // attributes the conversion back to it (backend ad_attribution.attribute_conversion).
         adAttribution.record(ad.adClickId)
         viewModelScope.launch { adTracker.track(AdEvent.CLICK, ad) }
+    }
+
+    // ---- ADV2-409 (F4): paid_partnership (sponsored-as-creator) billing ----
+
+    // Impression fired at most once per post (deduped on post id) so a scroll-away/return never
+    // double-mints; the backend mint + charge are additionally idempotent per (viewer, post).
+    private val paidPartnershipImpressed = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
+     * Fire an IMPRESSION the first time a creator-authored paid_partnership post becomes visible. Lazy-mints
+     * the per-viewer ad-click then bills the advertiser (funds-guarded) + credits the creator the placement
+     * share. Best-effort — a failure never disturbs the normal post. No-op for an organic post.
+     */
+    fun onPaidPartnershipImpression(post: FeedPost) {
+        if (!post.paidPartnership) return
+        if (!paidPartnershipImpressed.add(post.id)) return
+        viewModelScope.launch { sponsoredPostRepo.fireImpression(post.id) }
+    }
+
+    /**
+     * Fire a CLICK when the viewer engages (opens) a paid_partnership post — an additional advertiser charge
+     * (idempotent per ad_click_id#click). The viewer's TIP on the same post is untouched (it still credits
+     * the creator; this is a normal creator post, distinct flag). Best-effort. No-op for an organic post.
+     */
+    fun onPaidPartnershipClick(post: FeedPost) {
+        if (!post.paidPartnership) return
+        viewModelScope.launch { sponsoredPostRepo.fireClick(post.id) }
     }
 
     /**

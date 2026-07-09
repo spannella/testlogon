@@ -92,6 +92,13 @@ data class PostDto(
     @Json(name = "ctas") val ctas: List<CtaActionDto>? = null,
     @Json(name = "creator_id") val creatorId: String? = null,
     @Json(name = "content_id") val contentId: String? = null,
+    // --- ADV2-403/409 (F4) sponsored-as-creator (paid partnership) fields ---
+    // A DISTINCT flag from is_sponsored above: the post is AUTHORED BY THE CREATOR (they approved it), so
+    // it stays a NORMAL creator post (tippable/likeable/commentable, NO forced "Sponsored" label). These
+    // drive advertiser BILLING + attribution ONLY (per-impression/click via the placement mint), never the
+    // post UI. All defaulted so an organic post maps cleanly.
+    @Json(name = "paid_partnership") val paidPartnership: Boolean = false,
+    @Json(name = "paid_partnership_disclosure") val paidPartnershipDisclosure: String? = null,
     // --- AND-179 embedded poll (present for post_type "poll"/"survey") ---
     @Json(name = "poll_data") val pollData: PollDataDto? = null,
     @Json(name = "poll_vote_counts") val pollVoteCounts: Map<String, Map<String, Int>>? = null,
