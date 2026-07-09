@@ -361,6 +361,7 @@ def get_send(send_id: str) -> Optional[Dict[str, Any]]:
 def _run_send(
     *, product: str, offer: Dict[str, Any], creator_sub: str, sender_sub: str,
     content_owner_sub: str, body: str, recipients: List[str],
+    eligibility_fn=None,
 ) -> Dict[str, Any]:
     send_id = "amsgsend_%s" % uuid.uuid4().hex[:12]
     account_id = str(offer.get("sponsor_account_id") or offer.get("advertiser_account_id") or "")
@@ -382,6 +383,12 @@ def _run_send(
     results: List[Dict[str, Any]] = []
     stopped = False
     for recipient in recipients:
+        if eligibility_fn is not None and not eligibility_fn(recipient):
+            # ADV2-606 send-time re-gate: recipient became ineligible
+            # (unfollowed / opted out) between resolve and dispatch -> DROP.
+            results.append({"recipient_sub": recipient,
+                            "state": "excluded_ineligible", "charge_cents": 0})
+            continue
         r = deliver_to_recipient(
             send_id=send_id, product=product, creator_sub=content_owner_sub,
             account_id=account_id, campaign_id=campaign_id, creative_id=creative_id,
