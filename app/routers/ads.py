@@ -432,6 +432,101 @@ async def cta_click_endpoint(body: CtaClickIn, request: Request, ctx=Depends(req
     )
 
 
+# --- Sponsored-as-creator posts (ADV2-E4 / F4) ---------------------
+from typing import Optional as _SPCPOptional, List as _SPCPList
+from pydantic import BaseModel as _SPCPBase, Field as _SPCPField
+from app.services import sponsored_creator_posts as _spcp
+
+
+class SponsoredPostProposalIn(_SPCPBase):
+    creator_sub: str = _SPCPField(..., min_length=1, max_length=128)
+    body: str = _SPCPField("", max_length=20000)
+    body_format: str = _SPCPField("plain", max_length=16)
+    image_urls: _SPCPList[str] = _SPCPField(default_factory=list)
+    video_id: _SPCPOptional[str] = None
+    account_id: str = _SPCPField("", max_length=128)
+    campaign_id: str = _SPCPField("", max_length=128)
+    creative_id: str = _SPCPField("", max_length=128)
+    sponsor_label: str = _SPCPField("", max_length=200)
+    disclosure: str = _SPCPField("", max_length=500)
+
+
+class SponsoredPostRejectIn(_SPCPBase):
+    reason: str = _SPCPField("", max_length=500)
+
+
+def _spcp_http(exc):
+    return HTTPException(status_code=getattr(exc, "status_code", 400), detail=getattr(exc, "detail", str(exc)))
+
+
+@router.post("/sponsored-posts/proposals", status_code=201)
+async def create_sponsored_proposal_endpoint(body: SponsoredPostProposalIn, ctx=Depends(require_ui_session)):
+    """ADV2-401: an advertiser drafts a sponsored post and PROPOSES it to a
+    target creator. Does NOT publish until the creator approves."""
+    if body.account_id:
+        _require_account_owner(body.account_id, ctx["user_sub"])
+    try:
+        return _spcp.create_proposal(
+            advertiser_sub=ctx["user_sub"],
+            advertiser_account_id=body.account_id,
+            creator_sub=body.creator_sub,
+            body=body.body, body_format=body.body_format,
+            image_urls=body.image_urls, video_id=body.video_id,
+            campaign_id=body.campaign_id, creative_id=body.creative_id,
+            sponsor_account_id=body.account_id,
+            sponsor_label=body.sponsor_label, disclosure=body.disclosure,
+        )
+    except _spcp.SponsoredPostError as exc:
+        raise _spcp_http(exc)
+
+
+@router.get("/sponsored-posts/proposals/inbox")
+async def sponsored_proposals_inbox_endpoint(ctx=Depends(require_ui_session)):
+    """ADV2-403: the targeted creator's review queue (pending proposals)."""
+    return {"proposals": _spcp.list_pending_for_creator(ctx["user_sub"])}
+
+
+@router.get("/sponsored-posts/proposals/outbox")
+async def sponsored_proposals_outbox_endpoint(ctx=Depends(require_ui_session)):
+    return {"proposals": _spcp.list_for_advertiser(ctx["user_sub"])}
+
+
+@router.post("/sponsored-posts/proposals/{proposal_id}/approve")
+async def approve_sponsored_proposal_endpoint(proposal_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-402: only the TARGETED creator may approve -> publishes a post
+    authored-by-creator carrying paid_partnership (NOT is_sponsored)."""
+    try:
+        return _spcp.approve_and_publish(proposal_id=proposal_id, creator_sub=ctx["user_sub"])
+    except _spcp.SponsoredPostError as exc:
+        raise _spcp_http(exc)
+
+
+@router.post("/sponsored-posts/proposals/{proposal_id}/reject")
+async def reject_sponsored_proposal_endpoint(proposal_id: str, body: _SPCPOptional[SponsoredPostRejectIn] = None, ctx=Depends(require_ui_session)):
+    try:
+        return _spcp.reject_proposal(proposal_id=proposal_id, creator_sub=ctx["user_sub"], reason=(body.reason if body else ""))
+    except _spcp.SponsoredPostError as exc:
+        raise _spcp_http(exc)
+
+
+@router.get("/sponsored-posts/{post_id}/placement")
+async def sponsored_post_placement_endpoint(post_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-404: lazy-mint the per-viewer ad-click for a published
+    paid_partnership post and return impression/click tracking handles so the
+    client can fire /ui/ads/track (advertiser billed, creator placement share).
+    Returns {billable:false} for an organic post or a self-view."""
+    from app.routers.newsfeed import ddb_get_item, pk_post, sk_post
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    handle = _spcp.mint_post_ad_click(viewer_sub=ctx["user_sub"], post=post)
+    if not handle:
+        return {"billable": False}
+    out = {"billable": True}
+    out.update(handle)
+    return out
+
+
 @router.get("/stats/{campaign_id}")
 async def serving_stats_endpoint(campaign_id: str, ctx=Depends(require_ui_session)):
     _require_campaign_owner(campaign_id, ctx["user_sub"])

@@ -2325,6 +2325,19 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "sponsored_by": post.get("sponsored_by"),
         "deal_id": post.get("deal_id"),
         "ftc_disclosure": post.get("ftc_disclosure"),
+        # ADV2-403 (F4): sponsored-as-creator (paid partnership) fields.
+        # DISTINCT from the standalone is_sponsored ad unit -- the post stays
+        # a NORMAL creator post (tippable/likeable/commentable, no forced
+        # label); these drive advertiser BILLING + attribution + analytics
+        # only. Additive/defaulted so organic posts are unchanged.
+        "paid_partnership": bool(post.get("paid_partnership", False)),
+        "promoted_by_advertiser": bool(post.get("promoted_by_advertiser", False)),
+        "sponsor_account_id": post.get("sponsor_account_id"),
+        "sponsor_label": post.get("sponsor_label"),
+        "paid_partnership_disclosure": post.get("paid_partnership_disclosure"),
+        "campaign_id": post.get("campaign_id"),
+        "creative_id": post.get("creative_id"),
+        "content_owner_id": post.get("content_owner_id"),
         # ENGAGE-002: Poll data
         **_poll_fields_for_post(post, locked_body, viewer_id),
         # FEED-005: Countdown fields (countdown_title hidden when post body is locked)
