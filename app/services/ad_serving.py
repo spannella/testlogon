@@ -68,6 +68,7 @@ def serve_ad(
     user_id: str,
     user_context: Optional[Dict[str, Any]] = None,
     content_owner_id: str = "",
+    require_product: bool = False,
 ) -> Dict[str, Any]:
     """Select and return the best ad for the given context."""
     from app.services.ad_campaigns import list_campaigns_by_status
@@ -230,6 +231,9 @@ def serve_ad(
 
         # Get approved creatives
         creatives = list_approved_creatives(campaign["campaign_id"])
+        # B2: shop surfaces serve only PRODUCT-LINKED creatives (a product ad).
+        if require_product:
+            creatives = [c for c in creatives if c.get("product_id")]
         if not creatives:
             continue
 
@@ -312,6 +316,7 @@ def serve_ad(
             "campaign_id": winner["campaign"]["campaign_id"],
             "account_id": winner["campaign"]["account_id"],
             "creative_id": creative["creative_id"],
+            "product_id": creative.get("product_id", "") or "",
             "content_owner_sub": content_owner_id or "",
             "is_syndicate_ad": bool(winner.get("is_syndicate_ad")),
             "syndicate_id": str(winner.get("syndicate_id") or ""),
@@ -354,6 +359,9 @@ def serve_ad(
         "cta_text": creative.get("cta_text"),
         "cta_url": creative.get("cta_url"),
         "ctas": creative.get("ctas") or [],
+        "product_id": creative.get("product_id", "") or "",
+        "product_category_id": creative.get("product_category_id", "") or "",
+        "product_price_cents": int(creative.get("product_price_cents", 0) or 0),
         "image_url": creative.get("image_url"),
         "video_url": creative.get("video_url"),
         "thumbnail_url": creative.get("thumbnail_url"),

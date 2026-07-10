@@ -224,3 +224,62 @@ def list_approved_creatives(campaign_id: str) -> list[dict]:
     """List only approved creatives for a campaign (used by ad serving)."""
     all_cr = list_creatives(campaign_id)
     return [c for c in all_cr if c.get("status") == "approved"]
+
+
+# ── B1: product-linked creative ─────────────────────────────────────
+
+
+def create_product_creative(
+    campaign_id: str,
+    account_id: str,
+    *,
+    product_id: str,
+    product_category_id: str = "",
+    title: str,
+    headline: str = "",
+    body_text: str = "",
+    image_url: str = "",
+    price_cents: int = 0,
+    cta_text: str = "Shop now",
+    status: str = "draft",
+    rotation_weight: int = 50,
+) -> dict:
+    """B1: create a PRODUCT-LINKED creative whose subject is a catalog product.
+
+    Carries product_id + a buy_product CTA (reuse E2) so a tap deep-links to the
+    real product page and a resulting cart purchase attributes CPA. Used by the
+    seller-boost flow (auto-approved) and the advertiser product-creative
+    endpoint (draft)."""
+    creative_id = f"cr_{uuid.uuid4().hex[:12]}"
+    ts = now_ts()
+    item = {
+        "pk": f"CAMP#{campaign_id}",
+        "sk": f"CREATIVE#{creative_id}",
+        "creative_id": creative_id,
+        "campaign_id": campaign_id,
+        "account_id": account_id,
+        "format": "image",
+        "title": title,
+        "status": status,
+        "rotation_weight": int(rotation_weight),
+        "skip_after_seconds": 5,
+        "product_id": product_id,
+        "product_category_id": product_category_id or "",
+        "product_price_cents": int(price_cents or 0),
+        "cta_text": cta_text,
+        "ctas": [{"cta_type": "buy_product", "target_id": product_id, "label": cta_text}],
+        "created_at": ts,
+        "updated_at": ts,
+    }
+    if headline:
+        item["headline"] = headline
+    if body_text:
+        item["body_text"] = body_text
+    if image_url:
+        item["image_url"] = image_url
+    T.ad_creatives.put_item(Item=item)
+    logger.info(
+        "product_creative_created creative_id=%s campaign_id=%s product_id=%s status=%s",
+        creative_id, campaign_id, product_id, status,
+    )
+    return item

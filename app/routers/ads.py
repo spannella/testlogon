@@ -1017,3 +1017,108 @@ async def set_syndicate_ad_placement_config_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+# ── ADV x ECOM: product creative (B1) + shop serve (B2) + boost (B4) ─
+from pydantic import BaseModel as _AEBase, Field as _AEField
+
+
+class _ProductCreativeIn(_AEBase):
+    product_id: str = _AEField(..., min_length=1, max_length=200)
+    category_id: str = _AEField(default="", max_length=200)
+    title: str = _AEField(default="", max_length=200)
+    headline: str = _AEField(default="", max_length=200)
+    cta_text: str = _AEField(default="Shop now", max_length=40)
+
+
+class _ShopServeIn(_AEBase):
+    surface: str = _AEField(default="shop_search", pattern="^(shop_search|shop_browse)$")
+    query: str = _AEField(default="", max_length=200)
+    category_id: str = _AEField(default="", max_length=200)
+    limit: int = _AEField(default=3, ge=1, le=10)
+
+
+class _ProductBoostIn(_AEBase):
+    item_id: str = _AEField(..., min_length=1, max_length=200)
+    category_id: str = _AEField(default="", max_length=200)
+    budget_cents: int = _AEField(default=5000, ge=100, le=100_000_000)
+    bid_cpc_cents: int = _AEField(default=50, ge=1, le=10_000)
+    bid_cpm_cents: int = _AEField(default=500, ge=50, le=20_000)
+    bid_cpa_cents: int = _AEField(default=500, ge=1, le=100_000)
+    duration_days: int = _AEField(default=7, ge=1, le=365)
+    objective: str = _AEField(default="traffic", pattern="^(awareness|traffic|conversions)$")
+
+
+@router.post("/campaigns/{campaign_id}/product-creatives", status_code=201)
+async def create_product_creative_endpoint(
+    campaign_id: str, body: _ProductCreativeIn, ctx=Depends(require_ui_session)
+):
+    """B1: create a product-linked creative (references a catalog product +
+    buy_product CTA). Owner-checked via the campaign's ad account."""
+    camp = _require_campaign_owner(campaign_id, ctx["user_sub"])
+    from app.services.shop_ads import resolve_product
+    from app.services.ad_creatives import create_product_creative
+
+    prod = resolve_product(body.product_id, body.category_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Product not found")
+    imgs = prod.get("image_urls") or []
+    try:
+        price = int(prod.get("price_cents") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    return create_product_creative(
+        campaign_id,
+        camp["account_id"],
+        product_id=str(prod.get("item_id") or body.product_id),
+        product_category_id=str(prod.get("category_id", "") or body.category_id or ""),
+        title=(body.title or prod.get("name", "") or "Product"),
+        headline=body.headline or "",
+        body_text=str(prod.get("description", "") or ""),
+        image_url=(imgs[0] if imgs else ""),
+        price_cents=price,
+        cta_text=body.cta_text or "Shop now",
+        status="draft",
+    )
+
+
+@router.post("/shop/serve")
+async def shop_serve_endpoint(body: _ShopServeIn, ctx=Depends(require_ui_session)):
+    """B2: serve STANDALONE product-linked sponsored units into the shop
+    search/browse results (platform-100%, no-tip). The app fires impression on
+    render + click on tap via /ui/ads/track (funds-guarded, idempotent)."""
+    from app.services.shop_ads import serve_shop_sponsored
+
+    units = serve_shop_sponsored(
+        viewer_id=ctx["user_sub"],
+        query=body.query,
+        category_id=body.category_id,
+        limit=body.limit,
+        surface=body.surface,
+    )
+    return {"sponsored": units, "count": len(units)}
+
+
+@router.post("/boost/product", status_code=201)
+async def boost_product_endpoint(body: _ProductBoostIn, ctx=Depends(require_ui_session)):
+    """B4: seller BOOST-this-product. From a catalog LISTING, create/reuse the
+    seller ad account + a campaign + a product creative prefilled from the
+    listing. OWNER-CHECKED: a non-owner cannot boost the listing (403)."""
+    from app.services.shop_ads import boost_listing
+
+    try:
+        return boost_listing(
+            owner_sub=ctx["user_sub"],
+            item_id=body.item_id,
+            category_id=body.category_id,
+            budget_cents=body.budget_cents,
+            bid_cpc_cents=body.bid_cpc_cents,
+            bid_cpm_cents=body.bid_cpm_cents,
+            bid_cpa_cents=body.bid_cpa_cents,
+            duration_days=body.duration_days,
+            objective=body.objective,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="You do not own this listing")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
