@@ -390,4 +390,10 @@ def transition(
     # D3: notify the BUYER when this ship-group ships (default-ON push).
     if target == "shipped":
         _notify_buyer_shipped(updated)
+        # D4: create the shipment-tracking record (carrier detected from #).
+        try:
+            from app.services import shipment_tracking as _st
+            _st.create_on_ship(updated)
+        except Exception:
+            logger.exception("create_on_ship failed for sg %s", ship_group_id)
     return updated

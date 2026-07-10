@@ -129,6 +129,7 @@ class Tables:
     catalog_product_versions: Any
     orders: Any
     order_items: Any
+    shipment_tracking: Any
     payments: Any
     entitlements: Any
     entitlement_usage_events: Any
@@ -373,6 +374,7 @@ T = Tables(
     catalog_product_versions=_safe_table(S.catalog_product_versions_table_name),
     orders=_safe_table(S.orders_table_name),
     order_items=_safe_table(S.order_items_table_name),
+    shipment_tracking=_safe_table(S.shipment_tracking_table_name),
     payments=_safe_table(S.payments_table_name),
     entitlements=_safe_table(S.entitlements_table_name),
     entitlement_usage_events=_safe_table(S.entitlement_usage_events_table_name),

@@ -1101,6 +1101,8 @@ class Settings:
     catalog_product_versions_table_name: str = os.environ.get("CATALOG_PRODUCT_VERSIONS_TABLE_NAME", "catalog_product_versions")
     orders_table_name: str = os.environ.get("ORDERS_TABLE_NAME", "orders")
     order_items_table_name: str = os.environ.get("ORDER_ITEMS_TABLE_NAME", "order_items")
+    shipment_tracking_table_name: str = os.environ.get("SHIPMENT_TRACKING_TABLE_NAME", "shipment_tracking")
+    shipment_webhook_secret: str = os.environ.get("SHIPMENT_WEBHOOK_SECRET", "")
     payments_table_name: str = os.environ.get("PAYMENTS_TABLE_NAME", "payments")
     entitlements_table_name: str = os.environ.get("ENTITLEMENTS_TABLE_NAME", "entitlements")
     entitlement_usage_events_table_name: str = os.environ.get("ENTITLEMENT_USAGE_EVENTS_TABLE_NAME", "entitlement_usage_events")

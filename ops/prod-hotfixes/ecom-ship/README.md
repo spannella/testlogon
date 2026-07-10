@@ -52,3 +52,75 @@ Two prod files patched (anchored, idempotent, py_compile-checked):
 - Buyer deep-link `/orders?order=...&ship_group=...` is forward-compatible with the
   D4 buyer tracking view (app slice) — carries the order + ship-group so tracking
   can be resolved.
+
+## D4 — shipment-tracking subsystem (LIVE PROD HOTFIX 2026-07-10)
+`.bak_ecomd4_1783695396` on 5 prod files. New table `shipment_tracking`
+(PK ship_group_id, GSI GSI_TRACKING on tracking_number_norm) created on prod.
+Restart openapi 200; 4 new routes live. Prod in-process verify
+(verify_ecom_d4.py): **52/52 ALL_PASS**.
+
+### New service `app/services/shipment_tracking.py`
+- `detect_carrier(#)` -> USPS | UPS | FedEx | DHL | unknown by number format
+  (UPS 1Z+16; USPS 20-22 digits beginning 9 / 2-alpha+9-digit+US; FedEx 12/15/20
+  digits; DHL 10/11 digits) + `CARRIER_TRACKING_URLS` public tracking-page
+  templates + `tracking_url(carrier,#)`.
+- Tracking record keyed to the ship-group: carrier + tracking_number + status in
+  {label_created,in_transit,out_for_delivery,delivered,exception} + `events`
+  history (ts/status/location?/description?/source). `create_on_ship(sg_row)`
+  mints it on SHIP (status=label_created, carrier detected from #, idempotent).
+- `advance(...)` appends an event + fires the buyer delivery pushes IDEMPOTENTLY
+  (atomic `_claim_notify` string-set claim -> each status pushes at most once).
+- INGESTION SEAMS: `ingest_webhook(payload)` (maps EasyPost/Shippo/AfterShip/
+  carrier status vocab -> internal status -> advance) + `poll_tracking(#)` stub
+  (query-by-tracking# drop-in). SIMULATE driver `simulate_step`/`simulate_to_delivered`
+  advances label_created->in_transit->out_for_delivery->delivered for demos.
+- Delivery pushes: out_for_delivery -> buyer `order_out_for_delivery` Your order
+
+## D4 — shipment-tracking subsystem (LIVE PROD HOTFIX 2026-07-10)
+`.bak_ecomd4_1783695396` on 5 prod files. New table `shipment_tracking`
+(PK ship_group_id, GSI GSI_TRACKING on tracking_number_norm) created on prod.
+Restart openapi 200; 4 new routes live. Prod in-process verify
+(verify_ecom_d4.py): **52/52 ALL_PASS**.
+
+### New service `app/services/shipment_tracking.py`
+- `detect_carrier(#)` -> USPS | UPS | FedEx | DHL | unknown by number format
+  (UPS 1Z+16; USPS 20-22 digits beginning 9 / 2-alpha+9-digit+US; FedEx 12/15/20
+  digits; DHL 10/11 digits) + `CARRIER_TRACKING_URLS` public tracking-page
+  templates + `tracking_url(carrier,#)`.
+- Tracking record keyed to the ship-group: carrier + tracking_number + status in
+  {label_created,in_transit,out_for_delivery,delivered,exception} + `events`
+  history (ts/status/location?/description?/source). `create_on_ship(sg_row)`
+  mints it on SHIP (status=label_created, carrier detected from #, idempotent).
+- `advance(...)` appends an event + fires the buyer delivery pushes IDEMPOTENTLY
+  (atomic `_claim_notify` string-set claim -> each status pushes at most once).
+- INGESTION SEAMS: `ingest_webhook(payload)` (maps EasyPost/Shippo/AfterShip/
+  carrier status vocab -> internal status -> advance) + `poll_tracking(#)` stub
+  (query-by-tracking# drop-in). SIMULATE driver `simulate_step` / `simulate_to_delivered`
+  advances label_created->in_transit->out_for_delivery->delivered for demos.
+- Delivery pushes: out_for_delivery -> buyer `order_out_for_delivery` "Your order
+  is out for delivery"; delivered -> `order_delivered` "Your order was delivered";
+  both default-ON transactional, deep-link `/orders?order=..&ship_group=..&track=1`.
+
+### Router `app/routers/shipment_tracking.py`
+- GET  /ui/orders/tracking/{ship_group_id}          buyer tracking view (buyer-scoped, 404 else)
+- GET  /ui/shipping/tracking/{tracking_number}/poll poller stub (buyer/admin)
+- POST /ui/shipping/tracking/webhook                ingestion seam (optional X-Webhook-Secret)
+- POST /ui/admin/shipment-tracking/{sg}/simulate    demo driver (admin/root; ?to= optional)
+
+### alerts.py
+`order_out_for_delivery` + `order_delivered` registered in ALERT_EVENT_TYPES +
+DEFAULT_PUSH_EVENT_TYPES (default-ON, opt-out via push_opt_out_event_types) +
+the `commerce` category.
+
+### seller_ship_groups.py (PROD-ONLY)
+`transition(...)`: on the shipped edge, after `_notify_buyer_shipped`, best-effort
+`shipment_tracking.create_on_ship(updated)`.
+
+### Files
+- `apply_ecom_d4.py` — anchored idempotent patcher (writes the 2 new files from
+  base64 + patches alerts/settings/tables/main/seller_ship_groups; ROOT/TS/APPLY_TABLE
+  env; .bak + restore-on-compile-fail; ensure_table on APPLY_TABLE=1). Probed on a
+  /tmp/probe copy of the real prod files first (all anchors matched).
+- `verify_ecom_d4.py` — in-process prod-DDB verify (52 assertions: carrier matrix,
+  create-on-ship, simulate progression + idempotent pushes, webhook ingestion,
+  poller, registration/default-ON, buyer tracking view).

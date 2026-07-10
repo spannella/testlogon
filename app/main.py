@@ -21,6 +21,7 @@ from app.routers.mfa_devices import router as mfa_devices_router
 from app.routers.api_keys import router as api_keys_router
 from app.routers.api_usage import router as api_usage_router
 from app.routers.alerts import router as alerts_router
+from app.routers.shipment_tracking import router as shipment_tracking_router  # ECOM D4
 from app.routers.account import router as account_router
 from app.routers.push import router as push_router
 from app.routers.recovery import router as recovery_router
@@ -543,6 +544,7 @@ def create_app() -> FastAPI:
     app.include_router(api_keys_router)
     app.include_router(api_usage_router)
     app.include_router(alerts_router)
+    app.include_router(shipment_tracking_router)  # ECOM D4 shipment tracking
     app.include_router(account_router)
     app.include_router(push_router)
     app.include_router(recovery_router)

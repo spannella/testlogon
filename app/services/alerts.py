@@ -40,7 +40,7 @@ ALERT_CATEGORIES: Dict[str, set] = {
     "updates":  {"calendar_event_created", "calendar_event_updated",
                  "ticket_created", "ticket_assigned", "ticket_replied",
                  "ticket_status_changed", "ticket_reopened"},
-    "commerce": {"cart.abandoned", "order_shipped"},
+    "commerce": {"cart.abandoned", "order_shipped", "order_out_for_delivery", "order_delivered"},
 }
 
 # Reverse lookup: event -> category
@@ -149,6 +149,9 @@ ALERT_EVENT_TYPES: List[str] = [
     "shop_item_sold",
     # Commerce / buyer order lifecycle (ECOM D3)
     "order_shipped",
+    # Commerce / buyer delivery lifecycle (ECOM D4)
+    "order_out_for_delivery",
+    "order_delivered",
 ]
 
 # ECOM-SELLER P2 - TRANSACTIONAL push events that are ON-BY-DEFAULT (opt-OUT, not
@@ -161,6 +164,8 @@ DEFAULT_PUSH_EVENT_TYPES: List[str] = [
     "post_tip",              # you received a tip
     "message_tip",           # you received a message tip
     "order_shipped",         # your order has shipped (buyer, D3)
+    "order_out_for_delivery",  # your order is out for delivery (buyer, D4)
+    "order_delivered",         # your order was delivered (buyer, D4)
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.

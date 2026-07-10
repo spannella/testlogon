@@ -294,6 +294,13 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(_resolve_table_name(S.order_items_table_name, "order_items"), "order_id", "item_id"),
         TableDef(
+            _resolve_table_name(S.shipment_tracking_table_name, "shipment_tracking"),
+            "ship_group_id",
+            gsi=[
+                {"index_name": "GSI_TRACKING", "partition_key": "tracking_number_norm"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.payment_incidents_table_name, "payment_incidents"),
             "incident_id",
         ),
