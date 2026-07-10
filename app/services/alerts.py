@@ -145,6 +145,8 @@ ALERT_EVENT_TYPES: List[str] = [
     "cart.abandoned",
     # Achievements (ENGAGE-001)
     "achievement_unlocked",
+    # Commerce / seller fulfillment (ECOM-SELLER G1: enables opt-in FCM push for shop_item_sold)
+    "shop_item_sold",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.

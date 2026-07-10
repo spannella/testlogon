@@ -96,3 +96,14 @@ Set `PROBE=1` + `ROOT=/tmp/probe_...` to dry-run anchors + pycompile without cre
   the in-app alert always writes. Pre-existing unrelated noise during purchase:
   `store_integration.reserve(reservation_id=…)` TypeError + `commerce_entitlement_orchestration_failed`
   — neither affects the ship-group flow.
+
+## G1 push follow-up (apply_push_event.py)
+
+The initial G1 slice wrote the in-app `shop_item_sold` alert (via `write_alert`) but the
+FCM push could never be delivered: `shop_item_sold` was not in `ALERT_EVENT_TYPES`, so
+`set_alert_prefs` dropped it from `push_event_types` (a seller could not opt in) and
+`send_push_for_alert` early-returned. `apply_push_event.py` registers the event
+(anchored, idempotent, .bak) in `app/services/alerts.py`. After apply: restart backend,
+openapi 200, then a seller with `shop_item_sold` in `push_event_types` receives the FCM
+push on their device. Verified live on prod: fcm_send -> True, notification on A15 tray
+("You sold Ethiopia Yirgacheffe 12oz - ... ship to Rex Buyer, Springfield. Tap to fulfil.").
