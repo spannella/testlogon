@@ -28,6 +28,7 @@ import com.testlogon.android.feature.settings.geo.GeoSettingsRoute
 import com.testlogon.android.feature.settings.misc.PrivacySettingsScreen
 import com.testlogon.android.feature.settings.misc.SecuritySettingsScreen
 import com.testlogon.android.feature.settings.notifications.NotificationPreferencesRoute
+import com.testlogon.android.feature.settings.pushevents.PushEventPrefsRoute
 import com.testlogon.android.feature.shell.AuthedShellScreen
 
 /**
@@ -205,6 +206,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         listingEditorDestination(navController)
         sellerOrdersDestination(navController)
         sellerSalesDestination(navController)
+        // D4 - buyer order shipment-tracking (reached from buyer shipment alerts).
+        orderTrackingDestination(navController)
         // AND-211/AND-212: shopping cart (line items, qty edit, remove, in-cart search).
         cartDestination(navController)
         // AND-213: checkout session / order review (reached from the cart "Proceed to checkout").
@@ -497,6 +500,10 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
     }
     composable(MainDest.SettingsNotifications.route) {
         NotificationPreferencesRoute(onBack = { navController.popBackStack() })
+    }
+    // D2 - per-event PUSH preference toggles (opt-in/opt-out transactional events).
+    composable(MainDest.SettingsPushEvents.route) {
+        PushEventPrefsRoute(onBack = { navController.popBackStack() })
     }
     // AND-088: alert preferences — email/SMS alert target management. Links to the AND-080
     // type-preferences screen rather than duplicating the alert event-type matrix.

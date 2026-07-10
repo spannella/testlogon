@@ -247,6 +247,9 @@ sealed class MainDest(val route: String) {
     /** Alert preferences — email/SMS alert TARGET management (AND-088). */
     data object SettingsAlerts : MainDest("settings/alerts")
 
+    /** D2 - per-event PUSH toggles (transactional alerts opt-in/opt-out). */
+    data object SettingsPushEvents : MainDest("settings/push-events")
+
     /** Account activity feed — paged list of account events (AND-091). */
     data object Activity : MainDest("activity")
 

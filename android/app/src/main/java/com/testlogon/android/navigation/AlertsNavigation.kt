@@ -22,6 +22,10 @@ fun NavGraphBuilder.alertsDestination(navController: NavHostController) {
             onOpenSale = { shipGroupId ->
                 navController.navigate(SellerSalesDest.build(shipGroupId)) { launchSingleTop = true }
             },
+            // D4: a buyer shipment alert deep-links to the buyer order-tracking view (ship group).
+            onOpenTracking = { shipGroupId ->
+                navController.navigate(OrderTrackingDest.build(shipGroupId)) { launchSingleTop = true }
+            },
         )
     }
 }

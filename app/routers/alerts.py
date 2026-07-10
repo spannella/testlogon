@@ -33,6 +33,7 @@ from app.models import (
 from boto3.dynamodb.conditions import Attr
 from app.services.alerts import (
     ALERT_EVENT_TYPES,
+    DEFAULT_PUSH_EVENT_TYPES,
     ALERT_CATEGORIES,
     get_alert_category,
     audit_event,
@@ -240,9 +241,26 @@ async def set_toast_prefs(body: AlertToastPrefsReq, ctx: Dict[str, str] = Depend
     return prefs
 
 
+@router.get("/alerts/push_prefs")
+async def get_push_prefs(ctx: Dict[str, str] = Depends(require_ui_session)):
+    # D2: read the per-event PUSH prefs + the default-ON set so the app can render each
+    # transactional event ON/OFF (default-ON minus opt-out, plus explicit opt-in).
+    prefs = get_alert_prefs(ctx["user_sub"])
+    return {
+        "push_event_types": prefs.get("push_event_types", []),
+        "push_opt_out_event_types": prefs.get("push_opt_out_event_types", []),
+        "default_push_event_types": list(DEFAULT_PUSH_EVENT_TYPES),
+    }
+
+
 @router.post("/alerts/push_prefs")
 async def set_push_prefs(body: AlertPushPrefsReq, ctx: Dict[str, str] = Depends(require_ui_session)):
-    prefs = set_alert_prefs(ctx["user_sub"], push_event_types=body.push_event_types)
+    # D2: set both the opt-IN list and the opt-OUT (of default-ON) list. None leaves that list as-is.
+    prefs = set_alert_prefs(
+        ctx["user_sub"],
+        push_event_types=body.push_event_types,
+        push_opt_out_event_types=body.push_opt_out_event_types,
+    )
     audit_event("alerts_push_prefs_set", ctx["user_sub"], None, outcome="success", enabled=len(prefs.get("push_event_types") or []))
     return prefs
 

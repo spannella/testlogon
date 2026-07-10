@@ -124,3 +124,21 @@ the `commerce` category.
 - `verify_ecom_d4.py` — in-process prod-DDB verify (52 assertions: carrier matrix,
   create-on-ship, simulate progression + idempotent pushes, webhook ingestion,
   poller, registration/default-ON, buyer tracking view).
+
+## D2 (per-event PUSH-pref toggle) - backend, LIVE PROD HOTFIX
+
+App slice needs a per-event PUSH toggle over the opt-in/opt-out alert-prefs model. The existing
+`POST /ui/alerts/push_prefs` only set `push_event_types` (opt-IN) and there was no GET, so the
+app could neither read the default-ON transactional set nor opt OUT of a default-ON event.
+
+Applied via SSM (EC2 i-08f937fc705ebea75), backups `*.bak_ecomd2_1783696499`:
+- `app/models.py`: `AlertPushPrefsReq` -> both `push_event_types` and `push_opt_out_event_types`
+  Optional (None preserves the current list).
+- `app/routers/alerts.py`: import `DEFAULT_PUSH_EVENT_TYPES`; NEW `GET /ui/alerts/push_prefs`
+  returning `{push_event_types, push_opt_out_event_types, default_push_event_types}`; extended
+  `POST /ui/alerts/push_prefs` to pass BOTH lists to `set_alert_prefs`.
+
+restart_backend.sh -> openapi 200; both GET+POST /ui/alerts/push_prefs present. In-process verify
+(`verify_ecom_d2.py`): default (no prefs) empty (opt-out model -> default-ON events push); opt-out
+`order_shipped` persists; opt-out filters non-default events; explicit opt-in of a non-default event
+persists. Patcher: `apply_ecom_d2.py` (anchored, idempotent, .bak). Dev clone patched in-tree.

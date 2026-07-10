@@ -960,7 +960,9 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.SHOP,
             section = MoreSection.APP,
         ),
-        // ECOM (seller store): creator/operator-gated store management (SHOP hub).
+        // ECOM-SELLER (D1): OWNER-SCOPED store management (SHOP hub). NOT operatorOnly - any
+        // signed-in seller manages ONLY their own catalog (categories/items where creator_id ==
+        // caller); the backend catalog create/edit/delete is require_ui_session + owner-checked.
         MoreEntry(
             id = "seller_store",
             labelRes = R.string.more_entry_seller_store,
@@ -968,7 +970,6 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.SELLER_STORE,
             hub = MoreHub.SHOP,
             section = MoreSection.APP,
-            operatorOnly = true,
         ),
         MoreEntry(
             id = "seller_orders",

@@ -52,6 +52,8 @@ import com.testlogon.android.navigation.deeplink.NotificationDeepLink
 import com.testlogon.android.navigation.deeplink.PushTapRouting
 import com.testlogon.android.feature.messaging.nav.MessagingRoutes
 import com.testlogon.android.feature.alerts.saleIdFromActionUrl
+import com.testlogon.android.feature.alerts.shipGroupFromActionUrl
+import com.testlogon.android.navigation.OrderTrackingDest
 import com.testlogon.android.navigation.SellerSalesDest
 import com.testlogon.android.navigation.navigateToNotificationTarget
 import dagger.hilt.android.AndroidEntryPoint
@@ -353,8 +355,13 @@ class MainActivity : FragmentActivity() {
                 // notification target (alerts center).
                 is NotificationDeepLink.Alert -> {
                     val saleId = saleIdFromActionUrl(link.actionUrl)
+                    // D4: a buyer shipment alert (order_shipped/out_for_delivery/delivered) carries a
+                    // ship_group in its action_url -> open the buyer order-tracking view directly.
+                    val trackShipGroup = shipGroupFromActionUrl(link.actionUrl)
                     if (saleId != null) {
                         controller.navigate(SellerSalesDest.build(saleId)) { launchSingleTop = true }
+                    } else if (trackShipGroup != null) {
+                        controller.navigate(OrderTrackingDest.build(trackShipGroup)) { launchSingleTop = true }
                     } else {
                         controller.navigateToNotificationTarget(PushTapRouting.targetFor(link))
                     }

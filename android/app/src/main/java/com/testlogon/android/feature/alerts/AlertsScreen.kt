@@ -79,6 +79,8 @@ fun AlertsRoute(
     onOpenModeration: () -> Unit = {},
     // ECOM-SELLER (G1): tapping a shop_item_sold alert opens that seller sale (ship group).
     onOpenSale: (String) -> Unit = {},
+    // D4: tapping a buyer shipment alert opens the buyer order-tracking view (by ship-group id).
+    onOpenTracking: (String) -> Unit = {},
     viewModel: AlertsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -108,6 +110,7 @@ fun AlertsRoute(
         onAlertClick = viewModel::onAlertClick,
         onOpenModeration = onOpenModeration,
         onOpenSale = onOpenSale,
+        onOpenTracking = onOpenTracking,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -152,6 +155,33 @@ internal fun saleIdFromActionUrl(actionUrl: String?): String? {
         ?.takeIf { it.isNotBlank() }
 }
 
+/**
+ * D4 - the BUYER shipment-tracking alert events (backend write_alert). Their action_url is
+ * /orders?order=..&ship_group=..&track=1; tapping one deep-links to the buyer order-tracking view.
+ */
+private val ORDER_TRACKING_ALERT_EVENTS: Set<String> = setOf(
+    "order_shipped", "order_out_for_delivery", "order_delivered",
+)
+
+internal fun isOrderTrackingAlert(event: String?): Boolean =
+    event != null && event.trim().lowercase() in ORDER_TRACKING_ALERT_EVENTS
+
+/** Parses the ship_group id from a buyer shipment alert action_url query. */
+internal fun shipGroupFromActionUrl(actionUrl: String?): String? {
+    val url = actionUrl ?: return null
+    val q = url.substringAfter('?', "")
+    if (q.isEmpty()) return null
+    return q.split('&')
+        .mapNotNull { part ->
+            val i = part.indexOf('=')
+            if (i <= 0) null else part.substring(0, i) to part.substring(i + 1)
+        }
+        .firstOrNull { it.first == "ship_group" }
+        ?.second
+        ?.let { android.net.Uri.decode(it) }
+        ?.takeIf { it.isNotBlank() }
+}
+
 @Composable
 fun AlertsScreen(
     state: AlertsUiState,
@@ -163,6 +193,7 @@ fun AlertsScreen(
     onAlertClick: (String) -> Unit,
     onOpenModeration: () -> Unit = {},
     onOpenSale: (String) -> Unit = {},
+    onOpenTracking: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -269,6 +300,10 @@ fun AlertsScreen(
                                         // ECOM-SELLER (G1): a sold-item alert opens the seller sale.
                                         if (isShopSoldAlert(alert.event)) {
                                             saleIdFromActionUrl(alert.actionUrl)?.let(onOpenSale)
+                                        }
+                                        // D4: a buyer shipment alert opens the order-tracking view.
+                                        if (isOrderTrackingAlert(alert.event)) {
+                                            shipGroupFromActionUrl(alert.actionUrl)?.let(onOpenTracking)
                                         }
                                     },
                                 )

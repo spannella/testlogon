@@ -6,6 +6,7 @@ import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PermMedia
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.EmojiEmotions
@@ -67,6 +68,14 @@ class SettingsHubViewModel @Inject constructor() : ViewModel() {
                 subtitleRes = R.string.settings_section_notifications_subtitle,
                 icon = Icons.Outlined.Notifications,
                 route = MainDest.SettingsNotifications.route,
+                available = true,
+            ),
+            SettingsSection(
+                key = SettingsSectionKey.PUSH_EVENTS,
+                titleRes = R.string.settings_section_push_events_title,
+                subtitleRes = R.string.settings_section_push_events_subtitle,
+                icon = Icons.Outlined.NotificationsActive,
+                route = MainDest.SettingsPushEvents.route,
                 available = true,
             ),
             SettingsSection(

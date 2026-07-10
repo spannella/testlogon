@@ -391,7 +391,11 @@ class AlertToastPrefsReq(BaseModel):
     toast_event_types: List[str] = Field(default_factory=list)
 
 class AlertPushPrefsReq(BaseModel):
-    push_event_types: List[str] = Field(default_factory=list)
+    # D2: push-pref toggle. push_event_types = explicit opt-IN list; push_opt_out_event_types =
+    # opt-OUT of the default-ON transactional events. Both optional so a partial update keeps the
+    # unspecified list unchanged (None -> set_alert_prefs preserves current).
+    push_event_types: Optional[List[str]] = None
+    push_opt_out_event_types: Optional[List[str]] = None
 
 class AlertWebhookPrefsReq(BaseModel):
     webhook_urls: List[str] = Field(default_factory=list)

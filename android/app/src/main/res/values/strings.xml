@@ -4834,4 +4834,31 @@
     <string name="more_entry_ad_mass_dm">Message your audience</string>
     <string name="thread_ad_sponsored_label">Sponsored</string>
     <string name="thread_ad_learn_more">Learn more</string>
+    <!-- D2: per-event PUSH preference toggles -->
+    <string name="settings_section_push_events_title">Push notifications</string>
+    <string name="settings_section_push_events_subtitle">Choose which events push to this device</string>
+    <string name="push_event_prefs_title">Push notifications</string>
+    <string name="push_event_prefs_header">Get a push notification on this device for these events. Transactional events are on by default.</string>
+    <string name="push_event_sold_title">Item sold</string>
+    <string name="push_event_sold_sub">You sold an item and need to ship it</string>
+    <string name="push_event_shipped_title">Order shipped</string>
+    <string name="push_event_shipped_sub">Your order has shipped</string>
+    <string name="push_event_ofd_title">Out for delivery</string>
+    <string name="push_event_ofd_sub">Your order is out for delivery</string>
+    <string name="push_event_delivered_title">Delivered</string>
+    <string name="push_event_delivered_sub">Your order was delivered</string>
+    <string name="push_event_post_tip_title">Tips on posts</string>
+    <string name="push_event_post_tip_sub">You received a tip on a post</string>
+    <string name="push_event_message_tip_title">Tips in messages</string>
+    <string name="push_event_message_tip_sub">You received a tip in a message</string>
+    <string name="push_event_subscription_title">New subscription</string>
+    <string name="push_event_subscription_sub">A subscription or payment succeeded</string>
+    <!-- D4: buyer order-tracking view -->
+    <string name="order_tracking_title">Track order</string>
+    <string name="order_tracking_not_shipped">This order has not shipped yet.</string>
+    <string name="order_tracking_progress_title">Progress</string>
+    <string name="order_tracking_step_shipped">Shipped</string>
+    <string name="order_tracking_step_in_transit">In transit</string>
+    <string name="order_tracking_step_out_for_delivery">Out for delivery</string>
+    <string name="order_tracking_step_delivered">Delivered</string>
 </resources>
