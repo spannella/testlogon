@@ -149,6 +149,17 @@ ALERT_EVENT_TYPES: List[str] = [
     "shop_item_sold",
 ]
 
+# ECOM-SELLER P2 - TRANSACTIONAL push events that are ON-BY-DEFAULT (opt-OUT, not
+# opt-in). A user receives these without manually enabling push prefs; they can
+# still disable one via ``push_opt_out_event_types``. Keep to genuinely
+# transactional order/payment events (never social/marketing noise).
+DEFAULT_PUSH_EVENT_TYPES: List[str] = [
+    "shop_item_sold",        # you sold an item -> ship it
+    "subscription_started",  # a subscription/payment succeeded
+    "post_tip",              # you received a tip
+    "message_tip",           # you received a message tip
+]
+
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
 _SSE_SUBSCRIBERS: Dict[str, Set[asyncio.Queue]] = {}
 logger = logging.getLogger(__name__)
@@ -278,6 +289,7 @@ def get_alert_prefs(user_sub: str) -> Dict[str, Any]:
             "emails": [], "sms_numbers": [],
             "email_event_types": [], "sms_event_types": [],
             "toast_event_types": [], "push_event_types": [],
+            "push_opt_out_event_types": [],
             "webhook_urls": [], "webhook_event_types": [],
         }
     return {
@@ -287,6 +299,7 @@ def get_alert_prefs(user_sub: str) -> Dict[str, Any]:
         "sms_event_types": it.get("sms_event_types", []),
         "toast_event_types": it.get("toast_event_types", []),
         "push_event_types": it.get("push_event_types", []),
+        "push_opt_out_event_types": it.get("push_opt_out_event_types", []),
         "webhook_urls": it.get("webhook_urls", []),
         "webhook_event_types": it.get("webhook_event_types", []),
     }
@@ -300,6 +313,7 @@ def set_alert_prefs(
     sms_event_types: Optional[List[str]] = None,
     toast_event_types: Optional[List[str]] = None,
     push_event_types: Optional[List[str]] = None,
+    push_opt_out_event_types: Optional[List[str]] = None,
     webhook_urls: Optional[List[str]] = None,
     webhook_event_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
@@ -310,6 +324,10 @@ def set_alert_prefs(
     sms_event_types = cur["sms_event_types"] if sms_event_types is None else sms_event_types
     toast_event_types = cur["toast_event_types"] if toast_event_types is None else toast_event_types
     push_event_types = cur["push_event_types"] if push_event_types is None else push_event_types
+    push_opt_out_event_types = (
+        cur.get("push_opt_out_event_types", [])
+        if push_opt_out_event_types is None else push_opt_out_event_types
+    )
     webhook_urls = cur["webhook_urls"] if webhook_urls is None else webhook_urls
     webhook_event_types = cur["webhook_event_types"] if webhook_event_types is None else webhook_event_types
 
@@ -338,6 +356,10 @@ def set_alert_prefs(
     sms_types = [t for t in (sms_event_types or []) if t in allowed]
     toast_types = [t for t in (toast_event_types or []) if t in allowed]
     push_types = [t for t in (push_event_types or []) if t in allowed]
+    # P2: opt-out only carries the default-on transactional events (opting out of a
+    # non-default event is a no-op - it is off already).
+    default_on = set(DEFAULT_PUSH_EVENT_TYPES)
+    push_opt_out = [t for t in (push_opt_out_event_types or []) if t in default_on]
     webhook_types = [t for t in (webhook_event_types or []) if t in allowed]
     webhook_urls_n = _normalize_webhook_urls(webhook_urls or [])
 
@@ -349,6 +371,7 @@ def set_alert_prefs(
         "sms_event_types": sms_types,
         "toast_event_types": toast_types,
         "push_event_types": push_types,
+        "push_opt_out_event_types": push_opt_out,
         "webhook_urls": webhook_urls_n,
         "webhook_event_types": webhook_types,
         "updated_at": now_ts(),

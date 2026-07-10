@@ -237,7 +237,8 @@ def _notify_seller(row: Dict[str, Any]) -> None:
         logger.exception("write_alert failed for seller %s sg %s", seller, sg_id)
     try:
         from app.services.push import send_push_for_alert
-        send_push_for_alert(seller, "shop_item_sold", title, body, alert_id or sg_id)
+        # P1: pass the sale deep-link so the FCM data payload carries action_url.
+        send_push_for_alert(seller, "shop_item_sold", title, body, alert_id or sg_id, action_url=action_url)
     except Exception:
         logger.exception("push failed for seller %s sg %s", seller, sg_id)
 
