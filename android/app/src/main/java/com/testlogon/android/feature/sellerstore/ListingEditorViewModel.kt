@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.catalog.CatalogRepository
+import com.testlogon.android.data.livecommerce.LiveCommerceRepository
 import com.testlogon.android.data.profile.ProfileMediaUploader
 import com.testlogon.android.data.sellerstore.SellerCatalogRepository
 import com.testlogon.android.feature.profile.media.ProfileImageProcessor
@@ -39,6 +40,12 @@ data class ListingEditorUiState(
     val pendingImageUri: Uri? = null,
     val uploadingImage: Boolean = false,
     val saving: Boolean = false,
+    /**
+     * LIVECOM L5 — the seller-set affiliate commission a host earns for selling this listing via a
+     * stream, as a PERCENT string (e.g. "10" = 10%). Loaded/saved as bps against the live-commerce
+     * endpoints. Only meaningful for an existing (saved) listing.
+     */
+    val affiliateCommissionText: String = "",
 ) {
     val canSave: Boolean get() = name.isNotBlank() && priceText.isNotBlank() && !saving && !uploadingImage
 }
@@ -53,6 +60,7 @@ sealed interface ListingEditorEvent {
 class ListingEditorViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val sellerRepository: SellerCatalogRepository,
+    private val liveCommerceRepository: LiveCommerceRepository,
     private val imageProcessor: ProfileImageProcessor,
     savedState: SavedStateHandle,
 ) : ViewModel() {
@@ -93,12 +101,25 @@ class ListingEditorViewModel @Inject constructor(
                             imageUrl = item.thumbnailUrl,
                         )
                     }
+                    loadCommission(item.itemId)
                 }
                 is ApiResult.Failure -> { _uiState.update { it.copy(loading = false) }; _events.send(ListingEditorEvent.Message(r.error.message)) }
                 is ApiResult.NetworkError -> { _uiState.update { it.copy(loading = false) }; _events.send(ListingEditorEvent.Message(OFFLINE)) }
             }
         }
     }
+
+    /** LIVECOM L5 — reads the listing's current affiliate commission (bps) and shows it as a percent. */
+    private fun loadCommission(id: String) {
+        viewModelScope.launch {
+            (liveCommerceRepository.affiliateCommissionBps(categoryId, id) as? ApiResult.Success)?.let { r ->
+                _uiState.update { it.copy(affiliateCommissionText = bpsToPercentText(r.data)) }
+            }
+        }
+    }
+
+    fun onCommissionChange(v: String) =
+        _uiState.update { it.copy(affiliateCommissionText = v.filter { c -> c.isDigit() || c == '.' }) }
 
     fun onNameChange(v: String) = _uiState.update { it.copy(name = v) }
     fun onDescriptionChange(v: String) = _uiState.update { it.copy(description = v) }
@@ -152,7 +173,13 @@ class ListingEditorViewModel @Inject constructor(
             } else {
                 val id = itemId ?: argItemId
                 when (val r = sellerRepository.updateItem(categoryId, id, s.name.trim(), s.description, priceCents, stock)) {
-                    is ApiResult.Success -> finishSaved()
+                    is ApiResult.Success -> {
+                        // LIVECOM L5 — owner-scoped: persist the affiliate commission (percent -> bps).
+                        percentTextToBps(s.affiliateCommissionText)?.let { bps ->
+                            liveCommerceRepository.setAffiliateCommissionBps(categoryId, id, bps)
+                        }
+                        finishSaved()
+                    }
                     is ApiResult.Failure -> failSave(r.error.message)
                     is ApiResult.NetworkError -> failSave(OFFLINE)
                 }
@@ -194,6 +221,20 @@ class ListingEditorViewModel @Inject constructor(
 
     private fun centsToText(cents: Long): String =
         BigDecimal(cents).movePointLeft(2).stripTrailingZeros().toPlainString()
+
+    /** LIVECOM L5 — percent string (e.g. "10", "12.5") -> bps (0..10000), or null if blank/invalid. */
+    private fun percentTextToBps(text: String): Int? = try {
+        text.trim().takeIf { it.isNotBlank() }?.let {
+            BigDecimal(it).movePointRight(2).setScale(0, java.math.RoundingMode.HALF_UP).intValueExact()
+                .coerceIn(0, 10000)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** LIVECOM L5 — bps -> percent string for display (e.g. 1000 -> "10"). */
+    private fun bpsToPercentText(bps: Int): String =
+        BigDecimal(bps).movePointLeft(2).stripTrailingZeros().toPlainString()
 
     companion object {
         private const val OFFLINE = "You're offline"

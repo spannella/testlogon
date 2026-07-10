@@ -108,6 +108,10 @@ data class CartPurchaseInDto(
     @Json(name = "promo_code_id") val promoCodeId: String? = null,
     // ADV-405: last-click CPA attribution handle carried from an ad CTA (backend ADV-403 CartPurchaseIn).
     @Json(name = "ad_click_id") val adClickId: String? = null,
+    // LIVECOM L3/L5: threads the live broadcast session + host so an in-stream purchase is attributed to
+    // the stream/host and the backend (purchase_cart -> settle_stream_order) fires the commission split.
+    @Json(name = "broadcast_session_id") val broadcastSessionId: String? = null,
+    @Json(name = "host_id") val hostId: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

@@ -73,8 +73,32 @@ interface CartRepository {
         promoCodeId: String? = null,
         // ADV-405: last-click ad_click_id to attribute the checkout conversion (backend ADV-403).
         adClickId: String? = null,
+        // LIVECOM L3/L5: attribute the purchase to a live broadcast session + host so the backend fires
+        // the commission split (affiliate: host commission + seller net + platform; own: host keeps pool).
+        broadcastSessionId: String? = null,
+        hostId: String? = null,
     ): ApiResult<CartPurchaseResult> =
         ApiResult.NetworkError(UnsupportedOperationException("purchase not implemented"), isTimeout = false)
+
+    /**
+     * LIVECOM L5 — the in-stream "buy now" path: create a FRESH cart holding ONLY this product, then
+     * complete the purchase attributed to [broadcastSessionId] + [hostId]. A dedicated cart keeps the
+     * order isolated (clean stream attribution + a single commission split) and leaves any pre-existing
+     * shopping cart untouched. The viewer never leaves the stream. Default = not implemented so existing
+     * fakes need no change.
+     */
+    suspend fun buyNowInStream(
+        productId: String,
+        categoryId: String?,
+        name: String,
+        unitPriceCents: Long,
+        imageUrl: String?,
+        broadcastSessionId: String,
+        hostId: String?,
+        idempotencyKey: String,
+        quantity: Int = 1,
+    ): ApiResult<CartPurchaseResult> =
+        ApiResult.NetworkError(UnsupportedOperationException("buyNowInStream not implemented"), isTimeout = false)
 }
 
 @Singleton
@@ -151,17 +175,68 @@ class CartRepositoryImpl @Inject constructor(
         promoCode: String?,
         promoCodeId: String?,
         adClickId: String?,
+        broadcastSessionId: String?,
+        hostId: String?,
     ): ApiResult<CartPurchaseResult> = withContext(io) {
         call {
             api.purchaseCart(
                 cartId = cartId,
                 idempotencyKey = idempotencyKey,
-                body = CartPurchaseInDto(promoCode = promoCode, promoCodeId = promoCodeId, adClickId = adClickId),
+                body = CartPurchaseInDto(
+                    promoCode = promoCode,
+                    promoCodeId = promoCodeId,
+                    adClickId = adClickId,
+                    broadcastSessionId = broadcastSessionId,
+                    hostId = hostId,
+                ),
             )
         }.map { it.toDomain() }.also {
             // The purchased cart is consumed server-side; drop the cached handle so the next
             // add-to-cart resolves/creates a fresh cart instead of reusing the dead one.
             if (it is ApiResult.Success) cachedCartId = null
+        }
+    }
+
+    override suspend fun buyNowInStream(
+        productId: String,
+        categoryId: String?,
+        name: String,
+        unitPriceCents: Long,
+        imageUrl: String?,
+        broadcastSessionId: String,
+        hostId: String?,
+        idempotencyKey: String,
+        quantity: Int,
+    ): ApiResult<CartPurchaseResult> = withContext(io) {
+        // Step 1: a FRESH cart isolated to this in-stream buy (leaves any active shopping cart alone).
+        call { api.createCart() }.map { it.toDomain() }.flatMap { cart ->
+            // Step 2: add the single line (sku = product_id, per the web/add-to-cart convention).
+            call {
+                api.addItem(
+                    cartId = cart.cartId,
+                    body = CartItemInDto(
+                        sku = productId,
+                        name = name,
+                        unitPriceCents = unitPriceCents,
+                        quantity = quantity,
+                        itemId = productId,
+                        categoryId = categoryId,
+                        imageUrl = imageUrl,
+                    ),
+                )
+            }.flatMap {
+                // Step 3: complete the purchase, attributed to the stream + host (fires the split).
+                call {
+                    api.purchaseCart(
+                        cartId = cart.cartId,
+                        idempotencyKey = idempotencyKey,
+                        body = CartPurchaseInDto(
+                            broadcastSessionId = broadcastSessionId,
+                            hostId = hostId,
+                        ),
+                    )
+                }.map { it.toDomain() }
+            }
         }
     }
 

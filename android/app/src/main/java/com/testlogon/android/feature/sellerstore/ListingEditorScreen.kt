@@ -62,6 +62,9 @@ object ListingEditorTestTags {
     const val PICK_IMAGE = "listing_pick_image"
     const val SAVE = "listing_save"
     const val DELETE = "listing_delete"
+
+    /** LIVECOM L5 — the seller-set affiliate commission percent field. */
+    const val AFFILIATE_COMMISSION = "listing_affiliate_commission_input"
 }
 
 @Composable
@@ -95,6 +98,7 @@ fun ListingEditorRoute(
         onDescription = viewModel::onDescriptionChange,
         onPrice = viewModel::onPriceChange,
         onStock = viewModel::onStockChange,
+        onCommission = viewModel::onCommissionChange,
         onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
         onSave = viewModel::save,
         onDelete = viewModel::deleteListing,
@@ -111,6 +115,7 @@ fun ListingEditorScreen(
     onDescription: (String) -> Unit,
     onPrice: (String) -> Unit,
     onStock: (String) -> Unit,
+    onCommission: (String) -> Unit = {},
     onPickImage: () -> Unit,
     onSave: () -> Unit,
     onDelete: () -> Unit,
@@ -187,6 +192,19 @@ fun ListingEditorScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth().testTag(ListingEditorTestTags.STOCK),
             )
+            // LIVECOM L5 — the seller-set affiliate commission a host earns for selling this listing via a
+            // live stream (percent). Only meaningful for an existing/saved listing (needs an item id).
+            if (!state.isNew) {
+                OutlinedTextField(
+                    value = state.affiliateCommissionText,
+                    onValueChange = onCommission,
+                    label = { Text("Affiliate commission %") },
+                    supportingText = { Text("What a host earns for selling this via their live stream (e.g. 10 = 10%).") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth().testTag(ListingEditorTestTags.AFFILIATE_COMMISSION),
+                )
+            }
             Button(
                 onClick = onSave,
                 enabled = state.canSave,

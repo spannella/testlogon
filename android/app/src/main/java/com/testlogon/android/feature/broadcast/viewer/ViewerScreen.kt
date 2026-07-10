@@ -42,6 +42,7 @@ import com.testlogon.android.data.broadcast.BroadcastPreRoll
 import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
 import com.testlogon.android.feature.broadcast.qna.LiveQaPanel
 import com.testlogon.android.feature.broadcast.shelf.ProductsShelfPanel
+import com.testlogon.android.feature.broadcast.viewer.shop.ShopThisStreamPanel
 import com.testlogon.android.feature.broadcast.tips.TipsGoalsPanel
 import com.testlogon.android.feature.player.VideoPlayer
 import com.testlogon.android.feature.player.VideoPlayerController
@@ -181,6 +182,12 @@ fun ViewerScreen(
             }
 
             if (ready != null) {
+                // LIVECOM L5 — "Shop this stream": the host-pinned products + an in-stream buy (attributed
+                // to the broadcast session + host, without leaving the stream).
+                ShopThisStreamPanel(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+
                 // AND-283 — the products shelf overlay (hidden by default; toggled on the chrome).
                 ProductsShelfPanel(
                     sessionId = viewModel.sessionId,

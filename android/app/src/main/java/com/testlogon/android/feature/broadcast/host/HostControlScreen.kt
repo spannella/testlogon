@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.data.broadcast.BroadcastSession
 import com.testlogon.android.feature.broadcast.host.ads.AdControlViewModel
+import com.testlogon.android.feature.broadcast.host.livecommerce.LiveCommerceHostSection
 import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
 import com.testlogon.android.data.broadcast.BroadcastSessionStatus
 import com.testlogon.android.data.broadcast.HealthLevel
@@ -165,6 +166,9 @@ fun HostControlRoute(
         // ADV2-106 - Start ad break (+ countdown / End early) on the PRIMARY live screen. Shares the host
         // route's NavBackStackEntry (same sessionId arg) so AdControlViewModel resolves without extra wiring.
         adBreakControls = { HostAdBreakSection() },
+        // LIVECOM L5 - "Feature/Pin product" (shop this stream) control. Shares the host route's
+        // NavBackStackEntry (same sessionId arg) so LiveCommerceHostViewModel resolves without extra wiring.
+        liveCommerceControls = { LiveCommerceHostSection() },
         onStart = viewModel::onStart,
         onStop = viewModel::onStop,
         onConfirmStop = viewModel::onConfirmStopDialog,
@@ -202,6 +206,9 @@ fun HostControlScreen(
     chatPanel: @Composable () -> Unit = {},
     // ADV2-106 - the Start ad break / countdown / End early control slot on the primary live screen.
     adBreakControls: @Composable () -> Unit = {},
+    // LIVECOM L5 - the "Feature/Pin product" (shop this stream) control slot. Defaulted empty so existing
+    // call sites / Compose tests that render the stateless surface without Hilt are unaffected.
+    liveCommerceControls: @Composable () -> Unit = {},
     onStop: () -> Unit,
     onConfirmStop: (Boolean) -> Unit,
     onResume: () -> Unit,
@@ -288,6 +295,10 @@ fun HostControlScreen(
 
             // ADV2-106 - Start ad break (+ live countdown / End early) on the PRIMARY live host screen.
             adBreakControls()
+
+            // LIVECOM L5 - "Feature/Pin product" (shop this stream): pick own OR affiliate any product,
+            // show the pinned list + unpin.
+            liveCommerceControls()
 
             // Bidirectional live chat (read + compose) for the host, alongside the moderation controls.
             chatPanel()
