@@ -51,6 +51,8 @@ import com.testlogon.android.navigation.deeplink.DeepLinkParser
 import com.testlogon.android.navigation.deeplink.NotificationDeepLink
 import com.testlogon.android.navigation.deeplink.PushTapRouting
 import com.testlogon.android.feature.messaging.nav.MessagingRoutes
+import com.testlogon.android.feature.alerts.saleIdFromActionUrl
+import com.testlogon.android.navigation.SellerSalesDest
 import com.testlogon.android.navigation.navigateToNotificationTarget
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -344,6 +346,19 @@ class MainActivity : FragmentActivity() {
                         popUpTo(MessagingRoutes.THREAD) { inclusive = true }
                         launchSingleTop = true
                     }
+                // ECOM-SELLER P1: an alert push carrying a deep-link resolves to a per-entity
+                // destination via the SAME resolver the in-app Alerts row uses. A shop_item_sold
+                // action_url (/seller/orders?sale={ship_group_id}) opens DIRECTLY to the sale detail
+                // (SellerSalesDest) instead of the app home; any other alert falls back to the
+                // notification target (alerts center).
+                is NotificationDeepLink.Alert -> {
+                    val saleId = saleIdFromActionUrl(link.actionUrl)
+                    if (saleId != null) {
+                        controller.navigate(SellerSalesDest.build(saleId)) { launchSingleTop = true }
+                    } else {
+                        controller.navigateToNotificationTarget(PushTapRouting.targetFor(link))
+                    }
+                }
                 else ->
                     controller.navigateToNotificationTarget(PushTapRouting.targetFor(link))
             }
