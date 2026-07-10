@@ -1102,6 +1102,7 @@ class Settings:
     orders_table_name: str = os.environ.get("ORDERS_TABLE_NAME", "orders")
     order_items_table_name: str = os.environ.get("ORDER_ITEMS_TABLE_NAME", "order_items")
     shipment_tracking_table_name: str = os.environ.get("SHIPMENT_TRACKING_TABLE_NAME", "shipment_tracking")
+    live_stream_products_table_name: str = os.environ.get("DDB_LIVE_STREAM_PRODUCTS", "LiveStreamProducts")
     shipment_webhook_secret: str = os.environ.get("SHIPMENT_WEBHOOK_SECRET", "")
     # EasyPost integration (config-gated shipment tracking). When the key is
     # set, real EasyPost Trackers are created on ship + tracker.updated webhooks

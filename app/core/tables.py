@@ -130,6 +130,7 @@ class Tables:
     orders: Any
     order_items: Any
     shipment_tracking: Any
+    live_stream_products: Any
     payments: Any
     entitlements: Any
     entitlement_usage_events: Any
@@ -375,6 +376,7 @@ T = Tables(
     orders=_safe_table(S.orders_table_name),
     order_items=_safe_table(S.order_items_table_name),
     shipment_tracking=_safe_table(S.shipment_tracking_table_name),
+    live_stream_products=_safe_table(S.live_stream_products_table_name),
     payments=_safe_table(S.payments_table_name),
     entitlements=_safe_table(S.entitlements_table_name),
     entitlement_usage_events=_safe_table(S.entitlement_usage_events_table_name),

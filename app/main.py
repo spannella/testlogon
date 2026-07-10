@@ -758,6 +758,8 @@ def create_app() -> FastAPI:
     app.include_router(per_content_revenue_router)
     app.include_router(creator_dashboard_router)
     app.include_router(creator_payouts_router)
+    from app.routers.live_commerce import router as live_commerce_router  # LIVECOM
+    app.include_router(live_commerce_router)
     app.include_router(admin_payouts_router)
     app.include_router(billing_config_router)
     app.include_router(admin_rate_limits_router)

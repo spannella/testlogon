@@ -903,6 +903,9 @@ class CartPurchaseIn(BaseModel):
     promo_code_id: Optional[str] = None
     # ADV-403: optional last-click CPA attribution handle carried from an ad CTA.
     ad_click_id: Optional[str] = None
+    # LIVECOM L3: in-stream purchase attribution (broadcast session + host).
+    broadcast_session_id: Optional[str] = None
+    host_id: Optional[str] = None
 
 
 class ShoppingCartPurchaseOut(BaseModel):
