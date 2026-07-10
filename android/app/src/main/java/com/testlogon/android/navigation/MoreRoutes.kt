@@ -89,6 +89,7 @@ object MoreRoutes {
     val WISHLIST: String get() = WishlistDest.ROUTE
     val SELLER_STORE: String get() = SellerStoreDest.ROUTE
     val SELLER_ORDERS: String get() = SellerOrdersDest.ROUTE
+    val SELLER_SALES: String get() = SellerSalesDest.BASE
 
     // AND-332: the server file manager (path-based browse + upload/download/share/Drive-import).
     const val FILES = FilesDest.ROUTE
@@ -504,6 +505,7 @@ object MoreRoutes {
             WISHLIST,
             SELLER_STORE,
             SELLER_ORDERS,
+            SELLER_SALES,
             FILES,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,

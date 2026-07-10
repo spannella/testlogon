@@ -204,6 +204,7 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         sellerStoreDestination(navController)
         listingEditorDestination(navController)
         sellerOrdersDestination(navController)
+        sellerSalesDestination(navController)
         // AND-211/AND-212: shopping cart (line items, qty edit, remove, in-cart search).
         cartDestination(navController)
         // AND-213: checkout session / order review (reached from the cart "Proceed to checkout").

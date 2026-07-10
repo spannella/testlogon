@@ -18,6 +18,10 @@ fun NavGraphBuilder.alertsDestination(navController: NavHostController) {
             onSessionExpired = { navController.popBackStack() },
             // MOD-D1: a moderation alert deep-links to the poster's content-review screen.
             onOpenModeration = { navController.navigate(ModerationReviewDest.ROUTE) },
+            // ECOM-SELLER (G1): a shop_item_sold alert deep-links to that seller sale (ship group).
+            onOpenSale = { shipGroupId ->
+                navController.navigate(SellerSalesDest.build(shipGroupId)) { launchSingleTop = true }
+            },
         )
     }
 }

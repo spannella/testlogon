@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Copyright
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Balance
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.CreditCardOff
@@ -977,6 +978,16 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.SHOP,
             section = MoreSection.APP,
             operatorOnly = true,
+        ),
+        // ECOM-SELLER (G1-G4): the seller-scoped "My sales" (own ship groups + buyer address +
+        // fulfilment). NON-admin: reachable for ANY seller (unlike the admin-only seller_orders above).
+        MoreEntry(
+            id = "seller_sales",
+            labelRes = R.string.more_entry_seller_sales,
+            icon = Icons.Outlined.Sell,
+            route = MoreRoutes.SELLER_SALES,
+            hub = MoreHub.SHOP,
+            section = MoreSection.APP,
         ),
         MoreEntry(
             id = "purchase_history",

@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.sellerstore.ListingEditorRoute
 import com.testlogon.android.feature.sellerstore.SellerOrdersRoute
+import com.testlogon.android.feature.sellerstore.SellerSalesRoute
 import com.testlogon.android.feature.sellerstore.SellerStoreRoute
 
 /** ECOM (seller store) — "My store / Manage listings" (SHOP hub, creator/operator-gated). */
@@ -18,6 +19,19 @@ data object SellerStoreDest {
 /** ECOM (seller store) — orders-received (SHOP hub, creator/operator-gated). */
 data object SellerOrdersDest {
     const val ROUTE = "seller/orders"
+}
+
+/**
+ * ECOM-SELLER — the seller own "Sales / Orders received" (SHOP hub, NON-admin). Reachable for ANY
+ * seller. The shop_item_sold alert deep-links here with a sale query arg to auto-open the sale detail.
+ */
+data object SellerSalesDest {
+    const val ARG_SALE = "sale"
+    const val BASE = "seller/sales"
+    const val ROUTE = "seller/sales?sale={$ARG_SALE}"
+
+    fun build(shipGroupId: String? = null): String =
+        if (shipGroupId.isNullOrBlank()) BASE else BASE + "?sale=" + android.net.Uri.encode(shipGroupId)
 }
 
 /**
@@ -69,5 +83,24 @@ fun NavGraphBuilder.listingEditorDestination(navController: NavHostController) {
 fun NavGraphBuilder.sellerOrdersDestination(navController: NavHostController) {
     composable(SellerOrdersDest.ROUTE) {
         SellerOrdersRoute(onBack = { navController.popBackStack() })
+    }
+}
+
+/** Registers the seller-scoped "My sales" screen (non-admin); optional sale deep-link arg. */
+fun NavGraphBuilder.sellerSalesDestination(navController: NavHostController) {
+    composable(
+        route = SellerSalesDest.ROUTE,
+        arguments = listOf(
+            navArgument(SellerSalesDest.ARG_SALE) {
+                type = NavType.StringType
+                nullable = true
+                defaultValue = null
+            },
+        ),
+    ) { entry ->
+        SellerSalesRoute(
+            onBack = { navController.popBackStack() },
+            initialSaleId = entry.arguments?.getString(SellerSalesDest.ARG_SALE),
+        )
     }
 }

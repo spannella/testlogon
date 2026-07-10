@@ -68,4 +68,22 @@
     <string name="seller_orders_fulfil">Fulfilment</string>
     <string name="seller_orders_no_actions">No fulfilment actions available in this status.</string>
     <string name="seller_orders_cancel">Cancel order</string>
+    <!-- Seller store: my sales / orders-received (seller-scoped, non-admin) -->
+    <string name="more_entry_seller_sales">My sales</string>
+    <string name="seller_sales_title">My sales</string>
+    <string name="seller_sales_empty_title">No sales yet</string>
+    <string name="seller_sales_empty_body">When someone buys one of your items, it shows up here so you can ship it.</string>
+    <string name="seller_sales_buyer">Buyer: %1$s</string>
+    <string name="seller_sales_items">%1$d items</string>
+    <string name="seller_sales_status">Status: %1$s</string>
+    <string name="seller_sales_ship_to">Ship to</string>
+    <string name="seller_sales_no_address">No shipping address on file.</string>
+    <string name="seller_sales_line_items">Items to send</string>
+    <string name="seller_sales_subtotal">Subtotal</string>
+    <string name="seller_sales_fulfil">Fulfilment</string>
+    <string name="seller_sales_mark_shipped">Mark as shipped</string>
+    <string name="seller_sales_no_actions">No fulfilment actions available in this status.</string>
+    <string name="seller_sales_tracking">Tracking number (optional)</string>
+    <string name="seller_sales_carrier">Carrier (optional)</string>
+    <string name="seller_sales_tracked">Tracking: %1$s %2$s</string>
 </resources>

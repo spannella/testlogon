@@ -77,6 +77,8 @@ fun AlertsRoute(
     modifier: Modifier = Modifier,
     // MOD-D1: tapping a moderation alert opens the "My content under review" screen.
     onOpenModeration: () -> Unit = {},
+    // ECOM-SELLER (G1): tapping a shop_item_sold alert opens that seller sale (ship group).
+    onOpenSale: (String) -> Unit = {},
     viewModel: AlertsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -105,6 +107,7 @@ fun AlertsRoute(
         onToggleUnreadOnly = viewModel::onToggleUnreadOnly,
         onAlertClick = viewModel::onAlertClick,
         onOpenModeration = onOpenModeration,
+        onOpenSale = onOpenSale,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -126,6 +129,29 @@ private val MODERATION_ALERT_EVENTS: Set<String> = setOf(
 internal fun isModerationAlert(event: String?): Boolean =
     event != null && event.trim().lowercase() in MODERATION_ALERT_EVENTS
 
+/**
+ * ECOM-SELLER (G1) — the seller "you sold it" alert event (backend write_alert event=shop_item_sold).
+ * Its action_url is /seller/orders?sale={ship_group_id}; parse that ship-group id to deep-link to the
+ * seller sale detail.
+ */
+internal fun isShopSoldAlert(event: String?): Boolean =
+    event != null && event.trim().lowercase() == "shop_item_sold"
+
+internal fun saleIdFromActionUrl(actionUrl: String?): String? {
+    val url = actionUrl ?: return null
+    val q = url.substringAfter('?', "")
+    if (q.isEmpty()) return null
+    return q.split('&')
+        .mapNotNull { part ->
+            val i = part.indexOf('=')
+            if (i <= 0) null else part.substring(0, i) to part.substring(i + 1)
+        }
+        .firstOrNull { it.first == "sale" }
+        ?.second
+        ?.let { android.net.Uri.decode(it) }
+        ?.takeIf { it.isNotBlank() }
+}
+
 @Composable
 fun AlertsScreen(
     state: AlertsUiState,
@@ -136,6 +162,7 @@ fun AlertsScreen(
     onToggleUnreadOnly: () -> Unit,
     onAlertClick: (String) -> Unit,
     onOpenModeration: () -> Unit = {},
+    onOpenSale: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -239,6 +266,10 @@ fun AlertsScreen(
                                         onAlertClick(alert.id)
                                         // MOD-D1: moderation alerts deep-link to My content under review.
                                         if (isModerationAlert(alert.event)) onOpenModeration()
+                                        // ECOM-SELLER (G1): a sold-item alert opens the seller sale.
+                                        if (isShopSoldAlert(alert.event)) {
+                                            saleIdFromActionUrl(alert.actionUrl)?.let(onOpenSale)
+                                        }
                                     },
                                 )
                                 HorizontalDivider()
