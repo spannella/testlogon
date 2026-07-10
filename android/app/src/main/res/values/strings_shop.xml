@@ -40,6 +40,12 @@
     <string name="seller_store_delete_category">Delete this category</string>
     <string name="seller_store_edit_listing">Edit listing</string>
     <string name="seller_store_delete_listing">Delete listing</string>
+    <string name="seller_store_boost_listing">Boost listing</string>
+    <string name="seller_store_boost_title">Boost this product</string>
+    <string name="seller_store_boost_body">Promote this listing as a sponsored product. We build the ad from your listing (image, name, price) with a Buy now button. Pick a budget and a per-click bid.</string>
+    <string name="seller_store_boost_budget">Lifetime budget (USD)</string>
+    <string name="seller_store_boost_bid">Max cost per click (cents)</string>
+    <string name="seller_store_boost_submit">Start boost</string>
     <string name="seller_store_stock">%1$d in stock</string>
     <string name="seller_store_no_categories_title">No categories yet</string>
     <string name="seller_store_no_categories_body">Create a category to start listing products.</string>

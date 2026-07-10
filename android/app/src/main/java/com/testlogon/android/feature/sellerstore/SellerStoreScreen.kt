@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
@@ -69,6 +70,11 @@ object SellerStoreTestTags {
     const val ITEM_ROW = "seller_store_item_row"
     const val ITEM_EDIT = "seller_store_item_edit"
     const val ITEM_DELETE = "seller_store_item_delete"
+    const val ITEM_BOOST = "seller_store_item_boost"
+    const val BOOST_DIALOG = "seller_store_boost_dialog"
+    const val BOOST_BUDGET = "seller_store_boost_budget"
+    const val BOOST_BID = "seller_store_boost_bid"
+    const val BOOST_SUBMIT = "seller_store_boost_submit"
     const val EMPTY = "seller_store_empty"
     const val ERROR = "seller_store_error"
 }
@@ -107,6 +113,7 @@ fun SellerStoreRoute(
         onDeleteItem = viewModel::deleteItem,
         onEditItem = onEditItem,
         onCreateItem = onCreateItem,
+        onBoost = viewModel::boostListing,
         onRetry = viewModel::refresh,
         onBack = onBack,
         modifier = modifier,
@@ -123,11 +130,14 @@ fun SellerStoreScreen(
     onDeleteItem: (categoryId: String, itemId: String) -> Unit,
     onEditItem: (categoryId: String, itemId: String) -> Unit,
     onCreateItem: (categoryId: String) -> Unit,
+    onBoost: (categoryId: String, item: CatalogItem, budgetDollars: Int, bidCpcCents: Int) -> Unit = { _, _, _, _ -> },
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showNewCategory by remember { mutableStateOf(false) }
+    // ADV x ECOM (B4): the listing the seller is boosting (drives the boost dialog); null = hidden.
+    var boostTarget by remember { mutableStateOf<CatalogItem?>(null) }
 
     Scaffold(
         modifier = modifier.testTag(SellerStoreTestTags.SCREEN),
@@ -169,6 +179,7 @@ fun SellerStoreScreen(
                         onEditItem = onEditItem,
                         onDeleteItem = onDeleteItem,
                         onDeleteCategory = onDeleteCategory,
+                        onBoost = { boostTarget = it },
                     )
                 }
             }
@@ -181,6 +192,20 @@ fun SellerStoreScreen(
             onConfirm = { name, desc ->
                 showNewCategory = false
                 onCreateCategory(name, desc)
+            },
+        )
+    }
+
+    // ADV x ECOM (B4): the boost-this-product dialog (prefilled from the listing).
+    val target = boostTarget
+    if (target != null) {
+        BoostProductDialog(
+            item = target,
+            busy = state.boosting,
+            onDismiss = { boostTarget = null },
+            onConfirm = { budgetDollars, bidCpcCents ->
+                onBoost(target.categoryId, target, budgetDollars, bidCpcCents)
+                boostTarget = null
             },
         )
     }
@@ -220,6 +245,7 @@ private fun ItemsSection(
     onEditItem: (String, String) -> Unit,
     onDeleteItem: (String, String) -> Unit,
     onDeleteCategory: (String) -> Unit,
+    onBoost: (CatalogItem) -> Unit,
 ) {
     val categoryId = state.selectedCategoryId
     if (categoryId == null) {
@@ -247,6 +273,7 @@ private fun ItemsSection(
                     item = item,
                     onEdit = { onEditItem(categoryId, item.itemId) },
                     onDelete = { onDeleteItem(categoryId, item.itemId) },
+                    onBoost = { onBoost(item) },
                 )
             }
             item {
@@ -267,6 +294,7 @@ private fun SellerItemRow(
     item: CatalogItem,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onBoost: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().testTag(SellerStoreTestTags.ITEM_ROW).padding(vertical = 4.dp),
@@ -282,6 +310,14 @@ private fun SellerItemRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // ADV x ECOM (B4): promote this listing as a product ad in a couple taps.
+        IconButton(onClick = onBoost, modifier = Modifier.testTag(SellerStoreTestTags.ITEM_BOOST)) {
+            Icon(
+                Icons.Outlined.Campaign,
+                contentDescription = stringResource(R.string.seller_store_boost_listing),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
         IconButton(onClick = onEdit, modifier = Modifier.testTag(SellerStoreTestTags.ITEM_EDIT)) {
             Icon(Icons.Outlined.Edit, contentDescription = stringResource(R.string.seller_store_edit_listing))
         }
@@ -289,6 +325,65 @@ private fun SellerItemRow(
             Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.seller_store_delete_listing))
         }
     }
+}
+
+/**
+ * ADV x ECOM (B4) — the boost-this-product dialog. The creative is prefilled server-side from the
+ * listing (image / name / price + buy_product CTA); the seller only picks a lifetime BUDGET (dollars)
+ * and a per-click BID (cents). Submit calls the owner-checked boost endpoint.
+ */
+@Composable
+private fun BoostProductDialog(
+    item: CatalogItem,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (budgetDollars: Int, bidCpcCents: Int) -> Unit,
+) {
+    var budget by remember { mutableStateOf("20") }
+    var bid by remember { mutableStateOf("50") }
+    val budgetInt = budget.trim().toIntOrNull()
+    val bidInt = bid.trim().toIntOrNull()
+    val valid = budgetInt != null && budgetInt >= 1 && bidInt != null && bidInt in 1..10_000
+    AlertDialog(
+        modifier = Modifier.testTag(SellerStoreTestTags.BOOST_DIALOG),
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.seller_store_boost_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = item.name + "  ·  " + formatPrice(item.priceCents, item.currency),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = stringResource(R.string.seller_store_boost_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = budget,
+                    onValueChange = { budget = it.filter(Char::isDigit).take(7) },
+                    label = { Text(stringResource(R.string.seller_store_boost_budget)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag(SellerStoreTestTags.BOOST_BUDGET),
+                )
+                OutlinedTextField(
+                    value = bid,
+                    onValueChange = { bid = it.filter(Char::isDigit).take(5) },
+                    label = { Text(stringResource(R.string.seller_store_boost_bid)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag(SellerStoreTestTags.BOOST_BID),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (valid) onConfirm(budgetInt!!, bidInt!!) },
+                enabled = valid && !busy,
+                modifier = Modifier.testTag(SellerStoreTestTags.BOOST_SUBMIT),
+            ) { Text(stringResource(R.string.seller_store_boost_submit)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
 }
 
 @Composable

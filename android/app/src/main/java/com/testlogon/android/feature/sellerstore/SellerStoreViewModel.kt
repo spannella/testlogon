@@ -8,6 +8,7 @@ import com.testlogon.android.data.catalog.CatalogItem
 import com.testlogon.android.data.catalog.CatalogRepository
 import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.data.sellerstore.SellerCatalogRepository
+import com.testlogon.android.data.shopads.ShopAdsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +24,9 @@ import javax.inject.Inject
  * ECOM (seller store) — "My store / Manage listings" state. Shows the categories the signed-in seller
  * owns (creator_id == my user_sub), the items in the selected category, and drives create-category /
  * delete-category / delete-item. Item create/edit is delegated to the listing editor screen.
+ *
+ * ADV x ECOM (B4) — additionally drives BOOST-this-product: from a listing, create a product ad campaign
+ * (owner-checked server-side) in one call via [ShopAdsRepository.boostListing].
  */
 data class SellerStoreUiState(
     val loading: Boolean = true,
@@ -32,6 +36,8 @@ data class SellerStoreUiState(
     val itemsLoading: Boolean = false,
     val items: List<CatalogItem> = emptyList(),
     val busy: Boolean = false,
+    /** ADV x ECOM (B4) — a boost request is in flight (disables the boost dialog submit). */
+    val boosting: Boolean = false,
 ) {
     val selectedCategory: CatalogCategory? get() = categories.firstOrNull { it.categoryId == selectedCategoryId }
 }
@@ -44,6 +50,7 @@ sealed interface SellerStoreEvent {
 class SellerStoreViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val sellerRepository: SellerCatalogRepository,
+    private val shopAdsRepository: ShopAdsRepository,
     private val currentUserRepository: CurrentUserRepository,
 ) : ViewModel() {
 
@@ -159,6 +166,36 @@ class SellerStoreViewModel @Inject constructor(
         }
     }
 
+    /**
+     * ADV x ECOM (B4) — BOOST a listing into a product ad campaign. Prefills the creative from the listing
+     * server-side (image / name / price + buy_product CTA); owner-checked (a non-owner listing → 403 →
+     * a friendly message). [budgetDollars] / [bidCpcCents] come from the boost dialog.
+     */
+    fun boostListing(categoryId: String, item: CatalogItem, budgetDollars: Int, bidCpcCents: Int) {
+        if (_uiState.value.boosting) return
+        _uiState.update { it.copy(boosting = true) }
+        viewModelScope.launch {
+            val r = shopAdsRepository.boostListing(
+                itemId = item.itemId,
+                categoryId = categoryId,
+                budgetCents = (budgetDollars.coerceAtLeast(1)) * 100,
+                bidCpcCents = bidCpcCents.coerceIn(1, 10_000),
+            )
+            _uiState.update { it.copy(boosting = false) }
+            when (r) {
+                is ApiResult.Success ->
+                    _events.send(SellerStoreEvent.Message(BOOST_STARTED.format(item.name)))
+                is ApiResult.Failure ->
+                    _events.send(
+                        SellerStoreEvent.Message(
+                            if (r.error.status == 403) BOOST_NOT_OWNER else r.error.message,
+                        )
+                    )
+                is ApiResult.NetworkError -> _events.send(SellerStoreEvent.Message(OFFLINE))
+            }
+        }
+    }
+
     private suspend fun fail(message: String) {
         _uiState.update { it.copy(busy = false) }
         _events.send(SellerStoreEvent.Message(message))
@@ -169,5 +206,7 @@ class SellerStoreViewModel @Inject constructor(
         private const val CATEGORY_CREATED = "Category created"
         private const val CATEGORY_DELETED = "Category deleted"
         private const val ITEM_DELETED = "Listing deleted"
+        private const val BOOST_STARTED = "Boost started for %s — now serving as a sponsored product"
+        private const val BOOST_NOT_OWNER = "You do not own this listing"
     }
 }
