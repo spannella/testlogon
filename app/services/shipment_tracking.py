@@ -113,11 +113,14 @@ _EXTERNAL_STATUS_MAP = {
     "in_transit": STATUS_IN_TRANSIT, "intransit": STATUS_IN_TRANSIT,
     "transit": STATUS_IN_TRANSIT, "accepted": STATUS_IN_TRANSIT,
     "arrived": STATUS_IN_TRANSIT, "departed": STATUS_IN_TRANSIT,
+    "available_for_pickup": STATUS_IN_TRANSIT,  # EasyPost
     "out_for_delivery": STATUS_OUT_FOR_DELIVERY, "outfordelivery": STATUS_OUT_FOR_DELIVERY,
     "delivery": STATUS_OUT_FOR_DELIVERY,
     "delivered": STATUS_DELIVERED,
     "exception": STATUS_EXCEPTION, "failure": STATUS_EXCEPTION,
     "returned": STATUS_EXCEPTION, "return_to_sender": STATUS_EXCEPTION,
+    "error": STATUS_EXCEPTION, "cancelled": STATUS_EXCEPTION,  # EasyPost
+    "canceled": STATUS_EXCEPTION, "unknown": STATUS_LABEL_CREATED,  # EasyPost
 }
 
 
@@ -202,6 +205,32 @@ def create_on_ship(sg_row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "created_at": now,
         "updated_at": now,
     }
+    # EasyPost seam (config-gated on EASYPOST_API_KEY). When the key is present
+    # AND we have a tracking#, create a REAL EasyPost Tracker and store its id so
+    # tracker.updated webhooks / poll_tracking can advance status. Best-effort:
+    # never block the ship on an EasyPost failure. When the key is absent this is
+    # a no-op and behaviour is UNCHANGED (internal/simulate driver).
+    if tn:
+        try:
+            from app.services import easypost_client as _ep
+            if _ep.is_enabled():
+                tr = _ep.create_tracker(tracking_code=tn, carrier=carrier)
+                if tr and tr.get("id"):
+                    rec["easypost_tracker_id"] = str(tr["id"])
+                    rec["tracking_provider"] = "easypost"
+                    # seed the real carrier EasyPost resolved, if any
+                    if tr.get("carrier"):
+                        rec["carrier_easypost"] = str(tr["carrier"])
+                    mapped = _ep.map_status(tr.get("status") or "")
+                    if mapped and mapped != STATUS_LABEL_CREATED and mapped in VALID_STATUSES:
+                        rec["status"] = mapped
+                        rec["events"].append({"ts": now, "status": mapped,
+                                              "source": "easypost", "description": "EasyPost tracker created"})
+                else:
+                    logger.warning("EasyPost create_tracker returned no id for sg %s: %s",
+                                   sg_id, (tr or {}).get("reason") or (tr or {}).get("error"))
+        except Exception:
+            logger.exception("EasyPost create_tracker failed for sg %s (continuing)", sg_id)
     try:
         _table().put_item(Item=rec, ConditionExpression="attribute_not_exists(ship_group_id)")
     except Exception as exc:
@@ -347,9 +376,48 @@ def simulate_to_delivered(ship_group_id: str, max_steps: int = 6) -> Optional[Di
 def ingest_webhook(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Real-feed INGESTION SEAM: a carrier/aggregator (USPS/UPS/FedEx/DHL or
     EasyPost/Shippo/AfterShip) POSTs a status update. Resolves the record by
-    ship_group_id or tracking_number, maps the external status, and advances."""
+    ship_group_id or tracking_number, maps the external status, and advances.
+
+    Handles the EasyPost ``tracker.updated`` Event shape (``result.status`` +
+    ``result.tracking_details[]``) as well as the flat generic shape
+    (``status``/``event`` + ``tracking_number``/``ship_group_id``)."""
     sg_id = str(payload.get("ship_group_id") or "").strip()
     tn = str(payload.get("tracking_number") or "").strip()
+    location = payload.get("location")
+    description = payload.get("description")
+    source = str(payload.get("source") or "webhook")
+
+    # EasyPost Event envelope -> normalize via the EasyPost parser.
+    try:
+        from app.services import easypost_client as _ep
+        if _ep.is_easypost_payload(payload):
+            parsed = _ep.parse_webhook(payload)
+            if not parsed.get("ok"):
+                return {"ok": False, "reason": parsed.get("reason") or "unmapped_status",
+                        "raw_status": parsed.get("raw_status", "")}
+            mapped = parsed["status"]
+            tn = tn or str(parsed.get("tracking_number") or "").strip()
+            location = location or parsed.get("location")
+            description = description or parsed.get("description")
+            source = "easypost"
+            rec = None
+            if sg_id:
+                rec = get_tracking(sg_id)
+            # EasyPost tracking_code == our stored tracking_number (GSI_TRACKING).
+            if not rec and tn:
+                rec = get_by_tracking_number(tn)
+            if not rec:
+                return {"ok": False, "reason": "tracking_not_found",
+                        "easypost_tracker_id": parsed.get("easypost_tracker_id", "")}
+            updated = advance(ship_group_id=str(rec["ship_group_id"]), status=mapped,
+                              location=location, description=description, source=source)
+            return {"ok": True, "provider": "easypost",
+                    "ship_group_id": str(rec["ship_group_id"]),
+                    "status": (updated or {}).get("status")}
+    except Exception:
+        logger.exception("EasyPost webhook parse failed; falling back to generic")
+
+    # Generic flat shape.
     raw_status = payload.get("status") or payload.get("event") or ""
     mapped = normalize_status(raw_status)
     if not mapped:
@@ -363,21 +431,44 @@ def ingest_webhook(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "reason": "tracking_not_found"}
     updated = advance(
         ship_group_id=str(rec["ship_group_id"]), status=mapped,
-        location=payload.get("location"), description=payload.get("description"),
-        source=str(payload.get("source") or "webhook"),
+        location=location, description=description, source=source,
     )
     return {"ok": True, "ship_group_id": str(rec["ship_group_id"]),
             "status": (updated or {}).get("status")}
 
 
 def poll_tracking(tracking_number: str) -> Dict[str, Any]:
-    """Poller SEAM stub: query-by-tracking#. A real integration would call the
-    carrier/aggregator API here and feed the result through advance(). For now
-    returns the current stored record so the poll contract is exercisable."""
+    """Poller SEAM: query-by-tracking#. When EasyPost is configured AND the
+    record carries an easypost_tracker_id, GET the live EasyPost Tracker and
+    feed its status through advance() (webhook fallback). Without a key it
+    returns the current stored record so the poll contract stays exercisable."""
     rec = get_by_tracking_number(tracking_number)
     if not rec:
         return {"ok": False, "reason": "tracking_not_found", "tracking_number": tracking_number}
+    poller = "stub"  # real carrier/aggregator query drop-in point
+    tracker_id = str(rec.get("easypost_tracker_id") or "")
+    if tracker_id:
+        try:
+            from app.services import easypost_client as _ep
+            if _ep.is_enabled():
+                tr = _ep.get_tracker(tracker_id)
+                if tr and tr.get("ok") is not False and tr.get("status"):
+                    mapped = _ep.map_status(tr.get("status") or "")
+                    if mapped and mapped != str(rec.get("status")):
+                        details = tr.get("tracking_details") or []
+                        last = details[-1] if details and isinstance(details[-1], dict) else {}
+                        loc = last.get("tracking_location") or {}
+                        location = ", ".join(p for p in [str(loc.get("city") or ""),
+                                             str(loc.get("state") or "")] if p) if isinstance(loc, dict) else None
+                        advance(ship_group_id=str(rec["ship_group_id"]), status=mapped,
+                                location=location or None,
+                                description=str(last.get("message") or "") or None,
+                                source="easypost_poll")
+                        rec = get_tracking(str(rec["ship_group_id"])) or rec
+                    poller = "easypost"
+        except Exception:
+            logger.exception("EasyPost poll_tracking failed for %s", tracking_number)
     pub = to_public(rec)
     pub["ok"] = True
-    pub["poller"] = "stub"  # real carrier/aggregator query drop-in point
+    pub["poller"] = poller
     return pub

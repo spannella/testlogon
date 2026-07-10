@@ -1103,6 +1103,12 @@ class Settings:
     order_items_table_name: str = os.environ.get("ORDER_ITEMS_TABLE_NAME", "order_items")
     shipment_tracking_table_name: str = os.environ.get("SHIPMENT_TRACKING_TABLE_NAME", "shipment_tracking")
     shipment_webhook_secret: str = os.environ.get("SHIPMENT_WEBHOOK_SECRET", "")
+    # EasyPost integration (config-gated shipment tracking). When the key is
+    # set, real EasyPost Trackers are created on ship + tracker.updated webhooks
+    # drive status; when absent the internal/simulate driver is used (unchanged).
+    easypost_api_key: str = os.environ.get("EASYPOST_API_KEY", "")
+    easypost_webhook_secret: str = os.environ.get("EASYPOST_WEBHOOK_SECRET", "")
+    easypost_api_base: str = os.environ.get("EASYPOST_API_BASE", "https://api.easypost.com/v2")
     payments_table_name: str = os.environ.get("PAYMENTS_TABLE_NAME", "payments")
     entitlements_table_name: str = os.environ.get("ENTITLEMENTS_TABLE_NAME", "entitlements")
     entitlement_usage_events_table_name: str = os.environ.get("ENTITLEMENT_USAGE_EVENTS_TABLE_NAME", "entitlement_usage_events")
