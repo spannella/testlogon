@@ -40,7 +40,7 @@ ALERT_CATEGORIES: Dict[str, set] = {
     "updates":  {"calendar_event_created", "calendar_event_updated",
                  "ticket_created", "ticket_assigned", "ticket_replied",
                  "ticket_status_changed", "ticket_reopened"},
-    "commerce": {"cart.abandoned"},
+    "commerce": {"cart.abandoned", "order_shipped"},
 }
 
 # Reverse lookup: event -> category
@@ -147,6 +147,8 @@ ALERT_EVENT_TYPES: List[str] = [
     "achievement_unlocked",
     # Commerce / seller fulfillment (ECOM-SELLER G1: enables opt-in FCM push for shop_item_sold)
     "shop_item_sold",
+    # Commerce / buyer order lifecycle (ECOM D3)
+    "order_shipped",
 ]
 
 # ECOM-SELLER P2 - TRANSACTIONAL push events that are ON-BY-DEFAULT (opt-OUT, not
@@ -158,6 +160,7 @@ DEFAULT_PUSH_EVENT_TYPES: List[str] = [
     "subscription_started",  # a subscription/payment succeeded
     "post_tip",              # you received a tip
     "message_tip",           # you received a message tip
+    "order_shipped",         # your order has shipped (buyer, D3)
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
