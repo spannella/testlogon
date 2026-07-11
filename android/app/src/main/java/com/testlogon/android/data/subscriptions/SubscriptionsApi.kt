@@ -66,6 +66,19 @@ interface SubscriptionsApi {
         @Body body: SubscribeReqDto,
     ): SubscriptionOutDto
 
+    /**
+     * SUB-E2 PART 2 (SUB-23) — gift ONE cycle of a creator plan to another user. The GIFTER
+     * (X-User-Id) is charged once; the recipient receives a no-renew (auto_renew=false) sub that
+     * lapses at period end. Returns the created recipient SubscriptionOut.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("api/plans/{planId}/gift")
+    suspend fun gift(
+        @Header("X-User-Id") userId: String,
+        @Path("planId") planId: String,
+        @Body body: GiftSubscriptionReqDto,
+    ): SubscriptionOutDto
+
     /** Move an existing subscription to a different plan. Returns the updated SubscriptionOut. */
     @Headers("Content-Type: application/json")
     @POST("api/subscriptions/{subscriptionId}/change-plan")
@@ -213,6 +226,19 @@ data class SubscribeReqDto(
     @Json(name = "client_request_id") val clientRequestId: String? = null,
 )
 
+/**
+ * SUB-E2 PART 2 (SUB-23) — gift request. recipient_id is required; the gifter pays one cycle. Verified
+ * against backend SubscriptionGiftIn (subscription_server.py:441).
+ */
+@JsonClass(generateAdapter = true)
+data class GiftSubscriptionReqDto(
+    @Json(name = "recipient_id") val recipientId: String,
+    @Json(name = "interval") val interval: String? = null,
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+    @Json(name = "message") val message: String? = null,
+    @Json(name = "client_request_id") val clientRequestId: String? = null,
+)
+
 /** Change-plan request. Verified: SubscriptionChangePlanIn — `plan_id` required. */
 @JsonClass(generateAdapter = true)
 data class ChangePlanReqDto(
@@ -220,6 +246,8 @@ data class ChangePlanReqDto(
     @Json(name = "interval") val interval: String? = null,
     @Json(name = "effective") val effective: String? = null,
     @Json(name = "proration_policy") val prorationPolicy: String? = null,
+    // SUB-E2: the PM to charge an UPGRADE prorated delta against (blank -> subscriber default).
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
     @Json(name = "reason") val reason: String? = null,
 )
 
@@ -227,6 +255,10 @@ data class ChangePlanReqDto(
 @JsonClass(generateAdapter = true)
 data class CancelSubscriptionReqDto(
     @Json(name = "cancel_at_period_end") val cancelAtPeriodEnd: Boolean = true,
+    // SUB-E2 PART 2 (SUB-25): on an IMMEDIATE cancel (cancel_at_period_end=false) refund the unused
+    // prorated portion by default; pass false to force immediate-cancel with no refund. Ignored when
+    // cancelling at period end (that path never refunds).
+    @Json(name = "refund") val refund: Boolean? = null,
     @Json(name = "reason") val reason: String? = null,
 )
 

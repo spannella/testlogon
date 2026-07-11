@@ -1684,6 +1684,34 @@
     <string name="manage_sub_status_expired">Expired</string>
     <string name="manage_sub_status_unknown">Unknown</string>
 
+    <!-- SUB-E2: upgrade/downgrade + immediate-cancel-refund + trial + gifting -->
+    <string name="manage_sub_change_title">Change your plan</string>
+    <string name="manage_sub_change_upgrade">Upgrade</string>
+    <string name="manage_sub_change_downgrade">Downgrade</string>
+    <string name="manage_sub_change_confirm_title">Switch to %1$s?</string>
+    <string name="manage_sub_change_upgrade_body">You\'ll be charged a prorated amount for the rest of this billing period now, and switch to the new tier immediately.</string>
+    <string name="manage_sub_change_downgrade_body">Your plan changes at the end of the current period (%1$s). You won\'t be charged now.</string>
+    <string name="manage_sub_change_upgrade_confirm">Upgrade now</string>
+    <string name="manage_sub_change_downgrade_confirm">Schedule change</string>
+    <string name="manage_sub_change_needs_payment">Add a payment method to upgrade, then try again.</string>
+    <string name="manage_sub_confirm_choose_body">Cancel at period end keeps your access until %1$s with no refund. Cancel now ends access immediately and refunds the unused time.</string>
+    <string name="manage_sub_cancel_period_end_action">Cancel at period end</string>
+    <string name="manage_sub_cancel_immediate_action">Cancel now &amp; refund</string>
+    <string name="subscribe_trial_notice">Free for %1$d days. Your card is required now but won\'t be charged until the trial ends, when it auto-charges the plan price.</string>
+    <string name="subscribe_start_trial">Start %1$d-day free trial</string>
+    <string name="gift_sub_action">Gift</string>
+    <string name="gift_sub_title">Gift a subscription</string>
+    <string name="gift_sub_blurb">Pay for one billing cycle as a gift. The recipient gets access for the period and is never charged; the gift does not auto-renew.</string>
+    <string name="gift_sub_recipient_label">Recipient user ID</string>
+    <string name="gift_sub_pick_tier">Choose a tier</string>
+    <string name="gift_sub_message_label">Message (optional)</string>
+    <string name="gift_sub_charge_notice">You\'ll be charged %1$s now for one cycle.</string>
+    <string name="gift_sub_confirm">Gift subscription</string>
+    <string name="gift_sub_success_title">Gift sent</string>
+    <string name="gift_sub_success_body">They now have access for one billing cycle. It won\'t renew unless they subscribe themselves.</string>
+    <string name="gift_sub_empty_title">No giftable tiers</string>
+    <string name="gift_sub_empty_body">This creator has no paid tiers to gift.</string>
+
     <!-- AND-238/239/240: fan club (creator community) -->
     <string name="more_entry_fan_club">My fan clubs</string>
     <string name="profile_public_open_fanclub">Fan club</string>

@@ -42,6 +42,21 @@ interface SubscriptionsRepository {
     /** Subscribe to [planId] (X-User-Id). Non-idempotent. */
     suspend fun subscribe(planId: String, body: SubscribeReqDto = SubscribeReqDto()): ApiResult<CreatorSubscription>
 
+    /**
+     * SUB-E2 — upgrade/downgrade an existing subscription to another plan (X-User-Id). An UPGRADE
+     * (higher price) charges the prorated delta immediately; a DOWNGRADE is scheduled at period end.
+     */
+    suspend fun changePlan(
+        subscriptionId: String,
+        body: ChangePlanReqDto,
+    ): ApiResult<CreatorSubscription>
+
+    /** SUB-E2 PART 2 — gift ONE cycle of [planId] to another user; the gifter (X-User-Id) pays once. */
+    suspend fun gift(
+        planId: String,
+        body: GiftSubscriptionReqDto,
+    ): ApiResult<CreatorSubscription>
+
     /** Cancel [subscriptionId] (X-User-Id). */
     suspend fun cancel(
         subscriptionId: String,
@@ -96,6 +111,22 @@ class SubscriptionsRepositoryImpl @Inject constructor(
     ): ApiResult<CreatorSubscription> = withContext(io) {
         val userId = currentUserId() ?: return@withContext unauthenticated()
         call { api.subscribe(userId, planId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun changePlan(
+        subscriptionId: String,
+        body: ChangePlanReqDto,
+    ): ApiResult<CreatorSubscription> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.changePlan(userId, subscriptionId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun gift(
+        planId: String,
+        body: GiftSubscriptionReqDto,
+    ): ApiResult<CreatorSubscription> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.gift(userId, planId, body) }.map { it.toDomain() }
     }
 
     override suspend fun cancel(

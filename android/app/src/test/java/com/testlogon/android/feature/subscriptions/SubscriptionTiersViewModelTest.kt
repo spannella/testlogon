@@ -265,4 +265,16 @@ private class FakeSubscriptionsRepository : SubscriptionsRepository {
         body: com.testlogon.android.data.subscriptions.ResumeSubscriptionReqDto,
     ): ApiResult<CreatorSubscription> =
         ApiResult.Failure(ApiError(status = 500, message = "should not be called"))
+
+    override suspend fun changePlan(
+        subscriptionId: String,
+        body: com.testlogon.android.data.subscriptions.ChangePlanReqDto,
+    ): ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "should not be called"))
+
+    override suspend fun gift(
+        planId: String,
+        body: com.testlogon.android.data.subscriptions.GiftSubscriptionReqDto,
+    ): ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "should not be called"))
 }

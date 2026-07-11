@@ -31,6 +31,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -72,6 +73,7 @@ object SubscriptionTiersTestTags {
 fun SubscriptionTiersRoute(
     onNavigateToCheckout: (SubscriptionsEvent.NavigateToCheckout) -> Unit,
     onNavigateToManage: () -> Unit,
+    onNavigateToGift: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SubscriptionTiersViewModel = hiltViewModel(),
@@ -96,6 +98,7 @@ fun SubscriptionTiersRoute(
         snackbarHostState = snackbarHostState,
         onSubscribeClick = viewModel::onSubscribeClick,
         onManageClick = viewModel::onManageClick,
+        onGiftClick = onNavigateToGift,
         onRetry = viewModel::onRetry,
         onRefresh = viewModel::onRefresh,
         onBack = onBack,
@@ -109,6 +112,7 @@ fun SubscriptionTiersScreen(
     snackbarHostState: SnackbarHostState,
     onSubscribeClick: (String) -> Unit,
     onManageClick: () -> Unit,
+    onGiftClick: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
@@ -127,6 +131,12 @@ fun SubscriptionTiersScreen(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.action_back),
                         )
+                    }
+                },
+                actions = {
+                    // SUB-E2: gift a subscription of this creator to another user.
+                    TextButton(onClick = onGiftClick) {
+                        Text(stringResource(R.string.gift_sub_action))
                     }
                 },
             )

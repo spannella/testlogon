@@ -25,6 +25,10 @@ class TestSubscriptionsRepository : SubscriptionsRepository {
         ApiResult.Failure(ApiError(status = 500, message = "not configured"))
     var resumeResult: ApiResult<CreatorSubscription> =
         ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var changePlanResult: ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var giftResult: ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
 
     var subscribeCalls = 0
         private set
@@ -33,6 +37,10 @@ class TestSubscriptionsRepository : SubscriptionsRepository {
     var renewCalls = 0
         private set
     var resumeCalls = 0
+        private set
+    var changePlanCalls = 0
+        private set
+    var giftCalls = 0
         private set
 
     override suspend fun getCreatorTiers(creatorId: String) = tiersResult
@@ -63,6 +71,22 @@ class TestSubscriptionsRepository : SubscriptionsRepository {
     ): ApiResult<CreatorSubscription> {
         resumeCalls++
         return resumeResult
+    }
+
+    override suspend fun changePlan(
+        subscriptionId: String,
+        body: ChangePlanReqDto,
+    ): ApiResult<CreatorSubscription> {
+        changePlanCalls++
+        return changePlanResult
+    }
+
+    override suspend fun gift(
+        planId: String,
+        body: GiftSubscriptionReqDto,
+    ): ApiResult<CreatorSubscription> {
+        giftCalls++
+        return giftResult
     }
 }
 

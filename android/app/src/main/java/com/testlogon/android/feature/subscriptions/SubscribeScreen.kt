@@ -59,6 +59,7 @@ object SubscribeTestTags {
     const val ADD_CARD_HINT = "subscribe_add_card"
     const val BENEFITS = "subscribe_benefits"
     const val DONE = "subscribe_done"
+    const val START_TRIAL = "subscribe_start_trial"
 }
 
 /**
@@ -91,6 +92,7 @@ fun SubscribeRoute(
         state = state,
         snackbarHostState = snackbarHostState,
         onConfirm = viewModel::confirm,
+        onStartTrial = viewModel::startTrial,
         onRetry = viewModel::retry,
         onBack = onBack,
         modifier = modifier,
@@ -102,6 +104,7 @@ fun SubscribeScreen(
     state: SubscribeUiState,
     snackbarHostState: SnackbarHostState,
     onConfirm: () -> Unit,
+    onStartTrial: () -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -133,7 +136,12 @@ fun SubscribeScreen(
             when (state.status) {
                 SubscribeUiState.Status.Success -> SuccessContent()
                 SubscribeUiState.Status.PaymentsUnavailable -> UnavailableContent(onBack = onBack)
-                else -> ReviewContent(state = state, onConfirm = onConfirm, onRetry = onRetry)
+                else -> ReviewContent(
+                    state = state,
+                    onConfirm = onConfirm,
+                    onStartTrial = onStartTrial,
+                    onRetry = onRetry,
+                )
             }
         }
     }
@@ -143,6 +151,7 @@ fun SubscribeScreen(
 private fun ReviewContent(
     state: SubscribeUiState,
     onConfirm: () -> Unit,
+    onStartTrial: () -> Unit,
     onRetry: () -> Unit,
 ) {
     val freeLabel = stringResource(R.string.subs_tiers_free)
@@ -243,6 +252,24 @@ private fun ReviewContent(
                     .testTag(SubscribeTestTags.CONFIRM),
             ) {
                 Text(stringResource(R.string.subscribe_confirm))
+            }
+        }
+
+        // SUB-E2 - card-required free trial (no charge now; auto-charges at trial end).
+        if (!state.isWorking && state.tier.priceCents > 0L) {
+            Text(
+                text = stringResource(R.string.subscribe_trial_notice, state.trialDays),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = onStartTrial,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(SubscribeTestTags.START_TRIAL),
+            ) {
+                Text(stringResource(R.string.subscribe_start_trial, state.trialDays))
             }
         }
     }

@@ -2,6 +2,7 @@
 
 package com.testlogon.android.feature.subscriptions
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,9 +11,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -48,8 +54,9 @@ import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.subscriptions.SubscriptionState
+import com.testlogon.android.data.subscriptions.SubscriptionTier
 
-/** AND-237 — stable test tags for the manage / cancel subscription screen. */
+/** AND-237 / SUB-E2 - stable test tags for the manage / cancel / change-plan screen. */
 object ManageSubscriptionTestTags {
     const val SCREEN = "manage_sub_screen"
     const val CONTENT = "manage_sub_content"
@@ -60,14 +67,19 @@ object ManageSubscriptionTestTags {
     const val REACTIVATE = "manage_sub_reactivate"
     const val CONFIRM_DIALOG = "manage_sub_confirm_dialog"
     const val CONFIRM_CANCEL = "manage_sub_confirm_cancel"
+    const val CANCEL_IMMEDIATE = "manage_sub_cancel_immediate"
     const val MUTATION_PROGRESS = "manage_sub_progress"
     const val SCHEDULED_BANNER = "manage_sub_scheduled_banner"
+    const val CHANGE_SECTION = "manage_sub_change_section"
+    const val CHANGE_DIALOG = "manage_sub_change_dialog"
+    const val CHANGE_CONFIRM = "manage_sub_change_confirm"
+    fun changeTier(id: String) = "manage_sub_change_$id"
 }
 
 /**
- * AND-237 — manage / cancel subscription route. Loads the current subscription, renders status/renewal,
- * and exposes cancel (confirm dialog -> cancel-at-period-end), keep (clear scheduled cancel), and
- * reactivate (resume). A reactivation that needs fresh payment navigates to the AND-236 subscribe flow.
+ * AND-237 / SUB-E2 - manage subscription route. Loads the current subscription + the creator's other
+ * plans and exposes: upgrade/downgrade (change-plan), cancel (at-period-end default OR immediate +
+ * refund), keep (clear scheduled cancel) and reactivate (resume).
  */
 @Composable
 fun ManageSubscriptionRoute(
@@ -94,6 +106,9 @@ fun ManageSubscriptionRoute(
         onCancelClicked = viewModel::onCancelClicked,
         onCancelDismissed = viewModel::onCancelDismissed,
         onCancelConfirmed = viewModel::onCancelConfirmed,
+        onChangePlanClicked = viewModel::onChangePlanClicked,
+        onChangePlanDismissed = viewModel::onChangePlanDismissed,
+        onChangePlanConfirmed = viewModel::onChangePlanConfirmed,
         onRenewClicked = viewModel::onRenewClicked,
         onErrorRetry = viewModel::onErrorRetry,
         onBack = onBack,
@@ -107,7 +122,10 @@ fun ManageSubscriptionScreen(
     snackbarHostState: SnackbarHostState,
     onCancelClicked: () -> Unit,
     onCancelDismissed: () -> Unit,
-    onCancelConfirmed: () -> Unit,
+    onCancelConfirmed: (CancelChoice) -> Unit,
+    onChangePlanClicked: (SubscriptionTier) -> Unit,
+    onChangePlanDismissed: () -> Unit,
+    onChangePlanConfirmed: () -> Unit,
     onRenewClicked: () -> Unit,
     onErrorRetry: () -> Unit,
     onBack: () -> Unit,
@@ -154,6 +172,9 @@ fun ManageSubscriptionScreen(
                         onCancelClicked = onCancelClicked,
                         onCancelDismissed = onCancelDismissed,
                         onCancelConfirmed = onCancelConfirmed,
+                        onChangePlanClicked = onChangePlanClicked,
+                        onChangePlanDismissed = onChangePlanDismissed,
+                        onChangePlanConfirmed = onChangePlanConfirmed,
                         onRenewClicked = onRenewClicked,
                     )
             }
@@ -166,7 +187,10 @@ private fun ContentBody(
     state: ManageSubscriptionUiState.Content,
     onCancelClicked: () -> Unit,
     onCancelDismissed: () -> Unit,
-    onCancelConfirmed: () -> Unit,
+    onCancelConfirmed: (CancelChoice) -> Unit,
+    onChangePlanClicked: (SubscriptionTier) -> Unit,
+    onChangePlanDismissed: () -> Unit,
+    onChangePlanConfirmed: () -> Unit,
     onRenewClicked: () -> Unit,
 ) {
     val sub = state.subscription
@@ -184,6 +208,7 @@ private fun ContentBody(
     Column(
         Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -237,6 +262,11 @@ private fun ContentBody(
             }
         }
 
+        // SUB-E2 - upgrade/downgrade: pick another tier from the same creator.
+        if (state.canChangePlan) {
+            ChangePlanSection(state = state, onChangePlanClicked = onChangePlanClicked)
+        }
+
         when (val mutation = state.mutation) {
             is MutationStatus.Failed ->
                 Text(
@@ -247,7 +277,9 @@ private fun ContentBody(
             else -> Unit
         }
 
-        val working = state.mutation is MutationStatus.Canceling || state.mutation is MutationStatus.Renewing
+        val working = state.mutation is MutationStatus.Canceling ||
+            state.mutation is MutationStatus.Renewing ||
+            state.mutation is MutationStatus.Changing
         if (working) {
             Box(
                 Modifier
@@ -269,7 +301,75 @@ private fun ContentBody(
     }
 
     if (state.confirmCancelVisible) {
-        CancelConfirmDialog(onConfirm = onCancelConfirmed, onDismiss = onCancelDismissed)
+        CancelConfirmDialog(
+            periodEnd = periodEnd,
+            onAtPeriodEnd = { onCancelConfirmed(CancelChoice.AT_PERIOD_END) },
+            onImmediate = { onCancelConfirmed(CancelChoice.IMMEDIATE_REFUND) },
+            onDismiss = onCancelDismissed,
+        )
+    }
+
+    state.changeTarget?.let { target ->
+        ChangePlanConfirmDialog(
+            target = target,
+            isUpgrade = state.changeTargetIsUpgrade,
+            periodEnd = periodEnd,
+            onConfirm = onChangePlanConfirmed,
+            onDismiss = onChangePlanDismissed,
+        )
+    }
+}
+
+@Composable
+private fun ChangePlanSection(
+    state: ManageSubscriptionUiState.Content,
+    onChangePlanClicked: (SubscriptionTier) -> Unit,
+) {
+    val freeLabel = stringResource(R.string.subs_tiers_free)
+    val currentPrice = state.subscription.priceCents ?: 0L
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .testTag(ManageSubscriptionTestTags.CHANGE_SECTION),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            stringResource(R.string.manage_sub_change_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        state.availableTiers.forEach { tier ->
+            val isUpgrade = tier.priceCents > currentPrice
+            val price = formatTierPrice(tier.priceCents, tier.currency, freeLabel)
+            val interval = intervalSuffix(
+                interval = tier.interval,
+                monthLabel = stringResource(R.string.subs_tiers_interval_month),
+                yearLabel = stringResource(R.string.subs_tiers_interval_year),
+                weekLabel = stringResource(R.string.subs_tiers_interval_week),
+            )
+            Card(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onChangePlanClicked(tier) }
+                    .testTag(ManageSubscriptionTestTags.changeTier(tier.planId)),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(tier.name, style = MaterialTheme.typography.titleSmall)
+                    Text("$price$interval", style = MaterialTheme.typography.bodyMedium)
+                    AssistChip(
+                        onClick = { onChangePlanClicked(tier) },
+                        label = {
+                            Text(
+                                stringResource(
+                                    if (isUpgrade) R.string.manage_sub_change_upgrade
+                                    else R.string.manage_sub_change_downgrade,
+                                ),
+                            )
+                        },
+                        colors = AssistChipDefaults.assistChipColors(),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -312,20 +412,73 @@ private fun PrimaryAction(
 }
 
 @Composable
-private fun CancelConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun CancelConfirmDialog(
+    periodEnd: String?,
+    onAtPeriodEnd: () -> Unit,
+    onImmediate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val endText = periodEnd ?: stringResource(R.string.manage_sub_period_end_fallback)
     AlertDialog(
         modifier = Modifier.testTag(ManageSubscriptionTestTags.CONFIRM_DIALOG),
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.manage_sub_confirm_title)) },
-        text = { Text(stringResource(R.string.manage_sub_confirm_body)) },
+        text = { Text(stringResource(R.string.manage_sub_confirm_choose_body, endText)) },
         confirmButton = {
-            TextButton(
-                onClick = onConfirm,
-                modifier = Modifier.testTag(ManageSubscriptionTestTags.CONFIRM_CANCEL),
-            ) { Text(stringResource(R.string.manage_sub_confirm_yes)) }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = onAtPeriodEnd,
+                    modifier = Modifier.testTag(ManageSubscriptionTestTags.CONFIRM_CANCEL),
+                ) { Text(stringResource(R.string.manage_sub_cancel_period_end_action)) }
+                TextButton(
+                    onClick = onImmediate,
+                    modifier = Modifier.testTag(ManageSubscriptionTestTags.CANCEL_IMMEDIATE),
+                ) { Text(stringResource(R.string.manage_sub_cancel_immediate_action)) }
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.manage_sub_confirm_no)) }
+        },
+    )
+}
+
+@Composable
+private fun ChangePlanConfirmDialog(
+    target: SubscriptionTier,
+    isUpgrade: Boolean,
+    periodEnd: String?,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val endText = periodEnd ?: stringResource(R.string.manage_sub_period_end_fallback)
+    AlertDialog(
+        modifier = Modifier.testTag(ManageSubscriptionTestTags.CHANGE_DIALOG),
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.manage_sub_change_confirm_title, target.name)) },
+        text = {
+            Text(
+                if (isUpgrade) {
+                    stringResource(R.string.manage_sub_change_upgrade_body)
+                } else {
+                    stringResource(R.string.manage_sub_change_downgrade_body, endText)
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                modifier = Modifier.testTag(ManageSubscriptionTestTags.CHANGE_CONFIRM),
+            ) {
+                Text(
+                    stringResource(
+                        if (isUpgrade) R.string.manage_sub_change_upgrade_confirm
+                        else R.string.manage_sub_change_downgrade_confirm,
+                    ),
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
 }

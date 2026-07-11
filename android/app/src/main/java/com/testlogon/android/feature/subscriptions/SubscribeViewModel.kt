@@ -46,6 +46,8 @@ data class SubscribeUiState(
     val requiresPaymentMethod: Boolean = false,
     /** The activated subscription, present once [Status.Success]. */
     val subscription: CreatorSubscription? = null,
+    /** SUB-E2 - default free-trial length (card required up front; auto-charges at trial end). */
+    val trialDays: Int = 7,
 ) {
     enum class Status { Reviewing, Authorizing, Subscribing, Success, PaymentsUnavailable, Error }
 
@@ -94,6 +96,11 @@ class SubscribeViewModel @Inject constructor(
      */
     private val clientRequestId: String = java.util.UUID.randomUUID().toString()
 
+    // SUB-E2 - non-null for a card-required free-trial confirm (backend creates a trialing sub +
+    // captures the PM WITHOUT charging; the E1 sweeper auto-charges at trial end).
+    @Volatile
+    private var trialDays: Int? = null
+
     /** SUB-E0 - the payment method resolved by the billing seam for the current confirm. */
     @Volatile
     private var resolvedPaymentMethodId: String? = null
@@ -134,7 +141,18 @@ class SubscribeViewModel @Inject constructor(
      * by the checkout flag. NotConfigured / flag-off / decline -> PaymentsUnavailable, and the subscribe
      * endpoint is NEVER called. Only the Authorized path POSTs subscribe.
      */
+    /** SUB-E2 - start a card-required free trial (no charge now; auto-charges at trial end). */
+    fun startTrial() {
+        trialDays = TRIAL_DAYS
+        beginAuthorize()
+    }
+
     fun confirm() {
+        trialDays = null
+        beginAuthorize()
+    }
+
+    private fun beginAuthorize() {
         val current = _uiState.value
         if (current.isWorking) return // guard against concurrent confirms
 
@@ -180,6 +198,8 @@ class SubscribeViewModel @Inject constructor(
         // ADV-405: attach the session last-click ad_click_id so a subscribe converts the ad (ADV-402).
         val body = SubscribeReqDto(
             adClickId = adAttribution.peek(),
+            // SUB-E2 - when non-null this is a trial start: backend captures the PM but does NOT charge.
+            trialDays = trialDays,
             // SUB-E0: the resolved PM (blank in dev demo -> backend resolves the subscriber default);
             // the backend REALLY charges this + credits the creator net, or returns 402 (no phantom).
             paymentMethodId = resolvedPaymentMethodId?.takeIf { it.isNotBlank() },
@@ -243,6 +263,7 @@ class SubscribeViewModel @Inject constructor(
         const val ARG_DESCRIPTION = "description"
 
         private const val DEFAULT_CURRENCY = "USD"
+        private const val TRIAL_DAYS = 7
         private const val HTTP_PAYMENT_REQUIRED = 402
     }
 }
