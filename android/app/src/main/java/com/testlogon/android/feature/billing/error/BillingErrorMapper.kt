@@ -96,6 +96,8 @@ class BillingErrorMapper @Inject constructor() {
         DeclineCode.INSUFFICIENT_FUNDS,
         DeclineCode.EXPIRED_CARD,
         DeclineCode.INCORRECT_CVC,
+        DeclineCode.NO_PAYMENT_METHOD,
+        DeclineCode.PAYMENT_FAILED,
         -> Recoverability.REQUIRES_NEW_METHOD
         DeclineCode.MICRODEPOSITS_PENDING -> Recoverability.REQUIRES_ACTION
         DeclineCode.UNKNOWN -> Recoverability.FATAL
@@ -109,6 +111,8 @@ class BillingErrorMapper @Inject constructor() {
         DeclineCode.PROCESSING_ERROR -> R.string.billing_err_processing
         DeclineCode.AUTHENTICATION_REQUIRED -> R.string.billing_err_auth_required
         DeclineCode.MICRODEPOSITS_PENDING -> R.string.billing_err_microdeposits_pending
+        DeclineCode.NO_PAYMENT_METHOD -> R.string.billing_err_no_payment_method
+        DeclineCode.PAYMENT_FAILED -> R.string.billing_err_payment_failed
         DeclineCode.UNKNOWN -> R.string.billing_err_generic
     }
 }

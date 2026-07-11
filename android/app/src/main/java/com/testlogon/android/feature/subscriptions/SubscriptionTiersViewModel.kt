@@ -12,6 +12,7 @@ import com.testlogon.android.data.subscriptions.CreatorSubscription
 import com.testlogon.android.data.subscriptions.SubscriptionFeatureFlags
 import com.testlogon.android.data.subscriptions.SubscriptionState
 import com.testlogon.android.data.subscriptions.SubscriptionTier
+import com.testlogon.android.data.subscriptions.TierBenefit
 import com.testlogon.android.data.subscriptions.SubscriptionsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -34,6 +35,8 @@ data class TierUiModel(
     val currency: String,
     val interval: BillingInterval,
     val perks: List<String>,
+    /** SUB-E0 - structured benefits ({label, detail}) rendered as the tier perk list. */
+    val benefits: List<TierBenefit> = emptyList(),
     val isCurrent: Boolean,
 )
 
@@ -225,6 +228,7 @@ class SubscriptionTiersViewModel @Inject constructor(
         currency = currency,
         interval = interval,
         perks = perks,
+        benefits = benefits,
         isCurrent = planId == currentTierId,
     )
 

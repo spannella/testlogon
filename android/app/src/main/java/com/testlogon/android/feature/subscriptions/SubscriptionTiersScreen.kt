@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -47,6 +48,7 @@ import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.subscriptions.TierBenefit
 
 /** AND-235 — stable test tags for the subscription tiers browse screen. */
 object SubscriptionTiersTestTags {
@@ -182,6 +184,40 @@ private fun TierList(
     }
 }
 
+/** SUB-E0 - renders a tier's structured benefits as a checkmarked perk list (label + optional detail). */
+@Composable
+private fun TierBenefitList(benefits: List<TierBenefit>) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        benefits.forEach { benefit ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.Top,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp).heightIn(min = 18.dp),
+                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(benefit.label, style = MaterialTheme.typography.bodyMedium)
+                    benefit.detail?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun TierCard(
     tier: TierUiModel,
@@ -250,6 +286,11 @@ private fun TierCard(
 
                 tier.description?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium)
+                }
+
+                // SUB-E0: the creator-authored structured benefits (label + optional detail).
+                if (tier.benefits.isNotEmpty()) {
+                    TierBenefitList(tier.benefits)
                 }
 
                 if (tier.perks.isNotEmpty()) {

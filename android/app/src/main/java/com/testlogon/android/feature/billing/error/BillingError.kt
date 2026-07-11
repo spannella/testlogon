@@ -23,6 +23,9 @@ enum class DeclineCode {
     PROCESSING_ERROR,
     AUTHENTICATION_REQUIRED,
     MICRODEPOSITS_PENDING,
+    // SUB-E0: subscription (and any real-charge) money-path 402 codes.
+    NO_PAYMENT_METHOD,
+    PAYMENT_FAILED,
     UNKNOWN,
     ;
 
@@ -35,6 +38,8 @@ enum class DeclineCode {
             "processing_error" -> PROCESSING_ERROR
             "authentication_required" -> AUTHENTICATION_REQUIRED
             "microdeposits_pending" -> MICRODEPOSITS_PENDING
+            "no_payment_method" -> NO_PAYMENT_METHOD
+            "payment_failed" -> PAYMENT_FAILED
             else -> null
         }
     }

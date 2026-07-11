@@ -1633,6 +1633,9 @@
     <string name="billing_err_processing">There was a processing error. Please try again.</string>
     <string name="billing_err_auth_required">Your bank needs to verify this payment. Please complete the verification step.</string>
     <string name="billing_err_microdeposits_pending">Microdeposit verification is still pending.</string>
+    <!-- SUB-E0: real-charge money-path 402 codes -->
+    <string name="billing_err_no_payment_method">No payment method on file. Add a card to subscribe.</string>
+    <string name="billing_err_payment_failed">Payment failed. Try a different payment method.</string>
 
     <!-- AND-235: subscription tiers browse -->
     <string name="subs_tiers_title">Subscription tiers</string>
@@ -1655,6 +1658,9 @@
     <string name="subscribe_success_title">Subscription active</string>
     <string name="subscribe_success_body">You\'re all set. Your subscription is now active.</string>
     <string name="subscribe_unavailable_title">Payments unavailable</string>
+    <!-- SUB-E0: real charge + benefits -->
+    <string name="subscribe_charge_notice">You will be charged %1$s now, then each billing period.</string>
+    <string name="subscribe_add_card_hint">Add a payment method in Payments settings, then try subscribing again.</string>
 
     <!-- AND-237: manage / cancel subscription -->
     <string name="manage_sub_title">Manage subscription</string>

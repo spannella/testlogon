@@ -54,6 +54,12 @@ enum class SubscriptionState {
     }
 }
 
+/** SUB-E0 - a structured tier benefit/perk (label + optional detail), distinct from asset-name perks. */
+data class TierBenefit(
+    val label: String,
+    val detail: String?,
+)
+
 /** Creator-offered subscription plan (the "tier"). */
 data class SubscriptionTier(
     val planId: String,
@@ -65,8 +71,10 @@ data class SubscriptionTier(
     val interval: BillingInterval,
     val annualPriceCents: Long?,
     val status: String,
-    /** Feature/perk labels, mapped from `assets[].name` (no dedicated benefits field exists). */
+    /** Feature/perk labels, mapped from `assets[].name` (legacy free-form perk bullets). */
     val perks: List<String>,
+    /** SUB-E0 - structured benefits ({label, detail}); empty for older/seeded plans. */
+    val benefits: List<TierBenefit> = emptyList(),
     val createdAtEpochSeconds: Long?,
     val updatedAtEpochSeconds: Long?,
 ) {
@@ -116,6 +124,9 @@ internal fun SubscriptionPlanDto.toDomain(): SubscriptionTier = SubscriptionTier
     annualPriceCents = annualPriceCents,
     status = status,
     perks = assets.orEmpty().mapNotNull { it.name?.takeIf(String::isNotBlank) },
+    benefits = benefits.orEmpty().mapNotNull { b ->
+        b.label.takeIf(String::isNotBlank)?.let { TierBenefit(label = it, detail = b.detail?.takeIf(String::isNotBlank)) }
+    },
     createdAtEpochSeconds = createdAt,
     updatedAtEpochSeconds = updatedAt,
 )

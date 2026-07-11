@@ -128,6 +128,8 @@ data class SubscriptionPlanDto(
     @Json(name = "interval") val interval: String,
     @Json(name = "annual_price_cents") val annualPriceCents: Long? = null,
     @Json(name = "status") val status: String,
+    // SUB-E0: structured tier benefits/perks ({label, detail}) beyond the free-form assets.
+    @Json(name = "benefits") val benefits: List<PlanBenefitDto>? = null,
     @Json(name = "assets") val assets: List<PlanAssetDto>? = null,
     @Json(name = "created_at") val createdAt: Long? = null,
     @Json(name = "updated_at") val updatedAt: Long? = null,
@@ -140,6 +142,16 @@ data class PlanAssetDto(
     @Json(name = "path") val path: String? = null,
     @Json(name = "type") val type: String? = null,
     @Json(name = "content_type") val contentType: String? = null,
+)
+
+/**
+ * SUB-E0 - a structured tier benefit/perk descriptor (label + optional detail). First-class,
+ * distinct from the free-form asset names; verified against backend PlanBenefit (subscription_server.py).
+ */
+@JsonClass(generateAdapter = true)
+data class PlanBenefitDto(
+    @Json(name = "label") val label: String,
+    @Json(name = "detail") val detail: String? = null,
 )
 
 /** Viewer subscription. Verified: types.ts SubscriptionOut (L2713). */
@@ -159,6 +171,10 @@ data class SubscriptionOutDto(
     @Json(name = "price_cents") val priceCents: Long? = null,
     @Json(name = "currency") val currency: String? = null,
     @Json(name = "auto_renew") val autoRenew: Boolean = true,
+    // SUB-E0: authoritative next-charge timestamp + the PM/PI that were actually charged.
+    @Json(name = "next_billing_date") val nextBillingDate: Long? = null,
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+    @Json(name = "payment_intent_id") val paymentIntentId: String? = null,
     @Json(name = "trial_start") val trialStart: Long? = null,
     @Json(name = "trial_end") val trialEnd: Long? = null,
     @Json(name = "created_at") val createdAt: Long? = null,
@@ -190,6 +206,11 @@ data class SubscribeReqDto(
     @Json(name = "discount_code") val discountCode: String? = null,
     @Json(name = "trial_days") val trialDays: Int? = null,
     @Json(name = "subscriber_id") val subscriberId: String? = null,
+    // SUB-E0: the PM to charge (explicit -> subscriber default). A non-trial subscribe with no
+    // resolvable PM is rejected server-side with HTTP 402 (no phantom subscription).
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+    // SUB-E0: client idempotency key - a retry with the same value never double-charges/subscribes.
+    @Json(name = "client_request_id") val clientRequestId: String? = null,
 )
 
 /** Change-plan request. Verified: SubscriptionChangePlanIn — `plan_id` required. */
