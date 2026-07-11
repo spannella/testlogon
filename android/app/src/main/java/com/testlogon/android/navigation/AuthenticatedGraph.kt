@@ -232,6 +232,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         subscribeDestination(navController)
         // AND-237: manage / cancel subscription (status/renewal + cancel-at-period-end + resume/renew).
         manageSubscriptionDestination(navController)
+        // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
+        creatorSubscribersDestination(navController)
         // SUB-E2: gift a creator subscription to another user (gifter pays one no-renew cycle).
         giftSubscriptionDestination(navController)
         // AND-238/239/240: fan-club channels list (tier-grouped) + channel messages + tier members.

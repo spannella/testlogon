@@ -157,3 +157,112 @@ internal fun SubscriptionSummaryDto.toDomain(): CreatorSubscriptionSummary = Cre
     nextRenewalAtEpochSeconds = nextRenewalAt,
     lastInvoiceAtEpochSeconds = lastInvoiceAt,
 )
+
+// ---- SUB-E4-3: creator subscriber management + MRR/analytics ----
+
+/** SUB-E4-1 - a creator-facing subscriber row (from the CREATOR#SUB# index). */
+data class CreatorSubscriberRow(
+    val subscriptionId: String,
+    val subscriberId: String,
+    val subscriberName: String?,
+    val planId: String?,
+    val planName: String?,
+    /** Mapped taxonomy state; use [rawStatus] for creator-only states (canceling/grace). */
+    val status: SubscriptionState,
+    val rawStatus: String,
+    val interval: BillingInterval,
+    val priceCents: Long,
+    val currency: String?,
+    val sinceEpochSeconds: Long?,
+    val currentPeriodEndEpochSeconds: Long?,
+    val nextBillingDateEpochSeconds: Long?,
+    val cancelAtPeriodEnd: Boolean,
+    val autoRenew: Boolean,
+    val isGift: Boolean,
+    val gifterId: String?,
+    val isTrial: Boolean,
+) {
+    /** The subscriber's best display label (name -> id fallback). */
+    val displayName: String get() = subscriberName?.takeIf { it.isNotBlank() } ?: subscriberId
+}
+
+/** SUB-E4-1 - a page of the creator subscriber list. */
+data class CreatorSubscriberPage(
+    val creatorId: String,
+    val statusFilter: String?,
+    val count: Int,
+    val total: Int,
+    val nextCursor: String?,
+    val subscribers: List<CreatorSubscriberRow>,
+)
+
+/** SUB-E4-2 - creator subscription MRR/analytics, computed from real records + ledger. */
+data class SubscriptionAnalytics(
+    val creatorId: String,
+    val currency: String?,
+    val activeSubscribers: Int,
+    val trialing: Int,
+    val pastDue: Int,
+    val canceledTotal: Int,
+    val totalSubscribers: Int,
+    val mrrCents: Long,
+    val arpuCents: Long,
+    val periodDays: Int,
+    val newSubs30d: Int,
+    val churned30d: Int,
+    val churnRate: Double,
+    val grossRevenueToDateCents: Long,
+    val feeToDateCents: Long,
+    val refundedToDateCents: Long,
+    val netRevenueToDateCents: Long,
+)
+
+internal fun CreatorSubscriberDto.toDomain(): CreatorSubscriberRow = CreatorSubscriberRow(
+    subscriptionId = subscriptionId,
+    subscriberId = subscriberId,
+    subscriberName = subscriberName?.takeIf { it.isNotBlank() },
+    planId = planId,
+    planName = planName?.takeIf { it.isNotBlank() },
+    status = SubscriptionState.fromWire(status),
+    rawStatus = status,
+    interval = BillingInterval.fromWire(interval),
+    priceCents = priceCents,
+    currency = currency,
+    sinceEpochSeconds = since.takeIf { it > 0 },
+    currentPeriodEndEpochSeconds = currentPeriodEnd,
+    nextBillingDateEpochSeconds = nextBillingDate,
+    cancelAtPeriodEnd = cancelAtPeriodEnd,
+    autoRenew = autoRenew,
+    isGift = isGift,
+    gifterId = gifterId,
+    isTrial = isTrial,
+)
+
+internal fun CreatorSubscriberListDto.toDomain(): CreatorSubscriberPage = CreatorSubscriberPage(
+    creatorId = creatorId,
+    statusFilter = statusFilter,
+    count = count,
+    total = total,
+    nextCursor = nextCursor,
+    subscribers = subscribers.map { it.toDomain() },
+)
+
+internal fun SubscriptionAnalyticsDto.toDomain(): SubscriptionAnalytics = SubscriptionAnalytics(
+    creatorId = creatorId,
+    currency = currency,
+    activeSubscribers = activeSubscribers,
+    trialing = trialing,
+    pastDue = pastDue,
+    canceledTotal = canceledTotal,
+    totalSubscribers = totalSubscribers,
+    mrrCents = mrrCents,
+    arpuCents = arpuCents,
+    periodDays = periodDays,
+    newSubs30d = newSubs30d,
+    churned30d = churned30d,
+    churnRate = churnRate,
+    grossRevenueToDateCents = grossRevenueToDateCents,
+    feeToDateCents = feeToDateCents,
+    refundedToDateCents = refundedToDateCents,
+    netRevenueToDateCents = netRevenueToDateCents,
+)

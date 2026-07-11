@@ -217,6 +217,9 @@ object MoreRoutes {
     // AND-237: manage / cancel the viewer's current subscription (arg-less route).
     const val MANAGE_SUBSCRIPTION = ManageSubscriptionDest.ROUTE
 
+    // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
+    const val CREATOR_SUBSCRIBERS = CreatorSubscribersDest.ROUTE
+
     // AND-238: "My fan clubs" — self-browse the viewer's fan-club channels (SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val FAN_CLUB = "fanclub/channels/${FanClubChannelsDest.SELF}"
@@ -551,6 +554,7 @@ object MoreRoutes {
             TAX_FORMS_1099,
             BILLING_CONFIG,
             SUBSCRIPTION_TIERS,
+            CREATOR_SUBSCRIBERS,
             MANAGE_SUBSCRIPTION,
             FAN_CLUB,
             ORGS_MEMBERS,

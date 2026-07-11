@@ -120,6 +120,46 @@ interface SubscriptionsApi {
         @Path("subscriptionId") subscriptionId: String,
         @Body body: ResumeSubscriptionReqDto,
     ): SubscriptionOutDto
+
+    // ---- SUB-E4-3: creator subscriber management + MRR/analytics ----
+
+    /** SUB-E4-1 - owner-scoped creator subscriber list (CREATOR#SUB# index). Requires X-User-Id. */
+    @GET("api/creators/{creatorId}/subscribers")
+    suspend fun creatorSubscribers(
+        @Header("X-User-Id") userId: String,
+        @Path("creatorId") creatorId: String,
+        @Query("status") status: String? = null,
+        @Query("limit") limit: Int? = null,
+        @Query("cursor") cursor: String? = null,
+    ): CreatorSubscriberListDto
+
+    /** SUB-E4-2 - MRR/analytics computed from the creator sub records + ledger. Requires X-User-Id. */
+    @GET("api/creators/{creatorId}/subscription-analytics")
+    suspend fun subscriptionAnalytics(
+        @Header("X-User-Id") userId: String,
+        @Path("creatorId") creatorId: String,
+        @Query("period_days") periodDays: Int? = null,
+    ): SubscriptionAnalyticsDto
+
+    /** SUB-E4-3 - creator removes a subscriber (cancel + refund). Returns updated SubscriptionOut. */
+    @Headers("Content-Type: application/json")
+    @POST("api/creators/{creatorId}/subscriptions/{subscriptionId}/remove")
+    suspend fun removeSubscriber(
+        @Header("X-User-Id") userId: String,
+        @Path("creatorId") creatorId: String,
+        @Path("subscriptionId") subscriptionId: String,
+        @Body body: CreatorSubscriberActionReqDto,
+    ): SubscriptionOutDto
+
+    /** SUB-E4-3 - creator stops a subscriber renewal (cancel at period end). Returns SubscriptionOut. */
+    @Headers("Content-Type: application/json")
+    @POST("api/creators/{creatorId}/subscriptions/{subscriptionId}/stop-renewal")
+    suspend fun stopSubscriberRenewal(
+        @Header("X-User-Id") userId: String,
+        @Path("creatorId") creatorId: String,
+        @Path("subscriptionId") subscriptionId: String,
+        @Body body: CreatorSubscriberActionReqDto,
+    ): SubscriptionOutDto
 }
 
 // ---- Response DTOs (AND-234) ----
@@ -278,5 +318,69 @@ data class RenewalReqDto(
 /** AND-237 — resume request. Verified: SubscriptionResumeIn (subscriptions.ts resumeSubscription — reason only). */
 @JsonClass(generateAdapter = true)
 data class ResumeSubscriptionReqDto(
+    @Json(name = "reason") val reason: String? = null,
+)
+
+// ---- SUB-E4-3 DTOs (creator subscriber management + analytics) ----
+
+/** SUB-E4-1 - one row of the creator subscriber list (CREATOR#SUB# index). */
+@JsonClass(generateAdapter = true)
+data class CreatorSubscriberDto(
+    @Json(name = "subscription_id") val subscriptionId: String,
+    @Json(name = "subscriber_id") val subscriberId: String,
+    @Json(name = "subscriber_name") val subscriberName: String? = null,
+    @Json(name = "plan_id") val planId: String? = null,
+    @Json(name = "plan_name") val planName: String? = null,
+    @Json(name = "status") val status: String,
+    @Json(name = "interval") val interval: String? = null,
+    @Json(name = "price_cents") val priceCents: Long = 0,
+    @Json(name = "currency") val currency: String? = null,
+    @Json(name = "since") val since: Long = 0,
+    @Json(name = "current_period_end") val currentPeriodEnd: Long? = null,
+    @Json(name = "next_billing_date") val nextBillingDate: Long? = null,
+    @Json(name = "cancel_at_period_end") val cancelAtPeriodEnd: Boolean = false,
+    @Json(name = "auto_renew") val autoRenew: Boolean = true,
+    @Json(name = "is_gift") val isGift: Boolean = false,
+    @Json(name = "gifter_id") val gifterId: String? = null,
+    @Json(name = "is_trial") val isTrial: Boolean = false,
+)
+
+/** SUB-E4-1 - paginated creator subscriber list envelope. */
+@JsonClass(generateAdapter = true)
+data class CreatorSubscriberListDto(
+    @Json(name = "creator_id") val creatorId: String,
+    @Json(name = "status_filter") val statusFilter: String? = null,
+    @Json(name = "count") val count: Int = 0,
+    @Json(name = "total") val total: Int = 0,
+    @Json(name = "next_cursor") val nextCursor: String? = null,
+    @Json(name = "subscribers") val subscribers: List<CreatorSubscriberDto> = emptyList(),
+)
+
+/** SUB-E4-2 - creator subscription MRR/analytics projection. */
+@JsonClass(generateAdapter = true)
+data class SubscriptionAnalyticsDto(
+    @Json(name = "creator_id") val creatorId: String,
+    @Json(name = "currency") val currency: String? = null,
+    @Json(name = "generated_at") val generatedAt: Long = 0,
+    @Json(name = "active_subscribers") val activeSubscribers: Int = 0,
+    @Json(name = "trialing") val trialing: Int = 0,
+    @Json(name = "past_due") val pastDue: Int = 0,
+    @Json(name = "canceled_total") val canceledTotal: Int = 0,
+    @Json(name = "total_subscribers") val totalSubscribers: Int = 0,
+    @Json(name = "mrr_cents") val mrrCents: Long = 0,
+    @Json(name = "arpu_cents") val arpuCents: Long = 0,
+    @Json(name = "period_days") val periodDays: Int = 30,
+    @Json(name = "new_subs_30d") val newSubs30d: Int = 0,
+    @Json(name = "churned_30d") val churned30d: Int = 0,
+    @Json(name = "churn_rate") val churnRate: Double = 0.0,
+    @Json(name = "gross_revenue_to_date_cents") val grossRevenueToDateCents: Long = 0,
+    @Json(name = "fee_to_date_cents") val feeToDateCents: Long = 0,
+    @Json(name = "refunded_to_date_cents") val refundedToDateCents: Long = 0,
+    @Json(name = "net_revenue_to_date_cents") val netRevenueToDateCents: Long = 0,
+)
+
+/** SUB-E4-3 - creator subscriber action (remove / stop-renewal) request; reason optional. */
+@JsonClass(generateAdapter = true)
+data class CreatorSubscriberActionReqDto(
     @Json(name = "reason") val reason: String? = null,
 )

@@ -1162,6 +1162,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "creator_subscribers",
+            labelRes = R.string.more_entry_creator_subscribers,
+            icon = Icons.Outlined.Insights,
+            route = MoreRoutes.CREATOR_SUBSCRIBERS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "manage_subscription",
             labelRes = R.string.more_entry_manage_subscription,
             icon = Icons.Outlined.CardMembership,

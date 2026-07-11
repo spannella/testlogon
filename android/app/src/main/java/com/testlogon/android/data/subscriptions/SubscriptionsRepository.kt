@@ -77,6 +77,22 @@ interface SubscriptionsRepository {
         subscriptionId: String,
         body: ResumeSubscriptionReqDto = ResumeSubscriptionReqDto(),
     ): ApiResult<CreatorSubscription>
+
+    /** SUB-E4-1 - the current creator own subscriber list (owner-scoped; X-User-Id = creator id). */
+    suspend fun getMySubscribers(
+        status: String? = null,
+        limit: Int? = null,
+        cursor: String? = null,
+    ): ApiResult<CreatorSubscriberPage>
+
+    /** SUB-E4-2 - the current creator own subscription MRR/analytics (owner-scoped). */
+    suspend fun getMyAnalytics(periodDays: Int? = null): ApiResult<SubscriptionAnalytics>
+
+    /** SUB-E4-3 - creator removes one of their subscribers (cancel + refund). */
+    suspend fun removeSubscriber(subscriptionId: String, reason: String? = null): ApiResult<CreatorSubscription>
+
+    /** SUB-E4-3 - creator stops a subscriber auto-renewal (cancel at period end). */
+    suspend fun stopSubscriberRenewal(subscriptionId: String, reason: String? = null): ApiResult<CreatorSubscription>
 }
 
 @Singleton
@@ -151,6 +167,38 @@ class SubscriptionsRepositoryImpl @Inject constructor(
     ): ApiResult<CreatorSubscription> = withContext(io) {
         val userId = currentUserId() ?: return@withContext unauthenticated()
         call { api.resume(userId, subscriptionId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun getMySubscribers(
+        status: String?,
+        limit: Int?,
+        cursor: String?,
+    ): ApiResult<CreatorSubscriberPage> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.creatorSubscribers(userId, userId, status, limit, cursor) }.map { it.toDomain() }
+    }
+
+    override suspend fun getMyAnalytics(periodDays: Int?): ApiResult<SubscriptionAnalytics> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.subscriptionAnalytics(userId, userId, periodDays) }.map { it.toDomain() }
+    }
+
+    override suspend fun removeSubscriber(
+        subscriptionId: String,
+        reason: String?,
+    ): ApiResult<CreatorSubscription> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.removeSubscriber(userId, userId, subscriptionId, CreatorSubscriberActionReqDto(reason)) }
+            .map { it.toDomain() }
+    }
+
+    override suspend fun stopSubscriberRenewal(
+        subscriptionId: String,
+        reason: String?,
+    ): ApiResult<CreatorSubscription> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.stopSubscriberRenewal(userId, userId, subscriptionId, CreatorSubscriberActionReqDto(reason)) }
+            .map { it.toDomain() }
     }
 
     private suspend fun currentUserId(): String? = authStateStore.userSub.first()?.takeIf { it.isNotBlank() }
