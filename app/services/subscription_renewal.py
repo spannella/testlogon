@@ -413,6 +413,19 @@ def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
         if trial_end and trial_end <= now:
             _attempt_renewal(sub, now, summary, trial_conversion=True)
         return
+    # SUB-E2 PART 2 (SUB-25): a 'canceling' sub (cancel-at-period-end) KEEPS access
+    # until current_period_end (subscription_access grants it) then becomes terminal
+    # 'canceled' here. It is NEVER charged / renewed / dunned.
+    if status == "canceling":
+        cpe = int(sub.get("current_period_end") or 0)
+        if cpe and cpe <= now:
+            sub["status"] = "canceled"
+            sub["canceled_at"] = sub.get("canceled_at") or now
+            sub["updated_at"] = now
+            _save(sub)
+            summary["canceled"].append(sub["subscription_id"])
+            logger.info("subscription_canceled_at_period_end id=%s", sub["subscription_id"])
+        return
     if status not in ("active", "past_due"):
         return
     auto_renew = bool(sub.get("auto_renew", True))

@@ -66,7 +66,10 @@ def has_active_subscription(subscriber_id: str, creator_id: str) -> bool:
             continue
         status = (item.get("status") or "").lower()
         # SUB-E1: expired/canceled subs never grant access.
-        if status not in {"active", "past_due", "trialing"}:
+        # SUB-E2 PART 2 (SUB-25): 'canceling' = cancel-at-period-end; KEEP access
+        # until current_period_end (the effective_end check below bounds it); the
+        # E1 sweeper flips it to 'canceled' (excluded) at period end.
+        if status not in {"active", "past_due", "trialing", "canceling"}:
             continue
         # SUB-E1 expiry enforcement: access is bounded by the paid period
         # (grace-extended). A lapsed sub (period elapsed with no successful
