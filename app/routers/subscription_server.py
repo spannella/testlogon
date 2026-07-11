@@ -450,6 +450,9 @@ class SubscriptionChangePlanIn(BaseModel):
     effective: Literal["immediate", "period_end"] = "immediate"
     proration_policy: Literal["none", "charge", "credit", "full"] = "full"
     proration_amount_cents: Optional[int] = None
+    # SUB-E2: optional explicit PM to charge the upgrade delta against (falls back
+    # to the subscription's stored payment_method_id).
+    payment_method_id: Optional[str] = None
     provider_invoice_id: Optional[str] = None
     reason: Optional[str] = None
 
@@ -1215,6 +1218,12 @@ async def subscribe(
             subscription_id=subscription_id,
             idempotency_key=(idempotency_key or f"{subscription_id}:{ts}"),
         )
+    elif status == "trialing":
+        # SUB-E2: TRIAL requires a CARD UP FRONT. Capture + VALIDATE a real owned
+        # PM at trial start (NO charge now); store it so the E1 sweeper can
+        # AUTO-CONVERT (charge the stored PM) at trial_end. A trial with no
+        # resolvable/owned PM is rejected 402 here -> no phantom trialing sub.
+        payment_method_id = resolve_subscription_payment_method(subscriber_id, body.payment_method_id)
 
     sub = {
         "subscription_id": subscription_id,
@@ -1823,11 +1832,31 @@ async def change_subscription_plan(
     new_price = _select_plan_price(plan, interval)
     ts = now_ts()
 
-    if body.effective == "period_end":
+    # SUB-E2 LOCKED ROUTING: an UPGRADE (target price strictly higher) applies
+    # IMMEDIATELY and charges the PRORATED DELTA for the remaining period now (real
+    # E0 rail + creator credited the delta NET). A DOWNGRADE (target price <=
+    # current) is SCHEDULED as a pending_change that the E1 sweeper applies at
+    # period end (no immediate money). An explicit effective="period_end" also
+    # schedules.
+    old_price = int(sub["price_cents"])
+    is_upgrade = int(new_price) > old_price
+    schedule_at_period_end = (not is_upgrade) or (body.effective == "period_end")
+
+    if schedule_at_period_end:
+        apply_at = int(sub.get("current_period_end") or ts)
+        sub["pending_change"] = {
+            "plan_id": body.plan_id,
+            "interval": interval,
+            "price_cents": int(new_price),
+            "apply_at": apply_at,
+            "scheduled_at": ts,
+            "direction": "upgrade" if is_upgrade else "downgrade",
+        }
+        # legacy mirror fields (kept for any back-compat reader)
         sub["pending_plan_id"] = body.plan_id
         sub["pending_interval"] = interval
-        sub["pending_price_cents"] = new_price
-        sub["pending_apply_at"] = sub.get("current_period_end")
+        sub["pending_price_cents"] = int(new_price)
+        sub["pending_apply_at"] = apply_at
         sub["updated_at"] = ts
         save_subscription(sub)
         record_billing_subscription(sub)
@@ -1838,51 +1867,70 @@ async def change_subscription_plan(
             outcome="success",
             subscription_id=subscription_id,
             plan_id=body.plan_id,
-            effective=body.effective,
+            effective="period_end",
         )
         refresh_subscription_calendar_events(sub, plan)
         return attach_subscription_profiles(sub)
 
-    proration_amount = 0
-    if body.proration_amount_cents is not None:
-        proration_amount = int(body.proration_amount_cents)
-    elif body.proration_policy != "none":
-        proration_amount = calculate_proration(
-            current_price=int(sub["price_cents"]),
-            new_price=int(new_price),
-            now=ts,
-            period_start=int(sub.get("start_at") or ts),
-            period_end=int(sub.get("current_period_end") or ts),
+    # ---- UPGRADE: immediate, prorated DELTA charge via the E0 rail ----
+    # delta = (new_price - old_price) * remaining_fraction (>=0 for an upgrade with
+    # time left; a fully-elapsed period yields 0 -> switch plan with no charge).
+    proration_amount = calculate_proration(
+        current_price=old_price,
+        new_price=int(new_price),
+        now=ts,
+        period_start=int(sub.get("start_at") or ts),
+        period_end=int(sub.get("current_period_end") or ts),
+    )
+    if proration_amount < 0:
+        proration_amount = 0
+    upgrade_pm = None
+    upgrade_pi = None
+    if proration_amount > 0:
+        upgrade_pm = resolve_subscription_payment_method(
+            sub["subscriber_id"], body.payment_method_id or sub.get("payment_method_id")
         )
-    if body.proration_policy == "none":
-        proration_amount = 0
-    elif proration_amount > 0 and body.proration_policy == "credit":
-        proration_amount = 0
-    elif proration_amount < 0 and body.proration_policy == "charge":
-        proration_amount = 0
+        upgrade_pi = _charge_subscription_payment_intent(
+            subscriber_id=sub["subscriber_id"],
+            amount_cents=int(proration_amount),
+            currency=sub["currency"],
+            payment_method_id=upgrade_pm,
+            plan_id=body.plan_id,
+            subscription_id=subscription_id,
+            idempotency_key=f"{subscription_id}:upgrade:{int(sub.get('current_period_end') or ts)}:{body.plan_id}",
+        )
 
+    # switch the plan NOW; the cycle they already paid keeps its period end (they
+    # only owe the upgrade delta for the remaining time).
     sub["plan_id"] = body.plan_id
     sub["interval"] = interval
     sub["price_cents"] = int(new_price)
     sub["proration_policy"] = body.proration_policy
+    if upgrade_pm:
+        sub["payment_method_id"] = upgrade_pm
+    for _k in ("pending_change", "pending_plan_id", "pending_interval", "pending_price_cents", "pending_apply_at"):
+        sub.pop(_k, None)
     sub["updated_at"] = ts
     save_subscription(sub)
     record_billing_subscription(sub)
 
-    if proration_amount != 0:
+    if proration_amount > 0:
         invoice_id = body.provider_invoice_id or new_id("inv")
-        proration_status = "paid" if proration_amount > 0 else "credited"
         invoice = {
             "invoice_id": invoice_id,
             "subscription_id": subscription_id,
             "subscriber_id": sub["subscriber_id"],
-            "provider_invoice_id": body.provider_invoice_id or new_id("stub_inv"),
-            "amount_cents": abs(int(proration_amount)),
+            "provider": "stripe" if upgrade_pi else "stub",
+            "provider_invoice_id": upgrade_pi or body.provider_invoice_id or new_id("stub_inv"),
+            "payment_intent_id": upgrade_pi,
+            "payment_method_id": upgrade_pm,
+            "amount_cents": int(proration_amount),
             "currency": sub["currency"],
-            "status": proration_status,
+            "status": "paid",
             "period_start": ts,
             "period_end": sub.get("current_period_end"),
             "created_at": ts,
+            "billing_reason": "subscription_upgrade_proration",
             "is_proration": True,
             "proration_amount_cents": int(proration_amount),
             "proration_period_start": sub.get("start_at"),
@@ -1896,24 +1944,31 @@ async def change_subscription_plan(
             user_sub=sub["subscriber_id"],
             amount_cents=int(proration_amount),
             currency=sub["currency"],
-            description=f"Subscription proration {subscription_id}",
+            description=f"Subscription upgrade proration {subscription_id}",
             status="COMPLETED",
             external_ref=invoice_id,
-            metadata={"subscription_id": subscription_id, "creator_id": sub["creator_id"]},
+            metadata={"subscription_id": subscription_id, "creator_id": sub["creator_id"], "billing_reason": "upgrade_proration"},
         )
-
-        entry_type = "proration_charge" if proration_amount > 0 else "proration_credit"
-        entry = {
-            "entry_id": new_id("led"),
+        # creator credited the DELTA NET (10% fee) -> withdrawable via the mirror
+        fee_cents = int(proration_amount * FEE_BPS / 10000)
+        _base = {
             "subscription_id": subscription_id,
             "subscriber_id": sub["subscriber_id"],
-            "entry_type": entry_type,
-            "amount_cents": abs(int(proration_amount)),
             "currency": sub["currency"],
             "created_at": ts,
-            "metadata": {"invoice_id": invoice_id, "proration_amount_cents": proration_amount},
+            "metadata": {"invoice_id": invoice_id, "billing_reason": "upgrade_proration"},
         }
-        save_ledger_entry(sub["creator_id"], entry)
+        save_ledger_entry(sub["creator_id"], {**_base, "entry_id": new_id("led"), "entry_type": "charge", "amount_cents": int(proration_amount)})
+        save_ledger_entry(sub["creator_id"], {**_base, "entry_id": new_id("led"), "entry_type": "fee", "amount_cents": fee_cents})
+        _mirror_creator_credit_to_billing(
+            sub["creator_id"],
+            int(proration_amount) - fee_cents,
+            currency=sub["currency"],
+            created_at=ts,
+            subscription_id=subscription_id,
+            subscriber_id=sub["subscriber_id"],
+            invoice_id=invoice_id,
+        )
 
     audit_event(
         "subscription_plan_changed",

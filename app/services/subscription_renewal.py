@@ -214,7 +214,7 @@ def _decline(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any]
 # renewal success
 # ---------------------------------------------------------------------------
 
-def _renewal_success(sub: Dict[str, Any], now: int, pi_id: Optional[str], amount: int, summary: Dict[str, Any]) -> None:
+def _renewal_success(sub: Dict[str, Any], now: int, pi_id: Optional[str], amount: int, summary: Dict[str, Any], *, trial_conversion: bool = False) -> None:
     from app.routers.subscription_server import (
         FEE_BPS,
         _mirror_creator_credit_to_billing,
@@ -259,12 +259,14 @@ def _renewal_success(sub: Dict[str, Any], now: int, pi_id: Optional[str], amount
         "period_start": old_cpe,
         "period_end": new_cpe,
         "created_at": now,
-        "billing_reason": "subscription_renewal",
+        "billing_reason": ("trial_conversion" if trial_conversion else "subscription_renewal"),
     }
     # advance the record BEFORE reconcile so the recurring order carries the new period
     sub["current_period_end"] = new_cpe
     sub["next_billing_date"] = new_cpe
     sub["status"] = "active"
+    if trial_conversion:
+        sub["trial_converted_at"] = now
     sub["last_renewed_at"] = now
     sub["renewal_count"] = int(sub.get("renewal_count") or 0) + 1
     # clear dunning
@@ -325,23 +327,60 @@ def _renewal_success(sub: Dict[str, Any], now: int, pi_id: Optional[str], amount
         title="A subscription renewed",
         details={"subscription_id": subscription_id, "plan_id": sub.get("plan_id"), "subscriber_id": sub["subscriber_id"], "amount_cents": int(amount)},
     )
-    summary["renewed"].append({"subscription_id": subscription_id, "amount_cents": int(amount), "new_period_end": new_cpe, "pi": pi_id})
-    logger.info("subscription_renewed id=%s amount=%s new_cpe=%s pi=%s", subscription_id, amount, new_cpe, pi_id)
+    _bucket = "trial_converted" if trial_conversion else "renewed"
+    summary[_bucket].append({"subscription_id": subscription_id, "amount_cents": int(amount), "new_period_end": new_cpe, "pi": pi_id})
+    logger.info("subscription_%s id=%s amount=%s new_cpe=%s pi=%s", _bucket, subscription_id, amount, new_cpe, pi_id)
 
 
-def _attempt_renewal(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
+def _apply_pending_change(sub: Dict[str, Any], now: int) -> bool:
+    """SUB-E2: apply a SCHEDULED plan change (downgrade / period-end change) once its
+    apply_at has arrived. Mutates plan_id/interval/price_cents so the renewal that
+    follows charges the NEW plan for the NEW period. Returns True if applied."""
+    pending = sub.get("pending_change") or {}
+    if not pending and sub.get("pending_plan_id"):
+        pending = {
+            "plan_id": sub.get("pending_plan_id"),
+            "interval": sub.get("pending_interval"),
+            "price_cents": sub.get("pending_price_cents"),
+            "apply_at": sub.get("pending_apply_at"),
+        }
+    if not pending or not pending.get("plan_id"):
+        return False
+    apply_at = int(pending.get("apply_at") or sub.get("current_period_end") or 0)
+    if apply_at and apply_at > now:
+        return False
+    sub["plan_id"] = pending["plan_id"]
+    if pending.get("interval"):
+        sub["interval"] = pending["interval"]
+    if pending.get("price_cents") is not None:
+        sub["price_cents"] = int(pending["price_cents"])
+    sub["plan_change_applied_at"] = now
+    # a plan change resets any old-plan discount
+    sub.pop("discount", None)
+    sub.pop("discount_remaining_months", None)
+    for k in ("pending_change", "pending_plan_id", "pending_interval", "pending_price_cents", "pending_apply_at"):
+        sub.pop(k, None)
+    return True
+
+
+def _attempt_renewal(sub: Dict[str, Any], now: int, summary: Dict[str, Any], *, trial_conversion: bool = False) -> None:
     from app.routers.subscription_server import _charge_subscription_payment_intent
 
     subscription_id = sub["subscription_id"]
+    # SUB-E2: apply any DUE scheduled (downgrade / period-end) plan change BEFORE
+    # computing the amount so this cycle charges the new plan/price.
+    if not trial_conversion and _apply_pending_change(sub, now):
+        summary["plan_changed"].append(subscription_id)
     amount = _renewal_amount(sub)
     if amount <= 0:
-        _renewal_success(sub, now, None, 0, summary)
+        _renewal_success(sub, now, None, 0, summary, trial_conversion=trial_conversion)
         return
     pm = sub.get("payment_method_id")
     if not pm:
         _decline(sub, now, "no_payment_method", summary)
         return
     cpe = int(sub.get("current_period_end") or now)
+    idem_suffix = "convert" if trial_conversion else str(cpe)
     try:
         pi_id = _charge_subscription_payment_intent(
             subscriber_id=sub["subscriber_id"],
@@ -350,14 +389,14 @@ def _attempt_renewal(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> 
             payment_method_id=pm,
             plan_id=sub.get("plan_id", ""),
             subscription_id=subscription_id,
-            idempotency_key=f"{subscription_id}:{cpe}",
+            idempotency_key=f"{subscription_id}:{idem_suffix}",
         )
     except HTTPException as exc:
         if exc.status_code == 402:
             _decline(sub, now, "charge_declined", summary)
             return
         raise
-    _renewal_success(sub, now, pi_id, amount, summary)
+    _renewal_success(sub, now, pi_id, amount, summary, trial_conversion=trial_conversion)
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +405,14 @@ def _attempt_renewal(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> 
 
 def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
     status = (sub.get("status") or "").lower()
+    # SUB-E2: AUTO-CONVERT a trial at trial_end -> charge the card captured up front
+    # at trial start (via the same real rail). Success -> active + creator credited;
+    # decline / no-PM -> dunning (past_due). Trials are otherwise not "due".
+    if status == "trialing":
+        trial_end = int(sub.get("trial_end") or sub.get("current_period_end") or 0)
+        if trial_end and trial_end <= now:
+            _attempt_renewal(sub, now, summary, trial_conversion=True)
+        return
     if status not in ("active", "past_due"):
         return
     auto_renew = bool(sub.get("auto_renew", True))
@@ -430,6 +477,8 @@ def run_renewal_sweep(*, now: Optional[int] = None, limit: int = 1000) -> Dict[s
         "canceled": [],
         "idempotent_skips": [],
         "grandfather_skips": [],
+        "trial_converted": [],
+        "plan_changed": [],
     }
     filter_expr = Attr("entity").eq("subscription") & Attr("sk").eq("META")
     last_key: Optional[Dict[str, Any]] = None
