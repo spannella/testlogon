@@ -27,8 +27,21 @@ fun NavGraphBuilder.alertsDestination(navController: NavHostController) {
                 navController.navigate(OrderTrackingDest.build(shipGroupId)) { launchSingleTop = true }
             },
             // SUB-E5: a subscription alert deep-links to Subscribers (creator) or manage-subscription.
-            onOpenSubscription = { actionUrl ->  // SUB-E5
-                val dest = if (actionUrl.contains("subscribers")) CreatorSubscribersDest.ROUTE else ManageSubscriptionDest.ROUTE
+            // The backend sets a per-recipient action_url; we route on its path, using the event to
+            // disambiguate the bare "/subscriptions" path (creator-new-subscriber vs gift-recipient).
+            onOpenSubscription = { event, actionUrl ->  // SUB-E5: (event, actionUrl)
+                val path = actionUrl.substringBefore('?').trimEnd('/').lowercase()
+                val dest = when {
+                    // creator-side (new-subscriber / renewed / canceled / gifted) -> E4 Subscribers screen
+                    path.endsWith("/subscribers") -> CreatorSubscribersDest.ROUTE
+                    // subscriber-side (started / renewed / renewal-failed / expiring / expired / gifter) -> manage
+                    path.endsWith("/manage") -> ManageSubscriptionDest.ROUTE
+                    // bare "/subscriptions": a creator's new-subscriber alert -> Subscribers screen; a
+                    // gift-recipient's alert (subscription_gifted) falls through to manage their new sub.
+                    event == "subscription_started" || event == "subscription_new_subscriber" ->
+                        CreatorSubscribersDest.ROUTE
+                    else -> ManageSubscriptionDest.ROUTE
+                }
                 navController.navigate(dest) { launchSingleTop = true }
             },
         )
