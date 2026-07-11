@@ -47,7 +47,7 @@ from app.services.analytics_events import (
     record_engagement_event,
     record_revenue_event,
 )
-from app.services.subscription_access import can_access_creator
+from app.services.subscription_access import can_access_creator, content_locked_for_viewer
 from app.services.social_alerts import (
     BATCH_KEY_PATTERNS,
     emit_mention_alerts,
@@ -1418,6 +1418,7 @@ class CreatePostRequest(ContentFieldsMixin):
     tags: List[str] = Field(default_factory=list)
     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     visibility: Literal["followers", "public"] = "followers"
+    subscriber_only: bool = False  # SUB-E3: per-post subscriber-only gate
     lock_type: Optional[Literal["fixed_price", "tip_lottery"]] = None
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
     unlock_limit: Optional[int] = Field(default=None, ge=1)
@@ -2198,6 +2199,17 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     """
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
     status, publish_at, published_at, schedule_timezone, scheduled_at_local = _resolve_post_lifecycle_fields(post)
+    # SUB-E3: per-post subscriber-only gate -> non-destructive lock marker.
+    _sub_author = str(post.get("user_id") or "")
+    _sub_locked = False
+    if (not locked_body) and viewer_id and _sub_author and _sub_author != viewer_id and bool(post.get("subscriber_only")):
+        try:
+            from app.services.subscription_access import content_locked_for_viewer as _clfv
+            _sub_locked = _clfv(viewer_id, _sub_author, subscriber_only=True)
+        except Exception:
+            _sub_locked = False
+    if _sub_locked:
+        locked_body = True
 
     # Support both old image_url (str) and new image_urls (list)
     image_urls = list(post.get("image_urls") or [])
@@ -2277,6 +2289,9 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "video": video_embed,
         "file_attachments": file_attachments,
         "visibility": post.get("visibility", "followers"),
+        "subscriber_only": bool(post.get("subscriber_only")),
+        "subscriber_locked": _sub_locked,
+        "creator_id": _sub_author,
         "locked": bool(post.get("locked")),
         "lock_expired": lock_expired,
         "lock_type": lock_type,
@@ -2685,6 +2700,18 @@ def list_hidden_posts(
 def has_unlocked(user_id: str, post_id: str) -> bool:
     it = ddb_get_item({"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"})
     return bool(it and it.get("unlocked") is True)
+
+
+def _subscriber_locked_post(post: Dict[str, Any], viewer_id) -> bool:
+    """SUB-E3: True when a per-post subscriber-only item must be locked for the
+    viewer (owner/admin/active-subscriber bypass via content_locked_for_viewer)."""
+    author = str(post.get("user_id") or "")
+    if not author or author == viewer_id or not bool(post.get("subscriber_only")):
+        return False
+    try:
+        return content_locked_for_viewer(viewer_id, author, subscriber_only=True)
+    except Exception:
+        return False
 
 
 def can_view_post(viewer_id: str, post: Dict[str, Any]) -> bool:
@@ -3696,6 +3723,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "image_variants": list(getattr(req, "image_variants", None) or []),
         "video_id": video_id,
         "visibility": req.visibility,
+        "subscriber_only": bool(getattr(req, "subscriber_only", False)),
         "locked": locked,
         "lock_type": lock_type,
         "unlock_price_cents": unlock_price_cents,
@@ -4630,6 +4658,8 @@ def get_post_file(post_id: str, file_index: int, user_id: UserIdDep):
     locked = bool(post.get("locked"))
     if locked and author != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required")
+    if _subscriber_locked_post(post, user_id):
+        raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to unlock this content", "creator_id": author})
     attachments = post.get("file_attachments") or []
     if file_index < 0 or file_index >= len(attachments):
         raise HTTPException(status_code=404, detail="File attachment not found")
@@ -5634,6 +5664,9 @@ def download_post_attachment(
     if bool(post.get("locked")) and author != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required")
 
+    if _subscriber_locked_post(post, user_id):
+        raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to unlock this content", "creator_id": author})
+
     attachment = None
     for it in post.get("attachments") or []:
         if str((it or {}).get("attachment_id") or "") == attachment_id:
@@ -5702,6 +5735,9 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
 
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to comment")
+
+    if _subscriber_locked_post(post, user_id):
+        raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to comment on this content", "creator_id": post.get("user_id")})
 
     # FEED-004: gate media comments behind feature flag
     if req.kind in ("gif", "sticker") and not bool(getattr(S, "rich_comments_enabled", True)):
@@ -5927,6 +5963,9 @@ def list_comments(
 
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to view comments")
+
+    if _subscriber_locked_post(post, user_id):
+        raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to view comments on this content", "creator_id": post.get("user_id")})
 
     eks = decode_cursor_or_400(cursor)
     resp = ddb_query(

@@ -84,6 +84,51 @@ def has_active_subscription(subscriber_id: str, creator_id: str) -> bool:
     return False
 
 
+def is_platform_admin(user_id: str) -> bool:
+    """SUB-E3: best-effort platform-admin/root check for owner+ADMIN bypass on
+    gated surfaces. Reads the users table role; never raises."""
+    if not user_id:
+        return False
+    try:
+        from app.core.tables import T
+        item = T.users.get_item(Key={"user_sub": user_id}).get("Item") or {}
+    except Exception:
+        return False
+    return str(item.get("role") or "").strip().lower() in {"admin", "root"}
+
+
+def content_locked_for_viewer(viewer_id: str, creator_id: str, *, subscriber_only: bool = True) -> bool:
+    """SUB-E3 single source of truth for subscriber-only content gating.
+
+    Returns True when a subscriber-only item owned by ``creator_id`` must be
+    LOCKED (body withheld, non-destructive paywall) for ``viewer_id``:
+      * not flagged subscriber-only    -> False (open)
+      * owner / platform admin         -> False (bypass)
+      * active subscriber (lifecycle)  -> False (unlocked)
+      * syndicate-bundle holder        -> False (unlocked)
+      * everyone else                  -> True  (locked)
+
+    Re-locks automatically on expiry because ``has_active_subscription`` is
+    lifecycle-aware (SUB-E1: bounded by grace-extended current_period_end)."""
+    if not subscriber_only:
+        return False
+    if not creator_id:
+        return False
+    if viewer_id and viewer_id == creator_id:
+        return False
+    if is_platform_admin(viewer_id):
+        return False
+    if viewer_id and has_active_subscription(viewer_id, creator_id):
+        return False
+    try:
+        from app.services.syndicate_subscriptions import has_bundle_access
+        if viewer_id and has_bundle_access(viewer_id, creator_id):
+            return False
+    except Exception:
+        pass
+    return True
+
+
 def list_active_subscriber_ids(creator_id: str) -> List[str]:
     """ADV2 R4: enumerate the user_ids of users with an ACTIVE subscription to
     ``creator_id``. Reads the creator-index partition (``CREATOR#{creator_id}``,
@@ -123,6 +168,8 @@ def can_access_creator(subscriber_id: str, creator_id: str) -> bool:
     if subscriber_id == creator_id:
         return True
     if not creator_requires_subscription(creator_id):
+        return True
+    if is_platform_admin(subscriber_id):  # SUB-E3: admin bypass
         return True
     if has_active_subscription(subscriber_id, creator_id):
         return True

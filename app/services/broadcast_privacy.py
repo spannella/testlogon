@@ -236,6 +236,24 @@ def check_viewer_access(
       (still-available) invite token may watch. A valid token auto-enrolls the
       viewer onto the allowlist so subsequent joins succeed.
     """
+    # SUB-E3: subscriber-only broadcast gate (independent of visibility).
+    if viewer_id != creator_id:
+        try:
+            from app.core.tables import T as _T
+            _raw = _T.broadcast_sessions.get_item(Key={"session_id": session_id}).get("Item", {}) or {}
+        except Exception:
+            _raw = {}
+        if bool(_raw.get("subscriber_only")):
+            from app.services.subscription_access import content_locked_for_viewer
+            if content_locked_for_viewer(viewer_id, creator_id, subscriber_only=True):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "BROADCAST_SUBSCRIBER_ONLY",
+                        "detail": "Subscribe to watch this broadcast.",
+                        "creator_id": creator_id,
+                    },
+                )
     visibility = (visibility or "public").strip().lower()
     if visibility != "private":
         return

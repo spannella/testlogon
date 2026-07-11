@@ -18,7 +18,7 @@ from fastapi import HTTPException
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.billing_shared import new_ledger_entry, user_pk
-from app.services.subscription_access import has_active_subscription
+from app.services.subscription_access import has_active_subscription, is_platform_admin
 
 if TYPE_CHECKING:
     from app.models_video import VideoMetadataModel
@@ -150,6 +150,13 @@ def check_vod_access(
     # 1. Owner check
     if user_id == creator_id:
         return VodAccessResult(entitled=True, reason="owner")
+
+    # SUB-E3: platform admins bypass subscriber gating on every surface.
+    try:
+        if is_platform_admin(user_id):
+            return VodAccessResult(entitled=True, reason="admin")
+    except Exception:
+        pass
 
     # 1.5 Ad-supported check (VOD-018) — inserted BEFORE free check
     # so that ad_supported videos with price_cents=0 don't get caught

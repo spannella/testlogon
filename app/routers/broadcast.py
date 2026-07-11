@@ -163,6 +163,7 @@ class BroadcastSessionOut(BaseModel):
     tip_max_cents: int = 100000
     # Viewer Clip Creation (ENGAGE-005)
     clips_enabled: bool = True
+    subscriber_only: bool = False  # SUB-E3
     # Ad Breaks (ADS-006)
     pre_roll_enabled: bool = True
     pre_roll_creative_id: Optional[str] = None
@@ -334,6 +335,7 @@ def create_session_route(body: BroadcastSessionCreateIn, request: Request, ctx: 
         pre_roll_enabled=body.pre_roll_enabled,
         mid_roll_ad_break_duration_seconds=body.mid_roll_ad_break_duration_seconds,
         mid_roll_skip_after_seconds=body.mid_roll_skip_after_seconds,
+        subscriber_only=getattr(body, "subscriber_only", False),
     )
     record_broadcast_action(
         action="create_session",

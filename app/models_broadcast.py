@@ -88,6 +88,7 @@ class BroadcastSessionModel(BaseModel):
 
     # Viewer Clip Creation (ENGAGE-005)
     clips_enabled: bool = True
+    subscriber_only: bool = False  # SUB-E3: subscriber-only broadcast gate
 
     # Go-Private / Visibility (BCAST-011)
     # "public": discoverable + open to any authenticated viewer
