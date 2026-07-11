@@ -238,6 +238,9 @@ fun FeedRoute(
             post.sponsored?.ctaUrl?.let { onLinkClick(it) }
         },
         // ADV2-209 (F2): a structured CTA tap → CPC + CPA-stash (or tip = no charge), then route.
+        onSubscribeClick = { creatorId ->
+            if (creatorId.isNotBlank()) onCtaNavigate(CtaDestination.Subscriptions(creatorId))
+        },
         onSponsoredCta = { post, action ->
             viewModel.onCtaTap(post, action)
             onCtaNavigate(AdCtaRouter.destinationFor(action, post.sponsored?.creatorId ?: ""))
@@ -299,6 +302,8 @@ fun FeedScreen(
     onPaidPartnershipImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
     onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
+    // SUB-E3-2 - open the subscribe flow for a subscriber-only post lock card.
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit = {},
     authorNames: Map<String, String> = emptyMap(),
     authorPhotos: Map<String, String> = emptyMap(),
@@ -401,6 +406,7 @@ fun FeedScreen(
                         onPaidPartnershipImpression = onPaidPartnershipImpression,
                         onSponsoredClick = onSponsoredClick,
                         onSponsoredCta = onSponsoredCta,
+                        onSubscribeClick = onSubscribeClick,
                         onEnsurePoll = onEnsurePoll,
                         authorNames = authorNames,
                         authorPhotos = authorPhotos,
@@ -494,6 +500,7 @@ private fun FeedList(
     onPaidPartnershipImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
     onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit,
     authorNames: Map<String, String>,
     authorPhotos: Map<String, String>,
@@ -526,6 +533,7 @@ private fun FeedList(
                     onMediaClick = { post, _ -> onPostClick(post) },
                     onLinkClick = onLinkClick,
                     onUnlockClick = onUnlockClick,
+                    onSubscribeClick = onSubscribeClick,
                     onLikeToggle = onLikeToggle,
                     onToggleReaction = onToggleReaction,
                     onCommentClick = onCommentClick,

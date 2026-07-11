@@ -87,6 +87,9 @@ fun PostItem(
     onMediaClick: (post: FeedPost, index: Int) -> Unit = { _, _ -> },
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
+    // SUB-E3-2 - open the creator subscribe flow when a non-subscriber taps a subscriber-only
+    // post lock card. Default no-op for pure-render/preview contexts.
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     // AND-173 / AND-174 / AND-175 — content-engagement affordances. Null => hide the action bar
     // (e.g. in pure-render preview/test contexts that don't wire engagement).
     showActionBar: Boolean = true,
@@ -192,6 +195,13 @@ fun PostItem(
                     onUnlockClick = { onUnlockClick(post.id) },
                     style = PaywallStyle.Feed,
                     unlockState = unlockState,
+                )
+                // SUB-E3-2 - subscriber-only post withheld from a non-subscriber: show the
+                // "Subscribe to unlock" upsell card (creator + Subscribe CTA) in place of the body.
+                is Paywall.SubscriberLocked -> SubscriberLockCard(
+                    creatorName = authorName?.takeIf { it.isNotBlank() } ?: paywall.creatorId,
+                    onSubscribeClick = { onSubscribeClick(paywall.creatorId) },
+                    style = PaywallStyle.Feed,
                 )
                 Paywall.Unlocked -> {
                     val body = post.body

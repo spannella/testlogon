@@ -86,6 +86,7 @@ import kotlinx.coroutines.launch
 
 /** AND-190 — stable test tags. */
 object VideoDetailTestTags {
+    const val SUBSCRIBE_CTA = "video_subscribe_cta"
     const val SCREEN = "video_detail_screen"
     const val TITLE = "video_detail_title"
     const val DESCRIPTION = "video_detail_description"
@@ -195,6 +196,23 @@ fun VideoDetailRoute(
         monetizationContent = {
             // AND-192/193 — gating affordances under the player. When the title is locked
             // (not entitled) the rent/unlock affordances show; entitled play is owned by the player.
+            // SUB-E3-2 - a subscriber-only (or subscribe-or-buy) title the viewer cannot yet
+            // watch: surface a Subscribe-to-watch CTA opening this creator subscribe flow, instead
+            // of the dead-end FORBIDDEN block. Re-locks automatically when the sub lapses (the
+            // server flips entitled back to false; lifecycle-aware).
+            val subEnt = state.entitlement
+            if (subEnt is Entitlement.SubscriptionRequired || subEnt is Entitlement.PurchaseOrSubscribe) {
+                val subCreatorId = state.detail?.ownerUserId.orEmpty()
+                com.testlogon.android.core.ui.input.TlButton(
+                    text = "Subscribe to watch",
+                    onClick = {
+                        if (subCreatorId.isNotBlank()) {
+                            onCtaNavigate(CtaDestination.Subscriptions(subCreatorId))
+                        }
+                    },
+                    modifier = Modifier.testTag(VideoDetailTestTags.SUBSCRIBE_CTA),
+                )
+            }
             if (state.detail?.isEntitled == false) {
                 VodRentalPanel(
                     state = rentalState,

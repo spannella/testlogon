@@ -67,7 +67,7 @@ data class FeedPost(
     val paidPartnership: Boolean = false,
     val paidPartnershipDisclosure: String? = null,
 ) {
-    val isLocked: Boolean get() = paywall is Paywall.Locked
+    val isLocked: Boolean get() = paywall !is Paywall.Unlocked
 }
 
 /**
@@ -131,6 +131,17 @@ enum class LockType { FIXED_PRICE, TIP_LOTTERY, UNKNOWN }
 /** Paywall state. [Unlocked] covers never-locked, already-unlocked, and purchased posts. */
 sealed interface Paywall {
     data object Unlocked : Paywall
+
+    /**
+     * SUB-E3-2 - the post is subscriber-only and THIS viewer has no active subscription to the
+     * creator, so the body/media were withheld server-side (a non-destructive lock marker).
+     * Rendered as a "Subscribe to unlock" upsell card routing to the creator tiers (distinct from
+     * the tip/price [Locked] paywall: no per-post price, the CTA opens the subscribe flow).
+     * Re-locks automatically when the subscription lapses because the server re-marks it locked
+     * (has_active_subscription is lifecycle-aware).
+     */
+    data class SubscriberLocked(val creatorId: String) : Paywall
+
     data class Locked(
         val lockType: LockType,
         /** unlock_price_cents (cents, USD assumed by the UI); null => generic CTA. */
@@ -151,7 +162,9 @@ internal fun FeedPageDto.toDomain(): FeedPage = FeedPage(
 
 internal fun PostDto.toDomain(): FeedPost {
     val paywall = toPaywall()
-    val locked = paywall is Paywall.Locked
+    // Redact for BOTH the tip/price lock and the subscriber lock (defense in depth; the server
+    // already withheld the body, but never hand protected text/media to the UI or cache).
+    val locked = paywall !is Paywall.Unlocked
     return FeedPost(
         id = postId,
         authorId = authorId,
@@ -227,6 +240,12 @@ internal fun PostDto.toSponsored(): SponsoredInfo? {
  * has a price but no/unknown lock_type is treated as FIXED_PRICE (web parity).
  */
 internal fun PostDto.toPaywall(): Paywall {
+    // SUB-E3-2 - a subscriber-only post the server withheld from this (non-subscriber) viewer.
+    // The owner + active subscribers get subscriber_locked=false and see the real body, so this
+    // fires only for a genuinely gated-out viewer. Precedence over the tip/price lock.
+    if (subscriberLocked) {
+        return Paywall.SubscriberLocked(creatorId?.takeIf { it.isNotBlank() } ?: authorId)
+    }
     val effectivelyLocked = locked && !unlocked
     if (!effectivelyLocked) return Paywall.Unlocked
     val type = when (lockType) {

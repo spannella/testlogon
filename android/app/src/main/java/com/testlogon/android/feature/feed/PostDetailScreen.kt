@@ -50,6 +50,8 @@ fun PostDetailRoute(
     modifier: Modifier = Modifier,
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
+    // SUB-E3-2 - open the subscribe flow for a subscriber-only post lock card.
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     viewModel: PostDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -72,6 +74,7 @@ fun PostDetailRoute(
         snackbarHostState = snackbarHostState,
         onAuthorClick = onAuthorClick,
         onLinkClick = onLinkClick,
+        onSubscribeClick = onSubscribeClick,
         onLikeToggle = { viewModel.onLikeToggle() },
         onToggleReaction = { emoji -> viewModel.onToggleReaction(emoji) },
         onCommentCountChanged = viewModel::onCommentCountChanged,
@@ -92,6 +95,7 @@ fun PostDetailScreen(
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     onLikeToggle: () -> Unit = {},
     onToggleReaction: (emoji: String) -> Unit = {},
     onCommentCountChanged: (delta: Int) -> Unit = {},
@@ -155,6 +159,7 @@ fun PostDetailScreen(
                             authorName = authorName,
                             onAuthorClick = onAuthorClick,
                             onLinkClick = onLinkClick,
+                            onSubscribeClick = onSubscribeClick,
                             onLikeToggle = { onLikeToggle() },
                             onToggleReaction = { _, emoji -> onToggleReaction(emoji) },
                             // #25 — can't tip your own post.

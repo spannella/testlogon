@@ -7,6 +7,8 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
+import com.testlogon.android.feature.ads.cta.CtaDestination
+import com.testlogon.android.feature.ads.cta.navigateCta
 import com.testlogon.android.feature.feed.PostDetailRoute
 
 /**
@@ -26,6 +28,12 @@ fun NavGraphBuilder.postDetailDestination(navController: NavHostController) {
         deepLinks = postDetailDeepLinks(),
     ) {
         PostDetailRoute(
+            // SUB-E3-2 - a subscriber-only post lock card opens this creator subscribe flow.
+            onSubscribeClick = { creatorId ->
+                if (creatorId.isNotBlank()) {
+                    navController.navigateCta(CtaDestination.Subscriptions(creatorId))
+                }
+            },
             onBack = {
                 if (!navController.popBackStack()) {
                     navController.navigate(navController.graph.startDestinationRoute ?: TlGraphs.AUTHENTICATED) {

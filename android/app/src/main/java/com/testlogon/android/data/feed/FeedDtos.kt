@@ -71,6 +71,12 @@ data class PostDto(
     @Json(name = "unlock_count") val unlockCount: Int? = null,
     @Json(name = "unlock_limit_reached") val unlockLimitReached: Boolean? = null,
     @Json(name = "lock_expired") val lockExpired: Boolean? = null,
+    // --- SUB-E3-2 subscriber-only gating (per-post; emitted by newsfeed _post_to_dict) ---
+    // subscriber_only = the post is marked subscriber-gated; subscriber_locked = THIS viewer is a
+    // non-subscriber and the body/media were withheld (a lock marker, not deletion). creator_id (below,
+    // reused from the sponsored block) carries the author id for the Subscribe CTA.
+    @Json(name = "subscriber_only") val subscriberOnly: Boolean = false,
+    @Json(name = "subscriber_locked") val subscriberLocked: Boolean = false,
     // --- ADV-105 sponsored (paid) unit fields (injected by newsfeed sponsored path; ADV-104) ---
     // A server-injected sponsored post carries is_sponsored=true plus the creative + serving metadata.
     // All defaulted so an organic post (no sponsored keys) maps cleanly.
