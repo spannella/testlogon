@@ -26,6 +26,11 @@ fun NavGraphBuilder.alertsDestination(navController: NavHostController) {
             onOpenTracking = { shipGroupId ->
                 navController.navigate(OrderTrackingDest.build(shipGroupId)) { launchSingleTop = true }
             },
+            // SUB-E5: a subscription alert deep-links to Subscribers (creator) or manage-subscription.
+            onOpenSubscription = { actionUrl ->  // SUB-E5
+                val dest = if (actionUrl.contains("subscribers")) CreatorSubscribersDest.ROUTE else ManageSubscriptionDest.ROUTE
+                navController.navigate(dest) { launchSingleTop = true }
+            },
         )
     }
 }

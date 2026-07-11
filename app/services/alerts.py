@@ -70,6 +70,13 @@ def _build_action_url(alert_type: str, details: Dict[str, Any]) -> Optional[str]
         "mention":          f"/feed?post={post_id}" if post_id else (f"/messages/{conv_id}" if conv_id else None),
         "new_follower":     f"/discover?user={actor_id}" if actor_id else None,
         "subscription_started": "/subscriptions",
+        "subscription_new_subscriber": "/subscriptions/subscribers",
+        "subscription_renewed": "/subscriptions/manage",
+        "subscription_renewal_failed": "/subscriptions/manage",
+        "subscription_expiring": "/subscriptions/manage",
+        "subscription_expired": "/subscriptions/manage",
+        "subscription_canceled": "/subscriptions/manage",
+        "subscription_gifted": "/subscriptions/manage",
         "post_shared":      f"/feed?post={post_id}" if post_id else None,
         "post_tip":         f"/feed?post={post_id}" if post_id else None,
         "message_tip":      f"/messages/{conv_id}" if conv_id else None,
@@ -142,6 +149,9 @@ ALERT_EVENT_TYPES: List[str] = [
     "new_follower","post_liked","post_reaction","post_comment",
     "comment_reply","mention","subscription_started","post_shared",
     "post_tip","message_tip",
+    # Subscriptions (SUB-E1/E5): lifecycle notifications (default-on transactional)
+    "subscription_renewed","subscription_renewal_failed","subscription_expiring","subscription_expired",
+    "subscription_new_subscriber","subscription_canceled","subscription_gifted",
     "cart.abandoned",
     # Achievements (ENGAGE-001)
     "achievement_unlocked",
@@ -170,6 +180,9 @@ DEFAULT_PUSH_EVENT_TYPES: List[str] = [
     "subscription_renewal_failed",  # SUB-E1: a renewal charge failed
     "subscription_expiring",        # SUB-E1: subscription entering grace
     "subscription_expired",         # SUB-E1: subscription access ended
+    "subscription_new_subscriber",  # SUB-E5: a new subscriber joined (creator)
+    "subscription_canceled",        # SUB-E5: a subscription was canceled
+    "subscription_gifted",          # SUB-E5: a gift subscription
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.

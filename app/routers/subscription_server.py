@@ -1623,6 +1623,23 @@ async def subscribe(
         )
     except Exception:
         logger.warning("subscription social alert failed creator=%s", plan["creator_id"], exc_info=True)
+    # SUB-E5: notify the SUBSCRIBER too ("You subscribed to {creator}") - default-on push,
+    # deep-link to manage. actor=creator so emit_social_alert does NOT self-suppress.
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _creator_name = _gpi(plan["creator_id"]).get("display_name") or plan["creator_id"]
+        _emit_sa(
+            recipient_user_id=subscriber_id,
+            alert_type="subscription_started",
+            actor_user_id=plan["creator_id"],
+            actor_display_name=_creator_name,
+            title=f"You subscribed to {_creator_name}",
+            details={"plan_id": plan_id, "creator_id": plan["creator_id"], "subscription_id": subscription_id},
+            action_url="/subscriptions/manage",
+        )
+    except Exception:
+        logger.warning("subscription social alert failed subscriber=%s", subscriber_id, exc_info=True)
     audit_event(
         "subscription_started",
         subscriber_id,
@@ -1853,6 +1870,32 @@ async def gift_subscription(
         )
     except Exception:
         logger.warning("gift social alert failed recipient=%s", recipient_id, exc_info=True)
+    # SUB-E5: notify the GIFTER ("your gift was sent") + the CREATOR ("new subscriber via gift").
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _recipient_name = _gpi(recipient_id).get("display_name") or recipient_id
+        _gifter_name2 = _gpi(gifter_id).get("display_name") or gifter_id
+        _emit_sa(
+            recipient_user_id=gifter_id,
+            alert_type="subscription_gifted",
+            actor_user_id=recipient_id,
+            actor_display_name=_recipient_name,
+            title=f"Your gift to {_recipient_name} was sent",
+            details={"plan_id": plan_id, "subscription_id": subscription_id, "recipient_id": recipient_id, "creator_id": plan["creator_id"]},
+            action_url="/subscriptions/manage",
+        )
+        _emit_sa(
+            recipient_user_id=plan["creator_id"],
+            alert_type="subscription_gifted",
+            actor_user_id=gifter_id,
+            actor_display_name=_gifter_name2,
+            title=f"{_recipient_name} joined via a gift subscription",
+            details={"plan_id": plan_id, "subscription_id": subscription_id, "subscriber_id": recipient_id, "gifter_id": gifter_id, "gift": True},
+            action_url="/subscriptions/subscribers",
+        )
+    except Exception:
+        logger.warning("gift social alert (gifter/creator) failed gifter=%s", gifter_id, exc_info=True)
     audit_event("subscription_gifted", gifter_id, request, outcome="success", subscription_id=subscription_id, plan_id=plan_id, recipient_id=recipient_id, price_cents=int(price_cents))
     audit_event("subscription_gift_received", recipient_id, request, outcome="success", subscription_id=subscription_id, plan_id=plan_id, gifter_id=gifter_id)
     try:
@@ -2094,6 +2137,34 @@ async def cancel_subscription(
         notif_type="subscription_canceled",
         payload={"subscription_id": subscription_id, "creator_id": sub["creator_id"]},
     )
+    # SUB-E5: promote cancel to default-on PUSH for BOTH parties, deep-linked.
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _c_name = _gpi(sub["creator_id"]).get("display_name") or sub["creator_id"]
+        _s_name = _gpi(sub["subscriber_id"]).get("display_name") or sub["subscriber_id"]
+        _ends = int(sub.get("current_period_end") or 0)
+        _sub_title = ("Your subscription to %s is canceled" % _c_name) if not sub.get("cancel_at_period_end") else ("Your subscription to %s ends soon" % _c_name)
+        _emit_sa(
+            recipient_user_id=sub["subscriber_id"],
+            alert_type="subscription_canceled",
+            actor_user_id=sub["creator_id"],
+            actor_display_name=_c_name,
+            title=_sub_title,
+            details={"subscription_id": subscription_id, "creator_id": sub["creator_id"], "ends_at": _ends, "cancel_at_period_end": bool(sub.get("cancel_at_period_end"))},
+            action_url="/subscriptions/manage",
+        )
+        _emit_sa(
+            recipient_user_id=sub["creator_id"],
+            alert_type="subscription_canceled",
+            actor_user_id=sub["subscriber_id"],
+            actor_display_name=_s_name,
+            title=f"{_s_name} canceled their subscription",
+            details={"subscription_id": subscription_id, "subscriber_id": sub["subscriber_id"]},
+            action_url="/subscriptions/subscribers",
+        )
+    except Exception:
+        logger.warning("cancel social alert failed sub=%s", subscription_id, exc_info=True)
     audit_event(
         "subscription_canceled",
         sub["subscriber_id"],

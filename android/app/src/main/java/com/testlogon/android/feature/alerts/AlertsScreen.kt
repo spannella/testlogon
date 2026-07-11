@@ -81,6 +81,7 @@ fun AlertsRoute(
     onOpenSale: (String) -> Unit = {},
     // D4: tapping a buyer shipment alert opens the buyer order-tracking view (by ship-group id).
     onOpenTracking: (String) -> Unit = {},
+    onOpenSubscription: (String) -> Unit = {},  // SUB-E5 route(A1)
     viewModel: AlertsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -111,6 +112,7 @@ fun AlertsRoute(
         onOpenModeration = onOpenModeration,
         onOpenSale = onOpenSale,
         onOpenTracking = onOpenTracking,
+        onOpenSubscription = onOpenSubscription,  // SUB-E5 route(A2)
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -166,6 +168,20 @@ private val ORDER_TRACKING_ALERT_EVENTS: Set<String> = setOf(
 internal fun isOrderTrackingAlert(event: String?): Boolean =
     event != null && event.trim().lowercase() in ORDER_TRACKING_ALERT_EVENTS
 
+/**
+ * SUB-E5 subscription lifecycle alert events (backend emit_social_alert). Tapping one deep-links
+ * to manage-subscription (subscriber-facing) or the Subscribers screen (creator-facing); the
+ * backend sets the per-recipient action_url so the app just routes on that path.
+ */
+private val SUBSCRIPTION_ALERT_EVENTS: Set<String> = setOf(
+    "subscription_started", "subscription_new_subscriber", "subscription_renewed",
+    "subscription_renewal_failed", "subscription_expiring", "subscription_expired",
+    "subscription_canceled", "subscription_gifted",
+)
+
+internal fun isSubscriptionAlert(event: String?): Boolean =
+    event != null && event.trim().lowercase() in SUBSCRIPTION_ALERT_EVENTS
+
 /** Parses the ship_group id from a buyer shipment alert action_url query. */
 internal fun shipGroupFromActionUrl(actionUrl: String?): String? {
     val url = actionUrl ?: return null
@@ -194,6 +210,7 @@ fun AlertsScreen(
     onOpenModeration: () -> Unit = {},
     onOpenSale: (String) -> Unit = {},
     onOpenTracking: (String) -> Unit = {},
+    onOpenSubscription: (String) -> Unit = {},  // SUB-E5 route(A3)
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -304,6 +321,10 @@ fun AlertsScreen(
                                         // D4: a buyer shipment alert opens the order-tracking view.
                                         if (isOrderTrackingAlert(alert.event)) {
                                             shipGroupFromActionUrl(alert.actionUrl)?.let(onOpenTracking)
+                                        }
+                                        // SUB-E5: a subscription alert deep-links via its action_url.
+                                        if (isSubscriptionAlert(alert.event)) {
+                                            onOpenSubscription(alert.actionUrl ?: "")
                                         }
                                     },
                                 )

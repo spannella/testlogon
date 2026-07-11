@@ -103,7 +103,7 @@ def _display_name(user_id: str) -> str:
         return user_id
 
 
-def _emit(alert_type: str, *, recipient: str, actor: str, title: str, details: Dict[str, Any]) -> None:
+def _emit(alert_type: str, *, recipient: str, actor: str, title: str, details: Dict[str, Any], action_url: str = "/subscriptions/manage") -> None:
     try:
         from app.services.social_alerts import emit_social_alert
 
@@ -114,7 +114,7 @@ def _emit(alert_type: str, *, recipient: str, actor: str, title: str, details: D
             actor_display_name=_display_name(actor),
             title=title,
             details=details,
-            action_url="/subscriptions",
+            action_url=action_url,
         )
     except Exception:
         logger.warning("subscription alert %s failed recipient=%s", alert_type, recipient, exc_info=True)
@@ -195,7 +195,7 @@ def _decline(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any]
         "subscription_renewal_failed",
         recipient=sub["subscriber_id"],
         actor=sub["creator_id"],
-        title="Your subscription payment failed",
+        title="Your subscription payment failed — update your card",
         details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "attempt": attempts, "reason": reason},
     )
     if entered_grace:
@@ -326,6 +326,7 @@ def _renewal_success(sub: Dict[str, Any], now: int, pi_id: Optional[str], amount
         actor=sub["subscriber_id"],
         title="A subscription renewed",
         details={"subscription_id": subscription_id, "plan_id": sub.get("plan_id"), "subscriber_id": sub["subscriber_id"], "amount_cents": int(amount)},
+        action_url="/subscriptions/subscribers",  # SUB-E5 creator renewed deep-link
     )
     _bucket = "trial_converted" if trial_conversion else "renewed"
     summary[_bucket].append({"subscription_id": subscription_id, "amount_cents": int(amount), "new_period_end": new_cpe, "pi": pi_id})
@@ -403,6 +404,39 @@ def _attempt_renewal(sub: Dict[str, Any], now: int, summary: Dict[str, Any], *, 
 # per-subscription dispatch
 # ---------------------------------------------------------------------------
 
+def _expiring_notice_days() -> int:
+    try:
+        return int(getattr(S, "subscription_expiring_notice_days", 3))
+    except Exception:
+        return 3
+
+
+def _maybe_expiring_notice(sub: Dict[str, Any], now: int, boundary: int, summary: Dict[str, Any]) -> None:
+    """SUB-E5 (SUB-52): emit an ADVANCE 'subscription_expiring' notice N days before a
+    non-renewing subscription lapses (canceling / auto_renew off / trial ending). Fires
+    ONCE per boundary (idempotent via the ``expiring_notified_period`` marker so repeated
+    sweeps never re-notify)."""
+    if not boundary or boundary <= now:
+        return
+    window = _expiring_notice_days() * 86400
+    if boundary - now > window:
+        return
+    if int(sub.get("expiring_notified_period") or 0) == boundary:
+        return
+    sub["expiring_notified_period"] = boundary
+    sub["updated_at"] = now
+    _save(sub)
+    _emit(
+        "subscription_expiring",
+        recipient=sub["subscriber_id"],
+        actor=sub["creator_id"],
+        title="Your subscription is ending soon",
+        details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "ends_at": boundary},
+    )
+    summary.setdefault("expiring_soon", []).append({"subscription_id": sub["subscription_id"], "ends_at": boundary})
+    logger.info("subscription_expiring_advance id=%s ends_at=%s", sub["subscription_id"], boundary)
+
+
 def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
     status = (sub.get("status") or "").lower()
     # SUB-E2: AUTO-CONVERT a trial at trial_end -> charge the card captured up front
@@ -412,6 +446,8 @@ def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
         trial_end = int(sub.get("trial_end") or sub.get("current_period_end") or 0)
         if trial_end and trial_end <= now:
             _attempt_renewal(sub, now, summary, trial_conversion=True)
+        else:
+            _maybe_expiring_notice(sub, now, trial_end, summary)
         return
     # SUB-E2 PART 2 (SUB-25): a 'canceling' sub (cancel-at-period-end) KEEPS access
     # until current_period_end (subscription_access grants it) then becomes terminal
@@ -425,6 +461,8 @@ def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
             _save(sub)
             summary["canceled"].append(sub["subscription_id"])
             logger.info("subscription_canceled_at_period_end id=%s", sub["subscription_id"])
+        else:
+            _maybe_expiring_notice(sub, now, cpe, summary)
         return
     if status not in ("active", "past_due"):
         return
@@ -463,6 +501,8 @@ def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
             return
         due = (nbd and nbd <= now) or (cpe and cpe <= now)
         if not due:
+            if not auto_renew or cancel_ape:
+                _maybe_expiring_notice(sub, now, cpe, summary)
             return
     else:  # past_due
         if next_retry and next_retry > now:
@@ -492,6 +532,7 @@ def run_renewal_sweep(*, now: Optional[int] = None, limit: int = 1000) -> Dict[s
         "grandfather_skips": [],
         "trial_converted": [],
         "plan_changed": [],
+        "expiring_soon": [],
     }
     filter_expr = Attr("entity").eq("subscription") & Attr("sk").eq("META")
     last_key: Optional[Dict[str, Any]] = None
