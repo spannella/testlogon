@@ -60,12 +60,24 @@ def has_active_subscription(subscriber_id: str, creator_id: str) -> bool:
     except Exception:
         return False
     items: List[Dict[str, Any]] = resp.get("Items", [])
+    now = now_ts()
     for item in items:
         if item.get("creator_id") != creator_id:
             continue
         status = (item.get("status") or "").lower()
-        if status in {"active", "past_due", "trialing"}:
-            return True
+        # SUB-E1: expired/canceled subs never grant access.
+        if status not in {"active", "past_due", "trialing"}:
+            continue
+        # SUB-E1 expiry enforcement: access is bounded by the paid period
+        # (grace-extended). A lapsed sub (period elapsed with no successful
+        # renewal) or a past_due sub beyond grace LOSES access. A record
+        # with no period info (legacy/grandfathered) is left un-enforced.
+        period_end = int(item.get("current_period_end") or 0)
+        grace_until = int(item.get("grace_until") or 0)
+        effective_end = max(period_end, grace_until)
+        if effective_end and effective_end <= now:
+            continue
+        return True
     return False
 
 

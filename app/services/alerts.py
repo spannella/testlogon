@@ -166,6 +166,10 @@ DEFAULT_PUSH_EVENT_TYPES: List[str] = [
     "order_shipped",         # your order has shipped (buyer, D3)
     "order_out_for_delivery",  # your order is out for delivery (buyer, D4)
     "order_delivered",         # your order was delivered (buyer, D4)
+    "subscription_renewed",         # SUB-E1: your subscription renewed
+    "subscription_renewal_failed",  # SUB-E1: a renewal charge failed
+    "subscription_expiring",        # SUB-E1: subscription entering grace
+    "subscription_expired",         # SUB-E1: subscription access ended
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.

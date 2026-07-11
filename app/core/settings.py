@@ -393,6 +393,11 @@ class Settings:
     billing_dunning_enabled: bool = os.environ.get("BILLING_DUNNING_ENABLED", "false").lower() == "true"
     billing_dunning_interval_seconds: int = int(os.environ.get("BILLING_DUNNING_INTERVAL_SECONDS", "900"))
     billing_dunning_retry_schedule_seconds: str = os.environ.get("BILLING_DUNNING_RETRY_SCHEDULE_SECONDS", "3600,86400,172800")
+    # SUB-E1: recurring subscription renewal + dunning + expiry engine.
+    subscription_renewal_enabled: bool = os.environ.get("SUBSCRIPTION_RENEWAL_ENABLED", "true").lower() == "true"
+    subscription_renewal_interval_seconds: int = int(os.environ.get("SUBSCRIPTION_RENEWAL_INTERVAL_SECONDS", "900"))
+    subscription_dunning_retry_days: str = os.environ.get("SUBSCRIPTION_DUNNING_RETRY_DAYS", "1,3,5,7")
+    subscription_grace_days: int = int(os.environ.get("SUBSCRIPTION_GRACE_DAYS", "7"))
     billing_dunning_scan_limit: int = int(os.environ.get("BILLING_DUNNING_SCAN_LIMIT", "200"))
 
     # Playback entitlement issuance and validation (VWD-018)

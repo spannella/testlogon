@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, conint, conlist
 
 from app.core.settings import S
@@ -25,6 +25,7 @@ from app.services.profile import get_profile_identity
 from app.services.purchase_history import record_billing_transaction
 from app.services.subscription_access import get_subscription_settings, set_subscription_settings
 from app.services.subscription_cycle_orders import emit_subscription_cycle_order
+from app.auth.policy import require_admin_or_root
 
 logger = logging.getLogger(__name__)
 
@@ -2306,3 +2307,23 @@ async def billing_webhook(provider: str, body: WebhookIn):
     sub["updated_at"] = ts
     save_subscription(sub)
     return {"ok": True, "event_id": event_id}
+
+
+# -----------------------------
+# SUB-E1 — manual/admin trigger for the recurring renewal + dunning sweep
+# (mirrors the moderation/shipment simulate drivers; the periodic task in
+# main.py runs it on a wall-clock interval). Admin/root gated.
+# -----------------------------
+@router.post("/ui/admin/subscriptions/run-renewals")
+async def admin_run_renewals(
+    request: Request,
+    limit: int = Query(default=1000, ge=1, le=5000),
+    now_override: Optional[int] = Query(default=None),
+    _admin=Depends(require_admin_or_root),
+):
+    """Drive one renewal/dunning/expiry sweep now. ``now_override`` (unix ts)
+    lets an operator/verifier evaluate due-ness against a chosen wall clock.
+    Returns the sweep action summary."""
+    from app.services.subscription_renewal import run_renewal_sweep
+
+    return run_renewal_sweep(now=now_override, limit=limit)
