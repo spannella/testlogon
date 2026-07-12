@@ -73,8 +73,9 @@ fun NavGraphBuilder.payoutsDestinations(navController: NavHostController) {
     }
     composable(PayoutSetupDest.ROUTE) {
         PayoutSetupRoute(
-            // KYC verification entry route not available at M6 (E42); see STOP-AND-FLAG above.
-            onNavigateToKyc = { /* no-op until the KYC verification route lands */ },
+            // PAY-22 - route the pre-withdrawal gate to the EXISTING KYC case flow (view status /
+            // start-or-continue verification). The gate re-resolves on return (LifecycleResumeEffect).
+            onNavigateToKyc = { navController.navigate(KycCasesDest.ROUTE) { launchSingleTop = true } },
             onBack = { navController.popBackStack() },
         )
     }

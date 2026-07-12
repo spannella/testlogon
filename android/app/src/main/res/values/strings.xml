@@ -2047,6 +2047,44 @@
     <string name="payout_gate_unknown_title">Verification status unavailable</string>
     <string name="payout_gate_unknown_body">We couldn\'t confirm your verification status. Payouts are disabled until we can.</string>
 
+    <!-- PAY-22 - pre-withdrawal gate (KYC identity + W-9 tax info) -->
+    <string name="payout_withdraw_gate_title">Verify your identity and tax info to withdraw</string>
+    <string name="payout_withdraw_gate_subtitle">Both steps are required before you can withdraw.</string>
+    <string name="payout_gate_step_kyc">Identity verification</string>
+    <string name="payout_gate_step_tax">Tax info (W-9)</string>
+    <string name="payout_gate_step_done">Done</string>
+    <string name="payout_gate_step_pending">Required</string>
+    <string name="payout_gate_loading">Checking your withdrawal eligibility…</string>
+    <string name="payout_gate_refresh">Refresh status</string>
+    <string name="payout_kyc_panel_title">Verify your identity</string>
+    <string name="payout_kyc_panel_body">You must complete identity verification (KYC) before you can withdraw.</string>
+    <string name="payout_kyc_status_line">Current status: %1$s</string>
+    <string name="payout_kyc_verify_action">Verify your identity</string>
+    <string name="payout_kyc_status_none">Not started</string>
+    <string name="payout_kyc_status_draft">Draft</string>
+    <string name="payout_kyc_status_submitted">Submitted</string>
+    <string name="payout_kyc_status_under_review">Under review</string>
+    <string name="payout_kyc_status_needs_more_info">More info needed</string>
+    <string name="payout_kyc_status_approved">Approved</string>
+    <string name="payout_kyc_status_rejected">Rejected</string>
+    <string name="payout_kyc_status_expired">Expired</string>
+    <string name="payout_tax_panel_title">Tax information (W-9)</string>
+    <string name="payout_tax_panel_body">Provide your W-9 tax details before you can withdraw. Required for 1099 reporting.</string>
+    <string name="payout_tax_legal_name">Legal name</string>
+    <string name="payout_tax_classification">Tax classification</string>
+    <string name="payout_tax_class_individual">Individual (SSN)</string>
+    <string name="payout_tax_class_business">Business (EIN)</string>
+    <string name="payout_tax_tin_ssn">Social Security Number (SSN)</string>
+    <string name="payout_tax_tin_ein">Employer ID Number (EIN)</string>
+    <string name="payout_tax_tin_sec_note">We mask your TIN — only the last 4 digits are ever stored.</string>
+    <string name="payout_tax_address">Street address</string>
+    <string name="payout_tax_city">City</string>
+    <string name="payout_tax_state">State</string>
+    <string name="payout_tax_zip">ZIP code</string>
+    <string name="payout_tax_certify">Under penalties of perjury, I certify that this information is correct.</string>
+    <string name="payout_tax_submit">Save tax info</string>
+    <string name="payout_tax_saved">Tax info saved.</string>
+
     <!-- PAY-13 - routable payout methods (bank / PayPal / Stripe Connect) -->
     <string name="payout_methods_section_title">Payout destinations</string>
     <string name="payout_methods_empty">No payout destinations yet. Add one to receive payouts.</string>

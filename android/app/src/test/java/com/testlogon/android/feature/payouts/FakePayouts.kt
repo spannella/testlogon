@@ -24,6 +24,10 @@ import com.testlogon.android.data.payouts.PayoutRequestDraft
 import com.testlogon.android.data.payouts.PayoutRequestOutcome
 import com.testlogon.android.data.payouts.PayoutSetupData
 import com.testlogon.android.data.payouts.PayoutSetupRepository
+import com.testlogon.android.data.payouts.PayoutTaxInfo
+import com.testlogon.android.data.payouts.W9Submission
+import com.testlogon.android.data.payouts.WithdrawGateInputs
+import com.testlogon.android.core.model.kyc.KycCaseStatus
 import com.testlogon.android.data.payouts.PayoutStatus
 import com.testlogon.android.data.payouts.PayoutsRepository
 import com.testlogon.android.data.payouts.TierStatus
@@ -95,6 +99,20 @@ class FakePayoutSetupRepository : PayoutSetupRepository {
         requestPayoutCalls++
         lastDraft = draft
         return requestOutcome
+    }
+
+    // PAY-22 - pre-withdrawal gate doubles (default: both satisfied -> gate open).
+    var withdrawGateResult: ApiResult<WithdrawGateInputs> = ApiResult.Success(
+        WithdrawGateInputs(kycApproved = true, kycStatus = KycCaseStatus.APPROVED, taxInfo = sampleTaxInfo()),
+    )
+    var submitTaxResult: ApiResult<PayoutTaxInfo> = ApiResult.Success(sampleTaxInfo())
+    var submitTaxCalls = 0
+        private set
+
+    override suspend fun loadWithdrawGate(): ApiResult<WithdrawGateInputs> = withdrawGateResult
+    override suspend fun submitTaxInfo(submission: W9Submission): ApiResult<PayoutTaxInfo> {
+        submitTaxCalls++
+        return submitTaxResult
     }
 
     // ---- PAY-13: routable payout-method doubles ----
@@ -249,4 +267,21 @@ fun sampleMethod(
     externalAccountRef = "btok_mock_abc",
     createdAtEpochSeconds = 1_748_628_251L,
     updatedAtEpochSeconds = 1_748_800_800L,
+)
+
+fun sampleTaxInfo(
+    onFile: Boolean = true,
+    certified: Boolean = true,
+    tinLast4: String = "6789",
+): PayoutTaxInfo = PayoutTaxInfo(
+    onFile = onFile,
+    legalName = "Jane Creator",
+    tinLast4 = tinLast4,
+    tinType = "ssn",
+    addressLine1 = "1 Main St",
+    city = "Austin",
+    state = "TX",
+    zipCode = "78701",
+    certified = certified,
+    certifiedAt = 1_748_800_800L,
 )

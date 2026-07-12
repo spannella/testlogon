@@ -49,18 +49,21 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.core.model.kyc.KycCaseStatus
 import com.testlogon.android.core.ui.i18n.asString
 import com.testlogon.android.core.ui.i18n.resolve
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
-import com.testlogon.android.data.payouts.PayoutGate
 import com.testlogon.android.data.payouts.PayoutMethod
 import com.testlogon.android.data.payouts.PayoutMethodStatus
 import com.testlogon.android.data.payouts.RoutableMethodType
+import com.testlogon.android.data.payouts.TinType
+import com.testlogon.android.data.payouts.WithdrawGate
 
-/** AND-259 / PAY-13 — stable testTags for the payout setup screen. */
+/** AND-259 / PAY-13 / PAY-22 - stable testTags for the payout setup screen. */
 object PayoutSetupTestTags {
     const val SCREEN = "payout_setup_screen"
     const val FORM = "payout_setup_form"
@@ -70,7 +73,20 @@ object PayoutSetupTestTags {
     const val VERIFY = "payout_setup_verify"
     const val GATE_UNKNOWN = "payout_setup_gate_unknown"
 
-    // PAY-13 — routable payout methods.
+    // PAY-22 - pre-withdrawal gate (KYC + W-9).
+    const val WITHDRAW_GATE = "payout_withdraw_gate"
+    const val KYC_PANEL = "payout_kyc_panel"
+    const val W9_FORM = "payout_w9_form"
+    const val W9_LEGAL_NAME = "payout_w9_legal_name"
+    const val W9_TIN = "payout_w9_tin"
+    const val W9_ADDRESS = "payout_w9_address"
+    const val W9_CITY = "payout_w9_city"
+    const val W9_STATE = "payout_w9_state"
+    const val W9_ZIP = "payout_w9_zip"
+    const val W9_CERTIFY = "payout_w9_certify"
+    const val W9_SUBMIT = "payout_w9_submit"
+
+    // PAY-13 - routable payout methods.
     const val METHODS = "payout_methods_section"
     const val ADD_METHOD = "payout_add_method"
     const val ADD_FORM = "payout_add_method_form"
@@ -87,7 +103,7 @@ object PayoutSetupTestTags {
     fun methodRemove(id: String) = "payout_method_remove_$id"
 }
 
-/** AND-259 — route-level payout setup entry; the gate routes to the KYC verification entry route. */
+/** AND-259 / PAY-22 - route-level payout setup entry; the gate routes to the existing KYC flow. */
 @Composable
 fun PayoutSetupRoute(
     onNavigateToKyc: () -> Unit,
@@ -107,10 +123,16 @@ fun PayoutSetupRoute(
                 // resolve the UiText with Resources (non-composable lambda) per the gotchas.
                 is PayoutSetupViewModel.Effect.ShowMessage ->
                     snackbarHostState.showSnackbar(effect.text.resolve(resources))
-                // PAY-11 — real Connect onboarding URL (only when Stripe Connect is keyed server-side).
+                // PAY-11 - real Connect onboarding URL (only when Stripe Connect is keyed server-side).
                 is PayoutSetupViewModel.Effect.OpenUrl -> uriHandler.openUri(effect.url)
             }
         }
+    }
+
+    // PAY-22 - re-resolve the gate whenever we return to this screen (e.g. after completing KYC).
+    LifecycleResumeEffect(Unit) {
+        viewModel.onReturnedFromKyc()
+        onPauseOrDispose { }
     }
 
     // Surface the created-payout confirmation once.
@@ -131,6 +153,9 @@ fun PayoutSetupRoute(
         onNotesChanged = viewModel::onNotesChanged,
         onSubmit = viewModel::submit,
         onVerifyIdentity = viewModel::onVerifyIdentity,
+        onRefreshGate = viewModel::refreshGate,
+        onW9FieldChanged = viewModel::onW9FieldChanged,
+        onSubmitW9 = viewModel::submitW9,
         onRetry = viewModel::retry,
         onBack = onBack,
         onAddMethodClicked = viewModel::onAddMethodClicked,
@@ -155,6 +180,9 @@ fun PayoutSetupScreen(
     onNotesChanged: (String) -> Unit,
     onSubmit: () -> Unit,
     onVerifyIdentity: () -> Unit,
+    onRefreshGate: () -> Unit,
+    onW9FieldChanged: ((PayoutSetupViewModel.W9FormState) -> PayoutSetupViewModel.W9FormState) -> Unit,
+    onSubmitW9: () -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
     onAddMethodClicked: () -> Unit,
@@ -205,7 +233,7 @@ fun PayoutSetupScreen(
             ) {
                 state.balance?.let { BalanceCard(it) }
 
-                // PAY-13 — routable payout destinations (independent of the KYC gate).
+                // PAY-13 - routable payout destinations (independent of the KYC/tax gate).
                 PayoutMethodsSection(
                     state = state,
                     onAddMethodClicked = onAddMethodClicked,
@@ -219,20 +247,31 @@ fun PayoutSetupScreen(
                     onStartConnect = onStartConnect,
                 )
 
-                when (val gate = state.gate) {
-                    PayoutGate.Allowed -> PayoutForm(
+                // PAY-22 - the pre-withdrawal gate status header (identity + tax info).
+                WithdrawGateHeader(state.withdrawGate)
+
+                when (val gate = state.withdrawGate) {
+                    is WithdrawGate.Allowed -> PayoutForm(
                         state = state,
                         onAmountChanged = onAmountChanged,
                         onMethodSelected = onMethodSelected,
                         onNotesChanged = onNotesChanged,
                         onSubmit = onSubmit,
                     )
-                    is PayoutGate.Blocked -> KycGatePanel(
-                        blocked = gate,
+                    is WithdrawGate.NeedsKyc -> KycVerifyPanel(
+                        status = gate.kycStatus,
                         evaluating = state.evaluating,
                         onVerifyIdentity = onVerifyIdentity,
+                        onRefresh = onRefreshGate,
                     )
-                    PayoutGate.Unknown -> GateUnknownPanel(onRetry = onRetry)
+                    is WithdrawGate.NeedsTaxInfo -> W9FormPanel(
+                        form = state.w9Form,
+                        submitting = state.w9Submitting,
+                        onFieldChanged = onW9FieldChanged,
+                        onSubmit = onSubmitW9,
+                    )
+                    WithdrawGate.Loading -> GateLoadingPanel()
+                    WithdrawGate.Unresolved -> GateUnknownPanel(onRetry = onRetry)
                 }
             }
         }
@@ -263,6 +302,262 @@ private fun BalanceCard(balance: com.testlogon.android.data.payouts.PayoutBalanc
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// ---- PAY-22: pre-withdrawal gate (KYC + W-9) ----
+
+/** The always-visible gate status header: shows both requirements and whether each is satisfied. */
+@Composable
+private fun WithdrawGateHeader(gate: WithdrawGate) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(PayoutSetupTestTags.WITHDRAW_GATE)
+            .semantics(mergeDescendants = true) { },
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = stringResource(R.string.payout_withdraw_gate_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.payout_withdraw_gate_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            GateStepRow(
+                label = stringResource(R.string.payout_gate_step_kyc),
+                done = gate.kycSatisfied,
+            )
+            GateStepRow(
+                label = stringResource(R.string.payout_gate_step_tax),
+                done = gate.taxSatisfied,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GateStepRow(label: String, done: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        StatusPill(
+            text = stringResource(
+                if (done) R.string.payout_gate_step_done else R.string.payout_gate_step_pending,
+            ),
+            color = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+/** WithdrawGate.NeedsKyc -> route the user to the existing KYC verification flow. */
+@Composable
+private fun KycVerifyPanel(
+    status: KycCaseStatus,
+    evaluating: Boolean,
+    onVerifyIdentity: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(PayoutSetupTestTags.KYC_PANEL)
+            .semantics(mergeDescendants = true) { },
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = stringResource(R.string.payout_kyc_panel_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.payout_kyc_panel_body),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = stringResource(R.string.payout_kyc_status_line, kycStatusLabel(status)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HorizontalDivider()
+            Button(
+                onClick = onVerifyIdentity,
+                enabled = !evaluating,
+                modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.VERIFY),
+            ) {
+                Text(stringResource(R.string.payout_kyc_verify_action))
+            }
+            OutlinedButton(
+                onClick = onRefresh,
+                enabled = !evaluating,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (evaluating) CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
+                Text(stringResource(R.string.payout_gate_refresh))
+            }
+        }
+    }
+}
+
+@Composable
+private fun kycStatusLabel(status: KycCaseStatus): String = stringResource(
+    when (status) {
+        KycCaseStatus.APPROVED -> R.string.payout_kyc_status_approved
+        KycCaseStatus.SUBMITTED -> R.string.payout_kyc_status_submitted
+        KycCaseStatus.UNDER_REVIEW -> R.string.payout_kyc_status_under_review
+        KycCaseStatus.NEEDS_MORE_INFO -> R.string.payout_kyc_status_needs_more_info
+        KycCaseStatus.REJECTED -> R.string.payout_kyc_status_rejected
+        KycCaseStatus.EXPIRED -> R.string.payout_kyc_status_expired
+        KycCaseStatus.DRAFT -> R.string.payout_kyc_status_draft
+        KycCaseStatus.UNKNOWN -> R.string.payout_kyc_status_none
+    },
+)
+
+/** WithdrawGate.NeedsTaxInfo -> the W-9 collection form. The raw TIN is masked after submit (SEC). */
+@Composable
+private fun W9FormPanel(
+    form: PayoutSetupViewModel.W9FormState,
+    submitting: Boolean,
+    onFieldChanged: ((PayoutSetupViewModel.W9FormState) -> PayoutSetupViewModel.W9FormState) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.W9_FORM),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(R.string.payout_tax_panel_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.payout_tax_panel_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            OutlinedTextField(
+                value = form.legalName,
+                onValueChange = { v -> onFieldChanged { it.copy(legalName = v.take(200)) } },
+                label = { Text(stringResource(R.string.payout_tax_legal_name)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.W9_LEGAL_NAME),
+            )
+
+            // Tax classification (maps to the W-9 TIN type: individual/SSN vs business/EIN).
+            Text(stringResource(R.string.payout_tax_classification), style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = form.tinType == TinType.SSN,
+                    onClick = { onFieldChanged { it.copy(tinType = TinType.SSN) } },
+                    label = { Text(stringResource(R.string.payout_tax_class_individual)) },
+                )
+                FilterChip(
+                    selected = form.tinType == TinType.EIN,
+                    onClick = { onFieldChanged { it.copy(tinType = TinType.EIN) } },
+                    label = { Text(stringResource(R.string.payout_tax_class_business)) },
+                )
+            }
+
+            OutlinedTextField(
+                value = form.tin,
+                onValueChange = { v -> onFieldChanged { it.copy(tin = v.filter(Char::isDigit).take(9)) } },
+                label = {
+                    Text(
+                        stringResource(
+                            if (form.tinType == TinType.SSN) {
+                                R.string.payout_tax_tin_ssn
+                            } else {
+                                R.string.payout_tax_tin_ein
+                            },
+                        ),
+                    )
+                },
+                supportingText = { Text(stringResource(R.string.payout_tax_tin_sec_note)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.W9_TIN),
+            )
+
+            OutlinedTextField(
+                value = form.addressLine1,
+                onValueChange = { v -> onFieldChanged { it.copy(addressLine1 = v.take(200)) } },
+                label = { Text(stringResource(R.string.payout_tax_address)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.W9_ADDRESS),
+            )
+            OutlinedTextField(
+                value = form.city,
+                onValueChange = { v -> onFieldChanged { it.copy(city = v.take(100)) } },
+                label = { Text(stringResource(R.string.payout_tax_city)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.W9_CITY),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = form.state,
+                    onValueChange = { v -> onFieldChanged { it.copy(state = v.filter(Char::isLetter).take(2).uppercase()) } },
+                    label = { Text(stringResource(R.string.payout_tax_state)) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).testTag(PayoutSetupTestTags.W9_STATE),
+                )
+                OutlinedTextField(
+                    value = form.zipCode,
+                    onValueChange = { v -> onFieldChanged { it.copy(zipCode = v.filter { c -> c.isDigit() || c == '-' }.take(10)) } },
+                    label = { Text(stringResource(R.string.payout_tax_zip)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).testTag(PayoutSetupTestTags.W9_ZIP),
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = form.certified,
+                    onCheckedChange = { c -> onFieldChanged { it.copy(certified = c) } },
+                    modifier = Modifier.testTag(PayoutSetupTestTags.W9_CERTIFY),
+                )
+                Text(stringResource(R.string.payout_tax_certify), style = MaterialTheme.typography.bodySmall)
+            }
+
+            form.error?.let {
+                Text(
+                    text = it.asString(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            Button(
+                onClick = onSubmit,
+                enabled = form.canSubmit && !submitting,
+                modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.W9_SUBMIT),
+            ) {
+                if (submitting) CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
+                Text(stringResource(R.string.payout_tax_submit))
+            }
+        }
+    }
+}
+
+@Composable
+private fun GateLoadingPanel() {
+    Card(modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.GATE_PANEL)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator()
+            Text(
+                text = stringResource(R.string.payout_gate_loading),
+                style = MaterialTheme.typography.bodyMedium,
             )
         }
     }
@@ -658,53 +953,6 @@ private fun PayoutMethodOption(
         onClick = { onSelected(method) },
         label = { Text(stringResource(labelRes)) },
     )
-}
-
-@Composable
-private fun KycGatePanel(
-    blocked: PayoutGate.Blocked,
-    evaluating: Boolean,
-    onVerifyIdentity: () -> Unit,
-) {
-    val title = stringResource(R.string.payout_gate_title)
-    val tierLine = stringResource(
-        R.string.payout_gate_tiers,
-        blocked.currentTier.rank,
-        blocked.requiredTier.rank,
-    )
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(PayoutSetupTestTags.GATE_PANEL)
-            .semantics(mergeDescendants = true) { },
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(text = title, style = MaterialTheme.typography.titleMedium)
-            Text(text = tierLine, style = MaterialTheme.typography.bodyMedium)
-            if (blocked.missing.isNotEmpty()) {
-                Text(
-                    text = stringResource(R.string.payout_gate_missing, blocked.missing.joinToString(", ")),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            // STOP-AND-FLAG: the KYC vendor SDK is not configured; the verify action is wired but the
-            // bound StubKycVerifier never launches a real flow.
-            Text(
-                text = stringResource(R.string.payout_gate_unavailable),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            HorizontalDivider()
-            Button(
-                onClick = onVerifyIdentity,
-                enabled = !evaluating,
-                modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.VERIFY),
-            ) {
-                Text(stringResource(R.string.payout_gate_verify_action))
-            }
-        }
-    }
 }
 
 @Composable

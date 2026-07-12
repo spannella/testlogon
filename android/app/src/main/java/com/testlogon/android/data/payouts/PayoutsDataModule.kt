@@ -34,6 +34,12 @@ object PayoutsApiModule {
     @Singleton
     fun providePayoutMethodsApi(retrofit: Retrofit): PayoutMethodsApi =
         retrofit.create(PayoutMethodsApi::class.java)
+
+    // PAY-22 — the W-9 tax-info API (pre-withdrawal tax gate; masked TIN only).
+    @Provides
+    @Singleton
+    fun provideTaxInfoApi(retrofit: Retrofit): TaxInfoApi =
+        retrofit.create(TaxInfoApi::class.java)
 }
 
 /**
@@ -73,4 +79,9 @@ abstract class PayoutsDataModule {
     @Binds
     @Singleton
     abstract fun bindPayoutMethodsRepository(impl: PayoutMethodsRepositoryImpl): PayoutMethodsRepository
+
+    // PAY-22 — the W-9 tax-info repository (pre-withdrawal tax gate).
+    @Binds
+    @Singleton
+    abstract fun bindTaxInfoRepository(impl: TaxInfoRepositoryImpl): TaxInfoRepository
 }

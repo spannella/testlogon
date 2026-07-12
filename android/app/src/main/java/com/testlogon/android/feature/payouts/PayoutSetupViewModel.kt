@@ -16,6 +16,10 @@ import com.testlogon.android.data.payouts.PayoutMethod
 import com.testlogon.android.data.payouts.PayoutRequestDraft
 import com.testlogon.android.data.payouts.PayoutRequestOutcome
 import com.testlogon.android.data.payouts.PayoutSetupRepository
+import com.testlogon.android.data.payouts.TinType
+import com.testlogon.android.data.payouts.W9Submission
+import com.testlogon.android.data.payouts.WithdrawGate
+import com.testlogon.android.data.payouts.WithdrawGateEvaluator
 import com.testlogon.android.feature.billing.error.BillingErrorMapper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -29,16 +33,15 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * AND-259 / PAY-13 — payout-setup + KYC-gate + ROUTABLE payout-method management presentation logic.
+ * AND-259 / PAY-13 / PAY-22 - payout-setup + PRE-WITHDRAWAL gate + ROUTABLE payout-method management.
  *
- * Loads balance + recent payouts + tier (fail-closed gate) AND the routable payout methods + Connect
- * account status. Derives a [PayoutGate], validates the amount form client-side, and submits via
- * [PayoutSetupRepository.requestPayout] (gated through the BillingAuthorizer stub — no real payout).
- *
- * PAY-13: the user can ADD a routable destination (bank routing+account -> tokenized server-side, only
- * last-4 kept; PayPal email; Stripe Connect via an onboarding button), set a default, see each method's
- * verification STATUS, and trigger the PAY-12 verification seam ("Verify"). A payout can only target a
- * VERIFIED method — the backend request_payout enforces this; the UI surfaces the status honestly.
+ * PAY-22: the authoritative withdraw gate is [WithdrawGate] - a withdrawal is BLOCKED until BOTH the
+ * caller KYC is APPROVED (existing kyc_cases flow) AND a certified W-9 is on file (ui/payouts/tax-info).
+ * The form is only shown/enabled when the gate is [WithdrawGate.Allowed]; otherwise the screen routes
+ * the user to the KYC flow ([WithdrawGate.NeedsKyc]) or shows the W-9 form ([WithdrawGate.NeedsTaxInfo]).
+ * The backend mirrors this (403 kyc_required / tax_info_required), so a gate race on submit re-resolves
+ * the gate. The legacy AND-259 tier [gate] is still surfaced in state for compatibility but no longer
+ * gates the withdraw form.
  */
 @HiltViewModel
 class PayoutSetupViewModel @Inject constructor(
@@ -46,17 +49,22 @@ class PayoutSetupViewModel @Inject constructor(
     private val errorMapper: BillingErrorMapper,
 ) : ViewModel() {
 
-    /** PAY-13 — the destination type the add-method form is collecting. */
+    /** PAY-13 - the destination type the add-method form is collecting. */
     enum class MethodChoice { BANK, PAYPAL, CONNECT }
 
     data class UiState(
         val isLoading: Boolean = true,
         val gate: PayoutGate = PayoutGate.Unknown,
+        // PAY-22 - the authoritative pre-withdrawal gate (KYC approved + certified W-9 on file).
+        val withdrawGate: WithdrawGate = WithdrawGate.Loading,
         val balance: PayoutBalance? = null,
         val recentPayouts: List<Payout> = emptyList(),
         val form: FormState = FormState(),
         val isSubmitting: Boolean = false,
         val evaluating: Boolean = false,
+        // PAY-22 - the W-9 collection form (shown when the gate is NeedsTaxInfo).
+        val w9Form: W9FormState = W9FormState(),
+        val w9Submitting: Boolean = false,
         // ---- PAY-13: routable methods ----
         val methods: List<PayoutMethod> = emptyList(),
         val methodsLoading: Boolean = false,
@@ -83,7 +91,46 @@ class PayoutSetupViewModel @Inject constructor(
         val canSubmit: Boolean = false,
     )
 
-    /** PAY-13 — the add-routable-method form. Bank number/routing are WRITE-ONLY (tokenized server-side). */
+    /**
+     * PAY-22 - the transient W-9 collection form. The raw [tin] lives ONLY here (never persisted); it is
+     * sent once over TLS and cleared on success. The backend tokenizes+masks it to last-4.
+     */
+    data class W9FormState(
+        val legalName: String = "",
+        val tinType: TinType = TinType.SSN,
+        val tin: String = "",
+        val addressLine1: String = "",
+        val city: String = "",
+        val state: String = "",
+        val zipCode: String = "",
+        val certified: Boolean = false,
+        val error: UiText? = null,
+    ) {
+        val tinDigits: String get() = tin.filter { it.isDigit() }
+
+        /** Client-side gate for the W-9 submit button (server re-validates). SSN + EIN are both 9 digits. */
+        val canSubmit: Boolean
+            get() = legalName.isNotBlank() &&
+                tinDigits.length == 9 &&
+                addressLine1.isNotBlank() &&
+                city.isNotBlank() &&
+                state.trim().length == 2 &&
+                zipCode.trim().length in 5..10 &&
+                certified
+
+        fun toSubmission(): W9Submission = W9Submission(
+            legalName = legalName,
+            tin = tin,
+            tinType = tinType,
+            addressLine1 = addressLine1,
+            city = city,
+            state = state,
+            zipCode = zipCode,
+            certified = certified,
+        )
+    }
+
+    /** PAY-13 - the add-routable-method form. Bank number/routing are WRITE-ONLY (tokenized server-side). */
     data class AddMethodForm(
         val choice: MethodChoice = MethodChoice.BANK,
         val routingNumber: String = "",
@@ -124,7 +171,7 @@ class PayoutSetupViewModel @Inject constructor(
         data object NavigateToKyc : Effect
         data class ShowMessage(val text: UiText) : Effect
 
-        /** PAY-13 — open a real Stripe Connect onboarding URL (only when keyed; mock self-completes). */
+        /** PAY-13 - open a real Stripe Connect onboarding URL (only when keyed; mock self-completes). */
         data class OpenUrl(val url: String) : Effect
     }
 
@@ -140,22 +187,26 @@ class PayoutSetupViewModel @Inject constructor(
     }
 
     fun load() {
-        _state.update { it.copy(isLoading = true, loadFailed = false, error = null) }
+        _state.update {
+            it.copy(isLoading = true, loadFailed = false, error = null, withdrawGate = WithdrawGate.Loading)
+        }
         viewModelScope.launch {
             when (val result = repo.loadSetup()) {
                 is ApiResult.Success -> {
                     val data = result.data
-                    val gate = PayoutGateEvaluator.evaluate(data.tierStatus)
+                    // Legacy tier gate (kept for compatibility; no longer gates the withdraw form).
+                    val tierGate = PayoutGateEvaluator.evaluate(data.tierStatus)
                     _state.update {
                         it.copy(
                             isLoading = false,
-                            gate = gate,
+                            gate = tierGate,
                             balance = data.balance,
                             recentPayouts = data.recentPayouts,
-                            form = it.form.recomputed(data.balance, gate),
                             loadFailed = false,
                         )
                     }
+                    // PAY-22 - resolve the authoritative KYC + W-9 gate.
+                    resolveGate()
                 }
                 else -> _state.update {
                     it.copy(isLoading = false, loadFailed = true, error = errorMapper.map(result).message)
@@ -167,6 +218,58 @@ class PayoutSetupViewModel @Inject constructor(
     fun retry() {
         load()
         loadMethods()
+    }
+
+    // ---- PAY-22: pre-withdrawal gate (KYC + W-9) ----
+
+    /** Re-resolve the KYC + W-9 gate (called on load, after a W-9 submit, and on KYC return). */
+    fun refreshGate() {
+        viewModelScope.launch { resolveGate() }
+    }
+
+    private suspend fun resolveGate() {
+        when (val result = repo.loadWithdrawGate()) {
+            is ApiResult.Success -> {
+                val gate = WithdrawGateEvaluator.evaluate(result.data)
+                _state.update { it.copy(withdrawGate = gate, form = it.form.recomputed(it.balance, gate)) }
+            }
+            else -> _state.update {
+                it.copy(
+                    withdrawGate = WithdrawGate.Unresolved,
+                    form = it.form.recomputed(it.balance, WithdrawGate.Unresolved),
+                )
+            }
+        }
+    }
+
+    // ---- PAY-22: W-9 collection form ----
+
+    fun onW9FieldChanged(transform: (W9FormState) -> W9FormState) = _state.update {
+        it.copy(w9Form = transform(it.w9Form).copy(error = null))
+    }
+
+    /** Submit the W-9. On success the raw TIN is cleared from memory and the gate is re-resolved. */
+    fun submitW9() {
+        val s = _state.value
+        val form = s.w9Form
+        if (!form.canSubmit || s.w9Submitting) return
+        _state.update { it.copy(w9Submitting = true, error = null) }
+        viewModelScope.launch {
+            when (val result = repo.submitTaxInfo(form.toSubmission())) {
+                is ApiResult.Success -> {
+                    // Clear the raw TIN immediately; re-resolve the (now-satisfied) tax leg.
+                    _state.update { it.copy(w9Submitting = false, w9Form = W9FormState()) }
+                    _effects.send(Effect.ShowMessage(UiText.Res(R.string.payout_tax_saved)))
+                    resolveGate()
+                }
+                else -> _state.update {
+                    it.copy(
+                        w9Submitting = false,
+                        w9Form = it.w9Form.copy(error = errorMapper.map(result).message),
+                    )
+                }
+            }
+        }
     }
 
     // ---- PAY-13: routable payout methods ----
@@ -220,7 +323,7 @@ class PayoutSetupViewModel @Inject constructor(
         }
     }
 
-    /** PAY-12 — verify a method so a payout may target it. */
+    /** PAY-12 - verify a method so a payout may target it. */
     fun verifyMethod(methodId: String) {
         if (_state.value.busyMethodId != null) return
         _state.update { it.copy(busyMethodId = methodId, error = null) }
@@ -274,7 +377,7 @@ class PayoutSetupViewModel @Inject constructor(
     }
 
     /**
-     * PAY-11 — Stripe Connect onboarding. Creates (or reuses) the Connect account, requests an
+     * PAY-11 - Stripe Connect onboarding. Creates (or reuses) the Connect account, requests an
      * onboarding link, opens the real URL when keyed, then registers a routable stripe_connect method.
      * Under the mock the onboarding self-completes and the method is immediately verifiable.
      */
@@ -320,10 +423,10 @@ class PayoutSetupViewModel @Inject constructor(
         return if (idx >= 0) toMutableList().also { it[idx] = updated } else this + updated
     }
 
-    // ---- amount form (unchanged) ----
+    // ---- amount form ----
 
     fun onAmountChanged(text: String) = _state.update {
-        it.copy(form = it.form.copy(amountText = text).recomputed(it.balance, it.gate))
+        it.copy(form = it.form.copy(amountText = text).recomputed(it.balance, it.withdrawGate))
     }
 
     fun onMethodSelected(method: String) = _state.update {
@@ -334,33 +437,25 @@ class PayoutSetupViewModel @Inject constructor(
         it.copy(form = it.form.copy(notes = notes.take(MAX_NOTES)))
     }
 
+    /** PAY-22 - route the user to the existing KYC verification flow. */
     fun onVerifyIdentity() {
         viewModelScope.launch { _effects.send(Effect.NavigateToKyc) }
     }
 
-    /** FR-5: refresh tier after returning from the (scaffolded) KYC flow and re-derive the gate. */
+    /** Refresh the gate after returning from the KYC flow (KYC may now be approved). */
     fun onReturnedFromKyc() {
         if (_state.value.evaluating) return
         _state.update { it.copy(evaluating = true) }
         viewModelScope.launch {
-            when (val result = repo.refreshTier()) {
-                is ApiResult.Success -> {
-                    val gate = PayoutGateEvaluator.evaluate(result.data)
-                    _state.update {
-                        it.copy(evaluating = false, gate = gate, form = it.form.recomputed(it.balance, gate))
-                    }
-                }
-                else -> _state.update {
-                    it.copy(evaluating = false, error = errorMapper.map(result).message)
-                }
-            }
+            resolveGate()
+            _state.update { it.copy(evaluating = false) }
         }
     }
 
     /** FR-3/FR-8: submit a payout request. Defensive gate guard + double-submit guard. */
     fun submit() {
         val s = _state.value
-        if (s.gate !is PayoutGate.Allowed) return // defensive: never request when not allowed
+        if (!s.withdrawGate.canWithdraw) return // defensive: never request when the gate is not open
         if (s.isSubmitting) return // double-submit guard
         val amount = s.form.parsedAmountCents()
         if (amount == null || !s.form.canSubmit) return // local validation blocks submit
@@ -375,8 +470,17 @@ class PayoutSetupViewModel @Inject constructor(
                 is PayoutRequestOutcome.Created -> _state.update {
                     it.copy(isSubmitting = false, lastCreatedPayoutId = outcome.result.payoutId)
                 }
-                is PayoutRequestOutcome.Error -> _state.update {
-                    it.copy(isSubmitting = false, error = errorMapper.map(outcome.result).message)
+                is PayoutRequestOutcome.Error -> {
+                    // A backend gate race (403 kyc_required / tax_info_required) -> re-resolve the gate.
+                    val code = (outcome.result as? ApiResult.Failure)?.error?.code
+                    if (code == KYC_REQUIRED || code == TAX_INFO_REQUIRED) {
+                        _state.update { it.copy(isSubmitting = false) }
+                        resolveGate()
+                    } else {
+                        _state.update {
+                            it.copy(isSubmitting = false, error = errorMapper.map(outcome.result).message)
+                        }
+                    }
                 }
                 PayoutRequestOutcome.Cancelled -> _state.update { it.copy(isSubmitting = false) }
                 is PayoutRequestOutcome.Declined -> _state.update {
@@ -402,8 +506,8 @@ class PayoutSetupViewModel @Inject constructor(
         return Math.round(major * 100.0)
     }
 
-    private fun FormState.recomputed(balance: PayoutBalance?, gate: PayoutGate): FormState {
-        if (gate !is PayoutGate.Allowed || balance == null) {
+    private fun FormState.recomputed(balance: PayoutBalance?, gate: WithdrawGate): FormState {
+        if (!gate.canWithdraw || balance == null) {
             return copy(amountError = null, canSubmit = false)
         }
         if (amountText.isBlank()) return copy(amountError = null, canSubmit = false)
@@ -419,5 +523,7 @@ class PayoutSetupViewModel @Inject constructor(
 
     companion object {
         const val MAX_NOTES = 500
+        const val KYC_REQUIRED = "kyc_required"
+        const val TAX_INFO_REQUIRED = "tax_info_required"
     }
 }

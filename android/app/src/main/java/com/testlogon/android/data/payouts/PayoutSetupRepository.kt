@@ -1,6 +1,9 @@
 package com.testlogon.android.data.payouts
 
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.model.kyc.KycCaseStatus
+import com.testlogon.android.feature.kyc.cases.data.KycCaseRepository
+import com.testlogon.android.feature.kyc.cases.model.KycCaseSummary
 import com.testlogon.android.data.messaging.BillingAuthorizer
 import com.testlogon.android.data.messaging.BillingResult
 import kotlinx.coroutines.CoroutineDispatcher
@@ -78,6 +81,16 @@ interface PayoutSetupRepository {
      */
     suspend fun requestPayout(draft: PayoutRequestDraft, currency: String): PayoutRequestOutcome
 
+    /**
+     * PAY-22 - resolve the PRE-WITHDRAWAL gate: reads the EXISTING kyc_cases status + the W-9 tax-info
+     * status and folds them into [WithdrawGateInputs]. Either read failing -> the failure passes through
+     * (the gate fails closed to Unresolved). Reuses the existing KYC system (does NOT rebuild it).
+     */
+    suspend fun loadWithdrawGate(): ApiResult<WithdrawGateInputs>
+
+    /** PAY-22 - submit the W-9 (raw TIN tokenized+masked server-side); returns the masked view. */
+    suspend fun submitTaxInfo(submission: W9Submission): ApiResult<PayoutTaxInfo>
+
     // ---- PAY-13: routable payout-method management (delegated to PayoutMethodsRepository) ----
 
     /** List the creator's routable payout methods (status + default flag). */
@@ -111,6 +124,8 @@ class PayoutSetupRepositoryImpl @Inject constructor(
     private val kycRepository: KycRepository,
     private val billingAuthorizer: BillingAuthorizer,
     private val methodsRepository: PayoutMethodsRepository,
+    private val kycCaseRepository: KycCaseRepository,
+    private val taxInfoRepository: TaxInfoRepository,
 ) : PayoutSetupRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -168,6 +183,57 @@ class PayoutSetupRepositoryImpl @Inject constructor(
                 BillingResult.NotConfigured -> PayoutRequestOutcome.NotConfigured
             }
         }
+
+    // ---- PAY-22: pre-withdrawal gate (KYC + W-9) ----
+
+    override suspend fun loadWithdrawGate(): ApiResult<WithdrawGateInputs> = withContext(io) {
+        coroutineScope {
+            val casesDeferred = async { kycCaseRepository.cases() }
+            val taxDeferred = async { taxInfoRepository.getTaxInfo() }
+            val casesResult = casesDeferred.await()
+            val taxResult = taxDeferred.await()
+
+            // Fail closed: a failure in either leg passes through so the gate cannot open.
+            when (casesResult) {
+                is ApiResult.Success -> Unit
+                is ApiResult.Failure -> return@coroutineScope casesResult
+                is ApiResult.NetworkError -> return@coroutineScope casesResult
+            }
+            when (taxResult) {
+                is ApiResult.Success -> Unit
+                is ApiResult.Failure -> return@coroutineScope taxResult
+                is ApiResult.NetworkError -> return@coroutineScope taxResult
+            }
+            val (approved, status) = resolveKyc(casesResult.data)
+            ApiResult.Success(
+                WithdrawGateInputs(kycApproved = approved, kycStatus = status, taxInfo = taxResult.data),
+            )
+        }
+    }
+
+    override suspend fun submitTaxInfo(submission: W9Submission): ApiResult<PayoutTaxInfo> =
+        taxInfoRepository.submitTaxInfo(submission)
+
+    /**
+     * Resolve the KYC status from the caller cases (mirrors backend PAY-20 resolve_kyc_status):
+     * APPROVED iff ANY owned case is approved; else the most-informative in-progress status; else
+     * UNKNOWN (no case = not started).
+     */
+    private fun resolveKyc(cases: List<KycCaseSummary>): Pair<Boolean, KycCaseStatus> {
+        if (cases.any { it.status == KycCaseStatus.APPROVED }) return true to KycCaseStatus.APPROVED
+        val order = listOf(
+            KycCaseStatus.UNDER_REVIEW,
+            KycCaseStatus.NEEDS_MORE_INFO,
+            KycCaseStatus.SUBMITTED,
+            KycCaseStatus.DRAFT,
+            KycCaseStatus.REJECTED,
+            KycCaseStatus.EXPIRED,
+        )
+        val best = order.firstOrNull { st -> cases.any { it.status == st } }
+            ?: cases.maxByOrNull { it.updatedAt }?.status
+            ?: KycCaseStatus.UNKNOWN
+        return false to best
+    }
 
     // ---- PAY-13: pure delegations to the routable payout-methods repository ----
 
