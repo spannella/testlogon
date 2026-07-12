@@ -345,6 +345,76 @@ def release_payout_sentinel(user_id: str, payout_id: Optional[str] = None) -> No
         logger.warning("payout_sentinel_release_failed user_id=%s: %s", user_id, exc)
 
 
+class PayoutGateError(Exception):
+    """PAY-20/21: payout blocked by the verified-before-any-payout gate.
+
+    Carries a machine-readable code (kyc_required | tax_info_required)
+    plus the caller's current kyc_status so the app can route the creator to
+    the right step (KYC wizard or the W-9 form).
+    """
+
+    def __init__(self, code, message, *, kyc_status=""):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.kyc_status = kyc_status
+
+
+def resolve_kyc_status(user_id):
+    """Resolve overall KYC status from the EXISTING kyc_cases system (no rebuild).
+
+    Returns "approved" when any owned KYC case is approved, else the most
+    informative in-progress status, else "none".
+    """
+    try:
+        from app.services.kyc_cases import STORE as KYC_STORE
+
+        cases = KYC_STORE.list_cases_by_owner(user_sub=user_id, limit=25)
+    except Exception:
+        logger.warning("payout_gate_kyc_lookup_failed user_id=%s", user_id, exc_info=True)
+        cases = []
+    if not cases:
+        return "none"
+    statuses = {str(c.get("status") or "").strip() for c in cases}
+    if "approved" in statuses:
+        return "approved"
+    for candidate in ("under_review", "disputed", "submitted", "needs_more_info", "rejected", "expired", "draft"):
+        if candidate in statuses:
+            return candidate
+    return "none"
+
+
+def has_tax_info_on_file(user_id):
+    """True when a certified W-9 (TIN tokenized + masked to last-4) is on file."""
+    try:
+        from app.services import tax_info_w9
+
+        tax = tax_info_w9.get_tax_info(user_id)
+    except Exception:
+        logger.warning("payout_gate_tax_lookup_failed user_id=%s", user_id, exc_info=True)
+        return False
+    return bool(tax and tax.get("tin_last4") and tax.get("certified"))
+
+
+def _enforce_payout_gate(user_id):
+    """PAY-20/21: block a withdrawal until KYC is APPROVED and a W-9 is on file."""
+    if not S.payout_verification_gate_enabled:
+        return
+    kyc_status = resolve_kyc_status(user_id)
+    if kyc_status != "approved":
+        raise PayoutGateError(
+            "kyc_required",
+            "Verify your identity (KYC) before you can withdraw.",
+            kyc_status=kyc_status,
+        )
+    if not has_tax_info_on_file(user_id):
+        raise PayoutGateError(
+            "tax_info_required",
+            "A certified W-9 tax form must be on file before you can withdraw.",
+            kyc_status=kyc_status,
+        )
+
+
 def request_payout(
     user_id: str,
     amount_cents: int,
@@ -375,6 +445,10 @@ def request_payout(
         minimum = S.payout_minimum_cents
     if amount_cents < minimum:
         raise ValueError(f"Amount must be at least {minimum} cents (${minimum / 100:.2f})")
+
+    # PAY-20/21 (PAY-C): verified-before-any-payout gate. Reuses the existing
+    # KYC (kyc_cases) + W-9 (tax_info_w9) systems; blocks until BOTH satisfied.
+    _enforce_payout_gate(user_id)
 
     # Fast pre-check (cheap, friendly error before claiming the atomic slot).
     if _has_active_payout(user_id):

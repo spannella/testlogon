@@ -24,6 +24,8 @@ from app.models import (
     PayoutMethodListOut,
     ConnectAccountOut,
     ConnectOnboardingOut,
+    W9SubmitIn,
+    PayoutTaxInfoOut,
 )
 from app.services.creator_payouts import (
     cancel_payout,
@@ -39,7 +41,9 @@ from app.services.creator_payouts import (
     create_connect_account,
     create_connect_onboarding_link,
     get_connect_account,
+    PayoutGateError,
 )
+from app.services import tax_info_w9
 from app.core.settings import S
 
 logger = logging.getLogger(__name__)
@@ -73,6 +77,11 @@ def create_payout_request(body: PayoutRequestIn, session=Depends(require_ui_sess
             method=body.method,
             notes=body.notes,
             method_id=body.method_id,
+        )
+    except PayoutGateError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": exc.code, "message": exc.message, "kyc_status": exc.kyc_status},
         )
     except ValueError as exc:
         msg = str(exc)
@@ -124,6 +133,26 @@ def list_payouts(
 
 
 # ─── Payout Methods (GAP-0195 / FIN-009) ──────────────────────────────
+
+
+@router.get("/tax-info", response_model=PayoutTaxInfoOut)
+def get_payout_tax_info(session=Depends(require_ui_session)):
+    """W-9 status for the pre-withdrawal tax gate (masked; never the raw TIN)."""
+    result = tax_info_w9.get_tax_info(session["user_sub"])
+    if not result:
+        return PayoutTaxInfoOut(on_file=False)
+    return PayoutTaxInfoOut(on_file=True, **result)
+
+
+@router.post("/tax-info", response_model=PayoutTaxInfoOut, status_code=201)
+def submit_payout_tax_info(body: W9SubmitIn, session=Depends(require_ui_session)):
+    """Collect the creator's W-9. The TIN is KMS-tokenized and masked to last-4;
+    the raw SSN/EIN is never stored, logged, or echoed back."""
+    try:
+        result = tax_info_w9.submit_tax_info(user_sub=session["user_sub"], **body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_tin", "message": str(exc)})
+    return PayoutTaxInfoOut(on_file=True, **result)
 
 
 def _method_error(exc: ValueError) -> HTTPException:

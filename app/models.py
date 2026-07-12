@@ -10949,6 +10949,16 @@ class W9StatusOut(BaseModel):
     updated_at: int = 0
 
 
+class PayoutTaxInfoOut(W9StatusOut):
+    """W-9 status for the payouts pre-withdrawal gate (PAY-21).
+
+    on_file tells the app whether a W-9 has been collected. The TIN is always
+    masked to tin_last4 — the raw SSN/EIN is never included.
+    """
+
+    on_file: bool = False
+
+
 class TaxInfoAdminOut(W9StatusOut):
     """W9StatusOut extended with the decrypted TIN (GAP-0194 / FIN-008).
 

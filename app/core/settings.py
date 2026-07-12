@@ -1792,6 +1792,9 @@ class Settings:
     message_edit_window_seconds: int = int(os.environ.get("MESSAGE_EDIT_WINDOW_SECONDS", str(15 * 60)))
     payout_hold_days: int = int(os.environ.get("PAYOUT_HOLD_DAYS", "7"))
     payout_minimum_cents: int = int(os.environ.get("PAYOUT_MINIMUM_CENTS", "1000"))
+    # PAY-20/21 (PAY-C): verified-before-any-payout gate. Blocks request_payout
+    # until the creator has an APPROVED KYC case AND a W-9 on file. Default ON.
+    payout_verification_gate_enabled: bool = os.environ.get("PAYOUT_VERIFICATION_GATE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     payout_min_cents: int = int(os.environ.get("PAYOUT_MIN_CENTS", os.environ.get("PAYOUT_MINIMUM_CENTS", "1000")))
     # Bulk Payout & Refund Tools (FIN-017)
     bulk_payout_batches_table_name: str = os.environ.get("DDB_BULK_PAYOUT_BATCHES", "BulkPayoutBatches")
