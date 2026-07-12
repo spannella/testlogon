@@ -15,7 +15,7 @@ from app.routers import broadcast
 def _app() -> TestClient:
     app = FastAPI()
     app.include_router(broadcast.router)
-    app.dependency_overrides[broadcast.require_ui_session] = lambda: {"user_sub": "u1", "session_id": "sess-ui", "role": "admin"}
+    app.dependency_overrides[broadcast._ctx] = lambda: {"user_sub": "u1", "session_id": "sess-ui", "role": "admin", "ip": "", "tenant_id": "default"}
     return TestClient(app)
 
 
