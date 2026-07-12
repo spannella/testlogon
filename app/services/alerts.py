@@ -30,6 +30,7 @@ from app.services.ttl import with_ttl
 # --------------------------------------------------------------------------- #
 
 ALERT_CATEGORIES: Dict[str, set] = {
+    "payouts": {"payout_initiated", "payout_paid", "payout_failed", "payout_returned"},
     "activity": {"new_follower", "post_liked", "post_reaction", "post_comment",
                  "comment_reply", "mention", "subscription_started", "post_shared",
                  "post_tip", "message_tip"},
@@ -78,6 +79,10 @@ def _build_action_url(alert_type: str, details: Dict[str, Any]) -> Optional[str]
         "subscription_expired": "/subscriptions/manage",
         "subscription_canceled": "/subscriptions/manage",
         "subscription_gifted": "/subscriptions/manage",
+        "payout_initiated": "/wallet/payouts",
+        "payout_paid": "/wallet/payouts",
+        "payout_failed": "/wallet/payouts",
+        "payout_returned": "/wallet/payouts",
         "post_shared":      f"/feed?post={post_id}" if post_id else None,
         "post_tip":         f"/feed?post={post_id}" if post_id else None,
         "message_tip":      f"/messages/{conv_id}" if conv_id else None,
@@ -140,6 +145,8 @@ _NO_ALERT_EVENTS: frozenset = frozenset({
 })
 
 ALERT_EVENT_TYPES: List[str] = [
+    # Payouts (PAY-D / PAY-34): creator payout lifecycle (default-on transactional)
+    "payout_initiated","payout_paid","payout_failed","payout_returned",
     "login_success","login_failure","mfa_success","mfa_failure","challenge_created","challenge_revoked",
     "challenge_failed","api_key_created","api_key_revoked","api_key_ip_rules_updated","session_revoked",
     "totp_device_added","totp_device_removed","rate_limited","access_denied","security_event",
@@ -170,6 +177,10 @@ ALERT_EVENT_TYPES: List[str] = [
 # still disable one via ``push_opt_out_event_types``. Keep to genuinely
 # transactional order/payment events (never social/marketing noise).
 DEFAULT_PUSH_EVENT_TYPES: List[str] = [
+    "payout_initiated",  # PAY-D: your withdrawal is processing
+    "payout_paid",       # PAY-D: your withdrawal was paid
+    "payout_failed",     # PAY-D: your withdrawal failed
+    "payout_returned",   # PAY-D: your withdrawal was returned
     "shop_item_sold",        # you sold an item -> ship it
     "subscription_started",  # a subscription/payment succeeded
     "post_tip",              # you received a tip

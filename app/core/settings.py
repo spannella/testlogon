@@ -1795,6 +1795,13 @@ class Settings:
     # PAY-20/21 (PAY-C): verified-before-any-payout gate. Blocks request_payout
     # until the creator has an APPROVED KYC case AND a W-9 on file. Default ON.
     payout_verification_gate_enabled: bool = os.environ.get("PAYOUT_VERIFICATION_GATE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
+    # PAY-D (PAY-30..33): scheduled payout runner + bounded retry config.
+    payout_runner_enabled: bool = os.environ.get("PAYOUT_RUNNER_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    payout_runner_interval_seconds: int = int(os.environ.get("PAYOUT_RUNNER_INTERVAL_SECONDS", "300"))
+    payout_runner_min_age_seconds: int = int(os.environ.get("PAYOUT_RUNNER_MIN_AGE_SECONDS", "0"))
+    payout_max_transfer_attempts: int = int(os.environ.get("PAYOUT_MAX_TRANSFER_ATTEMPTS", "4"))
+    payout_retry_backoff_seconds: str = os.environ.get("PAYOUT_RETRY_BACKOFF_SECONDS", "60,300,900")
     payout_min_cents: int = int(os.environ.get("PAYOUT_MIN_CENTS", os.environ.get("PAYOUT_MINIMUM_CENTS", "1000")))
     # Bulk Payout & Refund Tools (FIN-017)
     bulk_payout_batches_table_name: str = os.environ.get("DDB_BULK_PAYOUT_BATCHES", "BulkPayoutBatches")

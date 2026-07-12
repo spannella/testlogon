@@ -219,6 +219,8 @@ from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.subscription_renewal import start_subscription_renewal_task
+from app.services.creator_payouts import start_payout_runner_task  # PAY-D
+from app.routers.admin_payouts import payd_admin_router, payd_webhook_router  # PAY-D
 from app.services.payment_provider_health import start_provider_health_check_task
 from app.services.llm_provider_keys import start_llm_usage_reset_task
 from app.services.ad_daily_reset import start_ad_daily_reset_task
@@ -766,6 +768,7 @@ def create_app() -> FastAPI:
 
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
+    app.add_event_handler("startup", start_payout_runner_task)  # PAY-D payout runner
     app.add_event_handler("startup", start_subscription_renewal_task)  # SUB-E1
     app.add_event_handler("startup", start_provider_health_check_task)
     app.add_event_handler("startup", start_llm_usage_reset_task)
@@ -905,6 +908,8 @@ def create_app() -> FastAPI:
     from app.routers.live_commerce import router as live_commerce_router  # LIVECOM
     app.include_router(live_commerce_router)
     app.include_router(admin_payouts_router)
+    app.include_router(payd_admin_router)  # PAY-D runner trigger
+    app.include_router(payd_webhook_router)  # PAY-D provider webhook
     app.include_router(billing_config_router)
     app.include_router(admin_rate_limits_router)
     app.include_router(admin_jobs_router)
