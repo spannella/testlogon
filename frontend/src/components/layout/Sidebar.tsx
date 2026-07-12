@@ -55,6 +55,7 @@ import {
   Phone,
   ShieldAlert,
   Server,
+  Boxes,
   Container,
   LayoutTemplate,
   Bot,
@@ -65,6 +66,42 @@ import {
   Palette,
   Gauge,
   Receipt,
+  Terminal,
+  Package,
+  Factory,
+  Hammer,
+  Truck,
+  Briefcase,
+  ReceiptText,
+  Target,
+  UserPlus,
+  FileText,
+  FileSignature,
+  FileBarChart,
+  History,
+  Mail,
+  Coins,
+  GitBranch,
+  FileBox,
+  MapPin,
+  ScrollText,
+  Copy,
+  Contact,
+  GitMerge,
+  FileSearch,
+  Landmark,
+  KeyRound,
+  Eye,
+  ArrowLeftRight,
+  UserCheck,
+  Hotel,
+  Star,
+  CalendarRange,
+  ConciergeBell,
+  BedDouble,
+  LineChart,
+  Building,
+  Award,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -73,10 +110,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Separator } from "@/components/ui/separator";
 import { useUiStore } from "@/stores/uiStore";
 import { useAuthStore } from "@/stores/authStore";
-import { canAccessModerationBoard, canAccessPaymentIncidentQueue, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
+import { canAccessGeneralAdminControls, canAccessModerationBoard, canAccessPaymentIncidentQueue, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { useQuery } from "@tanstack/react-query";
 import { getConversations } from "@/api/endpoints/messaging";
-import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled } from "@/lib/featureFlags";
+import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled, isAgentSshQaEnabled, isInventoryReservationsEnabled } from "@/lib/featureFlags";
 
 // ─── Navigation Config ──────────────────────────────────────────
 
@@ -148,6 +185,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Content Calendar", i18nKey: "nav.contentCalendar", path: "/content-calendar", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Scheduled", i18nKey: "nav.scheduled", path: "/scheduler", icon: <CalendarClock className="h-5 w-5" /> },
       { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
+      { label: "Signing Inbox", i18nKey: "nav.signingInbox", path: "/signing/inbox", icon: <FilePen className="h-5 w-5" /> },
       { label: "Licenses", i18nKey: "nav.licenses", path: "/licenses", icon: <FileCheck className="h-5 w-5" /> },
       { label: "License Compliance", i18nKey: "nav.licenseCompliance", path: "/licenses/compliance", icon: <FileCheck className="h-5 w-5" /> },
       { label: "Organizations", i18nKey: "nav.organizations", path: "/orgs", icon: <Building2 className="h-5 w-5" /> },
@@ -170,6 +208,7 @@ const NAV_GROUPS: NavGroup[] = [
     i18nKey: "nav.aiAgents",
     items: [
       { label: "Workers", i18nKey: "nav.workers", path: "/agents/workers", icon: <Bot className="h-5 w-5" /> },
+      { label: "QA Actions", i18nKey: "nav.qaActions", path: "/agents/qa-actions", icon: <Terminal className="h-5 w-5" /> },
       { label: "Fleet Dashboard", i18nKey: "nav.fleetDashboard", path: "/agents/fleet", icon: <LayoutGrid className="h-5 w-5" /> },
       { label: "Project Dashboard", i18nKey: "nav.projectDashboard", path: "/agents/project-dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
       { label: "Agent PRs", i18nKey: "nav.agentPrs", path: "/agents/prs", icon: <GitPullRequest className="h-5 w-5" /> },
@@ -198,8 +237,9 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Notifications", i18nKey: "nav.notifications", path: "/notifications", icon: <Bell className="h-5 w-5" /> },
       { label: "My Appeals", i18nKey: "nav.myAppeals", path: "/appeals", icon: <Scale className="h-5 w-5" /> },
       { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: <LifeBuoy className="h-5 w-5" /> },
-      { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
+      { label: "Boards", i18nKey: "nav.boards", path: "/tickets/boards", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
+      { label: "SSH Terminal", i18nKey: "nav.browserSsh", path: "/remote/ssh", icon: <Terminal className="h-5 w-5" /> },
       { label: "Containers", i18nKey: "nav.containers", path: "/remote/k8s", icon: <Container className="h-5 w-5" /> },
       { label: "Security Groups", i18nKey: "nav.securityGroups", path: "/remote/security-groups", icon: <Shield className="h-5 w-5" /> },
       { label: "Templates", i18nKey: "nav.instanceTemplates", path: "/remote/templates", icon: <LayoutTemplate className="h-5 w-5" /> },
@@ -225,8 +265,11 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Appeal Queue", i18nKey: "nav.appealQueue", path: "/admin/appeals", icon: <Gavel className="h-5 w-5" /> },
       { label: "Fraud Detection", i18nKey: "nav.fraudDetection", path: "/admin/fraud", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Risk Scoring", i18nKey: "nav.riskScoring", path: "/admin/risk", icon: <ShieldAlert className="h-5 w-5" /> },
+      { label: "Security Dashboard", i18nKey: "nav.securityDashboard", path: "/admin/security", icon: <ShieldAlert className="h-5 w-5" /> },
+      { label: "Legal Holds", i18nKey: "nav.legalHolds", path: "/admin/legal-holds", icon: <Gavel className="h-5 w-5" /> },
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
       { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },
+      { label: "Inventory", i18nKey: "nav.inventory", path: "/admin/inventory", icon: <Boxes className="h-5 w-5" /> },
       { label: "Financials", i18nKey: "nav.financials", path: "/admin/financials", icon: <BarChart3 className="h-5 w-5" /> },
       { label: "Billing Config", path: "/admin/billing-config", icon: <CreditCard className="h-5 w-5" /> },
       { label: "1099 Batch", path: "/admin/tax-forms-1099", icon: <Receipt className="h-5 w-5" /> },
@@ -236,6 +279,128 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Background Jobs", i18nKey: "nav.backgroundJobs", path: "/admin/jobs", icon: <Activity className="h-5 w-5" /> },
       { label: "Ad Fraud", i18nKey: "nav.adFraud", path: "/admin/ads/fraud", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Ad Platform", path: "/admin/ad-platform", icon: <Megaphone className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Operations (OFBiz)",
+    items: [
+      { label: "Order Lifecycle", path: "/orders", icon: <Package className="h-5 w-5" /> },
+      { label: "POS Terminal", path: "/ofbiz/pos", icon: <Store className="h-5 w-5" /> },
+      { label: "POS Reports", path: "/ofbiz/pos/reports", icon: <BarChart3 className="h-5 w-5" /> },
+      { label: "Catalog Depth", path: "/ofbiz/catalog-depth", icon: <Boxes className="h-5 w-5" /> },
+      { label: "Purchasing", path: "/purchasing", icon: <ShoppingCart className="h-5 w-5" /> },
+      { label: "BOMs", path: "/manufacturing/boms", icon: <Layers className="h-5 w-5" /> },
+      { label: "Work Orders", path: "/manufacturing/work-orders", icon: <Factory className="h-5 w-5" /> },
+      { label: "MRP", path: "/manufacturing/mrp", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "Work Centers", path: "/manufacturing/work-centers", icon: <Hammer className="h-5 w-5" /> },
+      { label: "Fixed Assets", path: "/ofbiz/fixed-assets", icon: <Boxes className="h-5 w-5" /> },
+      { label: "Maintenance Queue", path: "/ofbiz/fixed-assets/maintenance", icon: <Wrench className="h-5 w-5" /> },
+      { label: "Shipping", path: "/ofbiz/shipping", icon: <Truck className="h-5 w-5" /> },
+      { label: "Marketing", path: "/ofbiz/marketing", icon: <Megaphone className="h-5 w-5" /> },
+      { label: "HR & Payroll", path: "/ofbiz/hr", icon: <Briefcase className="h-5 w-5" /> },
+      { label: "Facilities", path: "/ofbiz/facilities", icon: <Building2 className="h-5 w-5" /> },
+      { label: "Fulfillment", path: "/ofbiz/fulfillment", icon: <Truck className="h-5 w-5" /> },
+      { label: "ERP", path: "/erp", icon: <Boxes className="h-5 w-5" /> },
+      { label: "Storefront", path: "/ofbiz/storefront", icon: <Store className="h-5 w-5" /> },
+      { label: "Cart Pricing", path: "/ofbiz/cart-pricing", icon: <ReceiptText className="h-5 w-5" /> },
+      { label: "Order Tracking", path: "/ofbiz/order-fulfillment", icon: <Truck className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "CRM (SuiteCRM)",
+    items: [
+      { label: "Leads", path: "/crm/leads", icon: <UserPlus className="h-5 w-5" /> },
+      { label: "Opportunities", path: "/crm/opportunities", icon: <Target className="h-5 w-5" /> },
+      { label: "Cases", path: "/crm/cases", icon: <LifeBuoy className="h-5 w-5" /> },
+      { label: "Quotes", path: "/crm/quotes", icon: <FileText className="h-5 w-5" /> },
+      { label: "Contracts", path: "/crm/contracts", icon: <FileSignature className="h-5 w-5" /> },
+      { label: "Activities", path: "/crm/activities", icon: <Activity className="h-5 w-5" /> },
+      { label: "Activity Timeline", path: "/crm/timeline", icon: <History className="h-5 w-5" /> },
+      { label: "CRM Reports", path: "/crm/reports", icon: <FileBarChart className="h-5 w-5" /> },
+      { label: "CRM Dashboard", path: "/crm/dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
+      { label: "Knowledge Base", path: "/crm/knowledge-base", icon: <BookOpen className="h-5 w-5" /> },
+      { label: "Email Templates", path: "/crm/email/templates", icon: <FileText className="h-5 w-5" /> },
+      { label: "Email Compose", path: "/crm/email/compose", icon: <Mail className="h-5 w-5" /> },
+      { label: "Email Log", path: "/crm/email/log", icon: <History className="h-5 w-5" /> },
+      { label: "CRM Invoices", path: "/crm/invoices", icon: <Receipt className="h-5 w-5" /> },
+      { label: "Currency & Tax", path: "/crm/billing-settings", icon: <Coins className="h-5 w-5" /> },
+      { label: "Workflows", path: "/crm/workflow", icon: <GitBranch className="h-5 w-5" /> },
+      { label: "CRM Security", path: "/crm/security", icon: <Shield className="h-5 w-5" /> },
+      { label: "CRM Studio", path: "/crm/studio", icon: <Wrench className="h-5 w-5" /> },
+      { label: "CRM Projects", path: "/crm/projects", icon: <FolderKanban className="h-5 w-5" /> },
+      { label: "Events", path: "/crm/events", icon: <CalendarDays className="h-5 w-5" /> },
+      { label: "Surveys", path: "/crm/surveys", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "CRM Documents", path: "/crm/documents", icon: <FileBox className="h-5 w-5" /> },
+      { label: "CRM Maps", path: "/crm/maps", icon: <MapPin className="h-5 w-5" /> },
+      { label: "SMS Compose", path: "/crm/sms", icon: <MessageSquare className="h-5 w-5" /> },
+      { label: "Audit Log", path: "/crm/audit-log", icon: <ScrollText className="h-5 w-5" /> },
+      { label: "Campaigns", path: "/crm/campaigns", icon: <Megaphone className="h-5 w-5" /> },
+      { label: "Web Leads", path: "/crm/web-leads", icon: <Users className="h-5 w-5" /> },
+      { label: "Lead Capture", path: "/crm/lead-capture", icon: <Target className="h-5 w-5" /> },
+      { label: "Org Accounts", path: "/crm/org-accounts", icon: <Building2 className="h-5 w-5" /> },
+      { label: "Reports-To Chain", path: "/crm/reports-to", icon: <Users className="h-5 w-5" /> },
+      { label: "Duplicate Contacts", path: "/crm/party-dedup", icon: <Copy className="h-5 w-5" /> },
+      { label: "vCard Import", path: "/crm/vcard-import", icon: <Contact className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "ATS (OpenCATS)",
+    items: [
+      { label: "Job Orders", path: "/ats/jobs", icon: <Briefcase className="h-5 w-5" /> },
+      { label: "Candidates", path: "/ats/candidates", icon: <Users className="h-5 w-5" /> },
+      { label: "Pipeline", path: "/ats/pipeline", icon: <GitMerge className="h-5 w-5" /> },
+      { label: "Job Board", path: "/ats/portal/jobs", icon: <Globe className="h-5 w-5" /> },
+      { label: "Career Portal Config", path: "/ats/applications", icon: <Briefcase className="h-5 w-5" /> },
+      { label: "Skill Registry", path: "/ats/skills", icon: <Tag className="h-5 w-5" /> },
+      { label: "Resume & Skill Search", path: "/ats/search", icon: <FileSearch className="h-5 w-5" /> },
+      { label: "ATS Integration", path: "/ats/integration", icon: <GitMerge className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Banking (OBP)",
+    items: [
+      { label: "Bank Accounts", path: "/bank/accounts", icon: <Landmark className="h-5 w-5" /> },
+      { label: "Transfers", path: "/bank/transfers", icon: <ArrowLeftRight className="h-5 w-5" /> },
+      { label: "Counterparties", path: "/bank/payments/counterparties", icon: <UserCheck className="h-5 w-5" /> },
+      { label: "Standing Orders", path: "/bank/payments/standing-orders", icon: <Repeat className="h-5 w-5" /> },
+      { label: "Mandates", path: "/bank/payments/mandates", icon: <FileText className="h-5 w-5" /> },
+      { label: "FX Rates", path: "/bank/payments/fx", icon: <ArrowLeftRight className="h-5 w-5" /> },
+      { label: "Consents", path: "/bank/consents", icon: <ShieldCheck className="h-5 w-5" /> },
+      { label: "Account Views", path: "/bank/views", icon: <Eye className="h-5 w-5" /> },
+      { label: "My Cards", path: "/bank/cards", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Customers", path: "/bank/customers", icon: <Users className="h-5 w-5" /> },
+      { label: "Financial Products", path: "/bank/products", icon: <Landmark className="h-5 w-5" /> },
+      { label: "OAuth Apps", path: "/bank/oauth-clients", icon: <KeyRound className="h-5 w-5" /> },
+      { label: "Developer Platform", path: "/bank/platform", icon: <Gauge className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Hospitality (QloApps)",
+    items: [
+      { label: "Book a Stay", path: "/hotels/book", icon: <BedDouble className="h-5 w-5" /> },
+      { label: "Reservations", path: "/hotels/reservations", icon: <ReceiptText className="h-5 w-5" /> },
+      { label: "Front Desk", path: "/hotels/front-desk", icon: <ConciergeBell className="h-5 w-5" /> },
+      { label: "Guest Folios", path: "/hotels/folios", icon: <ReceiptText className="h-5 w-5" /> },
+      { label: "Hotels", path: "/hotels/setup", icon: <Hotel className="h-5 w-5" /> },
+      { label: "Amenities", path: "/hotels/setup/amenities", icon: <Star className="h-5 w-5" /> },
+      { label: "Availability", path: "/hotels/availability", icon: <CalendarRange className="h-5 w-5" /> },
+      { label: "Rate Plans", path: "/hotels/rate-plans", icon: <ConciergeBell className="h-5 w-5" /> },
+      { label: "Cancellation Policies", path: "/hotels/policies", icon: <ShieldCheck className="h-5 w-5" /> },
+      { label: "Hotel KPI Reports", path: "/hotels/reports", icon: <LineChart className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Property & Bounties",
+    items: [
+      { label: "Properties", path: "/properties", icon: <Building className="h-5 w-5" /> },
+      { label: "Tenants", path: "/property/tenants", icon: <Users className="h-5 w-5" /> },
+      { label: "Leases", path: "/property/leases", icon: <FileText className="h-5 w-5" /> },
+      { label: "Rent Ledger", path: "/property/rent", icon: <Wallet className="h-5 w-5" /> },
+      { label: "Work Orders", path: "/property/work-orders", icon: <Wrench className="h-5 w-5" /> },
+      { label: "Vendors", path: "/property/vendors", icon: <Building className="h-5 w-5" /> },
+      { label: "Portfolio Dashboard", path: "/property/dashboard", icon: <LayoutDashboard className="h-5 w-5" /> },
+      { label: "Rent Policy", path: "/property/policies", icon: <FileText className="h-5 w-5" /> },
+      { label: "Bounty Board", path: "/bounties", icon: <Award className="h-5 w-5" /> },
     ],
   },
 ];
@@ -251,6 +416,8 @@ export default function Sidebar() {
   const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
   const showModerationBoard = canAccessModerationBoard(accessToken);
   const showPaymentIncidents = canAccessPaymentIncidentQueue(accessToken);
+  const showInventoryAdmin =
+    isInventoryReservationsEnabled() && canAccessGeneralAdminControls(accessToken);
 
   const { data: convoData } = useQuery({
     queryKey: ["conversations"],
@@ -299,6 +466,7 @@ export default function Sidebar() {
             if (item.path === "/broadcast/schedule") return isBroadcastNavigationEnabled();
             if (item.path === "/root/roles") return showRootRoleManagement;
             if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
+            if (item.path === "/agents/qa-actions") return isAgentSshQaEnabled();
             if (item.path === "/admin/moderation") return showModerationBoard;
             if (item.path === "/admin/payment-incidents") return showPaymentIncidents;
             if (item.path === "/admin/video-review") return showModerationBoard;
@@ -307,10 +475,13 @@ export default function Sidebar() {
             if (item.path === "/admin/appeals") return showModerationBoard;
             if (item.path === "/admin/communications") return showModerationBoard;
             if (item.path === "/admin/rate-limits") return showRootRoleManagement;
+            if (item.path === "/admin/security") return showRootRoleManagement;
+            if (item.path === "/admin/legal-holds") return showRootRoleManagement;
             if (item.path === "/admin/jobs") return showModerationBoard;
             if (item.path === "/admin/ads/fraud") return showModerationBoard;
             if (item.path === "/admin/ad-platform") return showModerationBoard;
             if (item.path === "/admin/bulk-payouts") return showRootRoleManagement;
+            if (item.path === "/admin/inventory") return showInventoryAdmin;
             return true;
           });
           if (items.length === 0) return null;
@@ -319,7 +490,7 @@ export default function Sidebar() {
             {gi > 0 && <Separator className="my-2" />}
             {!collapsed && (
               <span className="mb-1 block px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {group.i18nKey ? t(group.i18nKey) : group.title}
+                {group.i18nKey ? t(group.i18nKey, { defaultValue: group.title }) : group.title}
               </span>
             )}
             <ul className="space-y-0.5">
@@ -347,7 +518,7 @@ export default function Sidebar() {
                       )}
                     </span>
                     {!collapsed && (
-                      <span className="truncate">{item.i18nKey ? t(item.i18nKey) : item.label}</span>
+                      <span className="truncate">{item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label}</span>
                     )}
                     {!collapsed && badge > 0 && (
                       <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
@@ -363,7 +534,7 @@ export default function Sidebar() {
                       <Tooltip>
                         <TooltipTrigger asChild>{link}</TooltipTrigger>
                         <TooltipContent side="right" sideOffset={8}>
-                          {item.i18nKey ? t(item.i18nKey) : item.label}
+                          {item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label}
                         </TooltipContent>
                       </Tooltip>
                     </li>

@@ -66,15 +66,25 @@ export const createGroupPost = (groupId: string, data: {
   unlock_price_cents?: number;
 }) => api.post(`/ui/groups/${groupId}/posts`, data);
 
+// Build a query-param object that omits undefined/null values. Passing
+// `{ cursor: undefined }` straight into URLSearchParams serialises the literal
+// string "undefined", which the backend cursor decoder rejects with a 500.
+function feedParams(params?: { cursor?: string; limit?: number }): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (params?.cursor != null) out.cursor = String(params.cursor);
+  if (params?.limit != null) out.limit = String(params.limit);
+  return out;
+}
+
 export const getGroupFeed = (groupId: string, params?: {
   cursor?: string;
   limit?: number;
-}) => api.get<GroupFeedResponse>(`/ui/groups/${groupId}/feed`, params as Record<string, string>);
+}) => api.get<GroupFeedResponse>(`/ui/groups/${groupId}/feed`, feedParams(params));
 
 export const getPublicGroupFeed = (groupId: string, params?: {
   cursor?: string;
   limit?: number;
-}) => api.get<GroupFeedResponse>(`/public/groups/${groupId}/feed`, params as Record<string, string>);
+}) => api.get<GroupFeedResponse>(`/public/groups/${groupId}/feed`, feedParams(params));
 
 export const pinGroupPost = (groupId: string, postId: string) =>
   api.post(`/ui/groups/${groupId}/posts/${postId}/pin`);

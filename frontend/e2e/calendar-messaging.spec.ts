@@ -41,12 +41,16 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+// Repo root from the Playwright run cwd (frontend/) so seeders/env resolve in CI
+// (/home/runner/...) and on any host, not just the dev box.
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const BASE   = "http://localhost:3000";
 const API    = "http://localhost:8000";
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = `${REPO_ROOT}/.venv/bin/python3`;
 
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID   = "e2e_bob@test.local";
@@ -82,8 +86,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      `python3 ${REPO_ROOT}/e2e_session_setup.py`,
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -294,7 +298,7 @@ function checkCalendarShareInDdb(calendarId: string, recipientSub: string): bool
       `${PYTHON} -c "
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -1184,12 +1188,12 @@ test.describe("14. UI — ComposeBar CalendarDays dropdown opens dialogs", () =>
   test.afterAll(async () => page.close());
 
   test("CalendarDays dropdown button is visible in ComposeBar", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await expect(calBtn).toBeVisible({ timeout: 5000 });
   });
 
   test("CalendarDays dropdown shows three calendar menu items", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await calBtn.click();
     await expect(page.getByText(/share my calendar/i)).toBeVisible({ timeout: 3000 });
     await expect(page.getByText(/share an event/i)).toBeVisible({ timeout: 3000 });
@@ -1199,7 +1203,7 @@ test.describe("14. UI — ComposeBar CalendarDays dropdown opens dialogs", () =>
   });
 
   test("'Share my calendar' opens CalendarPickerDialog", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await calBtn.click();
     await page.getByText(/share my calendar/i).click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5000 });
@@ -1209,7 +1213,7 @@ test.describe("14. UI — ComposeBar CalendarDays dropdown opens dialogs", () =>
   });
 
   test("'Share an event' opens EventPickerDialog", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await calBtn.click();
     await page.getByText(/share an event/i).click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5000 });
@@ -1218,7 +1222,7 @@ test.describe("14. UI — ComposeBar CalendarDays dropdown opens dialogs", () =>
   });
 
   test("'Schedule a meeting' opens MeetingPollComposer", async () => {
-    const calBtn = page.getByRole("button", { name: "Calendar actions" });
+    const calBtn = page.getByRole("button", { name: "More compose options" });
     await calBtn.click();
     await page.getByText(/schedule a meeting/i).click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5000 });

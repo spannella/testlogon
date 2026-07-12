@@ -479,10 +479,17 @@ def list_children_page(
     started = time.perf_counter()
     tbl = _table()
 
+    owner_pk = pk_user(owner)
+
     def _filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # R1 FIX: GSI2 is keyed only by PARENT#<path> with NO owner namespacing, so a raw
+        # GSI2 query returns EVERY user's nodes at that parent path (cross-user listing leak;
+        # also the cause of rename/delete 404 -> get_node is owner-scoped). Constrain to the
+        # requesting owner here. The PK/SK ClientError fallback below is already owner-scoped.
+        scoped = [it for it in items if it.get("PK") == owner_pk]
         if include_deleted:
-            return items
-        return [it for it in items if not it.get("deleted_at")]
+            return scoped
+        return [it for it in scoped if not it.get("deleted_at")]
 
     def _query_kwargs() -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {}
@@ -528,7 +535,17 @@ def list_children(owner: str, folder_path: str, *, include_deleted: bool = False
         items.extend(batch)
         if not cursor:
             break
-    return items
+    # Defensive de-dup by path: a folder created via two code paths can leave duplicate nodes, and a
+    # duplicate path crashes the path-keyed UI list (Compose LazyColumn "key already used").
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for it in items:
+        key = str(it.get("path") or "")
+        if key and key in seen:
+            continue
+        seen.add(key)
+        deduped.append(it)
+    return deduped
 
 
 def _mount_match_for_path(owner: str, path: str) -> Optional[Dict[str, Any]]:
@@ -935,6 +952,35 @@ def ensure_folder_exists(owner: str, folder_path: str) -> None:
         if exc.status_code == 404:
             raise HTTPException(400, "parent folder does not exist") from exc
         raise
+
+
+def _ensure_folder_tree(owner: str, folder_path: str) -> None:
+    """mkdir -p: ensure folder_path and every ancestor exists, creating any that are missing.
+
+    Unlike ensure_folder_exists (which only asserts), this creates intermediate folders so an
+    upload to e.g. /messages/<conversation_id>/file.pdf works even when those folders were never
+    created (the messaging file-share + file-manager subfolder uploads rely on this).
+    """
+    folder_path = norm_path(folder_path, is_folder=True)
+    if folder_path == "/":
+        return
+    segments = [seg for seg in folder_path.strip("/").split("/") if seg]
+    cur = ""
+    for seg in segments:
+        cur = cur + "/" + seg
+        try:
+            node = get_node(owner, norm_path(cur, is_folder=True))
+            if node.get("type") != "folder":
+                raise HTTPException(400, "parent is not a folder")
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                try:
+                    create_empty_folder(owner, cur)
+                except HTTPException as ce:
+                    if ce.status_code != 409:  # 409 = already exists (race) -> fine
+                        raise
+            else:
+                raise
 
 
 def require_not_exists(owner: str, path: str) -> None:
@@ -2118,7 +2164,7 @@ def upload_file(
     bucket = _bucket()
     p = norm_path(path, is_folder=False)
     parent, name = split_parent_name(p)
-    ensure_folder_exists(user, parent)
+    _ensure_folder_tree(user, parent)
     require_not_exists(user, p)
 
     obj_id = str(uuid.uuid4())
@@ -2208,7 +2254,7 @@ def presign_upload(user: str, path: str, *, content_type: Optional[str]) -> Dict
     bucket = _bucket()
     p = norm_path(path, is_folder=False)
     parent, name = split_parent_name(p)
-    ensure_folder_exists(user, parent)
+    _ensure_folder_tree(user, parent)
     require_not_exists(user, p)
 
     obj_id = str(uuid.uuid4())
@@ -3289,29 +3335,26 @@ def _transact_move_item(tbl, user: str, item: Dict[str, Any], new_path: str, *, 
     if existing_new and allow_existing_dst:
         return "already_moved"
 
-    ddb.meta.client.transact_write_items(
-        TransactItems=[
-            {
-                "ConditionCheck": {
-                    "TableName": tbl.name,
-                    "Key": node_key(user, target),
-                    "ConditionExpression": "attribute_not_exists(PK)",
-                }
-            },
-            {
-                "Delete": {
-                    "TableName": tbl.name,
-                    "Key": node_key(user, old_path),
-                }
-            },
-            {
-                "Put": {
-                    "TableName": tbl.name,
-                    "Item": new_item,
-                }
-            },
-        ]
-    )
+    # R1 FIX (rename/move 500): the prior transaction had BOTH a ConditionCheck and a Put on the
+    # SAME item key (target) -> DynamoDB rejects "multiple operations on one item" with a
+    # ValidationException. Fold the existence guard onto the Put itself (attribute_not_exists(PK)) so
+    # the transaction touches each key exactly once (Delete old_path, conditional Put target).
+    transact_items = [
+        {
+            "Delete": {
+                "TableName": tbl.name,
+                "Key": node_key(user, old_path),
+            }
+        },
+        {
+            "Put": {
+                "TableName": tbl.name,
+                "Item": new_item,
+                "ConditionExpression": "attribute_not_exists(PK)",
+            }
+        },
+    ]
+    ddb.meta.client.transact_write_items(TransactItems=transact_items)
     _delete_token_entries(user, item)
     _put_token_entries(user, new_item)
     _move_shares(owner=user, old_path=old_path, new_path=target)
@@ -3584,6 +3627,79 @@ def move_node(user: str, src: str, dst: str) -> Dict[str, Any]:
     record_storage_delta(user, dst_p, 0, source="move_file", aggregate=False)
     record_filemgr_operation_latency("move", time.perf_counter() - started)
     return {"type": "file", "src": src_p, "dst": dst_p}
+
+
+def copy_node(user: str, src: str, dst: str) -> Dict[str, Any]:
+    """Duplicate a FILE node (DDB metadata + its S3 object) to a new path.
+
+    Recursive folder copy is intentionally OUT OF SCOPE (would require a
+    checkpointed multi-object copy like move); copying a folder raises 400 so
+    the client can surface a clear message. Reuses the move plumbing's node
+    shape, token-index writes, and storage accounting.
+    """
+    started = time.perf_counter()
+    src_p = norm_path(src, is_folder=None)
+    node = get_node(user, src_p if src_p.endswith("/") else src_p)
+    if node.get("type") == "folder":
+        raise HTTPException(400, "recursive folder copy is not supported")
+
+    dst_p = norm_path(dst, is_folder=False)
+    dst_parent, dst_name = split_parent_name(dst_p)
+    _ensure_folder_tree(user, dst_parent)
+    require_not_exists(user, dst_p)
+
+    new_item = dict(node)
+    new_item["path"] = dst_p
+    new_item["parent"] = dst_parent
+    new_item["name"] = dst_name
+    new_item["name_lc"] = dst_name.lower()
+    new_item["created_at"] = now_iso()
+    new_item["updated_at"] = now_iso()
+    new_item["SK"] = sk_node(dst_p)
+    new_item["GSI1PK"] = pk_user(user)
+    new_item["GSI1SK"] = f"NAME#{new_item['name_lc']}#PATH#{dst_p}"
+    new_item["GSI2PK"] = f"PARENT#{dst_parent}"
+    new_item["GSI2SK"] = f"TYPE#file#NAME#{new_item['name_lc']}#PATH#{dst_p}"
+    # Drop any soft-delete markers so the copy lands live.
+    for k in ("deleted_at", "deleted_by", "purge_after"):
+        new_item.pop(k, None)
+
+    # Duplicate the underlying S3 object to a fresh key so the two nodes do not
+    # alias the same object (independent lifecycle for delete/expire/tagging).
+    src_bucket = node.get("s3_bucket")
+    src_key = node.get("s3_key")
+    if src_bucket and src_key:
+        obj_id = uuid.uuid4().hex
+        new_key = f"{user}/objects/{obj_id}"
+        try:
+            _s3.copy_object(
+                Bucket=src_bucket,
+                Key=new_key,
+                CopySource={"Bucket": src_bucket, "Key": src_key},
+            )
+        except ClientError as exc:
+            raise HTTPException(502, f"failed to copy object: {exc}") from exc
+        new_item["s3_key"] = new_key
+        # Refresh deterministic derivative layout for the new source key.
+        try:
+            new_item.update(
+                build_media_derivative_layout(
+                    user, new_key, new_item.get("etag"), int(new_item.get("size") or 0)
+                )
+            )
+        except Exception:
+            pass
+
+    put_node(new_item)
+    _put_token_entries(user, new_item)
+    try:
+        _enqueue_media_preview_job(user, new_item)
+    except Exception:
+        pass
+    record_storage_delta(user, dst_p, int(new_item.get("size") or 0), source="copy_create")
+    record_filemgr_bytes("copied", "copy", int(new_item.get("size") or 0))
+    record_filemgr_operation_latency("copy", time.perf_counter() - started)
+    return {"type": "file", "src": src_p, "dst": dst_p, "size": int(new_item.get("size") or 0)}
 
 
 def download_zip(user: str, paths: List[str]) -> tuple[zipstream.ZipFile, int]:
@@ -4960,3 +5076,121 @@ def create_billing_adjustment_admin(
         "adjustment_type": adjustment_type,
         "adjustment_sk": adj_sk,
     }
+
+
+# ── EVT-011: CRM Document Library metadata helpers ─────────────────────────
+
+from typing import Any as _Any, Optional as _Opt, Tuple as _Tuple, List as _List
+
+_LINKED_RECORD_TYPES: frozenset[str] = frozenset({"contact", "ticket", "account", "party"})
+
+
+def update_crm_metadata(
+    owner: str,
+    path: str,
+    *,
+    crm_category: _Opt[str],
+    crm_description: _Opt[str],
+    linked_record_type: _Opt[str],
+    linked_record_id: _Opt[str],
+) -> dict:
+    """Write or clear CRM metadata on an existing file node.
+
+    Returns the refreshed node dict.  Raises HTTP 400/404 on invalid input.
+    """
+    from fastapi import HTTPException  # local import
+
+    path = norm_path(path, is_folder=False)
+    # 404 if absent or soft-deleted
+    get_node(owner, path)
+
+    if crm_category is not None and len(crm_category) > 200:
+        raise HTTPException(status_code=400, detail="crm_category max 200 chars")
+    if crm_description is not None and len(crm_description) > 2000:
+        raise HTTPException(status_code=400, detail="crm_description max 2000 chars")
+    if linked_record_type is not None and linked_record_type not in _LINKED_RECORD_TYPES:
+        raise HTTPException(status_code=400, detail={"code": "invalid_linked_record_type"})
+    if (linked_record_type is None) != (linked_record_id is None):
+        raise HTTPException(status_code=400, detail={"code": "linked_record_pair_required"})
+
+    set_parts: list[str] = ["crm_metadata_updated_at=:ts"]
+    remove_parts: list[str] = []
+    eav: dict[str, _Any] = {":ts": now_iso()}
+
+    for attr, val in [
+        ("crm_category", crm_category),
+        ("crm_description", crm_description),
+        ("linked_record_type", linked_record_type),
+        ("linked_record_id", linked_record_id),
+    ]:
+        if val is not None:
+            placeholder = f":{attr}"
+            eav[placeholder] = val
+            set_parts.append(f"{attr}={placeholder}")
+        else:
+            remove_parts.append(attr)
+
+    update_expr = "SET " + ", ".join(set_parts)
+    if remove_parts:
+        update_expr += " REMOVE " + ", ".join(remove_parts)
+
+    _table().update_item(
+        Key=node_key(owner, path),
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=eav,
+    )
+    return get_node(owner, path)
+
+
+def search_by_linked_record(
+    owner: str,
+    linked_record_type: str,
+    linked_record_id: str,
+    *,
+    limit: int = 50,
+    cursor: _Opt[dict] = None,
+) -> _Tuple[_List[dict], _Opt[dict]]:
+    """Return file nodes linked to a CRM record (user-scoped scan).
+
+    Returns (items, last_evaluated_key).
+    """
+    from fastapi import HTTPException  # local import
+    from boto3.dynamodb.conditions import Attr  # local import
+
+    if linked_record_type not in _LINKED_RECORD_TYPES:
+        raise HTTPException(status_code=400, detail={"code": "invalid_linked_record_type"})
+
+    limit = max(1, min(limit, 200))
+
+    filter_expr = (
+        Attr("PK").eq(pk_user(owner))
+        & Attr("SK").begins_with("NODE#")
+        & Attr("linked_record_type").eq(linked_record_type)
+        & Attr("linked_record_id").eq(linked_record_id)
+    )
+
+    results: list[dict] = []
+    lek = cursor
+    scan_rounds = 0
+    last_lek: _Opt[dict] = None
+
+    while len(results) < limit and scan_rounds < 30:
+        scan_rounds += 1
+        kwargs: dict[str, _Any] = {
+            "FilterExpression": filter_expr,
+        }
+        if lek:
+            kwargs["ExclusiveStartKey"] = lek
+        resp = _table().scan(**kwargs)
+        for item in resp.get("Items", []):
+            # Strip DynamoDB internal keys
+            clean = {k: v for k, v in item.items() if k not in ("PK", "SK", "GSI1PK", "GSI1SK", "GSI2PK", "GSI2SK")}
+            results.append(clean)
+            if len(results) >= limit:
+                break
+        lek = resp.get("LastEvaluatedKey")
+        last_lek = lek if len(results) < limit else lek
+        if not lek:
+            break
+
+    return results[:limit], last_lek

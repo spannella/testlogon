@@ -56,6 +56,8 @@ class SetDisplayBadgesIn(BaseModel):
 class AdvanceProgressIn(BaseModel):
     metric_key: str = Field(..., min_length=1, max_length=64)
     delta: int = Field(default=1, ge=0)
+    # ROOT may advance progress on behalf of another user (defaults to caller).
+    user_sub: str | None = Field(default=None, max_length=256)
 
 
 # ---------------------------------------------------------------------------
@@ -276,8 +278,13 @@ async def get_my_rank_endpoint(
 
 @router.post("/ui/achievements/admin/advance")
 async def admin_advance_progress(req: AdvanceProgressIn, ctx: AuthenticatedUser = Depends(require_root_session)):
-    """Advance progress for a user. ROOT access only."""
-    user_sub = ctx.sub
+    """Advance progress for a user. ROOT access only.
+
+    Defaults to the calling (root) user; ROOT may target another user via
+    the optional ``user_sub`` field so progress/unlock flows can be driven
+    on behalf of any account.
+    """
+    user_sub = req.user_sub or ctx.sub
     from app.services.achievement_progress import advance_progress
     unlocked = advance_progress(user_sub, req.metric_key, delta=req.delta)
     return {"ok": True, "newly_unlocked": unlocked}

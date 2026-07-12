@@ -18,6 +18,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -50,8 +52,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -94,7 +96,7 @@ async function apiPost(page: Page, path: string, body: object) {
 const DDB_PRELUDE = `
 import boto3, os, time
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -429,8 +431,20 @@ test.describe("Section 70: Wallet UI", () => {
     const depositMarker = seedWalletLedgerEntry(aliceSub, "wallet_deposit");
     const withdrawalMarker = seedWalletLedgerEntry(aliceSub, "wallet_withdrawal");
 
-    await alicePage.goto(`${BASE}/billing?tab=ledger`, { waitUntil: "load" });
-    await alicePage.waitForTimeout(800);
+    // Under full-suite load a background query can 401 and bounce the page to
+    // /login (clearing the auth store). Re-inject auth and retry the navigation
+    // until the Ledger tab actually renders the seeded marker (not login).
+    let rendered = false;
+    for (let attempt = 0; attempt < 3 && !rendered; attempt++) {
+      await injectAuth(alicePage);
+      await alicePage.goto(`${BASE}/billing?tab=ledger`, { waitUntil: "load" });
+      await alicePage.waitForTimeout(800);
+      rendered = await alicePage
+        .getByText(depositMarker)
+        .first()
+        .isVisible({ timeout: 12000 })
+        .catch(() => false);
+    }
 
     await expect(alicePage.getByText(depositMarker).first()).toBeVisible({ timeout: 15000 });
     await expect(alicePage.getByText(withdrawalMarker).first()).toBeVisible({ timeout: 15000 });

@@ -10,12 +10,14 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
 const API  = "http://localhost:8000";
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID   = "e2e_bob@test.local";
@@ -43,8 +45,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      `${PYTHON} /home/ubuntu/testlogon/e2e_session_setup.py`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      `${PYTHON} ${REPO_ROOT}/e2e_session_setup.py`,
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -88,7 +90,7 @@ table.put_item(Item=convert(raw))
 print("ok")
 `;
   execSync(`${PYTHON} -c '${script}' '${JSON.stringify(item)}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   });
 }
@@ -114,7 +116,7 @@ item = resp.get("Item", {})
 print(int(item.get("wallet_balance_cents", 0)))
 `;
   const out = execSync(`${PYTHON} -c '${script}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   }).toString().trim();
   return parseInt(out, 10);
@@ -143,7 +145,7 @@ table.update_item(
 print("ok")
 `;
   execSync(`${PYTHON} -c '${script}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   });
 }
@@ -171,7 +173,7 @@ else:
     print("null")
 `;
   const out = execSync(`${PYTHON} -c '${script}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   }).toString().trim();
   if (out === "null") return null;
@@ -194,7 +196,7 @@ table.update_item(
 print("ok")
 `;
   execSync(`${PYTHON} -c '${script}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   });
 }
@@ -222,7 +224,7 @@ for item in resp.get("Items", []):
     print("Ended call " + cid)
 `;
   execSync(`${PYTHON} -c '${script}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
   });
 }

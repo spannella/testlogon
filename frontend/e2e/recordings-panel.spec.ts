@@ -16,6 +16,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
@@ -43,8 +45,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -56,6 +58,13 @@ async function injectAuth(page: Page, identity: string) {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for identity "${identity}"`);
   await page.context().addCookies(session.cookies);
+  // ProtectedRoute gates the SPA on the persisted auth-store; cookies alone
+  // authenticate API calls but the router would redirect to /login. Seed the
+  // auth-store before every navigation so protected pages actually render.
+  await page.addInitScript((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +73,7 @@ async function injectAuth(page: Page, identity: string) {
 
 function runPy(py: string): void {
   execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
@@ -83,10 +92,18 @@ ddb.Table("Conversations").put_item(Item={
     "type": "dm", "created_at": ts, "last_message_at": ts, "updated_at": ts,
 })
 ptable = ddb.Table("Participants")
-for uid in ${JSON.stringify(participantIds)}:
+parts = ${JSON.stringify(participantIds)}
+for uid in parts:
     ptable.put_item(Item={
         "user_id": uid, "conversation_id": ${JSON.stringify(conversationId)},
         "status": "active", "joined_at": ts,
+        "role": "admin" if uid == parts[0] else "member",
+        "muted_until": 0, "last_read_at": 0, "unread_count": 0, "left_at": 0,
+        # The conversation-participants enrichment query reads the GSI1 index
+        # (GSI1PK = conversation_id, GSI1SK = user_id). Without these the
+        # participants list comes back empty, dmPartner never resolves, and the
+        # call/recording UI (callsEnabled) stays disabled.
+        "GSI1PK": ${JSON.stringify(conversationId)}, "GSI1SK": uid,
     })
 print("ok")
 `);

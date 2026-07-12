@@ -204,6 +204,10 @@ class TestTimeoutCallEndpoint:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
+        # fanout_event_to_conversation queries tbl_parts (DDB) — patch to no-op
+        # (added after test was written; GAP-0142 wired fanout into timeout endpoint)
+        monkeypatch.setattr(msg_module, "fanout_event_to_conversation", lambda *a, **kw: None)
+
         app = FastAPI()
         app.include_router(msg_module.router)
 
@@ -285,7 +289,7 @@ class TestExpireStaleInvites:
         }
 
         from app.routers.messaging import _expire_stale_invites
-        asyncio.get_event_loop().run_until_complete(_expire_stale_invites())
+        asyncio.run(_expire_stale_invites())
 
         # Check the call session was transitioned to missed
         updated = sessions.get_call_session("stale_call")
@@ -312,8 +316,8 @@ class TestExpireStaleInvites:
 
         from app.routers.messaging import _expire_stale_invites
         # Run twice — should not raise
-        asyncio.get_event_loop().run_until_complete(_expire_stale_invites())
-        asyncio.get_event_loop().run_until_complete(_expire_stale_invites())
+        asyncio.run(_expire_stale_invites())
+        asyncio.run(_expire_stale_invites())
 
         updated = sessions.get_call_session("stale_call2")
         assert updated is not None

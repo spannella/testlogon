@@ -1100,6 +1100,17 @@ def list_files(
             key=lambda x: (x["type"] != "folder", x.get("size") or 0, (x.get("name") or "").lower()),
             reverse=not scan_forward,
         )
+    # Defensive de-dup by path: a duplicate folder node must never reach the client's path-keyed list
+    # (Compose LazyColumn crashes with "key already used"). Keep first occurrence, preserve order.
+    _seen_paths: set = set()
+    _deduped: list = []
+    for _it in out:
+        _k = str(_it.get("path") or "")
+        if _k and _k in _seen_paths:
+            continue
+        _seen_paths.add(_k)
+        _deduped.append(_it)
+    out = _deduped
     next_payload_ddb = {"mode": "ddb", "key": next_cursor} if next_cursor else None
     return {"path": folder, "items": out, "cursor": _encode_cursor(next_payload_ddb)}
 
@@ -2685,6 +2696,38 @@ def move_fs_node(
     return {"ok": True, **result}
 
 
+@router.post("/copy")
+def copy_fs_node(
+    src: str = Body(..., embed=True),
+    dst: str = Body(..., embed=True),
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
+    from app.services.filemanager import copy_node as _copy_node
+    _enforce_sftp_mount_flags_for_path(src, operation="write")
+    _enforce_sftp_mount_flags_for_path(dst, operation="write")
+    _enforce_sftp_mount_status_for_path(src, owner=user, operation="write")
+    _enforce_sftp_mount_status_for_path(dst, owner=user, operation="write")
+    src_provider = resolve_storage_provider(user, src)
+    dst_provider = resolve_storage_provider(user, dst)
+    if src_provider.backend != dst_provider.backend:
+        raise HTTPException(status_code=400, detail={"code": "cross_backend_copy_not_supported", "message": "copying between native and mounted paths is not supported"})
+    if src_provider.backend == "sftp":
+        raise HTTPException(status_code=400, detail={"code": "copy_not_supported_for_mount", "message": "copy is only supported for native storage"})
+    result = _copy_node(user, src, dst)
+    audit_event(
+        "filemgr_node_copied",
+        user,
+        req,
+        outcome="success",
+        src=result.get("src"),
+        dst=result.get("dst"),
+        node_type=result.get("type"),
+        **_file_audit_fields(file_path=str(result.get("dst") or norm_path(dst, is_folder=None)), owner=user),
+    )
+    return {"ok": True, **result}
+
+
 @router.post("/move-resume")
 def resume_fs_move(inp: MoveCheckpointIn, req: Request = None, user: str = Depends(_current_user)):
     result = resume_move(user, inp.move_id)
@@ -3697,3 +3740,109 @@ def purge_deleted(req: Request = None, ctx: Dict[str, Any] = Depends(_admin_or_r
         errors=result.get("errors"),
     )
     return {"ok": True, **result}
+
+
+# ── EVT-011: CRM Document Library metadata + search ───────────────────────
+
+from pydantic import BaseModel as _FMBaseModel, Field as _FMField
+from typing import Optional as _FMOpt, List as _FMList
+
+
+class CrmMetadataIn(_FMBaseModel):
+    crm_category: _FMOpt[str] = _FMField(default=None, max_length=200)
+    crm_description: _FMOpt[str] = _FMField(default=None, max_length=2000)
+    linked_record_type: _FMOpt[str] = _FMField(default=None)
+    linked_record_id: _FMOpt[str] = _FMField(default=None, max_length=200)
+
+
+class CrmMetadataOut(_FMBaseModel):
+    path: str
+    crm_category: _FMOpt[str]
+    crm_description: _FMOpt[str]
+    linked_record_type: _FMOpt[str]
+    linked_record_id: _FMOpt[str]
+    crm_metadata_updated_at: _FMOpt[str]
+
+
+class CrmSearchOut(_FMBaseModel):
+    items: _FMList[CrmMetadataOut]
+    cursor: _FMOpt[str]
+    count: int
+
+
+def _require_crm_document_library_enabled() -> None:
+    if not S.crm_document_library_enabled:
+        raise HTTPException(status_code=404, detail="not found")
+
+
+@router.patch("/crm-metadata")
+def update_crm_metadata_endpoint(
+    path: str = Query(..., description="File path, e.g. /docs/contract.pdf"),
+    body: CrmMetadataIn = ...,
+    req: Request = None,
+    user: str = Depends(_current_user),
+) -> CrmMetadataOut:
+    _require_crm_document_library_enabled()
+    _enforce_sftp_mount_flags_for_path(path, operation="write")
+    from app.services.filemanager import update_crm_metadata  # lazy (RULE-1)
+    node = update_crm_metadata(
+        user,
+        path,
+        crm_category=body.crm_category,
+        crm_description=body.crm_description,
+        linked_record_type=body.linked_record_type,
+        linked_record_id=body.linked_record_id,
+    )
+    audit_event(
+        "filemgr_crm_metadata_updated",
+        user,
+        req,
+        outcome="success",
+        path=path,
+        linked_record_type=body.linked_record_type,
+        linked_record_id=body.linked_record_id,
+    )
+    return CrmMetadataOut(
+        path=node.get("path", path),
+        crm_category=node.get("crm_category"),
+        crm_description=node.get("crm_description"),
+        linked_record_type=node.get("linked_record_type"),
+        linked_record_id=node.get("linked_record_id"),
+        crm_metadata_updated_at=node.get("crm_metadata_updated_at"),
+    )
+
+
+@router.get("/crm-search")
+def crm_search_endpoint(
+    linked_record_type: str = Query(...),
+    linked_record_id: str = Query(...),
+    limit: int = Query(50, ge=1, le=200),
+    cursor: Optional[str] = Query(default=None),
+    user: str = Depends(_current_user),
+) -> CrmSearchOut:
+    _require_crm_document_library_enabled()
+    cursor_payload = _decode_cursor(cursor)
+    from app.services.filemanager import search_by_linked_record  # lazy (RULE-1)
+    items, next_key = search_by_linked_record(
+        user,
+        linked_record_type,
+        linked_record_id,
+        limit=limit,
+        cursor=cursor_payload,
+    )
+    next_cursor = _encode_cursor(next_key) if next_key else None
+    return CrmSearchOut(
+        items=[
+            CrmMetadataOut(
+                path=it.get("path", ""),
+                crm_category=it.get("crm_category"),
+                crm_description=it.get("crm_description"),
+                linked_record_type=it.get("linked_record_type"),
+                linked_record_id=it.get("linked_record_id"),
+                crm_metadata_updated_at=it.get("crm_metadata_updated_at"),
+            )
+            for it in items
+        ],
+        cursor=next_cursor,
+        count=len(items),
+    )

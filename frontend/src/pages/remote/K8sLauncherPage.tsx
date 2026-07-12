@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -8,6 +9,7 @@ import {
   Trash2,
   ScrollText,
   X,
+  Terminal,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -84,6 +86,7 @@ function relativeTime(ts: number): string {
 
 export default function K8sLauncherPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [showLaunch, setShowLaunch] = useState(false);
   const [showTermConfirm, setShowTermConfirm] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState<string | null>(null);
@@ -203,6 +206,22 @@ export default function K8sLauncherPage() {
                           data-testid={`logs-${pod.pod_id}`}
                         >
                           <ScrollText className="h-3 w-3 mr-1" /> View Logs
+                        </Button>
+                      )}
+                      {pod.status === "running" && (pod.host_id || pod.service_hostname) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            navigate(
+                              pod.host_id
+                                ? `/remote/ssh?host_id=${encodeURIComponent(pod.host_id)}`
+                                : `/remote/ssh?host=${encodeURIComponent(pod.service_hostname)}`,
+                            )
+                          }
+                          data-testid={`open-terminal-${pod.pod_id}`}
+                        >
+                          <Terminal className="h-3 w-3 mr-1" /> Open terminal
                         </Button>
                       )}
                       {pod.status !== "terminated" && (

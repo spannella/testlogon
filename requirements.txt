@@ -9,6 +9,10 @@ requests==2.31.0
 snowballstemmer==2.2.0
 stripe==8.5.0
 pytest==8.2.2
+# Starlette 0.36.x TestClient requires httpx and passes app= to httpx.Client,
+# which httpx>=0.28 removed. Pin <0.28 so fastapi.testclient.TestClient works
+# in CI (browser-ssh-backend-tests, broadcast release-gate) and locally.
+httpx>=0.27,<0.28
 prometheus-client==0.20.0
 PyJWT==2.8.0
 zipstream-new==1.1.8

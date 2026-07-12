@@ -69,6 +69,19 @@ def build_ctx():
 
 
 class TestUiSessionRoutes(unittest.TestCase):
+    def setUp(self):
+        # is_sso_only_tenant queries T.sso_providers; stub it for all tests
+        # (ENTERPRISE-002/GAP-0173 added after these tests were written)
+        self._sso_patcher = patch.object(
+            __import__("app.routers.ui_session", fromlist=["is_sso_only_tenant"]),
+            "is_sso_only_tenant",
+            return_value=False,
+        )
+        self._sso_patcher.start()
+
+    def tearDown(self):
+        self._sso_patcher.stop()
+
     def test_ui_session_routes(self):
         sessions_table = Mock()
         sessions_table.query.return_value = {
@@ -114,6 +127,10 @@ class TestUiSessionRoutes(unittest.TestCase):
             stack.enter_context(patch.object(ui_session, "compute_required_factors", return_value=["totp"]))
             stack.enter_context(patch.object(ui_session, "create_stepup_challenge", return_value="chal"))
             stack.enter_context(patch.object(ui_session, "audit_event"))
+            # Added after test was written — patch DDB-accessing helpers
+            stack.enter_context(patch.object(ui_session, "rate_limit_login_attempt"))
+            stack.enter_context(patch.object(ui_session, "record_login_anomaly", return_value={}))
+            stack.enter_context(patch.object(ui_session, "record_device_login", return_value={"new_device": False}))
 
             resp = run_async(ui_session.ui_session_start(req, UiSessionStartReq(), user_sub="user"))
             self.assertTrue(resp.auth_required)

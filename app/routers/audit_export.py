@@ -350,3 +350,52 @@ def _job_to_out(item: dict) -> dict:
         "events_scanned": int(item["events_scanned"]) if item.get("events_scanned") is not None else None,
         "events_written": int(item["events_written"]) if item.get("events_written") is not None else None,
     }
+
+
+# ── EVT-015: Audit Log Browse (live, paginated, ROOT-only) ─────────────────
+
+from app import models as _models  # noqa: E402 — avoid name collision
+
+browse_router = APIRouter(prefix="/ui/admin", tags=["audit-log-browse"])
+
+
+def _require_audit_log_browse_enabled() -> None:
+    if not S.crm_audit_log_browse_enabled:
+        raise HTTPException(status_code=404, detail="not found")
+
+
+@browse_router.get("/audit-log")
+async def browse_audit_log_endpoint(
+    category: str = Query(..., description="One of: auth, moderation, broadcast, admin, billing"),
+    from_ts: int = Query(..., description="Start Unix timestamp (inclusive)"),
+    to_ts: int = Query(..., description="End Unix timestamp (inclusive)"),
+    user_sub: Optional[str] = Query(None, description="Filter by actor user_sub"),
+    event_type: Optional[str] = Query(None, description="Filter by event_action string"),
+    limit: int = Query(50, ge=1, le=200, description="Items per page"),
+    cursor: Optional[str] = Query(None, description="Opaque pagination cursor"),
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+) -> dict:
+    _require_audit_log_browse_enabled()
+    _require_root(ctx)
+
+    # Rate limit: N req/min per ROOT user (configurable)
+    from app.services.rate_limit import _bucket_limit  # lazy import
+    rate_max = S.crm_audit_log_browse_rate_limit_per_minute
+    if not _bucket_limit(ctx["user_sub"], "rl#audit_log_browse", rate_max, 60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    from app.services.audit_log_browse import browse_audit_log  # lazy import (RULE-1)
+    try:
+        result = browse_audit_log(
+            category=category,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            user_sub_filter=user_sub,
+            event_type_filter=event_type,
+            limit=limit,
+            cursor=cursor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return result

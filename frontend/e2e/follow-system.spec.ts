@@ -11,6 +11,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -48,8 +50,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -398,19 +400,35 @@ test.describe("92 -- Follow Button UI", () => {
   });
 
   test("92.4 Follower count updates on profile after follow", async () => {
+    // Self-contained: navigate fresh + ensure a clean (non-following) state so
+    // this test doesn't depend on the page position/state left by 92.1-92.3
+    // (a retry runs in a fresh worker where no prior nav happened).
+    await cleanupFollow(alicePage, ALICE_KEY, BOB_ID);
+    await alicePage.goto(`${BASE}/u/${encodeURIComponent(BOB_ID)}`);
+    await alicePage.waitForLoadState("domcontentloaded");
+
     // Get initial stats
     const statsRow = alicePage.locator('[data-testid="stats-row"]');
-    await expect(statsRow).toBeVisible();
+    await expect(statsRow).toBeVisible({ timeout: 10_000 });
 
     // Follow Bob
     const followBtn = alicePage.locator('[data-testid="follow-button"]');
+    await expect(followBtn).toBeVisible({ timeout: 10_000 });
+    await expect(followBtn).toContainText("Follow");
     await followBtn.click();
     await expect(followBtn).toContainText("Following", { timeout: 5_000 });
 
-    // Verify follow worked via API
-    const resp = await apiGet(alicePage, `/ui/social/status/${BOB_ID}`);
-    const data = await resp.json();
-    expect(data.is_following).toBe(true);
+    // Verify follow worked via API (poll: the mutation settles asynchronously).
+    await expect
+      .poll(
+        async () => {
+          const resp = await apiGet(alicePage, `/ui/social/status/${BOB_ID}`);
+          const data = await resp.json();
+          return data.is_following;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
 
     // Cleanup
     await cleanupFollow(alicePage, ALICE_KEY, BOB_ID);

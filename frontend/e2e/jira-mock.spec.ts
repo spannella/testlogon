@@ -23,6 +23,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -64,8 +66,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -78,6 +80,7 @@ async function injectAuth(page: Page, identity: string): Promise<void> {
   const session = getSessions()[identity];
   if (!session) throw new Error(`No session for identity: ${identity}`);
   await page.context().addCookies(session.cookies);
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -125,7 +128,7 @@ async function apiPut(
 const DDB_PRELUDE = `
 import boto3, os, time, json
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -165,7 +168,7 @@ function seedJiraConnection(
 
   execSync(
     `${PYTHON} -c "
-import sys; sys.path.insert(0, '/home/ubuntu/testlogon')
+import sys; sys.path.insert(0, '${REPO_ROOT}')
 ${DDB_PRELUDE}
 tbl = ddb.Table(os.environ.get('TICKETS_TABLE_NAME', 'tickets'))
 tbl.put_item(Item={
@@ -192,7 +195,7 @@ tbl.put_item(Item={
 })
 print('seeded connection')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -208,7 +211,7 @@ tbl = ddb.Table(os.environ.get('TICKETS_TABLE_NAME', 'tickets'))
 tbl.delete_item(Key={'pk': 'WORKSPACE#${workspaceId}', 'sk': 'JIRA_CONN#${connectionId}'})
 print('cleaned up connection')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+      { cwd: REPO_ROOT, timeout: 15_000 },
     );
   } catch {
     // best-effort cleanup
@@ -227,7 +230,7 @@ tbl = ddb.Table(os.environ.get('TICKETS_TABLE_NAME', 'tickets'))
 tbl.delete_item(Key={'pk': 'WORKSPACE#${workspaceId}', 'sk': 'JIRA_PREFS#${userSub}#${cloudId}'})
 print('cleaned up preferences')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+      { cwd: REPO_ROOT, timeout: 15_000 },
     );
   } catch {
     // best-effort cleanup

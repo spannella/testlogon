@@ -1,12 +1,12 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus, Check } from "lucide-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { GifPicker } from "@/components/shared/GifPicker";
 import { StickerPicker } from "@/components/shared/StickerPicker";
 import { EmojiPicker } from "@/components/shared/EmojiPicker";
 import { replaceShortcodes } from "@/utils/emoji";
-import { sendGifMessage, sendStickerMessage } from "@/api/endpoints/messaging";
+import { sendGifMessage, sendStickerMessage, uploadConversationMedia } from "@/api/endpoints/messaging";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ import {
   isMessagingViewOnceImageEnabled,
   isMessagingViewOnceVideoEnabled,
   isMessagingDraftsEnabled,
+  isMessagingTtsEnabled,
 } from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
 import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, SendFindDateTimeReq, CreateLotteryMessageReq } from "@/api/types";
@@ -26,12 +27,6 @@ import { FindDateTimeComposer } from "./FindDateTimeComposer";
 import { CountdownComposerDialog, type CountdownSubmitData } from "./CountdownComposerDialog";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { FilePickerDialog } from "./FilePickerDialog";
 import { VideoPickerDialog } from "./VideoPickerDialog";
 import { VoiceRecorder } from "./VoiceRecorder";
@@ -73,6 +68,8 @@ interface ComposeBarProps {
   onSendCountdown?: (params: CountdownSubmitData) => void;
   onSendLottery?: (params: Omit<CreateLotteryMessageReq, "conversation_id">) => void;
   onSendVoiceMessage?: (blob: Blob, meta: { duration: number; waveform: number[]; contentType: string; consumption_policy?: "none" | "listen_once"; reply_to_message_id?: string | null; send_at?: number | null }) => void;
+  // MVA-010: synthesize the current draft text into a TTS voice message.
+  onSendTtsVoice?: (text: string, opts: { reply_to_message_id?: string | null }) => Promise<void> | void;
   sending?: boolean;
   disabled?: boolean;
   onKeystroke?: () => void;
@@ -104,6 +101,7 @@ export function ComposeBar({
   onSendCountdown,
   onSendLottery,
   onSendVoiceMessage,
+  onSendTtsVoice,
   sending,
   disabled,
   onKeystroke,
@@ -119,6 +117,8 @@ export function ComposeBar({
   const [gifPickerOpen, setGifPickerOpen] = React.useState(false);
   const [stickerPickerOpen, setStickerPickerOpen] = React.useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = React.useState(false);
+  // "+" overflow menu that collects the secondary compose actions (MCM).
+  const [moreOpen, setMoreOpen] = React.useState(false);
 
   const sendGifMut = useMutation({
     mutationFn: (gif: { url: string; alt_text: string; width: number; height: number }) =>
@@ -187,6 +187,8 @@ export function ComposeBar({
     payload_type: "text" | "image" | "video";
     text_content: string;
     media_asset_id: string;
+    media_name?: string;
+    uploading?: boolean;
     weight_bps: number;
     percent_input: string;
   }>>([
@@ -225,6 +227,26 @@ export function ComposeBar({
     clearSyncIssue,
   } = useConversationDrafts(normalizedConversationId);
   const draftsEnabled = isMessagingDraftsEnabled();
+  const ttsEnabled = isMessagingTtsEnabled();
+  const [ttsSynthesizing, setTtsSynthesizing] = React.useState(false);
+  // MVA-010: synthesize the current draft into a TTS voice message.
+  const handleSpeakThis = React.useCallback(async () => {
+    if (!onSendTtsVoice) return;
+    const draft = text.trim();
+    if (!draft) {
+      toast.error("Type something to speak first");
+      return;
+    }
+    setMoreOpen(false);
+    setTtsSynthesizing(true);
+    try {
+      await onSendTtsVoice(draft, { reply_to_message_id: replyingTo?.message_id ?? null });
+      // Only clear the draft once synthesis succeeded; errors keep the text.
+      setText("");
+    } finally {
+      setTtsSynthesizing(false);
+    }
+  }, [onSendTtsVoice, text, replyingTo, setMoreOpen, setText]);
   const [retryingDraftSync, setRetryingDraftSync] = React.useState(false);
   const autosaveTimerRef = React.useRef<number | null>(null);
   const lastPersistedDraftTextRef = React.useRef("");
@@ -286,6 +308,7 @@ export function ComposeBar({
   const lotteryOutcomesValid = React.useMemo(() => {
     if (lotteryOutcomes.length < 2 || lotteryOutcomes.length > 10) return false;
     if (lotteryTotalBps !== 10_000) return false;
+    if (lotteryOutcomes.some((o) => o.uploading)) return false;
     return lotteryOutcomes.every((o) =>
       o.weight_bps > 0 &&
       o.payload_type === "text"
@@ -302,10 +325,32 @@ export function ComposeBar({
         : undefined;
       const payloadError = o.payload_type === "text"
         ? (o.text_content.trim() ? undefined : "Text outcome cannot be empty.")
-        : (o.media_asset_id.trim() ? undefined : "Media asset id is required.");
+        : (o.uploading ? "Uploading…" : o.media_asset_id.trim() ? undefined : `Upload ${o.payload_type === "video" ? "a video" : "an image"} for this outcome.`);
       return { weightError, payloadError };
     });
   }, [lotteryOutcomes]);
+
+  // Upload an image/video for a lottery outcome → store the returned S3 key as
+  // the outcome's media_asset_id (the form the lottery API accepts).
+  const handleLotteryMediaUpload = React.useCallback(
+    async (outcomeId: string, file: File) => {
+      setLotteryOutcomes((prev) =>
+        prev.map((o) => (o.id === outcomeId ? { ...o, uploading: true, media_name: file.name } : o)),
+      );
+      try {
+        const { key } = await uploadConversationMedia(conversationId, file);
+        setLotteryOutcomes((prev) =>
+          prev.map((o) => (o.id === outcomeId ? { ...o, uploading: false, media_asset_id: key } : o)),
+        );
+      } catch {
+        toast.error("Failed to upload outcome media");
+        setLotteryOutcomes((prev) =>
+          prev.map((o) => (o.id === outcomeId ? { ...o, uploading: false, media_name: undefined } : o)),
+        );
+      }
+    },
+    [conversationId],
+  );
 
   const resetTextArea = () => {
     if (textareaRef.current) {
@@ -745,34 +790,10 @@ export function ComposeBar({
     setPendingFile({ file, previewUrl, kind });
   };
 
+  const _anyToggleActive = encryptEnabled || viewOnceText || lockEnabled || tipEnabled || expiresEnabled;
+
   return (
     <div className="border-t border-border bg-card px-4 py-3">
-      <div className="mb-2 flex items-center justify-between">
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={encryptEnabled}
-                  onChange={(e) => {
-                    setEncryptEnabled(e.target.checked);
-                    setEncryptError(null);
-                  }}
-                  disabled={disabled || sending || encrypting || !featureEnabled}
-                />
-                <Lock className="h-3.5 w-3.5" />
-                Encrypt message
-              </label>
-            </TooltipTrigger>
-          </Tooltip>
-        </TooltipProvider>
-        {encryptEnabled && (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-            Encrypted send enabled
-          </span>
-        )}
-      </div>
 
       {encryptEnabled && (
         <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
@@ -837,67 +858,44 @@ export function ComposeBar({
         </div>
       )}
 
-      {/* View-once text + Lock + Tip + Expiry controls row */}
-      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        {!pendingFile && (
-          <label className="inline-flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={viewOnceText}
-              onChange={(e) => setViewOnceText(e.target.checked)}
-              disabled={disabled || sending || encrypting}
-            />
-            <Eye className="h-3.5 w-3.5" />
-            View once
-          </label>
-        )}
-        <label className="inline-flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={lockEnabled}
-            onChange={(e) => {
-              setLockEnabled(e.target.checked);
-              if (e.target.checked) setTipEnabled(false);
-            }}
-            disabled={disabled || sending || encrypting}
-          />
-          <Lock className="h-3.5 w-3.5" />
-          Require tip to unlock
-        </label>
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <label className={cn("inline-flex items-center gap-1.5", !hasPaymentMethods && "cursor-not-allowed opacity-50")}>
-                <input
-                  type="checkbox"
-                  checked={tipEnabled}
-                  onChange={(e) => {
-                    if (!hasPaymentMethods) return;
-                    setTipEnabled(e.target.checked);
-                    if (e.target.checked) setLockEnabled(false);
-                  }}
-                  disabled={disabled || sending || encrypting || !hasPaymentMethods}
-                  className={cn(!hasPaymentMethods && "pointer-events-none")}
-                />
-                <DollarSign className="h-3.5 w-3.5" />
-                Attach tip
-              </label>
-            </TooltipTrigger>
-            {!hasPaymentMethods && (
-              <TooltipContent>Add a payment method in Billing to attach tips</TooltipContent>
-            )}
-          </Tooltip>
-        </TooltipProvider>
-        <label className="inline-flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={expiresEnabled}
-            onChange={(e) => setExpiresEnabled(e.target.checked)}
-            disabled={disabled || sending || encrypting}
-          />
-          Message expires
-        </label>
-        {expiresEnabled && (
+      {/* Active-toggle indicator strip — only shown when options are on */}
+      {_anyToggleActive && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+          {encryptEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-700">
+              <Lock className="h-3 w-3" /> Encrypted
+              <button type="button" onClick={() => { setEncryptEnabled(false); setEncryptError(null); }} className="ml-0.5 hover:text-amber-900" aria-label="Disable encryption">×</button>
+            </span>
+          )}
+          {viewOnceText && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-700">
+              <Eye className="h-3 w-3" /> View once
+              <button type="button" onClick={() => setViewOnceText(false)} className="ml-0.5 hover:text-blue-900" aria-label="Disable view once">×</button>
+            </span>
+          )}
+          {lockEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 font-medium text-purple-700">
+              <Lock className="h-3 w-3" /> Locked
+              <button type="button" onClick={() => { setLockEnabled(false); setLockPrice(""); setLockDescription(""); }} className="ml-0.5 hover:text-purple-900" aria-label="Disable lock">×</button>
+            </span>
+          )}
+          {tipEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">
+              <DollarSign className="h-3 w-3" /> Tip attached
+              <button type="button" onClick={() => { setTipEnabled(false); setTipAmount(""); setTipPaymentMethodId(null); }} className="ml-0.5 hover:text-green-900" aria-label="Disable tip">×</button>
+            </span>
+          )}
+          {expiresEnabled && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 font-medium text-orange-700">
+              Expires
+              <button type="button" onClick={() => { setExpiresEnabled(false); setExpiresDuration("3600"); }} className="ml-0.5 hover:text-orange-900" aria-label="Disable expiry">×</button>
+            </span>
+          )}
+        </div>
+      )}
+      {expiresEnabled && (
+        <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Expires in:</span>
           <select
             value={expiresDuration}
             onChange={(e) => setExpiresDuration(e.target.value)}
@@ -910,18 +908,8 @@ export function ComposeBar({
             <option value="86400">1 day</option>
             <option value="604800">7 days</option>
           </select>
-        )}
-        <label className="inline-flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={countdownAttachEnabled}
-            onChange={(e) => setCountdownAttachEnabled(e.target.checked)}
-            disabled={disabled || sending || encrypting}
-          />
-          <Timer className="h-3.5 w-3.5" />
-          Attach countdown
-        </label>
-      </div>
+        </div>
+      )}
       {countdownAttachEnabled && (
         <div className="mb-2 rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
           <div className="flex flex-col gap-1">
@@ -1326,14 +1314,29 @@ export function ComposeBar({
                   className="w-full rounded border border-input px-2 py-1 text-xs"
                 />
               ) : (
-                <input
-                  value={row.media_asset_id}
-                  onChange={(e) =>
-                    setLotteryOutcomes((prev) => prev.map((o) => o.id === row.id ? { ...o, media_asset_id: e.target.value } : o))
-                  }
-                  placeholder="Media asset id (from upload pipeline)"
-                  className="w-full rounded border border-input px-2 py-1 text-xs"
-                />
+                <div className="flex items-center gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent">
+                    {row.payload_type === "video" ? <Video className="h-3.5 w-3.5" /> : <ImageIcon className="h-3.5 w-3.5" />}
+                    {row.uploading ? "Uploading…" : row.media_asset_id ? "Replace" : `Upload ${row.payload_type === "video" ? "video" : "image"}`}
+                    <input
+                      type="file"
+                      accept={row.payload_type === "video" ? "video/*" : "image/*"}
+                      className="hidden"
+                      disabled={row.uploading}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void handleLotteryMediaUpload(row.id, file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {row.media_asset_id && !row.uploading && (
+                    <span className="inline-flex items-center gap-1 truncate text-[10px] text-muted-foreground">
+                      <Check className="h-3 w-3 text-green-600" />
+                      {row.media_name ?? "Uploaded"}
+                    </span>
+                  )}
+                </div>
               )}
               {lotteryFieldErrors[idx]?.payloadError && (
                 <p className="text-[10px] text-red-600">{lotteryFieldErrors[idx]?.payloadError}</p>
@@ -1350,7 +1353,7 @@ export function ComposeBar({
                 onClick={() =>
                   setLotteryOutcomes((prev) => [
                     ...prev,
-                    { id: `lo-${Date.now()}`, label: `Outcome ${prev.length + 1}`, payload_type: "text", text_content: "", media_asset_id: "", weight_bps: 1000, percent_input: "10.00" },
+                    { id: `lo-${Date.now()}`, label: `Outcome ${prev.length + 1}`, payload_type: "text" as const, text_content: "", media_asset_id: "", weight_bps: 1000, percent_input: "10.00" },
                   ].slice(0, 10))
                 }
                 disabled={lotteryOutcomes.length >= 10}
@@ -1597,8 +1600,205 @@ export function ComposeBar({
         </div>
       )}
 
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-end gap-2">
+      <div className="flex items-end gap-2">
+        {(onSendVoiceMessage || onSendGallery || onSendLottery || onSendFileShare || onSendVideoShare ||
+          onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendFindDateTime ||
+          onSendCountdown || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
+          <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="relative h-9 w-9 shrink-0"
+                aria-label="More compose options"
+                data-testid="compose-more"
+                disabled={disabled || sending || encrypting}
+              >
+                <Plus className="h-4 w-4" />
+                {_anyToggleActive && (
+                  <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary" aria-hidden="true" />
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="start" className="w-64 p-1">
+              <div className="grid">
+                {/* Message option toggles */}
+                {featureEnabled && (
+                  <Button
+                    type="button"
+                    variant={encryptEnabled ? "secondary" : "ghost"}
+                    className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setEncryptEnabled((v) => { if (v) setEncryptError(null); return !v; }); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting}
+                    aria-label="Toggle message encryption"
+                    data-testid="compose-toggle-encrypt"
+                  >
+                    <Lock className="h-4 w-4" /> Encrypt message
+                  </Button>
+                )}
+                {!pendingFile && (
+                  <Button
+                    type="button"
+                    variant={viewOnceText ? "secondary" : "ghost"}
+                    className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setViewOnceText((v) => !v); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting}
+                    aria-label="Toggle view once"
+                    data-testid="compose-toggle-view-once"
+                  >
+                    <Eye className="h-4 w-4" /> View once
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant={lockEnabled ? "secondary" : "ghost"}
+                  className="h-9 justify-start gap-2 px-2"
+                  onClick={() => { setLockEnabled((v) => { if (!v) setTipEnabled(false); return !v; }); setMoreOpen(false); }}
+                  disabled={disabled || sending || encrypting}
+                  aria-label="Toggle message lock"
+                  data-testid="compose-toggle-lock"
+                >
+                  <Lock className="h-4 w-4" /> Require tip to unlock
+                </Button>
+                <TooltipProvider delayDuration={0}>
+                  <Tooltip>
+                    {/* Span trigger: a disabled <button> suppresses pointer events in
+                        Chromium, so the tooltip would never open. Wrapping in a span
+                        keeps the hover target alive even when the button is disabled. */}
+                    <TooltipTrigger asChild>
+                      <span className="block w-full">
+                        <Button
+                          type="button"
+                          variant={tipEnabled ? "secondary" : "ghost"}
+                          className={cn("h-9 w-full justify-start gap-2 px-2", !hasPaymentMethods && "opacity-50 cursor-not-allowed")}
+                          onClick={() => { if (!hasPaymentMethods) return; setTipEnabled((v) => { if (!v) setLockEnabled(false); return !v; }); setMoreOpen(false); }}
+                          disabled={disabled || sending || encrypting || !hasPaymentMethods}
+                          aria-label="Toggle attach tip"
+                          data-testid="compose-toggle-tip"
+                        >
+                          <DollarSign className="h-4 w-4" /> Attach tip
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    {!hasPaymentMethods && (
+                      <TooltipContent>Add a payment method in Billing to attach tips</TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
+                <Button
+                  type="button"
+                  variant={expiresEnabled ? "secondary" : "ghost"}
+                  className="h-9 justify-start gap-2 px-2"
+                  onClick={() => { setExpiresEnabled((v) => !v); setMoreOpen(false); }}
+                  disabled={disabled || sending || encrypting}
+                  aria-label="Toggle message expiry"
+                  data-testid="compose-toggle-expires"
+                >
+                  <Clock className="h-4 w-4" /> Message expires
+                </Button>
+                <Button
+                  type="button"
+                  variant={countdownAttachEnabled ? "secondary" : "ghost"}
+                  className="h-9 justify-start gap-2 px-2"
+                  onClick={() => { setCountdownAttachEnabled((v) => !v); setMoreOpen(false); }}
+                  disabled={disabled || sending || encrypting}
+                  aria-label="Toggle attach countdown"
+                  data-testid="compose-toggle-countdown-attach"
+                >
+                  <Timer className="h-4 w-4" /> Attach countdown
+                </Button>
+                <div className="my-1 border-t border-border" />
+                {onSendVoiceMessage && !voiceRecording && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setVoiceRecording(true); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting || !!pendingFile || galleryMode || lotteryMode}
+                    aria-label="Record voice message">
+                    <Mic className="h-4 w-4" /> Voice message
+                  </Button>
+                )}
+                {onSendTtsVoice && ttsEnabled && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { void handleSpeakThis(); }}
+                    disabled={disabled || sending || encrypting || ttsSynthesizing || !text.trim()}
+                    aria-label="Speak this draft as a voice message">
+                    {ttsSynthesizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Headphones className="h-4 w-4" />} Speak this
+                  </Button>
+                )}
+                {onSendGallery && (
+                  <Button variant={galleryMode ? "secondary" : "ghost"} className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setGalleryMode((v) => !v); setLotteryMode(false); setPendingFile(null); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting}
+                    aria-label="Gallery message">
+                    <Images className="h-4 w-4" /> Gallery
+                  </Button>
+                )}
+                {onSendLottery && (
+                  <Button variant={lotteryMode ? "secondary" : "ghost"} className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setLotteryMode((v) => !v); setGalleryMode(false); setPendingFile(null); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting}
+                    aria-label="Lottery message">
+                    <Dices className="h-4 w-4" /> Lottery
+                  </Button>
+                )}
+                {onSendFileShare && (
+                  <Button variant={pendingFileShare ? "secondary" : "ghost"} className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setFilePickerOpen(true); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting}
+                    aria-label="Share file from Files">
+                    <FolderOpen className="h-4 w-4" /> Share a file
+                  </Button>
+                )}
+                {onSendVideoShare && (
+                  <Button type="button" variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setVideoPickerOpen(true); setMoreOpen(false); }}
+                    disabled={disabled || sending}
+                    aria-label="Share video">
+                    <Video className="h-4 w-4" /> Share a video
+                  </Button>
+                )}
+                {onSendCalendarShare && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setCalendarPickerOpen(true); setMoreOpen(false); }} aria-label="Share my calendar">
+                    <CalendarDays className="h-4 w-4" /> Share my calendar
+                  </Button>
+                )}
+                {onSendCalendarEvent && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setEventPickerOpen(true); setMoreOpen(false); }} aria-label="Share an event">
+                    <CalendarCheck className="h-4 w-4" /> Share an event
+                  </Button>
+                )}
+                {onSendMeetingPoll && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setMeetingPollOpen(true); setMoreOpen(false); }} aria-label="Schedule a meeting">
+                    <Users className="h-4 w-4" /> Schedule a meeting
+                  </Button>
+                )}
+                {onSendFindDateTime && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setFindDateTimeOpen(true); setMoreOpen(false); }} aria-label="Find a Time">
+                    <Clock className="h-4 w-4" /> Find a Time
+                  </Button>
+                )}
+                {onSendCountdown && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setCountdownOpen(true); setMoreOpen(false); }} aria-label="Create a countdown">
+                    <Timer className="h-4 w-4" /> Create a countdown
+                  </Button>
+                )}
+                {draftsEnabled && (
+                  <Button type="button" variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { handleSaveDraft(); setMoreOpen(false); }}
+                    disabled={disabled || sending || encrypting}
+                    aria-label="Save draft">
+                    <FileText className="h-4 w-4" /> Save draft
+                  </Button>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
         {onSendImage && (
           <>
             <Button
@@ -1619,67 +1819,6 @@ export function ComposeBar({
               onChange={handleFileChange}
             />
           </>
-        )}
-        {onSendVoiceMessage && !voiceRecording && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 shrink-0"
-            onClick={() => setVoiceRecording(true)}
-            disabled={disabled || sending || encrypting || !!pendingFile || galleryMode || lotteryMode}
-            aria-label="Record voice message"
-          >
-            <Mic className="h-4 w-4" />
-          </Button>
-        )}
-        {onSendGallery && (
-          <Button
-            variant={galleryMode ? "secondary" : "ghost"}
-            size="icon"
-            className="h-9 w-9 shrink-0"
-            onClick={() => { setGalleryMode((v) => !v); setLotteryMode(false); setPendingFile(null); }}
-            disabled={disabled || sending || encrypting}
-            aria-label="Gallery message"
-          >
-            <Images className="h-4 w-4" />
-          </Button>
-        )}
-        {onSendLottery && (
-          <Button
-            variant={lotteryMode ? "secondary" : "ghost"}
-            size="icon"
-            className="h-9 w-9 shrink-0"
-            onClick={() => { setLotteryMode((v) => !v); setGalleryMode(false); setPendingFile(null); }}
-            disabled={disabled || sending || encrypting}
-            aria-label="Lottery message"
-          >
-            <Dices className="h-4 w-4" />
-          </Button>
-        )}
-        {onSendFileShare && (
-          <Button
-            variant={pendingFileShare ? "secondary" : "ghost"}
-            size="icon"
-            className="h-9 w-9 shrink-0"
-            onClick={() => setFilePickerOpen(true)}
-            disabled={disabled || sending || encrypting}
-            aria-label="Share file from Files"
-          >
-            <FolderOpen className="h-4 w-4" />
-          </Button>
-        )}
-        {onSendVideoShare && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 shrink-0"
-            onClick={() => setVideoPickerOpen(true)}
-            disabled={disabled || sending}
-            aria-label="Share video"
-          >
-            <Video className="h-4 w-4" />
-          </Button>
         )}
         <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
           <PopoverTrigger asChild>
@@ -1749,49 +1888,6 @@ export function ComposeBar({
           </PopoverContent>
         </Popover>
 
-        {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendFindDateTime || onSendCountdown) && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 shrink-0"
-                aria-label="Calendar actions"
-                disabled={disabled || sending}
-              >
-                <CalendarDays className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent side="top" align="start">
-              {onSendCalendarShare && (
-                <DropdownMenuItem onClick={() => setCalendarPickerOpen(true)}>
-                  <CalendarDays className="mr-2 h-4 w-4" /> Share my calendar
-                </DropdownMenuItem>
-              )}
-              {onSendCalendarEvent && (
-                <DropdownMenuItem onClick={() => setEventPickerOpen(true)}>
-                  <CalendarCheck className="mr-2 h-4 w-4" /> Share an event
-                </DropdownMenuItem>
-              )}
-              {onSendMeetingPoll && (
-                <DropdownMenuItem onClick={() => setMeetingPollOpen(true)}>
-                  <Users className="mr-2 h-4 w-4" /> Schedule a meeting
-                </DropdownMenuItem>
-              )}
-              {onSendFindDateTime && (
-                <DropdownMenuItem onClick={() => setFindDateTimeOpen(true)}>
-                  <Clock className="mr-2 h-4 w-4" /> Find a Time
-                </DropdownMenuItem>
-              )}
-              {onSendCountdown && (
-                <DropdownMenuItem onClick={() => setCountdownOpen(true)}>
-                  <Timer className="mr-2 h-4 w-4" /> Create a countdown
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-
         {draftsEnabled && (
           <span
             className="shrink-0 text-[11px] text-muted-foreground"
@@ -1805,21 +1901,6 @@ export function ComposeBar({
           </span>
         )}
 
-        {draftsEnabled && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-9 shrink-0 px-2 text-xs"
-            onClick={handleSaveDraft}
-            disabled={disabled || sending || encrypting}
-          >
-            Save draft
-          </Button>
-        )}
-
-        </div>
-        <div className="flex items-end gap-2">
         {voiceRecording && onSendVoiceMessage ? (
           <div className="flex-1">
             <VoiceRecorder
@@ -1960,7 +2041,6 @@ export function ComposeBar({
             <Send className="h-4 w-4" />
           )}
         </Button>
-      </div>
       </div>
 
       <FilePickerDialog

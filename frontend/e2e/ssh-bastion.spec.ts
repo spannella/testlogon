@@ -13,6 +13,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const API = BASE;
@@ -42,8 +44,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -84,8 +86,8 @@ function pathBody(label: string) {
   return {
     label,
     description: "test path",
-    jump_hops: [{ hostname: "10.0.0.1", port: 22, username: "ubuntu", ssh_key_id: "key-bastion" }],
-    target: { hostname: "172.16.0.5", port: 22, username: "ubuntu", ssh_key_id: "key-target" },
+    jump_hops: [{ hostname: "bastion1.example.com", port: 22, username: "ubuntu", ssh_key_id: "key-bastion" }],
+    target: { hostname: "target.example.com", port: 22, username: "ubuntu", ssh_key_id: "key-target" },
   };
 }
 
@@ -138,10 +140,10 @@ test.describe("277 — Bastion Path CRUD API", () => {
     const resp = await apiPatch(alicePage, ALICE_ID, `${BP_BASE}/paths/${created.path_id}`, {
       label: `crud-${TS}-4-renamed`,
       jump_hops: [
-        { hostname: "10.0.0.1", port: 22, username: "ubuntu" },
-        { hostname: "10.0.0.2", port: 2222, username: "admin" },
+        { hostname: "bastion1.example.com", port: 22, username: "ubuntu" },
+        { hostname: "bastion2.example.com", port: 2222, username: "admin" },
       ],
-      target: { hostname: "172.16.0.9", port: 22, username: "deploy" },
+      target: { hostname: "target9.example.com", port: 22, username: "deploy" },
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
@@ -175,7 +177,7 @@ test.describe("278 — Chain Validation API", () => {
     const resp = await apiPost(alicePage, ALICE_ID, `${BP_BASE}/paths`, {
       label: `val-${TS}-1`,
       jump_hops: [{ hostname: "not a host!!", port: 22, username: "ubuntu" }],
-      target: { hostname: "172.16.0.5", port: 22, username: "ubuntu" },
+      target: { hostname: "target.example.com", port: 22, username: "ubuntu" },
     });
     expect(resp.status()).toBe(422);
   });
@@ -184,11 +186,11 @@ test.describe("278 — Chain Validation API", () => {
     const resp = await apiPost(alicePage, ALICE_ID, `${BP_BASE}/paths`, {
       label: `val-${TS}-2`,
       jump_hops: [
-        { hostname: "10.0.0.1", port: 22, username: "u" },
-        { hostname: "10.0.0.2", port: 22, username: "u" },
-        { hostname: "10.0.0.3", port: 22, username: "u" },
+        { hostname: "bastion1.example.com", port: 22, username: "u" },
+        { hostname: "bastion2.example.com", port: 22, username: "u" },
+        { hostname: "bastion3.example.com", port: 22, username: "u" },
       ],
-      target: { hostname: "10.0.0.4", port: 22, username: "u" },
+      target: { hostname: "target4.example.com", port: 22, username: "u" },
     });
     expect(resp.status()).toBe(422);
   });
@@ -196,8 +198,8 @@ test.describe("278 — Chain Validation API", () => {
   test("278.3 Circular chain (duplicate hop) returns 422", async () => {
     const resp = await apiPost(alicePage, ALICE_ID, `${BP_BASE}/paths`, {
       label: `val-${TS}-3`,
-      jump_hops: [{ hostname: "10.0.0.1", port: 22, username: "u" }],
-      target: { hostname: "10.0.0.1", port: 22, username: "u" },
+      jump_hops: [{ hostname: "bastion1.example.com", port: 22, username: "u" }],
+      target: { hostname: "bastion1.example.com", port: 22, username: "u" },
     });
     expect(resp.status()).toBe(422);
   });
@@ -206,7 +208,7 @@ test.describe("278 — Chain Validation API", () => {
     const resp = await apiPost(alicePage, ALICE_ID, `${BP_BASE}/paths`, {
       label: `val-${TS}-4`,
       jump_hops: [],
-      target: { hostname: "172.16.0.5", port: 22 },
+      target: { hostname: "target.example.com", port: 22 },
     });
     expect(resp.status()).toBe(422);
   });
@@ -215,7 +217,7 @@ test.describe("278 — Chain Validation API", () => {
     const resp = await apiPost(alicePage, ALICE_ID, `${BP_BASE}/paths`, {
       label: `val-${TS}-5`,
       jump_hops: [],
-      target: { hostname: "172.16.0.5", port: 22, username: "ubuntu" },
+      target: { hostname: "target.example.com", port: 22, username: "ubuntu" },
     });
     expect(resp.status()).toBe(201);
     const data = await resp.json();
@@ -241,11 +243,11 @@ test.describe("279 — Resolve / ProxyJump API", () => {
     const resp = await apiGet(alicePage, `${BP_BASE}/paths/${created.path_id}/resolve`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
-    expect(data.proxy_jump).toBe("ubuntu@10.0.0.1");
-    expect(data.ssh_command).toContain("ssh -J ubuntu@10.0.0.1 ubuntu@172.16.0.5");
-    expect(data.ssh_config).toContain("ProxyJump ubuntu@10.0.0.1");
-    expect(data.ssh_config).toContain("HostName 172.16.0.5");
-    expect(data.target.hostname).toBe("172.16.0.5");
+    expect(data.proxy_jump).toBe("ubuntu@bastion1.example.com");
+    expect(data.ssh_command).toContain("ssh -J ubuntu@bastion1.example.com ubuntu@target.example.com");
+    expect(data.ssh_config).toContain("ProxyJump ubuntu@bastion1.example.com");
+    expect(data.ssh_config).toContain("HostName target.example.com");
+    expect(data.target.hostname).toBe("target.example.com");
     expect(data.jump_hops.length).toBe(1);
   });
 
@@ -253,13 +255,13 @@ test.describe("279 — Resolve / ProxyJump API", () => {
     const created = await (await apiPost(alicePage, ALICE_ID, `${BP_BASE}/paths`, {
       label: `res-${TS}-2`,
       jump_hops: [],
-      target: { hostname: "172.16.0.5", port: 2200, username: "ubuntu" },
+      target: { hostname: "target.example.com", port: 2200, username: "ubuntu" },
     })).json();
     const resp = await apiGet(alicePage, `${BP_BASE}/paths/${created.path_id}/resolve`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(data.proxy_jump).toBe("");
-    expect(data.ssh_command).toBe("ssh ubuntu@172.16.0.5:2200");
+    expect(data.ssh_command).toBe("ssh ubuntu@target.example.com:2200");
   });
 
   test("279.3 Resolve non-existent path returns 404", async () => {

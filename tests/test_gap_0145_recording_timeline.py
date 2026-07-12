@@ -114,7 +114,7 @@ def _patch_handler_deps(monkeypatch):
 
 
 def _run_complete():
-    return asyncio.get_event_loop().run_until_complete(
+    return asyncio.run(
         cr.complete_recording_upload(
             call_id=CALL_ID,
             body=cr.RecordingUploadCompleteIn(

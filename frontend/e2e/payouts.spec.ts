@@ -21,10 +21,12 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const PYTHON   = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON   = REPO_ROOT + "/.venv/bin/python3";
 const BASE     = "http://localhost:3000";
 const API      = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
@@ -53,8 +55,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -114,7 +116,7 @@ function seedOldCredits(userSub: string, count: number, amountEach: number): num
 import boto3, os, uuid, time
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -143,7 +145,7 @@ for i in range(${count}):
     })
 print('seeded')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
   return count * amountEach;
 }
@@ -157,7 +159,7 @@ function cleanupActivePayouts(userSub: string): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -167,22 +169,40 @@ for line in env.read_text().splitlines():
 ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 tbl = ddb.Table('CreatorPayouts')
 
+# Collect active payouts via BOTH the GSI (eventually consistent) and a base-table
+# scan (catches very-recently-created payouts the GSI hasn't propagated yet) so the
+# pending-balance calculation is fully freed under full-suite accumulation.
+active = {}
 resp = tbl.query(
     IndexName='ByUserCreatedAt',
     KeyConditionExpression=boto3.dynamodb.conditions.Key('user_id').eq('${userSub}'),
 )
 for item in resp.get('Items', []):
-    status = item.get('status', '')
-    if status in ('requested', 'approved', 'processing'):
-        tbl.update_item(
-            Key={'payout_id': item['payout_id']},
-            UpdateExpression='SET #s = :s',
-            ExpressionAttributeNames={'#s': 'status'},
-            ExpressionAttributeValues={':s': 'cancelled'},
-        )
+    if item.get('status') in ('requested', 'approved', 'processing'):
+        active[item['payout_id']] = item
+scan_kwargs = {
+    'FilterExpression': boto3.dynamodb.conditions.Attr('user_id').eq('${userSub}')
+        & boto3.dynamodb.conditions.Attr('status').is_in(['requested', 'approved', 'processing']),
+}
+while True:
+    sresp = tbl.scan(**scan_kwargs)
+    for item in sresp.get('Items', []):
+        active[item['payout_id']] = item
+    lek = sresp.get('LastEvaluatedKey')
+    if not lek:
+        break
+    scan_kwargs['ExclusiveStartKey'] = lek
+for pid in active:
+    tbl.update_item(
+        Key={'payout_id': pid},
+        UpdateExpression='SET #s = :s',
+        ExpressionAttributeNames={'#s': 'status'},
+        ExpressionAttributeValues={':s': 'cancelled'},
+    )
+tbl.delete_item(Key={'payout_id': 'PAYOUT_STATE#${userSub}'})
 print('cleaned')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -195,7 +215,7 @@ function ensurePayoutsTable(): void {
 import boto3, os
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -240,10 +260,20 @@ except Exception:
     time.sleep(2)
     print('created')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
+
+/**
+ * Reset Alice's payout state for a deterministic request: cancel all active
+ * payouts + drop the sentinel, then top up settled balance so the next request
+ * has funds. Survives full-suite accumulation regardless of prior pending state.
+ */
+function resetAndSeed(userSub: string): void {
+  cleanupActivePayouts(userSub);
+  seedOldCredits(userSub, 2, 5000); // +$100 settled, past-hold
+}
 
 // =============================================================================
 // Test setup
@@ -288,7 +318,7 @@ test.describe("115 - Payout Balance + Request API", () => {
   });
 
   test("115.2 POST /ui/payouts/request creates a payout request", async () => {
-    cleanupActivePayouts(ALICE_ID);
+    resetAndSeed(ALICE_ID);
 
     const resp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
       amount_cents: 2000,
@@ -346,7 +376,7 @@ test.describe("116 - Admin Payout Workflow API", () => {
 
   test("116.1 admin lists pending payouts", async () => {
     // Create a fresh payout
-    cleanupActivePayouts(ALICE_ID);
+    resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
       amount_cents: 3000,
       method: "bank_transfer",
@@ -383,7 +413,7 @@ test.describe("116 - Admin Payout Workflow API", () => {
 
   test("116.4 admin rejects payout with reason", async () => {
     // Create another payout to reject
-    cleanupActivePayouts(ALICE_ID);
+    resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
       amount_cents: 2000,
       method: "paypal",
@@ -419,7 +449,7 @@ test.describe("116 - Admin Payout Workflow API", () => {
 test.describe("117 - Payout State Transitions", () => {
 
   test("117.1 cancel payout changes status to cancelled", async () => {
-    cleanupActivePayouts(ALICE_ID);
+    resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
       amount_cents: 1500,
       method: "bank_transfer",
@@ -435,7 +465,7 @@ test.describe("117 - Payout State Transitions", () => {
   });
 
   test("117.2 cannot approve a cancelled payout", async () => {
-    cleanupActivePayouts(ALICE_ID);
+    resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
       amount_cents: 1500,
       method: "bank_transfer",
@@ -452,7 +482,7 @@ test.describe("117 - Payout State Transitions", () => {
   });
 
   test("117.3 cannot cancel a completed payout", async () => {
-    cleanupActivePayouts(ALICE_ID);
+    resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
       amount_cents: 1500,
       method: "bank_transfer",
@@ -474,7 +504,7 @@ test.describe("117 - Payout State Transitions", () => {
 import boto3, os, uuid, time
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -499,7 +529,7 @@ tbl.put_item(Item={
 })
 print('hold credit seeded')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+      { cwd: REPO_ROOT, timeout: 15_000 },
     );
 
     const resp = await apiGet(alicePage, "/ui/payouts/balance");

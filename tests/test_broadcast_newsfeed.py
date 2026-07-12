@@ -123,7 +123,7 @@ class TestAnnouncementPost:
             scheduled_at=1700000000,
         )
         assert post_id is not None
-        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "POST"}).get("Item")
+        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "META"}).get("Item")
         assert item is not None
         assert item["post_type"] == "broadcast_announcement"
         assert item["broadcast_meta"]["session_id"] == "s1"
@@ -138,7 +138,7 @@ class TestAnnouncementPost:
             session_name="Demo",
             scheduled_at=1700000000,
         )
-        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "POST"}).get("Item")
+        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "META"}).get("Item")
         assert "Upcoming broadcast" in item["text"]
         assert "Demo" in item["text"]
 
@@ -149,7 +149,7 @@ class TestAnnouncementPost:
             creator_id="alice",
             session_name="Quick Live",
         )
-        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "POST"}).get("Item")
+        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "META"}).get("Item")
         assert "New broadcast" in item["text"]
 
     def test_creates_feed_ref(self, fake_table, no_fanout):
@@ -207,7 +207,7 @@ class TestLivePost:
             session_name="Demo",
         )
         assert live_id == ann_id  # Same post ID
-        item = fake_table.get_item(Key={"pk": f"POST#{ann_id}", "sk": "POST"}).get("Item")
+        item = fake_table.get_item(Key={"pk": f"POST#{ann_id}", "sk": "META"}).get("Item")
         assert item["post_type"] == "broadcast_live"
         assert "LIVE NOW" in item["text"]
         assert item["broadcast_meta"]["is_live"] is True
@@ -220,7 +220,7 @@ class TestLivePost:
             session_name="Demo",
         )
         assert live_id is not None
-        item = fake_table.get_item(Key={"pk": f"POST#{live_id}", "sk": "POST"}).get("Item")
+        item = fake_table.get_item(Key={"pk": f"POST#{live_id}", "sk": "META"}).get("Item")
         assert item["post_type"] == "broadcast_live"
 
 
@@ -239,7 +239,7 @@ class TestVodPost:
             recording_duration_seconds=4980,
             peak_viewer_count=1234,
         )
-        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "POST"}).get("Item")
+        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "META"}).get("Item")
         assert item["post_type"] == "broadcast_vod"
         assert "1h 23m" in item["text"]
         assert "1,234" in item["text"]
@@ -252,7 +252,7 @@ class TestVodPost:
             recording_id="rec_123",
             recording_duration_seconds=3600,
         )
-        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "POST"}).get("Item")
+        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "META"}).get("Item")
         meta = item["broadcast_meta"]
         assert meta["recording_id"] == "rec_123"
         assert meta["recording_duration_seconds"] == 3600
@@ -273,7 +273,7 @@ class TestDeletePost:
         )
         result = delete_broadcast_post(post_id=post_id, user_id="alice")
         assert result is True
-        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "POST"}).get("Item")
+        item = fake_table.get_item(Key={"pk": f"POST#{post_id}", "sk": "META"}).get("Item")
         assert item is None
 
 
@@ -288,7 +288,7 @@ class TestPostToDict:
         # Minimal post dict simulating DDB item
         post = {
             "pk": "POST#test1",
-            "sk": "POST",
+            "sk": "META",
             "post_id": "test1",
             "user_id": "alice",
             "created_at": "2024-01-01T00:00:00",
@@ -306,7 +306,7 @@ class TestPostToDict:
         """Posts with post_type set should return that type."""
         post = {
             "pk": "POST#test2",
-            "sk": "POST",
+            "sk": "META",
             "post_id": "test2",
             "user_id": "alice",
             "created_at": "2024-01-01T00:00:00",

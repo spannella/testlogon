@@ -79,8 +79,10 @@ class TestCatalogItemOut(unittest.TestCase):
 
 def _make_table(item=ITEM, meta=CAT_META, update_side_effect=None, update_return=None):
     table = Mock()
-    # _find_item_by_id -> scan
-    table.scan.return_value = {"Items": [item] if item else [], "LastEvaluatedKey": None}
+    # _find_item_by_id -> scan (legacy) OR query via ByItemId GSI (current)
+    items_resp = {"Items": [item] if item else [], "LastEvaluatedKey": None}
+    table.scan.return_value = items_resp
+    table.query.return_value = items_resp  # ByItemId GSI path added after test written
     # _require_category_owner -> get_item META
     table.get_item.return_value = {"Item": meta} if meta else {}
     if update_side_effect is not None:
@@ -173,9 +175,13 @@ class TestLowStockAlert(unittest.TestCase):
             calls["user_sub"] = user_sub
             calls.update(kwargs)
 
-        with patch.object(catalog, "S", _FakeS(alerts_enabled=True)), patch(
-            "app.services.alerts.write_alert", fake_write_alert
-        ):
+        # _check_low_stock_alert now writes a DDB dedup sentinel before firing the
+        # alert (GAP-0347); patch T.catalog so the sentinel put_item succeeds.
+        fake_tbl = Mock()
+        fake_tbl.put_item.return_value = {}  # sentinel write succeeds
+        with patch.object(catalog, "S", _FakeS(alerts_enabled=True)), \
+             patch.object(catalog, "T", Mock(catalog=fake_tbl)), \
+             patch("app.services.alerts.write_alert", fake_write_alert):
             catalog._check_low_stock_alert({**ITEM, "low_stock_threshold": 5}, 3)
         self.assertEqual(calls.get("event"), "catalog.low_stock")
         self.assertEqual(calls.get("user_sub"), "alice")

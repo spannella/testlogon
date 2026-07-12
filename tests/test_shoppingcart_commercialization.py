@@ -19,6 +19,13 @@ class FakeShoppingCartTable:
     def get_item(self, Key):
         return {"Item": self.items.get((Key["PK"], Key["SK"]))}
 
+    def update_item(self, **kwargs):
+        key = kwargs.get("Key", {})
+        pk, sk = key.get("PK"), key.get("SK")
+        item = self.items.setdefault((pk, sk), {"PK": pk, "SK": sk})
+        # Minimal update_item: no-op beyond ensuring the row exists (sufficient for
+        # _touch_cart_activity which just updates last_activity_at and ttl).
+
     def query(self, **kwargs):
         pk = None
         for (item_pk, _), _item in self.items.items():

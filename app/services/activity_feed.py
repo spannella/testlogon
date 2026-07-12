@@ -27,6 +27,7 @@ ACTIVITY_TYPES = [
     "mention",
     "share",
     "tip",
+    "quote_converted",
 ]
 
 _TTL_DAYS = 30
@@ -91,6 +92,48 @@ def record_activity(
         actor_id,
     )
     return item
+
+
+def record_social_interaction(
+    *,
+    recipient_id: str,
+    actor_id: str,
+    kind: str,
+    target_type: str = "",
+    target_id: str = "",
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Best-effort: write a social event (follow/like/comment/tip) to the recipient's
+    Activity feed AND Notification Center. Never raises (must not break the source action).
+    Skips self-actions + empty recipients."""
+    if not recipient_id or not actor_id or recipient_id == actor_id:
+        return
+    meta: Dict[str, Any] = {"actor_id": actor_id}
+    if extra:
+        meta.update(extra)
+    try:
+        record_activity(
+            user_id=recipient_id, actor_id=actor_id, activity_type=kind,
+            target_type=target_type, target_id=target_id, metadata=meta,
+        )
+    except Exception:
+        logger.warning("record_social_interaction: activity write failed", exc_info=True)
+    try:
+        from app.services.notification_engine import send_notification
+        who = actor_id.split("@", 1)[0] if "@" in actor_id else actor_id
+        copy = {
+            "follow": ("New follower", f"{who} started following you"),
+            "like": ("New like", f"{who} liked your post"),
+            "comment": ("New comment", f"{who} commented on your post"),
+            "tip": ("You received a tip", f"{who} sent you a tip"),
+        }.get(kind, ("New activity", f"{who} interacted with you"))
+        send_notification(
+            user_id=recipient_id, notification_type=kind,
+            title=copy[0], body=copy[1], data=meta,
+            batch_key=(f"{kind}:{target_id}" if target_id else None),
+        )
+    except Exception:
+        logger.warning("record_social_interaction: notification write failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

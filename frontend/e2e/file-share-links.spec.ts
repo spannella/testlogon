@@ -14,6 +14,8 @@
 
 import { test, expect, type Page, request as pwRequest } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const API = "http://localhost:8000";
@@ -39,8 +41,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -425,12 +427,22 @@ test.describe("700. Share Link Edge Cases", () => {
   });
 
   test("700.3 download with GET also works (no password link)", async () => {
+    // GAP: the public download endpoint is now IP-rate-limited (default
+    // 10 downloads / 60s per IP). The cumulative downloads earlier in this
+    // spec (all from localhost) can exhaust that budget, so if the GET hits a
+    // 429, wait out the window once and retry — the fresh max_downloads=1 link
+    // is still unused, so the retry returns the intended 200.
+    test.setTimeout(90_000);
     const created = await (await ownerPost(page, ALICE_ID, {
       file_node_id: filePath,
       max_downloads: 1,
     })).json();
     const anon = await pwRequest.newContext();
-    const resp = await anon.get(`${API}/public/files/share/${created.link_id}/download`);
+    let resp = await anon.get(`${API}/public/files/share/${created.link_id}/download`);
+    if (resp.status() === 429) {
+      await new Promise((r) => setTimeout(r, 61_000));
+      resp = await anon.get(`${API}/public/files/share/${created.link_id}/download`);
+    }
     expect(resp.status()).toBe(200);
     await anon.dispose();
   });

@@ -27,7 +27,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -61,8 +62,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -108,7 +109,7 @@ table.put_item(Item=convert(json.loads(sys.argv[1])))
   );
   try {
     execSync(`python3 ${scriptPath} ${JSON.stringify(itemJson)}`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
     });
   } finally {
@@ -134,7 +135,7 @@ table.delete_item(Key=json.loads(sys.argv[1]))
   );
   try {
     execSync(`python3 ${scriptPath} ${JSON.stringify(keyJson)}`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
     });
   } catch {
@@ -151,6 +152,13 @@ table.delete_item(Key=json.loads(sys.argv[1]))
 // ─── Test setup ───────────────────────────────────────────────────────────────
 
 const nowTs = Math.floor(Date.now() / 1000);
+
+// S3 key prefix for the seeded HLS manifests (served by the in-process moto
+// mock through the backend's /mock/s3 proxy).
+const MANIFEST_BUCKET = "local-uploads";
+const aliceSubForKey = () => getSessions()[ALICE_ID].user_sub;
+const manifestKeyPrefix = () =>
+  `videos/${aliceSubForKey()}/${ENGAGE_VIDEO_ID}`;
 
 test.beforeAll(() => {
   const aliceSub = getSessions()[ALICE_ID].user_sub;
@@ -171,7 +179,12 @@ test.beforeAll(() => {
     video_codec: "h264",
     audio_codec: "aac",
     file_size_bytes: 52428800,
-    hls_manifest_url: `http://localhost:8000/mock/s3/local-uploads/videos/${aliceSub}/${ENGAGE_VIDEO_ID}/master.m3u8`,
+    // RELATIVE (same-origin) URL so the manifest is fetched through the Vite
+    // proxy on :3000 (no cross-origin CORS rejection). hls.js fetches the
+    // manifest from inside a blob-URL Web Worker, which Playwright's page.route
+    // CANNOT intercept — so instead of stubbing the network we serve a real,
+    // valid (empty-VOD) HLS manifest from the in-process moto S3 mock below.
+    hls_manifest_url: `/mock/s3/${MANIFEST_BUCKET}/videos/${aliceSub}/${ENGAGE_VIDEO_ID}/master.m3u8`,
     source_type: "upload",
     renditions: [
       { label: "1080p", width: 1920, height: 1080, bitrate_kbps: 5000 },
@@ -183,16 +196,64 @@ test.afterAll(() => {
   ddbDelete(VIDEO_TABLE, { video_id: ENGAGE_VIDEO_ID });
 });
 
+// ─── HLS manifest seeding ────────────────────────────────────────────────────
+//
+// The player's HLS manifest URL points at the in-process moto S3 mock served
+// through the backend's `/mock/s3/{bucket}/{key}` proxy. We can't stub the
+// network with `page.route`, because hls.js fetches the manifest from inside a
+// blob-URL Web Worker which Playwright route interception does not see. Instead
+// we PUT real, valid manifests into moto S3 so hls.js fires MANIFEST_PARSED and
+// VideoPlayerPage mounts the `video-player` wrapper (with the <video> element).
+//
+// These tests never need real playback — they dispatch synthetic
+// `ended` / `timeupdate` events — so the media playlist is a valid *empty* VOD
+// playlist (no segments). That parses cleanly (player ready, no error) without
+// triggering any segment-load MEDIA_ERROR that would unmount the wrapper.
+//
+// Idempotent + best-effort: seeding the same key twice is harmless.
+async function seedHlsManifests(request: import("@playwright/test").APIRequestContext) {
+  const MASTER =
+    "#EXTM3U\n" +
+    "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n" +
+    "media.m3u8\n";
+  const MEDIA =
+    "#EXTM3U\n" +
+    "#EXT-X-VERSION:3\n" +
+    "#EXT-X-TARGETDURATION:10\n" +
+    "#EXT-X-MEDIA-SEQUENCE:0\n" +
+    "#EXT-X-PLAYLIST-TYPE:VOD\n" +
+    "#EXT-X-ENDLIST\n";
+  const base = `http://localhost:8000/mock/s3/${MANIFEST_BUCKET}/${manifestKeyPrefix()}`;
+  await request.put(`${base}/master.m3u8`, {
+    headers: { "content-type": "application/vnd.apple.mpegurl" },
+    data: MASTER,
+  });
+  await request.put(`${base}/media.m3u8`, {
+    headers: { "content-type": "application/vnd.apple.mpegurl" },
+    data: MEDIA,
+  });
+}
+
 // ─── Section 160 ──────────────────────────────────────────────────────────────
 
 test.describe("Section 160 · GAP-0160 engagement signals", () => {
-  test("160.1 fires watch_pct=100 engagement signal when video ends", async ({ browser }) => {
+  test("160.1 fires watch_pct=100 engagement signal when video ends", async ({ browser, request }) => {
+    await seedHlsManifests(request);
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
-    await page.goto(`${BASE}/videos/${ENGAGE_VIDEO_ID}`, { waitUntil: "domcontentloaded" });
 
-    // Player wrapper renders only when a playback URL is available.
+    // Player wrapper renders only when hls.js fires MANIFEST_PARSED. Under
+    // full-suite load the first init can race the route stub / token fetch, so
+    // retry the navigation until the wrapper mounts (no playerError).
+    let playerVisible = false;
+    for (let attempt = 0; attempt < 3 && !playerVisible; attempt++) {
+      await page.goto(`${BASE}/videos/${ENGAGE_VIDEO_ID}`, { waitUntil: "domcontentloaded" });
+      playerVisible = await page
+        .getByTestId("video-player")
+        .isVisible({ timeout: 10_000 })
+        .catch(() => false);
+    }
     await expect(page.getByTestId("video-player")).toBeVisible({ timeout: 10_000 });
     const video = page.getByTestId("media-player-video");
     await expect(video).toBeAttached();
@@ -219,12 +280,23 @@ test.describe("Section 160 · GAP-0160 engagement signals", () => {
     await ctx.close();
   });
 
-  test("160.2 fires engagement signal at ~30% watch milestone", async ({ browser }) => {
+  test("160.2 fires engagement signal at ~30% watch milestone", async ({ browser, request }) => {
+    await seedHlsManifests(request);
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     await injectAuth(page, ALICE_ID);
-    await page.goto(`${BASE}/videos/${ENGAGE_VIDEO_ID}`, { waitUntil: "domcontentloaded" });
 
+    // Player wrapper renders only when hls.js fires MANIFEST_PARSED. Under
+    // load the first init can race the route stub / token fetch, so retry the
+    // navigation until the wrapper mounts (no playerError) — same as 160.1.
+    let playerVisible = false;
+    for (let attempt = 0; attempt < 3 && !playerVisible; attempt++) {
+      await page.goto(`${BASE}/videos/${ENGAGE_VIDEO_ID}`, { waitUntil: "domcontentloaded" });
+      playerVisible = await page
+        .getByTestId("video-player")
+        .isVisible({ timeout: 10_000 })
+        .catch(() => false);
+    }
     await expect(page.getByTestId("video-player")).toBeVisible({ timeout: 10_000 });
     const video = page.getByTestId("media-player-video");
     await expect(video).toBeAttached();

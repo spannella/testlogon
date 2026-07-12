@@ -7,6 +7,8 @@
  */
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const TS = Date.now();
@@ -20,8 +22,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 }).toString();
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 }).toString();
     _sessions = JSON.parse(raw);
   }
   return _sessions!;
@@ -70,7 +72,7 @@ app_table = os.environ.get('APP_TABLE','app_single_table')
 ddb.Table(app_table).put_item(Item={
     'pk':'POST#${contentId}','sk':'META','user_sub':'${offenderId}',
     'text':'Spam post for moderation test','created_at':${now}})
-"`, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+"`, { cwd: REPO_ROOT, timeout: 10_000 });
 }
 
 // ─── 87. Content Moderation ─────────────────────────────────────────────────

@@ -151,6 +151,17 @@ def setup_stripe_mocks(monkeypatch, *, payment_intent_status: str = "processing"
     object.__setattr__(S, "stripe_publishable_key", "pk_test")
     object.__setattr__(S, "stripe_webhook_secret", "whsec_test")
 
+    # Patch fraud detection and purchase history so billing route tests never
+    # hit real DynamoDB (GAP-0206/0207 fraud gates + purchase_history tracking
+    # were both added after these tests were first written).
+    # billing.py imports these names at module level, so patch billing's namespace.
+    import app.routers.billing as _billing_mod
+    monkeypatch.setattr(_billing_mod, "_fraud_gate", lambda *a, **kw: None)
+    monkeypatch.setattr(_billing_mod, "_require_provider_enabled", lambda *a, **kw: None)
+    monkeypatch.setattr(_billing_mod, "record_billing_transaction", lambda *a, **kw: "txn_fake")
+    monkeypatch.setattr(_billing_mod, "mark_completed", lambda *a, **kw: None)
+    monkeypatch.setattr(_billing_mod, "mark_reverted", lambda *a, **kw: None)
+
     stripe_mock = MagicMock()
     stripe_mock.Customer.create.return_value = {"id": "cus_123"}
     stripe_mock.Customer.retrieve.return_value = {"metadata": {"app_user_id": "user-123"}}

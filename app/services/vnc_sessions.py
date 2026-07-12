@@ -234,17 +234,44 @@ def _default_targets() -> dict[str, TargetConfig]:
     }
 
 
-def _resolve_target(target_id: str) -> TargetConfig:
+def _resolve_target(target_id: str, user_sub: str | None = None) -> TargetConfig:
     inventory = _default_targets()
     target = inventory.get(target_id)
-    if not target:
-        raise VncSessionError(
-            http_status=404,
-            code="VNC_TARGET_NOT_FOUND",
-            message="requested VNC target is not registered",
-            details={"target_id": target_id},
-        )
-    return target
+    if target:
+        return target
+
+    # CTI-002: inventory-backed VNC host target "user:{host_id}". The host is
+    # looked up owner-scoped via host_inventory, so a host_id not owned by the
+    # caller simply doesn't resolve (and the dynamic target restricts
+    # allowed_users to the owner so _ensure_authorized double-checks ownership).
+    if target_id.startswith("user:") and user_sub:
+        host_id = target_id.split(":", 1)[1].strip()
+        host = None
+        if host_id:
+            try:
+                from app.services.host_inventory import get_host
+                host = get_host(user_sub, host_id)
+            except Exception:
+                host = None
+        if host and host.get("hostname"):
+            port = int(host.get("port") or 0) or 5900
+            return TargetConfig(
+                target_id=target_id,
+                ws_url=f"ws://{host['hostname']}:{port}/websockify",
+                allowed_users=(user_sub,),
+                capabilities={
+                    "clipboard": True,
+                    "file_transfer": False,
+                    "drag_drop_upload": False,
+                },
+            )
+
+    raise VncSessionError(
+        http_status=404,
+        code="VNC_TARGET_NOT_FOUND",
+        message="requested VNC target is not registered",
+        details={"target_id": target_id},
+    )
 
 
 def _normalize_role(role: str | None) -> str:
@@ -411,7 +438,7 @@ def create_session(*, user_sub: str, target_id: str, user_role: str = "user") ->
     with vnc_trace_span("vnc.bootstrap", user_sub=user_sub, target_id=target_id):
         _cleanup_expired_sessions()
         _ensure_vnc_feature_enabled()
-        target = _resolve_target(target_id)
+        target = _resolve_target(target_id, user_sub)
         _ensure_authorized(target, user_sub, user_role)
         _enforce_bootstrap_rate_limit(user_sub=user_sub, target_id=target.target_id)
         _validate_secure_transport(ws_url=target.ws_url)

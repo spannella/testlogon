@@ -19,6 +19,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 const BOB_ID = "e2e_bob@test.local";
@@ -38,8 +40,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon", timeout: 30_000,
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT, timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
   }
@@ -70,7 +72,7 @@ function cleanupUser(userSub: string): void {
     `python3 -c "
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line=line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -82,7 +84,7 @@ for it in resp.get('Items', []):
     t.delete_item(Key={'pk':it['pk'],'sk':it['sk']})
 print('cleaned')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -92,7 +94,7 @@ function expireGrace(userSub: string, requestId: string): void {
     `python3 -c "
 import boto3, os, time
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line=line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -102,7 +104,7 @@ t=ddb.Table(os.environ.get('ACCOUNT_DELETION_REQUESTS_TABLE_NAME','account_delet
 t.update_item(Key={'pk':'USER#${userSub}','sk':'REQUEST#${requestId}'}, UpdateExpression='SET scheduled_for=:s', ExpressionAttributeValues={':s': int(time.time())-10})
 print('expired')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 

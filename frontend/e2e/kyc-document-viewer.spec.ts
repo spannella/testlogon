@@ -19,6 +19,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -51,8 +53,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -76,7 +78,7 @@ async function injectAuth(page: Page, identity: string) {
 const DDB_PRELUDE = `
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -130,7 +132,7 @@ table.put_item(Item=item)
 print(case_id)
   `;
   execSync(`python3 -c '${script.replace(/'/g, "'\"'\"'")}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 15_000,
   });
 }
@@ -143,7 +145,7 @@ print("deleted")
   `;
   try {
     execSync(`python3 -c '${script.replace(/'/g, "'\"'\"'")}'`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
     });
   } catch {
@@ -202,8 +204,28 @@ test.describe("Section 246 — Shared DocumentViewer", () => {
     const fsButton = rootPage.getByRole("button", { name: "Fullscreen" });
     await fsButton.click();
     await expect(rootPage.locator(".fixed.inset-0.z-50")).toBeVisible();
-    // Toggle off.
-    await fsButton.click();
+    await expect(fsButton).toHaveAttribute("aria-pressed", "true");
+
+    // A transient sonner toast (top-right, high z-index) can overlap the
+    // Fullscreen button in the overlay and intercept a real mouse click — even
+    // a force-click dispatches at element coordinates, so the toast can still
+    // swallow it. Dispatch the click directly on the button element instead,
+    // which always targets the button regardless of what sits on top of it.
+    // Drive it off the aria-pressed state (the source of truth for the overlay)
+    // so a single intercepted click can't leave the test wedged.
+    await expect
+      .poll(
+        async () => {
+          if ((await fsButton.getAttribute("aria-pressed")) === "false") {
+            return "false";
+          }
+          await fsButton.dispatchEvent("click");
+          return fsButton.getAttribute("aria-pressed");
+        },
+        { timeout: 8_000 },
+      )
+      .toBe("false");
+
     await expect(rootPage.locator(".fixed.inset-0.z-50")).toHaveCount(0);
   });
 

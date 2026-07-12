@@ -548,6 +548,13 @@ def get_unread_alert_count(user_sub: str, *, cap: int = 99) -> int:
     return min(total, cap)
 
 
+# Wall-clock budget for the synchronous mark-all-read row sweep. The unread
+# *count* is reset via the sentinel counter independently, so a partial sweep
+# under a very large accumulated history is acceptable and keeps the endpoint
+# responsive.
+_MARK_ALL_READ_BUDGET_SECONDS = 6.0
+
+
 def mark_all_alerts_read(user_sub: str) -> int:
     """Mark all unread alerts as read for the given user.
 
@@ -556,12 +563,22 @@ def mark_all_alerts_read(user_sub: str) -> int:
 
     Note: This scans up to 2000 alerts (4 pages of 500).  For users with
     extremely large alert histories, a background job should be used.
+
+    A wall-clock budget bounds the per-row update work so the endpoint always
+    returns promptly even when a user has accumulated a very large unread
+    history — the authoritative unread *count* is reset separately (via the
+    sentinel counter) by the caller, so a partial row sweep is acceptable.
     """
+    import time as _time
+
     marked = 0
     lek: Optional[Dict[str, Any]] = None
     pages = 0
+    deadline = _time.monotonic() + _MARK_ALL_READ_BUDGET_SECONDS
 
     while pages < 4:
+        if _time.monotonic() >= deadline:
+            break
         kwargs: Dict[str, Any] = {
             "KeyConditionExpression": Key("user_sub").eq(user_sub),
             "FilterExpression": Attr("read").eq(False),
@@ -575,6 +592,8 @@ def mark_all_alerts_read(user_sub: str) -> int:
         items = resp.get("Items", [])
 
         for item in items:
+            if _time.monotonic() >= deadline:
+                return marked
             try:
                 T.alerts.update_item(
                     Key={"user_sub": item["user_sub"], "alert_id": item["alert_id"]},

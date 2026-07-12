@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Send, MoreHorizontal, Pencil, Trash2, X, Check, DollarSign, Flag, Smile, Images, Sticker as StickerIcon } from "lucide-react";
+import { Send, MoreHorizontal, Pencil, Trash2, X, Check, DollarSign, Flag, Smile, Images, Sticker as StickerIcon, ImagePlus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -23,9 +23,13 @@ import {
   editComment,
   deleteComment,
   reportFeedContent,
+  reactToComment,
+  unreactFromComment,
+  uploadPostImage,
 } from "@/api/endpoints/newsfeed";
 import { useAuthStore } from "@/stores/authStore";
 import { ApiError } from "@/api/client";
+import { cn } from "@/lib/utils";
 import type { FeedComment, CreateCommentReq } from "@/api/types";
 import { isEmojiOnly } from "@/utils/emoji";
 import { TipDialog } from "./TipDialog";
@@ -37,6 +41,8 @@ interface CommentsThreadProps {
   postId: string;
 }
 
+const COMMENT_REACTION_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮"];
+
 export function CommentsThread({ postId }: CommentsThreadProps) {
   const userId = useAuthStore((s) => s.userId);
   const queryClient = useQueryClient();
@@ -46,6 +52,11 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
   const [stickerOpen, setStickerOpen] = useState(false);
+  // Image comment state
+  const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null);
+  const [pendingImageAlt, setPendingImageAlt] = useState<string>("");
+  const [imageUploading, setImageUploading] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const commentsQuery = useInfiniteQuery({
     queryKey: ["comments", postId],
@@ -62,6 +73,8 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
       setBody("");
       setEditorMode("plain");
       setRichDoc(null);
+      setPendingImageUrl(null);
+      setPendingImageAlt("");
     },
     onError: (err: unknown) => {
       toast.error(err instanceof Error ? err.message : "Failed to post comment");
@@ -70,8 +83,34 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (pendingImageUrl) {
+      sendMutation.mutate({ kind: "image", image_url: pendingImageUrl, image_alt_text: pendingImageAlt || undefined });
+      return;
+    }
     if (!body.trim()) return;
     sendMutation.mutate({ kind: "text", ...buildContentPayload(body, editorMode, richDoc) });
+  };
+
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset input so the same file can be re-selected after removal.
+    e.target.value = "";
+    setImageUploading(true);
+    try {
+      const result = await uploadPostImage(file);
+      setPendingImageUrl(result.url);
+      setPendingImageAlt(file.name.replace(/\.[^.]+$/, ""));
+    } catch {
+      toast.error("Image upload failed. Please try again.");
+    } finally {
+      setImageUploading(false);
+    }
+  };
+
+  const removePendingImage = () => {
+    setPendingImageUrl(null);
+    setPendingImageAlt("");
   };
 
   // FEED-004: insert an emoji at the end of the comment draft (plain mode).
@@ -140,18 +179,39 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
 
       {/* Add comment */}
       <form onSubmit={handleSubmit} className="space-y-2">
-        <MarkdownComposer
-          mode={editorMode}
-          onModeChange={setEditorMode}
-          value={body}
-          onChange={setBody}
-          richDoc={richDoc}
-          onRichDocChange={setRichDoc}
-          placeholder="Write a comment..."
-          rows={2}
-        />
+        {/* Image preview before sending */}
+        {pendingImageUrl && (
+          <div className="relative inline-block">
+            <img
+              src={pendingImageUrl}
+              alt={pendingImageAlt || "Comment image preview"}
+              className="max-h-32 max-w-[200px] rounded border object-cover"
+              data-testid="comment-image-preview"
+            />
+            <button
+              type="button"
+              onClick={removePendingImage}
+              className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow"
+              aria-label="Remove image"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+        {!pendingImageUrl && (
+          <MarkdownComposer
+            mode={editorMode}
+            onModeChange={setEditorMode}
+            value={body}
+            onChange={setBody}
+            richDoc={richDoc}
+            onRichDocChange={setRichDoc}
+            placeholder="Write a comment..."
+            rows={2}
+          />
+        )}
         <div className="flex items-center justify-between">
-          {/* FEED-004: emoji / GIF / sticker toolbar */}
+          {/* FEED-004: emoji / GIF / sticker / image toolbar */}
           <div className="flex items-center gap-1">
             <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
               <PopoverTrigger asChild>
@@ -162,7 +222,7 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
                   className="h-7 w-7"
                   aria-label="Insert emoji"
                   data-testid="comment-emoji-button"
-                  disabled={sendMutation.isPending}
+                  disabled={sendMutation.isPending || !!pendingImageUrl}
                 >
                   <Smile className="h-4 w-4" />
                 </Button>
@@ -180,7 +240,7 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
                   className="h-7 w-7"
                   aria-label="Add a GIF"
                   data-testid="comment-gif-button"
-                  disabled={sendMutation.isPending}
+                  disabled={sendMutation.isPending || !!pendingImageUrl}
                 >
                   <Images className="h-4 w-4" />
                 </Button>
@@ -198,7 +258,7 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
                   className="h-7 w-7"
                   aria-label="Add a sticker"
                   data-testid="comment-sticker-button"
-                  disabled={sendMutation.isPending}
+                  disabled={sendMutation.isPending || !!pendingImageUrl}
                 >
                   <StickerIcon className="h-4 w-4" />
                 </Button>
@@ -207,12 +267,37 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
                 <StickerPicker onSelect={handleStickerSelect} />
               </PopoverContent>
             </Popover>
+            {/* Image upload button */}
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              data-testid="comment-image-input"
+              onChange={handleImageFileChange}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              aria-label="Upload an image"
+              data-testid="comment-image-button"
+              disabled={sendMutation.isPending || imageUploading || !!pendingImageUrl}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              {imageUploading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ImagePlus className="h-4 w-4" />
+              )}
+            </Button>
           </div>
           <Button
             type="submit"
             size="sm"
             variant="ghost"
-            disabled={!body.trim() || sendMutation.isPending}
+            disabled={(!body.trim() && !pendingImageUrl) || sendMutation.isPending || imageUploading}
           >
             <Send className="mr-1 h-4 w-4" />
             Post
@@ -239,7 +324,7 @@ function commentMode(comment: FeedComment): EditorMode {
 }
 
 function commentDraftText(comment: FeedComment): string {
-  if (comment.kind === "gif" || comment.kind === "sticker") return "";
+  if (comment.kind === "gif" || comment.kind === "sticker" || comment.kind === "image") return "";
   if (comment.body_format === "markdown") return comment.body_markdown ?? comment.body_plain ?? comment.body ?? "";
   if (comment.body_format === "rich") {
     const doc = (comment.body_rich as RichDoc | undefined) ?? null;
@@ -248,9 +333,9 @@ function commentDraftText(comment: FeedComment): string {
   return comment.body_plain ?? comment.body ?? "";
 }
 
-// FEED-004: media comments (gif/sticker) cannot be edited via the text editor.
+// FEED-004: media comments (gif/sticker/image) cannot be edited via the text editor.
 function isMediaComment(comment: FeedComment): boolean {
-  return comment.kind === "gif" || comment.kind === "sticker";
+  return comment.kind === "gif" || comment.kind === "sticker" || comment.kind === "image";
 }
 
 function CommentBodyView({ comment }: { comment: FeedComment }) {
@@ -275,6 +360,18 @@ function CommentBodyView({ comment }: { comment: FeedComment }) {
         className="mt-1 h-20 w-20 object-contain"
         loading="lazy"
         data-testid="comment-sticker"
+      />
+    );
+  }
+  // Image comment (user-uploaded)
+  if (comment.kind === "image" && comment.image_url) {
+    return (
+      <img
+        src={comment.image_url}
+        alt={comment.image_alt_text || "Image"}
+        className="mt-1 max-w-[300px] rounded"
+        loading="lazy"
+        data-testid="comment-image"
       />
     );
   }
@@ -310,7 +407,8 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
   const [editRichDoc, setEditRichDoc] = useState<RichDoc | null>((comment.body_rich as RichDoc | undefined) ?? null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
-  const authorProfilePath = resolveCanonicalProfilePath({ userId: comment.author_id, displayName: comment.author_id });
+  const commentAuthorName = comment.author_display_name || comment.author_id;
+  const authorProfilePath = resolveCanonicalProfilePath({ userId: comment.author_id, displayName: commentAuthorName });
   const [reportOpen, setReportOpen] = useState(false);
   const [reportServerError, setReportServerError] = useState<string | null>(null);
 
@@ -360,6 +458,26 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
     onError: () => toast.error("Failed to delete comment"),
   });
 
+  const addReactionMut = useMutation({
+    mutationFn: (emoji: string) => reactToComment(postId, comment.comment_id, emoji),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["comments", postId] }),
+    onError: () => toast.error("Failed to react"),
+  });
+
+  const removeReactionMut = useMutation({
+    mutationFn: (emoji: string) => unreactFromComment(postId, comment.comment_id, emoji),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["comments", postId] }),
+    onError: () => toast.error("Failed to remove reaction"),
+  });
+
+  const handleReaction = (emoji: string, isMine: boolean) => {
+    if (isMine) {
+      removeReactionMut.mutate(emoji);
+    } else {
+      addReactionMut.mutate(emoji);
+    }
+  };
+
   if (comment.deleted) {
     return (
       <div className="flex gap-2">
@@ -397,12 +515,12 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
       <div className="group flex gap-2">
         <a
           href={authorProfilePath ?? "#"}
-          aria-label={`Open ${comment.author_id} profile`}
+          aria-label={`Open ${commentAuthorName} profile`}
           className="shrink-0 rounded-full hover:opacity-90"
         >
           <Avatar className="h-6 w-6 shrink-0">
             <AvatarFallback className="text-[10px]">
-              {comment.author_id.slice(0, 2).toUpperCase()}
+              {commentAuthorName.slice(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
         </a>
@@ -410,10 +528,10 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
           <div className="flex items-baseline gap-1.5">
             <a
               href={authorProfilePath ?? "#"}
-              aria-label={`Open ${comment.author_id} profile`}
+              aria-label={`Open ${commentAuthorName} profile`}
               className="text-xs font-medium hover:underline"
             >
-              {comment.author_id}
+              {commentAuthorName}
             </a>
             <span className="text-[10px] text-muted-foreground">
               {new Date(comment.created_at).toLocaleDateString()}
@@ -477,6 +595,33 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
                   Tip
                 </button>
               )}
+            </div>
+          )}
+
+          {/* Reaction bar */}
+          {!comment.deleted && (
+            <div className="mt-1 flex items-center flex-wrap gap-1">
+              {COMMENT_REACTION_EMOJIS.map((emoji) => {
+                const count = (comment.reactions_counts ?? {})[emoji] ?? 0;
+                const isMine = (comment.my_reactions ?? []).includes(emoji);
+                return (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => handleReaction(emoji, isMine)}
+                    disabled={addReactionMut.isPending || removeReactionMut.isPending}
+                    className={cn(
+                      "flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-xs transition-colors",
+                      isMine
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-transparent hover:border-border hover:bg-muted text-muted-foreground",
+                    )}
+                  >
+                    <span>{emoji}</span>
+                    {count > 0 && <span className="text-[10px] font-medium">{count}</span>}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

@@ -19,6 +19,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const ALICE_ID = "alice";
@@ -46,8 +48,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -123,7 +125,7 @@ T.ad_analytics_rollups.put_item(Item=_floats_to_decimal(item))
 print("seeded")
 `;
   const out = execSync(
-    `bash -c 'set -a; source /home/ubuntu/testlogon/.env.local; set +a; cd /home/ubuntu/testlogon && PYTHONPATH=/home/ubuntu/testlogon /home/ubuntu/testlogon/.venv/bin/python -'`,
+    `bash -c 'set -a; source ${REPO_ROOT}/.env.local; set +a; cd ${REPO_ROOT} && PYTHONPATH=${REPO_ROOT} ${REPO_ROOT}/.venv/bin/python -'`,
     { timeout: 30_000, input: py },
   ).toString();
   if (!out.includes("seeded")) throw new Error(`seed failed: ${out}`);

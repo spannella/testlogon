@@ -12,6 +12,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -44,8 +46,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -169,7 +171,7 @@ table.update_item(
 )
 print('OK')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } catch {
     // If boto3 is not available, skip the DDB write
@@ -204,7 +206,11 @@ test.describe("631 — Agent State Machine API", () => {
 
     const statusResp = await apiGet(rootPage, `ui/agent/orchestrator/${WORKER_ID}/status`);
     const status = await statusResp.json();
-    expect(["idle", "claiming"]).toContain(status.agent_state);
+    // The autonomous loop (AGENT-003) may already have advanced past idle by
+    // the time we poll: it discovers + claims an eligible ticket, moving through
+    // claiming -> working (and on to completing). Any of these are valid once
+    // the loop is running.
+    expect(["idle", "claiming", "working", "completing"]).toContain(status.agent_state);
     expect(status.loop_running).toBe(true);
   });
 
@@ -270,6 +276,20 @@ test.describe("632 — Ticket Claiming API", () => {
   });
 
   test("Agent claims a ticket via claim-ticket endpoint", async () => {
+    // The AGENT-003 autonomous loop (started/stopped in section 631) may have
+    // auto-claimed an eligible ticket and `stop_agent_loop` retains an
+    // in-progress ticket — so WORKER_ID can still be holding a ticket here,
+    // which would make a manual claim 409 with `worker_busy`. Ensure the worker
+    // is idle (release any retained ticket) before the manual claim. Also make
+    // sure its loop is stopped so it can't race-claim the fresh ticket below.
+    await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/stop`);
+    const preStatus = await (
+      await apiGet(rootPage, `ui/agent/orchestrator/${WORKER_ID}/status`)
+    ).json();
+    if (preStatus.current_ticket_id) {
+      await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/release-ticket`);
+    }
+
     // First, create a fresh ticket and mark it eligible
     const ticketResp = await apiPost(rootPage, "root", "tickets", {
       subject: `E2E Claim Test ${TS}`,
@@ -313,7 +333,7 @@ print(json.dumps({
     'agent_claimed_at': int(item.get('agent_claimed_at', 0)),
 }))
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     ).toString();
     const ticket = JSON.parse(raw);
     expect(ticket.agent_worker_id).toBe(WORKER_ID);
@@ -413,7 +433,7 @@ table.update_item(
 )
 print('OK')
 "`,
-        { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+        { cwd: REPO_ROOT, timeout: 10_000 },
       );
     } catch {
       // If boto3 is not available, skip
@@ -535,10 +555,18 @@ test.describe("634 — Agent Error Recovery API", () => {
   });
 
   test("Release ticket with no active ticket returns 400", async () => {
-    // Worker should be idle with no ticket
+    // The autonomous loop (AGENT-003) may have auto-claimed an eligible ticket
+    // for this worker during earlier tests. Drain any active ticket first so we
+    // can deterministically exercise the no-active-ticket path. Releasing twice
+    // is harmless — the second call is the 400 we're asserting.
     const statusResp = await apiGet(rootPage, `ui/agent/orchestrator/${WORKER_ID}/status`);
     const status = await statusResp.json();
-    expect(status.current_ticket_id).toBe("");
+    if (status.current_ticket_id) {
+      await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/release-ticket`);
+    }
+
+    const cleared = await apiGet(rootPage, `ui/agent/orchestrator/${WORKER_ID}/status`);
+    expect((await cleared.json()).current_ticket_id).toBe("");
 
     const resp = await apiPost(rootPage, "root", `ui/agent/orchestrator/${WORKER_ID}/release-ticket`);
     expect(resp.status()).toBe(400);

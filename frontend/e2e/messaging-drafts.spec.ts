@@ -1,6 +1,8 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { execSync } from "child_process";
 import { randomUUID } from "crypto";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
@@ -195,7 +197,7 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (_sessions) return _sessions;
   const raw = execSync("python3 e2e_session_setup.py", {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 30_000,
   }).toString();
   _sessions = JSON.parse(raw);

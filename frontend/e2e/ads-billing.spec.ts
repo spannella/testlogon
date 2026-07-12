@@ -13,12 +13,17 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
+// Admin/root identity (key in e2e_admin_session_setup.py output) used for the
+// admin-only internal ad-charge endpoints (now mounted under /ui/admin/ads).
+const ROOT_ID = "root";
 const TS = Date.now();
 
 // ─── Session bootstrap ───────────────────────────────────────────────────────
@@ -44,12 +49,26 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
   return _sessions!;
+}
+
+// Admin/root sessions (root, alice, bob, charlie_*) for the admin-only
+// internal charge endpoints.
+let _adminSessions: Record<string, SessionData> | null = null;
+function getAdminSessions(): Record<string, SessionData> {
+  if (!_adminSessions) {
+    const raw = execSync(
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
+    ).toString();
+    _adminSessions = JSON.parse(raw);
+  }
+  return _adminSessions!;
 }
 
 // ─── Auth helpers ────────────────────────────────────────────────────────────
@@ -82,6 +101,16 @@ async function apiGet(page: Page, path: string) {
   return page.request.get(`${BASE}${path}`);
 }
 
+// POST as root (admin) with root's CSRF token — used for the admin-only
+// /ui/admin/ads/internal/charge-* endpoints (require_admin_or_root).
+async function adminPost(page: Page, path: string, body: object) {
+  const sess = getAdminSessions()[ROOT_ID];
+  return page.request.post(`${BASE}${path}`, {
+    data: body,
+    headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+  });
+}
+
 // ─── DDB helper ──────────────────────────────────────────────────────────────
 
 // Pass JSON payloads + table name via environment variables and the Python
@@ -90,7 +119,7 @@ async function apiGet(page: Page, path: string) {
 const _DDB_PRELUDE = `
 import boto3, json, os, decimal
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -110,7 +139,7 @@ ddb.Table(os.environ['DDB_TABLE']).put_item(Item=item)
 print('ok')
 `;
   execSync("python3 -", {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
     input: script,
     env: { ...process.env, DDB_ITEM: JSON.stringify(item), DDB_TABLE: tableName },
@@ -130,7 +159,7 @@ item = resp.get('Item')
 print(json.dumps(item, cls=Enc) if item else 'null')
 `;
   const raw = execSync("python3 -", {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
     input: script,
     env: { ...process.env, DDB_KEY: JSON.stringify(key), DDB_TABLE: tableName },
@@ -142,59 +171,71 @@ print(json.dumps(item, cls=Enc) if item else 'null')
 
 let alicePage: Page;
 let bobPage: Page;
+let rootPage: Page;
 let accountId: string;
 let campaignId: string;
+
+// Top-level setup so that pages + DDB fixtures are (re)created in EVERY worker,
+// including the fresh worker Playwright spawns for retries. Sections beyond 369
+// have no beforeAll of their own, so without this a retried test would see
+// undefined page handles. accountId/campaignId are deterministic per worker
+// (derived from the module-load TS) and ddbPut is idempotent.
+test.beforeAll(async ({ browser }) => {
+  // Create Alice page
+  const ctx = await browser.newContext();
+  alicePage = await ctx.newPage();
+  await injectAuth(alicePage, ALICE_ID);
+
+  // Create Bob page
+  const bCtx = await browser.newContext();
+  bobPage = await bCtx.newPage();
+  await injectAuth(bobPage, BOB_ID);
+
+  // Root page for admin-only internal charge endpoints (cookies only; the
+  // admin session setup provides the role-bearing JWT + CSRF token).
+  const rCtx = await browser.newContext();
+  rootPage = await rCtx.newPage();
+  await rCtx.addCookies(getAdminSessions()[ROOT_ID].cookies);
+
+  // Create ad account for Alice directly in DDB
+  accountId = `adacct_e2e_${TS}`;
+  ddbPut("AdAccounts", {
+    pk: `ACCT#${accountId}`,
+    sk: "META",
+    account_id: accountId,
+    owner_sub: ALICE_ID,
+    company_name: `E2E Corp ${TS}`,
+    billing_email: "billing@e2e.test",
+    status: "active",
+    balance_cents: 0,
+    lifetime_spend_cents: 0,
+    created_at: Math.floor(Date.now() / 1000),
+    updated_at: Math.floor(Date.now() / 1000),
+  });
+
+  // Create campaign for Alice
+  campaignId = `camp_e2e_${TS}`;
+  ddbPut("AdCampaigns", {
+    pk: `ACCT#${accountId}`,
+    sk: `CAMPAIGN#${campaignId}`,
+    campaign_id: campaignId,
+    account_id: accountId,
+    name: `E2E Campaign ${TS}`,
+    objective: "awareness",
+    budget_cents: 10000,
+    budget_type: "lifetime",
+    daily_budget_cents: 0,
+    spent_today_cents: 0,
+    lifetime_spent_cents: 0,
+    status: "active",
+    created_at: Math.floor(Date.now() / 1000),
+    updated_at: Math.floor(Date.now() / 1000),
+  });
+});
 
 // ── Section 369: Deposit API ─────────────────────────────────────────────────
 
 test.describe("369 — Deposit API", () => {
-  test.beforeAll(async ({ browser }) => {
-    // Create Alice page
-    const ctx = await browser.newContext();
-    alicePage = await ctx.newPage();
-    await injectAuth(alicePage, ALICE_ID);
-
-    // Create Bob page
-    const bCtx = await browser.newContext();
-    bobPage = await bCtx.newPage();
-    await injectAuth(bobPage, BOB_ID);
-
-    // Create ad account for Alice directly in DDB
-    accountId = `adacct_e2e_${TS}`;
-    ddbPut("AdAccounts", {
-      pk: `ACCT#${accountId}`,
-      sk: "META",
-      account_id: accountId,
-      owner_sub: ALICE_ID,
-      company_name: `E2E Corp ${TS}`,
-      billing_email: "billing@e2e.test",
-      status: "active",
-      balance_cents: 0,
-      lifetime_spend_cents: 0,
-      created_at: Math.floor(Date.now() / 1000),
-      updated_at: Math.floor(Date.now() / 1000),
-    });
-
-    // Create campaign for Alice
-    campaignId = `camp_e2e_${TS}`;
-    ddbPut("AdCampaigns", {
-      pk: `ACCT#${accountId}`,
-      sk: `CAMPAIGN#${campaignId}`,
-      campaign_id: campaignId,
-      account_id: accountId,
-      name: `E2E Campaign ${TS}`,
-      objective: "awareness",
-      budget_cents: 10000,
-      budget_type: "lifetime",
-      daily_budget_cents: 0,
-      spent_today_cents: 0,
-      lifetime_spent_cents: 0,
-      status: "active",
-      created_at: Math.floor(Date.now() / 1000),
-      updated_at: Math.floor(Date.now() / 1000),
-    });
-  });
-
   test("369.1 Deposit funds to ad account", async () => {
     const resp = await apiPost(
       alicePage,
@@ -249,9 +290,11 @@ test.describe("369 — Deposit API", () => {
 
 test.describe("370 — Impression charging", () => {
   test("370.1 Track impression creates charge", async () => {
-    const resp = await apiPost(
-      alicePage,
-      "/ui/ads/internal/charge-impression",
+    // Internal charge endpoints are admin-only (require_admin_or_root) and are
+    // mounted under /ui/admin/ads. Call them as root.
+    const resp = await adminPost(
+      rootPage,
+      "/ui/admin/ads/internal/charge-impression",
       {
         account_id: accountId,
         campaign_id: campaignId,
@@ -347,7 +390,7 @@ test.describe("371 — Budget enforcement", () => {
   test("371.1 Campaign auto-pauses at 100% budget", async () => {
     // Send enough impressions to exceed the 5 cent budget
     for (let i = 0; i < 6; i++) {
-      await apiPost(alicePage, "/ui/ads/internal/charge-impression", {
+      await adminPost(rootPage, "/ui/admin/ads/internal/charge-impression", {
         account_id: budgetAccountId,
         campaign_id: budgetCampaignId,
         creative_id: "creat_budget_001",

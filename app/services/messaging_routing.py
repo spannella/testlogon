@@ -5,7 +5,7 @@ from typing import Any, Dict, Literal, Mapping, Optional
 
 RoutingMode = Literal["standard", "helpdesk_bridge"]
 RoutingState = Literal["none", "awaiting_agent", "assigned", "paused_no_agents_online", "closed"]
-RoutingAction = Literal["assign_agent", "release_agent", "pause_no_agents", "resume_awaiting", "alert_awaiting", "close"]
+RoutingAction = Literal["assign_agent", "release_agent", "pause_no_agents", "resume_awaiting", "alert_awaiting", "close", "transfer_agent"]
 
 
 @dataclass(frozen=True)
@@ -236,6 +236,31 @@ def transition_helpdesk_routing(
                 **base_patch,
                 "routing_state": to_state,
                 "active_agent_user_id": "",
+                "assignment_version": current_version + 1,
+                "routing_state_group_pk": _state_group_pk(to_state, group_id),
+                "routing_state_group_sk": str(conversation.get("conversation_id") or ""),
+            },
+        )
+
+    if cmd.action == "transfer_agent":
+        if from_state != "assigned":
+            raise RoutingTransitionError(
+                code="routing_transfer_invalid_state",
+                message="agent can only be transferred from assigned state",
+            )
+        if not cmd.agent_user_id:
+            raise RoutingTransitionError(code="routing_transfer_agent_required", message="agent_user_id is required")
+        to_state = "assigned"
+        return RoutingTransitionResult(
+            from_state=from_state,
+            to_state=to_state,
+            changed=True,
+            event_type="helpdesk.conversation.transferred",
+            patch={
+                **base_patch,
+                "routing_state": to_state,
+                "active_agent_user_id": cmd.agent_user_id,
+                "active_agent_claimed_at": int(cmd.now_ts),
                 "assignment_version": current_version + 1,
                 "routing_state_group_pk": _state_group_pk(to_state, group_id),
                 "routing_state_group_sk": str(conversation.get("conversation_id") or ""),

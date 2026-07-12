@@ -18,6 +18,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -49,8 +51,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -123,8 +125,8 @@ async function ledgerCreditsForContent(
   contentId: string,
 ): Promise<number> {
   const out = execSync(
-    `set -a; source /home/ubuntu/testlogon/.env.local 2>/dev/null; set +a; ` +
-      `PYTHONPATH=/home/ubuntu/testlogon /home/ubuntu/testlogon/.venv/bin/python3 - <<'PY'
+    `set -a; source ${REPO_ROOT}/.env.local 2>/dev/null; set +a; ` +
+      `PYTHONPATH=${REPO_ROOT} ${REPO_ROOT}/.venv/bin/python3 - <<'PY'
 import json
 from app.core.tables import T
 from boto3.dynamodb.conditions import Key
@@ -137,8 +139,8 @@ for it in resp.get("Items", []):
 print(total)
 PY`,
     {
-      cwd: "/home/ubuntu/testlogon",
-      env: { ...process.env, PYTHONPATH: "/home/ubuntu/testlogon" },
+      cwd: REPO_ROOT,
+      env: { ...process.env, PYTHONPATH: REPO_ROOT },
       shell: "/bin/bash",
     },
   )

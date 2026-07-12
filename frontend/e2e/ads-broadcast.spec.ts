@@ -1,5 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
 /*  ADS-006 — Broadcast Ad Breaks                                      */
@@ -8,7 +10,7 @@ import { execSync } from "child_process";
 
 const API = "http://localhost:8000";
 const TS = Date.now();
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 const ROOT_ID = "root";
 const BOB_ID = "bob";
@@ -33,8 +35,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -84,7 +86,7 @@ function seedSubscription(subscriberSub: string, creatorSub: string, status: str
     `${PYTHON} -c "
 import boto3, os, time
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 if env.exists():
     for line in env.read_text().splitlines():
         line = line.strip()
@@ -111,7 +113,7 @@ function clearSubscription(subscriberSub: string, creatorSub: string): void {
     `${PYTHON} -c "
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 if env.exists():
     for line in env.read_text().splitlines():
         line = line.strip()

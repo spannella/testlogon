@@ -29,6 +29,7 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.models import (
     AddCardReq,
+    AddBankReq,
     AddChargeReq,
     BillingCheckoutReq,
     PaymentIncidentEvidenceUploadReq,
@@ -44,6 +45,7 @@ from app.models import (
     VerifyMicrodepositsReq,
     WalletDepositReq,
     WalletWithdrawReq,
+    SetWalletThresholdReq,  # PLT-005
 )
 from app.services.sessions import require_ui_session
 from app.services.alerts import audit_event
@@ -766,6 +768,32 @@ def pm_sk(payment_method_id: str) -> str:
     return f"PM#{payment_method_id}"
 
 
+def _card_brand_from_pan(pan: str) -> str:
+    """Best-effort card-brand detection from a PAN (IIN ranges).
+
+    B-PAY FIX: the dev stripe-mock coerces every card to brand=visa/last4=4242
+    regardless of the submitted number, so a user adding e.g. a 5656... card
+    sees "Visa 4242" and two distinct cards look identical (apparent duplicate).
+    In dev mode we derive the real brand+last4 from the PAN the user typed.
+    """
+    p = (pan or "").replace(" ", "").replace("-", "")
+    if not p.isdigit():
+        return "unknown"
+    if p.startswith("4"):
+        return "visa"
+    if p[:2] in {"34", "37"}:
+        return "amex"
+    if p[:4] in {"6011"} or p[:2] == "65" or (p[:6].isdigit() and 622126 <= int(p[:6]) <= 622925):
+        return "discover"
+    if (p[:2].isdigit() and 51 <= int(p[:2]) <= 55) or (p[:4].isdigit() and 2221 <= int(p[:4]) <= 2720):
+        return "mastercard"
+    if p[:2] in {"30", "36", "38", "39"}:
+        return "diners"
+    if p[:4] == "3528" or p[:4] == "3589" or p[:2] == "35":
+        return "jcb"
+    return "unknown"
+
+
 def list_payment_methods_ddb(user_id: str) -> List[Dict[str, Any]]:
     items = ddb_query_pk(T.billing, user_pk(user_id))
     return [it for it in items if it["sk"].startswith("PM#")]
@@ -919,6 +947,16 @@ def add_card(body: AddCardReq, req: Request = None, ctx=Depends(require_ui_sessi
     last4 = card.get("last4")
     exp_month = card.get("exp_month")
     exp_year = card.get("exp_year")
+    # B-PAY FIX: the dev stripe-mock returns brand=visa/last4=4242 for ALL PANs.
+    # Derive the real brand + last4 from the submitted card number so the saved
+    # method matches what the user typed (and distinct cards stay distinct).
+    if S.dev_mode:
+        _pan_digits = body.card_number.replace(" ", "").replace("-", "")
+        if _pan_digits.isdigit() and len(_pan_digits) >= 4:
+            last4 = _pan_digits[-4:]
+            _derived_brand = _card_brand_from_pan(_pan_digits)
+            if _derived_brand != "unknown":
+                brand = _derived_brand
     label = f"{brand} ****{last4}" if brand and last4 else None
 
     pk = user_pk(user_id)
@@ -957,6 +995,92 @@ def add_card(body: AddCardReq, req: Request = None, ctx=Depends(require_ui_sessi
         "last4": last4,
         "exp_month": exp_month,
         "exp_year": exp_year,
+        "label": label,
+    }
+
+
+@dual_route("POST", "/billing/payment-methods/us-bank")
+def add_bank(body: AddBankReq, req: Request = None, ctx=Depends(require_ui_session), _kyc: object = Depends(require_kyc_tier(2))) -> Dict[str, Any]:  # GAP-0268 (inert unless enforcement flag on)
+    # BK-C: DEV/TEST direct add of a FAKE US bank account from routing+account
+    # numbers. Mirrors add_card: create a us_bank_account PaymentMethod, attach
+    # it to the customer, persist to DDB, set default if first. In DEV_MODE this
+    # runs against stripe-mock; in real prod the web client would tokenize the
+    # bank via Stripe.js / Financial Connections instead. Guarded to dev_mode so
+    # a real provider is never hit with raw bank numbers.
+    if not S.dev_mode:
+        raise HTTPException(400, "Direct bank add is a dev/test path; use the hosted bank flow in production")
+    ensure_stripe_configured()
+    user_id = ctx["user_sub"]
+    customer_id = get_or_create_customer(user_id)
+
+    acct = body.account_number.replace(" ", "").replace("-", "")
+    rt = body.routing_number.replace(" ", "").replace("-", "")
+    pm_data: Dict[str, Any] = {
+        "type": "us_bank_account",
+        "us_bank_account": {
+            "routing_number": rt,
+            "account_number": acct,
+            "account_holder_type": body.account_holder_type,
+            "account_type": body.account_type,
+        },
+    }
+    if body.account_holder_name:
+        pm_data["billing_details"] = {"name": body.account_holder_name}
+
+    try:
+        pm = stripe.PaymentMethod.create(**pm_data)
+    except Exception as exc:
+        logger.warning("add_bank PaymentMethod.create failed", extra={"user_id": user_id}, exc_info=exc)
+        raise HTTPException(400, f"Bank account invalid: {exc}") from exc
+
+    pm_id = pm["id"]
+    try:
+        stripe.PaymentMethod.attach(pm_id, customer=customer_id)
+    except Exception as exc:
+        logger.warning("add_bank PaymentMethod.attach failed", extra={"user_id": user_id, "pm_id": pm_id}, exc_info=exc)
+        raise HTTPException(400, f"Failed to attach bank account: {exc}") from exc
+
+    bank = pm.get("us_bank_account", {}) or {}
+    # stripe-mock often returns empty bank metadata -> derive a usable last4 from input.
+    last4 = bank.get("last4") or (acct[-4:] if len(acct) >= 4 else acct)
+    bank_name = bank.get("bank_name")
+    label = f"{bank_name} ****{last4}" if bank_name and last4 else (f"Bank ****{last4}" if last4 else None)
+
+    pk = user_pk(user_id)
+    existing = list_payment_methods_ddb(user_id)
+    next_priority = 0 if not existing else (max(int(x.get("priority", 0)) for x in existing) + 1)
+
+    ddb_put(T.billing, {
+        "pk": pk,
+        "sk": pm_sk(pm_id),
+        "payment_method_id": pm_id,
+        "provider": "stripe",
+        "provider_method_id": pm_id,
+        "method_type": "us_bank_account",
+        "label": label,
+        "brand": bank_name,
+        "last4": last4,
+        "bank_name": bank_name,
+        "account_type": body.account_type,
+        "priority": next_priority,
+        "created_at": now_ts(),
+    })
+
+    if not current_default_pm(user_id):
+        set_default_pm(user_id, pm_id)
+        try:
+            stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": pm_id})
+        except Exception:
+            pass
+
+    bump_dunning_after_payment_method_update(user_id, "stripe")
+    audit_event("billing_add_bank", user_id, req, outcome="success", payment_method_id=pm_id)
+    return {
+        "payment_method_id": pm_id,
+        "method_type": "us_bank_account",
+        "bank_name": bank_name,
+        "last4": last4,
+        "account_type": body.account_type,
         "label": label,
     }
 
@@ -1314,24 +1438,36 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
-@dual_route("POST", "/billing/refund")
-def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
-    ensure_stripe_configured()
-    user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+def _do_refund(
+    user_id: str,
+    payment_intent_id: str,
+    amount_cents: int = 0,
+    reason: str = "",
+    req: Optional[Request] = None,
+) -> Dict[str, str]:
+    """Single point of Stripe refund issuance (TXR-004 §4.5).
+
+    Factored out of ``refund_payment`` so both the legacy ``POST /billing/refund``
+    endpoint and the TXR-004 execution engine (``_dispatch_refund``) issue the
+    Stripe refund through exactly one call site — ``stripe.Refund.create`` is
+    invoked exactly once per invocation. No money-path duplication.
+
+    Returns ``{"led_sk": ..., "refund_id": ..., "payment_intent_id": ...}``.
+    """
     pk = user_pk(user_id)
 
-    pay = ddb_get(T.billing, pk, pay_sk(body.payment_intent_id))
+    pay = ddb_get(T.billing, pk, pay_sk(payment_intent_id))
     if not pay:
         raise HTTPException(404, "Payment record not found")
 
-    amount = int(body.amount_cents or pay.get("amount_cents", 0))
+    amount = int(amount_cents or pay.get("amount_cents", 0))
     if amount <= 0:
         raise HTTPException(400, "amount_cents must be greater than zero")
 
     refund = stripe.Refund.create(
-        payment_intent=body.payment_intent_id,
+        payment_intent=payment_intent_id,
         amount=amount,
-        reason=body.reason,
+        reason=reason,
     )
 
     led_sk_value, led_item = new_ledger_entry(
@@ -1339,10 +1475,13 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
         key_value=pk,
         entry_type="adjustment",
         amount_cents=amount,
+        # D1 / CROSS_TICKET_AUDIT §A4: a refund is a credit -> positive signed.
+        # amount_cents stays unsigned (positive); signed_amount_cents = +amount.
+        signed_amount_cents=amount,
         state="settled",
         reason="refund",
-        meta={"reason": body.reason},
-        extra={"stripe_payment_intent_id": body.payment_intent_id, "stripe_refund_id": refund.get("id"), "provider": "stripe"},
+        meta={"reason": reason},
+        extra={"stripe_payment_intent_id": payment_intent_id, "stripe_refund_id": refund.get("id"), "provider": "stripe"},
     )
     ddb_put(T.billing, led_item)
 
@@ -1354,11 +1493,25 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
     if pay.get("ledger_sk"):
         settle_or_reverse_ledger(T.billing, "pk", pk, pay["ledger_sk"], "reversed")
 
-    update_payment_status(user_id, body.payment_intent_id, "refunded", charge_id=refund.get("charge"))
+    update_payment_status(user_id, payment_intent_id, "refunded", charge_id=refund.get("charge"))
 
     purchase_txn_id = pay.get("purchase_txn_id")
     if purchase_txn_id:
-        mark_reverted(user_id, purchase_txn_id, body.reason or "refund")
+        mark_reverted(user_id, purchase_txn_id, reason or "refund")
+
+    return {
+        "led_sk": led_sk_value,
+        "refund_id": refund.get("id"),
+        "payment_intent_id": payment_intent_id,
+    }
+
+
+@dual_route("POST", "/billing/refund")
+def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+
+    result = _do_refund(user_id, body.payment_intent_id, int(body.amount_cents or 0), body.reason, req)
 
     audit_event(
         "billing_refund",
@@ -1367,12 +1520,11 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
         outcome="success",
         provider="stripe",
         payment_intent_id=body.payment_intent_id,
-        refund_id=refund.get("id"),
-        amount_cents=amount,
+        refund_id=result.get("refund_id"),
         reason=body.reason,
         **admin_tags,
     )
-    return {"ok": True, "refund_id": refund.get("id"), "payment_intent_id": body.payment_intent_id}
+    return {"ok": True, "refund_id": result.get("refund_id"), "payment_intent_id": body.payment_intent_id}
 
 
 @dual_route("POST", "/billing/checkout_session")
@@ -2641,3 +2793,34 @@ def wallet_withdraw(body: WalletWithdrawReq, req: Request = None, ctx=Depends(re
         **admin_tags,
     )
     return {"ok": True, "wallet_balance_cents": wallet_balance_cents}
+
+
+# PLT-005: Balance threshold configuration endpoint
+@dual_route("PUT", "/billing/wallet/threshold")
+def set_wallet_threshold(
+    body: SetWalletThresholdReq,
+    req: Request = None,
+    ctx=Depends(require_ui_session),
+) -> Dict[str, Any]:
+    """PLT-005: Set or clear the low-balance alert threshold for the authenticated user."""
+    user_id = ctx["user_sub"]
+    pk = user_pk(user_id)
+    threshold = int(body.threshold_cents)
+    update_expr = "SET balance_threshold_cents = :t"
+    expr_vals: Dict[str, Any] = {":t": threshold}
+    if threshold == 0:
+        # Clear any stale edge state when disabling the threshold
+        update_expr += ", last_threshold_crossed = :f"
+        expr_vals[":f"] = False
+    T.billing.update_item(
+        Key={"pk": pk, "sk": "WALLET"},
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=expr_vals,
+    )
+    audit_event(
+        "wallet_threshold_set",
+        user_id,
+        req,
+        threshold_cents=threshold,
+    )
+    return {"ok": True, "threshold_cents": threshold, "currency": "usd"}

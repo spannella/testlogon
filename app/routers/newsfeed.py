@@ -1419,7 +1419,10 @@ class CreatePostRequest(ContentFieldsMixin):
     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     visibility: Literal["followers", "public"] = "followers"
     subscriber_only: bool = False  # SUB-E3: per-post subscriber-only gate
-    lock_type: Optional[Literal["fixed_price", "tip_lottery"]] = None
+    # B8 B-LOCK: accept "price"/"none" aliases so a fixed-price locked post created
+    # by the app (which sent "price") or an explicit unlock ("none") validates; the
+    # value is normalized to the canonical fixed_price/tip_lottery/None below.
+    lock_type: Optional[Literal["fixed_price", "tip_lottery", "price", "none"]] = None
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
     unlock_limit: Optional[int] = Field(default=None, ge=1)
     lottery_tip_cents: Optional[int] = Field(default=None, ge=1)
@@ -1660,6 +1663,34 @@ def _validate_sticker_url(url: str) -> str:
     )
 
 
+def _validate_comment_image_url(url: str) -> str:
+    """Validate an image_url for kind='image' comments.
+
+    Accepts platform-relative ``/uploads/object?s3_key=...`` URLs (produced by
+    ``POST /uploads/image``) and https absolute URLs (e.g. from CDN).  Rejects
+    dangerous schemes (data:, javascript:, file:), scheme-relative forms (//),
+    and plain http origins.  Same logic in dev and prod (SECOPS-007).
+    """
+    url = (url or "").strip()
+    # Platform-relative upload path (produced by upload_image endpoint).
+    if url.startswith("/") and not url.startswith("//"):
+        if url.startswith("/uploads/object"):
+            return url
+        logger.warning("comment image_url rejected (relative path)", extra={"url_prefix": url[:64]})
+        raise ValueError(
+            "image_url relative path must be a platform upload URL (/uploads/object?s3_key=...)"
+        )
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        logger.warning("comment image_url rejected (scheme)", extra={"scheme": parsed.scheme})
+        raise ValueError(
+            f"image_url scheme '{parsed.scheme}' is not allowed; use https:// or /uploads/object"
+        )
+    if not parsed.netloc:
+        raise ValueError("image_url must have a valid host")
+    return url
+
+
 class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
     # TIP-302: a comment can CARRY a tip. When tip_amount_cents is present the
@@ -1670,7 +1701,7 @@ class CreateCommentRequest(ContentFieldsMixin):
     tip_payment_method_id: Optional[str] = None
     # FEED-004: emoji/GIF/sticker comments. `kind` selects the content type.
     # For kind="text" the existing ContentFieldsMixin body_* fields are used.
-    kind: Literal["text", "gif", "sticker"] = "text"
+    kind: Literal["text", "gif", "sticker", "image"] = "text"
     # GIF fields (required when kind=gif) — mirrors MSG-008 message field names.
     gif_url: Optional[str] = Field(default=None, max_length=2048)
     gif_alt_text: Optional[str] = Field(default=None, max_length=256)
@@ -1681,6 +1712,12 @@ class CreateCommentRequest(ContentFieldsMixin):
     sticker_collection_id: Optional[str] = Field(default=None, max_length=64)
     sticker_url: Optional[str] = Field(default=None, max_length=2048)
     sticker_alt_text: Optional[str] = Field(default=None, max_length=256)
+    # Image fields (required when kind=image) — user-uploaded images via
+    # POST /uploads/image.  Mirrors the gif_* field naming convention.
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    image_alt_text: Optional[str] = Field(default=None, max_length=256)
+    image_width: Optional[int] = Field(default=None, ge=0, le=8192)
+    image_height: Optional[int] = Field(default=None, ge=0, le=8192)
 
     model_config = {
         "json_schema_extra": {
@@ -1699,6 +1736,11 @@ class CreateCommentRequest(ContentFieldsMixin):
                     "sticker_collection_id": "coll_love_pack",
                     "sticker_url": "/mock/s3/stickers/coll_love_pack/stk_love_heart_01.webp",
                     "sticker_alt_text": "Love heart sticker",
+                },
+                {
+                    "kind": "image",
+                    "image_url": "/uploads/object?s3_key=uploads%2Fuser123%2Fatt_abc%2Fphoto.jpg",
+                    "image_alt_text": "My uploaded photo",
                 },
             ]
         }
@@ -1721,11 +1763,27 @@ class CreateCommentRequest(ContentFieldsMixin):
                 raise ValueError("sticker_url is required for sticker comments")
             # GAP-0183: enforce platform-only sticker origin
             self.sticker_url = _validate_sticker_url(self.sticker_url)
+        elif self.kind == "image":
+            if not (self.image_url or "").strip():
+                raise ValueError("image_url is required for image comments")
+            # Enforce platform upload path or https origin.
+            self.image_url = _validate_comment_image_url(self.image_url)
+        # B8 B-COMMENT2: a text comment MAY also carry an image (text+image
+        # together). Validate the attached image_url like an image comment.
+        if self.kind == "text" and (self.image_url or "").strip():
+            self.image_url = _validate_comment_image_url(self.image_url)
         return self
 
 
 class EditCommentRequest(ContentFieldsMixin):
     expected_version: int = Field(default=1, ge=1)
+    # B8 B-COMMENT2: a text comment's attached image is editable. Omit a field to
+    # KEEP the current value; send image_url="" (or null) to REMOVE the image;
+    # send a new image_url to REPLACE it. image_url is validated like a create.
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    image_alt_text: Optional[str] = Field(default=None, max_length=256)
+    image_width: Optional[int] = Field(default=None, ge=0, le=8192)
+    image_height: Optional[int] = Field(default=None, ge=0, le=8192)
 
 
 class CommentResponse(BaseModel):
@@ -1745,7 +1803,10 @@ class CommentResponse(BaseModel):
     body_version: int = 1
     version: int = 1
     tip_total_cents: int = 0
-    # FEED-004: emoji/GIF/sticker comments
+    # Emoji reactions on comments (mirrors post reactions).
+    reactions_counts: Dict[str, int] = Field(default_factory=dict)
+    my_reactions: List[str] = Field(default_factory=list)
+    # FEED-004: emoji/GIF/sticker/image comments
     kind: str = "text"
     gif_url: Optional[str] = None
     gif_alt_text: Optional[str] = None
@@ -1755,6 +1816,11 @@ class CommentResponse(BaseModel):
     sticker_collection_id: Optional[str] = None
     sticker_url: Optional[str] = None
     sticker_alt_text: Optional[str] = None
+    # Image comment fields (kind="image")
+    image_url: Optional[str] = None
+    image_alt_text: Optional[str] = None
+    image_width: Optional[int] = None
+    image_height: Optional[int] = None
 
 
 class TipRequest(BaseModel):
@@ -1782,6 +1848,10 @@ class FeedCapabilitiesResponse(BaseModel):
 class EditPostRequest(ContentFieldsMixin):
     image_urls: Optional[List[str]] = None
     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
+    # B-POST #5: visibility + paid-lock are editable in place.
+    visibility: Optional[Literal["followers", "public"]] = None
+    lock_type: Optional[Literal["fixed_price", "none"]] = None
+    unlock_price_cents: Optional[int] = Field(default=None, ge=0)
     publish_at: Optional[int] = Field(default=None, ge=0)
     schedule_timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
     scheduled_at_local: Optional[str] = Field(default=None, min_length=1, max_length=32)
@@ -1949,6 +2019,20 @@ class PostTipRequest(BaseModel):
 
 class ReactionRequest(BaseModel):
     emoji: str = Field(..., min_length=1, max_length=10)
+
+
+# Canonical newsfeed reaction emoji allowlist (mirrors the PostCard reaction bar).
+ALLOWED_REACTION_EMOJIS: Tuple[str, ...] = ("👍", "❤️", "😂", "🔥", "😮")
+
+
+class CommentReactionRequest(BaseModel):
+    emoji: str = Field(..., min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_emoji(self):
+        if self.emoji not in ALLOWED_REACTION_EMOJIS:
+            raise ValueError("emoji not in allowed reaction set")
+        return self
 
 class ContentRenderTelemetryRequest(BaseModel):
     reason: Literal["unsupported_format", "render_exception"]
@@ -2270,6 +2354,7 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     return {
         "post_id": post_id,
         "author_id": post.get("user_id", ""),
+        "author_display_name": _resolve_author_display_name(post.get("user_id", "")),
         "created_at": post.get("created_at", ""),
         "published_at": published_at,
         "status": status,
@@ -2388,9 +2473,10 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     }
 
 
-def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
+def _comment_to_dict(it: Dict[str, Any], viewer_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw DDB comment item to the FeedComment shape expected by the frontend."""
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, _body_version = _resolve_read_body_fields(it)
+    reactions_counts, my_reactions = _reaction_summaries(it.get("reactions") or {}, viewer_id)
     if it.get("deleted"):
         body = None
         body_plain = None
@@ -2402,6 +2488,7 @@ def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
         "comment_id": it["comment_id"],
         "post_id": it["post_id"],
         "author_id": it.get("user_id", ""),
+        "author_display_name": _resolve_author_display_name(it.get("user_id", "")),
         "created_at": it.get("created_at", ""),
         "updated_at": it.get("updated_at"),
         "deleted": bool(it.get("deleted")),
@@ -2422,7 +2509,10 @@ def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
              "created_at": _r.get("created_at")}
             for _r in (it.get("tip_reactions") or [])
         ],
-        # FEED-004: emoji/GIF/sticker comments (additive — legacy items lack these)
+        # Emoji reactions on comments (additive — legacy items lack these)
+        "reactions_counts": reactions_counts,
+        "my_reactions": my_reactions,
+        # FEED-004: emoji/GIF/sticker/image comments (additive — legacy items lack these)
         "kind": it.get("kind", "text"),
         "gif_url": it.get("gif_url"),
         "gif_alt_text": it.get("gif_alt_text"),
@@ -2432,6 +2522,11 @@ def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
         "sticker_collection_id": it.get("sticker_collection_id"),
         "sticker_url": it.get("sticker_url"),
         "sticker_alt_text": it.get("sticker_alt_text"),
+        # Image comment fields (kind="image")
+        "image_url": it.get("image_url"),
+        "image_alt_text": it.get("image_alt_text"),
+        "image_width": int(it["image_width"]) if it.get("image_width") is not None else None,
+        "image_height": int(it["image_height"]) if it.get("image_height") is not None else None,
     }
 
 
@@ -3544,6 +3639,13 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
             )
 
     requested_lock_type = req.lock_type
+    # B8 B-LOCK: normalize client lock_type aliases. "price" == "fixed_price";
+    # "none" (explicit unlock) is treated like an absent lock_type so a price
+    # alone still infers a fixed_price lock (matches the EDIT path semantics).
+    if requested_lock_type == "price":
+        requested_lock_type = "fixed_price"
+    elif requested_lock_type == "none":
+        requested_lock_type = None
     unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
     has_lottery_fields = any(
         value is not None
@@ -4099,6 +4201,62 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
             expr_vals[":unlock_limit"] = req.unlock_limit
         else:
             remove_parts.append("unlock_limit")
+    # B-POST #5: visibility is editable in place.
+    if "visibility" in req.model_fields_set and req.visibility is not None:
+        set_parts.append("visibility = :vis")
+        expr_vals[":vis"] = req.visibility
+    # B-POST #5: video attachment is editable (set or clear). video_id was declared
+    # on EditPostRequest but previously ignored by the handler.
+    if "video_id" in req.model_fields_set:
+        if req.video_id:
+            set_parts.append("video_id = :vid")
+            expr_vals[":vid"] = req.video_id
+        else:
+            remove_parts.append("video_id")
+    # B-POST #5: paid-lock state is editable in place (fixed_price only; the
+    # tip_lottery strategy keeps its dedicated lottery flow untouched).
+    locked_name_used = False
+    lock_in_payload = ("unlock_price_cents" in req.model_fields_set) or ("lock_type" in req.model_fields_set)
+    if lock_in_payload:
+        existing_lock_type = post.get("lock_type")
+        if existing_lock_type == "tip_lottery":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "lock_edit_unsupported_for_tip_lottery",
+                    "message": "tip_lottery locks cannot be edited via PATCH /posts/{id}",
+                },
+            )
+        requested_lock_type = req.lock_type if "lock_type" in req.model_fields_set else (
+            "fixed_price" if existing_lock_type == "fixed_price" else "none"
+        )
+        if requested_lock_type == "none":
+            set_parts.append("#locked = :locked")
+            expr_vals[":locked"] = False
+            locked_name_used = True
+            remove_parts.append("unlock_price_cents")
+            remove_parts.append("lock_type")
+        else:  # fixed_price
+            price = req.unlock_price_cents if "unlock_price_cents" in req.model_fields_set else post.get("unlock_price_cents")
+            try:
+                price = _validate_and_normalize_unlock_price(price)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if price is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "fixed_price_requires_unlock_price",
+                        "message": "unlock_price_cents (> 0) is required for a fixed_price lock",
+                    },
+                )
+            set_parts.append("#locked = :locked")
+            expr_vals[":locked"] = True
+            locked_name_used = True
+            set_parts.append("unlock_price_cents = :upc")
+            expr_vals[":upc"] = price
+            set_parts.append("lock_type = :ltype")
+            expr_vals[":ltype"] = "fixed_price"
     update_expr = f"SET {', '.join(set_parts)}"
     if remove_parts:
         update_expr = f"{update_expr} REMOVE {', '.join(remove_parts)}"
@@ -4117,7 +4275,7 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
                     "TableName": APP_TABLE,
                     "Key": _ddb_serialize_map({"pk": pk_post(post_id), "sk": sk_post()}),
                     "UpdateExpression": update_expr,
-                    "ExpressionAttributeNames": {"#body": "body", "#status": "status", "#user": "user_id"},
+                    "ExpressionAttributeNames": ({"#body": "body", "#status": "status", "#user": "user_id", "#locked": "locked"} if locked_name_used else {"#body": "body", "#status": "status", "#user": "user_id"}),
                     "ExpressionAttributeValues": _ddb_serialize_map(expr_vals_tx),
                     "ConditionExpression": condition_expr,
                 }
@@ -4170,10 +4328,13 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
         updated = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()}) or {}
         record_newsfeed_schedule_operation(operation="edit", outcome="success")
     else:
+        _expr_names = {"#body": "body"}
+        if locked_name_used:
+            _expr_names["#locked"] = "locked"
         updated = ddb_update_item(
             key={"pk": pk_post(post_id), "sk": sk_post()},
             update_expr=update_expr,
-            expr_names={"#body": "body"},
+            expr_names=_expr_names,
             expr_vals=expr_vals,
         )
     return _post_to_dict(updated, viewer_id=user_id)
@@ -4343,6 +4504,24 @@ def _post_fadt_display_name(user_sub: str) -> str:
     except Exception:
         pass
     return user_sub
+
+
+# Short-TTL memo so resolving an author's display name for every post in a feed
+# page doesn't issue an N+1 profile lookup (authors repeat across posts; names
+# rarely change). Falls back to the raw sub on miss.
+_author_display_name_cache: Dict[str, "tuple[float, str]"] = {}
+
+
+def _resolve_author_display_name(user_sub: str) -> str:
+    if not user_sub:
+        return ""
+    now = time.time()
+    hit = _author_display_name_cache.get(user_sub)
+    if hit and now - hit[0] < 60:
+        return hit[1]
+    name = _post_fadt_display_name(user_sub)
+    _author_display_name_cache[user_sub] = (now, name)
+    return name
 
 
 def _post_fadt_meta_out(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -4758,6 +4937,13 @@ def like_post(post_id: str, user_id: UserIdDep):
             )
         except Exception:
             logger.debug("analytics hook: like_post engagement", exc_info=True)
+        # NRS-003: For-You engagement signal (no-op unless flag on).
+        _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="like")
+        try:
+            from app.services.activity_feed import record_social_interaction
+            record_social_interaction(recipient_id=post.get("user_id") or "", actor_id=user_id, kind="like", target_type="post", target_id=post_id)
+        except Exception:
+            logger.debug("social hook: like_post", exc_info=True)
     except ClientError as exc:
         if exc.response["Error"].get("Code") != "ConditionalCheckFailedException":
             raise HTTPException(
@@ -4848,6 +5034,11 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
             idempotency_key=new_id("posttip"),
         )
         _tip_txn_id = _tp.tip_payment_id
+        try:
+            from app.services.activity_feed import record_social_interaction
+            record_social_interaction(recipient_id=post_author, actor_id=user_id, kind="tip", target_type="post", target_id=post_id, extra={"amount_cents": req.amount_cents, "currency": req.currency})
+        except Exception:
+            logger.debug("social hook: tip_post", exc_info=True)
 
     # GAP-0026: Best-effort license revenue split for tipped post.
     # Wrapped in try/except so a split failure never breaks the tip transaction.
@@ -4919,6 +5110,9 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
         )
     except Exception:
         logger.debug("analytics hook: tip_post revenue", exc_info=True)
+
+    # NRS-003: For-You engagement signal (no-op unless flag on).
+    _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="tip")
 
     return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0))}
 
@@ -5000,6 +5194,8 @@ def add_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
             )
         except Exception:
             logger.warning("reaction social alert failed post_id=%s", post_id, exc_info=True)
+    # NRS-003: For-You engagement signal (no-op unless flag on).
+    _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="reaction")
     return {"ok": True}
 
 
@@ -5634,6 +5830,304 @@ def view_feed(
         raise
 
 
+def _hydrate_feed_posts_for_viewer(
+    user_id: str,
+    post_ids: List[str],
+    *,
+    fanout_source_by_post: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    """Hydrate a list of post_ids into _post_to_dict items with the SAME viewer
+    flags the chronological feed applies (liked_by_me, unlocked, is_bookmarked,
+    source) and the SAME exclusion rules. Order of input post_ids is preserved.
+    Used by GET /feed/for-you (NRS-009)."""
+    unique_post_ids = list(dict.fromkeys([p for p in post_ids if p]))
+    if not unique_post_ids:
+        return []
+    fanout_source_by_post = fanout_source_by_post or {}
+
+    # Batch-hydrate post items (parity with the chronological loop).
+    posts: List[Dict[str, Any]] = []
+    try:
+        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": [{"pk": pk_post(pid), "sk": sk_post()} for pid in unique_post_ids]}})
+        posts = raw.get("Responses", {}).get(APP_TABLE, [])
+    except ClientError:
+        posts = []
+    post_by_id = {post["post_id"]: post for post in posts if "post_id" in post}
+
+    liked_post_ids: set = set()
+    try:
+        like_raw = ddb.batch_get_item(
+            RequestItems={APP_TABLE: {"Keys": [{"pk": pk_like(user_id), "sk": f"POST#{pid}"} for pid in unique_post_ids]}}
+        )
+        liked_post_ids = {item.get("post_id", "") for item in like_raw.get("Responses", {}).get(APP_TABLE, [])}
+    except ClientError:
+        pass
+
+    bookmarked_post_ids: set = set()
+    try:
+        bk_raw = ddb.batch_get_item(
+            RequestItems={APP_TABLE: {"Keys": [{"pk": pk_bookmark_lookup(user_id), "sk": f"post#{pid}"} for pid in unique_post_ids]}}
+        )
+        bookmarked_post_ids = {item.get("content_id", "") for item in bk_raw.get("Responses", {}).get(APP_TABLE, [])}
+    except Exception:
+        pass
+
+    from app.services.blocking import get_blocked_set, get_blocked_by_set
+    blocked_set = get_blocked_set(user_id) | get_blocked_by_set(user_id)
+    snoozed_set: Set[str] = set()
+    try:
+        from app.services.social import get_snoozed_following_ids
+        snoozed_set = get_snoozed_following_ids(user_id)
+    except Exception:
+        pass
+
+    out: List[Dict[str, Any]] = []
+    for post_id in unique_post_ids:
+        post = post_by_id.get(post_id)
+        if not post:
+            continue
+        status, _pa, _pat, _stz, _sal = _resolve_post_lifecycle_fields(post)
+        if status != "published":
+            continue
+        if post.get("moderation_removed") or post.get("moderation_removed_at"):
+            continue
+        if is_hidden(user_id, post_id):
+            continue
+        author = post.get("user_id")
+        if author and author in blocked_set:
+            continue
+        if author and author in snoozed_set:
+            continue
+        if author and author != user_id and not can_view_post(user_id, post):
+            continue
+        locked = bool(post.get("locked"))
+        is_locked_for_viewer = locked and author != user_id and not has_unlocked(user_id, post_id)
+        viewer_unlocked = locked and not is_locked_for_viewer
+        post_dict = _post_to_dict(
+            post,
+            locked_body=is_locked_for_viewer,
+            liked_by_me=post_id in liked_post_ids,
+            unlocked=viewer_unlocked,
+            viewer_id=user_id,
+            bookmarked_ids=bookmarked_post_ids,
+        )
+        post_dict["source"] = fanout_source_by_post.get(post_id, "for_you")
+        out.append(post_dict)
+    return out
+
+
+@router.get("/feed/for-you")
+def view_for_you_feed(
+    limit: int = Query(default=20, ge=1, le=50),
+    cursor: Optional[str] = Query(default=None),
+    user_id: UserIdDep = None,
+):
+    """Ranked "For You" newsfeed (NRS-009). Falls back to the chronological feed
+    when the flag is off, no pre-computed row exists, or ranking yields zero
+    items — so this endpoint always returns posts."""
+    from app.metrics import (
+        record_newsfeed_recsys_request,
+        record_newsfeed_recsys_latency,
+    )
+    from app.services.newsfeed_recsys import get_for_you_posts
+
+    started = time.perf_counter()
+
+    def _chronological_fallback(source: str):
+        # view_feed is a FastAPI route handler: its author_id/q/from/to/has_media
+        # params carry Query(...) defaults that are only resolved when called over
+        # HTTP. Calling it as a plain function must pass them explicitly as None,
+        # else the unresolved Query FieldInfo leaks into _normalize_author_filter_or_400
+        # and 400s ("invalid_author_id").
+        chrono = view_feed(
+            limit=limit, cursor=cursor, author_id=None, q=None,
+            from_ts=None, to_ts=None, has_media=None, user_id=user_id,
+        )
+        chrono = dict(chrono)
+        chrono["source"] = source
+        record_newsfeed_recsys_request(mode="for_you", source=source)
+        record_newsfeed_recsys_latency(source=source, elapsed_seconds=time.perf_counter() - started)
+        return chrono
+
+    if not S.newsfeed_recsys_enabled:
+        return _chronological_fallback("chronological_fallback")
+
+    offset = 0
+    if cursor:
+        try:
+            offset = max(0, int(cursor))
+        except (TypeError, ValueError):
+            offset = 0
+
+    post_ids, next_cursor, source = get_for_you_posts(user_id, limit=limit, offset=offset)
+    if source != "for_you" or not post_ids:
+        return _chronological_fallback("chronological_fallback")
+
+    items = _hydrate_feed_posts_for_viewer(user_id, post_ids)
+    if not items:
+        return _chronological_fallback("chronological_fallback")
+
+    record_newsfeed_recsys_request(mode="for_you", source="for_you")
+    record_newsfeed_recsys_latency(source="for_you", elapsed_seconds=time.perf_counter() - started)
+    logger.info(
+        "newsfeed for-you query",
+        extra={
+            "viewer_id": user_id,
+            "source": "for_you",
+            "served_count": len(items),
+            "ranked_pool": len(post_ids),
+            "has_next_cursor": bool(next_cursor),
+        },
+    )
+    return {"items": items, "next_cursor": next_cursor, "source": "for_you"}
+
+
+def _recsys_fetch_followed(viewer_id: str, limit: int) -> List[Dict[str, str]]:
+    """Recent feed refs for a viewer (own + fanned-out posts) via GSI1."""
+    out: List[Dict[str, str]] = []
+    try:
+        resp = ddb_query(
+            IndexName="GSI1",
+            KeyConditionExpression="GSI1PK = :pk",
+            ExpressionAttributeValues={":pk": f"FEED#{viewer_id}"},
+            ScanIndexForward=False,
+            Limit=min(limit, 200),
+        )
+        for ref in resp.get("Items", []):
+            pid = ref.get("post_id")
+            if pid:
+                out.append({"post_id": str(pid), "author_id": str(ref.get("author_id") or "")})
+    except Exception:
+        logger.debug("recsys fetch_followed failed for %s", viewer_id, exc_info=True)
+    return out
+
+
+def _recsys_fetch_author_posts(author_id: str, limit: int) -> List[Dict[str, str]]:
+    """Recent posts by an author via GSI2 POST_AUTHOR."""
+    out: List[Dict[str, str]] = []
+    if not author_id:
+        return out
+    try:
+        resp = ddb_query(
+            IndexName="GSI2",
+            KeyConditionExpression="GSI2PK = :pk",
+            ExpressionAttributeValues={":pk": f"POST_AUTHOR#{author_id}"},
+            ScanIndexForward=False,
+            Limit=min(limit, 50),
+        )
+        for it in resp.get("Items", []):
+            pid = it.get("post_id")
+            if pid:
+                out.append({"post_id": str(pid), "author_id": author_id})
+    except Exception:
+        logger.debug("recsys fetch_author_posts failed for %s", author_id, exc_info=True)
+    return out
+
+
+def _recsys_hydrate(post_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Batch-get raw post items for ranking (no viewer-flag decoration)."""
+    unique = list(dict.fromkeys([p for p in post_ids if p]))
+    if not unique:
+        return {}
+    try:
+        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": [{"pk": pk_post(pid), "sk": sk_post()} for pid in unique]}})
+        posts = raw.get("Responses", {}).get(APP_TABLE, [])
+    except ClientError:
+        return {}
+    return {p["post_id"]: p for p in posts if "post_id" in p}
+
+
+def _recsys_engage(*, user_id: str, post: Optional[Dict[str, Any]], post_id: str, action: str) -> None:
+    """Fire-and-forget For-You engagement signal (NRS-003). No-op when flag off.
+    Never raises — must not change the 2xx outcome of the engagement endpoint."""
+    try:
+        from app.services.newsfeed_recsys import record_post_engagement
+        author_id = (post or {}).get("user_id") or ""
+        is_public = not bool((post or {}).get("locked"))
+        record_post_engagement(
+            user_id=user_id,
+            post_id=post_id,
+            author_id=author_id,
+            action=action,
+            is_public=is_public,
+        )
+    except Exception:
+        logger.debug("recsys engage hook failed (%s)", action, exc_info=True)
+
+
+def recompute_for_you_for_viewer(viewer_id: str) -> Dict[str, Any]:
+    """Candidate gen -> rank -> store the For-You row for one viewer."""
+    from app.services.newsfeed_recsys import compute_for_you_posts
+
+    follow_set: Set[str] = set()
+    try:
+        from app.services.social import get_following
+        following, _ = get_following(viewer_id, limit=200)
+        for f in following:
+            aid = f.get("target_user_id") or f.get("user_id") or ""
+            if aid:
+                follow_set.add(aid)
+    except Exception:
+        logger.debug("recompute_for_you: get_following failed for %s", viewer_id, exc_info=True)
+
+    def _exclude(post: Dict[str, Any]) -> bool:
+        post_id = str(post.get("post_id") or "")
+        author = post.get("user_id")
+        status, _pa, _pat, _stz, _sal = _resolve_post_lifecycle_fields(post)
+        if status != "published":
+            return True
+        if post.get("moderation_removed") or post.get("moderation_removed_at"):
+            return True
+        if is_hidden(viewer_id, post_id):
+            return True
+        if author and author != viewer_id and not can_view_post(viewer_id, post):
+            return True
+        return False
+
+    return compute_for_you_posts(
+        viewer_id,
+        fetch_followed=_recsys_fetch_followed,
+        fetch_author_posts=_recsys_fetch_author_posts,
+        hydrate=_recsys_hydrate,
+        follow_set=follow_set,
+        exclude=_exclude,
+    )
+
+
+def recompute_for_you_all_users() -> Dict[str, Any]:
+    """Recompute For-You rows for every viewer that has post-engagement signals."""
+    from app.services.newsfeed_recsys import list_post_signal_users
+
+    viewers = list_post_signal_users()
+    processed = 0
+    errors = 0
+    for vid in viewers:
+        try:
+            recompute_for_you_for_viewer(vid)
+            processed += 1
+        except Exception:
+            logger.exception("recsys refresh_all: error for viewer %s", vid)
+            errors += 1
+    return {"viewers_processed": processed, "errors": errors}
+
+
+recsys_internal_router = APIRouter(prefix="/internal/newsfeed-recsys", tags=["newsfeed-recsys-internal"])
+
+
+class _RecsysRefreshIn(BaseModel):
+    viewer_id: Optional[str] = None
+
+
+@recsys_internal_router.post("/refresh")
+def recsys_refresh_endpoint(body: _RecsysRefreshIn):
+    """Internal recompute trigger (single viewer or all signal users)."""
+    if body.viewer_id:
+        result = recompute_for_you_for_viewer(body.viewer_id)
+        return {"ok": True, "viewers_processed": 1, "result": result}
+    result = recompute_for_you_all_users()
+    return {"ok": True, **result}
+
+
 @router.get("/feed/capabilities", response_model=FeedCapabilitiesResponse)
 def feed_capabilities(user_id: UserIdDep):
     enabled = _is_unlock_limit_enabled_for_user(user_id)
@@ -5740,7 +6234,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to comment on this content", "creator_id": post.get("user_id")})
 
     # FEED-004: gate media comments behind feature flag
-    if req.kind in ("gif", "sticker") and not bool(getattr(S, "rich_comments_enabled", True)):
+    if req.kind in ("gif", "sticker", "image") and not bool(getattr(S, "rich_comments_enabled", True)):
         raise HTTPException(status_code=400, detail="Media comments are not enabled")
 
     comment_id = new_id("cmt")
@@ -5767,8 +6261,8 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         )
         comment_tip_total = int(req.tip_amount_cents)
 
-    # FEED-004: media comments (gif/sticker) carry no body content; text comments
-    # use the existing ContentFieldsMixin envelope.
+    # FEED-004: media comments (gif/sticker/image) carry no body content; text
+    # comments use the existing ContentFieldsMixin envelope.
     if req.kind == "text":
         content = _content_from_payload(req)
     else:
@@ -5791,6 +6285,10 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         "sticker_collection_id": req.sticker_collection_id,
         "sticker_url": req.sticker_url,
         "sticker_alt_text": req.sticker_alt_text,
+        "image_url": req.image_url,
+        "image_alt_text": req.image_alt_text,
+        "image_width": req.image_width,
+        "image_height": req.image_height,
     }
     _emit_newsfeed_content_metric("create_comment", surface="comment", body_format=content.get("body_format", "plain"))
 
@@ -5839,12 +6337,20 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
     except Exception:
         logger.debug("analytics hook: create_comment engagement", exc_info=True)
 
+    # NRS-003: For-You engagement signal (no-op unless flag on).
+    _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="comment")
+
     if post_author and post_author != user_id and parent is None:
         put_notification(
             recipient_user_id=post_author,
             notif_type="comment_on_post",
             payload={"post_id": post_id, "comment_id": comment_id, "from_user_id": user_id, "created_at": created_at},
         )
+        try:
+            from app.services.activity_feed import record_social_interaction
+            record_social_interaction(recipient_id=post_author, actor_id=user_id, kind="comment", target_type="post", target_id=post_id, extra={"comment_id": comment_id})
+        except Exception:
+            logger.debug("social hook: create_comment", exc_info=True)
         # GAP-0355: also emit a social alert (alerts table + bell badge).
         # Best-effort: never break comment creation.
         try:
@@ -5947,6 +6453,10 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         sticker_collection_id=req.sticker_collection_id,
         sticker_url=req.sticker_url,
         sticker_alt_text=req.sticker_alt_text,
+        image_url=req.image_url,
+        image_alt_text=req.image_alt_text,
+        image_width=req.image_width,
+        image_height=req.image_height,
     )
 
 
@@ -5977,7 +6487,7 @@ def list_comments(
         ExclusiveStartKey=eks if eks else None,
     )
     items = [
-        _comment_to_dict(it)
+        _comment_to_dict(it, viewer_id=user_id)
         for it in resp.get("Items", [])
         if (not it.get("moderation_removed")) or it.get("user_id") == user_id
     ]
@@ -6003,17 +6513,43 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         raise HTTPException(status_code=403, detail="Not your comment")
     if target.get("deleted"):
         raise HTTPException(status_code=409, detail="Comment deleted")
+    # Pure media comments (gif/sticker, or an image-ONLY comment) cannot be
+    # edited via the text editor (mirrors the frontend isMediaComment guard).
+    # A text comment that also carries an image IS editable (text+image).
+    if target.get("kind", "text") in ("gif", "sticker", "image"):
+        raise HTTPException(status_code=400, detail="Media comments cannot be edited")
 
     key = {"pk": target["pk"], "sk": target["sk"]}
     new_version = int(req.expected_version) + 1
 
     content = _content_from_payload(req)
     _emit_newsfeed_content_metric("edit_comment", surface="comment", body_format=content.get("body_format", "plain"))
+    _fields_set = getattr(req, "model_fields_set", set())
+    _set_extra = ""
+    _remove_extra = []
+    _img_vals = {}
+    # B8 B-COMMENT2: image is editable on a text comment. Omitted => keep;
+    # empty/None => remove; a value => validate + replace.
+    if "image_url" in _fields_set:
+        _img_raw = (req.image_url or "").strip()
+        if _img_raw:
+            _img_vals[":img"] = _validate_comment_image_url(_img_raw)
+            _img_vals[":imgalt"] = req.image_alt_text
+            _img_vals[":imgw"] = req.image_width
+            _img_vals[":imgh"] = req.image_height
+            _set_extra = ", image_url = :img, image_alt_text = :imgalt, image_width = :imgw, image_height = :imgh"
+        else:
+            _remove_extra = ["image_url", "image_alt_text", "image_width", "image_height"]
+    _update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u, version = :nv" + _set_extra
+    if _remove_extra:
+        _update_expr += " REMOVE " + ", ".join(_remove_extra)
+    _expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso(), ":nv": new_version, ":ev": int(req.expected_version)}
+    _expr_vals.update(_img_vals)
     updated = ddb_update_item(
         key=key,
-        update_expr="SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u, version = :nv",
+        update_expr=_update_expr,
         expr_names={"#body": "body"},
-        expr_vals={":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso(), ":nv": new_version, ":ev": int(req.expected_version)},
+        expr_vals=_expr_vals,
         condition_expr="version = :ev",
     )
 
@@ -6034,6 +6570,8 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         body_version=int(updated.get("body_version") or 1),
         version=int(updated.get("version", 1)),
         tip_total_cents=int(updated.get("tip_total_cents", 0)),
+        reactions_counts=_reaction_summaries(updated.get("reactions") or {}, user_id)[0],
+        my_reactions=_reaction_summaries(updated.get("reactions") or {}, user_id)[1],
         kind=updated.get("kind", "text"),
         gif_url=updated.get("gif_url"),
         gif_alt_text=updated.get("gif_alt_text"),
@@ -6043,6 +6581,10 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         sticker_collection_id=updated.get("sticker_collection_id"),
         sticker_url=updated.get("sticker_url"),
         sticker_alt_text=updated.get("sticker_alt_text"),
+        image_url=updated.get("image_url"),
+        image_alt_text=updated.get("image_alt_text"),
+        image_width=int(updated["image_width"]) if updated.get("image_width") is not None else None,
+        image_height=int(updated["image_height"]) if updated.get("image_height") is not None else None,
     )
 
 
@@ -6144,6 +6686,83 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
         )
 
     return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0)), "payment_intent": pi}
+
+
+# -----------------------------
+# Emoji reactions on comments (mirrors post reactions)
+# -----------------------------
+def _find_comment_item(post_id: str, comment_id: str) -> Optional[Dict[str, Any]]:
+    """Locate a comment's raw DDB item (its sort key embeds created_at, so we scan
+    the post's comment partition — same pattern as tip_comment/edit_comment)."""
+    q = ddb_query(
+        KeyConditionExpression="pk = :pk",
+        ExpressionAttributeValues={":pk": pk_post_comments(post_id)},
+        ScanIndexForward=False,
+        Limit=500,
+    )
+    for it in q.get("Items", []):
+        if it.get("comment_id") == comment_id:
+            return it
+    return None
+
+
+@router.post("/posts/{post_id}/comments/{comment_id}/reactions")
+def add_comment_reaction(post_id: str, comment_id: str, req: CommentReactionRequest, user_id: UserIdDep):
+    target = _find_comment_item(post_id, comment_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    reactions = dict(target.get("reactions") or {})
+    emoji_map = dict(reactions.get(req.emoji, {}))
+    emoji_map[user_id] = True
+    reactions[req.emoji] = emoji_map
+
+    ddb_update_item(
+        key={"pk": target["pk"], "sk": target["sk"]},
+        update_expr="SET reactions = :r",
+        expr_vals={":r": reactions},
+        return_values="NONE",
+    )
+    # Notify the comment author of the new reaction (best-effort; never break).
+    comment_author = target.get("user_id")
+    if comment_author and comment_author != user_id:
+        try:
+            actor_name = _post_fadt_display_name(user_id)
+            emit_social_alert(
+                recipient_user_id=comment_author,
+                alert_type="post_reaction",
+                actor_user_id=user_id,
+                actor_display_name=actor_name,
+                title=f"{actor_name} reacted to your comment",
+                details={"post_id": post_id, "comment_id": comment_id, "emoji": req.emoji},
+                action_url=f"/feed/posts/{post_id}",
+            )
+        except Exception:
+            logger.warning("comment reaction social alert failed comment_id=%s", comment_id, exc_info=True)
+    return {"ok": True}
+
+
+@router.post("/posts/{post_id}/comments/{comment_id}/unreact")
+def remove_comment_reaction(post_id: str, comment_id: str, req: CommentReactionRequest, user_id: UserIdDep):
+    target = _find_comment_item(post_id, comment_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    reactions = dict(target.get("reactions") or {})
+    if req.emoji in reactions:
+        emoji_map = dict(reactions[req.emoji])
+        emoji_map.pop(user_id, None)
+        if emoji_map:
+            reactions[req.emoji] = emoji_map
+        else:
+            del reactions[req.emoji]
+        ddb_update_item(
+            key={"pk": target["pk"], "sk": target["sk"]},
+            update_expr="SET reactions = :r",
+            expr_vals={":r": reactions},
+            return_values="NONE",
+        )
+    return {"ok": True}
 
 
 # -----------------------------
@@ -6443,6 +7062,10 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep, _kyc: object = Depen
         reason_code="payment_confirmed",
         payment_status=str(conf.get("status") or ""),
     )
+
+    # NRS-003: For-You engagement signal (no-op unless flag on). Unlock is a
+    # strong personal-history signal; locked posts are not pushed to popularity.
+    _recsys_engage(user_id=user_id, post=post, post_id=req.post_id, action="unlock")
 
     # GAP-0337: analytics instrumentation (revenue: unlock). Creator = post
     # author, amount = unlock price, subscriber = unlocking user. Best-effort.

@@ -78,7 +78,7 @@ def test_run_once_records_stat_on_success(monkeypatch):
     result = {"success": True, "response_code": 200, "duration_ms": 42}
     stat_calls = _patch_common(monkeypatch, due=[_DELIVERY], endpoint=_ENDPOINT, result=result)
 
-    asyncio.get_event_loop().run_until_complete(wd.run_webhook_dispatcher_once())
+    asyncio.run(wd.run_webhook_dispatcher_once())
 
     assert stat_calls == [("ep1", result)], (
         "run_webhook_dispatcher_once must call record_delivery_stat on success"
@@ -89,7 +89,7 @@ def test_run_once_records_stat_on_failure(monkeypatch):
     result = {"success": False, "response_code": 500, "error": "HTTP 500", "duration_ms": 99}
     stat_calls = _patch_common(monkeypatch, due=[_DELIVERY], endpoint=_ENDPOINT, result=result)
 
-    asyncio.get_event_loop().run_until_complete(wd.run_webhook_dispatcher_once())
+    asyncio.run(wd.run_webhook_dispatcher_once())
 
     assert stat_calls == [("ep1", result)], (
         "run_webhook_dispatcher_once must call record_delivery_stat on failure"
@@ -121,7 +121,7 @@ def test_loop_records_stat_on_success_and_failure(monkeypatch):
     monkeypatch.setattr(wd.asyncio, "sleep", fake_sleep)
 
     try:
-        asyncio.get_event_loop().run_until_complete(wd.run_webhook_dispatcher_loop())
+        asyncio.run(wd.run_webhook_dispatcher_loop())
     except asyncio.CancelledError:
         pass
 

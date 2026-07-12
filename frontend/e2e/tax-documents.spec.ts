@@ -19,12 +19,14 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const TS = Date.now();
 
 // Use a past, immutable year so cached + computed totals are deterministic.
@@ -53,8 +55,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -115,7 +117,7 @@ import boto3, os, json, uuid, base64, calendar
 from datetime import datetime, timezone
 from pathlib import Path
 
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -163,7 +165,7 @@ import boto3, os
 from pathlib import Path
 from boto3.dynamodb.conditions import Key
 
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -199,8 +201,10 @@ function catOf(body: any, name: string) {
 }
 
 // ─── Test data ───────────────────────────────────────────────────────────────
+// FIN-004 consumer SPENDING summaries aggregate billing-ledger *debit* entries
+// (money the user SPENT), so all seeded entries use type="debit".
 // 2024 totals: tips 5000 (2), subscriptions 12000 (1), unlocks 3500 (1),
-//              other 1000 (1)  => grand 21500, 5 debit-less credit txns.
+//              other 1000 (1)  => grand 21500, 5 spending txns.
 // 2023 totals: tips 10000 (1) => grand 10000.
 
 test.describe("FIN-004 Consumer Tax Documents", () => {
@@ -210,13 +214,13 @@ test.describe("FIN-004 Consumer Tax Documents", () => {
     cleanupLedger(ALICE_ID);
     cleanupLedger(BOB_ID);
     seedLedger(ALICE_ID, [
-      { reason: "Tip from fan", amount_cents: 2000, year: TEST_YEAR },
-      { reason: "Tip: message", amount_cents: 3000, year: TEST_YEAR },
-      { reason: "Subscription renewal", amount_cents: 12000, year: TEST_YEAR },
-      { reason: "Unlock locked post", amount_cents: 3500, year: TEST_YEAR },
-      { reason: "Platform bonus adjustment", amount_cents: 1000, year: TEST_YEAR },
-      // a credit in 2023 for comparison
-      { reason: "Tip from fan", amount_cents: 10000, year: PREV_YEAR },
+      { reason: "Tip to creator", amount_cents: 2000, year: TEST_YEAR, type: "debit" },
+      { reason: "Tip: message", amount_cents: 3000, year: TEST_YEAR, type: "debit" },
+      { reason: "Subscription renewal", amount_cents: 12000, year: TEST_YEAR, type: "debit" },
+      { reason: "Unlock locked post", amount_cents: 3500, year: TEST_YEAR, type: "debit" },
+      { reason: "Platform bonus adjustment", amount_cents: 1000, year: TEST_YEAR, type: "debit" },
+      // a debit in 2023 for comparison
+      { reason: "Tip to creator", amount_cents: 10000, year: PREV_YEAR, type: "debit" },
     ]);
     alice = await newIdentityPage(browser, "alice");
   });

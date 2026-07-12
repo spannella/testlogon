@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 KYC_CONTRACT_VERSION = "2026-03-kyc-v1"
-KYC_STATUS = Literal["draft", "submitted", "under_review", "needs_more_info", "approved", "rejected", "expired"]
+KYC_STATUS = Literal["draft", "submitted", "under_review", "needs_more_info", "approved", "rejected", "expired", "disputed"]
 
 KycErrorCode = Literal[
     "kyc_case_not_found",
@@ -15,6 +15,10 @@ KycErrorCode = Literal[
     "kyc_case_update_conflict",
     "kyc_invalid_request",
     "kyc_admin_role_required",
+    # KYD-005: dispute / reopen-and-resubmit flow
+    "kyc_retry_limit_reached",
+    "kyc_dispute_window_expired",
+    "kyc_feature_disabled",
 ]
 
 
@@ -49,6 +53,10 @@ class KycCaseReviewRef(BaseModel):
     decision: str | None = None
     decided_at: int | None = None
     reason_codes: list[str] = Field(default_factory=list)
+    # KYD-008: dispute / retry lifecycle metadata (additive, optional).
+    attempt_count: int | None = None
+    dispute: dict[str, Any] | None = None
+    dispute_resolution: dict[str, Any] | None = None
 
 
 class KycCaseOut(BaseModel):
@@ -101,6 +109,16 @@ class KycCaseUpdateRequest(BaseModel):
 
 
 class KycSubmitCaseRequest(BaseModel):
+    expected_version: int = Field(..., ge=1)
+
+
+class KycDisputeRequest(BaseModel):
+    expected_version: int = Field(..., ge=1)
+    reason: str = Field(..., min_length=1, max_length=240)
+    note: str = Field(default="", max_length=2000)
+
+
+class KycReopenRequest(BaseModel):
     expected_version: int = Field(..., ge=1)
 
 
@@ -384,6 +402,9 @@ _ERROR_MESSAGES: dict[str, str] = {
     "kyc_case_update_conflict": "KYC case was updated by another request; refresh and retry.",
     "kyc_invalid_request": "Invalid KYC request payload.",
     "kyc_admin_role_required": "Admin role required.",
+    "kyc_retry_limit_reached": "You have reached the maximum number of verification attempts.",
+    "kyc_dispute_window_expired": "The window to dispute this decision has closed.",
+    "kyc_feature_disabled": "This KYC feature is not currently available.",
 }
 
 
@@ -395,6 +416,9 @@ _ERROR_HTTP_STATUS: dict[str, int] = {
     "kyc_case_update_conflict": 409,
     "kyc_invalid_request": 400,
     "kyc_admin_role_required": 403,
+    "kyc_retry_limit_reached": 409,
+    "kyc_dispute_window_expired": 409,
+    "kyc_feature_disabled": 503,
 }
 
 

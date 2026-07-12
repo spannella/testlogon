@@ -27,7 +27,7 @@ class TestCatalogSearch(unittest.TestCase):
             "LastEvaluatedKey": None,
         }
         with patch.object(catalog, "T", Mock(catalog=table)):
-            resp = asyncio.run(catalog.search_items(q="chair", page_size=10, next_token=None))
+            resp = asyncio.run(catalog.search_items(q="chair", page_size=10, next_token=None, request=None))
         self.assertEqual(len(resp.items), 1)
         self.assertEqual(resp.items[0].item_id, "i1")
 
@@ -52,5 +52,5 @@ class TestCatalogSearch(unittest.TestCase):
             "LastEvaluatedKey": None,
         }
         with patch.object(catalog, "T", Mock(catalog=table)):
-            resp = asyncio.run(catalog.search_items(q="chair", page_size=10, next_token=None))
+            resp = asyncio.run(catalog.search_items(q="chair", page_size=10, next_token=None, request=None))
         self.assertEqual(resp.items, [])

@@ -57,9 +57,24 @@ class TestIpInAnyCidr(unittest.TestCase):
 
 
 class TestClientIpFromRequest(unittest.TestCase):
-    def test_client_ip_from_request_uses_xff(self):
-        req = SimpleNamespace(headers={"x-forwarded-for": "203.0.113.5, 10.0.0.1"}, client=None)
-        self.assertEqual(client_ip_from_request(req), "203.0.113.5")
+    def test_client_ip_from_request_uses_xff_with_trusted_proxy(self):
+        # XFF is only honored when the direct peer is in a trusted proxy CIDR.
+        from app.core import normalize as norm_mod
+        orig = norm_mod.S.trusted_proxy_cidrs
+        object.__setattr__(norm_mod.S, "trusted_proxy_cidrs", "10.0.0.0/24")
+        try:
+            client = SimpleNamespace(host="10.0.0.1")  # the ALB/proxy
+            req = SimpleNamespace(headers={"x-forwarded-for": "203.0.113.5, 10.0.0.1"}, client=client)
+            result = client_ip_from_request(req)
+        finally:
+            object.__setattr__(norm_mod.S, "trusted_proxy_cidrs", orig)
+        self.assertEqual(result, "203.0.113.5")
+
+    def test_client_ip_from_request_ignores_xff_without_trusted_proxy(self):
+        # When no trusted proxy CIDR is configured, XFF is ignored (injection guard).
+        client = SimpleNamespace(host="203.0.113.99")
+        req = SimpleNamespace(headers={"x-forwarded-for": "203.0.113.5, 10.0.0.1"}, client=client)
+        self.assertEqual(client_ip_from_request(req), "203.0.113.99")
 
     def test_client_ip_from_request_falls_back_to_client(self):
         client = SimpleNamespace(host="198.51.100.2")

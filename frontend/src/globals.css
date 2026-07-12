@@ -2,6 +2,14 @@
 @import "./styles/themeCustomization.css";
 
 /*
+ * Tailwind v4 class-based dark mode. Without this, `dark:` utilities default to
+ * the `prefers-color-scheme` media query and ignore the `.dark` class that
+ * ThemeProvider toggles on <html> — so the in-app dark toggle does nothing for
+ * any of the ~40 components that use `dark:` utilities. (THM-002)
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
  * Design system tokens — see docs/frontend-redesign-plan.md § 5
  *
  * Colors use the HSL channel convention that shadcn/ui expects so

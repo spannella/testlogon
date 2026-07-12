@@ -10,18 +10,32 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.core.settings import S
 from app.models import (
+    CreateSessionIn,
     CreateWorkerIn,
     ProvisionStepOut,
+    SessionListOut,
+    SessionOut,
     ToolInfo,
     ToolListOut,
     WorkerListOut,
     WorkerOut,
 )
+from app.services import agent_session_manager as sess_svc
 from app.services import agent_worker_provisioner as svc
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/ui/agent/workers", tags=["agent-workers"])
+
+
+def _require_sessions_enabled() -> None:
+    """Gate the interactive-session routes behind the ACS-001 master flag.
+
+    With the flag OFF these routes 404 so the feature is fully dormant.
+    """
+    if not getattr(S, "agent_claude_code_session_enabled", False):
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 # ---------------------------------------------------------------------------
@@ -153,3 +167,72 @@ async def get_provision_log(worker_id: str, ctx: Dict = Depends(require_ui_sessi
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
     return svc.get_provision_log(ctx["user_sub"], worker_id)
+
+
+# ---------------------------------------------------------------------------
+# Interactive Claude Code sessions (ACS-009). Flag-gated (ACS-001): all routes
+# 404 when AGENT_CLAUDE_CODE_SESSION_ENABLED is off.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{worker_id}/sessions", response_model=SessionOut, status_code=201)
+async def create_session(
+    worker_id: str,
+    body: CreateSessionIn,
+    ctx: Dict = Depends(require_ui_session),
+):
+    """Create an interactive Claude Code session for a worker."""
+    _require_sessions_enabled()
+    try:
+        sess = sess_svc.create_session(
+            user_id=ctx["user_sub"],
+            worker_id=worker_id,
+            cols=body.cols,
+            rows=body.rows,
+        )
+    except sess_svc.SessionError as exc:
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
+    return sess
+
+
+@router.get("/{worker_id}/sessions", response_model=SessionListOut)
+async def list_sessions(worker_id: str, ctx: Dict = Depends(require_ui_session)):
+    """List a worker's sessions (newest-first)."""
+    _require_sessions_enabled()
+    items = sess_svc.list_sessions_for_worker(ctx["user_sub"], worker_id)
+    return SessionListOut(sessions=items, count=len(items))
+
+
+@router.get("/{worker_id}/sessions/{session_id}", response_model=SessionOut)
+async def get_session(
+    worker_id: str, session_id: str, ctx: Dict = Depends(require_ui_session)
+):
+    """Get a single session's live state."""
+    _require_sessions_enabled()
+    sess = sess_svc.get_session(ctx["user_sub"], session_id)
+    if not sess or sess.get("worker_id") != worker_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return sess
+
+
+@router.post("/{worker_id}/sessions/{session_id}/stop", response_model=SessionOut)
+async def stop_session(
+    worker_id: str, session_id: str, ctx: Dict = Depends(require_ui_session)
+):
+    """Stop a session (idempotent on an already-ended session)."""
+    _require_sessions_enabled()
+    sess = sess_svc.get_session(ctx["user_sub"], session_id)
+    if not sess or sess.get("worker_id") != worker_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # Close any live PTY bridge held in the WS router's registry.
+    try:
+        from app.routers.agent_session_terminal import stop_session_bridge
+
+        stop_session_bridge(session_id)
+    except Exception:
+        pass
+    ended = sess_svc.end_session(ctx["user_sub"], session_id)
+    return ended or sess

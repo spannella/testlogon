@@ -41,6 +41,7 @@ class CreateModerationReportIn(BaseModel):
     topics: List[str] = Field(min_length=1, max_length=5)
     reason_text: str = Field(min_length=5, max_length=2000)
     post_id: Optional[str] = Field(default=None, max_length=256)
+    video_id: Optional[str] = Field(default=None, max_length=256)
     conversation_id: Optional[str] = Field(default=None, max_length=256)
     video_id: Optional[str] = Field(default=None, max_length=256)
     media_index: Optional[int] = Field(default=None, ge=0)
@@ -91,6 +92,12 @@ def _feed_comment_exists(post_id: str, comment_id: str) -> bool:
     return bool(resp.get("Items"))
 
 
+def _video_comment_exists(video_id: str, comment_id: str) -> bool:
+    from app.services.video_comments import get_comment
+
+    return bool(get_comment(video_id, comment_id))
+
+
 def _feed_media_exists(post_id: str, media_index: Optional[int]) -> bool:
     table = ddb.Table(APP_TABLE)
     post = table.get_item(Key={"pk": f"POST#{post_id}", "sk": "META"}).get("Item")
@@ -125,6 +132,13 @@ def _validate_content_exists(inp: CreateModerationReportIn) -> None:
         if not inp.post_id:
             raise HTTPException(status_code=400, detail="post_id is required for feed_comment")
         if not _feed_comment_exists(inp.post_id, inp.content_id):
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "video_comment":
+        if not inp.video_id:
+            raise HTTPException(status_code=400, detail="video_id is required for video_comment")
+        if not _video_comment_exists(inp.video_id, inp.content_id):
             raise HTTPException(status_code=404, detail="content not found")
         return
 

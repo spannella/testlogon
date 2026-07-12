@@ -47,6 +47,17 @@ from app.models import (
     OpeningsOut,
     RecurrenceRule,
     TeamAvailabilityIn,
+    # ACT-002: RSVP
+    EventAttendeeOut,
+    EventAttendeeRsvpStatus,
+    EventAttendeeListOut,
+    EventRsvpUpdateIn,
+    UserRsvpListOut,
+    # ACT-004: Reminders
+    EventReminderIn,
+    EventRemindersSetIn,
+    EventReminderOut,
+    EventRemindersOut,
 )
 from app.services.calendar_integrations.base import CalendarIntegrationError, CalendarIntegrationErrorCode
 from app.services.calendar_integrations.credentials import upsert_apple_caldav_credential
@@ -59,7 +70,8 @@ from app.services.calendar_integrations.credentials import (
     trigger_apple_caldav_sync_now,
 )
 from app.services.calendar_integrations.registry import get_provider_services
-from app.services.alerts import audit_event
+from app.services.alerts import audit_event, send_calendar_invite_email, write_alert
+from app.services.profile import get_profile_identity
 from app.services.google_calendar_flags import (
     is_google_calendar_sync_enabled_for_user,
     is_google_calendar_writeback_enabled_for_user,
@@ -608,6 +620,44 @@ def _expand_rrule(
             if until and week_start > until + timedelta(days=7):
                 break
             if week_start > window_end + timedelta(days=7):
+                break
+    elif rrule.freq == "YEARLY":
+        # Advance year by rrule.interval each iteration. Handle Feb-29 by
+        # clamping to Feb-28 in non-leap years (same approach as MONTHLY clamp).
+        import calendar as _cal
+        start_year = series_start_utc.year
+        start_month = series_start_utc.month
+        start_day = series_start_utc.day
+        year_offset = 0
+        while True:
+            y = start_year + year_offset * rrule.interval
+            # Clamp day to last valid day in that month/year (handles Feb-29)
+            max_day = _cal.monthrange(y, start_month)[1]
+            d = min(start_day, max_day)
+            try:
+                occ_start = datetime(
+                    y, start_month, d,
+                    series_start_utc.hour, series_start_utc.minute,
+                    series_start_utc.second, series_start_utc.microsecond,
+                    tzinfo=timezone.utc,
+                )
+            except ValueError:
+                year_offset += 1
+                continue
+            if occ_start < series_start_utc:
+                year_offset += 1
+                continue
+            if until and occ_start > until:
+                break
+            if remaining is not None and remaining <= 0:
+                break
+            occ_end = occ_start + duration
+            if overlap(occ_start, occ_end, window_start, window_end):
+                occs.append((occ_start, occ_end))
+            if remaining is not None:
+                remaining -= 1
+            year_offset += 1
+            if occ_start > window_end + timedelta(days=366):
                 break
     elif rrule.freq == "MONTHLY":
         def month_last_day(year: int, month: int) -> int:
@@ -1586,6 +1636,7 @@ async def create_event(
         **normalized,
     }
     T.calendar.put_item(Item=item)
+    _dispatch_invite_emails(item, event_id, ctx["user_sub"], "REQUEST")
     audit_event(
         "calendar_event_create",
         ctx["user_sub"],
@@ -1772,7 +1823,15 @@ async def update_event(
     meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
     item = _load_event(calendar_id, event_id)
     raw_recurrence = body.recurrence_rule if body.recurrence_rule is not None else item.get("recurrence_rule")
-    recurrence_rule = RecurrenceRule(**raw_recurrence) if raw_recurrence else None
+    # B-CAL #9: raw_recurrence may already be a RecurrenceRule model (when supplied on
+    # the update body) or a stored dict (when inherited from the existing item). Handle
+    # both so updating an event's recurrence no longer 500s.
+    if raw_recurrence is None:
+        recurrence_rule = None
+    elif isinstance(raw_recurrence, RecurrenceRule):
+        recurrence_rule = raw_recurrence
+    else:
+        recurrence_rule = RecurrenceRule(**raw_recurrence)
     payload = EventCreateIn(
         name=body.name if body.name is not None else item["name"],
         description=body.description if body.description is not None else item.get("description", ""),
@@ -1820,6 +1879,13 @@ async def update_event(
         **normalized,
     }
     T.calendar.put_item(Item=updated)
+    _attendees_changed = set(updated.get("attendees", [])) != set(item.get("attendees", []))
+    _times_changed = (
+        updated.get("start_utc") != item.get("start_utc")
+        or updated.get("end_utc") != item.get("end_utc")
+    )
+    if _attendees_changed or _times_changed:
+        _dispatch_invite_emails(updated, event_id, ctx["user_sub"], "REQUEST")
     audit_event(
         "calendar_event_update",
         ctx["user_sub"],
@@ -1856,6 +1922,7 @@ async def delete_event(
     meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
     item = _load_event(calendar_id, event_id)
     T.calendar.delete_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)})
+    _dispatch_invite_emails(item, event_id, ctx["user_sub"], "CANCEL")
     audit_event(
         "calendar_event_delete",
         ctx["user_sub"],
@@ -2043,10 +2110,73 @@ async def reserve_booking_slot(link_id: str, body: BookingRequestIn):
     return _event_out(item, meta["calendar_id"], user_sub=ctx["user_sub"])
 
 
+# ─── ACT-003: Calendar invite email dispatch ─────────────────────
+
+def _dispatch_invite_emails(
+    item: dict,
+    event_id: str,
+    organizer_sub: str,
+    method: str,
+) -> None:
+    """Fire-and-forget invite email dispatch (ACT-003). Never raises."""
+    try:
+        if not (S.crm_activities_enabled and S.crm_event_reminders_enabled):
+            return
+        attendees: list = [
+            a for a in item.get("attendees", [])
+            if a != organizer_sub
+        ][:50]
+        if not attendees:
+            return
+        ics_content = _build_ics(item, event_id, method=method)
+        event_name: str = item.get("name", "")
+        start_utc = item.get("start_utc", "")
+        end_utc = item.get("end_utc", "")
+        organizer_identity = get_profile_identity(organizer_sub)
+        organizer_name = organizer_identity.get("display_name") or organizer_sub
+        if method == "CANCEL":
+            verb = "informed of the cancellation of"
+            subject_prefix = "Cancelled"
+        else:
+            verb = "invited to"
+            subject_prefix = "Invitation"
+        for sub in attendees:
+            identity = get_profile_identity(sub)
+            email_addr = identity.get("email")
+            if not email_addr:
+                continue
+            body_text = (
+                f"You have been {verb} the event \"{event_name}\".\n\n"
+                f"When: {start_utc} – {end_utc} (UTC)\n"
+                f"Organizer: {organizer_name}\n\n"
+                "Open your calendar app to accept, decline, or propose a new time."
+            )
+            subject = f"{subject_prefix}: {event_name}"
+            send_calendar_invite_email([email_addr], subject, body_text, ics_content, event_name)
+            audit_event(
+                "calendar_invite_sent",
+                organizer_sub,
+                None,
+                outcome="ok",
+                attendee_sub=sub,
+                event_id=event_id,
+                method=method,
+            )
+    except Exception:
+        import logging as _log
+        _log.getLogger(__name__).warning("_dispatch_invite_emails failed", exc_info=True)
+
+
 # ─── iCal helper ─────────────────────────────────────────────────
 
-def _build_ics(evt: dict, event_id: str) -> str:
-    """Build an iCalendar (.ics) file string from an event dict."""
+def _build_ics(evt: dict, event_id: str, method: str | None = None) -> str:
+    """Build an iCalendar (.ics) file string from an event dict.
+
+    Args:
+        method: optional iTIP method (e.g. "REQUEST", "CANCEL"). When None
+                the METHOD line is omitted (backward-compatible for existing
+                ical-download endpoints that call _build_ics without method).
+    """
     def fmt_dt(s: str) -> str:
         dt = parse_iso_dt(s).astimezone(timezone.utc)
         return dt.strftime("%Y%m%dT%H%M%SZ")
@@ -2056,6 +2186,10 @@ def _build_ics(evt: dict, event_id: str) -> str:
         "VERSION:2.0",
         "PRODID:-//TestLogon//EN",
         "CALSCALE:GREGORIAN",
+    ]
+    if method:
+        lines.append(f"METHOD:{method}")
+    lines += [
         "BEGIN:VEVENT",
         f"UID:{event_id}@testlogon",
     ]
@@ -2070,6 +2204,23 @@ def _build_ics(evt: dict, event_id: str) -> str:
     lines.append(f"SUMMARY:{evt.get('name', '')}")
     if evt.get("description"):
         lines.append(f"DESCRIPTION:{evt['description'].replace(chr(10), chr(92) + 'n')}")
+    # Emit RRULE for recurring events (ACT-005)
+    rr = evt.get("recurrence_rule")
+    if rr and isinstance(rr, dict) and rr.get("freq"):
+        rrule_parts = [f"FREQ={rr['freq']}"]
+        if rr.get("interval", 1) != 1:
+            rrule_parts.append(f"INTERVAL={rr['interval']}")
+        if rr.get("until_utc"):
+            try:
+                until_dt = parse_iso_dt(rr["until_utc"]).astimezone(timezone.utc)
+                rrule_parts.append(f"UNTIL={until_dt.strftime('%Y%m%dT%H%M%SZ')}")
+            except Exception:
+                pass
+        if rr.get("count"):
+            rrule_parts.append(f"COUNT={rr['count']}")
+        if rr.get("byday"):
+            rrule_parts.append(f"BYDAY={','.join(rr['byday'])}")
+        lines.append(f"RRULE:{';'.join(rrule_parts)}")
     lines += ["END:VEVENT", "END:VCALENDAR"]
     return "\r\n".join(lines) + "\r\n"
 
@@ -2129,3 +2280,365 @@ async def download_event_ical(
         media_type="text/calendar",
         headers={"Content-Disposition": f'attachment; filename="{safe or "event"}.ics"'},
     )
+
+
+# ─── ACT-002: Calendar RSVP helpers ─────────────────────────────────────────
+
+def _upsert_rsvp(calendar_id: str, event_id: str, attendee_sub: str, status: str) -> dict:
+    """Write/replace an RSVP row in crm_event_rsvp. Returns the written item."""
+    from app.core.time import now_ts as _now_ts
+    ts = _now_ts()
+    event_key = f"{calendar_id}#{event_id}"
+    item: dict = {
+        "event_key": event_key,
+        "attendee_sub": attendee_sub,
+        "calendar_id": calendar_id,
+        "event_id": event_id,
+        "user_sub": attendee_sub,
+        "status": status,
+        "updated_at": ts,
+        "GSI1PK": f"USER#{attendee_sub}",
+        "GSI1SK": ts,
+    }
+    if status != "no_response":
+        item["responded_at"] = ts
+    # no responded_at key means DynamoDB won't store null for optional numeric
+    T.crm_event_rsvp.put_item(Item=item)
+    audit_event(
+        "calendar_event_rsvp",
+        attendee_sub,
+        None,
+        calendar_id=calendar_id,
+        event_id=event_id,
+        status=status,
+    )
+    return item
+
+
+def _get_rsvp(calendar_id: str, event_id: str, attendee_sub: str):
+    event_key = f"{calendar_id}#{event_id}"
+    resp = T.crm_event_rsvp.get_item(Key={"event_key": event_key, "attendee_sub": attendee_sub})
+    return resp.get("Item")
+
+
+def _list_rsvps(calendar_id: str, event_id: str) -> list:
+    from boto3.dynamodb.conditions import Key as _Key
+    event_key = f"{calendar_id}#{event_id}"
+    items = []
+    kw: dict = dict(KeyConditionExpression=_Key("event_key").eq(event_key))
+    while True:
+        resp = T.crm_event_rsvp.query(**kw)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kw["ExclusiveStartKey"] = lek
+    return items
+
+
+def _enrich_attendees(calendar_id: str, event_id: str, attendees: list) -> list:
+    rsvp_rows = {r["attendee_sub"]: r for r in _list_rsvps(calendar_id, event_id)}
+    result = []
+    for sub in attendees:
+        row = rsvp_rows.get(sub)
+        if row:
+            result.append(EventAttendeeOut(
+                user_sub=sub,
+                rsvp_status=row.get("status", "no_response"),
+                responded_at=row.get("responded_at"),
+            ))
+        else:
+            result.append(EventAttendeeOut(user_sub=sub))
+    return result
+
+
+def _list_user_rsvps(attendee_sub: str, limit: int = 20, cursor=None) -> dict:
+    from boto3.dynamodb.conditions import Key as _Key
+    from app.core.cursor import encode_cursor, decode_cursor
+    kw: dict = dict(
+        IndexName="ByUser",
+        KeyConditionExpression=_Key("GSI1PK").eq(f"USER#{attendee_sub}"),
+        ScanIndexForward=False,
+        Limit=limit,
+    )
+    if cursor:
+        kw["ExclusiveStartKey"] = decode_cursor(cursor)
+    resp = T.crm_event_rsvp.query(**kw)
+    items = resp.get("Items", [])
+    lek = resp.get("LastEvaluatedKey")
+    return {"items": items, "next_cursor": encode_cursor(lek) if lek else None}
+
+
+# ─── ACT-002: RSVP endpoints ─────────────────────────────────────────────────
+
+@router.put(
+    "/calendars/{calendar_id}/events/{event_id}/rsvp",
+    response_model=EventAttendeeOut,
+)
+async def update_event_rsvp(
+    calendar_id: str,
+    event_id: str,
+    body: EventRsvpUpdateIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+) -> EventAttendeeOut:
+    if not (S.crm_activities_enabled and S.crm_event_rsvp_enabled):
+        raise HTTPException(status_code=404, detail="Not found")
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)}).get("Item")
+    if not evt:
+        raise HTTPException(404, "Event not found")
+    if ctx["user_sub"] not in evt.get("attendees", []):
+        raise HTTPException(403, "Not an attendee")
+    row = _upsert_rsvp(calendar_id, event_id, ctx["user_sub"], body.status.value)
+    # Notify owner (best-effort)
+    try:
+        cal_meta = T.calendar.get_item(Key=_calendar_keys(calendar_id)).get("Item", {})
+        owner_sub = cal_meta.get("owner_user_sub", "")
+        if owner_sub and owner_sub != ctx["user_sub"]:
+            identity = get_profile_identity(ctx["user_sub"])
+            name = identity.get("display_name") or ctx["user_sub"]
+            write_alert(
+                owner_sub,
+                event="calendar_rsvp_received",
+                outcome="info",
+                title=f"{name} {body.status.value} your event: {evt.get('name', '')}",
+                details={"calendar_id": calendar_id, "event_id": event_id},
+            )
+    except Exception:
+        pass
+    return EventAttendeeOut(
+        user_sub=ctx["user_sub"],
+        rsvp_status=body.status,
+        responded_at=row.get("responded_at"),
+    )
+
+
+@router.get(
+    "/calendars/{calendar_id}/events/{event_id}/rsvp",
+    response_model=EventAttendeeOut,
+)
+async def get_my_rsvp(
+    calendar_id: str,
+    event_id: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+) -> EventAttendeeOut:
+    if not (S.crm_activities_enabled and S.crm_event_rsvp_enabled):
+        raise HTTPException(status_code=404, detail="Not found")
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)}).get("Item")
+    if not evt:
+        raise HTTPException(404, "Event not found")
+    if ctx["user_sub"] not in evt.get("attendees", []):
+        raise HTTPException(403, "Not an attendee")
+    row = _get_rsvp(calendar_id, event_id, ctx["user_sub"])
+    if not row:
+        return EventAttendeeOut(user_sub=ctx["user_sub"])
+    return EventAttendeeOut(
+        user_sub=ctx["user_sub"],
+        rsvp_status=row.get("status", "no_response"),
+        responded_at=row.get("responded_at"),
+    )
+
+
+@router.get(
+    "/calendars/{calendar_id}/events/{event_id}/attendees",
+    response_model=EventAttendeeListOut,
+)
+async def list_event_attendees(
+    calendar_id: str,
+    event_id: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+) -> EventAttendeeListOut:
+    if not (S.crm_activities_enabled and S.crm_event_rsvp_enabled):
+        raise HTTPException(status_code=404, detail="Not found")
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)}).get("Item")
+    if not evt:
+        raise HTTPException(404, "Event not found")
+    # Allow access to owner or attendees
+    try:
+        _load_calendar_access(calendar_id, ctx["user_sub"])
+        has_access = True
+    except HTTPException:
+        has_access = False
+    if not has_access and ctx["user_sub"] not in evt.get("attendees", []):
+        raise HTTPException(403, "Access denied")
+    enriched = _enrich_attendees(calendar_id, event_id, evt.get("attendees", []))
+    return EventAttendeeListOut(attendees=enriched)
+
+
+@router.get("/users/me/rsvps", response_model=UserRsvpListOut)
+async def list_my_rsvps(
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+    ctx: Dict[str, str] = Depends(require_ui_session),
+) -> UserRsvpListOut:
+    if not (S.crm_activities_enabled and S.crm_event_rsvp_enabled):
+        raise HTTPException(status_code=404, detail="Not found")
+    result = _list_user_rsvps(ctx["user_sub"], limit=limit, cursor=cursor)
+    return UserRsvpListOut(**result)
+
+
+# ─── ACT-004: Event reminder helpers ─────────────────────────────────────────
+
+def _resolve_event_start_ts(calendar_id: str, event_id: str):
+    """Return Unix ts of event start or None for all-day / missing events."""
+    from datetime import timezone as _tz
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)}).get("Item")
+    if not evt or not evt.get("start_utc"):
+        return None
+    try:
+        return int(parse_iso_dt(evt["start_utc"]).astimezone(_tz.utc).timestamp())
+    except Exception:
+        return None
+
+
+def _set_reminders(
+    calendar_id: str,
+    event_id: str,
+    user_sub: str,
+    reminders: list,
+    event_start_ts: int,
+    event_name: str,
+    event_start_utc: str,
+) -> list:
+    from app.core.time import now_ts as _now_ts
+    from boto3.dynamodb.conditions import Key as _Key
+    ts = _now_ts()
+    reminder_key = f"{calendar_id}#{event_id}#{user_sub}"
+    # Delete existing reminders for this triplet
+    existing = T.crm_event_reminders.query(
+        KeyConditionExpression=_Key("reminder_key").eq(reminder_key)
+    ).get("Items", [])
+    with T.crm_event_reminders.batch_writer() as bw:
+        for row in existing:
+            bw.delete_item(Key={"reminder_key": row["reminder_key"], "reminder_id": row["reminder_id"]})
+    written = []
+    for r in reminders:
+        fire_at = event_start_ts - r.minutes_before * 60
+        if fire_at <= ts:
+            continue
+        reminder_id = f"REM#{uuid.uuid4().hex}"
+        item = {
+            "reminder_key": reminder_key,
+            "reminder_id": reminder_id,
+            "calendar_id": calendar_id,
+            "event_id": event_id,
+            "user_sub": user_sub,
+            "minutes_before": r.minutes_before,
+            "method": r.method.value,
+            "fire_at": fire_at,
+            "fired": False,
+            "GSI1PK": "DUE",
+            "GSI1SK": fire_at,
+            "event_name": event_name,
+            "event_start_utc": event_start_utc,
+            "created_at": ts,
+            "updated_at": ts,
+            "ttl": fire_at + 7 * 86400,
+        }
+        T.crm_event_reminders.put_item(Item=item)
+        written.append(item)
+    audit_event("crm_reminder_set", user_sub, None, calendar_id=calendar_id, event_id=event_id, count=len(reminders))
+    return written
+
+
+def _get_reminders(calendar_id: str, event_id: str, user_sub: str) -> list:
+    from boto3.dynamodb.conditions import Key as _Key
+    reminder_key = f"{calendar_id}#{event_id}#{user_sub}"
+    items = T.crm_event_reminders.query(
+        KeyConditionExpression=_Key("reminder_key").eq(reminder_key)
+    ).get("Items", [])
+    return sorted(items, key=lambda x: int(x.get("fire_at", 0)))
+
+
+# ─── ACT-004: Reminder endpoints ─────────────────────────────────────────────
+
+@router.put(
+    "/calendars/{calendar_id}/events/{event_id}/reminders",
+    response_model=EventRemindersOut,
+)
+async def set_event_reminders(
+    calendar_id: str,
+    event_id: str,
+    body: EventRemindersSetIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+) -> EventRemindersOut:
+    if not (S.crm_activities_enabled and S.crm_event_reminders_enabled):
+        raise HTTPException(status_code=404, detail="Not found")
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)}).get("Item")
+    if not evt:
+        raise HTTPException(404, "Event not found")
+    user_sub = ctx["user_sub"]
+    # Verify caller is owner or attendee
+    try:
+        _load_calendar_access(calendar_id, user_sub)
+        authorized = True
+    except HTTPException:
+        authorized = False
+    if not authorized and user_sub not in evt.get("attendees", []):
+        raise HTTPException(403, "Access denied")
+    event_start_ts = _resolve_event_start_ts(calendar_id, event_id)
+    if event_start_ts is None:
+        raise HTTPException(422, "Cannot set reminders on an all-day or time-less event")
+    written = _set_reminders(
+        calendar_id,
+        event_id,
+        user_sub,
+        body.reminders,
+        event_start_ts,
+        evt.get("name", ""),
+        evt.get("start_utc", ""),
+    )
+    rem_out = [
+        EventReminderOut(
+            reminder_id=r["reminder_id"],
+            calendar_id=r["calendar_id"],
+            event_id=r["event_id"],
+            user_sub=r["user_sub"],
+            minutes_before=int(r["minutes_before"]),
+            method=r["method"],
+            fire_at=int(r["fire_at"]),
+            fired=bool(r.get("fired", False)),
+            created_at=int(r["created_at"]),
+        )
+        for r in written
+    ]
+    return EventRemindersOut(reminders=rem_out, count=len(rem_out))
+
+
+@router.get(
+    "/calendars/{calendar_id}/events/{event_id}/reminders",
+    response_model=EventRemindersOut,
+)
+async def get_event_reminders(
+    calendar_id: str,
+    event_id: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+) -> EventRemindersOut:
+    if not (S.crm_activities_enabled and S.crm_event_reminders_enabled):
+        raise HTTPException(status_code=404, detail="Not found")
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)}).get("Item")
+    if not evt:
+        raise HTTPException(404, "Event not found")
+    user_sub = ctx["user_sub"]
+    try:
+        _load_calendar_access(calendar_id, user_sub)
+        authorized = True
+    except HTTPException:
+        authorized = False
+    if not authorized and user_sub not in evt.get("attendees", []):
+        raise HTTPException(403, "Access denied")
+    items = _get_reminders(calendar_id, event_id, user_sub)
+    rem_out = [
+        EventReminderOut(
+            reminder_id=r["reminder_id"],
+            calendar_id=r["calendar_id"],
+            event_id=r["event_id"],
+            user_sub=r["user_sub"],
+            minutes_before=int(r["minutes_before"]),
+            method=r["method"],
+            fire_at=int(r["fire_at"]),
+            fired=bool(r.get("fired", False)),
+            created_at=int(r["created_at"]),
+        )
+        for r in items
+    ]
+    return EventRemindersOut(reminders=rem_out, count=len(rem_out))

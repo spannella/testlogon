@@ -18,7 +18,8 @@ import { execSync } from "child_process";
 
 const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
-const REPO_ROOT = "/home/ubuntu/testlogon";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const ALICE_ID = "e2e_alice@test.local";
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────

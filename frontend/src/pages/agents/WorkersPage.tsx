@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, Plus, Square, Play, Trash2 } from "lucide-react";
+import { Bot, Plus, Square, Play, Trash2, TerminalSquare } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -324,6 +325,7 @@ function WorkerCreateWizard({
 
 export default function WorkersPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -445,6 +447,19 @@ export default function WorkersPage() {
                   <Badge variant={statusColor(w.worker_status)}>
                     {w.worker_status}
                   </Badge>
+                  {(w.worker_status === "ready" ||
+                    w.worker_status === "running") && (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() =>
+                        navigate(`/agents/session?workerId=${encodeURIComponent(w.worker_id)}`)
+                      }
+                    >
+                      <TerminalSquare className="h-3 w-3 mr-1" />
+                      Open Session
+                    </Button>
+                  )}
                   {(w.worker_status === "ready" ||
                     w.worker_status === "running") && (
                     <Button

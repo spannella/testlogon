@@ -142,6 +142,15 @@ class TestValidateKeyId:
 class TestKeyServerEndpoint:
     """Test the /v1/vod/drm/key/{key_id} endpoint."""
 
+    @pytest.fixture(autouse=True)
+    def _patch_playback_secret(self):
+        """Ensure S.playback_entitlement_secret is set regardless of env var ordering."""
+        from app.services import playback_entitlements as pe_svc
+        orig = pe_svc.S.playback_entitlement_secret
+        object.__setattr__(pe_svc.S, "playback_entitlement_secret", "test-entitlement-secret")
+        yield
+        object.__setattr__(pe_svc.S, "playback_entitlement_secret", orig)
+
     @pytest.fixture
     def client(self):
         from fastapi.testclient import TestClient

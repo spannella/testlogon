@@ -14,6 +14,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API        = "http://localhost:8000";
 const ROOT_SUB   = "root.admin@testdev.local";
@@ -33,8 +35,8 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -98,7 +100,7 @@ function seedCase(opts: {
     `python3 -c "
 import boto3, os, json, time
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line=line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -111,7 +113,7 @@ item={'pk':'KYC#${opts.caseId}','sk':'META','entity_type':'kyc_case','kyc_case_i
 t.put_item(Item=item)
 print('seeded ${opts.caseId}')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -123,7 +125,7 @@ function clearAvailabilityAndCases(adminSubs: string[]): void {
     `python3 -c "
 import boto3, os, json
 from pathlib import Path
-env=Path('/home/ubuntu/testlogon/.env.local')
+env=Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line=line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -134,7 +136,7 @@ for s in ${subsPy}:
     t.delete_item(Key={'pk':'ADMIN#'+s,'sk':'AVAILABILITY'})
 print('cleared availability')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 

@@ -183,7 +183,7 @@ def test_start_audit_export_worker_task_creates_task_when_enabled():
     try:
         with patch.object(worker.asyncio, "create_task",
                           side_effect=lambda coro: created.append(coro)):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 worker.start_audit_export_worker_task()
             )
         assert len(created) == 1
@@ -203,7 +203,7 @@ def test_start_audit_export_worker_task_noop_when_disabled():
     try:
         with patch.object(worker.asyncio, "create_task",
                           side_effect=lambda coro: created.append(coro)):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 worker.start_audit_export_worker_task()
             )
         assert created == []

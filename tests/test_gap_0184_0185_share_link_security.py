@@ -103,10 +103,14 @@ def test_rate_limit_per_link_key_is_link_specific(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+class _FakeClient:
+    def __init__(self, host):
+        self.host = host
+
 class _FakeRequest:
     def __init__(self, ip="9.9.9.9"):
-        self.headers = {"x-forwarded-for": ip}
-        self.client = None
+        self.headers = {}  # XFF only honoured from trusted proxies; use direct client
+        self.client = _FakeClient(ip)
 
 
 def _import_router():

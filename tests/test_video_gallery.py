@@ -309,6 +309,7 @@ def _make_tables():
         video_metadata=_FakeTable(),
         video_views=_FakeTable(),
         video_likes=_FakeTable(),
+        video_comments=_FakeTable(),  # added when video_comments service was wired in
     )
 
 

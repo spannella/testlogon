@@ -139,6 +139,7 @@ describe("ComposeBar once-media toggles", () => {
     const { unmount } = renderWithClient(
       <ComposeBar conversationId="c1" onSendText={vi.fn()} onSendGallery={vi.fn()} />,
     );
+    await userEvent.click(screen.getByRole("button", { name: /More compose options/i }));
     await userEvent.click(screen.getByLabelText(/Gallery message/i));
     const fileInputs = document.querySelectorAll('input[type="file"]');
     const freeGalleryInput = fileInputs[0] as HTMLInputElement;

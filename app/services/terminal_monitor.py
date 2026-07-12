@@ -309,7 +309,7 @@ def create_feedback_request(
             "Agent %s transitioned to awaiting_feedback for request %s",
             worker_id, request_id,
         )
-    except (ValueError, LookupError) as exc:
+    except Exception as exc:
         logger.warning(
             "Could not transition worker %s to awaiting_feedback for "
             "request %s: %s",
@@ -378,6 +378,59 @@ def respond_to_feedback(
             worker_id, request_id, exc,
         )
 
+    return get_feedback_request(worker_id, request_id)
+
+
+def mark_feedback_responded(
+    worker_id: str,
+    request_id: str,
+    response_text: str,
+) -> Optional[Dict[str, Any]]:
+    """Mark a pending feedback request as responded WITHOUT re-injecting the
+    response into the worker's terminal ring buffer.
+
+    This is the variant used by the *interactive* agent-session terminal
+    (ACS-005). In that path the user's answer is typed straight into the live
+    Claude PTY via ``bridge.send_input``; the PTY echoes it back and that echo
+    is already tapped into ``process_terminal_output`` on the next poll. So the
+    response text reaches the monitor buffer through the normal output tap —
+    calling ``respond_to_feedback`` (which also ``buf.append``s
+    ``[User response]: …``) would inject the same answer a SECOND time and skew
+    pattern matching. This helper therefore only flips the feedback record's
+    status (keeping the monitor's feedback CRUD view consistent) and does NOT
+    touch the buffer or the orchestrator state.
+
+    Idempotent: a non-pending or missing request is a no-op (returns the
+    current record or ``None``). Never raises — a bookkeeping failure must not
+    interrupt the live terminal.
+    """
+    ts = now_ts()
+    existing = get_feedback_request(worker_id, request_id)
+    if not existing or existing.get("feedback_status") != "pending":
+        return existing
+    try:
+        T.agent_feedback.update_item(
+            Key={"pk": f"WORKER#{worker_id}", "sk": f"FEEDBACK#{request_id}"},
+            UpdateExpression=(
+                "SET feedback_status = :st, response_text = :rt, responded_at = :ra"
+            ),
+            ExpressionAttributeValues={
+                ":st": "responded",
+                ":rt": response_text,
+                ":ra": ts,
+            },
+        )
+    except Exception:  # pragma: no cover - defensive bookkeeping
+        logger.exception(
+            "mark_feedback_responded failed worker=%s request=%s",
+            worker_id, request_id,
+        )
+        return existing
+    logger.info(
+        "Marked feedback %s responded (interactive, no buffer re-inject) "
+        "for worker %s",
+        request_id, worker_id,
+    )
     return get_feedback_request(worker_id, request_id)
 
 

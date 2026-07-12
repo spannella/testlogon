@@ -1,5 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
 /*  Constants & helpers                                                */
@@ -29,8 +31,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -714,6 +716,14 @@ test.describe("Section 106 - Broadcast Price Editor (GAP-0293)", () => {
       profile_id: priceProfileId,
     });
     priceSessionId = (await sessResp.json()).id;
+
+    // The broadcast price is only "active" (is_broadcast_price / discount_pct /
+    // effective_price_cents reflect the discount) when the session status is
+    // "live" — see resolve_effective_price(). Start the session so 105.1/105.2
+    // observe the active broadcast price.
+    await apiPost(rootPage, "root", `/broadcast/sessions/${priceSessionId}/start`, {
+      reason: "e2e-price-editor",
+    });
 
     // Catalog item at $20.00 so a $10.00 broadcast price is exactly 50% off.
     const catResp = await apiPost(rootPage, "root", "/ui/catalog/categories", {

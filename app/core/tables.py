@@ -33,10 +33,8 @@ class _FloatSafeTable:
     delete_item, meta, ...) to the wrapped table unchanged.
     """
 
-    __slots__ = ("_t",)
-
     def __init__(self, table: Any) -> None:
-        object.__setattr__(self, "_t", table)
+        self._t = table
 
     def put_item(self, **kwargs: Any) -> Any:
         if "Item" in kwargs:
@@ -100,6 +98,9 @@ class Tables:
     subscriptions: Any
     projects: Any
     contacts: Any
+    sales_opportunities: Any
+    sales_quotas: Any
+    leads: Any  # CRM Leads (LED-001)
     broadcast_profiles: Any
     broadcast_promo_posts: Any
     broadcast_sessions: Any
@@ -141,6 +142,7 @@ class Tables:
     signature_packet_artifacts: Any
     signature_templates: Any
     tickets: Any
+    kb_articles: Any
     questionnaires: Any
     kyc_cases: Any
     kyc_business_cases: Any
@@ -209,6 +211,10 @@ class Tables:
     group_call_sessions: Any
     sms_delivery: Any
     email_delivery: Any
+    email_settings: Any
+    user_email_accounts: Any
+    user_email_messages: Any
+    email_archive: Any
     admin_messaging_templates: Any
     affiliate_links: Any
     affiliate_clicks: Any
@@ -236,6 +242,7 @@ class Tables:
     broadcast_clips: Any
     broadcast_ad_events: Any
     llm_provider_keys: Any
+    message_ai_cache: Any
     delegates: Any
     delegation_api_keys: Any
     syndicates: Any
@@ -267,6 +274,7 @@ class Tables:
     broadcast_moderation: Any
     k8s_pods: Any
     agent_workers: Any
+    agent_sessions: Any
     compute_billing: Any
     compute_quotas: Any
     instance_templates: Any
@@ -274,6 +282,7 @@ class Tables:
     agent_feedback: Any
     agent_types: Any
     agent_runs: Any
+    agent_actions: Any
     agent_doc_coverage: Any
     agent_doc_templates: Any
     stylist_ui_reviews: Any
@@ -295,6 +304,10 @@ class Tables:
     agent_cost_budgets: Any
     agent_cost_alerts: Any
     invoices: Any
+    aos_quotes: Any
+    aos_contracts: Any
+    crm_currencies: Any  # INV-002
+    crm_tax_rates: Any   # INV-005
     tax_documents: Any
     tax_forms_1099: Any
     tax_info: Any
@@ -311,6 +324,140 @@ class Tables:
     file_share_links: Any
     host_inventory: Any
     geo_rules: Any
+    legal_holds: Any
+    legal_exports: Any
+    security_events: Any
+    honeytokens: Any
+    inventory: Any
+    reservations: Any
+    returns: Any
+    gl_accounts: Any
+    gl_journal: Any
+    ar_ap_snapshots: Any
+    pricing_rules: Any
+    platform_settings: Any
+    party: Any  # Party/CRM single table (PTY-002)
+    candidates: Any
+    job_orders: Any
+    properties: Any
+    hotels: Any
+    hotel_amenities: Any
+    banking_accounts: Any
+    # CRM Reports & Dashboards (RPT-001)
+    crm_reports: Any
+    crm_dashboards: Any
+    crm_saved_searches: Any
+    # CRM Workflow (WFL-001)
+    crm_workflow_rules: Any
+    crm_workflow_runs: Any
+    # CRM Cases (CAS-001)
+    crm_cases_counters: Any
+    crm_cases_links: Any
+    crm_cases_templates: Any
+    crm_cases_portal_sessions: Any
+    crm_cases_sla_config: Any
+    crm_kb_articles: Any
+    crm_cases_watchers: Any
+    # STU-001: CRM Security Suite, Studio & Admin
+    crm_acl_roles: Any
+    crm_security_groups: Any
+    crm_studio_fields: Any
+    crm_studio_modules: Any
+    crm_studio_layouts: Any
+    crm_studio_dropdowns: Any
+    crm_audit_trail: Any
+    currencies: Any
+    search_config: Any
+    email_queue: Any
+    # CRM Project Management (PRJ-001)
+    crm_pm_projects: Any
+    crm_pm_tasks: Any
+    crm_pm_members: Any
+    crm_pm_templates: Any
+    hotel_availability: Any
+    hotel_rate_plans: Any
+    product_depth: Any
+    ats_pipeline: Any
+    property_tenants: Any
+    # QloApps hotel-PMS vertical (HTL-001..HTL-009)
+    hotel_rooms: Any
+    leases: Any
+    ats_skills: Any
+    hotel_reservations: Any
+    txn_requests: Any
+    rent_period_markers: Any
+    facilities: Any       # FAC-002
+    transfers: Any        # FAC-002
+    receipts: Any         # FAC-002
+    picklists: Any        # FAC-002
+    shipments: Any        # FAC-002
+    lot_serial: Any       # FAC-002 (reserved; no service uses it until FAC-011+)
+    # PRT-001: ATS Career Portal
+    career_portal: Any
+    oauth_consumers: Any
+    # CRM Activities (ACT-001..ACT-010)
+    crm_tasks: Any
+    crm_notes: Any
+    crm_activity_timeline: Any
+    crm_event_rsvp: Any
+    crm_event_reminders: Any
+    maintenance_orders: Any
+    maintenance_vendors: Any
+    account_views: Any
+    entitlement_requests: Any
+    shipping_carriers: Any
+    shipment_items: Any
+    shipment_packages: Any
+    customers: Any
+    financial_products: Any
+    rent_policy: Any
+    property_documents: Any
+    hotel_folios: Any
+    suppliers: Any
+    supplier_products: Any
+    purchase_orders: Any
+    po_receipts: Any
+    # CSN: PSD2 Consents
+    consents: Any
+    # CSN-003: Dynamic Entities
+    dynamic_entity_defs: Any
+    dynamic_entity_rows: Any
+    # CSN-004: Dynamic Endpoints
+    dynamic_endpoints: Any
+    # CSN-005: Open Data
+    open_data: Any
+    crm_events: Any
+    crm_event_registrations: Any
+    crm_contact_sms_log: Any
+    # PLT-003: Glossary endpoint
+    glossary: Any
+    mfg_boms: Any
+    mfg_work_centers: Any
+    mfg_work_orders: Any
+    mfg_mrp: Any
+    hr: Any
+    # OFBiz Fixed Assets (FXA-002)
+    fixed_assets: Any
+    fixed_asset_schedule: Any
+    pos: Any
+    # ECM / OFBiz Phase-1 inventory + reservations (ECM-005/ECM-008)
+    marketing_campaigns: Any
+    contact_lists: Any
+    party_segments: Any
+    tracking_codes: Any
+    marketing_send_log: Any
+    # OBP PAY cluster (counterparties / standing orders / mandates / FX) — owned by PAY
+    counterparties: Any
+    standing_orders: Any
+    direct_debit_mandates: Any
+    fx_rates: Any
+    ats_integration_links: Any
+    crm_campaigns: Any
+    crm_campaign_send_log: Any
+    marketing_email_templates: Any
+    marketing_contact_lists: Any
+    marketing_tracking_codes: Any
+    marketing_web_lead_captures: Any
 
 T = Tables(
     sessions=_safe_table(S.ddb_sessions_table),
@@ -346,6 +493,9 @@ T = Tables(
     subscriptions=_safe_table(S.subscriptions_table_name),
     projects=_safe_table(S.projects_table_name),
     contacts=_safe_table(S.contacts_table_name),
+    sales_opportunities=_safe_table(S.sales_opportunities_table_name),
+    sales_quotas=_safe_table(S.sales_quotas_table_name),
+    leads=_safe_table(S.leads_table_name),  # CRM Leads (LED-001)
     broadcast_profiles=_safe_table(S.broadcast_profiles_table_name),
     broadcast_promo_posts=_safe_table(S.broadcast_promo_posts_table_name),
     broadcast_sessions=_safe_table(S.broadcast_sessions_table_name),
@@ -387,6 +537,7 @@ T = Tables(
     signature_packet_artifacts=_safe_table(S.signature_packet_artifacts_table_name),
     signature_templates=_safe_table(S.signature_templates_table_name),
     tickets=_safe_table(S.tickets_table_name),
+    kb_articles=_safe_table(S.kb_articles_table),
     questionnaires=_safe_table(S.questionnaire_table_name),
     kyc_cases=_safe_table(S.kyc_cases_table_name),
     kyc_business_cases=_safe_table(S.kyc_business_cases_table_name),
@@ -455,6 +606,10 @@ T = Tables(
     group_call_sessions=_safe_table(S.group_call_sessions_table_name),
     sms_delivery=_safe_table(S.sms_delivery_table_name),
     email_delivery=_safe_table(S.email_delivery_table_name),
+    email_settings=_safe_table(S.email_settings_table_name),
+    user_email_accounts=_safe_table(S.user_email_accounts_table_name),
+    user_email_messages=_safe_table(S.user_email_messages_table_name),
+    email_archive=_safe_table(S.email_archive_table_name),
     admin_messaging_templates=_safe_table(S.admin_messaging_templates_table_name),
     affiliate_links=_safe_table(S.affiliate_links_table_name),
     affiliate_clicks=_safe_table(S.affiliate_clicks_table_name),
@@ -482,6 +637,7 @@ T = Tables(
     broadcast_clips=_safe_table(S.broadcast_clips_table_name),
     broadcast_ad_events=_safe_table(S.broadcast_ad_events_table_name),
     llm_provider_keys=_safe_table(S.llm_provider_keys_table_name),
+    message_ai_cache=_safe_table(S.message_ai_cache_table_name),
     delegates=_safe_table(S.delegates_table_name),
     delegation_api_keys=_safe_table(S.delegation_api_keys_table_name),
     syndicates=_safe_table(S.syndicates_table_name),
@@ -512,6 +668,7 @@ T = Tables(
     broadcast_moderation=_safe_table(S.broadcast_moderation_table_name),
     k8s_pods=_safe_table(S.k8s_pods_table_name),
     agent_workers=_safe_table(S.agent_workers_table_name),
+    agent_sessions=_safe_table(S.agent_sessions_table_name),
     compute_billing=_safe_table(S.compute_billing_table_name),
     compute_quotas=_safe_table(S.compute_quotas_table_name),
     instance_templates=_safe_table(S.instance_templates_table_name),
@@ -519,6 +676,7 @@ T = Tables(
     agent_feedback=_safe_table(S.agent_feedback_table_name),
     agent_types=_safe_table(S.agent_types_table_name),
     agent_runs=_safe_table(S.agent_runs_table_name),
+    agent_actions=_safe_table(S.agent_actions_table_name),
     agent_doc_coverage=_safe_table(S.agent_doc_coverage_table_name),
     agent_doc_templates=_safe_table(S.agent_doc_templates_table_name),
     stylist_ui_reviews=_safe_table(S.stylist_ui_reviews_table_name),
@@ -540,6 +698,10 @@ T = Tables(
     agent_cost_budgets=_safe_table(S.agent_cost_budgets_table_name),
     agent_cost_alerts=_safe_table(S.agent_cost_alerts_table_name),
     invoices=_safe_table(S.invoices_table_name),
+    aos_quotes=_safe_table(S.aos_quotes_table_name),
+    aos_contracts=_safe_table(S.aos_contracts_table_name),
+    crm_currencies=_safe_table(S.crm_currencies_table_name),  # INV-002
+    crm_tax_rates=_safe_table(S.crm_tax_rates_table_name),    # INV-005
     tax_documents=_safe_table(S.tax_documents_table_name),
     tax_forms_1099=_safe_table(S.tax_forms_1099_table_name),
     tax_info=_safe_table(S.tax_info_table_name),
@@ -557,4 +719,137 @@ T = Tables(
     host_inventory=_safe_table(S.ddb_host_inventory_table),
     kyc_document_templates=_safe_table(S.kyc_document_templates_table_name),
     geo_rules=_safe_table(S.geo_rules_table_name),
+    legal_holds=_safe_table(S.legal_holds_table_name),
+    legal_exports=_safe_table(S.legal_exports_table_name),
+    security_events=_safe_table(S.security_events_table_name),
+    honeytokens=_safe_table(S.honeytokens_table_name),
+    inventory=_safe_table(S.inventory_table_name),
+    reservations=_safe_table(S.reservations_table_name),
+    returns=_safe_table(S.returns_table_name),
+    gl_accounts=_safe_table(S.gl_accounts_table_name),
+    gl_journal=_safe_table(S.gl_journal_table_name),
+    ar_ap_snapshots=_safe_table(S.ar_ap_snapshots_table_name),
+    pricing_rules=_safe_table(S.pricing_rules_table_name),
+    platform_settings=_safe_table(S.platform_settings_table_name),
+    party=_safe_table(S.party_table_name),  # Party/CRM single table (PTY-002)
+    candidates=_safe_table(S.candidates_table_name),
+    job_orders=_safe_table(S.job_orders_table_name),
+    properties=_safe_table(S.properties_table_name),
+    hotels=_safe_table(S.hotels_table_name),
+    hotel_amenities=_safe_table(S.hotel_amenities_table_name),
+    banking_accounts=_safe_table(S.banking_accounts_table_name),
+    # CRM Reports & Dashboards (RPT-001)
+    crm_reports=_safe_table(S.crm_reports_table_name),
+    crm_dashboards=_safe_table(S.crm_dashboards_table_name),
+    crm_saved_searches=_safe_table(S.crm_saved_searches_table_name),
+    # CRM Workflow (WFL-001)
+    crm_workflow_rules=_safe_table(S.crm_workflow_rules_table_name),
+    crm_workflow_runs=_safe_table(S.crm_workflow_runs_table_name),
+    # CRM Cases (CAS-001)
+    crm_cases_counters=_safe_table(S.crm_cases_counter_table),
+    crm_cases_links=_safe_table(S.crm_cases_links_table),
+    crm_cases_templates=_safe_table(S.crm_cases_templates_table),
+    crm_cases_portal_sessions=_safe_table(S.crm_cases_portal_sessions_table),
+    crm_cases_sla_config=_safe_table(S.crm_cases_sla_config_table),
+    crm_kb_articles=_safe_table(S.crm_kb_articles_table),
+    crm_cases_watchers=_safe_table(S.crm_cases_watchers_table),
+    # STU-001: CRM Security Suite, Studio & Admin
+    crm_acl_roles=_safe_table(S.crm_acl_roles_table_name),
+    crm_security_groups=_safe_table(S.crm_security_groups_table_name),
+    crm_studio_fields=_safe_table(S.crm_studio_fields_table_name),
+    crm_studio_modules=_safe_table(S.crm_studio_modules_table_name),
+    crm_studio_layouts=_safe_table(S.crm_studio_layouts_table_name),
+    crm_studio_dropdowns=_safe_table(S.crm_studio_dropdowns_table_name),
+    crm_audit_trail=_safe_table(S.crm_audit_trail_table_name),
+    currencies=_safe_table(S.currencies_table_name),
+    search_config=_safe_table(S.search_config_table_name),
+    email_queue=_safe_table(S.email_queue_table_name),
+    # CRM Project Management (PRJ-001)
+    crm_pm_projects=_safe_table(S.crm_pm_projects_table_name),
+    crm_pm_tasks=_safe_table(S.crm_pm_tasks_table_name),
+    crm_pm_members=_safe_table(S.crm_pm_members_table_name),
+    crm_pm_templates=_safe_table(S.crm_pm_templates_table_name),
+    hotel_availability=_safe_table(S.hotel_availability_table_name),
+    hotel_rate_plans=_safe_table(S.hotel_rate_plans_table_name),
+    product_depth=_safe_table(S.product_depth_table_name),
+    ats_pipeline=_safe_table(S.ats_pipeline_table_name),
+    property_tenants=_safe_table(S.property_tenants_table_name),
+    # QloApps hotel-PMS vertical (HTL-001..HTL-009)
+    hotel_rooms=_safe_table(S.hotel_rooms_table_name),
+    leases=_safe_table(S.leases_table_name),
+    ats_skills=_safe_table(S.ats_skills_table_name),
+    hotel_reservations=_safe_table(S.hotel_reservations_table_name),
+    txn_requests=_safe_table(S.txn_requests_table_name),
+    rent_period_markers=_safe_table(S.rent_period_markers_table_name),
+    facilities=_safe_table(S.facilities_table_name),    # FAC-002
+    transfers=_safe_table(S.transfers_table_name),      # FAC-002
+    receipts=_safe_table(S.receipts_table_name),        # FAC-002
+    picklists=_safe_table(S.picklists_table_name),      # FAC-002
+    shipments=_safe_table(S.shipments_table_name),      # FAC-002
+    lot_serial=_safe_table(S.lot_serial_table_name),    # FAC-002 (reserved)
+    # PRT-001: ATS Career Portal
+    career_portal=_safe_table(S.career_portal_table_name),
+    oauth_consumers=_safe_table(S.oauth_consumers_table_name),
+    # CRM Activities (ACT-001..ACT-010)
+    crm_tasks=_safe_table(S.crm_tasks_table_name),
+    crm_notes=_safe_table(S.crm_notes_table_name),
+    crm_activity_timeline=_safe_table(S.crm_activity_timeline_table_name),
+    crm_event_rsvp=_safe_table(S.crm_event_rsvp_table_name),
+    crm_event_reminders=_safe_table(S.crm_event_reminders_table_name),
+    maintenance_orders=_safe_table(S.maintenance_orders_table_name),
+    maintenance_vendors=_safe_table(S.maintenance_vendors_table_name),
+    account_views=_safe_table(S.account_views_table_name),
+    entitlement_requests=_safe_table(S.entitlement_requests_table_name),
+    shipping_carriers=_safe_table(S.shipping_carriers_table_name),
+    shipment_items=_safe_table(S.shipment_items_table_name),
+    shipment_packages=_safe_table(S.shipment_packages_table_name),
+    customers=_safe_table(S.customers_table_name),
+    financial_products=_safe_table(S.financial_products_table_name),
+    rent_policy=_safe_table(S.rent_policy_table_name),
+    property_documents=_safe_table(S.property_documents_table_name),
+    hotel_folios=_safe_table(S.hotel_folios_table_name),
+    suppliers=_safe_table(S.suppliers_table_name),
+    supplier_products=_safe_table(S.supplier_products_table_name),
+    purchase_orders=_safe_table(S.purchase_orders_table_name),
+    po_receipts=_safe_table(S.po_receipts_table_name),
+    # CSN: PSD2 Consents
+    consents=_safe_table(S.consents_table_name),
+    # CSN-003: Dynamic Entities
+    dynamic_entity_defs=_safe_table(S.dynamic_entity_defs_table_name),
+    dynamic_entity_rows=_safe_table(S.dynamic_entity_rows_table_name),
+    # CSN-004: Dynamic Endpoints
+    dynamic_endpoints=_safe_table(S.dynamic_endpoints_table_name),
+    # CSN-005: Open Data (Branches + ATMs)
+    open_data=_safe_table(S.open_data_table_name),
+    crm_events=_safe_table(S.crm_events_table_name),
+    crm_event_registrations=_safe_table(S.crm_event_registrations_table_name),
+    crm_contact_sms_log=_safe_table(S.crm_contact_sms_log_table_name),
+    # PLT-003: Glossary endpoint
+    glossary=_safe_table(S.glossary_table_name),
+    mfg_boms=_safe_table(S.mfg_boms_table_name),
+    mfg_work_centers=_safe_table(S.mfg_work_centers_table_name),
+    mfg_work_orders=_safe_table(S.mfg_work_orders_table_name),
+    mfg_mrp=_safe_table(S.mfg_mrp_table_name),
+    hr=_safe_table(S.hr_table_name),
+    # OFBiz Fixed Assets (FXA-002)
+    fixed_assets=_safe_table(S.fixed_assets_table_name),
+    fixed_asset_schedule=_safe_table(S.fixed_asset_schedule_table_name),
+    pos=_safe_table(S.pos_table_name),
+    # ECM / OFBiz Phase-1 inventory + reservations
+    marketing_campaigns=_safe_table(S.marketing_campaigns_table_name),
+    contact_lists=_safe_table(S.contact_lists_table_name),
+    party_segments=_safe_table(S.party_segments_table_name),
+    tracking_codes=_safe_table(S.tracking_codes_table_name),
+    marketing_send_log=_safe_table(S.marketing_send_log_table_name),
+    counterparties=_safe_table(S.counterparties_table_name),
+    standing_orders=_safe_table(S.standing_orders_table_name),
+    direct_debit_mandates=_safe_table(S.direct_debit_mandates_table_name),
+    fx_rates=_safe_table(S.fx_rates_table_name),
+    ats_integration_links=_safe_table(S.ats_integration_links_table_name),
+    crm_campaigns=_safe_table(S.crm_campaigns_table_name),
+    crm_campaign_send_log=_safe_table(S.crm_campaign_send_log_table_name),
+    marketing_email_templates=_safe_table(S.marketing_email_templates_table_name),
+    marketing_contact_lists=_safe_table(S.marketing_contact_lists_table_name),
+    marketing_tracking_codes=_safe_table(S.marketing_tracking_codes_table_name),
+    marketing_web_lead_captures=_safe_table(S.marketing_web_lead_captures_table_name),
 )

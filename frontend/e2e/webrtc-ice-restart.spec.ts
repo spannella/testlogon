@@ -14,6 +14,8 @@
 
 import { test, expect, type Page, type BrowserContext, chromium, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -50,8 +52,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -88,7 +90,7 @@ table.put_item(Item={
 print("ok")
 `.replace("__CONVO_ID__", conversationId).replace("__PARTICIPANTS__", JSON.stringify(participantIds));
   execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
@@ -107,7 +109,7 @@ print("ok")
 `;
   try {
     execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
     });
@@ -146,7 +148,7 @@ table.put_item(Item={
 print("ok")
 `;
   execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 10_000,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
@@ -165,7 +167,7 @@ print("ok")
 `;
   try {
     execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
     });

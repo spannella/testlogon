@@ -29,11 +29,13 @@
 
 import { test, expect, type Page, request as playwrightRequest } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // Python interpreter that has boto3 installed.
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 const BASE = "http://localhost:3000";
 const API  = "http://localhost:8000";
@@ -63,8 +65,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -158,7 +160,7 @@ function injectPaymentMethod(userSub: string, pmId: string): void {
     `${PYTHON} -c "
 import boto3, os, time
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -211,7 +213,7 @@ function removePaymentMethod(userSub: string, pmId: string): void {
       `${PYTHON} -c "
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -265,38 +267,54 @@ async function getOrCreateDm(page: Page): Promise<string> {
 }
 
 /**
- * Navigate Alice to /messages and click on the "E2E Bob" DM row so the
- * conversation view + ComposeBar become visible.
+ * Open a specific conversation directly via the deep-link route
+ * (/messages/:conversationId) and wait for the ComposeBar.
+ *
+ * This is FULL-SUITE-SAFE: it does NOT depend on the conversation appearing
+ * (or being first) in the sidebar list. Under full-suite accumulation many
+ * Alice↔Bob DMs and hundreds of messages exist, so the sidebar list is large
+ * and may paginate or be slow to render the right "E2E Bob" row. Navigating
+ * directly to the conversation by id sidesteps all of that — MessagesPage's
+ * deep-link support (useParams + getConversation) auto-opens it.
+ *
+ * Caller must have injected auth first.
+ */
+async function openDmDirect(page: Page, convoId: string) {
+  await page.goto(`${BASE}/messages/${convoId}`, { waitUntil: "load" });
+  await expect(
+    page.getByPlaceholder("Type a message...").or(
+      page.getByPlaceholder("Type an encrypted message..."),
+    ),
+  ).toBeVisible({ timeout: 15000 });
+}
+
+/**
+ * Navigate Alice to her DM with Bob so the conversation view + ComposeBar
+ * become visible.
  *
  * Auth is injected first so that getOrCreateDm (and subsequent API helpers)
- * have valid cookies in the browser context.
+ * have valid cookies in the browser context. The conversation is opened via
+ * the deep-link route (by id) rather than by clicking a sidebar row, which is
+ * robust against full-suite DM/message accumulation.
  */
 async function openDmWithBob(page: Page) {
   // 1. Inject Alice's auth (sets cookies, navigates to /login)
   await injectAuth(page, ALICE_ID);
   // 2. Create / retrieve the DM (cookies are now in place)
   const convoId = await getOrCreateDm(page);
-  // 3. Send a "touch" message so _dmConvoId is the most-recently-active
-  //    conversation and appears as the FIRST "E2E Bob" row in the sidebar.
-  //    This is needed when multiple E2E DMs from past runs exist.
-  const session = getSessions()[ALICE_ID];
-  await page.request.post(`${API}/messaging/conversations/${convoId}/messages`, {
-    data: { text: `__touch__${Date.now()}` },
-    headers: { "x-csrf-token": session.csrf_token },
-  }).catch(() => {});
-  // 4. Navigate to /messages and wait for the conversations list to load.
-  await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await page.waitForTimeout(600);
-  // 5. Click on the "E2E Bob" conversation row
-  const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-  await expect(row).toBeVisible({ timeout: 12000 });
-  await row.click();
-  // 6. Wait for ComposeBar
-  await expect(
-    page.getByPlaceholder("Type a message...").or(
-      page.getByPlaceholder("Type an encrypted message..."),
-    ),
-  ).toBeVisible({ timeout: 5000 });
+  // 3. Open the conversation directly by id (suite-accumulation-safe).
+  await openDmDirect(page, convoId);
+}
+
+/** MCM-2: toggle options live inside the "+" popover. Open popover then click. */
+async function openComposeToggle(page: Page, ariaLabel: RegExp | string) {
+  await page.getByTestId("compose-more").click();
+  await page.getByRole("button", { name: ariaLabel }).click();
+}
+
+/** MCM-2: deactivate a toggle (same as activate — it's a toggle button). */
+async function deactivateComposeToggle(page: Page, ariaLabel: RegExp | string) {
+  await openComposeToggle(page, ariaLabel);
 }
 
 // ─── 1. Messaging page structure ──────────────────────────────────────────────
@@ -349,22 +367,24 @@ test.describe("2. ComposeBar — view-once text toggle", () => {
 
   test.afterAll(async () => page?.close());
 
-  test("'View once' checkbox is visible in compose bar", async () => {
-    await expect(page.getByLabel(/view once/i)).toBeVisible({ timeout: 5000 });
+  test("'View once' toggle is accessible via '+' popover", async () => {
+    await page.getByTestId("compose-more").click();
+    await expect(page.getByRole("button", { name: /toggle view once/i })).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("'View once' checkbox is unchecked by default", async () => {
-    await expect(page.getByLabel(/view once/i)).not.toBeChecked();
+  test("'View once' is inactive by default (no pill badge)", async () => {
+    await expect(page.getByText("View once").locator("..").filter({ has: page.locator("button[aria-label='Disable view once']") })).not.toBeVisible();
   });
 
-  test("Checking 'View once' marks it as checked", async () => {
-    await page.getByLabel(/view once/i).check();
-    await expect(page.getByLabel(/view once/i)).toBeChecked();
+  test("Enabling 'View once' shows active pill badge", async () => {
+    await openComposeToggle(page, /toggle view once/i);
+    await expect(page.getByRole("button", { name: /disable view once/i })).toBeVisible({ timeout: 3000 });
   });
 
-  test("Unchecking 'View once' reverts to unchecked", async () => {
-    await page.getByLabel(/view once/i).uncheck();
-    await expect(page.getByLabel(/view once/i)).not.toBeChecked();
+  test("Disabling 'View once' hides the pill badge", async () => {
+    await page.getByRole("button", { name: /disable view once/i }).click();
+    await expect(page.getByRole("button", { name: /disable view once/i })).not.toBeVisible({ timeout: 2000 });
   });
 });
 
@@ -380,22 +400,24 @@ test.describe("3. ComposeBar — encrypt message toggle", () => {
 
   test.afterAll(async () => page?.close());
 
-  test("'Encrypt message' checkbox is visible", async () => {
-    await expect(page.getByLabel(/encrypt message/i)).toBeVisible({ timeout: 5000 });
+  test("'Encrypt message' toggle is accessible via '+' popover", async () => {
+    await page.getByTestId("compose-more").click();
+    await expect(page.getByRole("button", { name: /toggle message encryption/i })).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("'Encrypt message' is unchecked by default", async () => {
-    await expect(page.getByLabel(/encrypt message/i)).not.toBeChecked();
+  test("'Encrypt message' is inactive by default", async () => {
+    await expect(page.getByRole("button", { name: /disable encryption/i })).not.toBeVisible();
   });
 
   test("Enabling encryption shows password input fields", async () => {
-    await page.getByLabel(/encrypt message/i).check();
+    await openComposeToggle(page, /toggle message encryption/i);
     await expect(page.getByPlaceholder("Encryption password")).toBeVisible({ timeout: 3000 });
     await expect(page.getByPlaceholder("Confirm password")).toBeVisible({ timeout: 3000 });
   });
 
-  test("'Encrypted send enabled' badge appears when encrypt is on", async () => {
-    await expect(page.getByText("Encrypted send enabled")).toBeVisible({ timeout: 3000 });
+  test("Active encrypt pill badge appears when encrypt is on", async () => {
+    await expect(page.getByRole("button", { name: /disable encryption/i })).toBeVisible({ timeout: 3000 });
   });
 
   test("Mismatched passwords shows 'Passwords do not match'", async () => {
@@ -410,7 +432,7 @@ test.describe("3. ComposeBar — encrypt message toggle", () => {
   });
 
   test("Disabling encryption hides password fields", async () => {
-    await page.getByLabel(/encrypt message/i).uncheck();
+    await page.getByRole("button", { name: /disable encryption/i }).click();
     await expect(page.getByPlaceholder("Encryption password")).not.toBeVisible({ timeout: 2000 });
     await expect(page.getByPlaceholder("Confirm password")).not.toBeVisible({ timeout: 2000 });
   });
@@ -441,23 +463,8 @@ test.describe("4. View-once text — recipient sees 'Tap to view once'", () => {
       throw new Error(`Bob's message send failed: HTTP ${resp.status()} — ${body}`);
     }
 
-    // Alice opens the conversation (already authed, just navigate)
-    const sec5ConvsLoaded2 = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec5ConvsLoaded2;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
-    await row.click();
-    await expect(
-      page.getByPlaceholder("Type a message...").or(
-        page.getByPlaceholder("Type an encrypted message..."),
-      ),
-    ).toBeVisible({ timeout: 5000 });
+    // Alice opens the conversation directly by id (suite-accumulation-safe).
+    await openDmDirect(page, convoId);
     // Small wait for messages to finish loading
     await page.waitForTimeout(500);
   });
@@ -522,23 +529,8 @@ test.describe("5. View-once text — sender sees text normally", () => {
       throw new Error(`Alice's message send failed: HTTP ${resp.status()} — ${body}`);
     }
 
-    // Alice opens the conversation
-    const sec5ConvsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec5ConvsLoaded;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
-    await expect(
-      page.getByPlaceholder("Type a message...").or(
-        page.getByPlaceholder("Type an encrypted message..."),
-      ),
-    ).toBeVisible({ timeout: 5000 });
+    // Alice opens the conversation directly by id (suite-accumulation-safe).
+    await openDmDirect(page, convoId);
     await page.waitForTimeout(500);
   });
 
@@ -568,8 +560,8 @@ test.describe("6. Encrypted message — compose and send via UI", () => {
     page = await browser.newPage();
     await openDmWithBob(page);
 
-    // Enable encryption, enter matching passwords, type and send
-    await page.getByLabel(/encrypt message/i).check();
+    // Enable encryption via "+" popover toggle
+    await openComposeToggle(page, /toggle message encryption/i);
     await page.getByPlaceholder("Encryption password").fill(ENCRYPT_PASSWORD);
     await page.getByPlaceholder("Confirm password").fill(ENCRYPT_PASSWORD);
     await expect(page.getByText("Passwords match")).toBeVisible({ timeout: 3000 });
@@ -648,7 +640,7 @@ test.describe("7. Decrypt message — dialog, wrong password, correct password",
     const existingCount = await page.getByRole("button", { name: "Decrypt message" }).count();
 
     // Send a fresh encrypted message to decrypt in this section
-    await page.getByLabel(/encrypt message/i).check();
+    await openComposeToggle(page, /toggle message encryption/i);
     await page.getByPlaceholder("Encryption password").fill(ENCRYPT_PASSWORD);
     await page.getByPlaceholder("Confirm password").fill(ENCRYPT_PASSWORD);
     await expect(page.getByText("Passwords match")).toBeVisible({ timeout: 3000 });
@@ -908,24 +900,10 @@ test.describe("9. Message display order — oldest first, newest last", () => {
     await page.waitForTimeout(1100);
     await apiPost(page, `/messaging/conversations/${_dmConvoId}/messages`, { text: MSG3 });
 
-    // Open the conversation in the browser.  ConversationView auto-scrolls
-    // to the bottom on mount, so MSG3 (newest) should be immediately visible.
-    const sec9ConvsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec9ConvsLoaded;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
-    await expect(
-      page.getByPlaceholder("Type a message...").or(
-        page.getByPlaceholder("Type an encrypted message..."),
-      ),
-    ).toBeVisible({ timeout: 5000 });
+    // Open the conversation in the browser directly by id (suite-safe).
+    // ConversationView auto-scrolls to the bottom on mount, so MSG3 (newest)
+    // should be immediately visible.
+    await openDmDirect(page, _dmConvoId!);
     // Wait until the message bubble <p> for MSG3 is rendered.
     // Using locator("p") avoids matching the sidebar <span> preview, which
     // would satisfy getByText too early (before the conversation view loads).
@@ -1028,18 +1006,8 @@ test.describe("9. Message display order — oldest first, newest last", () => {
   });
 
   test("Order is preserved after the page reloads (re-fetch from server)", async () => {
-    // Hard-navigate to /messages and re-open the DM to force a fresh API fetch.
-    const sec9ReloadConvsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec9ReloadConvsLoaded;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
+    // Hard-navigate to the DM by id to force a fresh API fetch (suite-safe).
+    await openDmDirect(page, _dmConvoId!);
     // Wait for the message bubble <p> (not the sidebar span) to confirm the
     // conversation view has finished loading before querying DOM order.
     await expect(page.locator("p").filter({ hasText: MSG3 })).toBeVisible({ timeout: 8000 });
@@ -1092,23 +1060,9 @@ test.describe("10. Scheduled send", () => {
   test.beforeAll(async ({ browser }) => {
     page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
-    await getOrCreateDm(page);
-    const sec10ConvsLoaded = page.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec10ConvsLoaded;
-    await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
-    await row.click();
-    await expect(
-      page.getByPlaceholder("Type a message...").or(
-        page.getByPlaceholder("Type an encrypted message..."),
-      ),
-    ).toBeVisible({ timeout: 5000 });
+    const convoId = await getOrCreateDm(page);
+    // Open the DM directly by id (suite-accumulation-safe).
+    await openDmDirect(page, convoId);
   });
 
   test.afterAll(async () => page?.close());
@@ -1348,25 +1302,17 @@ test.describe("11. Tips and locked messages", () => {
     bobMsgId = ((await r.json()) as { message_id: string }).message_id;
 
     // ── Bob's page ──
+    // Open the SAME DM directly by id (suite-accumulation-safe) instead of
+    // hunting for an "Alice" sidebar row, which is unreliable when many DMs
+    // and messages exist by the time this spec runs in the full suite.
     bobPage = await browser.newPage();
     await injectAuth(bobPage, BOB_ID);
-    const sec11BobConvsLoaded = bobPage.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await sec11BobConvsLoaded;
-    await bobPage.waitForTimeout(300);
-    // Bob's DM shows Alice's name (may be "E2E Alice" or changed by profile tests)
-    const bobRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(bobRow).toBeVisible({ timeout: 10000 });
-    await bobRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(`${BASE}/messages/${_dmConvoId}`, { waitUntil: "load" });
     await expect(
       bobPage
         .getByPlaceholder("Type a message...")
         .or(bobPage.getByPlaceholder("Type an encrypted message...")),
-    ).toBeVisible({ timeout: 5000 });
+    ).toBeVisible({ timeout: 15000 });
   });
 
   test.afterAll(async () => {
@@ -1551,54 +1497,44 @@ test.describe("11. Tips and locked messages", () => {
 
   // ── UI: compose-bar lock panel ─────────────────────────────────────────────
 
-  test("UI: 'Require tip to unlock' checkbox reveals lock price input", async () => {
-    const lockCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /require tip to unlock/i })
-      .locator("input[type='checkbox']");
-    await expect(lockCheck).toBeVisible({ timeout: 5000 });
-    await lockCheck.check();
+  test("UI: 'Require tip to unlock' toggle reveals lock price input", async () => {
+    // MCM-2: toggle lives in "+" popover.
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle message lock/i }).click();
     // Lock price input appears with placeholder "e.g. 1.00"
     await expect(alicePage.locator("input[placeholder='e.g. 1.00']")).toBeVisible({
       timeout: 3000,
     });
   });
 
-  test("UI: 'Attach tip' checkbox reveals tip amount input", async () => {
-    const lockCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /require tip to unlock/i })
-      .locator("input[type='checkbox']");
-    const tipCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /attach tip/i })
-      .locator("input[type='checkbox']");
-    // Uncheck lock if still checked
-    if (await lockCheck.isChecked()) await lockCheck.uncheck();
-    await tipCheck.check();
+  test("UI: 'Attach tip' toggle reveals tip amount input", async () => {
+    // Disable lock if still active (lock pill × button visible)
+    if (await alicePage.getByRole("button", { name: /disable lock/i }).isVisible().catch(() => false)) {
+      await alicePage.getByRole("button", { name: /disable lock/i }).click();
+    }
+    // Enable tip via "+" popover
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle attach tip/i }).click();
     // Tip amount input appears with placeholder "e.g. 5.00"
     await expect(alicePage.locator("input[placeholder='e.g. 5.00']")).toBeVisible({
       timeout: 3000,
     });
   });
 
-  test("UI: lock and tip checkboxes are mutually exclusive", async () => {
-    const lockCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /require tip to unlock/i })
-      .locator("input[type='checkbox']");
-    const tipCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /attach tip/i })
-      .locator("input[type='checkbox']");
-    // Tip is currently checked (from previous test); checking lock should uncheck tip
-    if (!(await tipCheck.isChecked())) await tipCheck.check();
-    await lockCheck.check();
-    await expect(tipCheck).not.toBeChecked({ timeout: 3000 });
-    // Vice versa: checking tip should uncheck lock
-    await tipCheck.check();
-    await expect(lockCheck).not.toBeChecked({ timeout: 3000 });
-    // Leave tip checked, lock unchecked for next test
+  test("UI: lock and tip toggles are mutually exclusive", async () => {
+    // Tip is currently active (from previous test); enabling lock should disable tip
+    if (!(await alicePage.getByRole("button", { name: /disable tip/i }).isVisible().catch(() => false))) {
+      await alicePage.getByTestId("compose-more").click();
+      await alicePage.getByRole("button", { name: /toggle attach tip/i }).click();
+    }
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle message lock/i }).click();
+    await expect(alicePage.getByRole("button", { name: /disable tip/i })).not.toBeVisible({ timeout: 3000 });
+    // Vice versa: enabling tip should disable lock
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle attach tip/i }).click();
+    await expect(alicePage.getByRole("button", { name: /disable lock/i })).not.toBeVisible({ timeout: 3000 });
+    // Leave tip active, lock inactive for next test
   });
 
   test("UI: Alice sends a locked message and sees the 'Locked ·' badge", async () => {
@@ -1607,19 +1543,16 @@ test.describe("11. Tips and locked messages", () => {
     // in-flight. Wait until the textarea is enabled before interacting.
     await expect(alicePage.locator("textarea").last()).not.toBeDisabled({ timeout: 20_000 });
 
-    const lockCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /require tip to unlock/i })
-      .locator("input[type='checkbox']");
-    const tipCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /attach tip/i })
-      .locator("input[type='checkbox']");
-    // After mutual-exclusion test, lock is unchecked — check it.
-    // Checking lock should uncheck tip (mutual exclusion) — wait for that to settle
-    // before filling the compose bar, otherwise the tip PM requirement keeps Send disabled.
-    if (!(await lockCheck.isChecked())) await lockCheck.check();
-    await expect(tipCheck).not.toBeChecked({ timeout: 5000 });
+    // Disable tip if active, then enable lock
+    if (await alicePage.getByRole("button", { name: /disable tip/i }).isVisible().catch(() => false)) {
+      await alicePage.getByRole("button", { name: /disable tip/i }).click();
+    }
+    if (!(await alicePage.getByRole("button", { name: /disable lock/i }).isVisible().catch(() => false))) {
+      await alicePage.getByTestId("compose-more").click();
+      await alicePage.getByRole("button", { name: /toggle message lock/i }).click();
+    }
+    // Tip should now be inactive (mutual exclusion)
+    await expect(alicePage.getByRole("button", { name: /disable tip/i })).not.toBeVisible({ timeout: 5000 });
     // Wait for the lock price input to appear after state update
     await expect(alicePage.locator("input[placeholder='e.g. 1.00']")).toBeVisible({ timeout: 3000 });
     await alicePage.locator("input[placeholder='e.g. 1.00']").fill("1");
@@ -1645,23 +1578,14 @@ test.describe("11. Tips and locked messages", () => {
   });
 
   test("UI: Bob's page shows 'Lock ·' badge and 'Unlock for' button", async () => {
-    // Reload Bob's page so the new locked message is fetched
-    const sec11BobReloadConvsLoaded = bobPage.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-        && !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await bobPage.reload({ waitUntil: "load" });
-    await sec11BobReloadConvsLoaded;
-    await bobPage.waitForTimeout(300);
-    const bobRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(bobRow).toBeVisible({ timeout: 10000 });
-    await bobRow.evaluate((el) => (el as HTMLElement).click());
+    // Re-open Bob's DM directly by id so the new locked message is fetched
+    // (suite-safe; the deep-link auto-opens the conversation).
+    await bobPage.goto(`${BASE}/messages/${_dmConvoId}`, { waitUntil: "load" });
     await expect(
       bobPage
         .getByPlaceholder("Type a message...")
         .or(bobPage.getByPlaceholder("Type an encrypted message...")),
-    ).toBeVisible({ timeout: 5000 });
+    ).toBeVisible({ timeout: 15000 });
     // The lock description is shown even when locked — use it to identify the correct bubble.
     // This avoids strict-mode failures when the DM contains locked messages from prior runs.
     const lockedBubble = bobPage.locator("div.group").filter({ hasText: UI_LOCK_DESC }).last();
@@ -1770,30 +1694,18 @@ test.describe("11. Tips and locked messages", () => {
     const body = await resp.json() as { tip_amount_cents: number };
     expect(body.tip_amount_cents).toBe(100);
 
-    // Reload Alice's page so the tipped message is fetched fresh from the server.
-    // The apiPost updated last_message_at, so the DM is the most-recent conversation
-    // and "E2E Bob" will appear at the top of the sidebar.
-    // Register the conversations-list listener BEFORE reload to avoid missing it.
-    const convsLoaded = alicePage.waitForResponse(
-      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET",
-      { timeout: 20_000 },
-    );
-    await alicePage.reload({ waitUntil: "load" });
-    await convsLoaded; // wait for sidebar conversations query to finish loading
-
-    // Re-open the DM conversation.
-    const dmRow = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(dmRow).toBeVisible({ timeout: 15_000 });
+    // Re-open the DM directly by id so the tipped message is fetched fresh from
+    // the server (suite-safe; does not depend on sidebar ordering/pagination).
     const msgsLoaded = alicePage.waitForResponse(
       (r) => r.url().includes(`/conversations/${_dmConvoId}/messages`) && r.request().method() === "GET",
       { timeout: 15_000 },
     );
-    await dmRow.click();
+    await alicePage.goto(`${BASE}/messages/${_dmConvoId}`, { waitUntil: "load" });
     await expect(
       alicePage
         .getByPlaceholder("Type a message...")
         .or(alicePage.getByPlaceholder("Type an encrypted message...")),
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 15_000 });
     await msgsLoaded;
 
     // "Tip: $1.00" badge should now appear on the sent bubble.
@@ -1823,30 +1735,19 @@ test.describe("11. Tips and locked messages", () => {
         throw new Error(`Bob fresh msg failed: ${r.status()}`);
       }
 
-      // Reload Alice's page so the new message is fetched fresh.
-      // Register the conversations-list listener BEFORE reload to avoid missing it.
-      const convsLoaded = alicePage.waitForResponse(
-        (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET",
-        { timeout: 20_000 },
-      );
-      await alicePage.reload({ waitUntil: "load" });
-      await convsLoaded; // wait for sidebar conversations query to complete
-
-      // Re-open the E2E Bob DM (it's at the top of the list as the most-recent).
-      const dmRow = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-      await expect(dmRow).toBeVisible({ timeout: 15_000 });
-
-      // Register the messages response listener BEFORE clicking to avoid a race.
+      // Re-open the DM directly by id so the new message is fetched fresh
+      // (suite-safe; does not depend on sidebar ordering/pagination).
+      // Register the messages response listener BEFORE navigating to avoid a race.
       const msgsLoaded = alicePage.waitForResponse(
         (res) => res.url().includes(`/conversations/${_dmConvoId}/messages`) && res.request().method() === "GET",
         { timeout: 15000 },
       );
-      await dmRow.click();
+      await alicePage.goto(`${BASE}/messages/${_dmConvoId}`, { waitUntil: "load" });
       await expect(
         alicePage
           .getByPlaceholder("Type a message...")
           .or(alicePage.getByPlaceholder("Type an encrypted message...")),
-      ).toBeVisible({ timeout: 5000 });
+      ).toBeVisible({ timeout: 15000 });
       await msgsLoaded; // wait for messages query to complete
 
       // Bob's fresh message should now be visible at the bottom of the conversation.
@@ -1991,13 +1892,10 @@ test.describe("12. Message expiry", () => {
 
   // ── UI: compose-bar expiry controls ───────────────────────────────────────
 
-  test("UI: 'Message expires' checkbox reveals the duration select", async () => {
-    const expiresCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /message expires/i })
-      .locator("input[type='checkbox']");
-    await expect(expiresCheck).toBeVisible({ timeout: 5000 });
-    await expiresCheck.check();
+  test("UI: 'Message expires' toggle reveals the duration select", async () => {
+    // MCM-2: toggle lives in "+" popover.
+    await alicePage.getByTestId("compose-more").click();
+    await alicePage.getByRole("button", { name: /toggle message expiry/i }).click();
     // The duration <select> should appear
     await expect(alicePage.locator("select")).toBeVisible({ timeout: 3000 });
   });
@@ -2012,12 +1910,11 @@ test.describe("12. Message expiry", () => {
   });
 
   test("UI: sending with 1-minute expiry shows the 'expires' badge on the bubble", async () => {
-    // Ensure the "Message expires" checkbox is checked (it should be from prev test).
-    const expiresCheck = alicePage
-      .locator("label")
-      .filter({ hasText: /message expires/i })
-      .locator("input[type='checkbox']");
-    if (!(await expiresCheck.isChecked())) await expiresCheck.check();
+    // Ensure the "Message expires" toggle is active (pill visible from prev test).
+    if (!(await alicePage.getByRole("button", { name: /disable expiry/i }).isVisible().catch(() => false))) {
+      await alicePage.getByTestId("compose-more").click();
+      await alicePage.getByRole("button", { name: /toggle message expiry/i }).click();
+    }
 
     // Select "1 minute" (value="60").
     const select = alicePage.locator("select");

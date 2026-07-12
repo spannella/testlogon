@@ -323,7 +323,13 @@ class Settings:
     default_monthly_price_cents: int = int(os.environ.get("DEFAULT_MONTHLY_PRICE_CENTS", "999"))
     default_currency_code: int = int(os.environ.get("DEFAULT_CURRENCY_CODE", "840"))
     default_currency: str = os.environ.get("DEFAULT_CURRENCY", "usd")
-    ccbill_webhook_ip_enforce: bool = os.environ.get("CCBILL_WEBHOOK_IP_ENFORCE", "false").lower() == "true"
+    property_dashboard_enabled: bool = os.environ.get("PROPERTY_DASHBOARD_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    rent_policy_table_name: str = os.environ.get("RENT_POLICY_TABLE_NAME", "rent_policy")
+    rent_policy_cache_ttl_seconds: int = int(os.environ.get("RENT_POLICY_CACHE_TTL_SECONDS", "60"))
+    property_documents_table_name: str = os.environ.get("PROPERTY_DOCUMENTS_TABLE_NAME", "property_documents")
+    portfolio_kpi_max_ledger_scan_pages: int = int(os.environ.get("PORTFOLIO_KPI_MAX_LEDGER_SCAN_PAGES", "50"))
+    portfolio_priority_items_default_limit: int = int(os.environ.get("PORTFOLIO_PRIORITY_ITEMS_DEFAULT_LIMIT", "20"))
+    ccbill_webhook_ip_enforce: bool = os.environ.get("CCBILL_WEBHOOK_IP_ENFORCE", "false").lower() in ("1", "true", "yes", "on")
     ccbill_webhook_ip_ranges: str = os.environ.get("CCBILL_WEBHOOK_IP_RANGES", "")
     ccbill_webhook_verify_mode: str = os.environ.get("CCBILL_WEBHOOK_VERIFY_MODE", "")
     ccbill_webhook_signature_secret: str = os.environ.get("CCBILL_WEBHOOK_SIGNATURE_SECRET", "")
@@ -386,11 +392,11 @@ class Settings:
     payment_incidents_webhook_replay_cache_size: int = int(os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_REPLAY_CACHE_SIZE", "5000"))
     payment_incidents_backfill_apply_enabled: bool = os.environ.get("PAYMENT_INCIDENTS_BACKFILL_APPLY_ENABLED", "0") not in ("0", "false", "False")
     account_state_table_name: str = os.environ.get("ACCOUNT_STATE_TABLE_NAME", "account_state")
-    billing_reconcile_enabled: bool = os.environ.get("BILLING_RECONCILE_ENABLED", "false").lower() == "true"
+    billing_reconcile_enabled: bool = os.environ.get("BILLING_RECONCILE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     billing_reconcile_interval_seconds: int = int(os.environ.get("BILLING_RECONCILE_INTERVAL_SECONDS", "900"))
     billing_reconcile_pending_age_seconds: int = int(os.environ.get("BILLING_RECONCILE_PENDING_AGE_SECONDS", "3600"))
     billing_reconcile_scan_limit: int = int(os.environ.get("BILLING_RECONCILE_SCAN_LIMIT", "200"))
-    billing_dunning_enabled: bool = os.environ.get("BILLING_DUNNING_ENABLED", "false").lower() == "true"
+    billing_dunning_enabled: bool = os.environ.get("BILLING_DUNNING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     billing_dunning_interval_seconds: int = int(os.environ.get("BILLING_DUNNING_INTERVAL_SECONDS", "900"))
     billing_dunning_retry_schedule_seconds: str = os.environ.get("BILLING_DUNNING_RETRY_SCHEDULE_SECONDS", "3600,86400,172800")
     # SUB-E1: recurring subscription renewal + dunning + expiry engine.
@@ -431,16 +437,44 @@ class Settings:
     tickets_space_status_index_name: str = os.environ.get("TICKETS_SPACE_STATUS_INDEX_NAME", "space_status-updated_at-index")
     tickets_space_assignee_index_name: str = os.environ.get("TICKETS_SPACE_ASSIGNEE_INDEX_NAME", "space_assignee-updated_at-index")
     tickets_member_spaces_index_name: str = os.environ.get("TICKETS_MEMBER_SPACES_INDEX_NAME", "member_sub-space_id-index")
+    # TKB: ticket boards (Kanban). Defaults OFF — when false the /boards router
+    # is not registered and board columns are not seeded/back-filled, so legacy
+    # space/ticket behavior is byte-for-byte unchanged.
+    ticket_boards_enabled: bool = os.environ.get("TICKET_BOARDS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     tickets_jira_workspace_index_name: str = os.environ.get("TICKETS_JIRA_WORKSPACE_INDEX_NAME", "jira_workspace-updated_at-index")
     tickets_jira_issue_index_name: str = os.environ.get("TICKETS_JIRA_ISSUE_INDEX_NAME", "jira_issue-index")
     tickets_jira_sync_state_index_name: str = os.environ.get("TICKETS_JIRA_SYNC_STATE_INDEX_NAME", "jira_sync_state-updated_at-index")
 
+    # Ticket bounties (TBT-001) — escrow-backed ticket bounties. Additive, default OFF.
+    # When off, all bounty endpoints 404 and the ticket + billing systems are unchanged.
+    ticket_bounties_enabled: bool = (
+        os.environ.get("TICKET_BOUNTIES_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    )
+    ticket_bounty_min_cents: int = int(os.environ.get("TICKET_BOUNTY_MIN_CENTS", "100"))
+    ticket_bounty_max_cents: int = int(os.environ.get("TICKET_BOUNTY_MAX_CENTS", "10000000"))
+    ticket_bounty_fee_bps: int = int(os.environ.get("TICKET_BOUNTY_FEE_BPS", "0"))
+    ticket_bounty_payout_hold_seconds: int = int(
+        os.environ.get("TICKET_BOUNTY_PAYOUT_HOLD_SECONDS", "0")
+    )
+    # Reserved / NOT enforced in v1 (audit D3 — no repost cap; bounty_repost_count
+    # is tracked but unenforced). Kept so a future opt-in cap is a one-line flip.
+    ticket_bounty_max_reposts: int = int(os.environ.get("TICKET_BOUNTY_MAX_REPOSTS", "3"))
+    # TKA-001/002 — ticket file attachments (presign + store, list/download/delete). Default OFF.
+    ticket_attachments_enabled: bool = os.environ.get("TICKET_ATTACHMENTS_ENABLED", "0").lower() not in ("0", "false", "no", "off", "")
+    ticket_attachments_s3_bucket: str = os.environ.get("TICKET_ATTACHMENTS_S3_BUCKET", "")
+    ticket_attachments_presign_ttl_seconds: int = int(os.environ.get("TICKET_ATTACHMENTS_PRESIGN_TTL_SECONDS", "900"))
+    ticket_attachments_download_ttl_seconds: int = int(os.environ.get("TICKET_ATTACHMENTS_DOWNLOAD_TTL_SECONDS", "300"))
+    # TBT-002 — sparse ByBounty GSI on the tickets table (funded+unclaimed board).
+    tickets_bounty_index_name: str = os.environ.get(
+        "TICKETS_BOUNTY_INDEX_NAME", "bounty-open-created_at-index"
+    )
+
     # Jira integration feature flags and guardrails
-    jira_sync_enabled: bool = os.environ.get("JIRA_SYNC_ENABLED", "false").lower() == "true"
-    jira_sync_read_enabled: bool = os.environ.get("JIRA_SYNC_READ_ENABLED", "false").lower() == "true"
-    jira_sync_outbound_enabled: bool = os.environ.get("JIRA_SYNC_OUTBOUND_ENABLED", "false").lower() == "true"
-    jira_sync_inbound_enabled: bool = os.environ.get("JIRA_SYNC_INBOUND_ENABLED", "false").lower() == "true"
-    jira_sync_outbound_kill_switch: bool = os.environ.get("JIRA_SYNC_OUTBOUND_KILL_SWITCH", "false").lower() == "true"
+    jira_sync_enabled: bool = os.environ.get("JIRA_SYNC_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    jira_sync_read_enabled: bool = os.environ.get("JIRA_SYNC_READ_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    jira_sync_outbound_enabled: bool = os.environ.get("JIRA_SYNC_OUTBOUND_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    jira_sync_inbound_enabled: bool = os.environ.get("JIRA_SYNC_INBOUND_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    jira_sync_outbound_kill_switch: bool = os.environ.get("JIRA_SYNC_OUTBOUND_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
     jira_sync_workspace_allowlist: str = os.environ.get("JIRA_SYNC_WORKSPACE_ALLOWLIST", "")
     jira_sync_require_workspace_allowlist: bool = os.environ.get("JIRA_SYNC_REQUIRE_WORKSPACE_ALLOWLIST", "true").lower() == "true"
     jira_sync_require_oauth_config: bool = os.environ.get("JIRA_SYNC_REQUIRE_OAUTH_CONFIG", "true").lower() == "true"
@@ -497,6 +531,20 @@ class Settings:
 
     # Contacts
     contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
+
+    # Sales pipeline (OPP-001)
+    sales_pipeline_enabled: bool = os.environ.get(
+        "SALES_PIPELINE_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    sales_pipeline_allow_reopen: bool = os.environ.get(
+        "SALES_PIPELINE_ALLOW_REOPEN", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    sales_opportunities_table_name: str = os.environ.get(
+        "DDB_SALES_OPPORTUNITIES_TABLE", "sales_opportunities"
+    )
+    sales_quotas_table_name: str = os.environ.get(
+        "DDB_SALES_QUOTAS_TABLE", "sales_quotas"
+    )
 
     # Messaging
     broadcast_profiles_table_name: str = os.environ.get("DDB_BROADCAST_PROFILES", "BroadcastProfiles")
@@ -828,6 +876,27 @@ class Settings:
     # Multi-stage cart reminders (GAP-0189 / FIN-003)
     cart_reminders_enabled: bool = os.environ.get("CART_REMINDERS_ENABLED", "1") not in ("0", "false", "False")
     cart_reminder_config_table_name: str = os.environ.get("CART_REMINDER_CONFIG_TABLE", "cart_reminder_config")
+    # PRT-001: ATS Career Portal
+    career_portal_enabled: bool = os.environ.get("CAREER_PORTAL_ENABLED", "0") not in ("0", "false", "False")
+    career_portal_table_name: str = os.environ.get("DDB_CAREER_PORTAL_TABLE", "CareerPortal")
+    career_portal_apply_rate_limit_per_ip_per_hour: int = int(
+        os.environ.get("CAREER_PORTAL_APPLY_RATE_LIMIT_PER_IP_PER_HOUR", "10")
+    )
+    career_portal_resume_max_bytes: int = int(
+        os.environ.get("CAREER_PORTAL_RESUME_MAX_BYTES", str(10 * 1024 * 1024))
+    )
+    career_portal_slug_prefix: str = os.environ.get("CAREER_PORTAL_SLUG_PREFIX", "")
+    career_portal_rss_max_items: int = int(
+        os.environ.get("CAREER_PORTAL_RSS_MAX_ITEMS", "50")
+    )
+    # PRT-004 apply autoresponder
+    career_portal_apply_autoresponder_enabled: bool = (
+        os.environ.get("CAREER_PORTAL_APPLY_AUTORESPONDER_ENABLED", "0") not in ("0", "false", "False")
+    )
+    career_portal_apply_autoresponder_subject: str = (
+        os.environ.get("CAREER_PORTAL_APPLY_AUTORESPONDER_SUBJECT", "We received your application")
+    )
+    career_portal_apply_notify_email: str = os.environ.get("CAREER_PORTAL_APPLY_NOTIFY_EMAIL", "")
     # Cart recovery one-time link signing (GAP-0190 / FIN-003). Defaults to the
     # UI access-token secret so dev (no extra env) and prod (set via env) both
     # produce verifiable signed tokens — dev/prod parity (SECOPS-007).
@@ -836,10 +905,60 @@ class Settings:
         or os.environ.get("UI_ACCESS_TOKEN_SECRET", "")
     )
     cart_recovery_link_ttl_days: int = int(os.environ.get("CART_RECOVERY_LINK_TTL_DAYS", "7"))
+    # OFBiz Manufacturing/MRP (MFG-001..MFG-014). Master switch defaults OFF.
+    manufacturing_mrp_enabled: bool = os.environ.get("MANUFACTURING_MRP_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    mfg_boms_table_name: str = os.environ.get("MFG_BOMS_TABLE_NAME", "mfg_boms")
+    mfg_work_centers_table_name: str = os.environ.get("MFG_WORK_CENTERS_TABLE_NAME", "mfg_work_centers")
+    mfg_work_orders_table_name: str = os.environ.get("MFG_WORK_ORDERS_TABLE_NAME", "mfg_work_orders")
+    mfg_mrp_table_name: str = os.environ.get("MFG_MRP_TABLE_NAME", "mfg_mrp")
+    mfg_mrp_default_horizon_days: int = int(os.environ.get("MFG_MRP_DEFAULT_HORIZON_DAYS", "30"))
+    mfg_bom_max_explosion_depth: int = int(os.environ.get("MFG_BOM_MAX_EXPLOSION_DEPTH", "5"))
+    manufacturing_cost_posting_enabled: bool = os.environ.get("MANUFACTURING_COST_POSTING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
     catalog_default_low_stock_threshold: int = int(os.environ.get("CATALOG_LOW_STOCK_THRESHOLD", "5"))
     catalog_stock_alerts_enabled: bool = os.environ.get("CATALOG_STOCK_ALERTS_ENABLED", "1") not in ("0", "false", "False")
+    # OFBiz Catalog/Product Depth (PRD-001..PRD-016)
+    # Master switch defaults OFF. Sub-flags default True so enabling the master
+    # activates all depth features; operators can disable individual axes.
+    product_depth_enabled: bool = os.environ.get("PRODUCT_DEPTH_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    product_depth_table_name: str = os.environ.get("PRODUCT_DEPTH_TABLE_NAME", "product_depth")
+    product_depth_variants_enabled: bool = os.environ.get("PRODUCT_DEPTH_VARIANTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    product_depth_bundles_enabled: bool = os.environ.get("PRODUCT_DEPTH_BUNDLES_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    product_depth_features_enabled: bool = os.environ.get("PRODUCT_DEPTH_FEATURES_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    product_depth_price_components_enabled: bool = os.environ.get("PRODUCT_DEPTH_PRICE_COMPONENTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    product_depth_max_category_depth: int = int(os.environ.get("PRODUCT_DEPTH_MAX_CATEGORY_DEPTH", "10"))
+    product_depth_max_variants_per_item: int = int(os.environ.get("PRODUCT_DEPTH_MAX_VARIANTS_PER_ITEM", "1000"))
+
+    # OFBiz commerce/ERP — Phase 1: inventory & soft reservations (ADR-001, OFB-002/003/004).
+    # Master switch defaults OFF: with it off, the catalog/cart/billing decrement-at-purchase
+    # path is byte-for-byte unchanged; the inventory service is dormant.
+    inventory_reservations_enabled: bool = os.environ.get("INVENTORY_RESERVATIONS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    inventory_reservation_ttl_seconds: int = int(os.environ.get("INVENTORY_RESERVATION_TTL_SECONDS", "1800"))
+    inventory_table_name: str = os.environ.get("INVENTORY_TABLE_NAME", "inventory")
+    reservations_table_name: str = os.environ.get("RESERVATIONS_TABLE_NAME", "reservations")
+    gl_double_entry_enabled: bool = os.environ.get("GL_DOUBLE_ENTRY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    gl_accounts_table_name: str = os.environ.get("GL_ACCOUNTS_TABLE_NAME", "gl_accounts")
+    gl_journal_table_name: str = os.environ.get("GL_JOURNAL_TABLE_NAME", "gl_journal")
+    gl_ar_ap_enabled: bool = os.environ.get("GL_AR_AP_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    ar_ap_subledgers_enabled: bool = os.environ.get("AR_AP_SUBLEDGERS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    ar_ap_snapshots_table_name: str = os.environ.get("AR_AP_SNAPSHOTS_TABLE_NAME", "ar_ap_snapshots")
+    pricing_rules_enabled: bool = os.environ.get("PRICING_RULES_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    pricing_rules_table_name: str = os.environ.get("PRICING_RULES_TABLE_NAME", "PricingRules")
+    # OFBiz commerce/ERP Milestone 3 — Returns / RMA (ADR-001, OFB-008..010).
+    # Master switch defaults OFF: with it off the returns/RMA endpoints 404 and
+    # the module is dormant; existing order/billing behavior is unchanged.
+    # Store integration layer (ECM-002 / Phase 8-J). Master switch: when False the entire store-integration layer is dormant and the catalog/cart/checkout paths are byte-for-byte unchanged.
+    store_integration_enabled: bool = os.environ.get("STORE_INTEGRATION_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    # Per-surface sub-flags — each is AND-ed with the master switch inside _integration_enabled(sub_flag). All default false so production deployments can enable surfaces incrementally without a code change.
+    store_show_live_availability: bool = os.environ.get("STORE_SHOW_LIVE_AVAILABILITY", "false").lower() in ("1", "true", "yes", "on")
+    store_apply_pricing_rules: bool = os.environ.get("STORE_APPLY_PRICING_RULES", "false").lower() in ("1", "true", "yes", "on")
+    store_show_fulfillment_status: bool = os.environ.get("STORE_SHOW_FULFILLMENT_STATUS", "false").lower() in ("1", "true", "yes", "on")
+    store_variant_selection_enabled: bool = os.environ.get("STORE_VARIANT_SELECTION_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    # ECM-008: reserve-on-add-to-cart flag (both this AND inventory_reservations_enabled must be true)
+    store_cart_reservations_enabled: bool = os.environ.get("STORE_CART_RESERVATIONS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    returns_rma_enabled: bool = os.environ.get("RETURNS_RMA_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    returns_table_name: str = os.environ.get("RETURNS_TABLE_NAME", "returns")
 
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
@@ -864,6 +983,10 @@ class Settings:
     filemgr_icloud_mount_rollout_mode_by_env: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_ROLLOUT_MODE_BY_ENV", "")
     filemgr_icloud_mount_kill_switch: bool = os.environ.get("FILEMGR_ICLOUD_MOUNT_KILL_SWITCH", "0") == "1"
     filemgr_icloud_mount_enabled_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_ENABLED_TENANT_IDS", "")
+
+    # Property management — Tenants (TEN-001)
+    property_tenants_enabled: bool = os.environ.get("PROPERTY_TENANTS_ENABLED", "0") not in ("0", "false", "False")
+    property_tenants_table_name: str = os.environ.get("DDB_PROPERTY_TENANTS_TABLE", "property_tenants")
     filemgr_icloud_mount_disabled_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_DISABLED_TENANT_IDS", "")
     filemgr_icloud_mount_internal_user_subs: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_INTERNAL_USER_SUBS", "")
     filemgr_icloud_mount_internal_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_INTERNAL_TENANT_IDS", "")
@@ -882,7 +1005,7 @@ class Settings:
     filemgr_mount_unavailable_fail_threshold: int = int(os.environ.get("FILEMGR_MOUNT_UNAVAILABLE_FAIL_THRESHOLD", "6"))
     filemgr_mount_recovery_success_threshold: int = int(os.environ.get("FILEMGR_MOUNT_RECOVERY_SUCCESS_THRESHOLD", "2"))
     filemgr_mount_status_update_sla_seconds: int = int(os.environ.get("FILEMGR_MOUNT_STATUS_UPDATE_SLA_SECONDS", "30"))
-    filemgr_mount_reconcile_enabled: bool = os.environ.get("FILEMGR_MOUNT_RECONCILE_ENABLED", "false").lower() == "true"
+    filemgr_mount_reconcile_enabled: bool = os.environ.get("FILEMGR_MOUNT_RECONCILE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     filemgr_mount_reconcile_interval_seconds: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_INTERVAL_SECONDS", "900"))
     filemgr_mount_reconcile_scan_limit: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_SCAN_LIMIT", "100"))
     filemgr_mount_reconcile_local_page_limit: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_LOCAL_PAGE_LIMIT", "200"))
@@ -918,6 +1041,18 @@ class Settings:
         "By signing this document, you agree your signature is legally binding.",
     )
     signature_packet_reminder_schedule_hours: str = os.environ.get("SIGNATURE_PACKET_REMINDER_SCHEDULE_HOURS", "24,72,168")
+    # SUX-001: public tokenized signing links. Mirrors cart_recovery_link_* —
+    # secret falls back to the UI access-token secret so dev (no extra env) and
+    # prod (set via env) both verify, dev/prod parity (SECOPS-007). Flag default
+    # OFF so existing behaviour is byte-for-byte unchanged until enabled.
+    signature_public_link_enabled: bool = os.environ.get("SIGNATURE_PUBLIC_LINK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    signature_packet_public_link_secret: str = (
+        os.environ.get("SIGNATURE_PACKET_PUBLIC_LINK_SECRET")
+        or os.environ.get("UI_ACCESS_TOKEN_SECRET", "")
+    )
+    signature_packet_public_link_ttl_days: int = int(os.environ.get("SIGNATURE_PACKET_PUBLIC_LINK_TTL_DAYS", "14"))
+    signature_public_link_rate_max_per_window: int = int(os.environ.get("SIGNATURE_PUBLIC_LINK_RATE_MAX_PER_WINDOW", "60"))
+    signature_public_link_rate_window_seconds: int = int(os.environ.get("SIGNATURE_PUBLIC_LINK_RATE_WINDOW_SECONDS", "3600"))
     signature_templates_table_name: str = os.environ.get(
         "SIGNATURE_TEMPLATES_TABLE_NAME",
         "signature_templates",
@@ -929,7 +1064,7 @@ class Settings:
     filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
     filemgr_retention_days: int = int(os.environ.get("FILEMGR_RETENTION_DAYS", "30"))
     filemgr_purge_scan_limit: int = int(os.environ.get("FILEMGR_PURGE_SCAN_LIMIT", "200"))
-    filemgr_purge_enabled: bool = os.environ.get("FILEMGR_PURGE_ENABLED", "false").lower() == "true"
+    filemgr_purge_enabled: bool = os.environ.get("FILEMGR_PURGE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     filemgr_purge_interval_seconds: int = int(os.environ.get("FILEMGR_PURGE_INTERVAL_SECONDS", "900"))
     filemgr_admin_content_access_tier: str = os.environ.get("FILEMGR_ADMIN_CONTENT_ACCESS_TIER", "none")
     filemgr_purge_index_name: str = os.environ.get("FILEMGR_PURGE_INDEX_NAME", "GSI_PURGE")
@@ -950,7 +1085,7 @@ class Settings:
     share_link_s3_prefix: str = os.environ.get("SHARE_LINK_S3_PREFIX", "share-links")
     share_link_base_url: str = os.environ.get("SHARE_LINK_BASE_URL", "http://localhost:3000/share").rstrip("/")
 
-    projects_reconcile_enabled: bool = os.environ.get("PROJECTS_RECONCILE_ENABLED", "false").lower() == "true"
+    projects_reconcile_enabled: bool = os.environ.get("PROJECTS_RECONCILE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     projects_reconcile_interval_seconds: int = int(os.environ.get("PROJECTS_RECONCILE_INTERVAL_SECONDS", "900"))
     projects_reconcile_scan_limit: int = int(os.environ.get("PROJECTS_RECONCILE_SCAN_LIMIT", "200"))
     projects_reconcile_max_attempts: int = int(os.environ.get("PROJECTS_RECONCILE_MAX_ATTEMPTS", "3"))
@@ -1121,6 +1256,11 @@ class Settings:
     api_entitlement_low_balance_thresholds: str = os.environ.get("API_ENTITLEMENT_LOW_BALANCE_THRESHOLDS", "0.2,0.1,0.05")
     api_entitlement_near_cap_thresholds: str = os.environ.get("API_ENTITLEMENT_NEAR_CAP_THRESHOLDS", "0.8,0.9,0.95")
 
+    # Order lifecycle state machine (ORD-002)
+    order_lifecycle_enabled: bool = os.environ.get("ORDER_LIFECYCLE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    order_lifecycle_auto_approve: bool = os.environ.get("ORDER_LIFECYCLE_AUTO_APPROVE", "false").lower() in ("1", "true", "yes", "on")
+    order_backorder_enabled: bool = os.environ.get("ORDER_BACKORDER_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+
 
     # Newsfeed rich-content feature flags
     newsfeed_markdown_enabled: bool = os.environ.get("NEWSFEED_MARKDOWN_ENABLED", "false").lower() in ("1", "true", "yes", "on")
@@ -1175,8 +1315,8 @@ class Settings:
     video_share_playback_token_ttl_seconds: int = int(os.environ.get("VIDEO_SHARE_PLAYBACK_TOKEN_TTL_SECONDS", "300"))
 
     # Messaging feature flags
-    messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() == "true"
-    messaging_encrypted_messages_kill_switch: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH", "false").lower() == "true"
+    messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    messaging_encrypted_messages_kill_switch: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
     countdown_messages_enabled: bool = os.environ.get("COUNTDOWN_MESSAGES_ENABLED", "true").lower() == "true"
     # GIF & Sticker messages (MSG-008)
     gif_messages_enabled: bool = os.environ.get("GIF_MESSAGES_ENABLED", "true").lower() == "true"
@@ -1208,16 +1348,16 @@ class Settings:
     find_datetime_max_slots_per_user: int = int(os.environ.get("FIND_DATETIME_MAX_SLOTS", "500"))
     # Find-a-DateTime newsfeed posts (FEED-003)
     find_datetime_posts_enabled: bool = os.environ.get("FIND_DATETIME_POSTS_ENABLED", "true").lower() == "true"
-    messaging_gallery_kill_switch: bool = os.environ.get("MESSAGING_GALLERY_KILL_SWITCH", "false").lower() == "true"
-    messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() == "true"
+    messaging_gallery_kill_switch: bool = os.environ.get("MESSAGING_GALLERY_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
+    messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     messaging_mass_send_enabled: bool = os.environ.get("MESSAGING_MASS_SEND_ENABLED", "true").lower() == "true"
-    messaging_mass_send_kill_switch: bool = os.environ.get("MESSAGING_MASS_SEND_KILL_SWITCH", "false").lower() == "true"
+    messaging_mass_send_kill_switch: bool = os.environ.get("MESSAGING_MASS_SEND_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
     messaging_mass_send_campaigns_per_user_per_hour: int = int(os.environ.get("MESSAGING_MASS_SEND_CAMPAIGNS_PER_USER_PER_HOUR", "20"))
     messaging_mass_send_campaigns_per_tenant_per_hour: int = int(os.environ.get("MESSAGING_MASS_SEND_CAMPAIGNS_PER_TENANT_PER_HOUR", "500"))
     messaging_mass_send_max_destinations_per_campaign: int = int(os.environ.get("MESSAGING_MASS_SEND_MAX_DESTINATIONS_PER_CAMPAIGN", "100"))
     messaging_mass_send_max_concurrent_workers: int = int(os.environ.get("MESSAGING_MASS_SEND_MAX_CONCURRENT_WORKERS", "8"))
-    messaging_dm_lottery_enabled: bool = os.environ.get("MESSAGING_DM_LOTTERY_ENABLED", "false").lower() == "true"
-    messaging_dm_lottery_kill_switch: bool = os.environ.get("MESSAGING_DM_LOTTERY_KILL_SWITCH", "false").lower() == "true"
+    messaging_dm_lottery_enabled: bool = os.environ.get("MESSAGING_DM_LOTTERY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    messaging_dm_lottery_kill_switch: bool = os.environ.get("MESSAGING_DM_LOTTERY_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
     # Canonical profile rollout flags (UPR-020)
     profile_lookup_audience_filtering_enabled: bool = os.environ.get("PROFILE_LOOKUP_AUDIENCE_FILTERING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     messaging_webrtc_direct_call_enabled: bool = os.environ.get("MESSAGING_WEBRTC_DIRECT_CALL_ENABLED", "false").lower() in ("1", "true", "yes", "on")
@@ -1264,6 +1404,13 @@ class Settings:
     kyc_pii_audit_accessor_index_name: str = os.environ.get("KYC_PII_AUDIT_ACCESSOR_INDEX_NAME", "pii-audit-accessor-index")
     kyc_retention_rejected_days: int = int(os.environ.get("KYC_RETENTION_REJECTED_DAYS", "30"))
     kyc_retention_expired_days: int = int(os.environ.get("KYC_RETENTION_EXPIRED_DAYS", "7"))
+    # KYC disputes & retry (KYD-001). Both gates DEFAULT OFF so the dispute /
+    # reopen-and-resubmit flows are inert until explicitly enabled — with the
+    # flags off, rejected/expired cases remain terminal exactly as before.
+    kyc_dispute_enabled: bool = os.environ.get("KYC_DISPUTE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    kyc_retry_enabled: bool = os.environ.get("KYC_RETRY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    kyc_retry_max_attempts: int = int(os.environ.get("KYC_RETRY_MAX_ATTEMPTS", "3"))
+    kyc_dispute_window_days: int = int(os.environ.get("KYC_DISPUTE_WINDOW_DAYS", "30"))
     kyc_retention_approved_days: int = int(os.environ.get("KYC_RETENTION_APPROVED_DAYS", "365"))
     kyc_review_ticket_space_id: str = os.environ.get("KYC_REVIEW_TICKET_SPACE_ID", "kyc-ops")
     kyc_review_ticket_category: str = os.environ.get("KYC_REVIEW_TICKET_CATEGORY", "kyc_review")
@@ -1864,6 +2011,25 @@ class Settings:
     voice_message_max_size_bytes: int = int(os.environ.get("VOICE_MESSAGE_MAX_SIZE_BYTES", "52428800"))
     voice_message_waveform_samples: int = int(os.environ.get("VOICE_MESSAGE_WAVEFORM_SAMPLES", "100"))
 
+    # Messenger Voice & Translation AI (MVA-001..MVA-003)
+    # Flags default safely: translation on; transcription/TTS off until keys configured.
+    messaging_translation_enabled: bool = os.environ.get("MESSAGING_TRANSLATION_ENABLED", "1") not in ("0", "false", "False")
+    messaging_transcription_enabled: bool = os.environ.get("MESSAGING_TRANSCRIPTION_ENABLED", "0") not in ("0", "false", "False")
+    messaging_tts_enabled: bool = os.environ.get("MESSAGING_TTS_ENABLED", "0") not in ("0", "false", "False")
+    messaging_translation_provider: str = os.environ.get("MESSAGING_TRANSLATION_PROVIDER", "anthropic")
+    messaging_tts_provider: str = os.environ.get("MESSAGING_TTS_PROVIDER", "elevenlabs")
+    messaging_stt_provider: str = os.environ.get("MESSAGING_STT_PROVIDER", "elevenlabs")
+    messaging_tts_max_chars: int = int(os.environ.get("MESSAGING_TTS_MAX_CHARS", "5000"))
+    messaging_translation_cache_ttl_seconds: int = int(os.environ.get("MESSAGING_TRANSLATION_CACHE_TTL_SECONDS", "2592000"))
+    message_ai_cache_table_name: str = os.environ.get("MESSAGE_AI_CACHE_TABLE_NAME", "message_ai_cache")
+    # Per-feature rate-limit caps (requests per window).
+    messaging_ai_translate_max_per_window: int = int(os.environ.get("MESSAGING_AI_TRANSLATE_RL_MAX", "60"))
+    messaging_ai_translate_window_seconds: int = int(os.environ.get("MESSAGING_AI_TRANSLATE_RL_WINDOW", "60"))
+    messaging_ai_transcribe_max_per_window: int = int(os.environ.get("MESSAGING_AI_TRANSCRIBE_RL_MAX", "20"))
+    messaging_ai_transcribe_window_seconds: int = int(os.environ.get("MESSAGING_AI_TRANSCRIBE_RL_WINDOW", "60"))
+    messaging_ai_tts_max_per_window: int = int(os.environ.get("MESSAGING_AI_TTS_RL_MAX", "20"))
+    messaging_ai_tts_window_seconds: int = int(os.environ.get("MESSAGING_AI_TTS_RL_WINDOW", "60"))
+
     # Voicemail (CALL-014)
     voicemail_enabled: bool = os.environ.get("VOICEMAIL_ENABLED", "1") not in ("0", "false", "False")
     voicemail_max_duration_seconds: int = int(os.environ.get("VOICEMAIL_MAX_DURATION_SECONDS", "60"))
@@ -1984,6 +2150,24 @@ class Settings:
     reco_new_video_boost_hours: int = int(os.environ.get("RECO_NEW_VIDEO_BOOST_HOURS", "48"))
     reco_signal_retention_days: int = int(os.environ.get("RECO_SIGNAL_RETENTION_DAYS", "90"))
 
+    # Newsfeed "For You" recommendations (NRS-001) — flag defaults OFF so existing
+    # GET /feed behavior is byte-for-byte unchanged unless explicitly enabled.
+    newsfeed_recsys_enabled: bool = os.environ.get("NEWSFEED_RECSYS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    newsfeed_recsys_refresh_interval_hours: int = int(os.environ.get("NEWSFEED_RECSYS_REFRESH_INTERVAL_HOURS", "6"))
+    newsfeed_recsys_max_for_you_results: int = int(os.environ.get("NEWSFEED_RECSYS_MAX_FOR_YOU_RESULTS", "200"))
+    newsfeed_recsys_candidate_followed_limit: int = int(os.environ.get("NEWSFEED_RECSYS_CANDIDATE_FOLLOWED_LIMIT", "200"))
+    newsfeed_recsys_candidate_popular_limit: int = int(os.environ.get("NEWSFEED_RECSYS_CANDIDATE_POPULAR_LIMIT", "100"))
+    newsfeed_recsys_candidate_affinity_limit: int = int(os.environ.get("NEWSFEED_RECSYS_CANDIDATE_AFFINITY_LIMIT", "100"))
+    newsfeed_recsys_signal_retention_days: int = int(os.environ.get("NEWSFEED_RECSYS_SIGNAL_RETENTION_DAYS", "90"))
+    newsfeed_recsys_new_post_boost_hours: int = int(os.environ.get("NEWSFEED_RECSYS_NEW_POST_BOOST_HOURS", "48"))
+    # Ranking-weight knobs (consumed by score_post in NRS-005)
+    newsfeed_recsys_weight_recency: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_RECENCY", "1.0"))
+    newsfeed_recsys_weight_engagement: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_ENGAGEMENT", "1.0"))
+    newsfeed_recsys_weight_affinity: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_AFFINITY", "3.0"))
+    newsfeed_recsys_weight_content_type: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_CONTENT_TYPE", "0.5"))
+    newsfeed_recsys_weight_personal_history: float = float(os.environ.get("NEWSFEED_RECSYS_WEIGHT_PERSONAL_HISTORY", "2.0"))
+    newsfeed_recsys_engagement_decay_factor: float = float(os.environ.get("NEWSFEED_RECSYS_ENGAGEMENT_DECAY_FACTOR", "0.95"))
+
     # Refund Requests (BILLING-001)
     refund_requests_table_name: str = os.environ.get("DDB_REFUND_REQUESTS", "RefundRequests")
     refund_requests_enabled: bool = os.environ.get("REFUND_REQUESTS_ENABLED", "1") not in ("0", "false", "False")
@@ -1999,6 +2183,30 @@ class Settings:
     # Notification Delivery Enhancements (NOTIFY-001)
     notification_dispatch_enabled: bool = os.environ.get("NOTIFICATION_DISPATCH_ENABLED", "1") not in ("0", "false", "False")
     notification_email_templates_enabled: bool = os.environ.get("NOTIFICATION_EMAIL_TEMPLATES_ENABLED", "1") not in ("0", "false", "False")
+
+    # EML-002: Admin runtime email settings override
+    email_settings_table_name: str = os.environ.get("EMAIL_SETTINGS_TABLE_NAME", "email_settings")
+    email_settings_cache_ttl_seconds: int = int(os.environ.get("EMAIL_SETTINGS_CACHE_TTL_SECONDS", "60"))
+    admin_email_settings_enabled: bool = os.environ.get("ADMIN_EMAIL_SETTINGS_ENABLED", "0") not in ("0", "false", "False")
+
+    # EML-003: Per-user email account connections
+    user_email_accounts_table_name: str = os.environ.get("USER_EMAIL_ACCOUNTS_TABLE_NAME", "user_email_accounts")
+    email_client_enabled: bool = os.environ.get("EMAIL_CLIENT_ENABLED", "0") not in ("0", "false", "False")
+
+    # EML-004: IMAP inbox sync
+    user_email_messages_table_name: str = os.environ.get("USER_EMAIL_MESSAGES_TABLE_NAME", "user_email_messages")
+    email_messages_ttl_days: int = int(os.environ.get("EMAIL_MESSAGES_TTL_DAYS", "90"))
+    email_imap_max_fetch: int = int(os.environ.get("EMAIL_IMAP_MAX_FETCH", "200"))
+    email_imap_timeout_seconds: int = int(os.environ.get("EMAIL_IMAP_TIMEOUT_SECONDS", "30"))
+    email_bodies_s3_bucket: str = os.environ.get("EMAIL_BODIES_S3_BUCKET", "local-uploads")
+    email_bodies_s3_prefix: str = os.environ.get("EMAIL_BODIES_S3_PREFIX", "email-bodies/")
+
+    # EML-007: Email archiving
+    email_archive_table_name: str = os.environ.get("EMAIL_ARCHIVE_TABLE_NAME", "email_archive")
+    email_archiving_enabled: bool = os.environ.get("EMAIL_ARCHIVING_ENABLED", "0") not in ("0", "false", "False")
+
+    # EML-009: Campaign email templates
+    campaign_email_templates_enabled: bool = os.environ.get("CAMPAIGN_EMAIL_TEMPLATES_ENABLED", "0") not in ("0", "false", "False")
     notification_toast_enabled: bool = os.environ.get("NOTIFICATION_TOAST_ENABLED", "1") not in ("0", "false", "False")
     notification_unread_count_enabled: bool = os.environ.get("NOTIFICATION_UNREAD_COUNT_ENABLED", "1") not in ("0", "false", "False")
     toast_default_duration_ms: int = int(os.environ.get("TOAST_DEFAULT_DURATION_MS", "5000"))
@@ -2316,6 +2524,16 @@ class Settings:
     # Agent Worker Provisioning (AGENT-002)
     agent_workers_table_name: str = os.environ.get("AGENT_WORKERS_TABLE_NAME", "agent_workers")
     agent_max_workers_per_user: int = int(os.environ.get("AGENT_MAX_WORKERS_PER_USER", "5"))
+
+    # Interactive Claude Code Sessions (ACS-001 / ADR-002). Master gate defaults
+    # OFF; with it off the agent-session WS path and REST routes 404/410 and the
+    # raw Browser SSH terminal is byte-for-byte unchanged.
+    agent_claude_code_session_enabled: bool = os.environ.get("AGENT_CLAUDE_CODE_SESSION_ENABLED", "0") not in ("0", "false", "False")
+    agent_claude_code_session_allowed_roles: str = os.environ.get("AGENT_CLAUDE_CODE_SESSION_ALLOWED_ROLES", "admin,root")
+    agent_claude_code_session_max_per_user: int = int(os.environ.get("AGENT_CLAUDE_CODE_SESSION_MAX_PER_USER", "2"))
+    agent_claude_code_session_idle_timeout_seconds: int = int(os.environ.get("AGENT_CLAUDE_CODE_SESSION_IDLE_TIMEOUT_SECONDS", "1800"))
+    agent_claude_code_session_replay_bytes: int = int(os.environ.get("AGENT_CLAUDE_CODE_SESSION_REPLAY_BYTES", "65536"))
+    agent_sessions_table_name: str = os.environ.get("AGENT_SESSIONS_TABLE_NAME", "agent_sessions")
     # User Groups (GROUP-001)
 
     # Group Treasury (GROUP-004)
@@ -2327,6 +2545,12 @@ class Settings:
     # PLATFORM-013: per-user theme customization
     user_themes_table_name: str = os.environ.get("USER_THEMES_TABLE_NAME", "user_themes")
     # Agent Orchestration (AGENT-002 / AGENT-003)
+    # Rent Ledger (open-property vertical, RNT cluster). Default-OFF.
+    rent_ledger_enabled: bool = os.environ.get("RENT_LEDGER_ENABLED", "0") not in ("0", "false", "False")
+    rent_run_enabled: bool = os.environ.get("RENT_RUN_ENABLED", "0") not in ("0", "false", "False")
+    rent_run_poll_interval: int = int(os.environ.get("RENT_RUN_POLL_INTERVAL", "3600"))
+    rent_period_markers_table_name: str = os.environ.get("RENT_PERIOD_MARKERS_TABLE_NAME", "rent_period_markers")
+    rent_periods_default_count: int = int(os.environ.get("RENT_PERIODS_DEFAULT_COUNT", "12"))
     # Compute Cost Tracking (INFRA-005)
     compute_billing_table_name: str = os.environ.get("COMPUTE_BILLING_TABLE_NAME", "compute_billing")
     compute_billing_enabled: bool = os.environ.get("COMPUTE_BILLING_ENABLED", "1") not in ("0", "false", "False")
@@ -2391,6 +2615,21 @@ class Settings:
     doc_agent_enabled: bool = os.environ.get("DOC_AGENT_ENABLED", "1") not in ("0", "false", "False")
     doc_pr_trigger_enabled: bool = os.environ.get("DOC_PR_TRIGGER_ENABLED", "0") not in ("0", "false", "False")
     doc_inline_tickets_enabled: bool = os.environ.get("DOC_INLINE_TICKETS_ENABLED", "1") not in ("0", "false", "False")
+
+    # Agent SSH QA (ADR-003 / AQA). Outbound, agent-driven non-interactive SSH
+    # exec for QA. Master flag defaults OFF — when off the router is not
+    # registered and the runner does not start (mirrors AUDIT_EXPORT_WORKER).
+    # Reuses the existing `agent_qa_execute_commands` gate (below) to decide
+    # whether a real SSH dial occurs vs an in-memory simulation.
+    agent_ssh_qa_enabled: bool = os.environ.get("AGENT_SSH_QA_ENABLED", "0") not in ("0", "false", "False")
+    agent_actions_table_name: str = os.environ.get("AGENT_ACTIONS_TABLE_NAME", "agent_actions")
+    agent_ssh_qa_action_timeout_seconds: int = int(os.environ.get("AGENT_SSH_QA_ACTION_TIMEOUT_SECONDS", "300"))
+    agent_ssh_qa_max_concurrent_per_worker: int = int(os.environ.get("AGENT_SSH_QA_MAX_CONCURRENT_PER_WORKER", "1"))
+    agent_ssh_qa_rate_limit_count: int = int(os.environ.get("AGENT_SSH_QA_RATE_LIMIT_COUNT", "10"))
+    agent_ssh_qa_rate_limit_window_seconds: int = int(os.environ.get("AGENT_SSH_QA_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    agent_ssh_qa_command_max_length: int = int(os.environ.get("AGENT_SSH_QA_COMMAND_MAX_LENGTH", "4096"))
+    agent_ssh_qa_command_denylist: str = os.environ.get("AGENT_SSH_QA_COMMAND_DENYLIST", "")
+    agent_vnc_screenshot_enabled: bool = os.environ.get("AGENT_VNC_SCREENSHOT_ENABLED", "0") not in ("0", "false", "False")
 
     # QA Agent (AGENT-009). Reuses the agent_types / agent_runs tables.
     agent_qa_enabled: bool = os.environ.get("QA_AGENT_ENABLED", "1") not in ("0", "false", "False")
@@ -2499,6 +2738,59 @@ class Settings:
     invoices_table_name: str = os.environ.get("INVOICES_TABLE_NAME", "invoices")
     invoices_enabled: bool = os.environ.get("INVOICES_ENABLED", "true").lower() not in ("0", "false")
     invoices_tax_bps: int = int(os.environ.get("INVOICES_TAX_BPS", "0"))
+    # QUO-001: Sales Quotes (AOS). Default OFF — no routes / DDB writes when off.
+    aos_quotes_enabled: bool = os.environ.get("AOS_QUOTES_ENABLED", "0") in ("1", "true", "True")
+    aos_quotes_table_name: str = os.environ.get("AOS_QUOTES_TABLE_NAME", "aos_quotes")
+    # QUO-004: CRM Contracts (AOS). Default OFF.
+    aos_contracts_enabled: bool = os.environ.get("AOS_CONTRACTS_ENABLED", "0") in ("1", "true", "True")
+    aos_contracts_table_name: str = os.environ.get("AOS_CONTRACTS_TABLE_NAME", "aos_contracts")
+    aos_contracts_renewal_notifications_enabled: bool = os.environ.get(
+        "AOS_CONTRACTS_RENEWAL_NOTIFICATIONS_ENABLED", "0"
+    ) in ("1", "true", "True")
+    aos_contracts_renewal_check_interval_seconds: int = int(
+        os.environ.get("AOS_CONTRACTS_RENEWAL_CHECK_INTERVAL_SECONDS", "3600")
+    )
+    # QUO-005: Standalone invoice lifecycle (AOS-INV-001 / VOID). Default OFF.
+    aos_standalone_invoices_enabled: bool = os.environ.get(
+        "AOS_STANDALONE_INVOICES_ENABLED", "0"
+    ) in ("1", "true", "True")
+    aos_invoice_overdue_checker_enabled: bool = os.environ.get(
+        "AOS_INVOICE_OVERDUE_CHECKER_ENABLED", "0"
+    ) in ("1", "true", "True")
+    aos_invoice_overdue_check_interval_seconds: int = int(
+        os.environ.get("AOS_INVOICE_OVERDUE_CHECK_INTERVAL_SECONDS", "3600")
+    )
+    # INV-001: AOS invoice extended fields (unit_price_cents, discount, shipping,
+    # billing/shipping addresses). Default OFF — existing invoice callers unchanged.
+    aos_invoice_fields_enabled: bool = os.environ.get(
+        "AOS_INVOICE_FIELDS_ENABLED", "0"
+    ).lower() in ("1", "true", "yes", "on")
+    # INV-002: Admin currency registry (default OFF).
+    crm_currencies_enabled: bool = os.environ.get(
+        "CRM_CURRENCIES_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    crm_currencies_table_name: str = os.environ.get(
+        "CRM_CURRENCIES_TABLE_NAME", "crm_currencies"
+    )
+    # INV-003: snapshot USD equivalent at invoice creation time (default OFF).
+    aos_invoice_currency_conversion_enabled: bool = os.environ.get(
+        "AOS_INVOICE_CURRENCY_CONVERSION_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    # INV-004: multi-currency display on invoice PDF (default OFF).
+    aos_invoice_multicurrency_display_enabled: bool = os.environ.get(
+        "AOS_INVOICE_MULTICURRENCY_DISPLAY_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    # INV-005: Named tax rate registry (default OFF).
+    crm_tax_rates_enabled: bool = os.environ.get(
+        "CRM_TAX_RATES_ENABLED", "0"
+    ).lower() in ("1", "true", "yes", "on")
+    crm_tax_rates_table_name: str = os.environ.get(
+        "CRM_TAX_RATES_TABLE_NAME", "crm_tax_rates"
+    )
+    # INV-006: Per-line-item tax rate assignment on invoices (default OFF).
+    aos_per_line_tax_enabled: bool = os.environ.get(
+        "AOS_PER_LINE_TAX_ENABLED", "0"
+    ).lower() in ("1", "true", "yes", "on")
     # FIN-004: Consumer Tax Documents (annual creator earnings / 1099-style summaries)
     tax_documents_table_name: str = os.environ.get("TAX_DOCUMENTS_TABLE_NAME", "tax_documents")
     tax_documents_enabled: bool = os.environ.get("TAX_DOCUMENTS_ENABLED", "true").lower() not in (
@@ -2581,6 +2873,58 @@ class Settings:
         os.environ.get("FRAUD_SCORE_THRESHOLD", "70")
     )
 
+    # HNY (Security tooling & honeypots) — all DEFENSIVE-only, default OFF.
+    # SECOPS-007 dev/prod parity: no dev_mode branch; the code paths gated by
+    # these flags short-circuit to current behavior when the flag is off.
+    security_events_table_name: str = os.environ.get(
+        "SECURITY_EVENTS_TABLE_NAME", "security_events"
+    )
+    honeytokens_table_name: str = os.environ.get(
+        "HONEYTOKENS_TABLE_NAME", "honeytokens"
+    )
+    honeytoken_enabled: bool = os.environ.get(
+        "HONEYTOKEN_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    honeypot_endpoints_enabled: bool = os.environ.get(
+        "HONEYPOT_ENDPOINTS_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    honeypot_tarpit_enabled: bool = os.environ.get(
+        "HONEYPOT_TARPIT_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    honeypot_tarpit_max_seconds: int = int(
+        os.environ.get("HONEYPOT_TARPIT_MAX_SECONDS", "5")
+    )
+    ids_enabled: bool = os.environ.get(
+        "IDS_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    ids_impossible_travel_enabled: bool = os.environ.get(
+        "IDS_IMPOSSIBLE_TRAVEL_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    ids_credential_stuffing_enabled: bool = os.environ.get(
+        "IDS_CREDENTIAL_STUFFING_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    ids_scanning_detection_enabled: bool = os.environ.get(
+        "IDS_SCANNING_DETECTION_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    security_dashboard_enabled: bool = os.environ.get(
+        "SECURITY_DASHBOARD_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    security_webhooks_enabled: bool = os.environ.get(
+        "SECURITY_WEBHOOKS_ENABLED", "false"
+    ).lower() not in ("0", "false", "no")
+    ids_credential_stuffing_max_failures: int = int(
+        os.environ.get("IDS_CREDENTIAL_STUFFING_MAX_FAILURES", "10")
+    )
+    ids_credential_stuffing_window_seconds: int = int(
+        os.environ.get("IDS_CREDENTIAL_STUFFING_WINDOW_SECONDS", "300")
+    )
+    ids_scanning_max_404_per_min: int = int(
+        os.environ.get("IDS_SCANNING_MAX_404_PER_MIN", "30")
+    )
+    ids_impossible_travel_min_kmh: int = int(
+        os.environ.get("IDS_IMPOSSIBLE_TRAVEL_MIN_KMH", "900")
+    )
+
     # KYC-017: Document Signing Template Library
     kyc_document_templates_table_name: str = os.environ.get(
         "KYC_DOCUMENT_TEMPLATES_TABLE_NAME", "kyc_document_templates"
@@ -2612,6 +2956,32 @@ class Settings:
         "KYC_TEMPLATE_READINESS_GATE", "true"
     ).lower() in ("1", "true", "yes", "on")
 
+    # QloApps hotel-PMS vertical (HTL) — master flag + reservations (HTL-001..HTL-021)
+    hotel_pms_enabled: bool = os.environ.get(
+        "HOTEL_PMS_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    hotel_reservations_table_name: str = os.environ.get(
+        "HOTEL_RESERVATIONS_TABLE_NAME", "hotel_reservations"
+    )
+    # OFBiz Facility / Fulfillment (FAC-001..FAC-010, ADR-001 Milestone 4+).
+    # Master switch defaults OFF. With it off every facility/transfer/receiving/
+    # picklist/shipment endpoint returns 404 and all service modules are dormant.
+    # Existing inventory, shop, cart, orders, and billing paths are unchanged.
+    facility_fulfillment_enabled: bool = os.environ.get(
+        "FACILITY_FULFILLMENT_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    # Table name settings (default to literal names; override in prod for prefix).
+    facilities_table_name: str = os.environ.get("FACILITIES_TABLE_NAME", "facilities")
+    transfers_table_name: str = os.environ.get("TRANSFERS_TABLE_NAME", "transfers")
+    receipts_table_name: str = os.environ.get("RECEIPTS_TABLE_NAME", "receipts")
+    picklists_table_name: str = os.environ.get("PICKLISTS_TABLE_NAME", "picklists")
+    shipments_table_name: str = os.environ.get("SHIPMENTS_TABLE_NAME", "shipments")
+    # Stretch: lot/serial tracking (deferred to FAC-011+, default OFF).
+    facility_lot_serial_enabled: bool = os.environ.get(
+        "FACILITY_LOT_SERIAL_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+    lot_serial_table_name: str = os.environ.get("LOT_SERIAL_TABLE_NAME", "lot_serial")
+
     # INFRA-001: Host Inventory Management
     ddb_host_inventory_table: str = os.environ.get(
         "DDB_HOST_INVENTORY_TABLE", "host_inventory"
@@ -2619,9 +2989,670 @@ class Settings:
     host_inventory_enabled: bool = os.environ.get(
         "HOST_INVENTORY_ENABLED", "true"
     ).lower() not in ("0", "false", "no")
-    host_inventory_max_per_user: int = int(
-        os.environ.get("HOST_INVENTORY_MAX_PER_USER", "500")
+    host_inventory_max_per_user: int = int(os.environ.get("HOST_INVENTORY_MAX_PER_USER", "500"))
+
+    # OBP umbrella flag (ACC-001) — gates entire Open Bank Project vertical
+    open_bank_project_enabled: bool = os.environ.get(
+        "OPEN_BANK_PROJECT_ENABLED", "false"
+    ).lower() in ("1", "true", "yes", "on")
+
+    # VEW — Account Views (gates VEW-001..VEW-003)
+    account_views_enabled: bool = os.environ.get("ACCOUNT_VIEWS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    account_views_table_name: str = os.environ.get("ACCOUNT_VIEWS_TABLE", "account_views")
+    account_view_public_secret: str = os.environ.get("ACCOUNT_VIEW_PUBLIC_SECRET") or os.environ.get("UI_ACCESS_TOKEN_SECRET", "")
+    account_view_public_link_ttl_days: int = int(os.environ.get("ACCOUNT_VIEW_PUBLIC_LINK_TTL_DAYS", "7"))
+    account_views_max_per_resource: int = int(os.environ.get("ACCOUNT_VIEWS_MAX_PER_RESOURCE", "25"))
+
+    # VEW — Entitlement Requests (gates VEW-004)
+    entitlement_requests_enabled: bool = os.environ.get("ENTITLEMENT_REQUESTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    entitlement_requests_table_name: str = os.environ.get("ENTITLEMENT_REQUESTS_TABLE", "entitlement_requests")
+    entitlement_request_max_open_per_user: int = int(os.environ.get("ENTITLEMENT_REQUEST_MAX_OPEN_PER_USER", "10"))
+    entitlement_request_max_per_window: int = int(os.environ.get("ENTITLEMENT_REQUEST_MAX_PER_WINDOW", "20"))
+    entitlement_request_window_seconds: int = int(os.environ.get("ENTITLEMENT_REQUEST_WINDOW_SECONDS", "3600"))
+
+    # LEX (Legal & DSAR export). Master flag DEFAULTS OFF: with it off, the
+    # legal-export/legal-hold endpoints all 404/403 and no deletion-path
+    # behavior changes (legal-hold enforcement is gated on this flag).
+    legal_export_enabled: bool = os.environ.get(
+        "LEGAL_EXPORT_ENABLED", "0"
+    ).lower() in ("1", "true", "yes", "on")
+    legal_holds_table_name: str = os.environ.get(
+        "LEGAL_HOLDS_TABLE_NAME", "legal_holds"
     )
+    legal_exports_table_name: str = os.environ.get(
+        "LEGAL_EXPORTS_TABLE_NAME", "legal_exports"
+    )
+    legal_export_s3_bucket: str = os.environ.get(
+        "LEGAL_EXPORT_S3_BUCKET", "data-exports"
+    )
+    legal_export_ttl_days: int = int(os.environ.get("LEGAL_EXPORT_TTL_DAYS", "90"))
+    legal_export_url_ttl_seconds: int = int(
+        os.environ.get("LEGAL_EXPORT_URL_TTL_SECONDS", "900")
+    )
+    # Comma-separated list of user_subs granted the LEGAL capability (in
+    # addition to ROOT, which is always permitted). Empty by default.
+    legal_export_authorized_subs: str = os.environ.get(
+        "LEGAL_EXPORT_AUTHORIZED_SUBS", ""
+    )
+
+    # Platform branding (BRAND-001 / decision D6). Env values are the DEFAULTS;
+    # the PLATFORM#BRANDING settings row overrides them at runtime when set.
+    platform_name: str = os.environ.get("PLATFORM_NAME", "testlogon")
+    platform_logo_url: str = os.environ.get("PLATFORM_LOGO_URL", "")
+    platform_support_email: str = os.environ.get("PLATFORM_SUPPORT_EMAIL", "")
+    platform_settings_table_name: str = os.environ.get("PLATFORM_SETTINGS_TABLE_NAME", "platform_settings")
+    branding_cache_ttl_seconds: int = int(os.environ.get("BRANDING_CACHE_TTL_SECONDS", "60"))
+    # Party / CRM (PTY-001 — OFBiz Party Manager, Phase 1)
+    # All flags default OFF. Turn on per-environment when Party/CRM is ready.
+    party_crm_enabled: bool = os.environ.get("PARTY_CRM_ENABLED", "0") not in ("0", "false", "False")
+    party_crm_contacts_migration_enabled: bool = os.environ.get("PARTY_CRM_CONTACTS_MIGRATION_ENABLED", "0") not in ("0", "false", "False")
+    party_crm_org_accounts_enabled: bool = os.environ.get("PARTY_CRM_ORG_ACCOUNTS_ENABLED", "0") not in ("0", "false", "False")
+    party_crm_profile_sync_enabled: bool = os.environ.get("PARTY_CRM_PROFILE_SYNC_ENABLED", "0") not in ("0", "false", "False")
+    party_table_name: str = os.environ.get("DDB_PARTY_TABLE", "party")
+
+    # ATS Candidates (CND-001)
+    # Master switch defaults OFF. With it off every CND route returns 404/503
+    # and no DynamoDB or S3 write is attempted. No existing table, endpoint, or
+    # service is modified when this flag is False.
+    candidates_enabled: bool = (
+        os.environ.get("CANDIDATES_ENABLED", "0") not in ("0", "false", "False")
+    )
+    candidates_table_name: str = os.environ.get("DDB_CANDIDATES_TABLE", "candidates")
+    candidate_resume_bucket: str = os.environ.get("CANDIDATE_RESUME_BUCKET", "local-uploads")
+    candidate_resume_s3_prefix: str = os.environ.get(
+        "CANDIDATE_RESUME_S3_PREFIX", "candidate-resumes/"
+    )
+    candidate_resume_max_bytes: int = int(
+        os.environ.get("CANDIDATE_RESUME_MAX_BYTES", "20971520")   # 20 MB
+    )
+    candidate_resume_max_per_candidate: int = int(
+        os.environ.get("CANDIDATE_RESUME_MAX_PER_CANDIDATE", "25")
+    )
+    # ATS / Recruiting — Job Orders (JOB-001)
+    ats_enabled: bool = os.environ.get("ATS_ENABLED", "0") not in ("0", "false", "False")
+    job_orders_enabled: bool = os.environ.get("JOB_ORDERS_ENABLED", "0") not in ("0", "false", "False")
+    job_orders_table_name: str = os.environ.get("DDB_JOB_ORDERS_TABLE", "job_orders")
+    # JOB-002: allow closed job orders to be reopened (default True)
+    job_order_allow_reopen: bool = os.environ.get("JOB_ORDER_ALLOW_REOPEN", "1") not in ("0", "false", "False")
+    # Property management (open-property vertical, PROP-001..PROP-005). Default OFF.
+    property_mgmt_enabled: bool = os.environ.get("PROPERTY_MGMT_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    properties_table_name: str = os.environ.get("PROPERTIES_TABLE_NAME", "properties")
+    # QloApps hotel-PMS vertical (HTL) — master flag, default OFF; with it off
+    # the hotel routers (HTL-003) are mounted but every handler 404s and the
+    # platform is byte-for-byte unchanged.
+    hotels_table_name: str = os.environ.get("HOTELS_TABLE_NAME", "hotels")
+    hotel_amenities_table_name: str = os.environ.get("HOTEL_AMENITIES_TABLE_NAME", "hotel_amenities")
+
+    # OpenBankProject umbrella master flag (cross-series, decision D4).
+    # One kill-switch for the entire banking vertical; every OBP series gate
+
+    # Banking accounts feature flags (ACC-001..ACC-004), all default OFF.
+    banking_accounts_enabled: bool = os.environ.get(
+        "BANKING_ACCOUNTS_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    banking_account_metadata_enabled: bool = os.environ.get(
+        "BANKING_ACCOUNT_METADATA_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    banking_account_views_enabled: bool = os.environ.get(
+        "BANKING_ACCOUNT_VIEWS_ENABLED", "0"
+    ) not in ("0", "false", "False")
+
+    # Banking accounts table + house-bank seed values.
+    banking_accounts_table_name: str = os.environ.get(
+        "BANKING_ACCOUNTS_TABLE_NAME", "banking_accounts"
+    )
+    banking_default_bank_id: str = os.environ.get("BANKING_DEFAULT_BANK_ID", "testlogon")
+    banking_default_bank_name: str = os.environ.get("BANKING_DEFAULT_BANK_NAME", "Testlogon")
+
+    # ACC-003 transaction-metadata config.
+    banking_s3_bucket: str = os.environ.get("BANKING_S3_BUCKET", "")
+    banking_image_max_bytes: int = int(os.environ.get("BANKING_IMAGE_MAX_BYTES", "5242880"))
+    banking_metadata_write_rate_limit: int = int(
+        os.environ.get("BANKING_METADATA_WRITE_RATE_LIMIT", "60")
+    )
+    # CRM Leads module (LED-001). Master switch defaults OFF: with it off all
+    # new routes return 404 and no background work starts; existing behavior
+    # is byte-for-byte unchanged.
+    leads_enabled: bool = os.environ.get("LEADS_ENABLED", "0") not in ("0", "false", "False")
+    leads_table_name: str = os.environ.get("DDB_LEADS_TABLE", "leads")
+    # Sub-flags — all default OFF; enabled individually as downstream LED
+    # tickets are deployed.
+    leads_scoring_enabled: bool = os.environ.get("LEADS_SCORING_ENABLED", "0") not in ("0", "false", "False")
+    leads_drip_enabled: bool = os.environ.get("LEADS_DRIP_ENABLED", "0") not in ("0", "false", "False")
+    leads_assignment_enabled: bool = os.environ.get("LEADS_ASSIGNMENT_ENABLED", "0") not in ("0", "false", "False")
+    # CRM Reports & Dashboards (RPT-001)
+    crm_reports_enabled: bool = os.environ.get("CRM_REPORTS_ENABLED", "0") not in ("0", "false", "False")
+    crm_reports_table_name: str = os.environ.get("CRM_REPORTS_TABLE_NAME", "crm_reports")
+    crm_dashboards_table_name: str = os.environ.get("CRM_DASHBOARDS_TABLE_NAME", "crm_dashboards")
+    crm_saved_searches_table_name: str = os.environ.get("CRM_SAVED_SEARCHES_TABLE_NAME", "crm_saved_searches")
+    # RPT-002: run rate limiting
+    crm_reports_run_rate_limit: int = int(os.environ.get("CRM_REPORTS_RUN_RATE_LIMIT", "10"))
+    crm_reports_run_rate_window: int = int(os.environ.get("CRM_REPORTS_RUN_RATE_WINDOW", "60"))
+    crm_reports_max_rows: int = int(os.environ.get("CRM_REPORTS_MAX_ROWS", "2000"))
+    # RPT-004: scheduled report email delivery
+    crm_reports_scheduler_enabled: bool = os.environ.get("CRM_REPORTS_SCHEDULER_ENABLED", "0") not in ("0", "false", "False")
+    crm_reports_scheduler_poll_interval: int = int(os.environ.get("CRM_REPORTS_SCHEDULER_POLL_INTERVAL", "300"))
+    # RPT-008: saved search run cap
+    crm_saved_search_run_max_rows: int = int(os.environ.get("CRM_SAVED_SEARCH_RUN_MAX_ROWS", "500"))
+    # CRM Workflow & Process Automation (WFL-001)
+    crm_workflow_enabled: bool = os.environ.get("CRM_WORKFLOW_ENABLED", "0") not in ("0", "false", "False")
+    crm_workflow_rules_table_name: str = os.environ.get("CRM_WORKFLOW_RULES_TABLE_NAME", "crm_workflow_rules")
+    crm_workflow_runs_table_name: str = os.environ.get("CRM_WORKFLOW_RUNS_TABLE_NAME", "crm_workflow_runs")
+    crm_workflow_poll_interval_seconds: int = int(os.environ.get("CRM_WORKFLOW_POLL_INTERVAL_SECONDS", "60"))
+    crm_workflow_max_rules_per_module: int = int(os.environ.get("CRM_WORKFLOW_MAX_RULES_PER_MODULE", "50"))
+    crm_workflow_max_conditions_per_rule: int = int(os.environ.get("CRM_WORKFLOW_MAX_CONDITIONS_PER_RULE", "10"))
+    crm_workflow_max_actions_per_rule: int = int(os.environ.get("CRM_WORKFLOW_MAX_ACTIONS_PER_RULE", "10"))
+    # CRM Cases, Customer Support & Customer Portal (CAS-001..CAS-017)
+    # Master switch — default OFF. Sub-flags also default OFF; they are only
+    # evaluated when crm_cases_enabled is True.
+    crm_cases_enabled: bool = os.environ.get(
+        "CRM_CASES_ENABLED", "false"
+    ).lower() == "true"
+
+    # Sub-flags
+    crm_cases_sla_enabled: bool = os.environ.get(
+        "CRM_CASES_SLA_ENABLED", "false"
+    ).lower() == "true"
+    crm_cases_portal_enabled: bool = os.environ.get(
+        "CRM_CASES_PORTAL_ENABLED", "false"
+    ).lower() == "true"
+    crm_cases_kb_enabled: bool = os.environ.get(
+        "CRM_CASES_KB_ENABLED", "false"
+    ).lower() == "true"
+    crm_cases_csat_enabled: bool = os.environ.get(
+        "CRM_CASES_CSAT_ENABLED", "false"
+    ).lower() == "true"
+    crm_cases_email_inbound_enabled: bool = os.environ.get(
+        "CRM_CASES_EMAIL_INBOUND_ENABLED", "false"
+    ).lower() == "true"
+
+    # Table names (CAS-001)
+    crm_cases_counter_table: str = os.environ.get(
+        "CRM_CASES_COUNTER_TABLE", "crm_cases_counters"
+    )
+    crm_cases_links_table: str = os.environ.get(
+        "CRM_CASES_LINKS_TABLE", "crm_cases_links"
+    )
+    crm_cases_templates_table: str = os.environ.get(
+        "CRM_CASES_TEMPLATES_TABLE", "crm_cases_templates"
+    )
+    crm_cases_portal_sessions_table: str = os.environ.get(
+        "CRM_CASES_PORTAL_SESSIONS_TABLE", "crm_cases_portal_sessions"
+    )
+    crm_cases_sla_config_table: str = os.environ.get(
+        "CRM_CASES_SLA_CONFIG_TABLE", "crm_cases_sla_config"
+    )
+    crm_kb_articles_table: str = os.environ.get(
+        "CRM_KB_ARTICLES_TABLE", "crm_kb_articles"
+    )
+
+    # S3 attachment storage (CAS-001 — shared bucket, distinct prefix)
+    crm_cases_attachments_bucket: str = os.environ.get(
+        "CRM_CASES_ATTACHMENTS_BUCKET", "local-uploads"
+    )
+    crm_cases_attachments_s3_prefix: str = os.environ.get(
+        "CRM_CASES_ATTACHMENTS_S3_PREFIX", "ticket-attachments/"
+    )
+
+    # CAS-003: priority GSI index name
+    tickets_priority_index_name: str = os.environ.get(
+        "TICKETS_PRIORITY_INDEX_NAME", "crm_cases_priority_index"
+    )
+
+    # CAS-005: contact/account GSI index names
+    tickets_contact_index_name: str = os.environ.get(
+        "TICKETS_CONTACT_INDEX_NAME", "crm_cases_contact_index"
+    )
+    tickets_account_index_name: str = os.environ.get(
+        "TICKETS_ACCOUNT_INDEX_NAME", "crm_cases_account_index"
+    )
+
+    # CAS-004: maximum transactional ticket emails per user per hour (anti-spam)
+    crm_cases_email_transactional_per_hour: int = int(
+        os.environ.get("CRM_CASES_EMAIL_TRANSACTIONAL_PER_HOUR", "20")
+    )
+
+    # CAS-007: ticket watchers table name
+    crm_cases_watchers_table: str = os.environ.get(
+        "CRM_CASES_WATCHERS_TABLE", "crm_cases_watchers"
+    )
+    # CRM Security Suite, Studio & Admin (STU-001)
+    # Both flags default OFF — platform is byte-for-byte unchanged when absent.
+    crm_acl_enabled: bool = os.environ.get("CRM_ACL_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    crm_studio_enabled: bool = os.environ.get("CRM_STUDIO_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+
+    # CRM table names (STU-001 scaffold)
+    crm_acl_roles_table_name: str = os.environ.get("CRM_ACL_ROLES_TABLE", "crm_acl_roles")
+    crm_security_groups_table_name: str = os.environ.get("CRM_SECURITY_GROUPS_TABLE", "crm_security_groups")
+    crm_studio_fields_table_name: str = os.environ.get("CRM_STUDIO_FIELDS_TABLE", "crm_studio_fields")
+    crm_studio_modules_table_name: str = os.environ.get("CRM_STUDIO_MODULES_TABLE", "crm_studio_modules")
+    crm_studio_layouts_table_name: str = os.environ.get("CRM_STUDIO_LAYOUTS_TABLE", "crm_studio_layouts")
+    crm_studio_dropdowns_table_name: str = os.environ.get("CRM_STUDIO_DROPDOWNS_TABLE", "crm_studio_dropdowns")
+    crm_audit_trail_table_name: str = os.environ.get("CRM_AUDIT_TRAIL_TABLE", "crm_audit_trail")
+    currencies_table_name: str = os.environ.get("CURRENCIES_TABLE", "currencies")
+    search_config_table_name: str = os.environ.get("SEARCH_CONFIG_TABLE", "search_config")
+    email_queue_table_name: str = os.environ.get("EMAIL_QUEUE_TABLE", "email_queue")
+
+    # STU-011 Studio tunable constants
+    crm_studio_max_fields_per_entity: int = int(os.environ.get("CRM_STUDIO_MAX_FIELDS_PER_ENTITY", "200"))
+    crm_studio_field_cache_ttl_seconds: int = int(os.environ.get("CRM_STUDIO_FIELD_CACHE_TTL_SECONDS", "60"))
+
+    # CRM Project Management (PRJ-001) — default OFF
+    crm_projects_enabled: bool = (
+        os.environ.get("CRM_PROJECTS_ENABLED", "0") not in ("0", "false", "False")
+    )
+    crm_pm_projects_table_name: str = os.environ.get(
+        "DDB_CRM_PM_PROJECTS_TABLE", "crm_pm_projects"
+    )
+    crm_pm_tasks_table_name: str = os.environ.get(
+        "DDB_CRM_PM_TASKS_TABLE", "crm_pm_tasks"
+    )
+    crm_pm_members_table_name: str = os.environ.get(
+        "DDB_CRM_PM_MEMBERS_TABLE", "crm_pm_members"
+    )
+    crm_pm_templates_table_name: str = os.environ.get(
+        "DDB_CRM_PM_TEMPLATES_TABLE", "crm_pm_templates"
+    )
+    # Hotel PMS / availability (QloApps vertical, HTL-010..HTL-013). Default OFF.
+    hotel_availability_table_name: str = os.environ.get("HOTEL_AVAILABILITY_TABLE_NAME", "hotel_availability")
+    hotel_hold_ttl_seconds: int = int(os.environ.get("HOTEL_HOLD_TTL_SECONDS", "900"))
+    # Hotel PMS (HTL-001 flag reused by HTL-014..HTL-016).
+    # The master flag already exists here; HTL-014 adds only the table-name setting.
+    # Hotel rate plans (HTL-014). Gated by the existing HOTEL_PMS_ENABLED master flag.
+    hotel_rate_plans_table_name: str = os.environ.get("HOTEL_RATE_PLANS_TABLE_NAME", "hotel_rate_plans")
+
+    # PIP-001: ATS Recruiting Pipeline
+    ats_pipeline_enabled: bool = (
+        os.environ.get("ATS_PIPELINE_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on")
+    )
+    ats_pipeline_table_name: str = os.environ.get(
+        "ATS_PIPELINE_TABLE_NAME", "ats_pipeline"
+    )
+    # Knowledge Base (KB-001)
+    knowledge_base_enabled: bool = os.environ.get("KNOWLEDGE_BASE_ENABLED", "0") not in ("0", "false", "False")
+    kb_articles_table: str = os.environ.get("KB_ARTICLES_TABLE", "crm_kb_articles")
+    kb_attachments_bucket: str = os.environ.get("KB_ATTACHMENTS_BUCKET", "local-uploads")
+    kb_attachments_s3_prefix: str = os.environ.get("KB_ATTACHMENTS_S3_PREFIX", "kb-attachments/")
+    kb_attachment_max_bytes: int = int(os.environ.get("KB_ATTACHMENT_MAX_BYTES", str(20 * 1024 * 1024)))
+    # KB-002: expiry checker
+    kb_expiry_checker_interval_seconds: int = int(os.environ.get("KB_EXPIRY_CHECKER_INTERVAL_SECONDS", "3600"))
+    # QloApps hotel-PMS (HTL-005..009): rooms table (master flag hotel_pms_enabled defined above)
+    hotel_rooms_table_name: str = os.environ.get("HOTEL_ROOMS_TABLE_NAME", "hotel_rooms")
+
+    # Leases (open-property vertical — LSE cluster)
+    leases_enabled: bool = os.environ.get("LEASES_ENABLED", "0") not in (
+        "0", "false", "False"
+    )
+    leases_table_name: str = os.environ.get("LEASES_TABLE_NAME", "leases")
+    leases_renewal_notifications_enabled: bool = os.environ.get(
+        "LEASES_RENEWAL_NOTIFICATIONS_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    leases_renewal_check_interval_seconds: int = int(
+        os.environ.get("LEASES_RENEWAL_CHECK_INTERVAL_SECONDS", "3600")
+    )
+    # ATS Recruiting — RSK reuses the master flag candidates_enabled owned by CND-001 (defined above)
+    ats_skills_table_name: str = os.environ.get("ATS_SKILLS_TABLE_NAME", "ats_skills")
+    ats_skills_enabled: bool = os.environ.get(
+        "ATS_SKILLS_ENABLED", "1"
+    ) not in ("0", "false", "False")
+
+    # RSK-002 — Résumé text extraction
+    ats_resume_extract_max_chars: int = int(
+        os.environ.get("ATS_RESUME_EXTRACT_MAX_CHARS", "50000")
+    )
+    ats_resume_extract_max_bytes: int = int(
+        os.environ.get("ATS_RESUME_EXTRACT_MAX_BYTES", str(10 * 1024 * 1024))
+    )
+    # --- OBP Transaction Requests + Step-Up SCA (TXR-001..TXR-005) ---
+    # Per-series flag (default OFF). The effective gate ANDs this with the
+    # umbrella S.open_bank_project_enabled (defined in ACC-001; referenced
+    # defensively via getattr so this series builds independently of ACC).
+    txn_requests_enabled: bool = os.environ.get(
+        "TXN_REQUESTS_ENABLED", "0"
+    ) not in ("0", "false", "False")
+    txn_requests_table_name: str = os.environ.get(
+        "TXN_REQUESTS_TABLE", "txn_requests"
+    )
+    # TXR-002 — per-type amount ceilings (0 = no limit).
+    txn_request_limit_wallet_transfer_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_WALLET_TRANSFER_CENTS", "0")
+    )
+    txn_request_limit_counterparty_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_COUNTERPARTY_CENTS", "0")
+    )
+    txn_request_limit_payout_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_PAYOUT_CENTS", "0")
+    )
+    txn_request_limit_refund_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_REFUND_CENTS", "0")
+    )
+    txn_request_limit_free_form_cents: int = int(
+        os.environ.get("TXN_REQUEST_LIMIT_FREE_FORM_CENTS", "0")
+    )
+    # TXR-003 — step-up SCA threshold + always-sensitive types.
+    txn_request_sca_threshold_cents: int = int(
+        os.environ.get("TXN_REQUEST_SCA_THRESHOLD_CENTS", "5000")
+    )
+    txn_request_sca_sensitive_types: frozenset = frozenset(
+        t.strip().upper()
+        for t in os.environ.get(
+            "TXN_REQUEST_SCA_SENSITIVE_TYPES", "PAYOUT,REFUND,COUNTERPARTY"
+        ).split(",")
+        if t.strip()
+    )
+    # TXR-004 — transient IN_FLIGHT cleanup TTL (seconds).
+    txn_request_in_flight_ttl_seconds: int = int(
+        os.environ.get("TXN_REQUEST_IN_FLIGHT_TTL_SECONDS", "300")
+    )
+    # HTL front-desk (HTL-022..024) reuses hotel_pms_enabled + the hotel_reservations / hotel_rooms tables (declared above)
+
+    # OBP umbrella gate (ACC-001 §6, decision D4) — kills the entire OBP banking vertical.
+    # Every OBP series _require_enabled() gate is S.open_bank_project_enabled AND S.<series>_enabled.
+    # REUSE: do NOT redefine if already present from sibling ACC-001 code.
+
+    # OAU-001: OAuth consumer-app registry
+    oauth_provider_enabled: bool = os.environ.get("OAUTH_PROVIDER_ENABLED", "0") not in ("0", "false", "False")
+    oauth_consumers_table_name: str = os.environ.get("OAUTH_CONSUMERS_TABLE_NAME", "oauth_consumers")
+    oauth_consumers_owner_index: str = os.environ.get("OAUTH_CONSUMERS_OWNER_INDEX", "ByOwner")
+
+    # OAU-002: Authorization-code flow + token settings
+    oauth_access_token_ttl_seconds: int = int(os.environ.get("OAUTH_ACCESS_TOKEN_TTL_SECONDS", "900"))
+    oauth_code_ttl_seconds: int = int(os.environ.get("OAUTH_CODE_TTL_SECONDS", "60"))
+    oauth_refresh_token_ttl_seconds: int = int(os.environ.get("OAUTH_REFRESH_TOKEN_TTL_SECONDS", "2592000"))
+    oauth_always_issue_refresh_token: bool = os.environ.get("OAUTH_ALWAYS_ISSUE_REFRESH_TOKEN", "0") not in ("0", "false", "False")
+    oauth_provider_directlogin_enabled: bool = os.environ.get("OAUTH_PROVIDER_DIRECTLOGIN_ENABLED", "0") not in ("0", "false", "False")
+
+    # OAU-003: OIDC layer
+    oauth_provider_oidc_enabled: bool = os.environ.get("OAUTH_PROVIDER_OIDC_ENABLED", "0") not in ("0", "false", "False")
+    oidc_id_token_ttl_seconds: int = int(os.environ.get("OIDC_ID_TOKEN_TTL_SECONDS", "3600"))
+    oidc_issuer_url: str = os.environ.get("OIDC_ISSUER_URL", "")
+
+    # OAU-004: Per-consumer scope enforcement
+    oauth_provider_scope_enforcement_enabled: bool = os.environ.get(
+        "OAUTH_PROVIDER_SCOPE_ENFORCEMENT_ENABLED", "0"
+    ) not in ("0", "false", "False")
+
+    # ── CRM Activities (ACT-001..ACT-010) ────────────────────────────────────
+    # Master switch — all sub-flags AND table access depend on this being true.
+    # Default OFF; sub-flags also default OFF so enabling master alone is safe.
+    crm_activities_enabled: bool = os.environ.get(
+        "CRM_ACTIVITIES_ENABLED", "false"
+    ).lower() == "true"
+
+    # Module-level sub-flags
+    crm_tasks_enabled: bool = os.environ.get(
+        "CRM_TASKS_ENABLED", "false"
+    ).lower() == "true"
+    crm_notes_enabled: bool = os.environ.get(
+        "CRM_NOTES_ENABLED", "false"
+    ).lower() == "true"
+    crm_activity_timeline_enabled: bool = os.environ.get(
+        "CRM_ACTIVITY_TIMELINE_ENABLED", "false"
+    ).lower() == "true"
+    crm_event_rsvp_enabled: bool = os.environ.get(
+        "CRM_EVENT_RSVP_ENABLED", "false"
+    ).lower() == "true"
+    crm_event_reminders_enabled: bool = os.environ.get(
+        "CRM_EVENT_REMINDERS_ENABLED", "false"
+    ).lower() == "true"
+
+    # DynamoDB table name settings
+    crm_tasks_table_name: str = os.environ.get("DDB_CRM_TASKS_TABLE", "crm_tasks")
+    crm_notes_table_name: str = os.environ.get("DDB_CRM_NOTES_TABLE", "crm_notes")
+    crm_activity_timeline_table_name: str = os.environ.get(
+        "DDB_CRM_ACTIVITY_TIMELINE_TABLE", "crm_activity_timeline"
+    )
+    crm_event_rsvp_table_name: str = os.environ.get(
+        "DDB_CRM_EVENT_RSVP_TABLE", "crm_event_rsvp"
+    )
+    crm_event_reminders_table_name: str = os.environ.get(
+        "DDB_CRM_EVENT_REMINDERS_TABLE", "crm_event_reminders"
+    )
+
+    # ACT-004: poller tuning
+    crm_event_reminders_poll_interval_seconds: int = int(
+        os.environ.get("CRM_EVENT_REMINDERS_POLL_INTERVAL_SECONDS", "60")
+    )
+
+    # ACT-010: S3 bucket for note attachments
+    crm_notes_s3_bucket: str = os.environ.get(
+        "CRM_NOTES_S3_BUCKET", "local-uploads"
+    )
+    # Maintenance Work Orders (WOV-001..WOV-004) — default OFF
+    maintenance_orders_enabled: bool = os.environ.get("MAINTENANCE_ORDERS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    maintenance_orders_table_name: str = os.environ.get("MAINTENANCE_ORDERS_TABLE_NAME", "maintenance_orders")
+    maintenance_vendors_table_name: str = os.environ.get("MAINTENANCE_VENDORS_TABLE_NAME", "maintenance_vendors")
+    maintenance_orders_escrow_enabled: bool = os.environ.get("MAINTENANCE_ORDERS_ESCROW_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    maintenance_escrow_min_cents: int = int(os.environ.get("MAINTENANCE_ESCROW_MIN_CENTS", "100"))
+    maintenance_escrow_max_cents: int = int(os.environ.get("MAINTENANCE_ESCROW_MAX_CENTS", "10000000"))
+    maintenance_escrow_fee_bps: int = int(os.environ.get("MAINTENANCE_ESCROW_FEE_BPS", "0"))
+    maintenance_escrow_payout_hold_seconds: int = int(os.environ.get("MAINTENANCE_ESCROW_PAYOUT_HOLD_SECONDS", "0"))
+
+    # QloApps Booking-Engine Storefront (HTL-025..HTL-027) — master flag reused from HTL-001 vertical (hotel_pms_enabled defined above via getattr). Table + RL settings owned here.
+    hotels_table_name: str = os.environ.get("HOTELS_TABLE_NAME", "hotels")
+    hotel_booking_search_rl_max: int = int(os.environ.get("HOTEL_BOOKING_SEARCH_RL_MAX", "60"))
+    hotel_booking_search_rl_window: int = int(os.environ.get("HOTEL_BOOKING_SEARCH_RL_WINDOW", "3600"))
+    hotel_booking_search_max_los_nights: int = int(os.environ.get("HOTEL_BOOKING_SEARCH_MAX_LOS_NIGHTS", "30"))
+    hotel_booking_search_max_rooms: int = int(os.environ.get("HOTEL_BOOKING_SEARCH_MAX_ROOMS", "8"))
+    hotel_booking_cart_rl_max: int = int(os.environ.get("HOTEL_BOOKING_CART_RL_MAX", "120"))
+    hotel_booking_cart_rl_window: int = int(os.environ.get("HOTEL_BOOKING_CART_RL_WINDOW", "3600"))
+    hotel_booking_checkout_rl_max: int = int(os.environ.get("HOTEL_BOOKING_CHECKOUT_RL_MAX", "20"))
+    hotel_booking_checkout_rl_window: int = int(os.environ.get("HOTEL_BOOKING_CHECKOUT_RL_WINDOW", "3600"))
+
+    # OFBiz Phase 8 — Shipping/Logistics (SHP-001+). Master switch defaults OFF. With it off all new shipping endpoints return 404 and existing shop/cart/orders/billing is unchanged.
+    shipping_enabled: bool = os.environ.get("SHIPPING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    shipping_rate_estimation_enabled: bool = os.environ.get("SHIPPING_RATE_ESTIMATION_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    shipping_default_currency: str = os.environ.get("SHIPPING_DEFAULT_CURRENCY", "usd")
+    shipping_default_item_weight_oz: int = int(os.environ.get("SHIPPING_DEFAULT_ITEM_WEIGHT_OZ", "16"))
+    shipping_dim_divisor: int = int(os.environ.get("SHIPPING_DIM_DIVISOR", "139"))
+    shipping_carriers_table_name: str = os.environ.get("SHIPPING_CARRIERS_TABLE_NAME", "shipping_carriers")
+    shipment_items_table_name: str = os.environ.get("SHIPMENT_ITEMS_TABLE_NAME", "shipment_items")
+    shipment_packages_table_name: str = os.environ.get("SHIPMENT_PACKAGES_TABLE_NAME", "shipment_packages")
+
+    customer_entity_enabled: bool = os.environ.get("CUSTOMER_ENTITY_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    customers_table_name: str = os.environ.get("CUSTOMERS_TABLE_NAME", "customers")
+    financial_products_enabled: bool = os.environ.get("FINANCIAL_PRODUCTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    financial_products_table_name: str = os.environ.get("FINANCIAL_PRODUCTS_TABLE_NAME", "financial_products")
+
+    # QloApps hotel-PMS vertical (HTL) — master flag + folio/payments tables
+    hotel_folios_table_name: str = os.environ.get("HOTEL_FOLIOS_TABLE_NAME", "hotel_folios")
+
+    # PUR-001/002: Purchasing / SCM
+    purchasing_scm_enabled: bool = os.environ.get("PURCHASING_SCM_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    suppliers_table_name: str = os.environ.get("SUPPLIERS_TABLE_NAME", "suppliers")
+    supplier_products_table_name: str = os.environ.get("SUPPLIER_PRODUCTS_TABLE_NAME", "supplier_products")
+    purchase_orders_table_name: str = os.environ.get("PURCHASE_ORDERS_TABLE_NAME", "purchase_orders")
+    po_receipts_table_name: str = os.environ.get("PO_RECEIPTS_TABLE_NAME", "po_receipts")
+    purchase_order_reorder_suggestions_enabled: bool = os.environ.get("PURCHASE_ORDER_REORDER_SUGGESTIONS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+
+
+    # PSD2 Consents (CSN-001/002)
+    psd2_consents_enabled: bool = os.environ.get("PSD2_CONSENTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    consents_table_name: str = os.environ.get("CONSENTS_TABLE_NAME", "consents")
+    consents_consumer_index: str = os.environ.get("CONSENTS_CONSUMER_INDEX", "ByConsumer")
+    consents_status_index: str = os.environ.get("CONSENTS_STATUS_INDEX", "ByStatusExpiry")
+    consents_by_payment_ref_index: str = os.environ.get("CONSENTS_BY_PAYMENT_REF_INDEX", "ByPaymentRef")
+    psd2_consent_default_ttl_days: int = int(os.environ.get("PSD2_CONSENT_DEFAULT_TTL_DAYS", "90"))
+    psd2_consent_max_ttl_days: int = int(os.environ.get("PSD2_CONSENT_MAX_TTL_DAYS", "365"))
+    psd2_consent_expiry_poll_interval: int = int(os.environ.get("PSD2_CONSENT_EXPIRY_POLL_INTERVAL", "300"))
+    psd2_consent_sca_threshold_cents: int = int(os.environ.get("PSD2_CONSENT_SCA_THRESHOLD_CENTS", "0"))
+    psd2_consent_pis_require_sca_factor: bool = os.environ.get("PSD2_CONSENT_PIS_REQUIRE_SCA_FACTOR", "true").lower() in ("1", "true", "yes", "on")
+    psd2_consent_rl_read_per_hour: int = int(os.environ.get("PSD2_CONSENT_RL_READ_PER_HOUR", "1000"))
+    psd2_consent_rl_refresh_per_hour: int = int(os.environ.get("PSD2_CONSENT_RL_REFRESH_PER_HOUR", "100"))
+
+    # Dynamic Entities (CSN-003)
+    dynamic_entities_enabled: bool = os.environ.get("DYNAMIC_ENTITIES_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    dynamic_entity_defs_table_name: str = os.environ.get("DYNAMIC_ENTITY_DEFS_TABLE_NAME", "dynamic_entity_defs")
+    dynamic_entity_rows_table_name: str = os.environ.get("DYNAMIC_ENTITY_ROWS_TABLE_NAME", "dynamic_entity_rows")
+    dynamic_entity_defs_creator_index: str = os.environ.get("DYNAMIC_ENTITY_DEFS_CREATOR_INDEX", "created_by-created_at-index")
+    dynamic_entity_rows_owner_index: str = os.environ.get("DYNAMIC_ENTITY_ROWS_OWNER_INDEX", "owner_sub-created_at-index")
+    dynamic_entity_max_properties: int = int(os.environ.get("DYNAMIC_ENTITY_MAX_PROPERTIES", "50"))
+    dynamic_entity_max_depth: int = int(os.environ.get("DYNAMIC_ENTITY_MAX_DEPTH", "3"))
+    dynamic_entity_max_required: int = int(os.environ.get("DYNAMIC_ENTITY_MAX_REQUIRED", "20"))
+    dynamic_entity_row_write_rate_per_hour: int = int(os.environ.get("DYNAMIC_ENTITY_ROW_WRITE_RATE_PER_HOUR", "200"))
+
+    # Dynamic Endpoints (CSN-004)
+    dynamic_endpoints_enabled: bool = os.environ.get("DYNAMIC_ENDPOINTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    dynamic_endpoints_table_name: str = os.environ.get("DYNAMIC_ENDPOINTS_TABLE_NAME", "dynamic_endpoints")
+    dynamic_endpoints_method_path_index: str = os.environ.get("DYNAMIC_ENDPOINTS_METHOD_PATH_INDEX", "method_path-sk-index")
+    dynamic_endpoints_created_by_index: str = os.environ.get("DYNAMIC_ENDPOINTS_CREATED_BY_INDEX", "created_by-created_at-index")
+    dynamic_endpoints_invoke_rate_per_hour: int = int(os.environ.get("DYNAMIC_ENDPOINTS_INVOKE_RATE_PER_HOUR", "1000"))
+
+    # Open Data: Branches + ATMs (CSN-005)
+    open_data_enabled: bool = os.environ.get("OPEN_DATA_ENABLED", "0") not in ("0", "false", "False")
+    open_data_table_name: str = os.environ.get("OPEN_DATA_TABLE_NAME", "open_data")
+    open_data_active_index: str = os.environ.get("OPEN_DATA_ACTIVE_INDEX", "ByActive")
+    open_data_list_max_limit: int = int(os.environ.get("OPEN_DATA_LIST_MAX_LIMIT", "200"))
+
+    # CRM Events (EVT-001) — Master flag default OFF.
+    # With flag off: all /ui/crm/events/* routes return 404; no workers start.
+    crm_events_enabled: bool = os.environ.get("CRM_EVENTS_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+    crm_events_table_name: str = os.environ.get("CRM_EVENTS_TABLE_NAME", "crm_events")
+    crm_event_registrations_table_name: str = os.environ.get("CRM_EVENT_REGISTRATIONS_TABLE_NAME", "crm_event_registrations")
+
+    # CRM Survey Distribution (EVT-008) — default OFF
+    crm_survey_distribution_enabled: bool = os.environ.get("CRM_SURVEY_DISTRIBUTION_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+    survey_distribution_rate_limit_max: int = int(os.environ.get("SURVEY_DISTRIBUTION_RATE_LIMIT_MAX", "10"))
+    survey_distribution_rate_limit_window: int = int(os.environ.get("SURVEY_DISTRIBUTION_RATE_LIMIT_WINDOW", "3600"))
+
+    # CRM Document Library (EVT-011) — default OFF
+    crm_document_library_enabled: bool = os.environ.get("CRM_DOCUMENT_LIBRARY_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+
+    # CRM Contact SMS (EVT-014) — default OFF
+    crm_contact_sms_enabled: bool = os.environ.get("CRM_CONTACT_SMS_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+    crm_contact_sms_log_table_name: str = os.environ.get("CRM_CONTACT_SMS_LOG_TABLE", "crm_contact_sms_log")
+    crm_contact_sms_rate_max: int = int(os.environ.get("CRM_CONTACT_SMS_RATE_MAX", "20"))
+    crm_contact_sms_rate_window_seconds: int = int(os.environ.get("CRM_CONTACT_SMS_RATE_WINDOW_SECONDS", "3600"))
+
+    # CRM Audit Log Browse (EVT-015) — default OFF
+    crm_audit_log_browse_enabled: bool = os.environ.get("CRM_AUDIT_LOG_BROWSE_ENABLED", "false") == "1"
+    crm_audit_log_browse_rate_limit_per_minute: int = int(os.environ.get("CRM_AUDIT_LOG_BROWSE_RATE_LIMIT", "60"))
+
+    # OBP umbrella master flag (ACC-001 §6) — single kill-switch for the entire
+
+    # PLT-001: Per-consumer API rate-limit middleware
+    api_consumer_rate_limit_enabled: bool = os.environ.get("API_CONSUMER_RATE_LIMIT_ENABLED", "0") not in ("0", "false", "False")
+    api_consumer_rate_limit_minute: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_MINUTE", "0"))
+    api_consumer_rate_limit_hour: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_HOUR", "0"))
+    api_consumer_rate_limit_day: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_DAY", "0"))
+    api_consumer_rate_limit_week: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_WEEK", "0"))
+    api_consumer_rate_limit_month: int = int(os.environ.get("API_CONSUMER_RATE_LIMIT_MONTH", "0"))
+
+    # PLT-002: Top-N API usage metrics leaderboard
+    metrics_leaderboard_enabled: bool = os.environ.get("METRICS_LEADERBOARD_ENABLED", "0") not in ("0", "false", "False")
+    metrics_leaderboard_max_top_n: int = int(os.environ.get("METRICS_LEADERBOARD_MAX_TOP_N", "100"))
+
+    # PLT-003: Glossary endpoint
+    glossary_enabled: bool = os.environ.get("GLOSSARY_ENABLED", "0") not in ("0", "false", "False")
+    glossary_table_name: str = os.environ.get("GLOSSARY_TABLE_NAME", "glossary")
+    glossary_definition_max_chars: int = int(os.environ.get("GLOSSARY_DEFINITION_MAX_CHARS", "4096"))
+
+    # PLT-004: Sandbox JSON import
+    sandbox_import_enabled: bool = os.environ.get("SANDBOX_IMPORT_ENABLED", "0") not in ("0", "false", "False")
+    sandbox_import_max_items: int = int(os.environ.get("SANDBOX_IMPORT_MAX_ITEMS", "500"))
+
+    # PLT-005: Account/ledger webhook events
+    account_ledger_webhooks_enabled: bool = os.environ.get("ACCOUNT_LEDGER_WEBHOOKS_ENABLED", "0") not in ("0", "false", "False")
+
+    # HTL-035 KPI caps (hotel_pms_enabled + hotel table names declared above)
+    hotel_kpi_max_range_days: int = int(os.environ.get("HOTEL_KPI_MAX_RANGE_DAYS", "366"))
+    hotel_kpi_max_stay_nights: int = int(os.environ.get("HOTEL_KPI_MAX_STAY_NIGHTS", "370"))
+
+    # Human Resources (HRM-001) — Phase M of the OFBiz ERP buildout.
+    # Master switch defaults OFF: with it off all HR endpoints 404 and the
+    # hr DynamoDB table need not exist; no other module is affected.
+    hr_enabled: bool = os.environ.get("HR_ENABLED", "0") not in ("0", "false", "False")
+    # Sub-gate for payroll run CRUD. Checked only when hr_enabled is True.
+    hr_payroll_enabled: bool = os.environ.get("HR_PAYROLL_ENABLED", "0") not in ("0", "false", "False")
+    # Sub-gate for double-entry GL journal-entry write on payroll approval.
+    # Checked only when hr_payroll_enabled is True.
+    hr_payroll_gl_posting_enabled: bool = os.environ.get("HR_PAYROLL_GL_POSTING_ENABLED", "0") not in ("0", "false", "False")
+    # DynamoDB table name for all HR single-table rows.
+    hr_table_name: str = os.environ.get("DDB_HR_TABLE", "hrm")
+    # GL account code for the Salaries & Wages Expense debit side of payroll
+    # journal entries (HRM-010). Must match a code in the seeded chart of
+    # accounts (OFB-013). Default "6000" = conventional OFBiz expense code.
+    hr_payroll_expense_account_code: str = os.environ.get("HR_PAYROLL_EXPENSE_ACCOUNT_CODE", "6000")
+    # If True, terminating an employment reverts the linked position to OPEN.
+    hr_position_revert_on_terminate: bool = os.environ.get("HR_POSITION_REVERT_ON_TERMINATE", "1") not in ("0", "false", "False")
+
+    # OFBiz Phase N — Fixed Assets (FXA-001/FXA-002).
+    # Master switch defaults OFF: with it off the existing shop/cart/orders/billing
+    # paths are byte-for-byte unchanged; the fixed-assets service is dormant.
+    # FIXED_ASSETS_DEPRECIATION_POSTING_ENABLED is a secondary gate for the
+    # background depreciation poster — meaningful only when the master switch is on.
+    fixed_assets_enabled: bool = os.environ.get("FIXED_ASSETS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    fixed_assets_depreciation_posting_enabled: bool = os.environ.get("FIXED_ASSETS_DEPRECIATION_POSTING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    fixed_assets_depreciation_poll_interval: int = int(os.environ.get("FIXED_ASSETS_DEPRECIATION_POLL_INTERVAL", "86400"))
+    fixed_assets_table_name: str = os.environ.get("FIXED_ASSETS_TABLE_NAME", "fixed_assets")
+    fixed_asset_schedule_table_name: str = os.environ.get("FIXED_ASSET_SCHEDULE_TABLE_NAME", "fixed_asset_schedule")
+
+    # OFBiz commerce/ERP — POS (Point of Sale) channel (POS-001..POS-NNN).
+    # Master switch defaults OFF. With pos_enabled=False every POS endpoint returns
+    # 404 and the module is dormant; existing shop/cart/orders/billing bytes are unchanged.
+    pos_enabled: bool = os.environ.get("POS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    pos_table_name: str = os.environ.get("POS_TABLE_NAME", "pos")
+    pos_cash_drawer_required: bool = os.environ.get("POS_CASH_DRAWER_REQUIRED", "false").lower() in ("1", "true", "yes", "on")
+    pos_default_tax_rate_bps: int = int(os.environ.get("POS_DEFAULT_TAX_RATE_BPS", "0"))
+    pos_receipt_store_name: str = os.environ.get("POS_RECEIPT_STORE_NAME", "")
+
+
+    # Marketing Campaigns module (MKT-002). Default OFF.
+    marketing_campaigns_enabled: bool = os.environ.get("MARKETING_CAMPAIGNS_ENABLED", "0") not in ("0", "false", "False")
+    marketing_campaigns_table_name: str = os.environ.get("DDB_MARKETING_CAMPAIGNS", "MarketingCampaigns")
+    contact_lists_table_name: str = os.environ.get("DDB_CONTACT_LISTS", "ContactLists")
+    party_segments_table_name: str = os.environ.get("DDB_PARTY_SEGMENTS", "PartySegments")
+    tracking_codes_table_name: str = os.environ.get("DDB_TRACKING_CODES", "TrackingCodes")
+    marketing_send_log_table_name: str = os.environ.get("DDB_MARKETING_SEND_LOG", "MarketingCampaignSendLog")
+
+    # OBP PAY cluster (counterparties, standing orders, mandates, FX). Owns ONLY the per-series flag + tables; umbrella S.open_bank_project_enabled (D4) is declared by ACC and read via getattr — never redeclared here.
+    payments_counterparties_enabled: bool = os.environ.get("PAYMENTS_COUNTERPARTIES_ENABLED", "0").lower() not in ("0", "false", "no")
+    counterparties_table_name: str = os.environ.get("COUNTERPARTIES_TABLE_NAME", "counterparties")
+    standing_orders_table_name: str = os.environ.get("STANDING_ORDERS_TABLE_NAME", "standing_orders")
+    direct_debit_mandates_table_name: str = os.environ.get("DIRECT_DEBIT_MANDATES_TABLE_NAME", "direct_debit_mandates")
+    fx_rates_table_name: str = os.environ.get("FX_RATES_TABLE_NAME", "fx_rates")
+
+    # EVT-005: CRM Geocoding — address-to-lat/lng (default OFF)
+    crm_geocoding_enabled: bool = os.environ.get("CRM_GEOCODING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    crm_geocoding_provider_url: str = os.environ.get("CRM_GEOCODING_PROVIDER_URL", "")
+    crm_geocoding_batch_limit: int = int(os.environ.get("CRM_GEOCODING_BATCH_LIMIT", "100"))
+
+    # EVT-006: CRM Proximity Search — Haversine radius query (default OFF)
+    crm_proximity_search_enabled: bool = os.environ.get("CRM_PROXIMITY_SEARCH_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    crm_proximity_search_max_radius_km: float = float(os.environ.get("CRM_PROXIMITY_SEARCH_MAX_RADIUS_KM", "20000.0"))
+    crm_proximity_search_rate_limit_n: int = int(os.environ.get("CRM_PROXIMITY_SEARCH_RATE_LIMIT_N", "30"))
+    crm_proximity_search_rate_limit_win: int = int(os.environ.get("CRM_PROXIMITY_SEARCH_RATE_LIMIT_WIN", "60"))
+
+    # EVT-007: CRM Map View — Leaflet pin-drop page (default OFF, controlled by crm_geocoding_enabled)
+    crm_map_default_lat: float = float(os.environ.get("CRM_MAP_DEFAULT_LAT", "37.7749"))
+    crm_map_default_lng: float = float(os.environ.get("CRM_MAP_DEFAULT_LNG", "-122.4194"))
+    crm_map_default_radius_km: float = float(os.environ.get("CRM_MAP_DEFAULT_RADIUS_KM", "50.0"))
+    crm_map_max_radius_km: float = float(os.environ.get("CRM_MAP_MAX_RADIUS_KM", "500.0"))
+    crm_map_max_pins: int = int(os.environ.get("CRM_MAP_MAX_PINS", "200"))
+
+    # ATI (OpenCATS ATS Integration) — ATI-owned cross-link bridge flag + table. Default OFF; AND-ed with candidates_enabled (CND-001 authoritative gate) inside ats_integration.py. Do NOT redeclare candidates_enabled/party_crm_*/job_orders_* here (sibling-owned).
+    ats_integration_enabled: bool = os.environ.get("ATS_INTEGRATION_ENABLED", "0").lower() not in ("0", "false", "no", "off", "")
+    ats_integration_links_table_name: str = os.environ.get("DDB_ATS_INTEGRATION_LINKS_TABLE", "ats_integration_links")
+
+    # CCT (SuiteCRM Contacts Extra) — PTY-001 + CCT-001..CCT-006
+    party_dedup_match_threshold: float = float(os.environ.get("PARTY_DEDUP_MATCH_THRESHOLD", "0.70"))
+
+    # CMP-001..CMP-008: SuiteCRM Campaigns-Extra subsystem (default OFF)
+    crm_campaigns_enabled: bool = os.environ.get("CRM_CAMPAIGNS_ENABLED", "0") not in ("0", "false", "False")
+    crm_campaigns_table_name: str = os.environ.get("DDB_MARKETING_CAMPAIGNS", "CrmCampaigns")
+    crm_campaign_send_log_table_name: str = os.environ.get("DDB_MARKETING_SEND_LOG", "CrmCampaignSendLog")
+    marketing_email_templates_table_name: str = os.environ.get("DDB_MARKETING_EMAIL_TEMPLATES", "MarketingEmailTemplates")
+    marketing_contact_lists_table_name: str = os.environ.get("DDB_MARKETING_CONTACT_LISTS", "MarketingContactLists")
+    marketing_tracking_codes_table_name: str = os.environ.get("DDB_MARKETING_TRACKING_CODES", "MarketingTrackingCodes")
+    marketing_web_lead_captures_table_name: str = os.environ.get("DDB_WEB_LEAD_CAPTURES_TABLE", "WebLeadCaptures")
+    marketing_unsubscribe_secret: str = (os.environ.get("MARKETING_UNSUBSCRIBE_SECRET") or os.environ.get("UI_ACCESS_TOKEN_SECRET", ""))
+    marketing_open_tracking_enabled: bool = os.environ.get("MARKETING_OPEN_TRACKING_ENABLED", "0") not in ("0", "false", "False")
+    marketing_open_tracking_bot_ignore_uas: str = os.environ.get("MARKETING_OPEN_TRACKING_BOT_IGNORE_UAS", "Barracuda,Proofpoint,SafeBrowsing,Google Image Proxy,Yahoo! Slurp,Googlebot")
+    web_to_lead_enabled: bool = os.environ.get("WEB_TO_LEAD_ENABLED", "0") not in ("0", "false", "False")
+    web_to_lead_autoresponder_enabled: bool = os.environ.get("WEB_TO_LEAD_AUTORESPONDER_ENABLED", "0") not in ("0", "false", "False")
+    web_to_lead_max_per_ip_per_hour: int = int(os.environ.get("WEB_TO_LEAD_MAX_PER_IP_PER_HOUR", "10"))
+    marketing_unsubscribe_token_ttl_days: int = int(os.environ.get("MARKETING_UNSUBSCRIBE_TOKEN_TTL_DAYS", "30"))
 
 
 S = Settings()

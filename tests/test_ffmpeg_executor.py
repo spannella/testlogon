@@ -111,7 +111,7 @@ def _base_args() -> list[str]:
 
 def _run(coro):
     """Helper to run an async function in a new event loop."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ─── Tests ────────────────────────────────────────────────────────────────────

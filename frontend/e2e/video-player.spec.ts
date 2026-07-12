@@ -59,8 +59,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -84,7 +84,8 @@ async function injectAuth(page: Page, userId: string) {
 
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
 function ddbPut(tableName: string, item: Record<string, unknown>) {
   const itemJson = JSON.stringify(item);
@@ -109,7 +110,7 @@ table.put_item(Item=convert(json.loads(sys.argv[1])))
   try {
     execSync(
       `python3 ${scriptPath} ${JSON.stringify(itemJson)}`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } finally {
     try { unlinkSync(scriptPath); } catch { /* ignore */ }
@@ -128,7 +129,7 @@ table.delete_item(Key=json.loads(sys.argv[1]))
   try {
     execSync(
       `python3 ${scriptPath} ${JSON.stringify(keyJson)}`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } catch {
     // Ignore cleanup errors

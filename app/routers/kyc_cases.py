@@ -24,6 +24,8 @@ from app.contracts.kyc_cases_contract import (
     KycCaseListEnvelope,
     KycReadinessEnvelope,
     KycSubmitCaseRequest,
+    KycDisputeRequest,
+    KycReopenRequest,
     KycSignatureStatusEnvelope,
     KycAddWitnessRequest,
     KycTemplateStatusEnvelope,
@@ -1360,6 +1362,116 @@ def submit_kyc_case(
     return _wrap_case(updated)
 
 
+@router.post("/{case_id}/dispute", response_model=KycCaseEnvelope)
+def dispute_kyc_case(
+    case_id: str,
+    body: KycDisputeRequest,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """KYD-005: user appeals a rejected case (rejected -> disputed)."""
+    if not S.kyc_dispute_enabled:
+        _raise_kyc_error("kyc_feature_disabled", details={"feature": "kyc_dispute"})
+
+    case = STORE.get_case(case_id)
+    if not case:
+        audit_event("kyc_dispute_denied", user.sub, request, outcome="failure", reason="not_found", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    if case.get("user_sub") != user.sub:
+        audit_event("kyc_dispute_denied", user.sub, request, outcome="failure", reason="forbidden", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+
+    from_status = str(case.get("status") or "")
+    try:
+        updated = STORE.dispute_case(
+            case_id=case_id,
+            owner_sub=user.sub,
+            expected_version=body.expected_version,
+            reason=body.reason,
+            note=body.note,
+        )
+    except KycCaseConflictError:
+        audit_event("kyc_dispute_denied", user.sub, request, outcome="failure", reason="conflict", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_case_update_conflict", details={"kyc_case_id": case_id, "expected_version": body.expected_version})
+    except KycCaseValidationError as exc:
+        code = str(exc)
+        if code in {"kyc_access_forbidden", "kyc_invalid_transition", "kyc_dispute_window_expired"}:
+            audit_event("kyc_dispute_denied", user.sub, request, outcome="failure", reason=code, kyc_case_id=case_id)
+            _raise_kyc_error(code, details={"kyc_case_id": case_id})
+        audit_event("kyc_dispute_denied", user.sub, request, outcome="failure", reason="invalid_request", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_invalid_request", details={"kyc_case_id": case_id})
+
+    if not updated:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    _audit_state_transition(
+        event_name="kyc_disputed",
+        actor_sub=user.sub,
+        request=request,
+        case_id=case_id,
+        from_status=from_status,
+        to_status=str(updated.get("status") or ""),
+        action="dispute",
+        reason=body.reason,
+    )
+    _emit_kyc_metric(request, metric_name="kyc_funnel_transition", tags={"to_status": str(updated.get("status") or "")})
+    return _wrap_case(updated)
+
+
+@router.post("/{case_id}/reopen", response_model=KycCaseEnvelope)
+def reopen_kyc_case(
+    case_id: str,
+    body: KycReopenRequest,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    """KYD-005: user reopens a rejected/expired case to retry (-> draft)."""
+    if not S.kyc_retry_enabled:
+        _raise_kyc_error("kyc_feature_disabled", details={"feature": "kyc_retry"})
+
+    case = STORE.get_case(case_id)
+    if not case:
+        audit_event("kyc_reopen_denied", user.sub, request, outcome="failure", reason="not_found", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    if case.get("user_sub") != user.sub:
+        audit_event("kyc_reopen_denied", user.sub, request, outcome="failure", reason="forbidden", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_access_forbidden", details={"kyc_case_id": case_id})
+
+    from_status = str(case.get("status") or "")
+    try:
+        updated = STORE.reopen_case(
+            case_id=case_id,
+            owner_sub=user.sub,
+            expected_version=body.expected_version,
+        )
+    except KycCaseConflictError:
+        audit_event("kyc_reopen_denied", user.sub, request, outcome="failure", reason="conflict", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_case_update_conflict", details={"kyc_case_id": case_id, "expected_version": body.expected_version})
+    except KycCaseValidationError as exc:
+        code = str(exc)
+        if code in {"kyc_access_forbidden", "kyc_invalid_transition", "kyc_retry_limit_reached"}:
+            audit_event("kyc_reopen_denied", user.sub, request, outcome="failure", reason=code, kyc_case_id=case_id)
+            _raise_kyc_error(code, details={"kyc_case_id": case_id})
+        audit_event("kyc_reopen_denied", user.sub, request, outcome="failure", reason="invalid_request", kyc_case_id=case_id)
+        _raise_kyc_error("kyc_invalid_request", details={"kyc_case_id": case_id})
+
+    if not updated:
+        _raise_kyc_error("kyc_case_not_found", details={"kyc_case_id": case_id})
+    _audit_state_transition(
+        event_name="kyc_reopened",
+        actor_sub=user.sub,
+        request=request,
+        case_id=case_id,
+        from_status=from_status,
+        to_status=str(updated.get("status") or ""),
+        action="reopen",
+        attempt_count=(updated.get("review") or {}).get("attempt_count"),
+    )
+    _emit_kyc_metric(request, metric_name="kyc_funnel_transition", tags={"to_status": str(updated.get("status") or "")})
+    return _wrap_case(updated)
+
+
 @router.get("/admin/queue", response_model=KycAdminQueueEnvelope)
 def list_admin_kyc_queue(
     request: Request,
@@ -1376,7 +1488,7 @@ def list_admin_kyc_queue(
         audit_event("kyc_admin_queue_denied", user.sub, request, outcome="failure", reason="admin_role_required")
         _raise_kyc_error("kyc_admin_role_required")
 
-    statuses = [status] if status else ["submitted", "under_review", "needs_more_info"]
+    statuses = [status] if status else ["submitted", "under_review", "needs_more_info", "disputed"]
     payload = STORE.list_admin_queue(
         statuses=statuses,
         assignee_sub=(assignee_admin_sub or "").strip() or None,

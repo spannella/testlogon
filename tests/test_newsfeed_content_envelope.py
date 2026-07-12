@@ -740,6 +740,11 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=False),
             patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch("app.services.blocking.get_blocked_set", return_value=set()),
+            patch("app.services.blocking.get_blocked_by_set", return_value=set()),
+            patch("app.services.social.get_snoozed_following_ids", return_value=set()),
+            patch("app.services.ad_feedback.get_hidden_ad_ids", return_value=set()),
+            patch("app.services.content_boost.elevate_feed_items", side_effect=lambda items, **kw: items),
         ):
             out = newsfeed.view_feed(limit=20, cursor=None, author_id=None, q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 

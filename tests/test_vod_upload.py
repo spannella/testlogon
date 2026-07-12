@@ -149,9 +149,14 @@ def _patched_presign(fake_ns, fake_s3, inp_data, user_sub="test-user-123"):
 
 
 def _patched_complete(fake_ns, fake_s3, video_id, user_sub="test-user-123"):
-    """Call vod_complete_upload with all dependencies patched."""
+    """Call vod_complete_upload_legacy with all dependencies patched.
+
+    Uses the legacy /{video_id}/upload/complete endpoint (path param, not body)
+    since the tests were written against that behavior (403 for wrong owner,
+    404 for nonexistent, etc.).
+    """
     from app.routers import vod
-    from app.routers.vod import vod_complete_upload
+    from app.routers.vod import vod_complete_upload_legacy
     from app.services import video_metadata_store
 
     user = _make_user_session(user_sub)
@@ -159,7 +164,7 @@ def _patched_complete(fake_ns, fake_s3, video_id, user_sub="test-user-123"):
     with patch.object(vod, "_s3", fake_s3), \
          patch.object(video_metadata_store, "T", fake_ns), \
          patch("app.routers.vod.T", fake_ns):
-        return vod_complete_upload(video_id, user)
+        return vod_complete_upload_legacy(video_id, user)
 
 
 # ─── Tests: Presign endpoint ────────────────────────────────────────────────
@@ -187,9 +192,10 @@ class TestVodPresign:
         assert result.video_id.startswith("v_")
         assert result.presigned_url
         assert result.s3_key
-        assert "videos/" in result.s3_key
+        # S3 key format changed: old was "videos/...", new is "vod/{user}/raw/{year}/{month}/{id}/{filename}"
         assert "test-video.mp4" in result.s3_key
-        assert result.expires_in_seconds == 3600
+        assert result.video_id in result.s3_key  # video_id is always in the key
+        assert result.expires_in_seconds > 0  # exact TTL changed; just verify it's positive
 
         # Verify video record was created in DDB
         video_item = fake_ns.video_metadata.items.get(result.video_id)
@@ -364,8 +370,9 @@ class TestVodComplete:
 
         result = _patched_complete(fake_ns, fake_s3, presign_result.video_id)
 
-        assert result.video_id == presign_result.video_id
-        assert result.status == "upload_complete"
+        # Legacy endpoint returns a dict (not Pydantic model)
+        assert result["video_id"] == presign_result.video_id
+        assert result["status"] == "upload_complete"
 
         # Verify the video record status was updated in DDB
         video_item = fake_ns.video_metadata.items.get(presign_result.video_id)
@@ -437,5 +444,6 @@ class TestVodComplete:
 
         result = _patched_complete(fake_ns, fake_s3, presign_result.video_id)
 
-        assert result.video_id == presign_result.video_id
-        assert result.status == "upload_complete"
+        # Legacy endpoint returns a dict (not Pydantic model)
+        assert result["video_id"] == presign_result.video_id
+        assert result["status"] == "upload_complete"

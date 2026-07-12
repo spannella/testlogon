@@ -85,6 +85,21 @@ PROVIDER_REGISTRY: Dict[str, Dict[str, Any]] = {
         "models": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
         "supports_usage_api": False,
     },
+    "elevenlabs": {
+        "display_name": "ElevenLabs",
+        "base_url": "https://api.elevenlabs.io/v1",
+        "auth_header": "xi-api-key",
+        "auth_prefix": "",
+        "test_endpoint": "/voices",
+        "test_method": "GET",
+        # TTS model IDs.
+        "models": ["eleven_multilingual_v2", "eleven_turbo_v2_5"],
+        # STT model id used by transcribe_audio.
+        "stt_model": "scribe_v1",
+        # Default voice for synthesize_speech when no voice_preference set.
+        "default_voice_id": "21m00Tcm4TlvDq8ikWAM",
+        "supports_usage_api": False,
+    },
     "custom": {
         "display_name": "Custom (OpenAI-compatible)",
         "base_url": "",
@@ -111,6 +126,7 @@ def add_key(
     api_key: str,
     base_url: str = "",
     model_preference: str = "",
+    voice_preference: str = "",
     rate_limit_rpm: int = 60,
     monthly_budget_cents: int = 0,
 ) -> Dict[str, Any]:
@@ -119,6 +135,9 @@ def add_key(
         raise ValueError(f"Unknown provider: {provider}")
     if provider == "custom" and not base_url:
         raise ValueError("base_url is required for custom provider")
+    # MVA-001: default voice for TTS providers (ElevenLabs) when unset.
+    if not voice_preference:
+        voice_preference = PROVIDER_REGISTRY[provider].get("default_voice_id", "")
 
     key_id = uuid4().hex
     encrypted = kms_encrypt(api_key)
@@ -136,6 +155,7 @@ def add_key(
         "key_suffix": key_suffix,
         "base_url": base_url or PROVIDER_REGISTRY[provider]["base_url"],
         "model_preference": model_preference,
+        "voice_preference": voice_preference,
         "available_models": [],
         "rate_limit_rpm": rate_limit_rpm,
         "monthly_budget_cents": monthly_budget_cents,
@@ -250,7 +270,12 @@ def test_key(user_id: str, key_id: str) -> Dict[str, Any]:
 
         if resp.status_code == 200:
             data = resp.json()
-            models = [m.get("id", "") for m in data.get("data", [])] if isinstance(data, dict) else []
+            if provider == "elevenlabs":
+                # MVA-001: ElevenLabs /voices returns {"voices": [{"voice_id", "name"}]}.
+                voices = data.get("voices", []) if isinstance(data, dict) else []
+                models = [v.get("voice_id", "") for v in voices if isinstance(v, dict)]
+            else:
+                models = [m.get("id", "") for m in data.get("data", [])] if isinstance(data, dict) else []
             ts = now_ts()
             T.llm_provider_keys.update_item(
                 Key={"pk": f"USER#{user_id}", "sk": f"KEY#{key_id}"},

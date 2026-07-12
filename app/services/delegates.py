@@ -290,6 +290,9 @@ def get_creator_settings(creator_id: str) -> Dict[str, Any]:
         "default_preset": "chat_agent",
         "delegate_tag_enabled": True,
         "delegate_tag_format": "[via @{delegate_name}]",
+        # When True, delegate attribution ("via @…") is shown to the creator and
+        # the delegate but never to message recipients. (DLP-001)
+        "hide_delegate_from_recipients": False,
     }
 
 
@@ -301,6 +304,7 @@ def update_creator_settings(
     default_preset: Optional[str] = None,
     delegate_tag_enabled: bool = True,
     delegate_tag_format: str = "[via @{delegate_name}]",
+    hide_delegate_from_recipients: bool = False,
 ) -> Dict[str, Any]:
     """Update creator delegation settings."""
     if max_delegates < 1 or max_delegates > MAX_DELEGATES_HARD_LIMIT:
@@ -316,6 +320,7 @@ def update_creator_settings(
         "default_preset": default_preset,
         "delegate_tag_enabled": delegate_tag_enabled,
         "delegate_tag_format": delegate_tag_format,
+        "hide_delegate_from_recipients": hide_delegate_from_recipients,
     }
     T.delegates.put_item(Item=item)
     return item

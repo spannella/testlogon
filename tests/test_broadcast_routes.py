@@ -40,6 +40,7 @@ def _session(status: str = "draft"):
         created_by="user-1",
         created_at="2026-03-25T00:00:00+00:00",
         updated_at="2026-03-25T00:00:00+00:00",
+        broadcast_privacy_visibility="public",
     )
 
 
@@ -128,7 +129,7 @@ def test_get_session_route_passes_through() -> None:
         patch.object(broadcast, "get_session", return_value=_session("stopped")),
         patch.object(broadcast, "get_output", return_value=SimpleNamespace(mediapackage_endpoint="https://pkg.example/hls.m3u8", cloudfront_playback_url=None, s3_archive_prefix=None, aws_input_arn=None, aws_channel_arn=None, provider_state_snapshot={})),
     ):
-        out = broadcast.get_session_route("s1", ctx=_ctx())
+        out = broadcast.get_session_route("s1", request=_req(), ctx=_ctx())
     assert out.status == "stopped"
     assert out.mediapackage_endpoint == "https://pkg.example/hls.m3u8"
 
@@ -152,6 +153,7 @@ def test_mint_playback_url_route_uses_existing_output_url_when_present() -> None
             "mint_local_playback_url",
             return_value=SimpleNamespace(url="http://localhost:8090/new", expires_at=1234),
         ),
+        patch("app.services.broadcast_privacy.check_viewer_access"),
     ):
         out = broadcast.mint_playback_url_route("s1", ctx=_ctx())
     assert out.session_id == "s1"
@@ -255,6 +257,7 @@ def test_mint_playback_url_route_returns_400_for_invalid_stream_key() -> None:
         patch.object(broadcast, "get_output", return_value=None),
         patch.object(broadcast, "mint_local_playback_url", side_effect=ValueError("invalid stream key format")),
         patch.object(broadcast, "record_broadcast_output_error") as record_broadcast_output_error,
+        patch("app.services.broadcast_privacy.check_viewer_access"),
         pytest.raises(HTTPException) as exc,
     ):
         broadcast.mint_playback_url_route("s1", ctx=_ctx())

@@ -18,6 +18,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -50,8 +52,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -104,6 +106,51 @@ async function apiPatch(page: Page, identity: string, path: string, body: unknow
   });
 }
 
+// ─── DDB cleanup helper ───────────────────────────────────────────────────────
+
+// GAP-0039: a user may own at most 5 (non-terminal) ad accounts; POST
+// /ui/ads/accounts returns 422 once the cap is hit. E2E runs accumulate ad
+// accounts for Alice/Bob across runs, so without cleanup the account-creating
+// tests in this spec eventually trip the cap (422 → cascading 404s). Delete all
+// ad accounts owned by the given user (and their campaigns) directly in DDB
+// before the run so the API create paths always have headroom.
+function ddbDeleteOwnerAccounts(ownerSubs: string[]): void {
+  const script = `
+import boto3, os
+from pathlib import Path
+env_file = Path('${REPO_ROOT}/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+from boto3.dynamodb.conditions import Key
+ddb = boto3.resource('dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'),
+    region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+accts = ddb.Table('AdAccounts')
+camps = ddb.Table('AdCampaigns')
+owners = os.environ['OWNER_SUBS'].split(',')
+for owner in owners:
+    resp = accts.query(IndexName='ByOwner', KeyConditionExpression=Key('owner_sub').eq(owner))
+    for item in resp.get('Items', []):
+        acct_pk = item['pk']
+        # Delete this account's campaigns first.
+        cresp = camps.query(KeyConditionExpression=Key('pk').eq(acct_pk))
+        for c in cresp.get('Items', []):
+            camps.delete_item(Key={'pk': c['pk'], 'sk': c['sk']})
+        accts.delete_item(Key={'pk': item['pk'], 'sk': item['sk']})
+print('ok')
+`;
+  execSync("python3 -", {
+    cwd: REPO_ROOT,
+    timeout: 20_000,
+    input: script,
+    env: { ...process.env, OWNER_SUBS: ownerSubs.join(",") },
+  });
+}
+
 // ─── Shared state ─────────────────────────────────────────────────────────────
 
 let alicePage: Page;
@@ -116,6 +163,11 @@ let campaignId: string;
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
 test.beforeAll(async ({ browser }) => {
+  // Wipe accumulated ad accounts for the test users so the 5-account cap
+  // (GAP-0039) never blocks the account-creation tests below. Alice/Bob session
+  // subs are the email addresses used as owner_sub on the account records.
+  ddbDeleteOwnerAccounts(["e2e_alice@test.local", "e2e_bob@test.local"]);
+
   alicePage = await newIdentityPage(browser, ALICE_ID);
   bobPage = await newIdentityPage(browser, BOB_ID);
   rootPage = await newIdentityPage(browser, ROOT_ID);
@@ -391,12 +443,12 @@ test.describe("344 — Advertiser Dashboard UI", () => {
 
   test("344.3 Campaign list shows campaigns", async () => {
     await alicePage.goto(`${BASE}/ads/campaigns?account=${accountId}`);
-    await expect(alicePage.getByText("Campaigns", { exact: true })).toBeVisible();
+    await expect(alicePage.locator("#main-content").getByText("Campaigns", { exact: true })).toBeVisible();
     await expect(alicePage.getByText(`Winter Sale ${TS}`)).toBeVisible({ timeout: 10000 });
   });
 
   test("344.4 Campaign status badge displays correctly", async () => {
     // The campaign should be "active" from section 343 tests
-    await expect(alicePage.getByText("active")).toBeVisible();
+    await expect(alicePage.locator("#main-content").getByText("active").first()).toBeVisible();
   });
 });

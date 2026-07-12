@@ -78,6 +78,12 @@ class QuestionReorderReq(BaseModel):
 
 class PublishDraftReq(BaseModel):
     published_slug: str | None = Field(default=None, min_length=1, max_length=240)
+    # LED-005: web-to-lead capture flags (default-off)
+    capture_as_lead: bool = False
+    lead_source_override: str | None = Field(
+        default=None,
+        pattern=r"^(web_site|cold_call|email|campaign|trade_show|word_of_mouth|other|internal)$",
+    )
 
 
 class QuestionnaireVersionEnvelope(BaseModel):
@@ -591,6 +597,8 @@ def publish_draft(
             owner_id=user.sub,
             actor_sub=user.sub,
             published_slug=body.published_slug.strip() if body.published_slug else None,
+            capture_as_lead=body.capture_as_lead,           # LED-005
+            lead_source_override=body.lead_source_override, # LED-005
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail={"error": {"code": "questionnaire_forbidden", "message": str(exc)}}) from exc
@@ -816,6 +824,21 @@ async def submit_response_session(
     )
     if not submitted:
         raise HTTPException(status_code=404, detail={"error": {"code": "session_not_found", "message": "response session not found"}})
+
+    # LED-005: best-effort web-to-lead capture (default-off)
+    from app.core.settings import S as _S
+    if getattr(_S, "leads_enabled", False) and version.get("capture_as_lead", False):
+        try:
+            import app.services.leads as _leads_svc
+            _leads_svc.create_lead_from_submission(
+                version,
+                authoritative_answers,
+                response_session_id=response_session_id,
+                user_sub=(user.sub if user else None),
+            )
+        except Exception:
+            pass  # never block a successful submission
+
     return {"session": submitted, "result": result}
 
 
@@ -893,6 +916,99 @@ async def download_response_session_pdf(
 
     filename = f"questionnaire-response-{response_session_id}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+# ── EVT-008: Survey Distribution ──────────────────────────────────────────
+
+from pydantic import BaseModel as _BaseModel, Field as _Field
+from typing import List as _List, Optional as _Opt
+
+
+class DistributeSurveyReq(_BaseModel):
+    recipients: _List[str] = _Field(..., min_length=1, max_length=500)
+    subject: str = _Field(default="You've been invited to complete a survey", max_length=120)
+    message: _Opt[str] = _Field(default=None, max_length=2000)
+    contact_list_id: _Opt[str] = _Field(default=None, min_length=1, max_length=120)
+
+
+class DistributeSurveyResp(_BaseModel):
+    sent: int
+    skipped: int
+    failed: int
+
+
+class DistributionSummaryResp(_BaseModel):
+    total_sent: int
+    total_responses: int
+    response_rate: float
+
+
+def _require_crm_survey_distribution_enabled() -> None:
+    if not S.crm_survey_distribution_enabled:
+        raise HTTPException(status_code=404, detail="not found")
+
+
+@router.post("/drafts/{questionnaire_id}/distribute", response_model=DistributeSurveyResp)
+def distribute_survey(
+    questionnaire_id: str,
+    body: DistributeSurveyReq,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> DistributeSurveyResp:
+    _require_crm_survey_distribution_enabled()
+    q = _owned_questionnaire_or_404(questionnaire_id, user.sub)
+
+    # Questionnaire must be published
+    if q.get("status") != "published":
+        raise HTTPException(status_code=409, detail={"code": "questionnaire_not_published"})
+
+    # Build public survey URL from published_slug
+    published_version_id = q.get("published_version_id")
+    if not published_version_id:
+        raise HTTPException(status_code=409, detail={"code": "questionnaire_not_published"})
+    try:
+        version = REPO.get_version_by_id(questionnaire_id, published_version_id)
+        published_slug = version.get("published_slug", "")
+    except Exception:
+        published_slug = ""
+    if not published_slug:
+        raise HTTPException(status_code=409, detail={"code": "questionnaire_not_published"})
+
+    survey_url = f"{S.public_base_url}/questionnaires/published/{published_slug}"
+
+    # Rate limit: 10 distributions per hour per owner
+    from app.services.rate_limit import _bucket_limit as _rl  # local import (RULE-1)
+    if not _rl(user.sub, "rl#survey_distribute", S.survey_distribution_rate_limit_max, S.survey_distribution_rate_limit_window):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    from app.services.crm_survey_distribution import send_survey_invitations  # lazy (RULE-1)
+    recipients = list(body.recipients)
+    result = send_survey_invitations(
+        questionnaire_id=questionnaire_id,
+        owner_sub=user.sub,
+        recipients=recipients,
+        subject=body.subject,
+        survey_url=survey_url,
+        message=body.message,
+        contact_list_id=body.contact_list_id,
+    )
+    return DistributeSurveyResp(**result)
+
+
+@router.get("/drafts/{questionnaire_id}/distribution-summary", response_model=DistributionSummaryResp)
+def get_distribution_summary(
+    questionnaire_id: str,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> DistributionSummaryResp:
+    _require_crm_survey_distribution_enabled()
+    _owned_questionnaire_or_404(questionnaire_id, user.sub)
+    from app.services.crm_survey_distribution import get_distribution_summary as _gds  # lazy (RULE-1)
+    result = _gds(questionnaire_id=questionnaire_id, owner_sub=user.sub)
+    return DistributionSummaryResp(**result)
+
+
+# ── End EVT-008 ─────────────────────────────────────────────────────────────
+
 
 @router.post("/drafts/{questionnaire_id}/validate", response_model=QuestionnaireValidationResponse)
 def validate_draft_form(

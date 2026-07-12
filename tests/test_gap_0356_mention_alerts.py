@@ -86,6 +86,7 @@ class TestCreateCommentMentionAlerts(unittest.TestCase):
             gif_url=None, gif_alt_text=None, gif_width=None, gif_height=None,
             sticker_id=None, sticker_collection_id=None, sticker_url=None,
             sticker_alt_text=None,
+            image_url=None, image_alt_text=None, image_width=None, image_height=None,
         )
         content = {
             "body": body, "body_plain": body, "body_markdown": None,

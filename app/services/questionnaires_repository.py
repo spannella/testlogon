@@ -22,7 +22,7 @@ class QuestionnaireRepository(Protocol):
     def list_questionnaires_by_status(self, status: str, *, limit: int = 25) -> list[dict[str, Any]]: ...
     def get_published_by_slug(self, published_slug: str) -> dict[str, Any] | None: ...
     def list_response_sessions_by_status(self, status: str, *, limit: int = 25) -> list[dict[str, Any]]: ...
-    def publish_draft(self, *, questionnaire_id: str, owner_id: str, actor_sub: str, published_slug: str | None = None) -> dict[str, Any]: ...
+    def publish_draft(self, *, questionnaire_id: str, owner_id: str, actor_sub: str, published_slug: str | None = None, capture_as_lead: bool = False, lead_source_override: str | None = None) -> dict[str, Any]: ...
     def get_response_session(self, *, questionnaire_id: str, response_session_id: str) -> dict[str, Any] | None: ...
     def list_session_answers(self, *, questionnaire_id: str, response_session_id: str) -> dict[str, Any]: ...
     def save_session_answers(self, *, questionnaire_id: str, response_session_id: str, answers_by_question_id: dict[str, Any], current_section_index: int | None = None, current_question_id: str | None = None) -> dict[str, Any] | None: ...
@@ -352,7 +352,7 @@ class DynamoQuestionnaireRepository:
                 return row
         return None
 
-    def publish_draft(self, *, questionnaire_id: str, owner_id: str, actor_sub: str, published_slug: str | None = None) -> dict[str, Any]:
+    def publish_draft(self, *, questionnaire_id: str, owner_id: str, actor_sub: str, published_slug: str | None = None, capture_as_lead: bool = False, lead_source_override: str | None = None) -> dict[str, Any]:
         draft = self.get_questionnaire(questionnaire_id)
         if not draft:
             raise ValueError("questionnaire_not_found")
@@ -373,6 +373,8 @@ class DynamoQuestionnaireRepository:
             schema_json=schema_json,
             published_slug=slug,
             actor_sub=actor_sub,
+            capture_as_lead=capture_as_lead,
+            lead_source_override=lead_source_override,
         )
 
     def put_version(
@@ -384,6 +386,8 @@ class DynamoQuestionnaireRepository:
         schema_json: dict[str, Any],
         published_slug: str,
         actor_sub: str | None = None,
+        capture_as_lead: bool = False,
+        lead_source_override: str | None = None,
     ) -> dict[str, Any]:
         ts = str(now_ts())
         item = {
@@ -401,6 +405,8 @@ class DynamoQuestionnaireRepository:
             "allow_anonymous": (self.get_questionnaire(questionnaire_id) or {}).get("visibility", "private") != "private",
             "gsi_published_pk": _published_pk(published_slug),
             "gsi_published_sk": f"VERSION#{version_number:06d}",
+            "capture_as_lead": capture_as_lead,          # LED-005
+            "lead_source_override": lead_source_override, # LED-005
         }
         self._table.put_item(Item=item)
         self._table.update_item(

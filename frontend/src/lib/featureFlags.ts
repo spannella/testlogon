@@ -32,6 +32,23 @@ export const messagingDmLotteryEnabled = toBool(env.VITE_MESSAGING_DM_LOTTERY_EN
 export const messagingDmLotteryKillSwitch = toBool(env.VITE_MESSAGING_DM_LOTTERY_KILL_SWITCH, false);
 export const isMessagingDmLotteryEnabled = () => messagingDmLotteryEnabled && !messagingDmLotteryKillSwitch;
 
+// Messenger Voice & AI (MVA). These mirror the server-side feature flags
+// (messaging_translation_enabled / messaging_transcription_enabled /
+// messaging_tts_enabled). They gate whether the UI shows the action; the
+// server still authoritatively 404s the endpoint when its flag is off, which
+// the UI surfaces as a toast. Translation defaults on (server default true);
+// transcription/TTS default off (server default false until keys configured).
+export const messagingTranslationEnabled = toBool(env.VITE_MESSAGING_TRANSLATION_ENABLED, true);
+export const isMessagingTranslationEnabled = () => messagingTranslationEnabled;
+export const messagingTranscriptionEnabled = toBool(env.VITE_MESSAGING_TRANSCRIPTION_ENABLED, false);
+export const isMessagingTranscriptionEnabled = () => messagingTranscriptionEnabled;
+export const messagingTtsEnabled = toBool(env.VITE_MESSAGING_TTS_ENABLED, false);
+export const isMessagingTtsEnabled = () => messagingTtsEnabled;
+// Default target language for one-click translate (BCP-47).
+export const messagingTranslationDefaultLang = String(
+  env.VITE_MESSAGING_TRANSLATION_DEFAULT_LANG ?? "en",
+).trim() || "en";
+
 export const messagingWebrtcDirectCallEnabled = toBool(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED, false);
 export const messagingWebrtcDirectCallKillSwitch = toBool(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_KILL_SWITCH, false);
 export const messagingWebrtcDirectCallMode = String(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_MODE ?? "enabled").trim().toLowerCase();
@@ -101,6 +118,13 @@ export const newsfeedDraftsEnabled = toBool(env.VITE_NEWSFEED_DRAFTS_ENABLED, tr
 export const newsfeedDraftsKillSwitch = toBool(env.VITE_NEWSFEED_DRAFTS_KILL_SWITCH, false);
 export const isNewsfeedDraftsEnabled = () => newsfeedDraftsEnabled && !newsfeedDraftsKillSwitch;
 export const newsfeedSchedulingUiEnabled = toBool(env.VITE_NEWSFEED_SCHEDULING_UI_ENABLED, true);
+
+// NRS-011: "For You" ranked-feed tab. Gates the visible tab bar in the newsfeed.
+// Defaults OFF so removing the flag reverts cleanly to the chronological feed.
+// The server still authoritatively falls back to chronological when
+// NEWSFEED_RECSYS_ENABLED is off (the For You request never errors).
+export const newsfeedRecsysUiEnabled = toBool(env.VITE_NEWSFEED_RECSYS_UI_ENABLED, false);
+export const isNewsfeedRecsysUiEnabled = () => newsfeedRecsysUiEnabled;
 export const profilePostsFeedEnabled = toBool(env.VITE_PROFILE_POSTS_FEED_ENABLED, true);
 export const profilePostsFeedKillSwitch = toBool(env.VITE_PROFILE_POSTS_FEED_KILL_SWITCH, false);
 export const isProfilePostsFeedEnabled = () => profilePostsFeedEnabled && !profilePostsFeedKillSwitch;
@@ -111,6 +135,31 @@ export const isCanonicalProfileNavigationEnabled = () => canonicalProfileNavigat
 export const vncRemoteDesktopEnabled = toBool(env.VITE_VNC_REMOTE_DESKTOP_ENABLED, true);
 export const vncRemoteDesktopKillSwitch = toBool(env.VITE_VNC_REMOTE_DESKTOP_KILL_SWITCH, false);
 export const isVncRemoteDesktopEnabled = () => vncRemoteDesktopEnabled && !vncRemoteDesktopKillSwitch;
+
+// Browser SSH terminal (xterm) — the interactive in-browser SSH page (CTI).
+export const browserSshEnabled = toBool(env.VITE_BROWSER_SSH_ENABLED, true);
+export const isBrowserSshEnabled = () => browserSshEnabled;
+
+// Agent SSH QA actions panel (ADR-003 / AQA). Default OFF — mirrors the backend
+// AGENT_SSH_QA_ENABLED master flag. With it off the QA Actions page/route/nav
+// entry are hidden and the backend router is not registered.
+export const agentSshQaEnabled = toBool(env.VITE_AGENT_SSH_QA_ENABLED, false);
+export const isAgentSshQaEnabled = () => agentSshQaEnabled;
+
+// RDP browser transport (ADR-004 / CTI-005). Phase 1 ships only the fallback
+// /remote/rdp instructions page; native in-browser RDP is a future milestone.
+// Default OFF — mirrors backend RDP_REMOTE_DESKTOP_ENABLED. With it off the
+// page shows "RDP not available — use VNC/SSH"; the fallback metadata surface
+// is always available so Windows hosts never dead-end in the SSH form.
+export const rdpRemoteDesktopEnabled = toBool(env.VITE_RDP_REMOTE_DESKTOP_ENABLED, false);
+export const isRdpRemoteDesktopEnabled = () => rdpRemoteDesktopEnabled;
+
+// Inventory & soft-reservations admin UI (ADR-001 OFB-003/004 / OFB-INV-UI).
+// Mirrors the backend INVENTORY_RESERVATIONS_ENABLED master flag. Default OFF —
+// with it off the inventory admin page/route/nav entry are hidden and the
+// backend endpoints 404, so existing catalog/cart behaviour is unchanged.
+export const inventoryReservationsEnabled = toBool(env.VITE_INVENTORY_RESERVATIONS_ENABLED, false);
+export const isInventoryReservationsEnabled = () => inventoryReservationsEnabled;
 
 export const broadcastNavigationEnabled = toBool(env.VITE_BROADCAST_NAVIGATION_ENABLED, true);
 export const broadcastNavigationKillSwitch = toBool(env.VITE_BROADCAST_NAVIGATION_KILL_SWITCH, false);

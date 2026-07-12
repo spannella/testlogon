@@ -165,7 +165,7 @@ export default function MobileNav() {
             }
           >
             <tab.icon className="h-5 w-5" />
-            {tab.i18nKey ? t(tab.i18nKey) : tab.label}
+            {tab.i18nKey ? t(tab.i18nKey, { defaultValue: tab.label }) : tab.label}
           </NavLink>
         ))}
         <button
@@ -196,7 +196,7 @@ export default function MobileNav() {
                 }}
               >
                 <link.icon className="h-5 w-5" />
-                <span className="text-[10px]">{link.i18nKey ? t(link.i18nKey) : link.label}</span>
+                <span className="text-[10px]">{link.i18nKey ? t(link.i18nKey, { defaultValue: link.label }) : link.label}</span>
               </Button>
             ))}
           </div>

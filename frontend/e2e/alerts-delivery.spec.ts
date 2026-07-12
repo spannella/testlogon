@@ -25,14 +25,16 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { readFileSync, statSync } from "fs";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE      = "http://localhost:3000";
 const API       = "http://localhost:8000";
 const ALICE_ID  = "e2e_alice@test.local";
-const EMAIL_LOG = "/home/ubuntu/testlogon/.logs/dev/emails.log";
-const SMS_LOG   = "/home/ubuntu/testlogon/.logs/dev/sms.log";
+const EMAIL_LOG = REPO_ROOT + "/.logs/dev/emails.log";
+const SMS_LOG   = REPO_ROOT + "/.logs/dev/sms.log";
 
 // Dedicated test addresses (separate from alerts.spec.ts to avoid collisions)
 const TEST_EMAIL = "alerts-delivery-e2e@example.com";
@@ -56,8 +58,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -108,14 +110,14 @@ function clearAliceAlertPrefs(): void {
     `python3 -c "
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
 import sys
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.core.tables import T
 try:
     T.alert_prefs.delete_item(Key={'user_sub': 'e2e_alice@test.local'})
@@ -149,14 +151,14 @@ function injectAlertPrefs(opts: {
     `python3 << 'PYEOF'
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
 import sys
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 import time
 from app.core.tables import T
 T.alert_prefs.put_item(Item={
@@ -182,7 +184,7 @@ function cleanupAliceApiKeys(): void {
 import boto3, os
 from pathlib import Path
 from boto3.dynamodb.conditions import Key
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -218,14 +220,14 @@ function clearAliceRateLimits(): void {
     `python3 << 'PYEOF'
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
 import sys
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.core.tables import T
 for sid in ('rl#alert_email', 'rl#alert_sms'):
     try:
@@ -243,14 +245,14 @@ function clearAliceAlerts(): void {
     `python3 << 'PYEOF'
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
         k, _, v = line.partition('=')
         os.environ.setdefault(k.strip(), v.strip())
 import sys
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 from app.core.tables import T
 from boto3.dynamodb.conditions import Key
 items = T.alerts.query(KeyConditionExpression=Key('user_sub').eq('e2e_alice@test.local')).get('Items', [])

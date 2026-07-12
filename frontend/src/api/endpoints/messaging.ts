@@ -33,6 +33,7 @@ import type {
   SendFindDateTimeReq,
   FindDateTimeFull,
   HelpdeskClaimOut,
+  HelpdeskTransferOut,
   RoutingEventOut,
   MessageControlActionResp,
   HiddenMessagesResp,
@@ -281,21 +282,34 @@ export interface CallInviteResp {
   callee_user_id?: string;
 }
 
+const _genCallId = (): string => {
+  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  const uuid = cryptoObj?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `call_${uuid.replace(/-/g, "")}`;
+};
+
 export const createCallInvite = (
   conversationId: string,
   body: {
     callee_user_id: string;
     mode: DirectCallMode;
     idempotency_key?: string;
+    paid?: boolean;
   },
 ) =>
-  api.post<CallInviteResp>("/messages/calls/invite", {
+  // Backend route is mounted under the /messaging router prefix and expects a
+  // client-supplied call_id + `initial_mode` (not `mode`).
+  api.post<CallInviteResp>("/messaging/messages/calls/invite", {
+    call_id: _genCallId(),
     conversation_id: conversationId,
-    ...body,
+    callee_user_id: body.callee_user_id,
+    initial_mode: body.mode,
+    ...(body.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
+    ...(body.paid !== undefined ? { paid: body.paid } : {}),
   });
 
 export const acceptCallInvite = (callId: string, idempotency_key?: string) =>
-  api.post<CallInviteResp>(`/messages/calls/${callId}/accept`, {
+  api.post<CallInviteResp>(`/messaging/messages/calls/${callId}/accept`, {
     ...(idempotency_key ? { idempotency_key } : {}),
   });
 
@@ -303,19 +317,19 @@ export const declineCallInvite = (
   callId: string,
   body?: { reason?: "declined" | "busy"; idempotency_key?: string },
 ) =>
-  api.post<CallInviteResp>(`/messages/calls/${callId}/decline`, {
+  api.post<CallInviteResp>(`/messaging/messages/calls/${callId}/decline`, {
     ...(body?.reason ? { reason: body.reason } : {}),
     ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
   });
 
 export const endCall = (callId: string, body?: { reason?: string; idempotency_key?: string }) =>
-  api.post<CallInviteResp>(`/messages/calls/${callId}/end`, {
+  api.post<CallInviteResp>(`/messaging/messages/calls/${callId}/end`, {
     ...(body?.reason ? { reason: body.reason } : {}),
     ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
   });
 
 export const timeoutCall = (callId: string, body?: { reason?: string; idempotency_key?: string }) =>
-  api.post<CallInviteResp>(`/messages/calls/${callId}/timeout`, {
+  api.post<CallInviteResp>(`/messaging/messages/calls/${callId}/timeout`, {
     ...(body?.reason ? { reason: body.reason } : {}),
     ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
   });
@@ -438,6 +452,26 @@ export const sendImageMessage = async (
 
   const res = await api.post<Message>(`/messaging/conversations/${conversationId}/messages/image`, payload);
   return adaptMessage(res);
+};
+
+/**
+ * Upload an image/video into a conversation's media bucket WITHOUT creating a
+ * message, and return the S3 key. Used for lottery outcome media: the key is in
+ * the `{conversation_id}/{sender}/…` form the lottery endpoint accepts as a
+ * `media_asset_id`. (Same presign + PUT steps as sendImageMessage, minus the
+ * message-create step.)
+ */
+export const uploadConversationMedia = async (
+  conversationId: string,
+  file: File,
+): Promise<{ key: string; bucket: string; content_type: string }> => {
+  const contentType = file.type || "application/octet-stream";
+  const presign = await api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
+    `/messaging/conversations/${conversationId}/images/presign`,
+    { content_type: contentType, filename: file.name || "upload" },
+  );
+  await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType);
+  return { key: presign.key, bucket: presign.bucket, content_type: presign.content_type || contentType };
 };
 
 export const editMessage = async (conversationId: string, messageId: string, body: { text: string }) => {
@@ -1025,6 +1059,30 @@ export async function startHelpdeskConversation(groupId: string): Promise<Conver
 
 export async function claimHelpdeskConversation(conversationId: string): Promise<HelpdeskClaimOut> {
   return api.post<HelpdeskClaimOut>(`/messaging/helpdesk/conversations/${conversationId}/claim`, {});
+}
+
+export async function transferHelpdeskConversation(
+  conversationId: string,
+  targetAgentUserId: string,
+): Promise<HelpdeskTransferOut> {
+  return api.post<HelpdeskTransferOut>(`/messaging/helpdesk/conversations/${conversationId}/transfer`, {
+    target_agent_user_id: targetAgentUserId,
+  });
+}
+
+export interface HelpdeskGroupAgent {
+  user_id: string;
+  display_name: string;
+  online: boolean;
+  is_self: boolean;
+}
+
+/** HMH-007: list a helpdesk group's agents (membership-gated) for the transfer picker. */
+export async function listHelpdeskGroupAgents(groupId: string): Promise<HelpdeskGroupAgent[]> {
+  const res = await api.get<{ agents: HelpdeskGroupAgent[] }>(
+    `/messaging/helpdesk/groups/${encodeURIComponent(groupId)}/agents`,
+  );
+  return res.agents ?? [];
 }
 
 export async function getHelpdeskQueue(groupId: string, state?: string): Promise<Conversation[]> {

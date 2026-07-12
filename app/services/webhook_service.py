@@ -134,6 +134,11 @@ WEBHOOK_EVENT_TYPES_V2: Dict[str, str] = {
     "account.api_key_created": "An API key was created",
     "account.api_key_revoked": "An API key was revoked",
 
+    # PLT-005: account/ledger events
+    "transaction.created": "A new ledger transaction was recorded",
+    "balance.threshold": "An account balance crossed a configured threshold",
+    "account.balance_low": "Account balance fell below the low-balance threshold",
+
     # Referrals
     "referral.signup": "A referred user signed up",
     "referral.commission": "A referral commission was earned",
@@ -148,6 +153,8 @@ WEBHOOK_EVENT_TYPES_V2: Dict[str, str] = {
     "kyc.case.approved": "A KYC case was approved",
     "kyc.case.rejected": "A KYC case was rejected",
     "kyc.case.needs_info": "Additional information was requested for a KYC case",
+    "kyc.case.disputed": "A rejected KYC case was disputed/appealed by the applicant",
+    "kyc.case.resubmitted": "A previously-rejected KYC case was resubmitted after a retry",
     "kyc.tier.changed": "A user verification tier changed",
     "kyc.tier.upgraded": "A user verification tier was upgraded",
     "kyc.tier.downgraded": "A user verification tier was downgraded",
@@ -175,6 +182,13 @@ WEBHOOK_EVENT_TYPES_V2: Dict[str, str] = {
     "ad.account.approved": "An advertiser account was approved",
     "ad.account.suspended": "An advertiser account was suspended for fraud",
     "ad.webhook.test": "Test event for verifying advertiser webhook configuration",
+
+    # OBP Transaction Requests + Step-Up SCA (TXR-001..TXR-005)
+    "txn_request.created": "Transaction request created (INITIATED)",
+    "txn_request.sca_required": "Step-up SCA challenge minted (PENDING)",
+    "txn_request.sca_passed": "All SCA factors satisfied",
+    "txn_request.executed": "Transaction request executed successfully (COMPLETED)",
+    "txn_request.failed": "Transaction request failed (FAILED)",
 }
 
 # Canonical allowlist of KYC webhook event types (KYC-011).

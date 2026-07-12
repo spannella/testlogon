@@ -28,8 +28,12 @@ import {
   type TicketMessage,
   type TicketStatus,
 } from "@/api/endpoints/tickets";
+import { listBoards, getBoard, listBoardTickets } from "@/api/endpoints/tickets";
+import { Link } from "react-router-dom";
 import { JiraLinkedPanel } from "./JiraLinkedPanel";
+import { TicketAttachmentsPanel } from "./TicketAttachmentsPanel";
 import { TicketKanbanBoard } from "./TicketKanbanBoard";
+import { BoardKanban } from "./BoardKanban";
 
 const POLL_MS = 15000;
 
@@ -52,6 +56,7 @@ export default function TicketsPage() {
   const [replyBody, setReplyBody] = useState("");
 
   const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
+  const [selectedBoardId, setSelectedBoardId] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<"" | TicketStatus>("");
   const [assigneeFilter, setAssigneeFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
@@ -181,6 +186,27 @@ export default function TicketsPage() {
 
   const statusCounts = useMemo(() => summaryQuery.data?.summary.by_status ?? {}, [summaryQuery.data]);
 
+  // TKB-015: board-mode picker — list the user's boards, then render a real
+  // per-board Kanban for the chosen board (driven by the board's columns).
+  const boardsQuery = useQuery({
+    queryKey: ["boards", "picker"],
+    queryFn: () => listBoards({ limit: 100 }),
+    enabled: viewMode === "kanban",
+  });
+
+  const selectedBoardQuery = useQuery({
+    queryKey: ["board", selectedBoardId],
+    queryFn: () => getBoard(selectedBoardId),
+    enabled: viewMode === "kanban" && !!selectedBoardId,
+  });
+
+  const boardTicketsQueryKey = ["board-tickets", selectedBoardId];
+  const boardTicketsQuery = useQuery({
+    queryKey: boardTicketsQueryKey,
+    queryFn: () => listBoardTickets(selectedBoardId, { limit: 100 }),
+    enabled: viewMode === "kanban" && !!selectedBoardId,
+  });
+
   return (
     <div className="space-y-6 p-4 md:p-6 lg:p-8">
       <PageHeader title="Support Tickets" description="Open, track, and resolve support issues." />
@@ -205,7 +231,44 @@ export default function TicketsPage() {
       </div>
 
       {viewMode === "kanban" && (
-        <TicketKanbanBoard tickets={listItems} isAdmin={isAdmin} />
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Board view</CardTitle>
+            <CardDescription>Pick a board to see its Kanban, or browse all boards.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="h-9 rounded-md border bg-background px-3 text-sm min-w-56"
+                value={selectedBoardId}
+                onChange={(e) => setSelectedBoardId(e.target.value)}
+                data-testid="board-picker"
+              >
+                <option value="">Global tickets (all)</option>
+                {(boardsQuery.data?.items ?? []).map((b) => (
+                  <option key={b.board_id} value={b.board_id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+              <Button asChild size="sm" variant="outline">
+                <Link to="/tickets/boards">Manage boards</Link>
+              </Button>
+            </div>
+
+            {!selectedBoardId && <TicketKanbanBoard tickets={listItems} isAdmin={isAdmin} />}
+            {selectedBoardId && selectedBoardQuery.data?.board && (
+              <BoardKanban
+                board={selectedBoardQuery.data.board}
+                tickets={boardTicketsQuery.data?.items ?? []}
+                ticketsQueryKey={boardTicketsQueryKey}
+              />
+            )}
+            {selectedBoardId && selectedBoardQuery.isLoading && (
+              <p className="text-sm text-muted-foreground">Loading board…</p>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {isAdmin && viewMode === "list" && (
@@ -391,6 +454,8 @@ export default function TicketsPage() {
                   <Textarea rows={3} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} placeholder="Reply to ticket..." />
                   <Button onClick={() => replyMut.mutate()} disabled={!replyBody.trim() || replyMut.isPending}>Send reply</Button>
                 </div>
+
+                <TicketAttachmentsPanel ticketId={selectedTicket.ticket_id} />
 
                 <JiraLinkedPanel ticketId={selectedTicket.ticket_id} currentTicket={selectedTicket as unknown as Record<string, unknown>} />
               </>

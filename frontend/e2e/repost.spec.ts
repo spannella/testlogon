@@ -7,8 +7,10 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const BASE = "http://localhost:3000";
 const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
@@ -33,8 +35,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -75,12 +77,22 @@ async function apiGet(page: Page, path: string) {
 
 // ─── Create test post via DDB (Bob's post for Alice to repost) ───────────────
 
-function createTestPost(postId: string, authorId: string, body: string): void {
+function createTestPost(
+  postId: string,
+  authorId: string,
+  body: string,
+  viewerIds: string[] = [],
+): void {
+  // Python list literal of viewers to fan the post out to (so the post shows
+  // in their feed, not just the author's). Use single-quoted strings: the
+  // whole python script is wrapped in double quotes for `python3 -c`, so
+  // double quotes (from JSON.stringify) would break the shell quoting.
+  const viewersPy = `[${viewerIds.map((v) => `'${v}'`).join(", ")}]`;
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -131,6 +143,20 @@ tbl.put_item(Item={
     'GSI1PK': 'FEED#${authorId}',
     'GSI1SK': now + '#POST#${postId}',
 })
+# Fan out to viewer feeds so the post appears in their timeline (mirrors
+# app/services/newsfeed_fanout.py FEEDREF shape).
+for vid in ${viewersPy}:
+    tbl.put_item(Item={
+        'pk': 'POST#${postId}',
+        'sk': 'FEEDREF#' + vid,
+        'Entity': 'FeedRef',
+        'post_id': '${postId}',
+        'owner_user_id': '${authorId}',
+        'created_at': now,
+        'fanout': True,
+        'GSI1PK': 'FEED#' + vid,
+        'GSI1SK': now + '#POST#${postId}',
+    })
 print('created')
 "`,
     { timeout: 10_000 },
@@ -142,7 +168,7 @@ function createLockedTestPost(postId: string, authorId: string, body: string, pr
     `${PYTHON} -c "
 import boto3, os, time
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -193,7 +219,7 @@ function cleanupRepost(userId: string, postId: string): void {
       `${PYTHON} -c "
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -350,7 +376,8 @@ test.describe("2. PostCard Repost UI", () => {
   const UI_POST_BODY = `Repost UI test ${TS}`;
 
   test.beforeAll(() => {
-    createTestPost(UI_POST_ID, BOB_ID, UI_POST_BODY);
+    // Fan Bob's post out to Alice's feed so she sees a repostable (non-own) post.
+    createTestPost(UI_POST_ID, BOB_ID, UI_POST_BODY, [ALICE_ID]);
     cleanupRepost(ALICE_ID, UI_POST_ID);
   });
 
@@ -419,8 +446,11 @@ test.describe("2. PostCard Repost UI", () => {
     await firstBtn.click();
     await page.waitForTimeout(500);
 
-    // The popover should show "Repost" option
-    const repostOption = page.getByRole("button", { name: "Repost", exact: true });
+    // The popover should show a "Repost" menu item. Match by visible text
+    // (the trigger buttons also expose the accessible name "Repost" via
+    // aria-label, so getByRole would be ambiguous — the menu item is the only
+    // element whose visible text is exactly "Repost").
+    const repostOption = page.getByText("Repost", { exact: true });
     if (await repostOption.isVisible()) {
       await repostOption.click();
       await page.waitForTimeout(1500);

@@ -16,6 +16,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -50,8 +52,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -87,6 +89,24 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
     ? `${API}${path}?${new URLSearchParams(params)}`
     : `${API}${path}`;
   return page.request.get(url);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// GAP-0359: GET /ui/search is rate-limited to 30 requests / 60s / user. Across
+// this large spec a user can exhaust the budget, so when a request that should
+// succeed (or return a deterministic validation error) hits a 429, wait out the
+// window once and retry. This asserts the intended behavior, not the limiter.
+async function searchWithRetry(
+  page: Page,
+  params: Record<string, string>,
+) {
+  let resp = await apiGet(page, "/ui/search", params);
+  if (resp.status() === 429) {
+    await sleep(61_000);
+    resp = await apiGet(page, "/ui/search", params);
+  }
+  return resp;
 }
 
 async function apiDelete(page: Page, identity: string, path: string) {
@@ -748,6 +768,7 @@ test.describe("104 — Edge cases", () => {
   });
 
   test("104.7 Concurrent searches return independent results", async () => {
+    test.setTimeout(90_000); // may wait out the 60s search rate-limit window
     // Create test data in this section's page
     const tktSubject = `conc_tkt_${TS}`;
     const conName = `conc_con_${TS}`;
@@ -759,10 +780,19 @@ test.describe("104 — Edge cases", () => {
       user_id: conName,
     });
 
-    const [resp1, resp2] = await Promise.all([
+    let [resp1, resp2] = await Promise.all([
       apiGet(alicePage, "/ui/search", { q: tktSubject, types: "tickets" }),
       apiGet(alicePage, "/ui/search", { q: conName, types: "contacts" }),
     ]);
+    // GAP-0359: if the per-user search budget was exhausted earlier in the
+    // suite, wait out the 60s window and re-run the concurrent pair.
+    if (resp1.status() === 429 || resp2.status() === 429) {
+      await sleep(61_000);
+      [resp1, resp2] = await Promise.all([
+        apiGet(alicePage, "/ui/search", { q: tktSubject, types: "tickets" }),
+        apiGet(alicePage, "/ui/search", { q: conName, types: "contacts" }),
+      ]);
+    }
     expect(resp1.status()).toBe(200);
     expect(resp2.status()).toBe(200);
     const data1 = await resp1.json();
@@ -794,9 +824,8 @@ test.describe("104 — Edge cases", () => {
   });
 
   test("104.10 Search with only whitespace after sanitization returns 400", async () => {
-    const resp = await apiGet(alicePage, "/ui/search", {
-      q: " \t ",
-    });
+    test.setTimeout(90_000); // may wait out the 60s search rate-limit window
+    const resp = await searchWithRetry(alicePage, { q: " \t " });
     expect(resp.status()).toBe(400);
   });
 });

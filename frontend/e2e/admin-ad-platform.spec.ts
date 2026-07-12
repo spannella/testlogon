@@ -19,6 +19,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -51,8 +53,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -67,10 +69,15 @@ async function injectAuth(page: Page, identity: string) {
   if (!session) throw new Error(`No session for ${identity}`);
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
-  await page.evaluate((uid: string) => {
-    const state = { userId: uid, accessToken: null, isAuthenticated: true };
-    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, session.user_sub);
+  // Seed the auth-store WITH the real access token so role-aware UI (e.g. the
+  // ROOT-only Emergency Controls tab, gated on getRoleFromAccessToken) renders.
+  await page.evaluate(
+    ({ uid, token }: { uid: string; token: string }) => {
+      const state = { userId: uid, accessToken: token, isAuthenticated: true };
+      localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+    },
+    { uid: session.user_sub, token: session.access_token },
+  );
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
@@ -105,9 +112,58 @@ let approvedAccountId: string;
 let campaignId: string;
 let creativeId: string;      // pending_review creative (for moderation)
 
+// ─── DDB cleanup helper ───────────────────────────────────────────────────────
+
+// GAP-0039: a user may own at most 5 (non-terminal) ad accounts; POST
+// /ui/ads/accounts returns 422 once the cap is hit. E2E runs accumulate ad
+// accounts for Alice/Bob across runs (and across specs in the suite), so without
+// cleanup the account-creating setup below (which creates TWO accounts for
+// Alice) eventually trips the cap (422 → cascading failures). Delete all ad
+// accounts owned by the given users (and their campaigns) directly in DDB before
+// the run so the create paths always have headroom.
+function ddbDeleteOwnerAccounts(ownerSubs: string[]): void {
+  const script = `
+import boto3, os
+from pathlib import Path
+env_file = Path('${REPO_ROOT}/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+from boto3.dynamodb.conditions import Key
+ddb = boto3.resource('dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'),
+    region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+accts = ddb.Table('AdAccounts')
+camps = ddb.Table('AdCampaigns')
+owners = os.environ['OWNER_SUBS'].split(',')
+for owner in owners:
+    resp = accts.query(IndexName='ByOwner', KeyConditionExpression=Key('owner_sub').eq(owner))
+    for item in resp.get('Items', []):
+        acct_pk = item['pk']
+        cresp = camps.query(KeyConditionExpression=Key('pk').eq(acct_pk))
+        for c in cresp.get('Items', []):
+            camps.delete_item(Key={'pk': c['pk'], 'sk': c['sk']})
+        accts.delete_item(Key={'pk': item['pk'], 'sk': item['sk']})
+print('ok')
+`;
+  execSync("python3 -", {
+    cwd: REPO_ROOT,
+    timeout: 20_000,
+    input: script,
+    env: { ...process.env, OWNER_SUBS: ownerSubs.join(",") },
+  });
+}
+
 // ─── Setup: seed advertiser account / campaign / creative as Alice ──────────────
 
 test.beforeAll(async ({ browser }) => {
+  // GAP-0039: wipe accumulated ad accounts so the 5-account cap never blocks
+  // the account-creation setup below regardless of suite order.
+  ddbDeleteOwnerAccounts(["e2e_alice@test.local", "e2e_bob@test.local"]);
+
   alicePage = await newIdentityPage(browser, ALICE_ID);
   charliePage = await newIdentityPage(browser, CHARLIE_ID);
   rootPage = await newIdentityPage(browser, ROOT_ID);

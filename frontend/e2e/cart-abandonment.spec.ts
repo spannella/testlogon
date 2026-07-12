@@ -18,6 +18,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -50,8 +52,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -120,8 +122,8 @@ table.update_item(
 print('OK')
 `;
   const result = execSync(
-    `/home/ubuntu/testlogon/.venv/bin/python -c "${script.replace(/"/g, '\\"')}"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    `${REPO_ROOT}/.venv/bin/python -c "${script.replace(/"/g, '\\"')}"`,
+    { cwd: REPO_ROOT, timeout: 10_000 },
   ).toString().trim();
   if (result !== "OK") throw new Error(`DDB update failed: ${result}`);
 }
@@ -142,8 +144,8 @@ item = resp.get('Item', {})
 print(json.dumps(item, cls=DecEncoder))
 `;
   const result = execSync(
-    `/home/ubuntu/testlogon/.venv/bin/python -c "${script.replace(/"/g, '\\"')}"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    `${REPO_ROOT}/.venv/bin/python -c "${script.replace(/"/g, '\\"')}"`,
+    { cwd: REPO_ROOT, timeout: 10_000 },
   ).toString().trim();
   return JSON.parse(result);
 }
@@ -162,8 +164,8 @@ table.update_item(
 print('OK')
 `;
   const result = execSync(
-    `/home/ubuntu/testlogon/.venv/bin/python -c "${script.replace(/"/g, '\\"')}"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    `${REPO_ROOT}/.venv/bin/python -c "${script.replace(/"/g, '\\"')}"`,
+    { cwd: REPO_ROOT, timeout: 10_000 },
   ).toString().trim();
   if (result !== "OK") throw new Error(`DDB update failed: ${result}`);
 }
@@ -314,7 +316,11 @@ test.describe("SHOP-003 — Section 2: Abandonment Detection API", () => {
     );
     expect(abandonAlert).toBeDefined();
     const details = abandonAlert.details as Record<string, unknown>;
-    expect(details.link).toBe(`/cart?cartId=${abandonCartId}`);
+    // FIN-003 / GAP-0190: the reminder now embeds a signed, one-time-use cart
+    // recovery link (.../ui/shoppingcart/recover/<token>) instead of a plain
+    // /cart?cartId=... link. The cart_id is encoded inside the signed token, so
+    // assert on the recovery endpoint path rather than the raw cart id.
+    expect(String(details.link)).toContain("/ui/shoppingcart/recover/");
     expect(details.cart_id).toBe(abandonCartId);
   });
 });
@@ -444,7 +450,7 @@ test.describe("SHOP-003 — Section 4: TTL & Purchase", () => {
     // Backdate TTL to simulate old cart
     const oldTtl = Math.floor(Date.now() / 1000) + 100; // almost expired
     execSync(
-      `/home/ubuntu/testlogon/.venv/bin/python -c "
+      `${REPO_ROOT}/.venv/bin/python -c "
 import boto3
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1',
                      aws_access_key_id='test', aws_secret_access_key='test')
@@ -457,7 +463,7 @@ table.update_item(
 )
 print('OK')
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
 
     // Add item - should reset TTL

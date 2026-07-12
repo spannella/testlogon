@@ -41,6 +41,1198 @@ def _resolve_table_name(name: str, fallback: str) -> str:
 
 def _table_defs() -> List[TableDef]:
     return [
+        # CMP-001..CMP-008: SuiteCRM Campaigns-Extra subsystem
+        TableDef(
+            _resolve_table_name(S.crm_campaigns_table_name, "CrmCampaigns"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_campaign_send_log_table_name, "CrmCampaignSendLog"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignSentAt", "partition_key": "campaign_id", "sort_key": "sent_at"},
+                {"index_name": "ByCampaignVariant", "partition_key": "campaign_id", "sort_key": "variant_id"},
+            ],
+            attr_types={"sent_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_email_templates_table_name, "MarketingEmailTemplates"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_contact_lists_table_name, "MarketingContactLists"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_tracking_codes_table_name, "MarketingTrackingCodes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+                {"index_name": "ByCodeTs", "partition_key": "code_slug", "sort_key": "ts"},
+            ],
+            attr_types={"created_at": "N", "ts": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_web_lead_captures_table_name, "WebLeadCaptures"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.ats_integration_links_table_name, "ats_integration_links"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_BY_TARGET", "partition_key": "target_key", "sort_key": "created_at"},
+                {"index_name": "GSI_BY_OWNER", "partition_key": "owner_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # OBP PAY cluster (counterparties / standing orders / mandates / FX). Flag-gated default-OFF.
+        # Counterparties: per-user payees. GSI ByUserCreatedAt for newest-first listing.
+        TableDef(
+            _resolve_table_name(S.counterparties_table_name, "counterparties"),
+            "user_sub",
+            "counterparty_id",
+            gsi=[
+                {"index_name": "ByUserCreatedAt", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Standing orders: recurring outbound. GSI ByDue (GSI_DUE_PK="DUE" / next_run_at N) for the scheduler.
+        TableDef(
+            _resolve_table_name(S.standing_orders_table_name, "standing_orders"),
+            "user_sub",
+            "standing_order_id",
+            gsi=[
+                {"index_name": "ByDue", "partition_key": "GSI_DUE_PK", "sort_key": "next_run_at"},
+            ],
+            attr_types={"next_run_at": "N"},
+        ),
+        # Direct-debit mandates: capped pull authorizations. Same ByDue due-index discipline.
+        TableDef(
+            _resolve_table_name(S.direct_debit_mandates_table_name, "direct_debit_mandates"),
+            "user_sub",
+            "mandate_id",
+            gsi=[
+                {"index_name": "ByDue", "partition_key": "GSI_DUE_PK", "sort_key": "next_run_at"},
+            ],
+            attr_types={"next_run_at": "N"},
+        ),
+        # FX rates: currency-pair history. PK=pair (SRC_TGT), SK=as_of (N) — newest read with ScanIndexForward=False, Limit=1.
+        TableDef(
+            _resolve_table_name(S.fx_rates_table_name, "fx_rates"),
+            "pair",
+            "as_of",
+            attr_types={"as_of": "N"},
+        ),
+        # Marketing Campaigns module (MKT-002)
+        TableDef(
+            _resolve_table_name(S.marketing_campaigns_table_name, "MarketingCampaigns"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByCampaignId", "partition_key": "campaign_id"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.contact_lists_table_name, "ContactLists"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "ByListJoinedAt", "partition_key": "list_id", "sort_key": "joined_at"},
+            ],
+            attr_types={"created_at": "N", "joined_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.party_segments_table_name, "PartySegments"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwnerCreatedAt", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "BySegmentSnapTs", "partition_key": "segment_id", "sort_key": "snap_ts"},
+            ],
+            attr_types={"created_at": "N", "snap_ts": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.tracking_codes_table_name, "TrackingCodes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignCreatedAt", "partition_key": "campaign_id", "sort_key": "created_at"},
+                {"index_name": "ByCodeTs", "partition_key": "code_slug", "sort_key": "ts"},
+            ],
+            attr_types={"created_at": "N", "ts": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.marketing_send_log_table_name, "MarketingCampaignSendLog"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCampaignSentAt", "partition_key": "campaign_id", "sort_key": "sent_at"},
+            ],
+            attr_types={"sent_at": "N"},
+        ),
+        # POS-003 — Point of Sale single-table store.
+        # Register config, session headers, tender sub-rows, and transaction headers
+        # all live in one table keyed by pos_pk/pos_sk.
+        # GSI_REGISTER_OPEN: find the open session per register (register_id → opened_at N).
+        # GSI_SESSION_TXN:   list a session's transactions (session_id → created_at N).
+        # GSI_CASHIER:       list a cashier's sessions     (cashier_sub → opened_at N).
+        TableDef(
+            _resolve_table_name(S.pos_table_name, "pos"),
+            "pos_pk",
+            "pos_sk",
+            gsi=[
+                {
+                    "index_name": "GSI_REGISTER_OPEN",
+                    "partition_key": "register_id",
+                    "sort_key": "opened_at",
+                },
+                {
+                    "index_name": "GSI_SESSION_TXN",
+                    "partition_key": "session_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "GSI_CASHIER",
+                    "partition_key": "cashier_sub",
+                    "sort_key": "opened_at",
+                },
+            ],
+            attr_types={"opened_at": "N", "created_at": "N"},
+        ),
+        # OFBiz Fixed Assets — FXA-003.
+        # fixed_assets: one row per registered asset (PK=ASSET#{id}, SK=META).
+        # GSI_OWNER lets users list their assets by acquisition date.
+        # GSI_STATUS lets ops filter the active/disposed fleet.
+        TableDef(
+            _resolve_table_name(S.fixed_assets_table_name, "fixed_assets"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER", "partition_key": "owner_sub", "sort_key": "acquired_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "acquired_at"},
+            ],
+            attr_types={"acquired_at": "N"},
+        ),
+        # fixed_asset_schedule: one row per depreciation period per asset.
+        # GSI_DUE lets the background poster find all due-but-unposted periods
+        # efficiently (schedule_status=scheduled, period_end_ts <= now).
+        TableDef(
+            _resolve_table_name(S.fixed_asset_schedule_table_name, "fixed_asset_schedule"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_DUE", "partition_key": "schedule_status", "sort_key": "period_end_ts"},
+            ],
+            attr_types={"period_end_ts": "N"},
+        ),
+        # HRM-002: HR single-table for positions, employments, and payroll runs.
+        # PK/SK are uppercase per OFBiz ERP convention.  GSI1 enables status-
+        # filtered listing; GSI2 enables party reverse-lookup; GSI_CREATED
+        # enables newest-first listing across all entity types.
+        # attr_types={"created_at": "N"} prevents ValidationException when the
+        # GSI_CREATED sort key (an integer Unix timestamp) is queried with
+        # integer values (CLAUDE.md "DynamoDB numeric GSI sort keys" gotcha).
+        TableDef(
+            _resolve_table_name(S.hr_table_name, "hrm"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1",        "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2",        "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI_CREATED", "partition_key": "entity_type", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # MFG-002: Manufacturing/MRP tables (flag-gated; always provisioned, never
+        # accessed when manufacturing_mrp_enabled=false).
+        TableDef(
+            _resolve_table_name(S.mfg_boms_table_name, "mfg_boms"),
+            "bom_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_PRODUCT", "partition_key": "product_sku", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.mfg_work_centers_table_name, "mfg_work_centers"),
+            "work_center_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.mfg_work_orders_table_name, "mfg_work_orders"),
+            "work_order_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "GSI_PRODUCT", "partition_key": "product_sku", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.mfg_mrp_table_name, "mfg_mrp"),
+            "mrp_run_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_RUN_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # PLT-003: Glossary endpoint (GSI sort key is string — no attr_types needed)
+        TableDef(
+            _resolve_table_name(S.glossary_table_name, "glossary"),
+            "term_id",
+            gsi=[
+                {"index_name": "GSI_BY_TERM", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
+        # EVT-001: CRM Events — event metadata + invitee rows
+        TableDef(
+            _resolve_table_name(S.crm_events_table_name, "crm_events"),
+            "event_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner", "partition_key": "owner_sub", "sort_key": "created_at"},
+                {"index_name": "ByCalendar", "partition_key": "calendar_event_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # EVT-001: CRM Event Registrations — one row per registrant per event
+        TableDef(
+            _resolve_table_name(S.crm_event_registrations_table_name, "crm_event_registrations"),
+            "event_id",
+            "registrant_sub",
+            gsi=[
+                {"index_name": "ByRegistrant", "partition_key": "registrant_sub", "sort_key": "registered_at"},
+            ],
+            attr_types={"registered_at": "N"},
+        ),
+        # EVT-014: CRM Contact SMS Log — per-contact outbound SMS history
+        TableDef(
+            _resolve_table_name(S.crm_contact_sms_log_table_name, "crm_contact_sms_log"),
+            "sender_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByContact", "partition_key": "contact_id", "sort_key": "sent_at_ts"},
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "sent_at_ts"},
+            ],
+            attr_types={"sent_at_ts": "N"},
+        ),
+        # CSN-001: PSD2 AIS/PIS Consents
+        TableDef(
+            _resolve_table_name(S.consents_table_name, "consents"),
+            "owner_sub",
+            "consent_id",
+            gsi=[
+                {
+                    "index_name": S.consents_consumer_index,
+                    "partition_key": "consumer_ref",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": S.consents_status_index,
+                    "partition_key": "status",
+                    "sort_key": "valid_until",
+                },
+                {
+                    "index_name": S.consents_by_payment_ref_index,
+                    "partition_key": "payment_ref",
+                },
+            ],
+            attr_types={"created_at": "N", "valid_until": "N"},
+        ),
+        # CSN-003: Dynamic Entity Definitions
+        TableDef(
+            _resolve_table_name(S.dynamic_entity_defs_table_name, "dynamic_entity_defs"),
+            "entity_name",
+            "sk",
+            gsi=[
+                {
+                    "index_name": S.dynamic_entity_defs_creator_index,
+                    "partition_key": "created_by",
+                    "sort_key": "created_at",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CSN-003: Dynamic Entity Rows (generic per-entity row store)
+        TableDef(
+            _resolve_table_name(S.dynamic_entity_rows_table_name, "dynamic_entity_rows"),
+            "entity_name",
+            "row_id",
+            gsi=[
+                {
+                    "index_name": S.dynamic_entity_rows_owner_index,
+                    "partition_key": "owner_sub",
+                    "sort_key": "created_at",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CSN-004: Dynamic Endpoints
+        TableDef(
+            _resolve_table_name(S.dynamic_endpoints_table_name, "dynamic_endpoints"),
+            "endpoint_id",
+            "sk",
+            gsi=[
+                {
+                    "index_name": S.dynamic_endpoints_method_path_index,
+                    "partition_key": "method_path",
+                    "sort_key": "sk",
+                },
+                {
+                    "index_name": S.dynamic_endpoints_created_by_index,
+                    "partition_key": "created_by",
+                    "sort_key": "created_at",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CSN-005: Open Data (Branches + ATMs)
+        TableDef(
+            _resolve_table_name(S.open_data_table_name, "open_data"),
+            "kind",
+            "resource_id",
+            gsi=[
+                {
+                    "index_name": S.open_data_active_index,
+                    "partition_key": "kind_active",
+                    "sort_key": "name",
+                },
+            ],
+        ),
+        # PUR-002: Purchasing / SCM tables
+        TableDef(
+            _resolve_table_name(S.suppliers_table_name, "suppliers"),
+            "supplier_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.supplier_products_table_name, "supplier_products"),
+            "supplier_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_SKU", "partition_key": "sku", "sort_key": "unit_cost_cents"},
+            ],
+            attr_types={"unit_cost_cents": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.purchase_orders_table_name, "purchase_orders"),
+            "po_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_SUPPLIER", "partition_key": "supplier_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.po_receipts_table_name, "po_receipts"),
+            "po_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_RECEIPT", "partition_key": "receipt_id"},
+            ],
+        ),
+        # HTL-029: Guest folio entity — running stay-balance table.
+        # PK=reservation_id, SK=META (header) or LINE#{line_id} (charge rows).
+        # GSI_FOLIO_HOTEL: hotel_id (S) / created_at (N) — lists a hotel's
+        # folios newest-first; sparse (only META rows carry hotel_id).
+        # attr_types: created_at must be N or DynamoDB stores it as S →
+        # ValidationException when queried with integer values (CLAUDE.md gotcha).
+        TableDef(
+            _resolve_table_name(S.hotel_folios_table_name, "hotel_folios"),
+            "reservation_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_FOLIO_HOTEL", "partition_key": "hotel_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # PMD-001: Per-owner rent-policy settings. pk="POLICY#{owner_sub}", sk="CURRENT" or
+        # sk="AUDIT#{ts:010d}#{event_id}". No GSI needed; all access patterns are
+        # single-owner point reads + prefix queries.
+        TableDef(
+            _resolve_table_name(S.rent_policy_table_name, "rent_policy"),
+            "pk",
+            "sk",
+        ),
+        # PMD-002: Property document link store. pk="LINK#{record_type}#{record_id}",
+        # sk="DOC#{doc_id}". GSI allows listing all docs for an owner.
+        # EVT-011 is not yet built; PMD-002 uses this local link store instead.
+        TableDef(
+            _resolve_table_name(S.property_documents_table_name, "property_documents"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "owner-index", "partition_key": "owner_sub", "sort_key": "sk"},
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.customers_table_name, "customers"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_NUMBER", "partition_key": "gsi_number_pk", "sort_key": "customer_number"},
+                {"index_name": "GSI_BRANCH", "partition_key": "gsi_branch_pk", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.financial_products_table_name, "financial_products"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI_CATEGORY", "partition_key": "gsi_cat_pk", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # OFBiz Phase 8 — Shipping/Logistics (SHP-002). Four new tables. All
+        # default OFF (SHIPPING_ENABLED=false); existing paths byte-for-byte
+        # unchanged when the flag is off.
+        TableDef(
+            _resolve_table_name(S.shipping_carriers_table_name, "shipping_carriers"),
+            "carrier_id",
+            "sk",
+            gsi=[{"index_name": "GSI_CODE", "partition_key": "carrier_code", "sort_key": "sk"}],
+        ),
+        TableDef(
+            _resolve_table_name(S.shipments_table_name, "shipments"),
+            "shipment_id",
+            gsi=[
+                {"index_name": "GSI_ORDER", "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.shipment_items_table_name, "shipment_items"),
+            "shipment_id",
+            "item_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.shipment_packages_table_name, "shipment_packages"),
+            "shipment_id",
+            "package_seq",
+        ),
+        TableDef(
+            _resolve_table_name(S.account_views_table_name, "account_views"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "by-owner", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "by-grantee", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.entitlement_requests_table_name, "entitlement_requests"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "by-status", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "by-requester", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # WOV-001: maintenance work orders — co-located by property partition.
+        # GSI_WO_STATUS: system-wide status queue (Kanban columns).
+        # GSI_WO_ASSIGNEE: sparse — WOs with assignee_sub only; drives "my work" view.
+        TableDef(
+            _resolve_table_name(S.maintenance_orders_table_name, "maintenance_orders"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_WO_STATUS", "partition_key": "wo_status", "sort_key": "created_at"},
+                {"index_name": "GSI_WO_ASSIGNEE", "partition_key": "assignee_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # WOV-004: standalone vendor directory (used when PUR-002/003 are unbuilt).
+        # GSI_VENDOR_STATUS: active/inactive listing by trade category.
+        TableDef(
+            _resolve_table_name(S.maintenance_vendors_table_name, "maintenance_vendors"),
+            "vendor_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_VENDOR_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # ── CRM Activities scaffold (ACT-001) ────────────────────────────────
+        TableDef(
+            _resolve_table_name(S.crm_tasks_table_name, "crm_tasks"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus",   "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByAssignee", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_notes_table_name, "crm_notes"),
+            "user_sub",
+            "sk",
+            gsi=[
+                {"index_name": "ByEntity", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_activity_timeline_table_name, "crm_activity_timeline"),
+            "entity_key",
+            "sk",
+            gsi=[
+                {"index_name": "ByType", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_event_rsvp_table_name, "crm_event_rsvp"),
+            "event_key",
+            "attendee_sub",
+            gsi=[
+                {"index_name": "ByUser", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_event_reminders_table_name, "crm_event_reminders"),
+            "reminder_key",
+            "reminder_id",
+            gsi=[
+                {"index_name": "DueReminders", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # PRT-001: ATS Career Portal
+        TableDef(
+            _resolve_table_name(S.career_portal_table_name, "CareerPortal"),
+            "pk",      # partition key (String)
+            "sk",      # sort key (String)
+            gsi=[
+                {"index_name": "ByJob", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},   # numeric sort key — MUST be declared (CLAUDE.md gotcha)
+        ),
+        # QloApps Hotel PMS — HTL-018: hotel_reservations
+        # PK=reservation_id, SK=sk (META header + HIST#* history rows).
+        # GSI_HOTEL_ARRIVALS: PK=hotel_id, SK=checkin (S) — arrivals board.
+        # GSI_GUEST:          PK=guest_party_id, SK=created_at (N) — guest history.
+        # GSI_HOTEL_STATUS:   PK=hotel_id, SK=status (S) — in-house / confirmed buckets.
+        TableDef(
+            _resolve_table_name(S.hotel_reservations_table_name, "hotel_reservations"),
+            "reservation_id",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "GSI_HOTEL_ARRIVALS",
+                    "partition_key": "hotel_id",
+                    "sort_key": "checkin",
+                },
+                {
+                    "index_name": "GSI_GUEST",
+                    "partition_key": "guest_party_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "GSI_HOTEL_STATUS",
+                    "partition_key": "hotel_id",
+                    "sort_key": "status",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # QloApps Hotel PMS — HTL-006: hotel_rooms
+        # PK=hotel_id, SK=ROOM#{room_id}.
+        # GSI_ROOMTYPE:  PK=room_type_id, SK=created_at (N).
+        # GSI_HK_STATUS: PK=hotel_id, SK=housekeeping_status (S) — HK board.
+        TableDef(
+            _resolve_table_name(S.hotel_rooms_table_name, "hotel_rooms"),
+            "hotel_id",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "GSI_ROOMTYPE",
+                    "partition_key": "room_type_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "GSI_HK_STATUS",
+                    "partition_key": "hotel_id",
+                    "sort_key": "housekeeping_status",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # OFBiz Facility/Fulfillment (FAC-002) — Milestone 4+
+        # facilities: facility headers (SK=META) + location rows (SK=LOC#{id}).
+        # GSI_OWNER for per-owner list; GSI_STATUS for admin queue.
+        TableDef(
+            _resolve_table_name(S.facilities_table_name, "facilities"),
+            "facility_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER",  "partition_key": "owner_sub",  "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status",     "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # transfers: header (SK=META) + per-SKU line rows (SK=ITEM#{n}).
+        TableDef(
+            _resolve_table_name(S.transfers_table_name, "transfers"),
+            "transfer_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_STATUS",   "partition_key": "status",           "sort_key": "created_at"},
+                {"index_name": "GSI_FROM_LOC", "partition_key": "from_location_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # receipts: inbound goods receipts. Header (SK=META) + line rows (SK=ITEM#{n}).
+        # GSI_FACILITY for per-facility listing; GSI_PO consumed by PUR module;
+        # GSI_STATUS for admin queue.
+        TableDef(
+            _resolve_table_name(S.receipts_table_name, "receipts"),
+            "receipt_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_FACILITY", "partition_key": "facility_id", "sort_key": "created_at"},
+                {"index_name": "GSI_PO",       "partition_key": "po_id",       "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS",   "partition_key": "status",      "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # picklists: pick work orders. Header (SK=META) + line rows (SK=LINE#{n}).
+        TableDef(
+            _resolve_table_name(S.picklists_table_name, "picklists"),
+            "picklist_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_ORDER",  "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status",   "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # lot_serial: reserved for FAC-011+ lot/serial tracking. Not wired in T
+        # until FAC-014 explicitly enables it. Created now to avoid a breaking
+        # just-restart when that ticket ships.
+        TableDef(
+            _resolve_table_name(S.lot_serial_table_name, "lot_serial"),
+            "sku",
+            "sk",   # LOT#{lot_id}  or  SERIAL#{serial}
+            gsi=[
+                {"index_name": "GSI_LOT_STATUS", "partition_key": "lot_status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.rent_period_markers_table_name, "rent_period_markers"),
+            "pk",
+            "sk",
+        ),
+        # INV-002: currency registry. pk=CURRENCY#{iso}, sk=META.
+        # GSI1=active currencies alphabetically (CURRENCIES#ACTIVE / iso_code, string).
+        TableDef(
+            _resolve_table_name(S.crm_currencies_table_name, "crm_currencies"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
+        # INV-005: named tax rate registry. pk=TAXRATE#{id}, sk=META.
+        # GSI1=active rates alphabetically; GSI2=by jurisdiction. Both SKs string.
+        TableDef(
+            _resolve_table_name(S.crm_tax_rates_table_name, "crm_tax_rates"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "taxrates-active-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "taxrates-jurisdiction-index", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+        ),
+        # OBP Transaction Requests + Step-Up SCA (TXR-001..TXR-005)
+        TableDef(
+            _resolve_table_name(S.txn_requests_table_name, "txn_requests"),
+            "user_sub",
+            "request_id",
+            gsi=[{"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
+        # EML-002: Admin runtime email settings (single CONFIG/GLOBAL row)
+        TableDef(
+            _resolve_table_name(S.email_settings_table_name, "email_settings"),
+            "pk",
+            "sk",
+        ),
+        # EML-003: Per-user IMAP/SMTP account connections
+        TableDef(
+            _resolve_table_name(S.user_email_accounts_table_name, "user_email_accounts"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByUser",
+                    "partition_key": "pk",
+                    "sort_key": "created_at",
+                }
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # EML-004: IMAP inbox sync messages (and sync cursor rows)
+        TableDef(
+            _resolve_table_name(S.user_email_messages_table_name, "user_email_messages"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByFolder",
+                    "partition_key": "folder_pk",
+                    "sort_key": "date_ts",
+                },
+                {
+                    "index_name": "ByThread",
+                    "partition_key": "pk",
+                    "sort_key": "thread_id",
+                },
+            ],
+            attr_types={"date_ts": "N"},
+        ),
+        # EML-007: Email archiving — relate email to CRM record
+        TableDef(
+            _resolve_table_name(S.email_archive_table_name, "email_archive"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByUser",
+                    "partition_key": "gsi_user_pk",
+                    "sort_key": "archived_at",
+                }
+            ],
+            attr_types={"archived_at": "N"},
+        ),
+        # QloApps hotel-PMS vertical (HTL-018): reservation entity with three GSIs.
+        # GSI_HOTEL_ARRIVALS: arrivals board (hotel_id/checkin S)
+        # GSI_GUEST: guest booking history newest-first (guest_party_id/created_at N)
+        # GSI_HOTEL_STATUS: hotel reservations by lifecycle status (hotel_id/status S)
+        # attr_types: created_at is numeric (GSI_GUEST SK) — omitting would cause
+        #             ValidationException when querying with integer values.
+        TableDef(
+            _resolve_table_name(S.hotel_reservations_table_name, "hotel_reservations"),
+            "reservation_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_HOTEL_ARRIVALS", "partition_key": "hotel_id",       "sort_key": "checkin"},
+                {"index_name": "GSI_GUEST",          "partition_key": "guest_party_id", "sort_key": "created_at"},
+                {"index_name": "GSI_HOTEL_STATUS",   "partition_key": "hotel_id",       "sort_key": "status"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # RSK-001: ATS skill registry + assignment store.
+        # GSI1 (ByName) enables autocomplete prefix scan: GSI1PK="NAME_PREFIX#{c}" / GSI1SK=name_lc (STRING).
+        # GSI1SK is a STRING sort key — do NOT add "N" to attr_types.
+        TableDef(
+            _resolve_table_name(S.ats_skills_table_name, "ats_skills"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "ByName",
+                    "partition_key": "GSI1PK",
+                    "sort_key": "GSI1SK",
+                },
+            ],
+            attr_types={},
+        ),
+        # LSE-001 (open-property Lease entity). Two GSIs; numeric sort keys declared
+        # in attr_types to avoid ValidationException when queried with integer values.
+        TableDef(
+            _resolve_table_name(S.leases_table_name, "leases"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "leases-all-index",
+                    "partition_key": "GSI1PK",
+                    "sort_key": "GSI1SK",
+                },
+                {
+                    "index_name": "leases-by-status-index",
+                    "partition_key": "GSI2PK",
+                    "sort_key": "GSI2SK",
+                },
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # QloApps hotel-PMS vertical (HTL-001 + HTL-005): hotel entity table.
+        # META header row + ROOMTYPE#{room_type_id} + AMEN#{amenity_id} child rows.
+        # GSI_OWNER: list a hotelier's hotels newest-first (PK=owner_sub, SK=created_at).
+        # GSI_STATUS: admin listing by status (PK=status, SK=created_at).
+        # GSI_HOTEL_ROOMTYPES: list a hotel's room types newest-first (PK=hotel_id, SK=created_at).
+        # attr_types: created_at is N (integer Unix seconds from now_ts()).
+        TableDef(
+            _resolve_table_name(S.hotels_table_name, "hotels"),
+            "hotel_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER",          "partition_key": "owner_sub",  "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS",         "partition_key": "status",     "sort_key": "created_at"},
+                {"index_name": "GSI_HOTEL_ROOMTYPES","partition_key": "hotel_id",   "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # QloApps hotel-PMS vertical (HTL-006 + HTL-007): individual rooms table.
+        # ROOM#{room_id} rows + HKTASK#{task_id} child rows on the hotel partition.
+        # GSI_ROOMTYPE: list rooms of a given type newest-first (PK=room_type_id, SK=created_at).
+        # GSI_HK_STATUS: query a hotel's rooms by housekeeping status (PK=hotel_id, SK=hk_status).
+        # GSI_HK_TASK_STATUS: list a hotel's tasks by status (PK=hotel_id, SK=status).
+        # GSI_HK_ASSIGNEE: list a staffer's assigned tasks newest-first (PK=assignee_sub, SK=created_at).
+        # attr_types: created_at is N; housekeeping_status and status are S (no override needed).
+        TableDef(
+            _resolve_table_name(S.hotel_rooms_table_name, "hotel_rooms"),
+            "hotel_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_ROOMTYPE",       "partition_key": "room_type_id", "sort_key": "created_at"},
+                {"index_name": "GSI_HK_STATUS",      "partition_key": "hotel_id",     "sort_key": "housekeeping_status"},
+                {"index_name": "GSI_HK_TASK_STATUS", "partition_key": "hotel_id",     "sort_key": "status"},
+                {"index_name": "GSI_HK_ASSIGNEE",    "partition_key": "assignee_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Knowledge Base (KB-001) — crm_kb_articles single-table for all KB data
+        TableDef(
+            _resolve_table_name(S.kb_articles_table, "crm_kb_articles"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCategory", "partition_key": "category",   "sort_key": "published_at"},
+                {"index_name": "ByStatus",   "partition_key": "status",     "sort_key": "published_at"},
+                {"index_name": "ByAuthor",   "partition_key": "author_sub", "sort_key": "created_at"},
+                {"index_name": "ByTag",      "partition_key": "tag",        "sort_key": "created_at"},
+            ],
+            attr_types={"published_at": "N", "created_at": "N"},
+        ),
+        # TEN-001: Property management — tenant directory
+        # GSI_OWNER: newest-first listing per landlord (sort key created_at is numeric)
+        # GSI_PARTY: reverse-lookup from PTY party_id → tenant META row
+        TableDef(
+            _resolve_table_name(S.property_tenants_table_name, "property_tenants"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI_OWNER", "partition_key": "owner_id", "sort_key": "created_at"},
+                {"index_name": "GSI_PARTY", "partition_key": "party_id", "sort_key": "SK"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # PIP-001: ATS Recruiting Pipeline junction table.
+        # Stores pipeline entries (USER#{owner_sub} / PIPE#{job_id}#CAND#{cand_id}),
+        # the status-config singleton (PIPELINE_STATUS_CONFIG / META), and
+        # placement sub-rows (USER#{owner_sub} / PIPE#{job_id}#CAND#{cand_id}#PLACEMENT).
+        # No numeric GSI sort keys in PIP-001..PIP-006; no attr_types needed.
+        TableDef(
+            _resolve_table_name(S.ats_pipeline_table_name, "ats_pipeline"),
+            "pk",
+            "sk",
+        ),
+        # PRD-002 (OFBiz Catalog Depth): dedicated product_depth table for virtual/variant
+        # products, feature categories, price components, bundles, and associations.
+        # All numeric GSI sort keys declared in attr_types per CLAUDE.md convention.
+        TableDef(
+            _resolve_table_name(S.product_depth_table_name, "product_depth"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "ByParent",          "partition_key": "GSI_PARENT_PK", "sort_key": "GSI_PARENT_SK"},
+                {"index_name": "ByFeatureCategory", "partition_key": "GSI_FTCAT_PK",  "sort_key": "GSI_FTCAT_SK"},
+                {"index_name": "ByVirtualParent",   "partition_key": "GSI_VIRT_PK",   "sort_key": "GSI_VIRT_SK"},
+                {"index_name": "ByAssocSource",     "partition_key": "GSI_ASSOC_PK",  "sort_key": "GSI_ASSOC_SK"},
+                {"index_name": "ByItemPrice",       "partition_key": "GSI_PRICE_PK",  "sort_key": "GSI_PRICE_SK"},
+            ],
+            attr_types={
+                "GSI_PARENT_SK": "N",   # category position (int)
+                "GSI_FTCAT_SK":  "N",   # feature-value position (int)
+                "GSI_VIRT_SK":   "N",   # variant created_at (int)
+                "GSI_PRICE_SK":  "N",   # price effective_at (int)
+            },
+        ),
+        # OFBiz GL Milestone 4 — chart of accounts (OFB-013).
+        # gl_accounts: one row per account (PK=account_code, SK=META).
+        # GSI_CLASS groups accounts by class for OFB-014 mapping.
+        TableDef(
+            _resolve_table_name(S.gl_accounts_table_name, "gl_accounts"),
+            "account_code",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_CLASS", "partition_key": "account_class", "sort_key": "account_code"},
+            ],
+        ),
+        # gl_journal: balanced double-entry journal entries (OFB-014).
+        # PK=JE#GLOBAL, SK=JE#{id} (header) | JL#{id}#{seq} (lines).
+        # ENTRIES_BY_DATE drives date-range queries; SOURCE_ENTRY_IDX idempotency.
+        TableDef(
+            _resolve_table_name(S.gl_journal_table_name, "gl_journal"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "ENTRIES_BY_DATE", "partition_key": "ledger_date", "sort_key": "posted_at"},
+                {"index_name": "SOURCE_ENTRY_IDX", "partition_key": "source_entry_id", "sort_key": "posted_at"},
+            ],
+            attr_types={"posted_at": "N"},
+        ),
+        # ar_ap_snapshots: point-in-time AR/AP aging snapshots (OFB-015).
+        # PK="AR"|"AP", SK="SNAP#{ts}#{snap_id}"; GSI_DATE for time-range queries.
+        TableDef(
+            _resolve_table_name(S.ar_ap_snapshots_table_name, "ar_ap_snapshots"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_DATE", "partition_key": "pk", "sort_key": "ts"},
+            ],
+            attr_types={"ts": "N"},
+        ),
+        # OFBiz GL Milestone 5 — pricing rules engine (OFB-019/020).
+        # PricingRules: tiered/bulk/conditional rules + audit + redemption rows.
+        # PK=pk, SK=sk; ByCreatorCreatedAt + ByActive GSIs.
+        TableDef(
+            _resolve_table_name(S.pricing_rules_table_name, "PricingRules"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatorCreatedAt", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByActive", "partition_key": "active_pk", "sort_key": "created_at"},
+            ],
+            attr_types={"GSI1SK": "N", "created_at": "N"},
+        ),
+        # HTL-014: Hotel nightly rate plans — plan header (SK=META) + rule child
+        # rows (SK=RULE#{kind}#{rule_id}) co-located on a hotel_id#room_type_id
+        # partition.  GSI_HOTEL lists plans for a hotel; GSI_ROOM_TYPE fetches
+        # the plan(s) for a room type.  created_at is the numeric GSI sort key on
+        # both indexes — attr_types required (CLAUDE.md "DynamoDB numeric GSI sort
+        # keys" gotcha; omitting it stores created_at as String → ValidationException).
+        TableDef(
+            _resolve_table_name(S.hotel_rate_plans_table_name, "hotel_rate_plans"),
+            "hotel_id#room_type_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_HOTEL",     "partition_key": "hotel_id",     "sort_key": "created_at"},
+                {"index_name": "GSI_ROOM_TYPE", "partition_key": "room_type_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # HTL-010..HTL-011 (QloApps hotel PMS): per-room-type per-date availability.
+        # PK=availability_pk ("{hotel_id}#{room_type_id}"), SK="DATE#{YYYY-MM-DD}".
+        # Hold meta rows use PK="HOLD#{hold_id}", SK="META".
+        # GSI_HOTEL_DATE: hotel-wide calendar aggregation across all room types.
+        # GSI_HOLD_EXPIRY: TTL sweep for expiring holds (expires_at is numeric).
+        # attr_types: updated_at=N (mutation timestamp), expires_at=N (hold TTL).
+        TableDef(
+            _resolve_table_name(S.hotel_availability_table_name, "hotel_availability"),
+            "availability_pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_HOTEL_DATE",  "partition_key": "hotel_id",      "sort_key": "date"},
+                {"index_name": "GSI_HOLD_EXPIRY", "partition_key": "gsi_expiry_pk", "sort_key": "expires_at"},
+            ],
+            attr_types={"expires_at": "N"},
+        ),
+        # STU-001: CRM Security Suite, Studio & Admin scaffolding
+        TableDef(
+            S.crm_acl_roles_table_name,
+            "pk", "sk",
+            gsi=[{"index_name": "by-assignee", "partition_key": "assignee_id", "sort_key": "assigned_at"}],
+            attr_types={"assigned_at": "N"},
+        ),
+        TableDef(
+            S.crm_security_groups_table_name,
+            "pk", "sk",
+            gsi=[{"index_name": "by-record", "partition_key": "record_ref", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(S.crm_studio_fields_table_name, "entity_type", "field_key"),
+        TableDef(S.crm_studio_modules_table_name, "pk", "sk"),
+        TableDef(S.crm_studio_layouts_table_name, "pk", "sk"),
+        TableDef(S.crm_studio_dropdowns_table_name, "pk", "sk"),
+        TableDef(
+            S.crm_audit_trail_table_name,
+            "pk", "sk",
+            gsi=[{"index_name": "by-actor", "partition_key": "actor_sub", "sort_key": "changed_at"}],
+            attr_types={"changed_at": "N"},
+        ),
+        TableDef(S.currencies_table_name, "pk", "sk"),
+        TableDef(S.search_config_table_name, "pk", "sk"),
+        TableDef(
+            S.email_queue_table_name,
+            "pk", "sk",
+            gsi=[{"index_name": "by-status", "partition_key": "status", "sort_key": "queued_at"}],
+            attr_types={"queued_at": "N"},
+        ),
+        # CRM Cases (CAS-001) — six new tables
+        TableDef(
+            _resolve_table_name(S.crm_cases_counter_table, "crm_cases_counters"),
+            "counter_id",
+            "scope",
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_cases_links_table, "crm_cases_links"),
+            "ticket_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByRelated", "partition_key": "related_ticket_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_cases_templates_table, "crm_cases_templates"),
+            "template_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner", "partition_key": "owner_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_cases_portal_sessions_table, "crm_cases_portal_sessions"),
+            "token",
+            "sk",
+            gsi=[
+                {"index_name": "ByEmail", "partition_key": "submitter_email", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_cases_sla_config_table, "crm_cases_sla_config"),
+            "config_key",
+            "sk",
+        ),
+        TableDef(
+            _resolve_table_name(S.crm_kb_articles_table, "crm_kb_articles"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCategory", "partition_key": "category", "sort_key": "published_at"},
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "published_at"},
+            ],
+            attr_types={"published_at": "N"},
+        ),
+        # CAS-007: ticket watchers table
+        TableDef(
+            _resolve_table_name(S.crm_cases_watchers_table, "crm_cases_watchers"),
+            "ticket_id",
+            "sk",
+            gsi=[
+                {"index_name": "ByWatcher", "partition_key": "watcher_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CRM Workflow Rules (WFL-001)
+        TableDef(
+            _resolve_table_name(S.crm_workflow_rules_table_name, "crm_workflow_rules"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByModule", "partition_key": "GSI_MODULE_PK", "sort_key": "GSI_MODULE_SK"},
+            ],
+            attr_types={"GSI_MODULE_SK": "N"},
+        ),
+        # CRM Workflow Runs (WFL-001)
+        TableDef(
+            _resolve_table_name(S.crm_workflow_runs_table_name, "crm_workflow_runs"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByRecord", "partition_key": "GSI_RECORD_PK", "sort_key": "GSI_RECORD_SK"},
+            ],
+            attr_types={"GSI_RECORD_SK": "N"},
+        ),
+        # CRM Reports & Dashboards (RPT-001)
+        # crm_reports: report definitions, RUN rows, and SCHEDULE rows (single-table).
+        # GSI1: owner-reports-index  (GSI1PK=OWNER#{owner_sub}, GSI1SK=created_at N)
+        # GSI2: rpt-schedules-due-index (GSI2PK=RPT_SCHEDULES#ACTIVE, GSI2SK=next_run_at N)
+        TableDef(
+            _resolve_table_name(S.crm_reports_table_name, "crm_reports"),
+            "report_id",
+            "sk",
+            gsi=[
+                {"index_name": "owner-reports-index",     "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "rpt-schedules-due-index", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # crm_dashboards: per-user dashboard layout (single item per user).
+        TableDef(
+            _resolve_table_name(S.crm_dashboards_table_name, "crm_dashboards"),
+            "dashboard_id",
+            "sk",
+            gsi=[
+                {"index_name": "owner-dashboards-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # crm_saved_searches: named saved filter expressions.
+        TableDef(
+            _resolve_table_name(S.crm_saved_searches_table_name, "crm_saved_searches"),
+            "saved_search_id",
+            "sk",
+            gsi=[
+                {"index_name": "owner-searches-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # CRM Leads (LED-001): single table for Lead + Prospect records.
+        # GSI sort keys are integer Unix timestamps → must declare attr_types N.
+        # LED-007 adds ByEmail GSI (GSI4) for O(1) email-based dedup.
+        TableDef(
+            _resolve_table_name(S.leads_table_name, "leads"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner",  "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByStatus", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "BySource", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "ByEmail",  "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
+            ],
+            attr_types={
+                "GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N",
+                "GSI4SK": "N",
+            },
+        ),
         TableDef(_resolve_table_name(S.ddb_sessions_table, "sessions"), "user_sub", "session_id"),
         TableDef(_resolve_table_name(S.ddb_totp_table, "totp_devices"), "user_sub", "device_id"),
         TableDef(_resolve_table_name(S.ddb_sms_table, "sms_devices"), "user_sub", "sms_device_id"),
@@ -57,6 +1249,18 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.api_keys_table_name, "api_keys"),
             "key_id",
             gsi=[{"index_name": S.api_keys_user_index, "partition_key": "user_sub"}],
+        ),
+        # OAU-001: OAuth consumer-app registry (single-table: META + CODE# + GRANT# + OIDC_SIGNING_KEY rows)
+        TableDef(
+            _resolve_table_name(S.oauth_consumers_table_name, "oauth_consumers"),
+            "client_id",
+            "sk",
+            gsi=[{
+                "index_name": S.oauth_consumers_owner_index,
+                "partition_key": "owner_sub",
+                "sort_key": "created_at",
+            }],
+            attr_types={"created_at": "N"},
         ),
         TableDef(_resolve_table_name(S.alerts_table_name, "alerts"), "user_sub", "alert_id"),
         TableDef(_resolve_table_name(S.alert_prefs_table_name, "alert_prefs"), "user_sub"),
@@ -275,6 +1479,55 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
             ],
         ),
+        # CRM Project Management (PRJ-001)
+        # crm_pm_projects: PK=OWNER#{owner_sub}, SK=PROJECT#{project_id}
+        #   GSI1: single-project lookup by project_id
+        #   GSI2: status-filtered list sorted by created_at (N)
+        #   GSI3: per-account project lookup sorted by created_at (N) (PRJ-011)
+        TableDef(
+            _resolve_table_name(S.crm_pm_projects_table_name, "crm_pm_projects"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={"GSI2SK": "N", "GSI3SK": "N"},
+        ),
+        # crm_pm_tasks: PK=PROJECT#{project_id}, SK=TASK#{task_order:06d}#{task_id}
+        #   GSI1: single-task lookup by task_id
+        #   GSI2: per-assignee workload sorted by end_date (N)
+        TableDef(
+            _resolve_table_name(S.crm_pm_tasks_table_name, "crm_pm_tasks"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI2SK": "N"},
+        ),
+        # crm_pm_members: PK=PROJECT#{project_id}, SK=MEMBER#{user_sub}
+        #   GSI1: per-user project membership list
+        TableDef(
+            _resolve_table_name(S.crm_pm_members_table_name, "crm_pm_members"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
+        # crm_pm_templates: PK=OWNER#{owner_sub}, SK=TEMPLATE#{template_id}
+        #   GSI1: template lookup by template_id
+        TableDef(
+            _resolve_table_name(S.crm_pm_templates_table_name, "crm_pm_templates"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+        ),
         TableDef(
             _resolve_table_name(S.catalog_products_table_name, "catalog_products"),
             "PK",
@@ -287,10 +1540,14 @@ def _table_defs() -> List[TableDef]:
         TableDef(
             _resolve_table_name(S.orders_table_name, "orders"),
             "order_id",
+            "sk",
             gsi=[
                 {"index_name": "GSI_USER", "partition_key": "user_id", "sort_key": "created_at"},
                 {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "GSI_ORDER_STATUS", "partition_key": "lifecycle_status", "sort_key": "updated_ts"},
+                {"index_name": "GSI_SHIP_DATE", "partition_key": "ship_date_bucket", "sort_key": "ship_ts"},
             ],
+            attr_types={"updated_ts": "N", "ship_ts": "N"},
         ),
         TableDef(_resolve_table_name(S.order_items_table_name, "order_items"), "order_id", "item_id"),
         TableDef(
@@ -715,6 +1972,24 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
         TableDef(os.getenv("DDB_CONTACTS_TABLE", "Contacts"), "owner_id", "contact_id"),
+        # Sales pipeline — Opportunities (OPP-001)
+        TableDef(
+            _resolve_table_name(S.sales_opportunities_table_name, "sales_opportunities"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_BY_USER_CLOSE", "partition_key": "owner_sub", "sort_key": "close_date"},
+                {"index_name": "GSI_BY_STAGE",      "partition_key": "stage",     "sort_key": "close_date"},
+                {"index_name": "GSI_DIRECT",        "partition_key": "opp_id"},
+            ],
+            attr_types={"close_date": "N"},
+        ),
+        # Sales pipeline — Quotas (OPP-001)
+        TableDef(
+            _resolve_table_name(S.sales_quotas_table_name, "sales_quotas"),
+            "pk",
+            "sk",
+        ),
         # Tickets (composite GSI keys: gsi1pk/gsi1sk=owner, gsi2pk/gsi2sk=status, gsi3pk/gsi3sk=assignee,
         # gsi_space_pk/sk=space, gsi_space_status_pk/sk=space+status, gsi_space_assignee_pk/sk=space+assignee,
         # gsi_member_pk/sk=member spaces)
@@ -733,7 +2008,17 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": S.tickets_jira_workspace_index_name, "partition_key": "gsi_jira_workspace_pk", "sort_key": "gsi_jira_workspace_sk"},
                 {"index_name": S.tickets_jira_issue_index_name, "partition_key": "gsi_jira_issue_pk", "sort_key": "gsi_jira_issue_sk"},
                 {"index_name": S.tickets_jira_sync_state_index_name, "partition_key": "gsi_jira_sync_state_pk", "sort_key": "gsi_jira_sync_state_sk"},
+                # TBT-002 — sparse ByBounty GSI: funded+unclaimed bounty board.
+                # gsi_bounty_pk="BOUNTY#OPEN" / gsi_bounty_sk=created_at (numeric).
+                {"index_name": S.tickets_bounty_index_name, "partition_key": "gsi_bounty_pk", "sort_key": "gsi_bounty_sk"},
+                # CAS-003: priority filter index (gsi_priority_sk is a lexicographic string, not numeric)
+                {"index_name": S.tickets_priority_index_name, "partition_key": "gsi_priority_pk", "sort_key": "gsi_priority_sk"},
+                # CAS-005: contact/account link indexes
+                {"index_name": S.tickets_contact_index_name, "partition_key": "gsi_contact_pk", "sort_key": "gsi_contact_sk"},
+                {"index_name": S.tickets_account_index_name, "partition_key": "gsi_account_pk", "sort_key": "gsi_account_sk"},
             ],
+            # TBT-002 — numeric sort key for the ByBounty GSI (CLAUDE.md gotcha).
+            attr_types={"gsi_bounty_sk": "N"},
         ),
         # Broadcast tables
         TableDef(
@@ -1737,6 +3022,12 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Messenger AI cache (MVA-002): translation/transcript caching.
+        TableDef(
+            _resolve_table_name(S.message_ai_cache_table_name, "message_ai_cache"),
+            "cache_key",
+            attr_types={},
+        ),
         # Delegates (DELEGATE-001 .. DELEGATE-003)
         TableDef(
             _resolve_table_name(S.delegates_table_name, "delegates"),
@@ -2006,6 +3297,19 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Interactive Claude Code Sessions (ACS-001 / ADR-002)
+        # PK pk=USER#{user_id}, SK sk=SESSION#{session_id}; ByWorker GSI keyed on
+        # worker_id (S) + created_at (N) so list_sessions_for_worker can return
+        # newest-first without a ValidationException (numeric sort key gotcha).
+        TableDef(
+            _resolve_table_name(S.agent_sessions_table_name, "agent_sessions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByWorker", "partition_key": "worker_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # Compute Cost Tracking (INFRA-005)
         TableDef(
             _resolve_table_name(S.compute_billing_table_name, "compute_billing"),
@@ -2074,6 +3378,19 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByTypeDate", "partition_key": "gsi_type_date_pk", "sort_key": "gsi_type_date_sk"},
             ],
+        ),
+        # Agent SSH QA (ADR-003 / AQA-003) — non-interactive SSH exec action
+        # records (pk=WORKER#{worker_id}, sk=ACTION#{action_id}). The ByStatus
+        # GSI lets the background runner claim pending actions (status=pending)
+        # oldest-first; created_at is numeric so it must be declared as "N".
+        TableDef(
+            _resolve_table_name(S.agent_actions_table_name, "agent_actions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
         ),
         # DevOps/SRE Agent (AGENT-010) — deployment audit log (pk=DEPLOY#{id}, sk=STEP#{nnnn})
         TableDef(
@@ -2277,8 +3594,10 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                # GSI3=overdue scanner (STATUS#sent / due_date) — QUO-005.
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
             ],
-            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+            attr_types={"GSI1SK": "N", "GSI2SK": "N", "GSI3SK": "N"},
         ),
         # Platform Financial Dashboard daily/live rollups (FIN-013).
         # pk=ROLLUP#DAILY sk=YYYY-MM-DD ; pk=ROLLUP#LIVE sk=CURRENT
@@ -2412,6 +3731,211 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.geo_rules_table_name, "geo_rules"),
             "pk",
             "sk",
+        ),
+        # LEX-006: standalone legal holds. PK=pk (HOLD#{hold_id}), SK=sk (META).
+        # GSI ByUser lets is_user_on_hold() do an O(1) query keyed on the held
+        # user_sub instead of scanning all holds. Sparse: user-index rows carry
+        # gsi1pk="USER#{user_sub}" / gsi1sk="HOLD#{hold_id}".
+        TableDef(
+            _resolve_table_name(S.legal_holds_table_name, "legal_holds"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "ByUser", "partition_key": "gsi1pk", "sort_key": "gsi1sk"}],
+        ),
+        # LEX-009/010: law-enforcement / subpoena scoped exports. PK=pk
+        # (EXPORT#{legal_export_id}), SK=sk (META).
+        TableDef(
+            _resolve_table_name(S.legal_exports_table_name, "legal_exports"),
+            "pk",
+            "sk",
+        ),
+        # HNY-002: unified security/IDS/honeypot/honeytoken signal store.
+        # PK=pk (EVENT#{event_id}), SK=sk (META). GSI ByDate lets the security
+        # dashboard query a time window by event_date (S, e.g. "2026-06-09")
+        # + ts (N, unix seconds) instead of scanning. ts MUST be declared "N"
+        # or DynamoDB stores it as String and queries with integers raise
+        # ValidationException (CLAUDE.md numeric-GSI gotcha).
+        TableDef(
+            _resolve_table_name(S.security_events_table_name, "security_events"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "ByDate", "partition_key": "event_date", "sort_key": "ts"}],
+            attr_types={"ts": "N"},
+        ),
+        # HNY-002: honeytoken (decoy credential / canary) store. PK=token_id.
+        # GSI ByLookupHash resolves a presented decoy key by its lookup_hash
+        # (api_key_hash of the secret) so the trip-wire can match without
+        # storing decoys in the real api_keys table (attacker-indistinguishable
+        # public shape, isolated store).
+        TableDef(
+            _resolve_table_name(S.honeytokens_table_name, "honeytokens"),
+            "token_id",
+            gsi=[{"index_name": "ByLookupHash", "partition_key": "lookup_hash"}],
+        ),
+        # OFBiz commerce/ERP Phase 1 — inventory & soft reservations (ADR-001, OFB-002).
+        # inventory: first-class SKU stock record. PK=sku, SK=LOC#{location_id}
+        # (single default "warehouse" now; multi-location deferred). GSI_AVAILABLE
+        # buckets by status with numeric `available` sort key for low-stock filtering.
+        TableDef(
+            _resolve_table_name(S.inventory_table_name, "inventory"),
+            "sku",
+            "location_sk",
+            gsi=[
+                {"index_name": "GSI_AVAILABLE", "partition_key": "status", "sort_key": "available"},
+            ],
+            attr_types={"available": "N"},
+        ),
+        # reservations: reserve -> commit -> release lifecycle. PK=reservation_pk
+        # (RES#{reservation_id}), SK=META. GSI_SKU lists reservations per SKU
+        # (numeric created_at); GSI_EXPIRY drives the TTL-release loop over active
+        # reservations (partition gsi_expiry_pk=SCHED#ACTIVE, numeric expires_at).
+        TableDef(
+            _resolve_table_name(S.reservations_table_name, "reservations"),
+            "reservation_pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_SKU", "partition_key": "sku", "sort_key": "created_at"},
+                {"index_name": "GSI_EXPIRY", "partition_key": "gsi_expiry_pk", "sort_key": "expires_at"},
+                {"index_name": "GSI_CART", "partition_key": "cart_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N", "expires_at": "N"},
+        ),
+        # OFBiz commerce/ERP Milestone 3 — Returns / RMA (ADR-001, OFB-008..010).
+        # returns: RMA header (SK=META) + per-line rows (SK=ITEM#{n}) keyed off the
+        # existing orders/order_items. GSI_ORDER lists returns for an order; GSI_STATUS
+        # drives the admin RMA queue. Both use a numeric created_at sort key.
+        TableDef(
+            _resolve_table_name(S.returns_table_name, "returns"),
+            "return_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_ORDER", "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # BRAND-001 / decision D6: platform-wide branding singleton (name, logo_url,
+        # support_email). PK="PLATFORM", SK="BRANDING". No GSIs — singleton fetched
+        # by exact key. updated_at is a plain item attribute (N), not a GSI key, so
+        # no attr_types entry is needed.
+        TableDef(_resolve_table_name(S.platform_settings_table_name, "platform_settings"), "pk", "sk"),
+        # Party/CRM single table (PTY-002). Stores Party meta, role, relationship,
+        # and contact-mech rows in one table. GSI_CREATED uses a numeric created_at
+        # sort key for newest-first pagination; GSI1/2/3 are all-string.
+        TableDef(
+            _resolve_table_name(S.party_table_name, "party"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "GSI_CREATED", "partition_key": "type", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # CND-001: ATS Candidates table — single-table design with three GSIs.
+        # GSI sort keys are numeric (created_at aliases) — attr_types required
+        # to avoid ValidationException on integer range queries (CLAUDE.md gotcha).
+        TableDef(
+            _resolve_table_name(S.candidates_table_name, "candidates"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByOwner",  "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "ByStatus", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "BySource", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+            attr_types={
+                "GSI1SK": "N",
+                "GSI2SK": "N",
+                "GSI3SK": "N",
+            },
+        ),
+        # ATS — Job Orders (JOB-001)
+        TableDef(
+            _resolve_table_name(S.job_orders_table_name, "job_orders"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_BY_STATUS",    "partition_key": "status",        "sort_key": "created_at"},
+                {"index_name": "GSI_BY_RECRUITER", "partition_key": "recruiter_sub", "sort_key": "created_at"},
+                {"index_name": "GSI_HOT",          "partition_key": "hot_flag",      "sort_key": "created_at"},
+                {"index_name": "GSI_PUBLIC",       "partition_key": "public_flag",   "sort_key": "created_at"},
+                {"index_name": "GSI_DIRECT",       "partition_key": "job_id"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Property management (open-property vertical, PROP-001..PROP-005).
+        # Single table: META header rows + UNIT#{unit_id} child rows.
+        # GSI_OWNER: list a landlord's properties newest-first (PROP-001).
+        # GSI_STATUS: admin listing by active/archived state (PROP-001).
+        # GSI_UNIT_OCCUPANCY: count units by occupancy bucket per property (PROP-002).
+        TableDef(
+            _resolve_table_name(S.properties_table_name, "properties"),
+            "property_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_OWNER",          "partition_key": "owner_sub",         "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS",         "partition_key": "status",            "sort_key": "created_at"},
+                {"index_name": "GSI_UNIT_OCCUPANCY", "partition_key": "property_id",       "sort_key": "occupancy_status"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # QloApps hotel-PMS vertical (HTL-002): reusable amenity dictionary table.
+        # GSI_CATEGORY: list amenities by category for the FE picker.
+        # attr_types: created_at is N.
+        TableDef(
+            _resolve_table_name(S.hotel_amenities_table_name, "hotel_amenities"),
+            "amenity_id",
+            "sk",
+            gsi=[
+                {"index_name": "GSI_CATEGORY", "partition_key": "category", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # OpenBankProject ACC-001: single-table store for Banks + Accounts +
+        # transaction metadata + co-owner reverse-index rows. GSI_ACCOUNT_BY_ID
+        # resolves an account by id regardless of owner partition (cross-owner
+        # co-access). created_at is the numeric GSI sort key → attr_types "N".
+        TableDef(
+            _resolve_table_name(S.banking_accounts_table_name, "banking_accounts"),
+            "pk",
+            "sk",
+            gsi=[
+                {
+                    "index_name": "GSI_ACCOUNT_BY_ID",
+                    "partition_key": "account_id",
+                    "sort_key": "created_at",
+                }
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # QUO-001: AOS Sales Quotes.
+        # GSI1=admin cross-user list (QUOTES#ALL / created_at).
+        # GSI2=per-user stage filter (USER#{sub}#STAGE#{stage} / created_at).
+        TableDef(
+            _resolve_table_name(S.aos_quotes_table_name, "aos_quotes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
+        ),
+        # QUO-004: AOS CRM Contracts.
+        # GSI1=admin cross-user list (CONTRACTS#ALL / created_at).
+        # GSI2=per-user stage + expiry filter (USER#{sub}#STAGE#{stage} / end_date).
+        TableDef(
+            _resolve_table_name(S.aos_contracts_table_name, "aos_contracts"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "contracts-all-index", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "contracts-by-stage-index", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+            attr_types={"GSI1SK": "N", "GSI2SK": "N"},
         ),
     ]
 
@@ -2638,7 +4162,28 @@ def main() -> None:
         )
     except Exception:
         pass
+    # Content-moderation reports require allowed-topic sentinel rows (TOPIC#{topic})
+    # for the DB-level condition checks in create_content_report's transact-write.
+    # Without them every moderation report fails 422 on a fresh stack. Seed them
+    # idempotently (mirrors scripts/migrations/20260305_content_reports_schema.py).
+    _seed_content_report_topics(ddb)
+
     print(f"Ensured {len(created)} DynamoDB tables exist.")
+
+
+def _seed_content_report_topics(ddb) -> None:
+    table_name = _resolve_table_name(S.content_reports_table_name, "ContentReports")
+    table = ddb.Table(table_name)
+    for topic in ("sexual", "extortion", "criminal", "spam", "racist"):
+        try:
+            _retry_transient_ddb_call(
+                table.put_item,
+                Item={"report_id": f"TOPIC#{topic}", "entity_type": "content_report_topic", "topic": topic},
+                ConditionExpression="attribute_not_exists(report_id)",
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
 
 
 if __name__ == "__main__":

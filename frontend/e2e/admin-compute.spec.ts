@@ -15,6 +15,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 const ROOT_SUB = "root.admin@testdev.local";
@@ -30,8 +32,8 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -112,7 +114,7 @@ function clearQuota(userSub: string): void {
     `python3 -c "
 import boto3, os
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -123,7 +125,7 @@ tbl = ddb.Table(os.environ.get('COMPUTE_QUOTAS_TABLE_NAME','compute_quotas'))
 tbl.delete_item(Key={'user_sub':'${userSub}'})
 print('cleared quota')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 
@@ -134,7 +136,7 @@ function seedBilling(userSub: string, resourceType: string, amountCents: number)
 import boto3, os, uuid, time
 from datetime import datetime, timezone
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -149,7 +151,7 @@ tbl.put_item(Item={'user_sub':'${userSub}','sk':f'TICK#{ts}#{eid}','entry_id':ei
 tbl.update_item(Key={'user_sub':'${userSub}','sk':f'MONTH#{mk}'}, UpdateExpression='SET current_month_total_cents = if_not_exists(current_month_total_cents,:z)+:a, month_key=:mk', ExpressionAttributeValues={':z':0,':a':${amountCents},':mk':mk})
 print('seeded billing')
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 

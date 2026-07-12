@@ -15,6 +15,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -24,7 +26,7 @@ const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID   = "e2e_bob@test.local";
 
 // Python interpreter that has pyotp installed.
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
 
@@ -49,8 +51,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -203,7 +205,7 @@ async function openDmWithBob(page: Page) {
 const DDB_HELPER_PRELUDE = `
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -245,7 +247,7 @@ function injectPaymentMethod(userSub: string, pmId: string): void {
     `${PYTHON} -c "
 import boto3, os, time
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -327,7 +329,7 @@ function removePaymentMethod(userSub: string, pmId: string): void {
       `${PYTHON} -c "
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -606,10 +608,27 @@ test.describe("4. View-once text — 'Already viewed' stub after consuming", () 
   });
 
   test("After tapping, message text becomes visible", async () => {
+    // Consuming a view-once message is client-side instant (text reveals
+    // immediately) PLUS a fire-and-forget POST .../{messageId}/view that the
+    // backend uses to set `view_once_seen`. The "Already viewed" stub asserted
+    // by the NEXT test depends on that POST having landed, so wait for it here
+    // (register the listener BEFORE the click to avoid a race).
+    const viewPosted = page.waitForResponse(
+      (r) =>
+        /\/messages\/[^/]+\/view(\?|$)/.test(r.url()) &&
+        r.request().method() === "POST" &&
+        r.ok(),
+      { timeout: 8000 },
+    );
     await page.getByRole("button", { name: /tap to view once/i }).click();
     await expect(
       page.locator("p").filter({ hasText: VO_TEXT }),
     ).toBeVisible({ timeout: 5000 });
+    // Ensure the backend recorded the view before we navigate away/back, then
+    // give any concurrent ViewTracker POSTs a moment to drain so the
+    // server-side view_once_seen flag is committed.
+    await viewPosted.catch(() => {});
+    await page.waitForTimeout(800);
   });
 
   test("After navigating away and back, shows 'Already viewed' stub", async () => {
@@ -650,26 +669,24 @@ test.describe("5. Compose bar — Attach tip disabled when no payment method", (
 
   test.afterAll(async () => page?.close());
 
-  test("'Attach tip' checkbox is disabled when Alice has no payment methods", async () => {
-    // The tip label/checkbox is always rendered in the compose area.
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await expect(tipLabel).toBeVisible({ timeout: 5000 });
-
-    // The checkbox inside the label must be disabled.
-    const checkbox = tipLabel.locator("input[type='checkbox']");
-    await expect(checkbox).toBeDisabled({ timeout: 3000 });
+  test("'Attach tip' toggle is disabled in '+' popover when Alice has no payment methods", async () => {
+    // MCM-2: tip toggle lives in "+" popover.
+    await page.getByTestId("compose-more").click();
+    const tipBtn = page.getByRole("button", { name: /toggle attach tip/i });
+    await expect(tipBtn).toBeVisible({ timeout: 5000 });
+    await expect(tipBtn).toBeDisabled({ timeout: 3000 });
+    await page.keyboard.press("Escape");
   });
 
-  test("Hovering 'Attach tip' shows a tooltip about missing payment method", async () => {
-    const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await expect(tipLabel).toBeVisible({ timeout: 3000 });
-    // Hover over the text portion specifically — the label's left side has a
-    // disabled <input> which can absorb pointer events before they reach the
-    // Radix TooltipTrigger. Force-hover ensures the trigger fires.
-    await tipLabel.hover({ force: true });
+  test("Hovering 'Attach tip' in '+' popover shows a tooltip about missing payment method", async () => {
+    await page.getByTestId("compose-more").click();
+    const tipBtn = page.getByRole("button", { name: /toggle attach tip/i });
+    await expect(tipBtn).toBeVisible({ timeout: 3000 });
+    await tipBtn.hover({ force: true });
     await expect(
       page.getByText(/add a payment method in billing/i),
     ).toBeVisible({ timeout: 4000 });
+    await page.keyboard.press("Escape");
   });
 });
 
@@ -1063,17 +1080,13 @@ test.describe("10. Expired message — conversation list preview shows '[This me
     await sec10Reload1ConvsLoaded;
     await page.waitForTimeout(300);
 
-    // The most-recent-active DM with Bob should now show Bob's text as preview.
-    // Anchor the row to THIS run's conversation by matching the unique MSG_TEXT
-    // preview: under shard accumulation there are many Bob DMs, so .first() alone
-    // could resolve a different (older) Bob conversation.  Requiring the unique
-    // preview text guarantees we are looking at _dmConvoId before/after expiry.
-    const convoRow = page
-      .getByRole("button")
-      .filter({ hasText: "E2E Bob" })
-      .filter({ hasText: MSG_TEXT })
-      .first();
+    // Anchor the row to THIS run's exact conversation via its conversation_id
+    // testid: under shard accumulation there are many Bob DMs (some with a
+    // newer __touch__ last-message), so a "first Bob row" selector resolves the
+    // wrong conversation. The id-scoped row is _dmConvoId before/after expiry.
+    const convoRow = page.getByTestId(`conversation-row-${_dmConvoId}`);
     await expect(convoRow).toBeVisible({ timeout: 8000 });
+    await expect(convoRow).toContainText(MSG_TEXT, { timeout: 8000 });
 
     // Wait for the 15-second TTL + 7-second buffer (22 s total).
     // The extra buffer absorbs backend latency and slow full-suite runs.
@@ -1089,7 +1102,7 @@ test.describe("10. Expired message — conversation list preview shows '[This me
     await sec10Reload2ConvsLoaded;
     await page.waitForTimeout(300);
 
-    const convoRow2 = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    const convoRow2 = page.getByTestId(`conversation-row-${_dmConvoId}`);
     await expect(convoRow2).toBeVisible({ timeout: 8000 });
     // The sidebar preview must now show the stub text — NOT the original message.
     await expect(convoRow2).toContainText("[This message has expired]", { timeout: 15_000 });

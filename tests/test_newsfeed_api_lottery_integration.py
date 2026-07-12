@@ -62,6 +62,18 @@ def _build_client(user_sub: str, monkeypatch: pytest.MonkeyPatch) -> tuple[TestC
     monkeypatch.setattr(newsfeed, "_enforce_newsfeed_post_quota_precheck", lambda user_id: None)
     monkeypatch.setattr(newsfeed, "_meter_newsfeed_post_publish", lambda user_id, post_id: None)
 
+    # Patch services that view_feed calls via lazy imports (added after these tests were
+    # first written) to prevent real DynamoDB calls in unit/integration tests.
+    import app.services.blocking as _blocking_mod
+    import app.services.social as _social_mod
+    import app.services.ad_feedback as _ad_fb_mod
+    import app.services.content_boost as _cb_mod
+    monkeypatch.setattr(_blocking_mod, "get_blocked_set", lambda user_id: set())
+    monkeypatch.setattr(_blocking_mod, "get_blocked_by_set", lambda user_id: set())
+    monkeypatch.setattr(_social_mod, "get_snoozed_following_ids", lambda user_id: set())
+    monkeypatch.setattr(_ad_fb_mod, "get_hidden_ad_ids", lambda user_id: set())
+    monkeypatch.setattr(_cb_mod, "elevate_feed_items", lambda items, **kw: items)
+
     return TestClient(app), fake_table
 
 

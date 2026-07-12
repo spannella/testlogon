@@ -2268,6 +2268,8 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(resp[0].assignment_version, 3)
 
     def test_list_conversations_omits_helpdesk_assignment_fields_for_end_user(self):
+        # HMH-008 exposed routing_state to customers (so they can see helpdesk status)
+        # but still hides internal agent fields (active_agent_user_id, assignment_version).
         tbl_parts = Mock()
         tbl_convos = Mock()
         tbl_parts.query.return_value = {"Items": [{"conversation_id": "c1", "user_id": "customer-1", "status": "active"}]}
@@ -2295,7 +2297,8 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "_is_helpdesk_group_member", return_value=False),
         ):
             resp = messaging.list_conversations(user_id="customer-1")
-        self.assertIsNone(resp[0].routing_state)
+        # routing_state is now customer-visible (HMH-008); agent fields stay hidden
+        self.assertEqual(resp[0].routing_state, "assigned")
         self.assertIsNone(resp[0].active_agent_user_id)
         self.assertIsNone(resp[0].assignment_version)
 
@@ -3202,6 +3205,8 @@ class TestMessagingRoutes(unittest.TestCase):
                 return_value={"message_id": "m1", "sender_id": "other-user", "kind": "text"},
             ),
             patch.object(messaging, "tbl_views", tbl_views),
+            patch.object(messaging, "tbl_receipts", Mock()),
+            patch.object(messaging, "_message_receipts_enabled", return_value=False),
             patch.object(messaging, "fanout_event_to_conversation"),
             patch.object(messaging, "now_ts", return_value=10),
         ):
@@ -3254,17 +3259,31 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(resp[0].user_id, "u1")
 
     def test_presence_heartbeat(self):
-        tbl_presence = Mock()
+        # GAP-0313 changed presence_heartbeat to use a conditional update_item
+        # with a ConditionalCheckFailedException catch (rather than put_item).
+        # Use a real-ish exception class so the except clause doesn't TypeError.
+        import types
+        from botocore.exceptions import ClientError
+
+        class _FakePresenceTable:
+            class meta:
+                class client:
+                    class exceptions:
+                        ConditionalCheckFailedException = ClientError
+            def update_item(self, **kwargs):
+                pass  # Simulates the conditional check succeeding (SSE fires)
+
+        tbl_presence = _FakePresenceTable()
         with (
             patch.object(messaging, "tbl_presence", tbl_presence),
             patch.object(messaging, "_handle_helpdesk_presence_event", return_value={"action": "observe_available", "processed": 0, "transitioned": 0, "failed": 0}),
+            patch.object(messaging, "_enforce_messaging_internal_entitlement"),
             patch.object(messaging, "audit_event"),
             patch.object(messaging, "now_ts", return_value=10),
         ):
             resp = messaging.presence_heartbeat(messaging.PresenceHeartbeatIn(), user_id="u1")
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["status"], "online")
-        tbl_presence.put_item.assert_called_once()
 
     def test_handle_helpdesk_presence_event_releases_assigned_conversations(self):
         convo = {

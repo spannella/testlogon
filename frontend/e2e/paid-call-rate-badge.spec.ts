@@ -12,11 +12,13 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
@@ -45,8 +47,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(`${PYTHON} /home/ubuntu/testlogon/e2e_session_setup.py`, {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync(`${PYTHON} ${REPO_ROOT}/e2e_session_setup.py`, {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -58,6 +60,13 @@ async function injectAuth(page: Page, userId: string) {
   const session = getSessions()[userId];
   if (!session) throw new Error(`No session for ${userId}`);
   await page.context().addCookies(session.cookies);
+  // ProtectedRoute gates the SPA on the persisted auth-store; cookies alone
+  // authenticate API calls but the router would redirect to /login. Seed the
+  // auth-store before every navigation so protected pages actually render.
+  await page.addInitScript((uid: string) => {
+    const state = { userId: uid, accessToken: null, isAuthenticated: true };
+    localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
+  }, session.user_sub);
 }
 
 function csrfHeader(userId: string): Record<string, string> {

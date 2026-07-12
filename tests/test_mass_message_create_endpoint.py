@@ -79,6 +79,7 @@ class TestMassMessageCreateEndpoint(unittest.TestCase):
             patch.object(messaging, "apply_destination_counter_delta") as apply_destination_counter_delta,
             patch.object(messaging, "set_campaign_submission_result") as set_campaign_submission_result,
             patch.object(messaging, "audit_event") as audit_event,
+            patch.object(messaging, "_kickoff_mass_message_dispatch"),
         ):
             out = messaging.create_mass_message_campaign(req, user_id="u1")
 
@@ -164,6 +165,7 @@ class TestMassMessageCreateEndpoint(unittest.TestCase):
             patch.object(messaging, "apply_destination_counter_delta") as apply_destination_counter_delta,
             patch.object(messaging, "set_campaign_submission_result") as set_campaign_submission_result,
             patch.object(messaging, "audit_event") as audit_event,
+            patch.object(messaging, "_kickoff_mass_message_dispatch"),
         ):
             out = messaging.create_mass_message_campaign(req, user_id="u1")
 

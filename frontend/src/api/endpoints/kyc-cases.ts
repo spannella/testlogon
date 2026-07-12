@@ -8,9 +8,23 @@ import type {
   PiiAuditLogResponse,
   KeyRotationResponse,
   KeyDestroyResponse,
+  KycSelfServiceCaseEnvelope,
+  KycDisputeRequest,
+  KycReopenRequest,
 } from "@/api/types";
 
 const BASE = "/v1/kyc/cases";
+
+// ─── KYD-009: Dispute / reopen-and-resubmit flow (flag-gated server-side by
+// KYC_DISPUTE_ENABLED / KYC_RETRY_ENABLED — actions 503 until enabled). ──────
+
+/** KYD-005: appeal a rejected case (rejected -> disputed). */
+export const disputeKycCase = (caseId: string, body: KycDisputeRequest) =>
+  api.post<KycSelfServiceCaseEnvelope>(`${BASE}/${caseId}/dispute`, body);
+
+/** KYD-005: reopen a rejected/expired case to retry (-> draft). */
+export const reopenKycCase = (caseId: string, body: KycReopenRequest) =>
+  api.post<KycSelfServiceCaseEnvelope>(`${BASE}/${caseId}/reopen`, body);
 
 /** KYC-023: Encrypt and store PII fields onto a draft case (owner). */
 export const writePii = (caseId: string, body: PiiWriteRequest) =>

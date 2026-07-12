@@ -21,6 +21,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -53,8 +55,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -96,7 +98,7 @@ async function apiPost(page: Page, path: string, body: object) {
 const DDB_PRELUDE = `
 import boto3, os, time
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -393,10 +395,13 @@ test.describe("Section 72: Signing UI", () => {
   });
 
   test("72.2 Create signature form section visible", async () => {
+    // SUX-009: the packet composer moved to the dedicated /signing/new page.
+    await alicePage.goto(`${BASE}/signing/new`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByText("Create signature form")).toBeVisible();
   });
 
   test("72.3 source path input is visible and editable", async () => {
+    await alicePage.goto(`${BASE}/signing/new`, { waitUntil: "domcontentloaded" });
     const input = alicePage.getByPlaceholder(/source pdf path/i);
     await expect(input).toBeVisible();
     await input.fill("/test/editable.pdf");
@@ -406,7 +411,7 @@ test.describe("Section 72: Signing UI", () => {
   });
 
   test("72.4 sidebar Signing link is visible with correct href", async () => {
-    const link = alicePage.getByRole("link", { name: "Signing" });
+    const link = alicePage.getByRole("link", { name: "Signing", exact: true });
     await expect(link).toBeVisible();
     const href = await link.getAttribute("href");
     expect(href).toBe("/signing");
@@ -444,8 +449,9 @@ test.describe("Section 72: Signing UI", () => {
     const uiPdfPath = `/e2e/ui_sign_${TS}.pdf`;
     injectPdfNode(aliceSub, uiPdfPath);
 
-    await alicePage.goto(`${BASE}/signing`, { waitUntil: "domcontentloaded" });
-    await expect(alicePage.getByText("Document Signing")).toBeVisible({ timeout: 8_000 });
+    // SUX-009: packet creation lives on the dedicated /signing/new composer page.
+    await alicePage.goto(`${BASE}/signing/new`, { waitUntil: "domcontentloaded" });
+    await expect(alicePage.getByText("Create signature form")).toBeVisible({ timeout: 8_000 });
 
     const input = alicePage.getByPlaceholder(/source pdf path/i);
     await input.fill(uiPdfPath);

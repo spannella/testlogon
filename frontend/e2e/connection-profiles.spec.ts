@@ -59,7 +59,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("create profile then list and get", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-crud-${TS}`,
-      hostname: "10.0.0.1",
+      hostname: "host-crud.example.com",
       port: 22,
       username: "ubuntu",
       auth_method: "key_ref",
@@ -87,7 +87,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("update profile fields", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-update-${TS}`,
-      hostname: "10.0.0.2",
+      hostname: "host-update.example.com",
       username: "admin",
     });
     const profile = await create.json();
@@ -107,7 +107,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("delete profile then 404", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-del-${TS}`,
-      hostname: "10.0.0.3",
+      hostname: "host-del.example.com",
       username: "ubuntu",
     });
     const profile = await create.json();
@@ -124,7 +124,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("quick-connect resolves descriptor and bumps last_used", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-qc-${TS}`,
-      hostname: "10.0.0.10",
+      hostname: "host-qc.example.com",
       port: 22,
       username: "ubuntu",
       terminal_color_scheme: "dracula",
@@ -135,7 +135,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
     const qc = await apiPost(alicePage, `${BASE}/${profile.profile_id}/quick-connect`);
     expect(qc.status()).toBe(200);
     const desc = await qc.json();
-    expect(desc.hostname).toBe("10.0.0.10");
+    expect(desc.hostname).toBe("host-qc.example.com");
     expect(desc.username).toBe("ubuntu");
     expect(desc.port).toBe(22);
     expect(desc.terminal_color_scheme).toBe("dracula");
@@ -151,7 +151,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("favorites and recent are ordered first in the list", async () => {
     const fav = await apiPost(alicePage, BASE, {
       label: `cp-fav-${TS}`,
-      hostname: "10.0.0.20",
+      hostname: "host-fav.example.com",
       username: "ubuntu",
       is_favorite: true,
     });
@@ -183,7 +183,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("out-of-range terminal_cols returns 422", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-badcols-${TS}`,
-      hostname: "10.0.0.30",
+      hostname: "host-badcols.example.com",
       username: "ubuntu",
       terminal_cols: 10,
     });
@@ -193,7 +193,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("invalid color scheme returns 422", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-badcolor-${TS}`,
-      hostname: "10.0.0.31",
+      hostname: "host-badcolor.example.com",
       username: "ubuntu",
       terminal_color_scheme: "neon",
     });
@@ -211,7 +211,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("quick-connect without username returns 400", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-nouser-${TS}`,
-      hostname: "10.0.0.40",
+      hostname: "host-nouser.example.com",
       protocol: "ssh",
     });
     const profile = await create.json();
@@ -222,7 +222,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("reference to non-existent SSH key returns 404", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-badkey-${TS}`,
-      hostname: "10.0.0.41",
+      hostname: "host-badkey.example.com",
       username: "ubuntu",
       ssh_key_id: "does-not-exist",
     });
@@ -234,7 +234,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("profiles are user-isolated (404 across users)", async () => {
     const create = await apiPost(alicePage, BASE, {
       label: `cp-iso-${TS}`,
-      hostname: "10.0.0.50",
+      hostname: "host-iso.example.com",
       username: "ubuntu",
     });
     const profile = await create.json();
@@ -259,7 +259,7 @@ test.describe("INFRA-006 Connection Profiles & Quick Connect", () => {
   test("management UI lists profiles and opens dialog", async () => {
     await apiPost(alicePage, BASE, {
       label: `cp-ui-${TS}`,
-      hostname: "10.0.0.60",
+      hostname: "host-ui.example.com",
       username: "ubuntu",
     });
     await alicePage.goto("/remote/connection-profiles");

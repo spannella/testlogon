@@ -18,14 +18,16 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as fs from "fs";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // Load backend env (.env.local) so child python processes get the real
 // DynamoDB table names + endpoint for boto3 (S.billing_table_name etc.).
 function backendEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   const candidates = [
-    "/home/ubuntu/testlogon/wt/fin015/.env.local",
-    "/home/ubuntu/testlogon/.env.local",
+    REPO_ROOT + "/wt/fin015/.env.local",
+    REPO_ROOT + "/.env.local",
   ];
   for (const p of candidates) {
     if (!fs.existsSync(p)) continue;
@@ -68,8 +70,8 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -118,7 +120,7 @@ now = int(time.time())
 ${body}
 `;
   execSync(`python3 -c "${script.replace(/"/g, '\\"')}"`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 20_000,
     env: PYENV,
   });
@@ -127,7 +129,7 @@ ${body}
 /** Run an inline Python snippet against the worktree app and return stdout. */
 function appPython(body: string): string {
   return execSync(`python3 -c "${body.replace(/"/g, '\\"')}"`, {
-    cwd: "/home/ubuntu/testlogon",
+    cwd: REPO_ROOT,
     timeout: 20_000,
     env: PYENV,
   }).toString();
@@ -187,7 +189,7 @@ test.describe("706. Fraud review queue + velocity flag (API)", () => {
     // Drive the rule engine through the in-process service so a real flag
     // is created from real ledger velocity data (>20 tx/hr).
     const out = appPython(`
-import sys; sys.path.insert(0, '/home/ubuntu/testlogon/wt/fin015')
+import sys; sys.path.insert(0, '${REPO_ROOT}/wt/fin015')
 import json
 from app.services.fraud_detection import evaluate_transaction
 r = evaluate_transaction(user_id='${VEL_USER}', amount_cents=100, entry_type='tip', tx_id='led_eval')
@@ -275,7 +277,7 @@ test.describe("707. Risk scoring + user freeze hook (API)", () => {
 
   test("Risk score is computed and persisted for a user", async () => {
     const out = appPython(`
-import sys; sys.path.insert(0,'/home/ubuntu/testlogon/wt/fin015')
+import sys; sys.path.insert(0,'${REPO_ROOT}/wt/fin015')
 import json
 from app.services.fraud_detection import compute_risk_score
 print(json.dumps(compute_risk_score('${VEL_USER}')))
@@ -314,7 +316,7 @@ print(json.dumps(compute_risk_score('${VEL_USER}')))
 
     // Assert the is_frozen() hook other financial flows call returns true.
     const out = appPython(`
-import sys; sys.path.insert(0,'/home/ubuntu/testlogon/wt/fin015')
+import sys; sys.path.insert(0,'${REPO_ROOT}/wt/fin015')
 from app.services.fraud_detection import is_frozen
 print('FROZEN' if is_frozen('${FREEZE_USER}') else 'OK')
 `);
@@ -329,7 +331,7 @@ print('FROZEN' if is_frozen('${FREEZE_USER}') else 'OK')
     expect(r.status()).toBe(200);
     expect((await r.json()).frozen).toBe(false);
     const out = appPython(`
-import sys; sys.path.insert(0,'/home/ubuntu/testlogon/wt/fin015')
+import sys; sys.path.insert(0,'${REPO_ROOT}/wt/fin015')
 from app.services.fraud_detection import is_frozen
 print('FROZEN' if is_frozen('${FREEZE_USER}') else 'OK')
 `);

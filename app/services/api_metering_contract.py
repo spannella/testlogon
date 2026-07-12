@@ -20,12 +20,19 @@ _EXCLUDED_EXACT_PATHS: Set[str] = {
 _EXCLUDED_HEALTH_SEGMENTS: Set[str] = {"health", "healthz"}
 
 
+import re as _re
+
+_PATH_PARAM_TYPE_RE = _re.compile(r"\{(\w+):[^}]+\}")
+
+
 def _normalize_path_template(path_template: str) -> str:
     raw = (path_template or "").strip()
     if not raw:
         return "/"
     if not raw.startswith("/"):
         raw = f"/{raw}"
+    # Strip :type annotations from path params: {param:path} → {param}
+    raw = _PATH_PARAM_TYPE_RE.sub(r"{\1}", raw)
     normalized = "/".join(part for part in raw.split("/") if part)
     return "/" if not normalized else f"/{normalized}"
 

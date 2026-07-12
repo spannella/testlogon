@@ -12,6 +12,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -50,8 +52,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -132,7 +134,7 @@ tbl.put_item(Item={
 })
 print('OK')
 "`;
-  execSync(cmd, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+  execSync(cmd, { cwd: REPO_ROOT, timeout: 10_000 });
   return enfId;
 }
 
@@ -155,7 +157,7 @@ tbl.put_item(Item={
 })
 print('OK')
 "`;
-  execSync(cmd, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+  execSync(cmd, { cwd: REPO_ROOT, timeout: 10_000 });
 }
 
 function clearBan(userId: string): void {
@@ -169,7 +171,7 @@ except Exception:
     pass
 print('OK')
 "`;
-  execSync(cmd, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+  execSync(cmd, { cwd: REPO_ROOT, timeout: 10_000 });
 }
 
 function clearAppeals(): void {
@@ -182,7 +184,7 @@ for item in resp.get('Items', []):
     tbl.delete_item(Key={'appeal_id': item['appeal_id']})
 print(f'Cleared {len(resp.get(chr(73)+chr(116)+chr(101)+chr(109)+chr(115), []))} appeals')
 "`;
-  execSync(cmd, { cwd: "/home/ubuntu/testlogon", timeout: 10_000 });
+  execSync(cmd, { cwd: REPO_ROOT, timeout: 10_000 });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

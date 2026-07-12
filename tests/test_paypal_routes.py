@@ -138,6 +138,10 @@ def test_billing_balance(monkeypatch):
 
 
 def test_payment_method_list_and_setup(monkeypatch):
+    _tbl = FakeTable()
+    # Patch provider check + billing table (GAP-0206 added after this test was written)
+    monkeypatch.setattr(paypal, "_require_provider_enabled", lambda *a, **kw: None)
+    monkeypatch.setattr(paypal, "_billing_table", lambda: _tbl)
     monkeypatch.setattr(
         paypal,
         "list_payment_methods_ddb",
@@ -211,7 +215,14 @@ def test_remove_payment_method(monkeypatch):
 
 def test_charge_once_and_capture(monkeypatch):
     recorded = {}
+    _tbl = FakeTable()
 
+    # Patch provider check + purchase history + billing table (added after this test was written)
+    monkeypatch.setattr(paypal, "_require_provider_enabled", lambda *a, **kw: None)
+    monkeypatch.setattr(paypal, "record_billing_transaction", lambda *a, **kw: "txn_fake")
+    monkeypatch.setattr(paypal, "mark_completed", lambda *a, **kw: None)
+    monkeypatch.setattr(paypal, "mark_reverted", lambda *a, **kw: None)
+    monkeypatch.setattr(paypal, "_billing_table", lambda: _tbl)
     monkeypatch.setattr(paypal, "_get_default_token_or_400", lambda user_id: "pm_default")
     monkeypatch.setattr(paypal, "new_ledger_entry", lambda **kwargs: ("LEDGER#1", {"pk": "USER#user", "sk": "LEDGER#1"}))
     monkeypatch.setattr(paypal, "ddb_put", lambda item, **kwargs: recorded.setdefault("put", item))
@@ -318,6 +329,11 @@ def test_paypal_webhook(monkeypatch):
 def test_charge_once_capture_updates_balance(monkeypatch):
     table = FakeTable()
 
+    # Patch provider check + purchase history (added after this test was written)
+    monkeypatch.setattr(paypal, "_require_provider_enabled", lambda *a, **kw: None)
+    monkeypatch.setattr(paypal, "record_billing_transaction", lambda *a, **kw: "txn_fake")
+    monkeypatch.setattr(paypal, "mark_completed", lambda *a, **kw: None)
+    monkeypatch.setattr(paypal, "mark_reverted", lambda *a, **kw: None)
     monkeypatch.setattr(paypal, "_billing_table", lambda: table)
     monkeypatch.setattr(
         paypal,
@@ -421,8 +437,10 @@ def test_capture_order_unknown_payment(monkeypatch):
 
 
 def test_webhook_requires_headers(monkeypatch):
+    _wh_table = FakeTable()
     monkeypatch.setattr(paypal, "mark_webhook_processed", lambda dedupe_key: True)
     monkeypatch.setattr(paypal, "S", types.SimpleNamespace(paypal_webhook_id="wh"))
+    monkeypatch.setattr(paypal, "_billing_table", lambda: _wh_table)
 
     async def fake_body():
         return b"{}"

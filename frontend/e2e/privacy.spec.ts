@@ -10,6 +10,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -47,8 +49,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -94,7 +96,7 @@ async function apiDelete(page: Page, sessionKey: string, path: string) {
 function cleanupPrivacyRequests(userSub: string) {
   try {
     execSync(
-      `/home/ubuntu/testlogon/.venv/bin/python3 -c "
+      `${REPO_ROOT}/.venv/bin/python3 -c "
 import boto3, os
 os.environ.setdefault('AWS_ACCESS_KEY_ID','test')
 os.environ.setdefault('AWS_SECRET_ACCESS_KEY','test')
@@ -104,7 +106,7 @@ resp = t.query(KeyConditionExpression=boto3.dynamodb.conditions.Key('pk').eq('US
 for item in resp.get('Items',[]):
     t.delete_item(Key={'pk': item['pk'], 'sk': item['sk']})
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } catch {
     // Table may not exist yet
@@ -288,7 +290,7 @@ test.describe("B — Account Deletion API", () => {
 
     // Set grace_period_ends_at to the past via DDB
     execSync(
-      `/home/ubuntu/testlogon/.venv/bin/python3 -c "
+      `${REPO_ROOT}/.venv/bin/python3 -c "
 import boto3, os
 os.environ.setdefault('AWS_ACCESS_KEY_ID','test')
 os.environ.setdefault('AWS_SECRET_ACCESS_KEY','test')
@@ -300,7 +302,7 @@ t.update_item(
     ExpressionAttributeValues={':g': 1000000},
 )
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
 
     const session = getSessions()[BOB_KEY];

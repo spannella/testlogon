@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import ipaddress
 import re
@@ -18,7 +18,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.core.normalize import normalize_phone
+from app.core.normalize import normalize_email, normalize_phone
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
@@ -356,6 +356,9 @@ class ApiKeySelfLimitsReq(BaseModel):
     monthly_calls_cap: int = Field(default=0, ge=0)
     monthly_spend_cap_micros: int = Field(default=0, ge=0)
     route_caps: Dict[str, ApiKeyRouteCapReq] = Field(default_factory=dict)
+    # PLT-001: optional per-window rate-limit overrides
+    # (e.g. {"hour": 500, "day": 5000}; null values clear a window).
+    rate_limit_overrides: Optional[Dict[str, Any]] = None
 
     @field_validator("route_caps")
     @classmethod
@@ -582,6 +585,97 @@ class CatalogStockOut(BaseModel):
     stock_updated_at: Optional[str] = None
 
 
+# ── OFBiz commerce/ERP Phase 1 — inventory & soft reservations (ADR-001 / OFB-003/004) ──
+
+
+class InventoryRecordOut(BaseModel):
+    sku: str
+    location_id: str = "warehouse"
+    on_hand: int = 0
+    reserved: int = 0
+    available: int = 0
+    reorder_point: int = 0
+    status: str = "in_stock"  # in_stock | low_stock | out_of_stock
+    updated_at: int = 0
+
+
+class InventorySetOnHandIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    on_hand: int = Field(ge=0, le=100_000_000)
+    location_id: str = Field(default="warehouse", min_length=1, max_length=128)
+    reorder_point: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    reason: Optional[str] = Field(default=None, max_length=200)
+
+
+class InventoryAdjustIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    delta: int = Field(ge=-100_000_000, le=100_000_000)
+    location_id: str = Field(default="warehouse", min_length=1, max_length=128)
+    reason: Optional[str] = Field(default=None, max_length=200)
+
+
+class InventoryReserveIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    quantity: int = Field(ge=1, le=10_000_000)
+    location_id: str = Field(default="warehouse", min_length=1, max_length=128)
+    cart_id: Optional[str] = Field(default=None, max_length=256)
+    ttl_seconds: Optional[int] = Field(default=None, ge=10, le=86_400)
+
+
+class ReservationOut(BaseModel):
+    reservation_id: str
+    sku: str
+    location_id: str = "warehouse"
+    quantity: int
+    status: str  # active | committed | released | expired
+    cart_id: Optional[str] = None
+    user_sub: Optional[str] = None
+    created_at: int = 0
+    expires_at: int = 0
+
+
+# ── Returns / RMA (ADR-001 OFB-008..010) ────────────────────────────────────
+
+
+class ReturnLineIn(BaseModel):
+    item_id: str = Field(min_length=1, max_length=64)
+    quantity: int = Field(ge=1, le=10_000_000)
+
+
+class ReturnRequestIn(BaseModel):
+    order_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=500)
+    lines: List[ReturnLineIn] = Field(min_length=1)
+
+
+class ReturnDecisionIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class ReturnLineOut(BaseModel):
+    item_id: str
+    sku: Optional[str] = None
+    quantity: int = 0
+    amount_cents: int = 0
+
+
+class ReturnOut(BaseModel):
+    return_id: str
+    order_id: str
+    user_sub: str
+    status: str  # requested | approved | rejected | received | refunded | closed
+    reason: Optional[str] = None
+    currency: str = "usd"
+    refund_amount_cents: int = 0
+    refund_ledger_sk: Optional[str] = None
+    provider: Optional[str] = None
+    lines: List[ReturnLineOut] = Field(default_factory=list)
+    created_at: int = 0
+    updated_at: int = 0
+    decided_by: Optional[str] = None
+    decision_note: Optional[str] = None
+
+
 class CatalogItemOut(BaseModel):
     category_id: str
     item_id: str
@@ -599,6 +693,9 @@ class CatalogItemOut(BaseModel):
     low_stock_threshold: int = 5
     stock_updated_at: Optional[str] = None
     position: Optional[int] = None
+    # ECM-003: integration layer enrichment (default None = flag off / not enriched)
+    variants: Optional[List["StorefrontVariantOut"]] = None
+    availability: Optional["StorefrontAvailabilityOut"] = None
 
 
 class CatalogItemListOut(CatalogPageOut):
@@ -896,6 +993,8 @@ class ShoppingCartTotalOut(BaseModel):
     cart_id: str
     total_cents: int
     currency: str = "USD"
+    # ECM-003: pricing rules breakdown (None = flag off or rules not applicable)
+    pricing_breakdown: Optional["CartPricingBreakdownOut"] = None
 
 
 class CartPurchaseIn(BaseModel):
@@ -1270,7 +1369,7 @@ class EventsPageOut(BaseModel):
 
 
 class RecurrenceRule(BaseModel):
-    freq: Literal["DAILY", "WEEKLY", "MONTHLY"]
+    freq: Literal["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]
     interval: int = Field(default=1, ge=1)
     until_utc: Optional[str] = None
     count: Optional[int] = Field(default=None, ge=1)
@@ -1650,6 +1749,16 @@ class AddCardReq(BaseModel):
     exp_year: int = Field(ge=2000, le=2100)
     cvc: str
     cardholder_name: Optional[str] = None
+
+class AddBankReq(BaseModel):
+    # BK-C: dev/test path to add a FAKE US bank (checking/savings) account
+    # directly from routing + account numbers (no Stripe.js / Financial
+    # Connections). Works against stripe-mock in DEV_MODE.
+    routing_number: str = Field(min_length=9, max_length=9)
+    account_number: str = Field(min_length=4, max_length=17)
+    account_holder_type: str = Field(default="individual", pattern="^(individual|company)$")
+    account_type: str = Field(default="checking", pattern="^(checking|savings)$")
+    account_holder_name: Optional[str] = Field(default=None, max_length=200)
 
 class AddChargeReq(BaseModel):
     amount_cents: int = Field(ge=1)
@@ -4330,11 +4439,12 @@ class FollowStatusResponse(BaseModel):
 
 
 class LlmKeyCreateIn(BaseModel):
-    provider: str = Field(..., pattern=r"^(openai|anthropic|deepseek|gemini|custom)$")
+    provider: str = Field(..., pattern=r"^(openai|anthropic|deepseek|gemini|elevenlabs|custom)$")
     label: str = Field(..., min_length=1, max_length=200)
     api_key: str = Field(..., min_length=8, max_length=500)
     base_url: str = Field(default="", max_length=500)
     model_preference: str = Field(default="", max_length=200)
+    voice_preference: str = Field(default="", max_length=200)
     rate_limit_rpm: int = Field(default=60, ge=1, le=10000)
     monthly_budget_cents: int = Field(default=0, ge=0)
 
@@ -4368,6 +4478,7 @@ class LlmKeyOut(BaseModel):
     key_suffix: str = ""
     base_url: str = ""
     model_preference: str = ""
+    voice_preference: str = ""
     available_models: List[str] = Field(default_factory=list)
     rate_limit_rpm: int = 60
     monthly_budget_cents: int = 0
@@ -4411,10 +4522,41 @@ class LlmProviderInfo(BaseModel):
     base_url: str
     models: List[str] = Field(default_factory=list)
     supports_usage_api: bool = False
+    # MVA-001: TTS/STT capability metadata (ElevenLabs).
+    stt_model: str = ""
+    default_voice_id: str = ""
 
 
 class LlmProviderListOut(BaseModel):
     providers: List[LlmProviderInfo]
+
+
+# --- Messenger Voice & Translation AI (MVA-004 / MVA-007 / MVA-009) ---
+
+
+class TranslateMessageRequest(BaseModel):
+    target_lang: str = Field(..., min_length=2, max_length=35)
+
+
+class TranslateMessageOut(BaseModel):
+    translated_text: str
+    source_lang: str = "auto"
+    target_lang: str
+    cached: bool = False
+
+
+class TranscribeMessageOut(BaseModel):
+    transcript: str
+    transcript_lang: str = ""
+    cached: bool = False
+
+
+class TtsVoiceMessageRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=20000)
+    voice_id: str = Field(default="", max_length=200)
+    model_id: str = Field(default="", max_length=200)
+    reply_to_message_id: Optional[str] = None
+    send_at: Optional[int] = None
 # --- Advertiser Accounts & Campaigns (ADS-001) ---
 
 class AdAccountOut(BaseModel):
@@ -4562,6 +4704,7 @@ class DelegateSettingsIn(BaseModel):
     default_preset: Optional[str] = None
     delegate_tag_enabled: bool = True
     delegate_tag_format: str = Field(default="[via @{delegate_name}]", max_length=100)
+    hide_delegate_from_recipients: bool = False
 
 
 class DelegateOut(BaseModel):
@@ -4593,6 +4736,7 @@ class DelegateSettingsOut(BaseModel):
     default_preset: Optional[str] = None
     delegate_tag_enabled: bool = True
     delegate_tag_format: str = "[via @{delegate_name}]"
+    hide_delegate_from_recipients: bool = False
 
 
 class DelegateAuditOut(BaseModel):
@@ -5619,6 +5763,9 @@ class WorkerOut(BaseModel):
     llm_key_id: str
     llm_provider: str = ""
     host_id: str = ""
+    # AQA-002: SSH key injected during provisioning, used by the agent QA exec
+    # engine to resolve credentials by id (never PEM). Empty when no key.
+    ssh_key_id: str = ""
     public_ip: str = ""
     worker_status: str
     provision_log: List[ProvisionStepOut] = Field(default_factory=list)
@@ -5636,6 +5783,81 @@ class WorkerOut(BaseModel):
 
 class WorkerListOut(BaseModel):
     workers: List[WorkerOut]
+    count: int
+
+
+# --- Agent SSH QA actions (ADR-003 / AQA-003) ---
+
+
+class RunAgentActionIn(BaseModel):
+    """Submit a non-interactive SSH QA action for a worker.
+
+    SECURITY: this request carries ONLY identifiers (`host_id`, `ssh_key_id`,
+    `path_id`) — never a key, PEM, or password. Credentials are resolved
+    server-side from the owner's KMS-encrypted store. A raw hostname is never
+    accepted; the target is resolved from `host_id` via host inventory.
+    """
+
+    action_type: str = "run_command"  # run_command | run_test_suite
+    command: str
+    host_id: str = ""
+    # Optional explicit key id; defaults to the worker's persisted ssh_key_id.
+    ssh_key_id: str = ""
+    # Optional multi-hop bastion path id (resolved server-side).
+    path_id: str = ""
+    timeout_seconds: int = 0  # 0 -> use the configured default cap
+
+
+class AgentActionOut(BaseModel):
+    action_id: str
+    worker_id: str
+    action_type: str = "run_command"
+    host_id: str = ""
+    command: str = ""
+    status: str = "pending"  # pending|running|completed|failed|timed_out|cancelled|denied
+    exit_code: Optional[int] = None
+    stdout_tail: str = ""
+    stderr_tail: str = ""
+    error_code: str = ""
+    error_message: str = ""
+    created_at: int = 0
+    started_at: int = 0
+    finished_at: int = 0
+    timeout_seconds: int = 0
+
+
+class AgentActionListOut(BaseModel):
+    actions: List[AgentActionOut]
+    count: int
+
+
+# --- Interactive Claude Code sessions (ACS-002 / ADR-002) ---
+
+
+class CreateSessionIn(BaseModel):
+    cols: int = 80
+    rows: int = 24
+
+
+class SessionOut(BaseModel):
+    session_id: str
+    worker_id: str
+    user_id: str
+    state: str
+    created_at: int = 0
+    started_at: int = 0
+    ended_at: int = 0
+    last_activity_at: int = 0
+    cols: int = 80
+    rows: int = 24
+    claude_pid: int = 0
+    error_message: str = ""
+    # WS URL the dedicated agent-terminal frontend connects to (ACS-004).
+    ws_path: str = "/api/agent-session/ws"
+
+
+class SessionListOut(BaseModel):
+    sessions: List[SessionOut]
     count: int
 
 
@@ -8034,7 +8256,7 @@ class SprintDetailOut(BaseModel):
     burndown: List[SprintBurndownPointOut] = Field(default_factory=list)
 
 
-class ReportOut(BaseModel):
+class PmReportOut(BaseModel):
     report_id: str
     report_type: str = "daily"
     content: str = ""
@@ -8043,7 +8265,7 @@ class ReportOut(BaseModel):
 
 
 class ReportListOut(BaseModel):
-    reports: List[ReportOut] = Field(default_factory=list)
+    reports: List[PmReportOut] = Field(default_factory=list)
     count: int = 0
 
 
@@ -9428,6 +9650,7 @@ class InvoiceLineItemOut(BaseModel):
     description: str
     quantity: int = 1
     amount_cents: int
+    unit_price_cents: int = 0  # QUO-005 (additive; 0 for legacy items)
 
 
 class InvoiceOut(BaseModel):
@@ -9448,6 +9671,12 @@ class InvoiceOut(BaseModel):
     payment_method_summary: str = ""
     ledger_entry_id: str = ""
     created_at: int = 0
+    # QUO-003 (additive): back-reference to the originating quote.
+    aos_quote_id: str = ""
+    # QUO-005 (additive): standalone invoice lifecycle fields.
+    payment_terms_days: Optional[int] = None
+    due_date: Optional[int] = None
+    voided_at: Optional[int] = None
 
 
 class InvoiceListOut(BaseModel):
@@ -13107,6 +13336,44 @@ class UserRiskProfile(BaseModel):
     recent_flags: Optional[List[FraudFlagOut]] = Field(None, description="Most recent flags")
 
 
+class HoneytokenMintIn(BaseModel):
+    """Request to mint a decoy honeytoken (HNY-004/HNY-007)."""
+    kind: str = Field(
+        ..., pattern=r"^(api_key|credential_record|canary_row)$",
+        description="Honeytoken kind",
+    )
+    label: str = Field(..., min_length=1, max_length=200, description="Human label / where placed")
+    placement: Optional[str] = Field(None, max_length=500, description="Optional placement hint")
+
+
+class HoneytokenOut(BaseModel):
+    """Honeytoken metadata. NEVER includes the stored secret/hash."""
+    token_id: str
+    kind: str
+    label: str = ""
+    created_by: str = ""
+    created_at: int = 0
+    retired: bool = False
+    placement: str = ""
+    key_id: str = ""
+    decoy_username: str = ""
+    canary_id: str = ""
+
+
+class HoneytokenMintOut(BaseModel):
+    """Mint response — returns the plaintext secret ONCE (api_key/credential)."""
+    token_id: str
+    kind: str
+    label: str = ""
+    created_at: int = 0
+    placement: str = ""
+    api_key: Optional[str] = None
+    key_id: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    canary_id: Optional[str] = None
+
+
 class FreezeUserRequest(BaseModel):
     """Request model for freezing a user's financial operations."""
     reason: str = Field(..., min_length=1, max_length=500, description="Reason for freezing")
@@ -14498,5 +14765,8346 @@ class AffiliateTopProductItem(BaseModel):
     commission_earned_cents: int
 
 
+# ─── Knowledge Base (KB-001..KB-011) ─────────────────────────────────────────
+
+
+class KbArticleOut(BaseModel):
+    article_id: str
+    title: str
+    body_html: str = ""
+    excerpt: str = ""
+    status: str = "draft"          # "draft" | "published" | "expired"
+    category_id: Optional[str] = None
+    category: Optional[str] = None
+    author_sub: str = ""
+    tags: List[str] = []
+    created_at: int = 0
+    updated_at: int = 0
+    published_at: Optional[int] = None
+    expires_at: Optional[int] = None
+    expired_at: Optional[int] = None
+    expiry_reason: Optional[str] = None
+    view_count: int = 0
+    helpful_count: int = 0
+    not_helpful_count: int = 0
+    attachments: List[dict] = []
+
+
+class KbArticleSummaryOut(BaseModel):
+    article_id: str
+    title: str
+    excerpt: str = ""
+    status: str = "draft"
+    category_id: Optional[str] = None
+    category: Optional[str] = None
+    author_sub: str = ""
+    tags: List[str] = []
+    created_at: int = 0
+    updated_at: int = 0
+    published_at: Optional[int] = None
+    view_count: int = 0
+    helpful_count: int = 0
+    not_helpful_count: int = 0
+
+
+class KbArticleCreateIn(BaseModel):
+    title: str
+    body_html: str = ""
+    excerpt: str = ""
+    category_id: Optional[str] = None
+    tags: List[str] = []
+    expires_at: Optional[int] = None
+
+
+class KbArticleUpdateIn(BaseModel):
+    title: Optional[str] = None
+    body_html: Optional[str] = None
+    excerpt: Optional[str] = None
+    category_id: Optional[str] = None
+    tags: Optional[List[str]] = None
+    expires_at: Optional[int] = None
+
+
+class KbExpireReq(BaseModel):
+    reason: str = ""
+
+
+class KbRateReq(BaseModel):
+    helpful: bool
+
+
+class KbRateOut(BaseModel):
+    ok: bool = True
+    already_rated: bool = False
+    helpful_count: int = 0
+    not_helpful_count: int = 0
+
+
+class KbAttachmentOut(BaseModel):
+    attachment_id: str
+    article_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    url: str = ""
+    uploaded_by: str
+    created_at: int
+
+
+class KbCategoryIn(BaseModel):
+    name: str
+    parent_id: Optional[str] = None
+    description: str = ""
+    sort_order: int = 0
+
+
+class KbCategoryOut(BaseModel):
+    category_id: str
+    name: str
+    parent_id: Optional[str] = None
+    path: str = ""
+    description: str = ""
+    sort_order: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+    children: List[dict] = []
+
+
+class KbArticleListOut(BaseModel):
+    items: List[KbArticleSummaryOut]
+    cursor: Optional[str] = None
+    total: int = 0
+
+
+class KbCategoryListOut(BaseModel):
+    categories: List[KbCategoryOut]
+
+
+class KbTagStats(BaseModel):
+    tag: str
+    article_count: int = 0
+
+
+class KbTagListOut(BaseModel):
+    tags: List[KbTagStats]
+
+
+class KbSearchOut(BaseModel):
+    items: List[KbArticleSummaryOut]
+    query: str = ""
+    cursor: Optional[str] = None
+
+
 class AffiliateTopProductsOut(BaseModel):
     items: List[AffiliateTopProductItem]
+
+
+# ---------------------------------------------------------------------------
+# BRAND-001 — Platform branding (decision D6)
+# ---------------------------------------------------------------------------
+
+class BrandingOut(BaseModel):
+    """Read/update response for the platform branding entity.
+
+    ``platform_name`` (not ``name``) is the output key so downstream consumers
+    and merge-tag users access it as ``get_branding().platform_name`` or
+    ``BrandingOut.platform_name`` (matching the ``{{platform_name}}`` template
+    variable name).
+    """
+    platform_name: str
+    logo_url: str = ""
+    support_email: str = ""
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+
+
+class BrandingUpdateIn(BaseModel):
+    """PUT payload for updating platform branding; all fields optional (partial update).
+
+    ``name`` is the input key (matches the stored DDB attribute and the D6
+    shape); the output exposes it as ``platform_name``.
+    """
+    name: Optional[str] = None
+    logo_url: Optional[str] = None
+    support_email: Optional[str] = None
+# ─── Party / CRM Enums (PTY-003) ─────────────────────────────────────────────
+
+
+class CrmPartyType(str, Enum):
+    PERSON = "PERSON"
+    PARTY_GROUP = "PARTY_GROUP"
+
+
+class CrmPartyStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    MERGED = "MERGED"
+
+
+class CrmPartyRoleType(str, Enum):
+    CUSTOMER = "CUSTOMER"
+    SUPPLIER = "SUPPLIER"
+    EMPLOYEE = "EMPLOYEE"
+    ORG_ADMIN = "ORG_ADMIN"
+    BILL_TO = "BILL_TO"
+    SHIP_TO = "SHIP_TO"
+    CONTACT = "CONTACT"
+
+
+class CrmRelationshipType(str, Enum):
+    EMPLOYMENT = "EMPLOYMENT"
+    GROUP_MEMBER = "GROUP_MEMBER"
+    CONTACT_REL = "CONTACT_REL"
+    OWNER = "OWNER"
+
+
+class CrmContactMechType(str, Enum):
+    EMAIL = "EMAIL"
+    PHONE = "PHONE"
+    POSTAL = "POSTAL"
+
+
+class CrmContactMechPurpose(str, Enum):
+    PRIMARY_EMAIL = "PRIMARY_EMAIL"
+    BILLING = "BILLING"
+    SHIPPING = "SHIPPING"
+    WORK = "WORK"
+    HOME = "HOME"
+
+
+# ─── Party / CRM Domain Models (PTY-003) ──────────────────────────────────────
+
+
+class CrmParty(BaseModel):
+    party_id: str
+    party_type: CrmPartyType
+    status: CrmPartyStatus = CrmPartyStatus.ACTIVE
+    user_sub: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class CrmPartyRole(BaseModel):
+    party_id: str
+    role_type: CrmPartyRoleType
+    created_at: int = 0
+
+
+class CrmPartyRelationship(BaseModel):
+    from_party_id: str
+    to_party_id: str
+    relationship_type: CrmRelationshipType
+    created_at: int = 0
+
+
+class CrmContactMech(BaseModel):
+    mech_id: str
+    party_id: str
+    mech_type: CrmContactMechType
+    value: str
+    purposes: List[CrmContactMechPurpose] = Field(default_factory=list)
+    verified: bool = False
+    created_at: int = 0
+    updated_at: int = 0
+
+
+# ─── Party / CRM Request (In) Models (PTY-003) ────────────────────────────────
+
+
+class CrmPartyIn(BaseModel):
+    party_type: CrmPartyType
+    user_sub: Optional[str] = None  # PERSON only; ignored for PARTY_GROUP
+    correlation_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class CrmPartyStatusIn(BaseModel):
+    status: CrmPartyStatus
+
+
+class CrmAddRoleIn(BaseModel):
+    role_type: CrmPartyRoleType
+
+
+# Alias retained for PTY-011 router import compatibility.
+CrmPartyRoleIn = CrmAddRoleIn
+
+
+class CrmRelationshipIn(BaseModel):
+    from_party_id: str = Field(..., min_length=1, max_length=64)
+    to_party_id: str = Field(..., min_length=1, max_length=64)
+    relationship_type: CrmRelationshipType
+
+    @model_validator(mode="after")
+    def _parties_differ(self) -> "CrmRelationshipIn":
+        if self.from_party_id == self.to_party_id:
+            raise ValueError("from_party_id and to_party_id must differ")
+        return self
+
+
+class CrmContactMechIn(BaseModel):
+    mech_type: CrmContactMechType
+    value: Optional[str] = None  # for EMAIL and PHONE
+    postal_address: Optional[AddressIn] = None  # for POSTAL
+    purposes: List[CrmContactMechPurpose] = Field(default_factory=list)
+    correlation_id: Optional[str] = Field(default=None, max_length=128)
+    verified: bool = False
+
+    @model_validator(mode="after")
+    def _normalize_and_validate(self) -> "CrmContactMechIn":
+        if self.mech_type == CrmContactMechType.EMAIL:
+            if not self.value:
+                raise ValueError("value is required for EMAIL contact mechs")
+            try:
+                self.value = normalize_email(self.value)
+            except Exception as exc:
+                raise ValueError("Invalid email") from exc
+        elif self.mech_type == CrmContactMechType.PHONE:
+            if not self.value:
+                raise ValueError("value is required for PHONE contact mechs")
+            try:
+                self.value = normalize_phone(self.value)
+            except Exception as exc:
+                raise ValueError("Invalid phone") from exc
+        elif self.mech_type == CrmContactMechType.POSTAL:
+            if self.postal_address is None:
+                raise ValueError("postal_address is required for POSTAL contact mechs")
+            import hashlib
+            import json as _json
+
+            _addr = {
+                k: v
+                for k, v in self.postal_address.model_dump().items()
+                if v is not None
+            }
+            _canon = _json.dumps(_addr, sort_keys=True)
+            self.value = hashlib.sha256(_canon.encode()).hexdigest()[:16]
+        return self
+
+
+# Alias retained for PTY-011 router import compatibility.
+CrmContactMechUpdateIn = None  # replaced below after class definition
+
+
+class CrmUpdateContactMechIn(BaseModel):
+    purposes: Optional[List[CrmContactMechPurpose]] = None
+    verified: Optional[bool] = None
+
+
+CrmContactMechUpdateIn = CrmUpdateContactMechIn
+
+
+# ─── Party / CRM Response (Out) Models (PTY-003) ──────────────────────────────
+
+
+class CrmPartyOut(BaseModel):
+    party_id: str
+    party_type: CrmPartyType
+    status: CrmPartyStatus
+    user_sub: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmPartyRoleOut(BaseModel):
+    party_id: str
+    role_type: CrmPartyRoleType
+    created_at: int
+
+
+class CrmRelationshipOut(BaseModel):
+    from_party_id: str
+    to_party_id: str
+    relationship_type: CrmRelationshipType
+    created_at: int
+
+
+class CrmContactMechOut(BaseModel):
+    mech_id: str
+    party_id: str
+    mech_type: CrmContactMechType
+    value: str
+    postal_address: Optional[AddressIn] = None
+    purposes: List[CrmContactMechPurpose]
+    verified: bool
+    created_at: int
+    updated_at: int
+
+
+# ─── Party / CRM List-Wrapper Models (PTY-005/006/007) ────────────────────────
+
+
+class CrmRoleListOut(BaseModel):
+    roles: List[CrmPartyRoleOut]
+    count: int
+
+
+class CrmPartyByRoleOut(BaseModel):
+    roles: List[CrmPartyRoleOut]
+    count: int
+
+
+class CrmRelationshipListOut(BaseModel):
+    relationships: List[CrmRelationshipOut]
+    next_cursor: Optional[str] = None
+    count: int
+
+
+class CrmContactMechListOut(BaseModel):
+    mechs: List[CrmContactMechOut]
+    count: int
+
+
+# ─── Party / CRM B2B Org-Account Models (PTY-003 / PTY-008) ───────────────────
+#
+# Cross-ticket reconciliation: the canonical CRM-org read model is CrmOrgOut
+# (org_party_id + owner_user_sub). CrmOrgAccountOut is retained as the legacy
+# name and aligned to the same field set so PTY-003/PTY-008/PTY-013 agree.
+
+
+class CrmOrgOut(BaseModel):
+    org_party_id: str
+    name: str
+    status: CrmPartyStatus
+    owner_user_sub: Optional[str] = None
+    roles: List[CrmPartyRoleOut] = Field(default_factory=list)
+    member_count: int = 0
+    created_at: int
+    updated_at: int
+
+
+# Legacy alias: same shape, kept so existing references resolve.
+CrmOrgAccountOut = CrmOrgOut
+
+
+class CrmCreateOrgAccountIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=256)
+    owner_user_sub: Optional[str] = Field(default=None, min_length=1)
+    correlation_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class CrmOrgMemberIn(BaseModel):
+    member_party_id: str = Field(..., min_length=1, max_length=64)
+    role_type: str = Field(default="member", pattern=r"^(member|admin|org_admin)$")
+
+
+
+
+# ── ATS Candidates (CND-001) ─────────────────────────────────────────────────
+
+CANDIDATE_STATUSES = frozenset({
+    "active",
+    "qualified",
+    "submitted",
+    "interviewing",
+    "placed",
+    "on_hold",
+    "not_in_search",
+    "archived",
+})
+
+CANDIDATE_SOURCES = frozenset({
+    "direct",
+    "referral",
+    "job_board",
+    "linkedin",
+    "agency",
+    "career_portal",
+    "import",
+    "other",
+})
+
+CANDIDATE_RESUME_CONTENT_TYPES = frozenset({
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/rtf",
+    "text/plain",
+    "application/vnd.oasis.opendocument.text",
+})
+
+
+class CandidateCreateIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=200)
+    last_name: str = Field(..., min_length=1, max_length=200)
+    email: str = Field(..., max_length=254)
+    phone: Optional[str] = Field(default=None, max_length=30)
+    company: Optional[str] = Field(default=None, max_length=500)
+    title: Optional[str] = Field(default=None, max_length=500)
+    source: Optional[str] = Field(
+        default=None,
+        pattern=r"^(direct|referral|job_board|linkedin|agency|career_portal|import|other)$",
+    )
+    owner_sub: Optional[str] = Field(default=None, max_length=200)
+    status: Optional[str] = Field(
+        default=None,
+        pattern=r"^(active|qualified|submitted|interviewing|placed|on_hold|not_in_search|archived)$",
+    )
+    # ATS delta fields
+    current_pay: Optional[str] = Field(default=None, max_length=500)
+    desired_pay: Optional[str] = Field(default=None, max_length=500)
+    key_skills: Optional[str] = Field(default=None, max_length=4000)
+    date_available: Optional[str] = Field(default=None, max_length=10)  # "YYYY-MM-DD"
+    can_relocate: bool = False
+    linkedin_url: Optional[str] = Field(default=None, max_length=500)
+    web_url: Optional[str] = Field(default=None, max_length=500)
+    address: Optional[str] = Field(default=None, max_length=500)
+    city: Optional[str] = Field(default=None, max_length=200)
+    state: Optional[str] = Field(default=None, max_length=200)
+    postal_code: Optional[str] = Field(default=None, max_length=20)
+    country: Optional[str] = Field(default=None, max_length=200)
+
+
+class CandidateUpdateIn(BaseModel):
+    first_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    last_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=254)
+    phone: Optional[str] = Field(default=None, max_length=30)
+    company: Optional[str] = Field(default=None, max_length=500)
+    title: Optional[str] = Field(default=None, max_length=500)
+    source: Optional[str] = Field(
+        default=None,
+        pattern=r"^(direct|referral|job_board|linkedin|agency|career_portal|import|other)$",
+    )
+    status: Optional[str] = Field(
+        default=None,
+        pattern=r"^(active|qualified|submitted|interviewing|placed|on_hold|not_in_search|archived)$",
+    )
+    current_pay: Optional[str] = Field(default=None, max_length=500)
+    desired_pay: Optional[str] = Field(default=None, max_length=500)
+    key_skills: Optional[str] = Field(default=None, max_length=4000)
+    date_available: Optional[str] = Field(default=None, max_length=10)
+    can_relocate: Optional[bool] = None
+    linkedin_url: Optional[str] = Field(default=None, max_length=500)
+    web_url: Optional[str] = Field(default=None, max_length=500)
+    address: Optional[str] = Field(default=None, max_length=500)
+    city: Optional[str] = Field(default=None, max_length=200)
+    state: Optional[str] = Field(default=None, max_length=200)
+    postal_code: Optional[str] = Field(default=None, max_length=20)
+    country: Optional[str] = Field(default=None, max_length=200)
+
+
+class CandidateResumeOut(BaseModel):
+    attachment_id: str
+    candidate_id: str
+    filename: str
+    filename_original: str
+    content_type: str
+    size_bytes: int
+    url: str              # presigned (prod) or /mock/s3/... (dev)
+    source: str           # "upload" | "file_manager"
+    is_primary: bool
+    node_path: Optional[str] = None   # only for source="file_manager"
+    created_at: int
+    uploaded_by: str
+
+
+class CandidateOut(BaseModel):
+    candidate_id: str
+    first_name: str
+    last_name: str
+    email: str
+    email_raw: str
+    phone: Optional[str] = None
+    company: Optional[str] = None
+    title: Optional[str] = None
+    source: str
+    owner_sub: str
+    status: str
+    # ATS delta
+    current_pay: Optional[str] = None
+    desired_pay: Optional[str] = None
+    key_skills: Optional[str] = None
+    date_available: Optional[str] = None
+    can_relocate: bool
+    linkedin_url: Optional[str] = None
+    web_url: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    primary_resume_id: Optional[str] = None
+    created_by: str
+    created_at: int
+    updated_at: int
+    deleted_at: Optional[int] = None
+    resumes: List[CandidateResumeOut] = Field(default_factory=list)
+
+
+# ── ATS Candidates change history (CND-004) ──────────────────────────────────
+
+class CandidateHistoryOut(BaseModel):
+    event_id: str            # activity_id
+    candidate_id: str
+    change_type: str
+    summary: str
+    actor_sub: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int
+
+
+# ── ATS Candidates router models (CND-005) ───────────────────────────────────
+
+class SetOwnerIn(BaseModel):
+    owner_sub: str = Field(..., min_length=1, max_length=128)
+
+
+class CandidateListOut(BaseModel):
+    candidates: List[CandidateOut]
+    cursor: Optional[str] = None
+    total_hint: Optional[int] = None
+
+
+class CandidateHistoryPage(BaseModel):
+    events: List[CandidateHistoryOut]
+    cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# ATS — Job Order constants and models (JOB-001)
+# ---------------------------------------------------------------------------
+
+JOB_ORDER_TYPES: Tuple[str, ...] = (
+    "hire",             # Direct / permanent placement
+    "contract",         # Contract-only
+    "contract_to_hire", # Contract-to-hire (C2H)
+    "referral",         # Referral / non-fee
+)
+JOB_ORDER_STATUSES: Tuple[str, ...] = (
+    "active",           # Open and accepting candidates
+    "on_hold",          # Temporarily paused
+    "full",             # Openings filled / placed_count == openings
+    "closed",           # Manually closed — terminal
+    "canceled",         # Canceled by client — terminal
+    "lead",             # Pre-sale / not yet confirmed
+    "upcoming",         # Future start, not yet active
+)
+JOB_ORDER_TERMINAL: Tuple[str, ...] = ("closed", "canceled")
+
+
+class JobOrderCreateIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    type: str = Field(..., description="One of JOB_ORDER_TYPES")
+    status: str = Field(default="active", description="One of JOB_ORDER_STATUSES")
+    openings: int = Field(default=1, ge=0, le=10_000)
+    client_company_id: str = Field(..., min_length=1, max_length=128)
+    client_contact_id: Optional[str] = Field(None, max_length=128)
+    recruiter_subs: List[str] = Field(default_factory=list, max_length=25)
+    hot: bool = False
+    public: bool = False
+    pay_rate_cents: Optional[int] = Field(None, ge=0)
+    bill_rate_cents: Optional[int] = Field(None, ge=0)
+    duration: Optional[str] = Field(None, max_length=120)
+    city: Optional[str] = Field(None, max_length=120)
+    state: Optional[str] = Field(None, max_length=120)
+    description: Optional[str] = Field(None, max_length=20_000)
+
+    @model_validator(mode="after")
+    def _validate_enums(self) -> "JobOrderCreateIn":
+        if self.type not in JOB_ORDER_TYPES:
+            raise ValueError(f"type must be one of {JOB_ORDER_TYPES}")
+        if self.status not in JOB_ORDER_STATUSES:
+            raise ValueError(f"status must be one of {JOB_ORDER_STATUSES}")
+        return self
+
+
+class JobOrderUpdateIn(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    type: Optional[str] = None
+    status: Optional[str] = None
+    openings: Optional[int] = Field(None, ge=0, le=10_000)
+    client_company_id: Optional[str] = Field(None, max_length=128)
+    client_contact_id: Optional[str] = Field(None, max_length=128)
+    recruiter_subs: Optional[List[str]] = Field(None, max_length=25)
+    hot: Optional[bool] = None
+    public: Optional[bool] = None
+    pay_rate_cents: Optional[int] = Field(None, ge=0)
+    bill_rate_cents: Optional[int] = Field(None, ge=0)
+    duration: Optional[str] = Field(None, max_length=120)
+    city: Optional[str] = Field(None, max_length=120)
+    state: Optional[str] = Field(None, max_length=120)
+    description: Optional[str] = Field(None, max_length=20_000)
+
+    @model_validator(mode="after")
+    def _validate_enums(self) -> "JobOrderUpdateIn":
+        if self.type is not None and self.type not in JOB_ORDER_TYPES:
+            raise ValueError(f"type must be one of {JOB_ORDER_TYPES}")
+        if self.status is not None and self.status not in JOB_ORDER_STATUSES:
+            raise ValueError(f"status must be one of {JOB_ORDER_STATUSES}")
+        return self
+
+
+class JobOrderOut(BaseModel):
+    job_id: str
+    title: str
+    type: str
+    status: str
+    openings: int
+    placed_count: int           # 0 until PIPE-* ships; JOB-005 adds adjust_placed_count
+    openings_remaining: int     # max(openings - placed_count, 0), derived not stored
+    client_company_id: str
+    client_contact_id: Optional[str]
+    recruiter_subs: List[str]
+    hot: bool
+    public: bool
+    pay_rate_cents: Optional[int]
+    bill_rate_cents: Optional[int]
+    duration: Optional[str]
+    city: Optional[str]
+    state: Optional[str]
+    description: Optional[str]
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class JobOrderListOut(BaseModel):
+    items: List[JobOrderOut]
+    next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# Property management (open-property vertical, PROP-001..PROP-005)
+# ---------------------------------------------------------------------------
+
+class PropertyAddress(BaseModel):
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    region: str
+    postal_code: str
+    country: str
+
+
+class PropertyIn(BaseModel):
+    name: str
+    property_type: Literal["single_family", "multi_family", "apartment", "commercial"]
+    address: PropertyAddress
+    color_tags: List[str] = []
+
+
+class PropertyOut(BaseModel):
+    property_id: str
+    owner_sub: str
+    name: str
+    property_type: str
+    address: PropertyAddress
+    color_tags: List[str]
+    occupancy_status: Literal["vacant", "partial", "occupied"]
+    unit_count: int
+    status: Literal["active", "archived"]
+    created_at: int
+    updated_at: int
+
+
+class PropertyUpdateIn(BaseModel):
+    name: Optional[str] = None
+    property_type: Optional[Literal["single_family", "multi_family", "apartment", "commercial"]] = None
+    address: Optional[PropertyAddress] = None
+    color_tags: Optional[List[str]] = None
+
+
+class UnitIn(BaseModel):
+    label: str
+    bedrooms: int = Field(ge=0)
+    bathrooms: float = Field(ge=0)
+    square_footage: int = Field(ge=0)
+    market_rent_cents: int = Field(ge=0)
+    occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"] = "vacant"
+
+
+class UnitOut(BaseModel):
+    property_id: str
+    unit_id: str
+    label: str
+    bedrooms: int
+    bathrooms: float
+    square_footage: int
+    market_rent_cents: int
+    occupancy_status: Literal["vacant", "occupied", "turnover", "unavailable"]
+    created_at: int
+    updated_at: int
+
+
+class UnitUpdateIn(BaseModel):
+    label: Optional[str] = None
+    bedrooms: Optional[int] = Field(default=None, ge=0)
+    bathrooms: Optional[float] = Field(default=None, ge=0)
+    square_footage: Optional[int] = Field(default=None, ge=0)
+    market_rent_cents: Optional[int] = Field(default=None, ge=0)
+    occupancy_status: Optional[Literal["vacant", "occupied", "turnover", "unavailable"]] = None
+
+
+class PropertyOccupancyOut(BaseModel):
+    property_id: str
+    total: int
+    occupied: int
+    vacant: int
+    turnover: int
+    unavailable: int
+    occupancy_status: Literal["vacant", "partial", "occupied"]
+    occupancy_rate: float
+
+
+class PortfolioOccupancyOut(BaseModel):
+    property_count: int
+    unit_count: int
+    occupied: int
+    vacant: int
+    turnover: int
+    unavailable: int
+    occupancy_rate: float
+
+
+class PropertyListOut(BaseModel):
+    properties: List[PropertyOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# QloApps hotel-PMS vertical (HTL-001..HTL-004)
+# ---------------------------------------------------------------------------
+
+class HotelAddress(BaseModel):
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    region: str
+    postal_code: str
+    country: str
+
+
+class HotelPolicies(BaseModel):
+    cancellation_text: str = ""
+    pet_policy: str = ""
+    smoking: bool = False
+    children: bool = True
+
+
+class HotelContact(BaseModel):
+    phone: str = ""
+    email: str = ""
+    website: str = ""
+
+
+class HotelIn(BaseModel):
+    name: str
+    description: str = ""
+    star_rating: int = Field(ge=1, le=5)
+    address: HotelAddress
+    check_in_time: str = "15:00"
+    check_out_time: str = "11:00"
+    policies: HotelPolicies = HotelPolicies()
+    contact: HotelContact = HotelContact()
+    photo_urls: List[str] = []
+
+    @field_validator("check_in_time", "check_out_time")
+    @classmethod
+    def _valid_time(cls, v: str) -> str:
+        import re
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError("must be HH:MM 24h")
+        return v
+
+
+class HotelOut(BaseModel):
+    hotel_id: str
+    owner_sub: str
+    name: str
+    description: str
+    star_rating: int
+    address: HotelAddress
+    check_in_time: str
+    check_out_time: str
+    policies: HotelPolicies
+    contact: HotelContact
+    photo_urls: List[str]
+    status: Literal["active", "archived"]
+    created_at: int
+    updated_at: int
+
+
+class HotelUpdateIn(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    star_rating: Optional[int] = Field(default=None, ge=1, le=5)
+    address: Optional[HotelAddress] = None
+    check_in_time: Optional[str] = None
+    check_out_time: Optional[str] = None
+    policies: Optional[HotelPolicies] = None
+    contact: Optional[HotelContact] = None
+    photo_urls: Optional[List[str]] = None
+
+    @field_validator("check_in_time", "check_out_time")
+    @classmethod
+    def _valid_time(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        import re
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+            raise ValueError("must be HH:MM 24h")
+        return v
+
+
+class AmenityIn(BaseModel):
+    name: str
+    category: Literal[
+        "connectivity", "wellness", "parking",
+        "dining", "family", "accessibility", "general",
+    ]
+    icon: Optional[str] = None
+
+
+class AmenityOut(BaseModel):
+    amenity_id: str
+    name: str
+    category: str
+    icon: Optional[str] = None
+    created_at: int
+
+
+class AmenityAttachIn(BaseModel):
+    target_type: Literal["hotel", "room_type"]
+    target_id: str
+    amenity_id: str
+
+
+class AmenityAssociationOut(BaseModel):
+    amenity_id: str
+    name: str
+    category: str
+    icon: Optional[str] = None
+    target_type: Literal["hotel", "room_type"]
+    created_at: int
+
+
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# OpenBankProject — Banking accounts (ACC-001..ACC-004)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class AccountAttributeIn(BaseModel):
+    name: str
+    type: str  # "STRING" | "INTEGER" | "DOUBLE" | "BOOLEAN" | "DATE"
+    value: str  # always string-encoded
+
+
+class BankOut(BaseModel):
+    bank_id: str
+    name: str
+    short_name: str
+    logo_url: Optional[str] = None
+    website: Optional[str] = None
+
+
+class BankListOut(BaseModel):
+    banks: List[BankOut]
+
+
+class AccountOut(BaseModel):
+    account_id: str
+    bank_id: str
+    label: str
+    account_type: str
+    product_code: str
+    currency: str
+    owners: List[str]
+    is_default: bool
+    wallet_backed: bool
+    iban: Optional[str] = None
+    routing_number: Optional[str] = None
+    account_number_masked: Optional[str] = None
+    attributes: List[AccountAttributeIn] = []
+    created_at: int
+    updated_at: int
+
+
+class AccountListOut(BaseModel):
+    accounts: List[AccountOut]
+
+
+class AccountCreateIn(BaseModel):
+    bank_id: str
+    label: str
+    account_type: str  # "SAVINGS" | "EXTERNAL"
+    product_code: str = "default"
+    currency: str = "usd"
+    attributes: List[AccountAttributeIn] = []
+    iban: Optional[str] = None
+    routing_number: Optional[str] = None
+    account_number_masked: Optional[str] = None
+
+
+class AccountUpdateIn(BaseModel):
+    label: Optional[str] = None
+    attributes: Optional[List[AccountAttributeIn]] = None
+    iban: Optional[str] = None
+    routing_number: Optional[str] = None
+    account_number_masked: Optional[str] = None
+
+
+class AccountBalanceOut(BaseModel):
+    currency: str
+    current: float  # dollars (not cents)
+    available: float  # dollars; == current (no holds in this tier)
+
+
+# ACC-002 — transaction projection over the billing ledger
+
+
+class TransactionAmountOut(BaseModel):
+    currency: str
+    value: str  # decimal string, e.g. "12.50" (cents / 100)
+
+
+class TransactionOut(BaseModel):
+    transaction_id: str
+    account_id: str
+    type: str
+    amount: TransactionAmountOut
+    status: str
+    posted_at: int
+    description: str
+    provider: Optional[str] = None
+    new_balance: TransactionAmountOut
+    # ACC-003 additive fields
+    has_metadata: bool = False
+    metadata: Optional["TransactionMetadataOut"] = None
+
+
+class TransactionListOut(BaseModel):
+    transactions: List[TransactionOut]
+    cursor: Optional[str] = None
+
+
+# ACC-003 — transaction metadata
+
+
+class NarrativeOut(BaseModel):
+    text: str
+    author_sub: str
+    updated_at: int
+
+
+class GeotagOut(BaseModel):
+    lat: float
+    lon: float
+    label: Optional[str] = None
+    author_sub: str
+    updated_at: int
+
+
+class TransactionImageOut(BaseModel):
+    image_id: str
+    url: str
+    author_sub: str
+    created_at: int
+
+
+class TransactionTagOut(BaseModel):
+    tag_id: str
+    value: str
+    author_sub: str
+    created_at: int
+
+
+class TransactionCommentOut(BaseModel):
+    comment_id: str
+    text: str
+    author_sub: str
+    created_at: int
+
+
+class TransactionMetadataOut(BaseModel):
+    narrative: Optional[NarrativeOut] = None
+    geotag: Optional[GeotagOut] = None
+    image: Optional[TransactionImageOut] = None
+    tags: List[TransactionTagOut] = []
+    comments: List[TransactionCommentOut] = []
+
+
+class PutNarrativeIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class PutGeotagIn(BaseModel):
+    lat: float = Field(ge=-90.0, le=90.0)
+    lon: float = Field(ge=-180.0, le=180.0)
+    label: Optional[str] = Field(default=None, max_length=200)
+
+
+class AddTagIn(BaseModel):
+    value: str = Field(min_length=1, max_length=100)
+
+
+class AddCommentIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+# ACC-004 — account-holder co-access
+
+
+class AccountHolderOut(BaseModel):
+    user_sub: str
+    added_at: int
+    is_primary_owner: bool
+
+
+class AccountHoldersOut(BaseModel):
+    holders: List[AccountHolderOut]
+
+
+class AddAccountHolderIn(BaseModel):
+    user_sub: str
+
+
+TransactionOut.model_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# QUO-001 — AOS Sales Quotes
+# ---------------------------------------------------------------------------
+
+
+class QuoteAddressIn(BaseModel):
+    street: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = ""
+
+
+class QuoteLineItemIn(BaseModel):
+    catalog_item_id: str = ""
+    description: str
+    qty: int = Field(ge=1)
+    unit_price_cents: int = Field(ge=0)
+    discount_bps: int = Field(default=0, ge=0, le=10000)
+    tax_rate_bps: int = Field(default=0, ge=0, le=10000)
+
+
+class QuoteCreateIn(BaseModel):
+    title: str
+    valid_until: Optional[int] = None
+    assigned_user_sub: str = ""
+    account_id: str = ""
+    contact_id: str = ""
+    currency: str = "usd"
+    billing_address: QuoteAddressIn = Field(default_factory=QuoteAddressIn)
+    shipping_address: QuoteAddressIn = Field(default_factory=QuoteAddressIn)
+    notes: str = ""
+    line_items: List[QuoteLineItemIn]
+
+    @field_validator("line_items")
+    @classmethod
+    def _non_empty_line_items(cls, v: List[QuoteLineItemIn]) -> List[QuoteLineItemIn]:
+        if not v:
+            raise ValueError("at least one line item is required")
+        return v
+
+
+class QuotePatchIn(BaseModel):
+    title: Optional[str] = None
+    valid_until: Optional[int] = None
+    assigned_user_sub: Optional[str] = None
+    account_id: Optional[str] = None
+    contact_id: Optional[str] = None
+    currency: Optional[str] = None
+    billing_address: Optional[QuoteAddressIn] = None
+    shipping_address: Optional[QuoteAddressIn] = None
+    notes: Optional[str] = None
+    line_items: Optional[List[QuoteLineItemIn]] = None
+
+
+class QuoteStageIn(BaseModel):
+    stage: str
+
+
+class QuoteLineItemOut(BaseModel):
+    catalog_item_id: str = ""
+    description: str = ""
+    qty: int = 1
+    unit_price_cents: int = 0
+    discount_bps: int = 0
+    tax_rate_bps: int = 0
+    line_total_cents: int = 0
+
+
+class QuoteOut(BaseModel):
+    quote_id: str
+    quote_number: str
+    title: str
+    stage: str
+    valid_until: Optional[int] = None
+    assigned_user_sub: str = ""
+    account_id: str = ""
+    contact_id: str = ""
+    currency: str = "usd"
+    billing_address: Dict[str, Any] = Field(default_factory=dict)
+    shipping_address: Dict[str, Any] = Field(default_factory=dict)
+    notes: str = ""
+    line_items: List[QuoteLineItemOut] = Field(default_factory=list)
+    subtotal_cents: int = 0
+    discount_cents: int = 0
+    tax_cents: int = 0
+    total_cents: int = 0
+    converted_to_invoice_number: str = ""
+    converted_to_contract_id: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class QuoteListOut(BaseModel):
+    quotes: List[QuoteOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# QUO-004 — AOS CRM Contracts
+# ---------------------------------------------------------------------------
+
+
+class ContractAddressIn(BaseModel):
+    street: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = ""
+
+
+class ContractCreateIn(BaseModel):
+    title: str
+    start_date: int
+    end_date: Optional[int] = None
+    value_cents: int = Field(default=0, ge=0)
+    currency: str = "usd"
+    description: str = ""
+    account_id: str = ""
+    contact_id: str = ""
+    renewal_notice_days: int = Field(default=30, ge=1, le=365)
+    billing_address: ContractAddressIn = Field(default_factory=ContractAddressIn)
+    shipping_address: ContractAddressIn = Field(default_factory=ContractAddressIn)
+
+
+class ContractPatchIn(BaseModel):
+    title: Optional[str] = None
+    end_date: Optional[int] = None
+    value_cents: Optional[int] = None
+    currency: Optional[str] = None
+    description: Optional[str] = None
+    renewal_notice_days: Optional[int] = None
+    billing_address: Optional[ContractAddressIn] = None
+    shipping_address: Optional[ContractAddressIn] = None
+
+
+class ContractStageTransitionIn(BaseModel):
+    stage: str
+
+
+class ContractOut(BaseModel):
+    contract_id: str
+    contract_number: str
+    title: str
+    stage: str
+    account_id: str = ""
+    contact_id: str = ""
+    aos_quote_id: str = ""
+    start_date: int = 0
+    end_date: Optional[int] = None
+    value_cents: int = 0
+    currency: str = "usd"
+    description: str = ""
+    renewal_notice_days: int = 30
+    renewal_notified_at: Optional[int] = None
+    billing_address: Dict[str, Any] = Field(default_factory=dict)
+    shipping_address: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class ContractListOut(BaseModel):
+    contracts: List[ContractOut] = Field(default_factory=list)
+    count: int = 0
+    next_cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# QUO-005 — Standalone invoice lifecycle (manual B2B + payment)
+# ---------------------------------------------------------------------------
+
+
+class ManualInvoiceLineItemIn(BaseModel):
+    description: str = Field(min_length=1, max_length=512)
+    quantity: int = Field(default=1, ge=1, le=10000)
+    unit_price_cents: int = Field(ge=0)
+    tax_rate_bps: int = Field(default=0, ge=0, le=10000)
+
+
+class ManualInvoiceBillingAddressIn(BaseModel):
+    street: str = Field(default="", max_length=256)
+    city: str = Field(default="", max_length=128)
+    state: str = Field(default="", max_length=128)
+    postal_code: str = Field(default="", max_length=32)
+    country: str = Field(default="", max_length=64)
+
+
+class ManualInvoiceCreateIn(BaseModel):
+    buyer_user_sub: str = Field(default="", max_length=256)
+    buyer_name: str = Field(min_length=1, max_length=256)
+    buyer_email: str = Field(min_length=1, max_length=256)
+    billing_address: ManualInvoiceBillingAddressIn = Field(
+        default_factory=ManualInvoiceBillingAddressIn
+    )
+    line_items: List[ManualInvoiceLineItemIn] = Field(min_length=1)
+    currency: str = Field(default="usd", max_length=8)
+    payment_terms_days: int = Field(default=30, ge=1, le=365)
+    notes: str = Field(default="", max_length=4096)
+
+
+class ManualPayInvoiceIn(BaseModel):
+    payment_ref: str = Field(default="", max_length=256)
+
+
+class RecordExternalPaymentIn(BaseModel):
+    # D5: admin record offline/manual payment (no provider charge).
+    amount_cents: int = Field(ge=1)
+    method: Literal["external"] = "external"
+    reference: str = Field(default="", max_length=256)
+    reason: str = Field(default="", max_length=512)
+    user_sub: str = Field(min_length=1, max_length=256)  # invoice owner
+
+
+
+
+# ── Sales Pipeline (OPP-001..OPP-006) ────────────────────────────────────────
+
+OPPORTUNITY_STAGES = (
+    "prospecting",
+    "qualification",
+    "needs_analysis",
+    "value_proposition",
+    "id_decision_makers",
+    "proposal_price_quote",
+    "negotiation_review",
+    "closed_won",
+    "closed_lost",
+)
+
+LEAD_SOURCE_CHOICES = (
+    "cold_call",
+    "existing_customer",
+    "self_generated",
+    "employee",
+    "partner",
+    "public_relations",
+    "direct_mail",
+    "conference",
+    "trade_show",
+    "web_site",
+    "word_of_mouth",
+    "email",
+    "campaign",
+    "other",
+)
+
+
+class OpportunityCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    stage: str = Field(..., description="One of OPPORTUNITY_STAGES")
+    amount_cents: int = Field(..., ge=0)
+    close_date: int = Field(..., description="Unix timestamp integer seconds")
+    probability: int = Field(0, ge=0, le=100)
+    lead_source: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=4096)
+    account_party_id: Optional[str] = Field(None, max_length=128)
+    contact_party_id: Optional[str] = Field(None, max_length=128)
+
+    @field_validator("stage")
+    @classmethod
+    def _validate_stage(cls, v: str) -> str:
+        if v not in OPPORTUNITY_STAGES:
+            raise ValueError(
+                f"Unknown stage {v!r}. Valid choices: {', '.join(OPPORTUNITY_STAGES)}"
+            )
+        return v
+
+    @field_validator("lead_source")
+    @classmethod
+    def _validate_lead_source(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in LEAD_SOURCE_CHOICES:
+            raise ValueError(
+                f"Unknown lead_source {v!r}. Valid choices: {', '.join(LEAD_SOURCE_CHOICES)}"
+            )
+        return v
+
+
+class OpportunityUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    stage: Optional[str] = None
+    amount_cents: Optional[int] = Field(None, ge=0)
+    close_date: Optional[int] = None
+    probability: Optional[int] = Field(None, ge=0, le=100)
+    lead_source: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=4096)
+    account_party_id: Optional[str] = Field(None, max_length=128)
+    contact_party_id: Optional[str] = Field(None, max_length=128)
+
+    @field_validator("stage")
+    @classmethod
+    def _validate_stage(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in OPPORTUNITY_STAGES:
+            raise ValueError(
+                f"Unknown stage {v!r}. Valid choices: {', '.join(OPPORTUNITY_STAGES)}"
+            )
+        return v
+
+    @field_validator("lead_source")
+    @classmethod
+    def _validate_lead_source(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in LEAD_SOURCE_CHOICES:
+            raise ValueError(
+                f"Unknown lead_source {v!r}. Valid choices: {', '.join(LEAD_SOURCE_CHOICES)}"
+            )
+        return v
+
+
+class OppContactRoleOut(BaseModel):
+    opp_id: str
+    contact_ref: str
+    contact_role: str
+    owner_sub: str
+    created_at: int
+
+
+class OpportunityOut(BaseModel):
+    opp_id: str
+    owner_sub: str
+    name: str
+    stage: str
+    amount_cents: int
+    weighted_amount_cents: int
+    close_date: int
+    probability: int
+    lead_source: Optional[str] = None
+    description: Optional[str] = None
+    account_party_id: Optional[str] = None
+    contact_party_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+    contact_roles: List["OppContactRoleOut"] = Field(default_factory=list)
+
+
+class OppContactRoleIn(BaseModel):
+    contact_ref: str = Field(..., min_length=1, max_length=255)
+    contact_role: str = Field(..., description="One of CONTACT_ROLES")
+
+    @field_validator("contact_role")
+    @classmethod
+    def validate_contact_role(cls, v: str) -> str:
+        from app.services.opportunities import CONTACT_ROLES  # lazy import to avoid circular
+        if v not in CONTACT_ROLES:
+            raise ValueError(f"Unknown contact_role '{v}'. Valid values: {CONTACT_ROLES}")
+        return v
+
+
+# OPP-003 Stage config models
+class StageConfigItemIn(BaseModel):
+    stage_key: str = Field(..., min_length=1, max_length=80)
+    label: str = Field(..., min_length=1, max_length=80)
+    probability_default: int = Field(default=0, ge=0, le=100)
+    order: int = Field(default=0, ge=0)
+    is_won: bool = False
+    is_lost: bool = False
+    color: Optional[str] = Field(None, max_length=7)  # "#RRGGBB"
+
+
+class StageConfigIn(BaseModel):
+    stages: List[StageConfigItemIn]
+
+
+class StageConfigItemOut(BaseModel):
+    stage_key: str
+    label: str
+    probability_default: int
+    order: int
+    is_won: bool
+    is_lost: bool
+    color: Optional[str] = None
+
+
+class StageConfigOut(BaseModel):
+    stages: List[StageConfigItemOut]
+    updated_at: Optional[int] = None
+    updated_by_sub: Optional[str] = None
+
+
+# OPP-005 Quota / Forecast models
+PERIOD_TYPE_CHOICES = ("monthly", "quarterly", "annual")
+
+
+class SalesQuotaIn(BaseModel):
+    user_sub: str = Field(..., min_length=1)
+    period_type: str = Field(..., description="monthly | quarterly | annual")
+    period_key: str = Field(..., min_length=4, max_length=16)
+    target_amount_cents: int = Field(..., ge=0)
+
+    @field_validator("period_type")
+    @classmethod
+    def _validate_period_type(cls, v: str) -> str:
+        if v not in PERIOD_TYPE_CHOICES:
+            raise ValueError(f"period_type must be one of {PERIOD_TYPE_CHOICES}")
+        return v
+
+
+class SalesQuotaOut(BaseModel):
+    user_sub: str
+    period_type: str
+    period_key: str
+    target_amount_cents: int
+    created_at: int
+    updated_at: int
+    set_by_sub: str
+
+
+class SalesQuotaListOut(BaseModel):
+    items: List[SalesQuotaOut]
+    next_cursor: Optional[str] = None
+
+
+class ForecastWorksheetIn(BaseModel):
+    committed_cents: int = Field(..., ge=0)
+    best_case_cents: int = Field(..., ge=0)
+    pipeline_cents: int = Field(..., ge=0)
+    notes: Optional[str] = Field(None, max_length=4096)
+
+
+class ForecastWorksheetOut(BaseModel):
+    user_sub: str
+    period_key: str
+    committed_cents: int
+    best_case_cents: int
+    pipeline_cents: int
+    closed_cents: int
+    quota_cents: int
+    attainment_pct: int
+    notes: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+# OPP-006 Pipeline report models
+class PipelineStageMetric(BaseModel):
+    stage: str
+    label: str
+    count: int
+    total_amount_cents: int
+    weighted_amount_cents: int
+    avg_close_date: Optional[int] = None
+
+
+class PipelineReportOut(BaseModel):
+    stages: List[PipelineStageMetric]
+    total_amount_cents: int
+    total_weighted_cents: int
+    generated_at: int
+
+
+
+
+# ── CRM Leads (LED-002) ──────────────────────────────────────────────────────
+
+LEAD_STATUSES: frozenset = frozenset({
+    "new", "assigned", "in_process", "converted", "recycled", "dead"
+})
+
+LEAD_SOURCES: frozenset = frozenset({
+    "web_site", "cold_call", "email", "campaign", "trade_show",
+    "word_of_mouth", "other", "internal",
+})
+
+_LEAD_SOURCE_PATTERN = (
+    r"^(web_site|cold_call|email|campaign|trade_show|word_of_mouth|other|internal)$"
+)
+
+
+class LeadCreateIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=120)
+    last_name: str = Field(..., min_length=1, max_length=120)
+    email: str = Field(..., min_length=3, max_length=254)
+    phone: Optional[str] = None
+    company: Optional[str] = Field(default=None, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
+    lead_source: str = Field(default="other", pattern=_LEAD_SOURCE_PATTERN)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    assigned_to: Optional[str] = None
+    website: Optional[str] = Field(default=None, max_length=500)
+    attribution_code: Optional[str] = Field(default=None, max_length=200)
+    campaign_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class LeadUpdateIn(BaseModel):
+    first_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    last_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    email: Optional[str] = Field(default=None, min_length=3, max_length=254)
+    phone: Optional[str] = None
+    company: Optional[str] = Field(default=None, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
+    lead_source: Optional[str] = Field(default=None, pattern=_LEAD_SOURCE_PATTERN)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    assigned_to: Optional[str] = None
+    status: Optional[str] = None  # transition enforced by service layer (LED-003)
+    website: Optional[str] = Field(default=None, max_length=500)
+    score: Optional[int] = None   # only written by scoring engine (LED-011)
+
+
+class LeadOut(BaseModel):
+    lead_id: str
+    first_name: str
+    last_name: str
+    email: str
+    phone: Optional[str] = None
+    company: Optional[str] = None
+    title: Optional[str] = None
+    lead_source: str = "other"
+    description: Optional[str] = None
+    status: str = "new"
+    assigned_to: Optional[str] = None
+    score: int = 0
+    website: Optional[str] = None
+    attribution_code: Optional[str] = None
+    campaign_id: Optional[str] = None
+    created_by: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    converted_at: Optional[int] = None
+    converted_party_id: Optional[str] = None
+    converted_org_id: Optional[str] = None
+    origin_questionnaire_id: Optional[str] = None
+    origin_response_session_id: Optional[str] = None
+    linked_entity_id: Optional[str] = None  # opaque PTY linkage (soft, LED-006)
+
+
+class ProspectCreateIn(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+    first_name: Optional[str] = Field(default=None, max_length=120)
+    last_name: Optional[str] = Field(default=None, max_length=120)
+    phone: Optional[str] = None
+    company: Optional[str] = Field(default=None, max_length=200)
+
+
+class ProspectOut(BaseModel):
+    prospect_id: str
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    company: Optional[str] = None
+    suppressed: bool = False
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class ProspectUpdateIn(BaseModel):
+    first_name: Optional[str] = Field(default=None, max_length=120)
+    last_name: Optional[str] = Field(default=None, max_length=120)
+    phone: Optional[str] = None
+    company: Optional[str] = Field(default=None, max_length=200)
+
+
+class LeadConversionIn(BaseModel):
+    create_account: bool = False
+    account_name: Optional[str] = Field(default=None, max_length=200)
+    create_opportunity: bool = False
+    opportunity_name: Optional[str] = Field(default=None, max_length=300)
+    opportunity_amount_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class OpportunityStubOut(BaseModel):
+    opportunity_id: str
+    name: str
+    amount_cents: int
+    currency: str
+    stage: str
+    created_at: int
+
+
+class LeadConversionOut(BaseModel):
+    lead_id: str
+    status: str = "converted"
+    converted_party_id: str = ""
+    converted_org_id: Optional[str] = None
+    opportunity: Optional[OpportunityStubOut] = None
+    converted_at: int = 0
+    pty_path_used: bool = False
+
+
+class LeadScoreRuleIn(BaseModel):
+    """A single scoring rule definition (LED-011)."""
+    field: str = Field(..., max_length=100)
+    operator: str = Field(..., max_length=50)
+    value: str = Field(..., max_length=500)
+    points: int
+
+
+class LeadScoreRulesIn(BaseModel):
+    rules: List[LeadScoreRuleIn]
+    max_score: int = Field(default=100, ge=0)
+
+
+class LeadScoreRulesOut(BaseModel):
+    rules: List[LeadScoreRuleIn]
+    max_score: int
+    updated_at: int = 0
+
+
+class LeadScoreHistoryEntry(BaseModel):
+    score: int
+    trigger: str
+    computed_at: int
+    lead_id: str
+
+
+class LeadScoreHistoryOut(BaseModel):
+    lead_id: str
+    entries: List[LeadScoreHistoryEntry]
+    cursor: Optional[str] = None
+
+
+class LeadActivityOut(BaseModel):
+    activity_id: str
+    lead_id: str
+    activity_type: str
+    subject: Optional[str] = None
+    description: Optional[str] = None
+    actor_sub: str = ""
+    created_at: int = 0
+    metadata: Optional[Dict] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# CRM Reports & Dashboards (RPT-001..RPT-009)
+# ---------------------------------------------------------------------------
+
+class ReportCondition(BaseModel):
+    field: str = Field(..., min_length=1, max_length=100)
+    operator: str = Field(
+        ...,
+        pattern=r"^(eq|neq|contains|gt|lt|gte|lte|is_empty|not_empty)$"
+    )
+    value: Optional[str] = Field(None, max_length=500)
+
+
+class AggregateSpec(BaseModel):
+    field: str = Field(..., min_length=1, max_length=100, description="Field name or '*' for COUNT(*)")
+    function: str = Field(..., pattern=r"^(SUM|AVG|COUNT|MIN|MAX)$")
+
+
+class ChartConfig(BaseModel):
+    chart_type: str = Field(..., pattern=r"^(bar|line|pie)$")
+    x_field: str = Field(..., min_length=1, max_length=100)
+    y_field: str = Field(..., min_length=1, max_length=100)
+
+
+class ReportCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+    module: str = Field(
+        ...,
+        pattern=r"^(tickets|contacts|billing_ledger|orders|subscriptions|questionnaire_responses)$"
+    )
+    fields: List[str] = Field(..., min_length=1, max_length=20)
+    conditions: List[ReportCondition] = Field(default_factory=list)
+    # RPT-003 additions
+    group_by: Optional[str] = Field(None, min_length=1, max_length=100)
+    aggregates: List[AggregateSpec] = Field(default_factory=list)
+    # RPT-005 addition
+    chart: Optional[ChartConfig] = None
+
+    @model_validator(mode="after")
+    def _check_group_by_aggregates(self) -> "ReportCreateIn":
+        if self.group_by and not self.aggregates:
+            raise ValueError("aggregates must be non-empty when group_by is set")
+        if not self.group_by and self.aggregates:
+            raise ValueError("aggregates requires group_by to be set")
+        if len(self.aggregates) > 10:
+            raise ValueError("maximum 10 aggregates per report")
+        # Check for duplicate (field, function) pairs
+        seen = set()
+        for agg in self.aggregates:
+            pair = (agg.field, agg.function)
+            if pair in seen:
+                raise ValueError(f"Duplicate aggregate: {pair}")
+            seen.add(pair)
+        return self
+
+
+class ReportUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+    fields: Optional[List[str]] = Field(None, min_length=1, max_length=20)
+    conditions: Optional[List[ReportCondition]] = None
+    group_by: Optional[str] = Field(None, min_length=1, max_length=100)
+    aggregates: Optional[List[AggregateSpec]] = None
+    chart: Optional[ChartConfig] = None
+
+
+class ReportOut(BaseModel):
+    report_id: str
+    name: str
+    description: Optional[str] = None
+    module: str
+    fields: List[str]
+    conditions: List[ReportCondition]
+    group_by: Optional[str] = None
+    aggregates: List[AggregateSpec] = Field(default_factory=list)
+    chart: Optional[ChartConfig] = None
+    owner_sub: str
+    created_at: int
+    updated_at: int
+
+
+class ReportRunOut(BaseModel):
+    report_id: str
+    run_id: str
+    run_at: int
+    status: str
+    row_count: int
+    columns: List[str]
+    rows: List[List[Any]]
+    error_msg: Optional[str] = None
+    chart: Optional[ChartConfig] = None
+
+
+# RPT-004: schedule models
+
+class ReportScheduleCreateIn(BaseModel):
+    cadence: str = Field(..., pattern=r"^(daily|weekly|monthly)$")
+    recipients: List[str] = Field(..., min_length=1, max_length=50)
+    format: str = Field("csv", pattern=r"^(csv|json)$")
+
+    @field_validator("recipients")
+    @classmethod
+    def validate_recipients(cls, v: List[str]) -> List[str]:
+        for email in v:
+            if "@" not in email:
+                raise ValueError(f"Invalid email address: {email}")
+        return v
+
+
+class ReportScheduleUpdateIn(BaseModel):
+    cadence: Optional[str] = Field(None, pattern=r"^(daily|weekly|monthly)$")
+    recipients: Optional[List[str]] = Field(None, min_length=1, max_length=50)
+    format: Optional[str] = Field(None, pattern=r"^(csv|json)$")
+    enabled: Optional[bool] = None
+
+    @field_validator("recipients")
+    @classmethod
+    def validate_recipients(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        for email in v:
+            if "@" not in email:
+                raise ValueError(f"Invalid email address: {email}")
+        return v
+
+
+class ReportScheduleOut(BaseModel):
+    schedule_id: str
+    report_id: str
+    owner_sub: str
+    cadence: str
+    recipients: List[str]
+    format: str
+    enabled: bool
+    created_at: int
+    next_run_at: int
+    last_run_at: Optional[int] = None
+    last_run_id: Optional[str] = None
+
+
+class ReportScheduleListOut(BaseModel):
+    schedules: List[ReportScheduleOut]
+    cursor: Optional[str] = None
+
+
+# RPT-006: dashboard models
+
+class DashletConfig(BaseModel):
+    dashlet_type: str = Field(
+        ...,
+        pattern=r"^(recent_tickets|calendar_today|my_contacts|billing_summary|report|saved_search)$"
+    )
+    title: str = Field(..., min_length=1, max_length=120)
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DashletConfigOut(BaseModel):
+    dashlet_id: str
+    dashlet_type: str
+    title: str
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DashboardOut(BaseModel):
+    dashboard_id: str
+    name: str
+    owner_sub: str
+    dashlets: List[DashletConfigOut]
+    created_at: int
+    updated_at: int
+
+
+class DashboardUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    dashlets: Optional[List[DashletConfig]] = None
+
+
+class DashletAddIn(BaseModel):
+    dashlet_type: str = Field(
+        ...,
+        pattern=r"^(recent_tickets|calendar_today|my_contacts|billing_summary|report|saved_search)$"
+    )
+    title: str = Field(..., min_length=1, max_length=120)
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DashletReorderIn(BaseModel):
+    dashlet_ids: List[str] = Field(..., min_length=1)
+
+
+# RPT-008: saved search models
+
+class SavedSearchCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    module: str = Field(
+        ...,
+        pattern=r"^(tickets|contacts|billing_ledger|orders|subscriptions|questionnaire_responses)$"
+    )
+    filters: List[ReportCondition] = Field(default_factory=list, max_length=20)
+
+
+class SavedSearchUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    filters: Optional[List[ReportCondition]] = Field(None, max_length=20)
+
+
+class SavedSearchOut(BaseModel):
+    saved_search_id: str
+    name: str
+    module: str
+    filters: List[Dict[str, Any]]
+    owner_sub: str
+    created_at: int
+    updated_at: int
+
+
+class SavedSearchRunOut(BaseModel):
+    saved_search_id: str
+    module: str
+    columns: List[str]
+    rows: List[Dict[str, Any]]
+    row_count: int
+    ran_at: int
+
+
+
+
+# ---------------------------------------------------------------------------
+# CRM Workflow & Process Automation (WFL-001 / WFL-002 / WFL-006 / WFL-008 / WFL-009)
+# ---------------------------------------------------------------------------
+
+class WorkflowConditionIn(BaseModel):
+    field: str
+    operator: str  # eq|neq|contains|gt|lt|is_empty|is_not_empty
+    value: Optional[str] = None
+
+
+class WorkflowActionIn(BaseModel):
+    action_type: str  # modify_field|create_record|send_email|drip_sequence
+    config: dict = {}
+
+
+class WorkflowRuleCreateIn(BaseModel):
+    name: str = Field(..., max_length=200)
+    description: str = Field(default="", max_length=2000)
+    target_module: str
+    trigger_type: str
+    trigger_config: dict = {}
+    conditions: List[WorkflowConditionIn] = []
+    actions: List[WorkflowActionIn] = []
+    enabled: bool = True
+
+
+class WorkflowRuleUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = None
+    trigger_config: Optional[dict] = None
+    conditions: Optional[List[WorkflowConditionIn]] = None
+    actions: Optional[List[WorkflowActionIn]] = None
+
+
+class WorkflowRuleOut(BaseModel):
+    rule_id: str
+    name: str
+    description: str = ""
+    target_module: str
+    trigger_type: str
+    trigger_config: dict
+    conditions: List[dict]
+    actions: List[dict]
+    enabled: bool
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class WorkflowRuleListOut(BaseModel):
+    rules: List[WorkflowRuleOut] = []
+    cursor: Optional[str] = None
+
+
+class WorkflowActionFiredOut(BaseModel):
+    action_type: str
+    result: str  # "ok" | "skipped" | "error:<msg>"
+    error: Optional[str] = None
+
+
+class WorkflowRunOut(BaseModel):
+    run_id: str
+    rule_id: str
+    target_module: str
+    record_id: str
+    trigger_type: str
+    outcome: str  # "matched" | "error" | "skipped"
+    actions_fired: List[dict] = []
+    started_at: int
+    finished_at: Optional[int] = None
+    error_message: Optional[str] = None
+
+
+class WorkflowRunListOut(BaseModel):
+    runs: List[WorkflowRunOut] = []
+    cursor: Optional[str] = None
+
+
+class DripStageIn(BaseModel):
+    stage_number: int = Field(..., ge=1)
+    delay_hours: int = Field(..., ge=0)
+    template_id: str
+    to_field: str
+
+
+class DripSequenceCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = ""
+    stages: List[DripStageIn] = Field(..., min_length=1)
+
+
+class DripSequenceUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = None
+    stages: Optional[List[DripStageIn]] = None
+
+
+class DripSequenceOut(BaseModel):
+    sequence_id: str
+    name: str
+    description: str
+    stages: List[dict]
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class DripSequenceListOut(BaseModel):
+    sequences: List[DripSequenceOut] = []
+    cursor: Optional[str] = None
+
+
+class DripEnrolmentOut(BaseModel):
+    sequence_id: str
+    module: str
+    record_id: str
+    current_stage: int
+    enrolled_at: int
+    last_stage_sent_at: Optional[int] = None
+    completed: bool
+    stopped: bool
+
+
+
+
+# ---------------------------------------------------------------------------
+# CAS-007 — Ticket watchers / CC list
+# ---------------------------------------------------------------------------
+class TicketWatcherOut(BaseModel):
+    ticket_id: str
+    watcher_sub: str
+    added_by_sub: Optional[str] = None
+    created_at: int
+
+
+class TicketWatcherListOut(BaseModel):
+    watchers: List[TicketWatcherOut]
+
+
+class AddWatcherReq(BaseModel):
+    watcher_sub: str
+
+
+# ---------------------------------------------------------------------------
+# CAS-011 — Case-to-case relationship links
+# ---------------------------------------------------------------------------
+class TicketLinkOut(BaseModel):
+    ticket_id: str
+    related_ticket_id: str
+    link_type: Literal["duplicate", "blocks", "relates_to"]
+    created_by_sub: Optional[str] = None
+    created_at: int
+
+
+class TicketLinkListOut(BaseModel):
+    links: List[TicketLinkOut]
+
+
+class CreateTicketLinkReq(BaseModel):
+    related_ticket_id: str
+    link_type: Literal["duplicate", "blocks", "relates_to"]
+
+
+
+
+# ---------------------------------------------------------------------------
+# STU-002: CRM ACL Role matrix models
+# ---------------------------------------------------------------------------
+
+class CrmAclPermissionMatrix(BaseModel):
+    """Seven per-module boolean permission flags."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    create: bool = False
+    read: bool = False
+    update: bool = False
+    delete: bool = False
+    export: bool = False
+    import_: bool = Field(False, alias="import")
+    mass_update: bool = False
+
+
+class CrmAclRoleCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str = ""
+    permissions: Dict[str, CrmAclPermissionMatrix] = {}
+
+
+class CrmAclRoleUpdateIn(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    description: Optional[str] = None
+    permissions: Optional[Dict[str, CrmAclPermissionMatrix]] = None
+
+
+class CrmAclRoleOut(BaseModel):
+    role_id: str
+    name: str
+    description: str
+    permissions: Dict[str, Any]
+    created_at: int
+    created_by_sub: str
+    updated_at: Optional[int] = None
+    updated_by_sub: Optional[str] = None
+
+
+class CrmAclAssignmentIn(BaseModel):
+    user_sub: str
+
+
+class CrmAclAssignmentOut(BaseModel):
+    role_id: str
+    user_sub: str
+    assigned_by_sub: str
+    assigned_at: int
+
+
+class CrmEffectivePermissionsOut(BaseModel):
+    user_sub: str
+    permissions: Dict[str, Any]
+
+
+# STU-003: Group assignment models
+
+class CrmAclGroupAssignmentIn(BaseModel):
+    group_key: str = Field(..., min_length=1, max_length=100)
+
+
+class CrmAclGroupAssignmentOut(BaseModel):
+    role_id: str
+    group_key: str
+    assigned_by_sub: str
+    assigned_at: int
+
+
+class CrmAclRoleAssignmentsOut(BaseModel):
+    role_id: str
+    user_assignments: List[Dict[str, Any]]
+    group_assignments: List[CrmAclGroupAssignmentOut]
+
+
+# ---------------------------------------------------------------------------
+# STU-004: CRM Security Groups models
+# ---------------------------------------------------------------------------
+
+class CrmSecurityGroupCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str = Field("", max_length=512)
+    is_global: bool = False
+
+
+class CrmSecurityGroupMemberAddIn(BaseModel):
+    user_sub: str
+    can_edit: bool = False
+
+
+class CrmSecurityGroupRecordAssignIn(BaseModel):
+    entity_type: str = Field(..., min_length=1)
+    record_id: str = Field(..., min_length=1)
+
+
+class CrmSecurityGroupOut(BaseModel):
+    group_id: str
+    name: str
+    description: str
+    owner_sub: str
+    created_at: int
+    is_global: bool
+    member_count: int = 0
+    record_count: int = 0
+
+
+class CrmSecurityGroupMemberOut(BaseModel):
+    user_sub: str
+    added_by_sub: str
+    added_at: int
+    can_edit: bool
+
+
+class CrmSecurityGroupRecordOut(BaseModel):
+    entity_type: str
+    record_id: str
+    record_ref: str
+    assigned_by_sub: str
+    created_at: int
+
+
+class CrmSecurityGroupDetailOut(BaseModel):
+    group: CrmSecurityGroupOut
+    members: List[CrmSecurityGroupMemberOut]
+    records: List[CrmSecurityGroupRecordOut]
+
+
+# ---------------------------------------------------------------------------
+# STU-011: Studio custom fields models
+# ---------------------------------------------------------------------------
+
+class StudioFieldCreateIn(BaseModel):
+    field_key: str = Field(..., pattern=r"^[a-z][a-z0-9_]{2,49}$")
+    label: str = Field(..., min_length=1, max_length=255)
+    field_type: Literal["text", "integer", "decimal", "boolean", "date", "picklist", "multi_picklist"]
+    required: bool = False
+    default_value: Any = None
+    picklist_name: Optional[str] = None
+    max_length: int = Field(1000, ge=1, le=65535)
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    sort_order: int = 0
+
+
+class StudioFieldUpdateIn(BaseModel):
+    label: Optional[str] = Field(None, min_length=1, max_length=255)
+    required: Optional[bool] = None
+    default_value: Any = None
+    max_length: Optional[int] = Field(None, ge=1, le=65535)
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    sort_order: Optional[int] = None
+    reactivate: Optional[bool] = None
+
+
+class StudioFieldOut(BaseModel):
+    entity_type: str
+    field_key: str
+    label: str
+    field_type: str
+    required: bool
+    default_value: Any
+    picklist_name: Optional[str]
+    max_length: int
+    min_value: Optional[float]
+    max_value: Optional[float]
+    sort_order: int
+    is_active: bool
+    created_by_sub: str
+    created_at: int
+    updated_by_sub: str
+    updated_at: int
+
+
+class StudioFieldListOut(BaseModel):
+    fields: List[StudioFieldOut]
+    next_cursor: Optional[str]
+    total_count: Optional[int] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# CRM Project Management (PRJ-001 through PRJ-009)
+# ---------------------------------------------------------------------------
+
+
+class CrmProjectStatus(str, Enum):
+    draft = "draft"
+    in_review = "in_review"
+    underway = "underway"
+    completed = "completed"
+    deferred = "deferred"
+
+
+class CrmProjectCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    status: CrmProjectStatus = CrmProjectStatus.draft
+    priority: int = Field(default=0, ge=0, le=4)
+    start_date: Optional[int] = None  # Unix ts (seconds)
+    end_date: Optional[int] = None
+    assigned_user_sub: Optional[str] = None
+    account_id: Optional[str] = None
+
+
+class CrmProjectUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    status: Optional[CrmProjectStatus] = None
+    priority: Optional[int] = Field(default=None, ge=0, le=4)
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    assigned_user_sub: Optional[str] = None
+    account_id: Optional[str] = None
+
+
+class CrmProjectOut(BaseModel):
+    id: str
+    owner_sub: str
+    name: str
+    description: Optional[str] = None
+    status: CrmProjectStatus
+    priority: int
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    assigned_user_sub: Optional[str] = None
+    account_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmProjectListResp(BaseModel):
+    items: List[CrmProjectOut]
+    cursor: Optional[str] = None
+
+
+# PRJ-003: Task models
+class CrmProjectResourceType(str, Enum):
+    user = "user"
+    contact = "contact"
+
+
+class CrmProjectTaskCreateReq(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_order: int = Field(default=0, ge=0)  # 0 = auto-assign
+    duration_days: int = Field(default=1, ge=1)
+    start_date: Optional[int] = None  # Unix ts
+    end_date: Optional[int] = None
+    percent_complete: int = Field(default=0, ge=0, le=100)
+    is_milestone: bool = False
+    assigned_user_sub: Optional[str] = None
+    predecessor_task_ids: List[str] = Field(default_factory=list, max_length=50)
+    project_resource_type: Optional[CrmProjectResourceType] = None
+    linked_contact_id: Optional[str] = None
+
+
+class CrmProjectTaskUpdateReq(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_order: Optional[int] = Field(default=None, ge=0)
+    duration_days: Optional[int] = Field(default=None, ge=1)
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    percent_complete: Optional[int] = Field(default=None, ge=0, le=100)
+    is_milestone: Optional[bool] = None
+    assigned_user_sub: Optional[str] = None
+    predecessor_task_ids: Optional[List[str]] = Field(default=None, max_length=50)
+    project_resource_type: Optional[CrmProjectResourceType] = None
+    linked_contact_id: Optional[str] = None
+
+
+class CrmProjectTaskReorderReq(BaseModel):
+    task_ids: List[str] = Field(..., min_length=1)
+
+
+class CrmProjectTaskModel(BaseModel):
+    id: str
+    project_id: str
+    owner_sub: str
+    name: str
+    description: Optional[str] = None
+    task_order: int
+    duration_days: int
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    percent_complete: int
+    is_milestone: bool
+    assigned_user_sub: Optional[str] = None
+    predecessor_task_ids: List[str]
+    project_resource_type: CrmProjectResourceType = CrmProjectResourceType.user
+    linked_contact_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmProjectTaskListResp(BaseModel):
+    items: List[CrmProjectTaskModel]
+    cursor: Optional[str] = None
+
+
+# PRJ-004: Workload models
+class CrmTaskWorkloadEntry(BaseModel):
+    assignee_key: str
+    resource_type: CrmProjectResourceType
+    assigned_id: str
+    task_count: int
+    overdue_count: int
+
+
+class CrmProjectWorkloadResp(BaseModel):
+    project_id: str
+    entries: List[CrmTaskWorkloadEntry]
+
+
+# PRJ-005: Milestone models
+class CrmMilestoneSummaryItem(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    task_order: int
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    percent_complete: int
+    on_track: bool
+    overdue: bool
+    created_at: int
+    updated_at: int
+
+
+class CrmMilestoneSummaryResp(BaseModel):
+    items: List[CrmMilestoneSummaryItem]
+    cursor: Optional[str] = None
+    total_milestones: int
+    overdue_count: int
+    on_track_count: int
+    no_date_count: int
+
+
+# PRJ-006: Template models
+class CrmTemplateTaskDef(BaseModel):
+    template_task_id: str
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_order: int = Field(..., ge=0)
+    duration_days: int = Field(default=1, ge=1)
+    is_milestone: bool = False
+    predecessor_template_task_ids: List[str] = Field(default_factory=list)
+
+
+class CrmProjectTemplateModel(BaseModel):
+    id: str
+    owner_sub: str
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_defs: List[CrmTemplateTaskDef] = Field(default_factory=list)
+    created_at: int
+    updated_at: int
+
+
+class CrmTemplateCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    task_defs: List[CrmTemplateTaskDef] = Field(default_factory=list)
+
+
+class CrmTemplateFromProjectIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CrmTemplateInstantiateIn(BaseModel):
+    project_name: str = Field(..., min_length=1, max_length=120)
+    start_date: Optional[int] = None  # Unix timestamp; None → no start_date
+
+
+class CrmTemplateListOut(BaseModel):
+    items: List[CrmProjectTemplateModel] = Field(default_factory=list)
+    cursor: Optional[str] = None
+
+
+# PRJ-007: Member models
+class CrmProjectMemberRole(str, Enum):
+    owner = "owner"
+    member = "member"
+    viewer = "viewer"
+
+
+class CrmProjectMemberOut(BaseModel):
+    project_id: str
+    user_sub: str
+    role: CrmProjectMemberRole
+    added_by: str
+    added_at: int
+
+
+class CrmProjectMemberListResp(BaseModel):
+    items: List[CrmProjectMemberOut]
+    cursor: Optional[str] = None
+
+
+class CrmProjectAddMemberIn(BaseModel):
+    user_sub: str
+    role: CrmProjectMemberRole = CrmProjectMemberRole.member
+
+
+class CrmProjectUpdateMemberIn(BaseModel):
+    role: CrmProjectMemberRole
+
+
+# PRJ-009: Status history model
+class CrmProjectStatusHistoryEntry(BaseModel):
+    project_id: str
+    from_status: Optional[str] = None
+    to_status: str
+    changed_by: str
+    changed_at: int
+    event_id: str
+
+
+class CrmProjectStatusHistoryResp(BaseModel):
+    items: List[CrmProjectStatusHistoryEntry]
+    cursor: Optional[str] = None
+
+
+# PRJ-010: Contact links model
+class CrmProjectContactLinkOut(BaseModel):
+    project_id: str
+    linked_entity_id: str
+    linked_entity_type: str
+    added_by: str
+    added_at: int
+    note: Optional[str] = None
+
+
+class CrmProjectContactLinkListResp(BaseModel):
+    items: List[CrmProjectContactLinkOut]
+    cursor: Optional[str] = None
+
+
+class CrmProjectAddContactLinkIn(BaseModel):
+    linked_entity_id: str
+    linked_entity_type: str = "contact_party"
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+
+
+# ─── Hotel PMS / Availability (QloApps vertical, HTL-010..HTL-013) ───────────
+
+class AvailabilityDayOut(BaseModel):
+    """One (room_type, date) row — mirrors the hotel_availability DATE# row.
+
+    ``available`` is derived: total_rooms + overbooking_allowance - booked - held.
+    It is never stored; the service recomputes it on every read/mutation.
+    """
+    hotel_id: str
+    room_type_id: str
+    date: str                           # YYYY-MM-DD
+    total_rooms: int
+    booked: int
+    held: int
+    overbooking_allowance: int
+    min_availability: int
+    max_availability: Optional[int] = None
+    available: int                      # derived
+    updated_at: int
+
+
+class AvailabilitySetIn(BaseModel):
+    """Date-range seed/set payload for set_total_rooms."""
+    hotel_id: str
+    room_type_id: str
+    start_date: str                     # YYYY-MM-DD inclusive
+    end_date: str                       # YYYY-MM-DD inclusive
+    total_rooms: int = Field(ge=0)
+
+
+class AvailabilityDayIn(BaseModel):
+    """Single-date set payload."""
+    hotel_id: str
+    room_type_id: str
+    date: str                           # YYYY-MM-DD
+    total_rooms: int = Field(ge=0)
+
+
+class HoldRoomsIn(BaseModel):
+    """Request body for hold_rooms (HTL-011)."""
+    hotel_id: str
+    room_type_id: str
+    checkin: str                        # YYYY-MM-DD inclusive
+    checkout: str                       # YYYY-MM-DD exclusive
+    quantity: int = Field(ge=1)
+    ttl_seconds: Optional[int] = Field(default=None, ge=1)
+
+
+class HoldOut(BaseModel):
+    """Response for a hold (HTL-011)."""
+    hold_id: str
+    hotel_id: str
+    room_type_id: str
+    checkin: str
+    checkout: str
+    dates: List[str]
+    quantity: int
+    status: str                         # "active" | "released" | "expired"
+    user_sub: str
+    created_at: int
+    expires_at: int
+
+
+class OverbookingSetIn(BaseModel):
+    """Request body for set_overbooking_allowance (HTL-011)."""
+    hotel_id: str
+    room_type_id: str
+    start_date: str
+    end_date: str
+    allowance: int = Field(ge=0)
+
+
+class MinMaxSetIn(BaseModel):
+    """Request body for set_min_max_availability (HTL-011)."""
+    hotel_id: str
+    room_type_id: str
+    start_date: str
+    end_date: str
+    min_availability: Optional[int] = Field(default=None, ge=0)
+    max_availability: Optional[int] = Field(default=None, ge=0)
+
+
+
+
+# ─────────────────── Hotel Rate Plans (HTL-014..HTL-016) ────────────────────
+
+
+class RatePlanIn(BaseModel):
+    room_type_id: str
+    name: str = Field(min_length=1, max_length=200)
+    base_nightly_rate_cents: Optional[int] = Field(default=None, ge=0)  # None → default from room type
+    base_occupancy: int = Field(default=2, ge=1)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+
+
+class RatePlanOut(BaseModel):
+    rate_plan_id: str
+    hotel_id: str
+    room_type_id: str
+    name: str
+    base_nightly_rate_cents: int
+    base_occupancy: int
+    currency: str
+    active: bool
+    created_at: int
+    updated_at: int
+    created_by: str
+
+
+class RatePlanUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    base_nightly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    base_occupancy: Optional[int] = Field(default=None, ge=1)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    active: Optional[bool] = None
+
+
+class RatePlanRuleIn(BaseModel):
+    kind: Literal["season", "occupancy", "los", "advance", "weekend"]
+    rule_config: dict  # validated per-kind in the service
+    priority: int = Field(default=500, ge=0)
+
+
+class RatePlanRuleOut(BaseModel):
+    rule_id: str
+    kind: str
+    rule_config: dict
+    priority: int
+    created_at: int
+    updated_at: int
+    created_by: str
+
+
+class NightLineOut(BaseModel):
+    date: str                     # "YYYY-MM-DD" — the night's calendar date (inclusive)
+    base_cents: int               # base_nightly_rate_cents at the start of this night
+    season_delta_cents: int       # signed; net effect of season rules
+    weekend_delta_cents: int      # signed; net effect of weekend rules
+    occupancy_cents: int          # >= 0; extra-adult + extra-child surcharge
+    night_total_cents: int        # >= 0; floored final per-night charge (one room)
+
+
+class StayPriceResult(BaseModel):
+    nights: int
+    per_night: List[NightLineOut]
+    stay_subtotal_cents: int      # sum(night_total_cents); ONE room, pre whole-stay mods
+    los_discount_cents: int       # >= 0; LOS discount applied to the subtotal
+    advance_modifier_cents: int   # signed; advance modifier (negative = discount)
+    rooms: int
+    total_cents: int              # final: (subtotal - los + advance) * rooms, floored >= 0
+    currency: str
+    applied_rule_ids: List[str]
+
+
+class StayQuoteIn(BaseModel):
+    checkin: str                  # "YYYY-MM-DD" inclusive (first night)
+    checkout: str                 # "YYYY-MM-DD" exclusive (departure day, not a night)
+    adults: int = Field(ge=1)
+    children: int = Field(default=0, ge=0)
+    rooms: int = Field(default=1, ge=1)
+    advance_days: Optional[int] = Field(default=None, ge=0)
+
+
+class StayQuoteOut(BaseModel):   # serialization of HTL-015's StayPriceResult
+    nights: int
+    per_night: List[NightLineOut]
+    stay_subtotal_cents: int
+    los_discount_cents: int
+    advance_modifier_cents: int   # signed: negative = discount
+    rooms: int
+    total_cents: int              # final, all rules applied, × rooms, floored >= 0
+    currency: str
+    applied_rule_ids: List[str]
+
+
+
+
+# ---------------------------------------------------------------------------
+# PRD-003 / PRD-006 / PRD-007 / PRD-012  — OFBiz Catalog Depth models
+# All models are ADDITIVE; CatalogItemOut above is unchanged.
+# ---------------------------------------------------------------------------
+
+class ProductTypeEnum(str, Enum):
+    virtual    = "virtual"
+    variant    = "variant"
+    standalone = "standalone"
+    bundle     = "bundle"
+    kit        = "kit"
+    digital    = "digital"
+
+
+class PriceTypeEnum(str, Enum):
+    LIST         = "LIST"
+    DEFAULT      = "DEFAULT"
+    PROMO        = "PROMO"
+    COMPETITIVE  = "COMPETITIVE"
+    MINIMUM      = "MINIMUM"
+    AVERAGE_COST = "AVERAGE_COST"
+
+
+# --- Feature categories / values ---
+
+class FeatureCategoryCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=500)
+    feature_category_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class FeatureValueCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    price_delta_cents: int = Field(default=0, ge=-10_000_000_00, le=10_000_000_00)
+    position: int = Field(default=0, ge=0, le=9999)
+
+
+class FeatureValueOut(BaseModel):
+    feature_value_id: str
+    feature_category_id: str
+    name: str
+    price_delta_cents: int = 0
+    position: int = 0
+
+
+class FeatureCategoryOut(BaseModel):
+    feature_category_id: str
+    name: str
+    description: Optional[str] = None
+    creator_id: str
+    created_at: int
+    values: List[FeatureValueOut] = Field(default_factory=list)
+
+
+class AttachFeatureCategoryIn(BaseModel):
+    feature_category_id: str
+
+
+# --- PRD-006: Per-item feature categories & values (OFBiz Catalog Depth) ---
+
+class ProductFeatureCategoryCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)  # e.g. "Color", "Size"
+    position: int = Field(default=0, ge=0)
+
+
+class ProductFeatureCategoryOut(BaseModel):
+    feature_category_id: str
+    name: str
+    position: int
+    item_id: str  # the product it's attached to
+    created_at: int
+
+
+class ProductFeatureValueCreateIn(BaseModel):
+    value: str = Field(..., min_length=1, max_length=100)  # e.g. "Red", "XL"
+    price_delta_cents: int = Field(default=0)
+    position: int = Field(default=0, ge=0)
+
+
+class ProductFeatureValueOut(BaseModel):
+    feature_value_id: str
+    feature_category_id: str
+    value: str
+    price_delta_cents: int
+    position: int
+    created_at: int
+
+
+class ProductFeaturesOut(BaseModel):
+    item_id: str
+    feature_categories: List[ProductFeatureCategoryOut]
+    values: List[ProductFeatureValueOut]
+
+
+# --- Variants ---
+
+class VariantCreateIn(BaseModel):
+    feature_values: Dict[str, str]  # {feature_category_id: feature_value_id}
+    sku_override: Optional[str] = None
+
+
+class VariantOut(BaseModel):
+    variant_id: str
+    parent_item_id: str
+    sku: str
+    feature_values: Dict[str, str]
+    price_delta_cents: int
+    effective_price_cents: int
+    creator_id: str
+    created_at: int
+
+
+class VariantListOut(BaseModel):
+    item_id: str
+    variants: List["VariantOut"]
+    count: int
+
+
+# --- Price components ---
+
+class ProductPriceComponentIn(BaseModel):
+    price_type: PriceTypeEnum
+    amount_cents: int = Field(ge=0, le=10_000_000_00)
+    currency: str = "USD"
+    effective_at: int = Field(ge=0)
+    expires_at: Optional[int] = Field(default=None, ge=0)
+
+
+class ProductPriceComponentOut(BaseModel):
+    price_component_id: str
+    item_id: str
+    price_type: str
+    amount_cents: int
+    currency: str
+    effective_at: int
+    expires_at: Optional[int] = None
+    is_active: bool = False
+
+
+class PriceResolution(BaseModel):
+    amount_cents: int
+    currency: str = "USD"
+    price_component_id: Optional[str] = None
+    source: str  # "price_component" | "scalar_fallback"
+
+
+class SetPriceComponentsIn(BaseModel):
+    price_type: PriceTypeEnum
+    components: List[ProductPriceComponentIn] = Field(default_factory=list)
+
+
+
+
+# ── Order Lifecycle (ORD-004) ─────────────────────────────────────────────────
+
+
+class OrderLifecycleStatus(str, Enum):
+    CREATED = "created"
+    APPROVED = "approved"
+    ALLOCATED = "allocated"
+    PICKING = "picking"
+    PACKED = "packed"
+    SHIPPED = "shipped"
+    COMPLETED = "completed"
+    HELD = "held"
+    BACKORDER = "backorder"
+    CANCELLED = "cancelled"
+    RETURNED = "returned"
+
+
+class OrderAdjustmentType(str, Enum):
+    DISCOUNT = "discount"
+    SURCHARGE = "surcharge"
+    TAX = "tax"
+    SHIPPING = "shipping"
+    PROMOTION = "promotion"
+
+
+class OrderStatusHistoryEntry(BaseModel):
+    event_id: str = Field(min_length=1, max_length=32)
+    from_status: Optional[str] = None  # None for the initial "created" event
+    to_status: str
+    actor: str = Field(min_length=1, max_length=255)
+    reason: str = Field(default="", max_length=500)
+    ts: int = Field(ge=0)  # Unix seconds (now_ts())
+
+
+class ShipGroup(BaseModel):
+    ship_group_id: str = Field(min_length=1, max_length=64)
+    ship_method: str = Field(default="", max_length=128)
+    address_id: Optional[str] = Field(default=None, max_length=128)
+    item_ids: List[str] = Field(default_factory=list)
+    ship_status: OrderLifecycleStatus = OrderLifecycleStatus.CREATED
+    ship_date_bucket: Optional[str] = Field(default=None, max_length=10)  # YYYY-MM-DD
+    ship_ts: Optional[int] = Field(default=None, ge=0)
+    tracking_number: Optional[str] = Field(default=None, max_length=256)
+    tracking_url: Optional[str] = Field(default=None, max_length=2048)
+    created_at: int = Field(default=0, ge=0)
+    updated_at: int = Field(default=0, ge=0)
+
+
+class OrderAdjustment(BaseModel):
+    adjustment_id: str = Field(min_length=1, max_length=64)
+    adj_type: OrderAdjustmentType
+    amount_cents: int = Field(..., ge=0)  # always non-negative; sign conveyed by adj_type
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    label: str = Field(default="", max_length=255)
+    taxable: bool = False
+    source_rule_ref: Optional[str] = Field(default=None, max_length=128)
+    created_at: int = Field(default=0, ge=0)
+
+
+class OrderTransitionRequest(BaseModel):
+    target_status: OrderLifecycleStatus
+    reason: str = Field(default="", max_length=500)
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
+
+
+class OrderLineItemOut(BaseModel):
+    item_id: str
+    sku: str = Field(default="", max_length=256)
+    name: str = Field(default="", max_length=512)
+    quantity: int = Field(default=1, ge=1)
+    unit_price_cents: int = Field(default=0, ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class OrderLifecycleOut(BaseModel):
+    # ── Core fields (mirror of DDB order_record written by create_order) ──
+    order_id: str
+    status: str  # legacy mirror
+    created_at: str  # ISO string
+    updated_at: str  # ISO string
+    source_system: str
+    correlation_id: str
+    amount_cents: int = Field(ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    line_item_count: int = Field(default=0, ge=0)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    # ── Lifecycle fields (populated only when ORDER_LIFECYCLE_ENABLED is on) ──
+    lifecycle_status: Optional[OrderLifecycleStatus] = None
+    updated_ts: Optional[int] = Field(default=None, ge=0)
+    pre_hold_status: Optional[str] = None
+
+    # ── Enriched collections (None = not fetched; [] = fetched but empty) ──
+    adjustments: Optional[List[OrderAdjustment]] = None
+    ship_groups: Optional[List[ShipGroup]] = None
+    status_history: Optional[List[OrderStatusHistoryEntry]] = None
+
+    # ── Derived from TRANSITIONS graph; populated by get_order_lifecycle ──
+    allowed_transitions: Optional[List[str]] = None
+
+    # ── Joined order items; populated by get_order_lifecycle ──
+    line_items: Optional[List["OrderLineItemOut"]] = None
+
+
+class OrderTransitionResult(BaseModel):
+    order: "OrderLifecycleOut"
+    event_id: str
+    from_status: Optional[str] = None
+    to_status: str
+
+
+# ── Order Lifecycle router-layer request shapes (ORD-011) ──
+
+
+class OrderAdjustmentIn(BaseModel):
+    adj_type: OrderAdjustmentType
+    amount_cents: int = Field(..., ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    label: str = Field(default="", max_length=255)
+    taxable: bool = False
+    source_rule_ref: Optional[str] = Field(default=None, max_length=128)
+
+
+class ShipGroupCreateIn(BaseModel):
+    ship_method: str = Field(default="", max_length=128)
+    address_id: Optional[str] = Field(default=None, max_length=128)
+    item_ids: List[str] = Field(default_factory=list)
+    ship_date_bucket: Optional[str] = Field(default=None, max_length=10)
+
+
+class ShipGroupAssignIn(BaseModel):
+    item_ids: List[str] = Field(min_length=1)
+
+
+class OrderCancelIn(BaseModel):
+    reason: str = Field(default="", max_length=500)
+    refund: bool = False
+
+
+OrderLifecycleOut.model_rebuild()
+OrderTransitionResult.model_rebuild()
+
+
+# ── ORD-008: order adjustments response models ────────────────────────────────
+
+class OrderAdjustmentOut(BaseModel):
+    adjustment_id: str
+    order_id: str
+    adj_type: str  # discount|surcharge|tax|shipping
+    description: str
+    amount_cents: int
+    percentage: Optional[float] = None
+    created_at: int
+    created_by: str
+
+
+class OrderAdjustmentListOut(BaseModel):
+    order_id: str
+    adjustments: List[OrderAdjustmentOut]
+    total_adjustments_cents: int
+    base_amount_cents: int
+    total_cents: int
+
+
+class OrderAdjustmentAddIn(BaseModel):
+    adj_type: str
+    description: str = Field(..., min_length=1, max_length=500)
+    amount_cents: int
+    percentage: Optional[float] = None
+
+
+# ── ORD-009: ship group response models ───────────────────────────────────────
+
+class ShipGroupCreateBodyIn(BaseModel):
+    ship_to: Dict[str, Any] = Field(..., min_length=1)
+    carrier: Optional[str] = Field(default=None, max_length=128)
+    ship_method: str = Field(default="standard", max_length=64)
+    item_ids: List[str] = Field(default_factory=list)
+    estimated_ship_date: Optional[str] = Field(default=None, max_length=10)
+
+
+class ShipGroupUpdateIn(BaseModel):
+    tracking_number: Optional[str] = Field(default=None, max_length=256)
+    status: Optional[str] = Field(default=None, max_length=64)
+    carrier: Optional[str] = Field(default=None, max_length=128)
+    estimated_ship_date: Optional[str] = Field(default=None, max_length=10)
+
+
+class ShipGroupFullOut(BaseModel):
+    ship_group_id: str
+    order_id: str
+    ship_to: Dict[str, Any]
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    ship_method: str
+    estimated_ship_date: Optional[str] = None
+    item_ids: List[str]
+    status: str
+    created_at: int
+    updated_at: int
+
+
+class ShipGroupListOut(BaseModel):
+    order_id: str
+    ship_groups: List[ShipGroupFullOut]
+
+
+# ---------------------------------------------------------------------------
+# ATS Pipeline (PIP-001..PIP-006)
+# ---------------------------------------------------------------------------
+
+class PipelineEntryCreateIn(BaseModel):
+    job_order_id: str
+    candidate_id: str
+    status: Optional[str] = None  # defaults to "100_no_contact" in service
+
+
+class PipelineEntryOut(BaseModel):
+    pipeline_id: str
+    job_order_id: str
+    candidate_id: str
+    owner_sub: str
+    status: str
+    status_rank: int
+    rating: int
+    created_at: int
+    updated_at: int
+
+
+class PipelineStatusChangeIn(BaseModel):
+    new_status: str = Field(..., min_length=1, max_length=80)
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class PipelineRatingIn(BaseModel):
+    rating: int = Field(
+        ..., ge=0, le=5,
+        description="1–5 star rating; 0 clears the rating (unrated).",
+    )
+
+
+class PipelineStatusItemIn(BaseModel):
+    status_key: str = Field(..., min_length=1, max_length=80)
+    label: str = Field(..., min_length=1, max_length=80)
+    rank: int = Field(..., ge=0)
+    order: int = Field(ge=0, default=0)
+    is_submitted: bool = False
+    is_placed: bool = False
+    is_terminal: bool = False
+    color: Optional[str] = Field(None, max_length=7)  # "#RRGGBB"
+
+
+class PipelineStatusConfigIn(BaseModel):
+    statuses: List[PipelineStatusItemIn]
+
+    @model_validator(mode="after")
+    def _validate_constraints(self) -> "PipelineStatusConfigIn":
+        keys = [s.status_key for s in self.statuses]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate_status_key")
+        placed_count = sum(1 for s in self.statuses if s.is_placed)
+        if placed_count != 1:
+            raise ValueError("exactly_one_is_placed_required")
+        submitted_count = sum(1 for s in self.statuses if s.is_submitted)
+        if submitted_count > 1:
+            raise ValueError("at_most_one_is_submitted_allowed")
+        if not (1 <= len(self.statuses) <= 20):
+            raise ValueError("statuses_count_out_of_range")
+        return self
+
+
+class PipelineStatusItemOut(BaseModel):
+    status_key: str
+    label: str
+    rank: int
+    order: int
+    is_submitted: bool
+    is_placed: bool
+    is_terminal: bool
+    color: Optional[str]
+
+
+class PipelineStatusConfigOut(BaseModel):
+    statuses: List[PipelineStatusItemOut]
+    updated_at: Optional[int]
+    updated_by_sub: Optional[str]
+
+
+class PlacementIn(BaseModel):
+    start_date: int = Field(..., description="Unix epoch seconds for the candidate's start date")
+    fee_cents: int = Field(..., ge=0, description="Placement fee in integer cents; 0 = pro-bono")
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
+class PlacementOut(BaseModel):
+    placement_id: str
+    job_order_id: str
+    candidate_id: str
+    owner_sub: str
+    start_date: int
+    fee_cents: int
+    status_at_placement: str
+    notes: Optional[str]
+    created_at: int
+
+
+
+
+# ─── Property Management — Tenants (TEN-001..TEN-003) ──────────────────────
+
+
+class CreateTenantIn(BaseModel):
+    display_name: str = Field(min_length=1, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    party_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+
+
+class UpdateTenantIn(BaseModel):
+    display_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    status: Optional[str] = None  # "prospect" | "active" | "past"
+
+
+class PropertyTenantOut(BaseModel):
+    """Named PropertyTenantOut (not TenantOut) to avoid collision with ENTERPRISE-001
+    class TenantOut at app/models.py:4158."""
+
+    tenant_id: str
+    owner_id: str
+    party_id: str = ""
+    display_name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    status: str = "prospect"
+    active_unit_id: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class TenantListOut(BaseModel):
+    tenants: List[PropertyTenantOut]
+    count: int
+    next_cursor: Optional[str] = None
+
+
+class EmploymentIn(BaseModel):
+    employer_name: Optional[str] = None
+    job_title: Optional[str] = None
+    employment_type: Optional[str] = None
+    start_date: Optional[str] = None
+    employer_phone: Optional[str] = None
+
+
+class IncomeIn(BaseModel):
+    annual_income_cents: Optional[int] = None
+    income_currency: str = "usd"
+    pay_frequency: Optional[str] = None
+
+
+class EmergencyContactIn(BaseModel):
+    ec_id: Optional[str] = None
+    name: str
+    relationship: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+
+
+class TenantProfileIn(BaseModel):
+    employment: Optional[EmploymentIn] = None
+    income: Optional[IncomeIn] = None
+    emergency_contacts: Optional[List[EmergencyContactIn]] = None
+
+
+class TenantProfileOut(BaseModel):
+    employment: dict = {}
+    income: dict = {}
+    emergency_contacts: List[dict] = []
+    updated_at: Optional[int] = None
+
+
+class IncomeDocOut(BaseModel):
+    doc_id: str
+    tenant_id: str
+    file_node_path: str
+    file_name: str
+    content_type: str
+    size_bytes: int
+    doc_kind: str
+    uploaded_at: int
+    uploaded_by: str
+
+
+class IncomeDocListOut(BaseModel):
+    docs: List[IncomeDocOut]
+    next_cursor: Optional[str] = None
+    count: int
+
+
+class ActiveUnitIn(BaseModel):
+    property_id: Optional[str] = None
+    unit_id: Optional[str] = None
+
+
+class SetIncomeVerificationIn(BaseModel):
+    status: str  # unverified | pending | verified | rejected
+
+
+class TenantLeaseSummaryOut(BaseModel):
+    lease_id: str
+    unit_id: str
+    status: str
+    start_date: int
+    end_date: Optional[int] = None
+    monthly_rent_cents: int
+    security_deposit_cents: int
+    currency: str
+    lease_number: Optional[str] = None
+
+
+class TenantLeaseListOut(BaseModel):
+    leases: List[TenantLeaseSummaryOut]
+    count: int
+    next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# QloApps Hotel-PMS models — HTL-005 (Room Types)
+# ---------------------------------------------------------------------------
+
+class RoomTypeIn(BaseModel):
+    name: str
+    description: str = ""
+    base_occupancy_adults: int = Field(ge=0)
+    base_occupancy_children: int = Field(default=0, ge=0)
+    max_occupancy: int = Field(ge=1)
+    bed_type: Literal["single", "twin", "double", "queen", "king", "suite"]
+    size_sqft: int = Field(default=0, ge=0)
+    base_nightly_rate_cents: int = Field(ge=0)
+    photo_urls: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_occupancy(self) -> "RoomTypeIn":
+        if self.max_occupancy < self.base_occupancy_adults + self.base_occupancy_children:
+            raise ValueError(
+                "max_occupancy must be >= base_occupancy_adults + base_occupancy_children"
+            )
+        return self
+
+
+class RoomTypeOut(BaseModel):
+    hotel_id: str
+    room_type_id: str
+    name: str
+    description: str
+    base_occupancy_adults: int
+    base_occupancy_children: int
+    max_occupancy: int
+    bed_type: Literal["single", "twin", "double", "queen", "king", "suite"]
+    size_sqft: int
+    base_nightly_rate_cents: int
+    photo_urls: List[str]
+    status: Literal["active", "archived"]
+    created_at: int
+    updated_at: int
+
+
+class RoomTypeUpdateIn(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    base_occupancy_adults: Optional[int] = Field(default=None, ge=0)
+    base_occupancy_children: Optional[int] = Field(default=None, ge=0)
+    max_occupancy: Optional[int] = Field(default=None, ge=1)
+    bed_type: Optional[Literal["single", "twin", "double", "queen", "king", "suite"]] = None
+    size_sqft: Optional[int] = Field(default=None, ge=0)
+    base_nightly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    photo_urls: Optional[List[str]] = None
+
+
+# ---------------------------------------------------------------------------
+# QloApps Hotel-PMS models — HTL-006 (Individual Rooms)
+# ---------------------------------------------------------------------------
+
+class RoomIn(BaseModel):
+    room_type_id: str
+    room_number: str
+    floor: int
+    status: Literal["available", "out_of_service"] = "available"
+
+
+class RoomOut(BaseModel):
+    hotel_id: str
+    room_id: str
+    room_type_id: str
+    room_number: str
+    floor: int
+    status: Literal["available", "out_of_service"]
+    housekeeping_status: Literal["clean", "dirty", "inspected", "out_of_service"]
+    created_at: int
+    updated_at: int
+
+
+class RoomUpdateIn(BaseModel):
+    room_type_id: Optional[str] = None
+    room_number: Optional[str] = None
+    floor: Optional[int] = None
+    status: Optional[Literal["available", "out_of_service"]] = None
+
+
+# ---------------------------------------------------------------------------
+# QloApps Hotel-PMS models — HTL-007 (Housekeeping)
+# ---------------------------------------------------------------------------
+
+class HousekeepingStatusIn(BaseModel):
+    housekeeping_status: Literal["clean", "dirty", "inspected", "out_of_service"]
+
+
+class HkTaskIn(BaseModel):
+    room_id: str
+    assignee_sub: str = ""
+    due_at: int = Field(default=0, ge=0)
+    notes: str = ""
+
+
+class HkTaskOut(BaseModel):
+    hotel_id: str
+    task_id: str
+    room_id: str
+    assignee_sub: str
+    status: Literal["open", "in_progress", "done"]
+    due_at: int
+    notes: str
+    created_at: int
+    updated_at: int
+    completed_at: int
+
+
+class HkTaskAssignIn(BaseModel):
+    assignee_sub: str
+
+
+class HkTaskUpdateIn(BaseModel):
+    status: Optional[Literal["open", "in_progress", "done"]] = None
+    notes: Optional[str] = None
+    due_at: Optional[int] = Field(default=None, ge=0)
+
+
+
+
+# ---------------------------------------------------------------------------
+# Leases (open-property vertical — LSE-001 / LSE-002 / LSE-003)
+# ---------------------------------------------------------------------------
+
+
+class LeaseCreateIn(BaseModel):
+    tenant_id: str
+    property_id: str
+    unit_id: str
+    start_date: int                                     # Unix ts; required
+    end_date: Optional[int] = None                      # Unix ts; None = month-to-month
+    monthly_rent_cents: int = Field(ge=0)
+    security_deposit_cents: int = Field(default=0, ge=0)
+    rent_due_day: int = Field(ge=1, le=28)
+    late_fee_type: str = "none"                         # none | flat | percent
+    late_fee_cents: int = Field(default=0, ge=0)
+    late_fee_percent_bps: int = Field(default=0, ge=0, le=10000)
+    late_fee_grace_days: int = Field(default=0, ge=0)
+    currency: str = "usd"
+    notes: str = ""
+    renewal_notice_days: int = Field(default=30, ge=1, le=365)
+    force_draft: bool = False
+
+
+class LeasePatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    end_date: Optional[int] = None
+    monthly_rent_cents: Optional[int] = Field(default=None, ge=0)
+    security_deposit_cents: Optional[int] = Field(default=None, ge=0)
+    rent_due_day: Optional[int] = Field(default=None, ge=1, le=28)
+    late_fee_type: Optional[str] = None
+    late_fee_cents: Optional[int] = Field(default=None, ge=0)
+    late_fee_percent_bps: Optional[int] = Field(default=None, ge=0, le=10000)
+    late_fee_grace_days: Optional[int] = Field(default=None, ge=0)
+    currency: Optional[str] = None
+    notes: Optional[str] = None
+    renewal_notice_days: Optional[int] = Field(default=None, ge=1, le=365)
+
+
+class LeaseStatusTransitionIn(BaseModel):
+    status: str  # upcoming | active | ended
+
+
+class LeaseOut(BaseModel):
+    lease_id: str
+    lease_number: str
+    user_sub: str
+    tenant_id: str
+    property_id: str
+    unit_id: str
+    status: str
+    start_date: int
+    end_date: Optional[int] = None
+    monthly_rent_cents: int
+    security_deposit_cents: int
+    rent_due_day: int
+    late_fee_type: str
+    late_fee_cents: int
+    late_fee_percent_bps: int
+    late_fee_grace_days: int
+    currency: str
+    notes: str
+    renewal_notice_days: int
+    renewal_notified_at: Optional[int] = None
+    created_at: int
+    updated_at: int
+
+
+class LeaseListOut(BaseModel):
+    leases: List[LeaseOut]
+    count: int
+    next_cursor: Optional[str] = None
+
+
+
+
+# ── ATS Skills (RSK-001) ──────────────────────────────────────────────────────
+
+class SkillOut(BaseModel):
+    skill_id: str
+    name: str
+    usage_count: int = 0
+    weight: Optional[int] = None          # 1-5, candidate proficiency
+    required: Optional[bool] = None       # job_order required flag
+    created_at: int = 0
+
+
+class SkillAssignmentIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    weight: Optional[int] = Field(None, ge=1, le=5)
+    required: Optional[bool] = None
+
+
+class EntitySkillsOut(BaseModel):
+    entity_type: str
+    entity_id: str
+    skills: List[SkillOut]
+
+
+# ── ATS Résumé Search (RSK-002/RSK-003) ─────────────────────────────────────
+
+class ResumeExtractionOut(BaseModel):
+    candidate_id: str
+    attachment_id: str
+    extraction_status: str      # "ok" | "unsupported" | "error" | "disabled"
+    char_count: int
+    extracted_at: Optional[int] = None
+
+
+class ResumeSearchResultItem(BaseModel):
+    candidate_id: str
+    name_snippet: str
+    owner_sub: str
+    updated_at: int
+
+
+class ResumeSearchOut(BaseModel):
+    items: List[ResumeSearchResultItem]
+    query: str
+    total_estimate: int
+    has_more: bool
+
+
+# ── ATS Skill Search (RSK-004) ───────────────────────────────────────────────
+
+class CandidateMatchOut(BaseModel):
+    candidate_id: str
+    name: str
+    email: Optional[str] = None
+    matched_skill_ids: List[str]
+    match_score: float
+    owner_sub: Optional[str] = None
+
+
+class JobOrderMatchOut(BaseModel):
+    job_order_id: str
+    title: str
+    status: str
+    matched_skill_ids: List[str]
+    match_score: float
+
+
+class SkillSearchResultsOut(BaseModel):
+    items: List[Union[CandidateMatchOut, JobOrderMatchOut]]
+    total: int
+    query_skill_ids: List[str]
+    match: str
+
+
+
+
+# ---------------------------------------------------------------------------
+# QloApps Hotel PMS — Stay-Search + Reservation Lifecycle (HTL-017..HTL-021)
+# ---------------------------------------------------------------------------
+
+
+class StaySearchIn(BaseModel):
+    """HTL-017 stay-search request payload."""
+    hotel_id: Optional[str] = None   # one of hotel_id | city required (else 422)
+    city: Optional[str] = None
+    checkin: str                     # "YYYY-MM-DD" (inclusive — first night)
+    checkout: str                    # "YYYY-MM-DD" (exclusive — departure day)
+    adults: int = Field(ge=1)
+    children: int = Field(default=0, ge=0)
+    rooms: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def _check_target(self) -> "StaySearchIn":
+        if not (self.hotel_id or self.city):
+            raise ValueError("one of hotel_id or city is required")
+        return self
+
+
+class StayRoomTypeResult(BaseModel):
+    """HTL-017 — one available room type in a stay-search result."""
+    hotel_id: str
+    room_type_id: str
+    name: str
+    available: bool                   # always True for a surviving result
+    min_remaining: int
+    rooms: int
+    per_night: List[Any] = []        # List[NightLineOut] — typed as Any until HTL-015 merges
+    total_cents: int
+    currency: str
+    applied_rule_ids: List[str] = []
+
+
+class StaySearchResult(BaseModel):
+    """HTL-017 — full stay-search response."""
+    checkin: str
+    checkout: str
+    nights: int
+    adults: int
+    children: int
+    rooms: int
+    results: List[StayRoomTypeResult]
+    result_count: int
+
+
+class ReservationCreateIn(BaseModel):
+    """HTL-018 — reservation creation payload."""
+    hotel_id: str
+    guest_party_id: str
+    room_type_id: str
+    checkin: str                      # "YYYY-MM-DD"
+    checkout: str                     # "YYYY-MM-DD" (exclusive)
+    adults: int = Field(ge=1)
+    children: int = Field(ge=0, default=0)
+    rooms: int = Field(ge=1, default=1)
+    deposit_cents: int = Field(ge=0, default=0)
+
+
+class StayReservationOut(BaseModel):
+    """HTL-018 — full reservation read response (named StayReservationOut to avoid
+    collision with the live inventory ReservationOut at app/models.py:618)."""
+    reservation_id: str
+    hotel_id: str
+    guest_party_id: str
+    room_type_id: str
+    assigned_room_ids: List[str]
+    checkin: str
+    checkout: str
+    nights: int
+    adults: int
+    children: int
+    rooms: int
+    total_cents: int
+    deposit_cents: int
+    currency: str
+    status: Literal["confirmed", "checked_in", "checked_out", "cancelled", "no_show"]
+    hold_id: str
+    version: int
+    created_at: int
+    updated_at: int
+
+
+class ReservationTransitionIn(BaseModel):
+    """HTL-019 — lifecycle transition request."""
+    target_status: Literal["checked_in", "checked_out", "cancelled", "no_show"]
+    reason: str = ""
+    assigned_room_ids: Optional[List[str]] = None   # required by the service on → checked_in
+
+
+class ReservationActionIn(BaseModel):
+    """HTL-019 — body for the dedicated literal lifecycle endpoints
+    (check-in / check-out / cancel / no-show). The target status is implied by
+    the route, so ``target_status`` is NOT required here — only the optional
+    ``reason`` and (for check-in) ``assigned_room_ids``."""
+    reason: str = ""
+    assigned_room_ids: Optional[List[str]] = None
+
+
+class ReservationModifyIn(BaseModel):
+    """HTL-019 — modify-reservation request (all fields optional; None = keep current)."""
+    checkin: Optional[str] = None
+    checkout: Optional[str] = None
+    room_type_id: Optional[str] = None
+    adults: Optional[int] = Field(default=None, ge=1)
+    children: Optional[int] = Field(default=None, ge=0)
+    rooms: Optional[int] = Field(default=None, ge=1)
+
+
+class ReservationHistoryEntry(BaseModel):
+    """HTL-019 — one append-only HIST# child row."""
+    event_id: str
+    from_status: str
+    to_status: str
+    actor: str
+    reason: str
+    ts: int
+
+
+
+
+# ---------------------------------------------------------------------------
+# EML-002: Admin email settings
+# ---------------------------------------------------------------------------
+
+class EmailSettingsOut(BaseModel):
+    from_email: str
+    reply_to_email: Optional[str] = None
+    ses_enabled: bool
+    smtp_enabled: bool
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+    source: str  # "ddb_override" | "env_fallback"
+
+
+class EmailSettingsUpdate(BaseModel):
+    from_email: Optional[str] = None
+    reply_to_email: Optional[str] = None
+    ses_enabled: Optional[bool] = None
+    smtp_enabled: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# EML-003: Per-user email account connections
+# ---------------------------------------------------------------------------
+
+class EmailAccountCreateIn(BaseModel):
+    label: str = Field(..., max_length=100)
+    imap_host: str
+    imap_port: int = Field(default=993, ge=1, le=65535)
+    imap_use_ssl: bool = True
+    smtp_host: str
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_use_tls: bool = True
+    username: str
+    password: str = Field(..., min_length=1)
+    is_default: bool = False
+
+
+class EmailAccountUpdateIn(BaseModel):
+    label: Optional[str] = Field(default=None, max_length=100)
+    imap_host: Optional[str] = None
+    imap_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    imap_use_ssl: Optional[bool] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    smtp_use_tls: Optional[bool] = None
+    username: Optional[str] = None
+    password: Optional[str] = Field(default=None, min_length=1)
+    is_default: Optional[bool] = None
+
+
+class EmailAccountOut(BaseModel):
+    account_id: str
+    label: str
+    imap_host: str
+    imap_port: int
+    imap_use_ssl: bool
+    smtp_host: str
+    smtp_port: int
+    smtp_use_tls: bool
+    username: str
+    is_default: bool
+    created_at: int
+    updated_at: int
+    status: str
+    last_error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# EML-004: IMAP inbox sync
+# ---------------------------------------------------------------------------
+
+class SyncInboxIn(BaseModel):
+    folder: str = "INBOX"
+    max_fetch: Optional[int] = Field(default=None, ge=1, le=500)
+
+
+class SyncInboxOut(BaseModel):
+    synced: int
+    folder: str
+    last_uid: int
+
+
+class EmailMessageOut(BaseModel):
+    uid: int
+    message_id: str
+    in_reply_to: Optional[str] = None
+    references: List[str] = []
+    thread_id: str
+    subject: str
+    from_addr: str
+    to_addrs: List[str] = []
+    cc_addrs: List[str] = []
+    date_ts: int
+    folder: str
+    flags: List[str] = []
+    snippet: str
+    body_text: Optional[str] = None
+    body_html: Optional[str] = None
+    body_html_url: Optional[str] = None
+    has_attachments: bool = False
+    synced_at: int
+
+
+class EmailMessageListOut(BaseModel):
+    items: List[EmailMessageOut]
+    next_cursor: Optional[str] = None
+
+
+class EmailThreadOut(BaseModel):
+    thread_id: str
+    messages: List[EmailMessageOut]
+
+
+# ---------------------------------------------------------------------------
+# EML-007: Email archiving
+# ---------------------------------------------------------------------------
+
+class ArchiveEmailIn(BaseModel):
+    account_id: str
+    uid: int
+    entity_type: Literal["contact", "ticket"]
+    entity_id: str
+
+
+class ArchivedEmailOut(BaseModel):
+    pk: str
+    sk: str
+    entity_type: str
+    entity_id: str
+    user_sub: str
+    account_id: str
+    uid: int
+    message_id: str
+    message_id_hash: str
+    subject: str
+    from_addr: str
+    snippet: str
+    date_ts: int
+    archived_at: int
+
+
+# ---------------------------------------------------------------------------
+# EML-009: Campaign email template models
+# ---------------------------------------------------------------------------
+
+class CampaignEmailTemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=50_000)
+    campaign_id: Optional[str] = Field(default=None, max_length=64)
+    merge_fields: List[str] = Field(default_factory=list)
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def _strip_scripts(cls, v):
+        if isinstance(v, str):
+            return re.sub(
+                r"<script[^>]*>.*?</script>", "", v,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+        return v
+
+    @field_validator("merge_fields", mode="before")
+    @classmethod
+    def _validate_merge_fields(cls, v):
+        if not isinstance(v, list):
+            return v
+        for f in v:
+            if not re.fullmatch(r"[a-zA-Z0-9_]{1,64}", str(f)):
+                raise ValueError(f"Invalid merge field name: {f!r}")
+        return v
+
+
+class CampaignEmailTemplateUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    subject: Optional[str] = Field(default=None, max_length=200)
+    body: Optional[str] = Field(default=None, max_length=50_000)
+    campaign_id: Optional[str] = Field(default=None, max_length=64)
+    merge_fields: Optional[List[str]] = None
+    active: Optional[bool] = None
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def _strip_scripts(cls, v):
+        if isinstance(v, str):
+            return re.sub(
+                r"<script[^>]*>.*?</script>", "", v,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+        return v
+
+
+class CampaignEmailTemplateOut(NotificationTemplateOut):
+    campaign_id: Optional[str] = None
+    merge_fields: List[str] = Field(default_factory=list)
+
+
+class CampaignEmailTemplatePreviewOut(NotificationTemplatePreviewOut):
+    merge_fields: List[str] = Field(default_factory=list)
+
+
+
+
+# ---------------------------------------------------------------------------
+# OBP Transaction Requests + Step-Up SCA (TXR-001..TXR-005)
+# ---------------------------------------------------------------------------
+
+
+class TxnRequestType(str, Enum):
+    WALLET_TRANSFER = "WALLET_TRANSFER"
+    COUNTERPARTY = "COUNTERPARTY"
+    PAYOUT = "PAYOUT"
+    REFUND = "REFUND"
+    FREE_FORM = "FREE_FORM"
+
+
+class TxnRequestCreateIn(BaseModel):
+    type: TxnRequestType
+    amount_cents: int = Field(..., gt=0, description="Amount in cents, must be > 0")
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    target: Dict[str, Any] = Field(default_factory=dict)
+    reason: Optional[str] = None
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
+
+
+class TxnRequestOut(BaseModel):
+    request_id: str
+    type: TxnRequestType
+    amount_cents: int
+    currency: str
+    target: Dict[str, Any]
+    # INITIATED | PENDING | IN_FLIGHT (transient) | COMPLETED | FAILED
+    status: str
+    sca_challenge_id: Optional[str] = None
+    required_factors: Optional[List[str]] = None
+    sca_required_factors: Optional[List[str]] = None
+    ledger_refs: List[str] = []
+    created_at: int
+    updated_at: int
+    failure_reason: Optional[str] = None
+
+
+class TxnRequestListOut(BaseModel):
+    items: List[TxnRequestOut]
+    next_cursor: Optional[str] = None
+
+
+class InvoiceAddressOut(BaseModel):
+    """INV-001: invoice billing/shipping address (additive)."""
+    street: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = ""
+
+
+class TaxBreakdownEntry(BaseModel):
+    """INV-006: one entry per distinct per-line tax rate on an invoice."""
+    name: str = ""
+    rate_bps: int = 0
+    tax_cents: int = 0
+
+
+    unit_price_cents: int = 0  # INV-001
+    tax_rate_bps: int = 0      # INV-006
+    tax_cents: int = 0         # INV-006
+    invoice_type: str  # tip, unlock, subscription, shop, deposit, b2b
+    # QUO-005 standalone-lifecycle fields (additive; default to safe values).
+    aos_quote_id: str = ""
+    payment_terms_days: Optional[int] = None
+    due_date: Optional[int] = None
+    voided_at: Optional[int] = None
+    # INV-001: extended AOS invoice fields.
+    billing_address: Optional[InvoiceAddressOut] = None
+    shipping_address: Optional[InvoiceAddressOut] = None
+    discount_cents: int = 0
+    shipping_cents: int = 0
+    # INV-003: currency conversion snapshot.
+    original_currency: str = ""
+    original_amount_cents: int = 0
+    usd_amount_cents: int = 0
+    exchange_rate_snapshot: Optional[float] = None
+    # INV-006: per-line tax breakdown.
+    tax_breakdown: List[TaxBreakdownEntry] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# INV-002 / INV-005: CRM currency + tax-rate registries
+# ---------------------------------------------------------------------------
+from decimal import Decimal as _InvDecimal  # noqa: E402
+
+
+class CurrencyCreateIn(BaseModel):
+    iso_code: str = Field(..., min_length=3, max_length=3)
+    name: str = Field(..., min_length=1, max_length=64)
+    symbol: str = Field(..., min_length=1, max_length=8)
+    rate_to_usd: _InvDecimal = Field(..., gt=_InvDecimal("0"))
+    decimal_places: int = Field(default=2, ge=0, le=4)
+    is_active: bool = True
+
+
+class CurrencyPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=64)
+    symbol: Optional[str] = Field(default=None, max_length=8)
+    rate_to_usd: Optional[_InvDecimal] = Field(default=None, gt=_InvDecimal("0"))
+    decimal_places: Optional[int] = Field(default=None, ge=0, le=4)
+    is_active: Optional[bool] = None
+
+
+class CurrencyOut(BaseModel):
+    iso_code: str
+    name: str
+    symbol: str
+    rate_to_usd: float
+    decimal_places: int = 2
+    is_active: bool = True
+    is_default: bool = False
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class CurrencyListOut(BaseModel):
+    currencies: List[CurrencyOut] = Field(default_factory=list)
+
+
+class TaxRateCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    rate_bps: int = Field(..., ge=0, le=10000)
+    jurisdiction: str = Field(..., min_length=1, max_length=20)
+    description: str = Field(default="", max_length=500)
+
+
+class TaxRatePatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    rate_bps: Optional[int] = Field(default=None, ge=0, le=10000)
+    jurisdiction: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    description: Optional[str] = Field(default=None, max_length=500)
+    is_active: Optional[bool] = None
+
+
+class TaxRateOut(BaseModel):
+    tax_rate_id: str
+    name: str
+    rate_bps: int
+    jurisdiction: str
+    description: str = ""
+    is_active: bool = True
+    created_by: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class TaxRateListOut(BaseModel):
+    tax_rates: List[TaxRateOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# Rent Ledger (open-property vertical, RNT-001..RNT-006). Additive.
+# ---------------------------------------------------------------------------
+class RentChargeOut(BaseModel):
+    """Response shape for a posted rent_charge ledger row."""
+    pk: str
+    sk: str
+    entry_id: str
+    ts: int
+    type: Literal["rent_charge"]
+    state: str
+    amount_cents: int
+    reason: str
+    ledger_date: str
+    lease_id: str
+    property_id: str = ""
+    unit_id: str = ""
+    tenant_id: str = ""
+    period: str
+    rent_kind: Literal["charge"]
+    currency: str
+    signed_amount_cents: Optional[int] = None
+
+
+class RentChargeSkipOut(BaseModel):
+    skipped: bool
+    reason: Literal["already_charged"]
+    period: str
+
+
+class RentPaymentIn(BaseModel):
+    amount_cents: int = Field(ge=1)
+    method: Literal["cash", "check", "bank_transfer", "card_external", "other"]
+    paid_on: Optional[int] = Field(default=None)
+    reference: Optional[str] = Field(default="", max_length=256)
+    period: Optional[str] = Field(default=None, pattern=r"^\d{4}-(?:0[1-9]|1[0-2])$")
+    notes: Optional[str] = Field(default="", max_length=1024)
+
+
+class RentLedgerRowOut(BaseModel):
+    sk: str
+    ts: int
+    type: str
+    rent_kind: str
+    amount_cents: int
+    state: str
+    reason: str
+    period: Optional[str] = None
+    lease_id: Optional[str] = None
+    property_id: Optional[str] = None
+    unit_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    currency: Optional[str] = None
+    signed_amount_cents: Optional[int] = None
+    status: Optional[str] = None
+    method: Optional[str] = None
+    reference: Optional[str] = None
+    paid_on: Optional[int] = None
+    ledger_date: Optional[str] = None
+
+
+class RentPaymentOut(BaseModel):
+    ledger_sk: str
+    period: str
+    amount_cents: int
+    method: str
+    reference: str
+    paid_on: Optional[int] = None
+    charge_status: Optional[str] = None
+
+
+class RentChargeListOut(BaseModel):
+    lease_id: str
+    charges: List[RentLedgerRowOut]
+    as_of_ts: int
+
+
+class RentHistoryOut(BaseModel):
+    rows: List[RentLedgerRowOut]
+    count: int
+    next_cursor: Optional[str] = None
+
+
+class RentVoidIn(BaseModel):
+    reason: str = ""
+
+
+class RentVoidOut(BaseModel):
+    ok: bool
+    ledger_sk: str
+    state: str
+
+
+class RentAgingOut(BaseModel):
+    current_cents: int
+    days_30_cents: int
+    days_60_cents: int
+    days_90_plus_cents: int
+    total_open_cents: int
+    open_item_count: int
+    source: str
+
+
+class RentPeriodSummaryOut(BaseModel):
+    period: str
+    scope: str
+    charged_cents: int
+    collected_cents: int
+    outstanding_cents: int
+    overdue_cents: int
+    due_settled_cents_all_time: int
+    charge_count: int
+    payment_count: int
+    lease_count: int
+    aging: Optional[RentAgingOut] = None
+
+
+class RentPeriodsOut(BaseModel):
+    periods: List[str]
+    count: int
+
+
+class RentRunTriggerIn(BaseModel):
+    period: Optional[str] = None
+
+
+class RentRunResultOut(BaseModel):
+    period: str
+    charged: int
+    skipped: int
+    lease_count: int
+
+
+
+
+# ── OFBiz Facility/Fulfillment (FAC-003) ─────────────────────────────────────
+# Pydantic models for facility CRUD, stock transfers, inbound receiving,
+# pick/pack/ship lifecycle, and optional lot/serial tracking.
+# All Out models coerce DynamoDB Decimal → int via field_validator(mode="before").
+# Importable unconditionally; flag gate enforced at service layer (FAC-004+).
+
+
+class FacilityIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    facility_type: str = Field(
+        default="warehouse",
+        pattern="^(warehouse|retail|virtual|drop_ship)$",
+    )
+    description: Optional[str] = Field(default=None, max_length=1000)
+    # address stored as DDB Map (M) per FAC-001/002 authoritative schema.
+    address: Optional[dict] = Field(default=None)
+    owner_sub: Optional[str] = Field(default=None, max_length=256)
+    idempotency_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class FacilityOut(BaseModel):
+    facility_id: str
+    name: str
+    facility_type: str = "warehouse"
+    description: Optional[str] = None
+    address: Optional[dict] = None
+    owner_sub: Optional[str] = None
+    status: str = "active"  # active | archived
+    created_at: int = 0
+    updated_at: int = 0
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class FacilityLocationIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    location_type: str = Field(
+        default="bulk",
+        pattern="^(bulk|bin|aisle|shelf|staging|receiving|shipping)$",
+    )
+    description: Optional[str] = Field(default=None, max_length=500)
+    parent_location_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class FacilityLocationOut(BaseModel):
+    facility_id: str
+    location_id: str
+    name: str
+    location_type: str = "bulk"
+    description: Optional[str] = None
+    parent_location_id: Optional[str] = None
+    status: str = "active"  # active | archived
+    created_at: int = 0
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class FacilityListOut(BaseModel):
+    facilities: List[FacilityOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class FacilityLocationListOut(BaseModel):
+    locations: List[FacilityLocationOut] = Field(default_factory=list)
+
+
+# Transfer models
+
+class TransferItemIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    quantity: int = Field(ge=1, le=10_000_000)
+
+
+class TransferIn(BaseModel):
+    from_facility_id: str = Field(min_length=1, max_length=128)
+    from_location_id: str = Field(min_length=1, max_length=128)
+    to_facility_id: str = Field(min_length=1, max_length=128)
+    to_location_id: str = Field(min_length=1, max_length=128)
+    lines: List[TransferItemIn] = Field(min_length=1, max_length=500)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class TransferItemOut(BaseModel):
+    sku: str
+    quantity: int = 0
+    picked_quantity: int = 0  # units physically moved
+    status: str = "pending"  # pending | moved | short
+
+    @field_validator("quantity", "picked_quantity", mode="before")
+    @classmethod
+    def _coerce_qty(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class TransferOut(BaseModel):
+    transfer_id: str
+    from_facility_id: str
+    from_location_id: str
+    to_facility_id: str
+    to_location_id: str
+    status: str  # requested | in_transit | completed | cancelled
+    notes: Optional[str] = None
+    lines: List[TransferItemOut] = Field(default_factory=list)
+    created_by: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+    completed_at: Optional[int] = None
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+    @field_validator("completed_at", mode="before")
+    @classmethod
+    def _coerce_opt_ts(cls, v: Any) -> Optional[int]:
+        return None if v is None else int(v)
+
+
+class TransferListOut(BaseModel):
+    transfers: List[TransferOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# Receiving models
+
+class ReceiveLineIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    quantity: int = Field(ge=1, le=10_000_000)
+    unit_cost_cents: Optional[int] = Field(default=None, ge=0, le=1_000_000_000)
+    lot_label: Optional[str] = Field(default=None, max_length=128)
+    serials: List[str] = Field(default_factory=list, max_length=10_000)
+
+
+class ReceiveIn(BaseModel):
+    facility_id: str = Field(min_length=1, max_length=128)
+    location_id: str = Field(min_length=1, max_length=128)
+    lines: List[ReceiveLineIn] = Field(min_length=1, max_length=500)
+    po_id: Optional[str] = Field(default=None, max_length=128)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    # Required to enforce idempotency: sha256(correlation_id) → receipt_id.
+    correlation_id: str = Field(min_length=1, max_length=256)
+
+
+class ReceiptLineOut(BaseModel):
+    sku: str
+    ordered_quantity: int = 0  # from linked PO line; 0 if no PO
+    received_quantity: int = 0
+    unit_cost_cents: int = 0
+    receipt_status: str = "received"  # received | short | over
+    lot_id: Optional[str] = None
+
+    @field_validator("ordered_quantity", "received_quantity", "unit_cost_cents", mode="before")
+    @classmethod
+    def _coerce_qty(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class ReceiptOut(BaseModel):
+    receipt_id: str
+    facility_id: str
+    location_id: str
+    po_id: Optional[str] = None
+    correlation_id: str
+    status: str  # received | partial | over | cancelled
+    notes: Optional[str] = None
+    lines: List[ReceiptLineOut] = Field(default_factory=list)
+    received_by: Optional[str] = None
+    created_at: int = 0
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class ReceiptListOut(BaseModel):
+    receipts: List[ReceiptOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# Pick / pack / ship models
+
+class PickLineOut(BaseModel):
+    line_id: str  # e.g. "LINE#1"
+    order_line_id: str
+    sku: str
+    requested_quantity: int = 0
+    picked_quantity: int = 0
+    from_facility_id: str = ""
+    from_location_id: str = ""
+    reservation_id: Optional[str] = None
+    status: str = "pending"  # pending | picked | short | cancelled
+
+    @field_validator("requested_quantity", "picked_quantity", mode="before")
+    @classmethod
+    def _coerce_qty(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class PicklistOut(BaseModel):
+    picklist_id: str
+    order_id: str
+    status: str  # pending | picking | picked | packed | cancelled
+    lines: List[PickLineOut] = Field(default_factory=list)
+    created_by: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+    packed_at: Optional[int] = None
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+    @field_validator("packed_at", mode="before")
+    @classmethod
+    def _coerce_opt_ts(cls, v: Any) -> Optional[int]:
+        return None if v is None else int(v)
+
+
+class PackageLineIn(BaseModel):
+    order_line_id: str = Field(min_length=1, max_length=128)
+    sku: str = Field(min_length=1, max_length=256)
+    quantity: int = Field(ge=1, le=10_000_000)
+
+
+class PackageIn(BaseModel):
+    weight_grams: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    length_mm: Optional[int] = Field(default=None, ge=0)
+    width_mm: Optional[int] = Field(default=None, ge=0)
+    height_mm: Optional[int] = Field(default=None, ge=0)
+    contents: List[PackageLineIn] = Field(min_length=1, max_length=500)
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
+class PackageOut(BaseModel):
+    package_id: str  # e.g. "1" (PKG# prefix stripped by service layer)
+    weight_grams: int = 0
+    length_mm: int = 0
+    width_mm: int = 0
+    height_mm: int = 0
+    contents: List[PackageLineIn] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+    @field_validator("weight_grams", "length_mm", "width_mm", "height_mm", mode="before")
+    @classmethod
+    def _coerce_dim(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+class FulfillmentShipmentIn(BaseModel):
+    picklist_id: str = Field(min_length=1, max_length=128)
+    carrier: str = Field(min_length=1, max_length=100)
+    tracking_number: str = Field(min_length=1, max_length=200)
+    service_level: Optional[str] = Field(default=None, max_length=100)
+    packages: List[PackageIn] = Field(min_length=1, max_length=500)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class FulfillmentShipmentOut(BaseModel):
+    shipment_id: str
+    order_id: str
+    picklist_id: str
+    status: str  # draft | packed | shipped | delivered | cancelled
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    service_level: Optional[str] = None
+    packages: List[PackageOut] = Field(default_factory=list)
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: int = 0
+    shipped_at: Optional[int] = None
+    delivered_at: Optional[int] = None
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+    @field_validator("shipped_at", "delivered_at", mode="before")
+    @classmethod
+    def _coerce_opt_ts(cls, v: Any) -> Optional[int]:
+        return None if v is None else int(v)
+
+
+class ShipmentListOut(BaseModel):
+    shipments: List[ShipmentOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# Lot / serial models (FAC-014, optional; defined here to prevent a second models.py PR)
+
+class LotSummaryOut(BaseModel):
+    """Simplified lot view owned by FAC-003. FAC-014 adds the full LotOut."""
+    sku: str
+    lot_id: str
+    quantity: int = 0
+    received_at: int = 0
+    expires_at: Optional[int] = None
+    receipt_id: Optional[str] = None
+    notes: Optional[str] = None
+
+    @field_validator("quantity", "received_at", mode="before")
+    @classmethod
+    def _coerce_int(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+    @field_validator("expires_at", mode="before")
+    @classmethod
+    def _coerce_opt_int(cls, v: Any) -> Optional[int]:
+        return None if v is None else int(v)
+
+
+class SerialOut(BaseModel):
+    sku: str
+    serial: str
+    lot_id: Optional[str] = None
+    status: str = "on_hand"  # on_hand | picked | shipped | returned
+    receipt_id: Optional[str] = None
+    shipment_id: Optional[str] = None
+    received_at: int = 0
+
+    @field_validator("received_at", mode="before")
+    @classmethod
+    def _coerce_ts(cls, v: Any) -> int:
+        return 0 if v is None else int(v)
+
+
+
+
+# ── Hotel Front Desk (HTL-022..024) ─────────────────────────────────────────
+# Additive read-only and action models for the QloApps hotel front-desk
+# console.  No existing model is modified; these are appended at the end
+# per CLAUDE.md "APPEND new Pydantic models at END of app/models.py".
+
+
+class FrontDeskRow(BaseModel):
+    """A reservation projection for a front-desk console row (HTL-022)."""
+    reservation_id: str
+    hotel_id: str
+    room_type_id: str
+    guest_name: str
+    guest_sub: str
+    checkin: str              # "YYYY-MM-DD"
+    checkout: str             # "YYYY-MM-DD"
+    status: Literal["confirmed", "checked_in", "checked_out", "cancelled", "no_show"]
+    nights: int
+    occupancy_adults: int
+    occupancy_children: int
+    assigned_room_ids: List[str] = []
+    total_cents: int
+
+
+class FrontDeskListOut(BaseModel):
+    """Paginated list envelope for the front-desk console (HTL-022)."""
+    rows: List[FrontDeskRow]
+    count: int
+    cursor: Optional[str] = None
+
+
+class OccupancySnapshotOut(BaseModel):
+    """Live occupancy snapshot for a hotel on a given date (HTL-022)."""
+    hotel_id: str
+    date: str                 # "YYYY-MM-DD"
+    rooms_total: int
+    rooms_occupied: int
+    rooms_available: int
+    rooms_out_of_service: int
+    occupancy_rate: float     # rooms_occupied / max(rooms_total, 1); 0.0..1.0
+    arrivals_count: int
+    departures_count: int
+    in_house_count: int
+
+
+class WalkInBookingIn(BaseModel):
+    """Walk-in create+check-in request body (HTL-023)."""
+    room_type_id: str
+    checkin: str              # "YYYY-MM-DD"
+    checkout: str             # "YYYY-MM-DD"
+    occupancy_adults: int = Field(default=1, ge=1)
+    occupancy_children: int = Field(default=0, ge=0)
+    guest_name: str
+    guest_sub: Optional[str] = None
+    assigned_room_ids: Optional[List[str]] = None
+    total_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class AssignRoomIn(BaseModel):
+    """Assign / change room request body (HTL-023)."""
+    assigned_room_ids: List[str]
+    version: int = Field(ge=0)
+
+
+class RoomMoveIn(BaseModel):
+    """Room-move request body (HTL-023)."""
+    from_room_id: str
+    to_room_id: str
+    version: int = Field(ge=0)
+
+
+class FrontDeskActionOut(BaseModel):
+    """Action response: updated reservation row + affected room rows (HTL-023)."""
+    reservation: FrontDeskRow
+    affected_rooms: List[dict] = []
+
+
+
+
+# ── ATS Career Portal (PRT-001..PRT-005) ─────────────────────────────────────
+
+class CareerPortalConfigIn(BaseModel):
+    portal_name: str = Field(..., min_length=1, max_length=120)
+    intro_copy: str = Field(default="", max_length=4000)
+    logo_file_path: Optional[str] = Field(default=None)
+    primary_color: Optional[str] = Field(
+        default=None,
+        pattern=r"^#[0-9a-fA-F]{6}$",
+    )
+    support_email: Optional[str] = Field(default=None, max_length=254)
+
+
+class CareerPortalConfigOut(BaseModel):
+    portal_name: str
+    intro_copy: str
+    logo_file_path: Optional[str] = None
+    logo_url: Optional[str] = None          # resolved at read time; None when no logo
+    primary_color: Optional[str] = None
+    support_email: Optional[str] = None
+    updated_at: Optional[int] = None        # None when no row persisted yet (default config)
+    updated_by: Optional[str] = None
+
+
+class CareerJobSummaryOut(BaseModel):
+    job_order_id: str
+    slug: str
+    title: str
+    location: Optional[str] = None
+    employment_type: Optional[str] = None   # "full_time"|"part_time"|"contract"|"temp"|"referral"
+    posted_at: int = 0                      # Unix timestamp
+    openings: int = 1
+
+
+class CareerJobDetailOut(CareerJobSummaryOut):
+    public_description: Optional[str] = None
+    screening_questionnaire_slug: Optional[str] = None  # non-None → PRT-005 applies
+    apply_path: str = ""                    # "/public/careers/jobs/{slug}/apply"
+
+
+class CareerJobListOut(BaseModel):
+    items: List[CareerJobSummaryOut]
+    cursor: Optional[str] = None           # opaque HMAC-signed cursor; None = no more pages
+    total_estimate: Optional[int] = None   # always None (DynamoDB GSI queries don't count)
+
+
+# PRT-004: Self-apply
+
+class CareerApplyIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=120)
+    last_name: str = Field(..., min_length=1, max_length=120)
+    email: str = Field(..., max_length=254)
+    phone: Optional[str] = Field(None, max_length=30)
+    cover_note: Optional[str] = Field(None, max_length=4000)
+    # Bot-trap: non-empty → silent fake-success, no DDB write (CMP-006 §5.1).
+    # No max_length so arbitrarily long bot values still hit honeypot, not 422.
+    honeypot: Optional[str] = None
+    # PRT-005 extensions (backward-compatible optional fields)
+    resume_ticket_id: Optional[str] = Field(None, max_length=64)
+    screening_response_session_id: Optional[str] = Field(None, max_length=64)
+
+
+class CareerApplyOut(BaseModel):
+    application_id: str
+    candidate_id: Optional[str] = None
+    status: str  # always "received" on success
+
+
+# PRT-005: Résumé presign
+
+class CareerResumePresignIn(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=260)
+    content_type: str = Field(..., max_length=120)
+    size_bytes: int = Field(..., ge=1)
+    # Bot-trap: identical honeypot semantics to CareerApplyIn (CMP-006 §5.1).
+    honeypot: Optional[str] = None
+
+
+class CareerResumePresignOut(BaseModel):
+    upload_url: str          # /mock/s3/... in dev; presigned PUT URL in prod
+    ticket_id: str
+    key: str                 # S3 object key
+    path: str                # file-manager path: /career-portal/resumes/{job_order_id}/{uuid}.ext
+    content_type: str
+
+
+
+# ---------------------------------------------------------------------------
+# OAU-001 / OAU-005: OAuth consumer-app registry models
+# ---------------------------------------------------------------------------
+
+class CreateConsumerReq(BaseModel):
+    name: str
+    description: str = ""
+    redirect_uris: List[str]
+    allowed_scopes: List[str]
+    is_confidential: bool = True
+
+
+class UpdateConsumerReq(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    redirect_uris: Optional[List[str]] = None
+    allowed_scopes: Optional[List[str]] = None
+
+
+class ConsumerOut(BaseModel):
+    client_id: str
+    client_secret_prefix: str
+    owner_sub: str
+    name: str
+    description: str = ""
+    redirect_uris: List[str] = []
+    allowed_scopes: List[str] = []
+    is_confidential: bool = True
+    enabled: bool = True
+    created_at: int = 0
+    updated_at: int = 0
+    secret_rotated_at: int = 0
+
+
+class CreateConsumerOut(ConsumerOut):
+    client_secret: str  # present only at creation/rotation; omitted on subsequent reads
+
+
+# OAU-002: OAuth2 token models
+class OAuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    scope: str
+    refresh_token: Optional[str] = None
+    id_token: Optional[str] = None
+
+
+class OAuthErrorResponse(BaseModel):
+    error: str
+    error_description: Optional[str] = None
+
+
+
+    freq: Literal["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]
+
+
+# ─── CRM Activities (ACT-002): Calendar RSVP ─────────────────────────────────
+
+class EventAttendeeRsvpStatus(str, Enum):
+    accepted = "accepted"
+    declined = "declined"
+    tentative = "tentative"
+    no_response = "no_response"
+
+
+class EventAttendeeOut(BaseModel):
+    user_sub: str
+    rsvp_status: EventAttendeeRsvpStatus = EventAttendeeRsvpStatus.no_response
+    responded_at: Optional[int] = None   # Unix epoch; None when no_response
+
+
+class EventRsvpUpdateIn(BaseModel):
+    status: EventAttendeeRsvpStatus
+
+
+class EventAttendeeListOut(BaseModel):
+    attendees: List[EventAttendeeOut]
+
+
+class UserRsvpListOut(BaseModel):
+    items: List[dict]
+    next_cursor: Optional[str] = None
+
+
+# ─── CRM Activities (ACT-004): Event Reminders/Alarms ───────────────────────
+
+class EventReminderMethod(str, Enum):
+    email = "email"
+    in_app = "in_app"
+
+
+class EventReminderIn(BaseModel):
+    minutes_before: int = Field(ge=1, le=10080)   # 1 min to 1 week
+    method: EventReminderMethod = EventReminderMethod.in_app
+
+
+class EventRemindersSetIn(BaseModel):
+    reminders: List[EventReminderIn] = Field(default_factory=list, max_length=5)
+
+
+class EventReminderOut(BaseModel):
+    reminder_id: str
+    calendar_id: str
+    event_id: str
+    user_sub: str
+    minutes_before: int
+    method: EventReminderMethod
+    fire_at: int
+    fired: bool
+    created_at: int
+
+
+class EventRemindersOut(BaseModel):
+    reminders: List[EventReminderOut]
+    count: int
+
+
+# ─── CRM Activities (ACT-006/ACT-007): CRM Call Logging ─────────────────────
+
+class CallOutcome(str, Enum):
+    connected = "connected"
+    not_connected = "not_connected"
+    left_message = "left_message"
+    wrong_number = "wrong_number"
+    busy = "busy"
+
+
+class CallLogCreateIn(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    direction: Literal["inbound", "outbound"]
+    duration_seconds: int = Field(default=0, ge=0)
+    outcome: CallOutcome
+    call_type: Literal["audio", "video", "phone"] = "phone"
+    contact_user_sub: Optional[str] = None
+    # ACT-007: entity link (opaque, PTY will resolve once shipped)
+    linked_entity_type: Optional[Literal["contact", "lead", "account", "opportunity"]] = None
+    linked_entity_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CallLogUpdateIn(BaseModel):
+    subject: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    outcome: Optional[CallOutcome] = None
+
+
+class CallLogOut(BaseModel):
+    call_id: str
+    user_sub: str
+    subject: str
+    description: str
+    direction: str
+    duration_seconds: int
+    outcome: str
+    call_type: str
+    contact_user_sub: Optional[str] = None
+    linked_entity_type: Optional[str] = None
+    linked_entity_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CallLogListResponse(BaseModel):
+    items: List[CallLogOut]
+    next_cursor: Optional[str] = None
+
+
+# ─── CRM Activities (ACT-008): CRM Tasks ────────────────────────────────────
+
+class CrmTaskStatus(str, Enum):
+    not_started = "not_started"
+    in_progress = "in_progress"
+    completed = "completed"
+    deferred = "deferred"
+    waiting = "waiting"
+
+
+class CrmTaskPriority(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    urgent = "urgent"
+
+
+class CrmTaskCreateIn(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    status: CrmTaskStatus = CrmTaskStatus.not_started
+    priority: CrmTaskPriority = CrmTaskPriority.medium
+    due_date_ts: Optional[int] = None   # Unix epoch seconds
+    assignee_sub: Optional[str] = None
+    linked_entity_type: Optional[Literal["contact", "lead", "account", "opportunity"]] = None
+    linked_entity_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CrmTaskUpdateIn(BaseModel):
+    subject: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    status: Optional[CrmTaskStatus] = None
+    priority: Optional[CrmTaskPriority] = None
+    due_date_ts: Optional[int] = None
+    assignee_sub: Optional[str] = None
+
+
+class CrmTaskOut(BaseModel):
+    task_id: str
+    user_sub: str
+    subject: str
+    description: str
+    status: str
+    priority: str
+    due_date_ts: Optional[int] = None
+    assignee_sub: Optional[str] = None
+    linked_entity_type: Optional[str] = None
+    linked_entity_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmTaskListOut(BaseModel):
+    items: List[CrmTaskOut]
+    next_cursor: Optional[str] = None
+    count: int = 0
+
+
+# ─── CRM Activities (ACT-009): CRM Activity Timeline ────────────────────────
+
+class CrmActivityOut(BaseModel):
+    activity_id: str
+    entity_type: str
+    entity_id: str
+    activity_type: str   # call | task | note | calendar_event | email
+    user_sub: str
+    summary: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: int
+
+
+class CrmActivityTimelineOut(BaseModel):
+    entity_type: str
+    entity_id: str
+    items: List[CrmActivityOut]
+    next_cursor: Optional[str] = None
+
+
+# ─── CRM Activities (ACT-010): CRM Notes ────────────────────────────────────
+
+class CrmNoteCreateIn(BaseModel):
+    body: str = Field(default="", max_length=20_000)
+    linked_entity_type: Optional[Literal["contact", "lead", "account", "opportunity"]] = None
+    linked_entity_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CrmNoteUpdateIn(BaseModel):
+    body: str = Field(max_length=20_000)
+
+
+class CrmNoteOut(BaseModel):
+    note_id: str
+    user_sub: str
+    body: str
+    linked_entity_type: Optional[str] = None
+    linked_entity_id: Optional[str] = None
+    attachment_s3_key: Optional[str] = None
+    attachment_filename: Optional[str] = None
+    attachment_content_type: Optional[str] = None
+    attachment_url: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class CrmNoteListOut(BaseModel):
+    notes: List[CrmNoteOut]
+    next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# Maintenance Work Orders (WOV-001..WOV-004)
+# ---------------------------------------------------------------------------
+
+class MaintenanceOrderIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+    priority: str = Field("normal")
+    property_id: str
+    unit_id: Optional[str] = None
+    scheduled_for: Optional[int] = None
+    correlation_id: Optional[str] = None
+    amount_cents: Optional[int] = None  # WOV-003 escrow; ignored when sub-flag off
+
+
+class MaintenanceOrderOut(BaseModel):
+    work_order_id: str
+    property_id: str
+    unit_id: Optional[str] = None
+    vendor_id: Optional[str] = None
+    assignee_sub: Optional[str] = None
+    title: str
+    description: Optional[str] = None
+    priority: str
+    wo_status: str
+    scheduled_for: Optional[int] = None
+    cost_cents: Optional[int] = None
+    created_at: int
+    updated_at: int
+    completed_at: Optional[int] = None
+    correlation_id: str
+    actor_sub: str
+    escrow_amount_cents: Optional[int] = None  # WOV-003
+    escrow_status: Optional[str] = None         # WOV-003
+
+
+class MaintenanceOrderTransitionIn(BaseModel):
+    property_id: str = Field(..., min_length=1, max_length=64)
+    target_status: Literal["assigned", "in_progress", "completed", "cancelled"]
+    cost_cents: Optional[int] = Field(default=None, ge=0)
+    assignee_sub: Optional[str] = None
+    vendor_id: Optional[str] = None
+
+
+class MaintenanceOrderAssignIn(BaseModel):
+    property_id: str = Field(..., min_length=1, max_length=64)
+    vendor_id: Optional[str] = None
+    unit_id: Optional[str] = None
+    assignee_sub: Optional[str] = None
+
+
+class MaintenanceOrderScheduleIn(BaseModel):
+    property_id: str = Field(..., min_length=1, max_length=64)
+    scheduled_for: int = Field(..., ge=1)
+
+
+class WoListOut(BaseModel):
+    items: List[MaintenanceOrderOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Maintenance Vendors (WOV-004)
+# ---------------------------------------------------------------------------
+
+class VendorCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    trade_category: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: str = "USD"
+    payment_terms_days: int = Field(default=30, ge=0, le=365)
+    user_sub: Optional[str] = None  # WOV-003/D2: link to platform account
+
+
+class VendorPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    trade_category: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: Optional[str] = None
+    payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
+    user_sub: Optional[str] = None  # "" clears link; None leaves unchanged
+
+
+class VendorStatusIn(BaseModel):
+    status: str
+
+
+class VendorOut(BaseModel):
+    vendor_id: str
+    name: str
+    status: str
+    trade_category: str
+    source: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: str
+    payment_terms_days: int
+    user_sub: Optional[str] = None  # WOV-003/D2: linked platform account
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class VendorListOut(BaseModel):
+    vendors: List[VendorOut]
+    cursor: Optional[str] = None
+    count: int
+
+
+
+
+
+# ---------------------------------------------------------------------------
+# VEW-001 — Account Views models
+# ---------------------------------------------------------------------------
+
+class ViewGrantsMatrix(BaseModel):
+    """Per-field boolean grants — all default False (deny-by-default)."""
+    can_see_balance: bool = False
+    can_see_available_balance: bool = False
+    can_see_transaction_list: bool = False
+    can_see_transaction_amount: bool = False
+    can_see_transaction_description: bool = False
+    can_see_counterparty: bool = False
+    can_see_counterparty_name: bool = False
+    can_see_owners: bool = False
+    can_see_account_label: bool = False
+    can_see_payout_destination_masked: bool = False
+    can_add_comment: bool = False
+    can_add_tag: bool = False
+    can_add_narrative: bool = False
+    can_delete_comment: bool = False
+
+
+class ViewCreateIn(BaseModel):
+    name: str
+    grants: ViewGrantsMatrix
+    preset: Optional[str] = None
+    description: str = ""
+    metadata_visibility: str = ""
+
+
+class ViewUpdateIn(BaseModel):
+    name: Optional[str] = None
+    grants: Optional[ViewGrantsMatrix] = None
+    description: Optional[str] = None
+    metadata_visibility: Optional[str] = None
+
+
+class ViewOut(BaseModel):
+    view_id: str
+    resource_type: str
+    resource_id: str
+    owner_sub: str
+    name: str
+    description: str
+    is_system_alias: bool
+    grants: Dict[str, bool]
+    preset: Optional[str]
+    metadata_visibility: str
+    created_at: int
+    updated_at: int
+
+
+class ViewGrantCatalogOut(BaseModel):
+    fields: List[str]
+    presets: List[Dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# VEW-002 — Grant models
+# ---------------------------------------------------------------------------
+
+class ViewGrantIn(BaseModel):
+    grantee_sub: str
+
+
+class ViewGrantRespondIn(BaseModel):
+    accept: bool
+
+
+class ViewGrantOut(BaseModel):
+    grant_id: str
+    view_id: str
+    grantee_sub: str
+    owner_sub: str
+    resource_type: str
+    resource_id: str
+    status: str
+    invited_at: int
+    accepted_at: int
+    updated_at: int
+
+
+class ViewGrantListOut(BaseModel):
+    grants: List[ViewGrantOut]
+    next_cursor: Optional[str] = None
+
+
+class PublicViewLinkIn(BaseModel):
+    ttl_days: Optional[int] = None
+
+
+class PublicViewLinkOut(BaseModel):
+    url: str
+    token: str
+    expires_at: int
+
+
+class PublicViewDataOut(BaseModel):
+    resource_type: str
+    resource_id: str
+    data: Dict[str, Any]
+    expires_at: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# VEW-003 — Projection models
+# ---------------------------------------------------------------------------
+
+class ViewProvenanceOut(BaseModel):
+    view_id: str
+    view_name: str
+    preset: Optional[str]
+    granted_fields: List[str]
+
+
+class ViewedResourceOut(BaseModel):
+    resource_type: str
+    resource_id: str
+    data: Dict[str, Any]
+    view: ViewProvenanceOut = Field(alias="_view")
+    model_config = ConfigDict(populate_by_name=True)
+
+
+# ---------------------------------------------------------------------------
+# VEW-004 — Entitlement-request models
+# ---------------------------------------------------------------------------
+
+class EntitlementRequestCreateIn(BaseModel):
+    entitlement_kind: str = Field(..., pattern="^(acl_role|admin_scope)$")
+    target_ref: str = Field(..., min_length=1, max_length=200)
+    justification: str = Field(..., min_length=10, max_length=2000)
+
+
+class EntitlementDecisionIn(BaseModel):
+    reason: str = Field(default="", max_length=1000)
+
+
+class EntitlementRequestOut(BaseModel):
+    request_id: str
+    requester_sub: str
+    entitlement_kind: str
+    target_ref: str
+    justification: str
+    status: str
+    claimed_by_sub: Optional[str]
+    claimed_at: Optional[int]
+    decided_by_sub: Optional[str]
+    decided_at: Optional[int]
+    decision_reason: Optional[str]
+    grant_pending_acl: bool
+    created_at: int
+    updated_at: int
+
+
+class EntitlementAuditEventOut(BaseModel):
+    event_type: str
+    actor_sub: str
+    from_status: Optional[str]
+    to_status: Optional[str]
+    reason: str
+    created_at: int
+
+
+class EntitlementQueueOut(BaseModel):
+    requests: List[EntitlementRequestOut]
+    next_cursor: Optional[str] = None
+
+
+
+
+# ---------------------------------------------------------------------------
+# QloApps Booking-Engine Storefront (HTL-025 .. HTL-027)
+# Public, unauthenticated, storefront-safe projections.
+# These are append-only additions; no existing model is modified.
+# ---------------------------------------------------------------------------
+
+class HotelAddress(BaseModel):
+    """HTL-025: Storefront-safe hotel address (mirrors HTL-001 HotelAddress)."""
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    region: str
+    postal_code: str
+    country: str
+
+
+class HotelPolicies(BaseModel):
+    """HTL-025: Storefront-safe hotel policies (mirrors HTL-001 HotelPolicies)."""
+    cancellation_text: str = ""
+    pet_policy: str = ""
+    smoking: bool = False
+    children: bool = True
+
+
+class HotelContact(BaseModel):
+    """HTL-025: Storefront-safe hotel contact (mirrors HTL-001 HotelContact)."""
+    phone: str = ""
+    email: str = ""
+    website: str = ""
+
+
+class PublicHotelOut(BaseModel):
+    """HTL-025: Storefront-safe hotel projection (no owner_sub, no status, no internal fields)."""
+    hotel_id: str
+    name: str
+    description: str = ""
+    star_rating: int
+    check_in_time: str
+    check_out_time: str
+    address: HotelAddress
+    amenities: List[str] = []
+    photos: List[str] = []
+    policies: HotelPolicies
+    contact: HotelContact
+
+
+class PublicRoomTypeOut(BaseModel):
+    """HTL-025: Storefront-safe room-type projection."""
+    room_type_id: str
+    name: str
+    description: str = ""
+    occupancy_adults: int
+    occupancy_children: int
+    max_occupancy: int
+    bed_type: str
+    size_sqft: int
+    amenities: List[str] = []
+    photos: List[str] = []
+    base_rate_cents: int
+    currency: str = "usd"
+
+
+class PublicRoomTypeListOut(BaseModel):
+    """HTL-025: Storefront-safe list of room types."""
+    room_types: List[PublicRoomTypeOut]
+    count: int
+
+
+class PerNightAvailOut(BaseModel):
+    """HTL-026: Per-night availability + rate line in a stay quote."""
+    date: str
+    rooms_available: int
+    rate_cents: int
+
+
+class StayQuoteResultOut(BaseModel):
+    """HTL-026: One available room type's availability + total in a stay quote."""
+    room_type: PublicRoomTypeOut
+    available_rooms: int
+    per_night: List[PerNightAvailOut]
+    total_price_cents: int
+    currency: str
+
+
+class BookingStayQuoteOut(BaseModel):
+    """HTL-026: Full stay-search quote envelope (public booking-engine response)."""
+    hotel_id: str
+    checkin: str
+    checkout: str
+    nights: int
+    adults: int
+    children: int
+    rooms: int
+    results: List[StayQuoteResultOut]
+    currency: str
+
+
+class AddRoomToCartIn(BaseModel):
+    """HTL-027: Add a room-night selection to the booking cart."""
+    hotel_id: str
+    room_type_id: str
+    checkin: str
+    checkout: str
+    adults: int = Field(ge=1, default=1)
+    children: int = Field(ge=0, default=0)
+    rooms: int = Field(ge=1, default=1)
+
+
+class GuestDetailsIn(BaseModel):
+    """HTL-027: Guest snapshot for set_guest_details."""
+    name: str
+    email: str
+    phone: str
+    address: Optional[HotelAddress] = None
+
+
+class BookingCheckoutIn(BaseModel):
+    """HTL-027: Checkout payload."""
+    payment_method_token: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+class BookingCartLineOut(BaseModel):
+    """HTL-027: A single room-night line in the booking cart projection."""
+    room_type_id: str
+    room_type_name: str
+    checkin: str
+    checkout: str
+    nights: int
+    adults: int
+    children: int
+    rooms: int
+    unit_price_cents: int
+    line_total_cents: int
+    currency: str
+
+
+class GuestSnapshotOut(BaseModel):
+    """HTL-027: Guest snapshot in the booking cart projection."""
+    name: str
+    email: str
+    phone: str
+    address: Optional[HotelAddress] = None
+
+
+class BookingCartOut(BaseModel):
+    """HTL-027: Storefront-safe booking cart projection."""
+    booking_cart_id: str
+    hotel_id: str
+    status: str
+    currency: str
+    lines: List[BookingCartLineOut]
+    total_cents: int
+    guest: Optional[GuestSnapshotOut] = None
+    created_at: str
+
+
+class BookingCheckoutResult(BaseModel):
+    """HTL-027: Checkout response."""
+    reservation_ids: List[str]
+    order_id: str
+    total_price_cents: int
+    currency: str
+    confirmation: dict
+
+
+
+
+# ── Shipping / Logistics (SHP-003, Phase 8 Module H) ────────────────────────
+
+class CarrierIn(BaseModel):
+    carrier_code: str = Field(pattern=r"^(ups|fedex|usps|dhl|manual)$")
+    display_name: str = Field(min_length=1, max_length=100)
+
+
+class CarrierOut(BaseModel):
+    carrier_id: str
+    carrier_code: str
+    display_name: str
+    online_tracking: bool
+    enabled: bool
+    created_at: int
+    updated_at: int
+
+
+class ShipmentMethodIn(BaseModel):
+    method_code: str = Field(pattern=r"^(ground|express|overnight|economy|flat_rate)$")
+    method_label: str = Field(min_length=1, max_length=100)
+    base_rate_cents: int = Field(ge=0)
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    transit_days_min: Optional[int] = Field(default=None, ge=0)
+    transit_days_max: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _transit_days_order(self) -> "ShipmentMethodIn":
+        if self.transit_days_min is not None and self.transit_days_max is not None:
+            if self.transit_days_min > self.transit_days_max:
+                raise ValueError("transit_days_min must be <= transit_days_max")
+        return self
+
+
+class ShipmentMethodOut(BaseModel):
+    carrier_id: str
+    carrier_code: str
+    method_code: str
+    method_label: str
+    base_rate_cents: int
+    currency: str
+    transit_days_min: Optional[int] = None
+    transit_days_max: Optional[int] = None
+    enabled: bool = True
+
+
+class ShippingRateRequest(BaseModel):
+    carrier_code: str = Field(pattern=r"^(ups|fedex|usps|dhl|manual)$")
+    method_code: str = Field(pattern=r"^(ground|express|overnight|economy|flat_rate)$")
+    weight_oz: int = Field(ge=0)
+    destination_zip: str = Field(min_length=1, max_length=20)
+    origin_zip: Optional[str] = Field(default=None, max_length=20)
+
+
+class ShippingRateOption(BaseModel):
+    carrier_code: str
+    method_code: str
+    rate_cents: int
+    currency: str
+    transit_days_min: Optional[int] = None
+    transit_days_max: Optional[int] = None
+    estimated_delivery: Optional[str] = None
+
+
+class ShippingRateQuote(BaseModel):
+    request_id: str
+    options: List["ShippingRateOption"]
+    currency: str
+    generated_at: int
+
+
+class ShipGroupIn(BaseModel):
+    ship_to_address: Dict[str, Any] = Field(min_length=1)
+    ship_method_id: Optional[str] = None
+    carrier_code: Optional[str] = Field(default=None, pattern=r"^(ups|fedex|usps|dhl|manual)$")
+    method_code: Optional[str] = Field(default=None, pattern=r"^(ground|express|overnight|economy|flat_rate)$")
+
+
+class ShipGroupOut(BaseModel):
+    ship_to_address: Dict[str, Any]
+    ship_method_id: Optional[str] = None
+    carrier_code: Optional[str] = None
+    method_code: Optional[str] = None
+
+
+class ShipmentPackageContentIn(BaseModel):
+    item_id: str
+    sku: Optional[str] = None
+    quantity: int = Field(ge=1)
+
+
+class ShipmentPackageIn(BaseModel):
+    weight_oz: int = Field(ge=0)
+    length_in: Optional[float] = Field(default=None, ge=0)
+    width_in: Optional[float] = Field(default=None, ge=0)
+    height_in: Optional[float] = Field(default=None, ge=0)
+    contents: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ShipmentPackageOut(BaseModel):
+    package_seq: str
+    weight_oz: int
+    length_in: Optional[float] = None
+    width_in: Optional[float] = None
+    height_in: Optional[float] = None
+    contents: List[Dict[str, Any]] = Field(default_factory=list)
+    billed_weight_oz: Optional[int] = None
+
+
+class ShipmentItemOut(BaseModel):
+    item_id: str
+    sku: Optional[str] = None
+    quantity: int
+    order_id: Optional[str] = None
+
+
+class ShipmentIn(BaseModel):
+    order_id: str = Field(min_length=1, max_length=128)
+    carrier_code: str = Field(pattern=r"^(ups|fedex|usps|dhl|manual)$")
+    method_code: str = Field(pattern=r"^(ground|express|overnight|economy|flat_rate)$")
+    ship_to_address: Dict[str, Any]
+    line_items: List[Dict[str, Any]] = Field(min_length=1)
+    packages: List[ShipmentPackageIn] = Field(default_factory=list)
+    correlation_id: Optional[str] = None
+    ship_group_seq: int = Field(default=1, ge=1)
+    purchase_txn_id: Optional[str] = None
+
+
+class ShipmentOut(BaseModel):
+    shipment_id: str
+    order_id: str
+    user_id: str
+    status: str
+    carrier_code: str
+    method_code: str
+    ship_method_id: Optional[str] = None
+    tracking_number: Optional[str] = None
+    tracking_url: Optional[str] = None
+    ship_to_address: Dict[str, Any]
+    ship_group_seq: int = 1
+    estimated_delivery: Optional[str] = None
+    shipped_at: Optional[int] = None
+    delivered_at: Optional[int] = None
+    created_at: int
+    updated_at: int
+    version: int = 1
+    items: List[ShipmentItemOut] = Field(default_factory=list)
+    packages: List[ShipmentPackageOut] = Field(default_factory=list)
+
+
+class ShipmentTrackingUpdateIn(BaseModel):
+    tracking_number: str = Field(min_length=1, max_length=100)
+    carrier_code: Optional[str] = Field(default=None, pattern=r"^(ups|fedex|usps|dhl|manual)$")
+
+
+class ShipmentAdvanceIn(BaseModel):
+    target_status: str = Field(min_length=1, max_length=50)
+    reason: Optional[str] = None
+
+
+class ShipmentCancelIn(BaseModel):
+    reason: str = Field(default="cancelled", min_length=1, max_length=500)
+    refund_shipping: bool = False
+
+
+
+
+# ---------------------------------------------------------------------------
+# CUS-001: Customer entity models
+# ---------------------------------------------------------------------------
+
+class CustomerCreateIn(BaseModel):
+    legal_name: str
+    date_of_birth: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    branch_id: Optional[str] = None
+
+
+class CustomerPatchIn(BaseModel):
+    legal_name: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    branch_id: Optional[str] = None
+    kyc_status: Optional[str] = None
+    expected_version: int
+
+
+class CustomerOut(BaseModel):
+    customer_id: str
+    customer_number: str
+    legal_name: str
+    date_of_birth: Optional[str] = None
+    mobile_phone: Optional[str] = None
+    email: Optional[str] = None
+    kyc_status: str
+    branch_id: Optional[str] = None
+    created_at: int
+    updated_at: int
+    version: int
+
+
+class CustomerAttributeSetIn(BaseModel):
+    name: str
+    type: Literal["STRING", "INTEGER", "DOUBLE", "DATE_WITH_DAY"]
+    value: str
+
+
+class CustomerAttributeOut(BaseModel):
+    attribute_id: str
+    name: str
+    type: str
+    value: str
+    created_at: int
+
+
+class CustomerListOut(BaseModel):
+    customers: List[CustomerOut]
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# CUS-002: User-link + customer message models
+# ---------------------------------------------------------------------------
+
+class CustomerLinkIn(BaseModel):
+    user_sub: str
+
+
+class CustomerLinkOut(BaseModel):
+    customer_id: str
+    user_sub: str
+    linked_at: int
+    linked_by: str
+
+
+class CustomerMessageCreateIn(BaseModel):
+    body: str = Field(max_length=10_000)
+
+
+class CustomerMessageOut(BaseModel):
+    message_id: str
+    author_sub: str
+    author_role: Literal["STAFF", "CUSTOMER"]
+    body: str
+    created_at: int
+
+
+class CustomerMessageListOut(BaseModel):
+    messages: List[CustomerMessageOut]
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# CUS-003: Card resource models
+# ---------------------------------------------------------------------------
+
+class CardOut(BaseModel):
+    card_id: str
+    brand: Optional[str] = None
+    last4: Optional[str] = None
+    exp_month: Optional[int] = None
+    exp_year: Optional[int] = None
+    label: Optional[str] = None
+    is_default: bool
+    card_status: str
+    card_version: int
+    created_at: Optional[int] = None
+
+
+class CardStatusUpdateIn(BaseModel):
+    status: str
+    expected_version: int
+
+
+class CardAttributeSetIn(BaseModel):
+    name: str
+    type: Literal["STRING", "INTEGER", "DOUBLE", "DATE_WITH_DAY"]
+    value: str
+
+
+class CardAttributeOut(BaseModel):
+    attribute_id: str
+    name: str
+    type: str
+    value: str
+    created_at: Optional[int] = None
+
+
+class CardListOut(BaseModel):
+    cards: List[CardOut]
+
+
+# ---------------------------------------------------------------------------
+# CUS-004: Financial Products + Collections models
+# ---------------------------------------------------------------------------
+
+class FinancialProductCreateIn(BaseModel):
+    product_code: str = Field(pattern=r"^[a-zA-Z0-9_\-]{1,64}$")
+    name: str
+    parent_product_code: Optional[str] = None
+    category: Optional[str] = None
+    family: Optional[str] = None
+    super_family: Optional[str] = None
+    more_info_url: Optional[str] = None
+    description: Optional[str] = None
+
+
+class FinancialProductPatchIn(BaseModel):
+    name: Optional[str] = None
+    parent_product_code: Optional[str] = None
+    category: Optional[str] = None
+    family: Optional[str] = None
+    super_family: Optional[str] = None
+    more_info_url: Optional[str] = None
+    description: Optional[str] = None
+    expected_version: int
+
+
+class FinancialProductOut(BaseModel):
+    product_code: str
+    name: str
+    parent_product_code: Optional[str] = None
+    category: Optional[str] = None
+    family: Optional[str] = None
+    super_family: Optional[str] = None
+    more_info_url: Optional[str] = None
+    description: Optional[str] = None
+    created_at: int
+    updated_at: int
+    version: int
+
+
+class FinancialProductListOut(BaseModel):
+    items: List[FinancialProductOut]
+    cursor: Optional[str] = None
+
+
+class ProductAttributeSetIn(BaseModel):
+    name: str
+    type: Literal["STRING", "INTEGER", "DOUBLE", "DATE_WITH_DAY"]
+    value: str = Field(max_length=2048)
+
+
+class ProductAttributeOut(BaseModel):
+    attribute_id: str
+    name: str
+    type: str
+    value: str
+    created_at: int
+
+
+class ProductAttributeListOut(BaseModel):
+    attributes: List[ProductAttributeOut]
+
+
+class ProductCollectionUpsertIn(BaseModel):
+    name: str
+    product_codes: List[str]
+
+
+class ProductCollectionOut(BaseModel):
+    collection_code: str
+    name: str
+    product_codes: List[str]
+    updated_at: int
+
+
+class ProductCollectionListOut(BaseModel):
+    items: List[ProductCollectionOut]
+    cursor: Optional[str] = None
+
+
+class ProductCollectionMemberIn(BaseModel):
+    product_code: str
+
+
+
+
+# ---------------------------------------------------------------------------
+# PMD-001 — Rent-policy models
+# ---------------------------------------------------------------------------
+
+class RentPolicyUpdateIn(BaseModel):
+    rent_due_day: int = Field(..., ge=1, le=28,
+        description="Day of month rent is due (1-28; 29-31 excluded for Feb safety)")
+    late_fee_cents: int = Field(..., ge=0,
+        description="Flat late fee in cents applied after grace period")
+    grace_period_days: int = Field(..., ge=0,
+        description="Days after due_day before late fee applies")
+    currency: str = Field(..., min_length=3, max_length=3,
+        description="3-letter ISO 4217 currency code, case-insensitive")
+
+    @field_validator("currency")
+    @classmethod
+    def _currency_alpha(cls, v: str) -> str:
+        v = v.strip()
+        if not v.isalpha():
+            raise ValueError("currency must be 3 alphabetic characters")
+        return v.lower()
+
+
+class RentPolicyOut(BaseModel):
+    rent_due_day: int
+    late_fee_cents: int
+    grace_period_days: int
+    currency: str
+    updated_at: Optional[int] = None
+    updated_by: Optional[str] = None
+    is_default: bool
+
+
+class RentPolicyAuditEntryOut(BaseModel):
+    actor_sub: str
+    before: Optional[Dict[str, Any]] = None
+    after: Dict[str, Any]
+    created_at: int
+
+
+class RentPolicyAuditOut(BaseModel):
+    entries: List[RentPolicyAuditEntryOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# PMD-002 — Property document link models
+# ---------------------------------------------------------------------------
+
+class PropertyDocumentLinkIn(BaseModel):
+    record_type: str = Field(..., description="One of: property, unit, lease, tenant")
+    record_id: str = Field(..., min_length=1, max_length=200)
+    doc_id: str = Field(..., min_length=1, max_length=200)
+    file_path: str = Field("", max_length=500)
+    crm_category: str = Field("", max_length=200)
+    crm_description: str = Field("", max_length=1000)
+
+
+class PropertyDocumentUnlinkIn(BaseModel):
+    record_type: str
+    record_id: str
+    doc_id: str
+
+
+class PropertyDocumentLinkOut(BaseModel):
+    doc_id: str
+    record_type: str
+    record_id: str
+    file_path: str
+    crm_category: str
+    crm_description: str
+    linked_at: Optional[int] = None
+    owner_sub: str
+
+
+class PropertyDocumentListOut(BaseModel):
+    items: List[PropertyDocumentLinkOut]
+    count: int
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# PMD-003 — Portfolio dashboard KPI models
+# ---------------------------------------------------------------------------
+
+class PortfolioKpisOut(BaseModel):
+    occupancy_rate: float
+    unit_count: int
+    occupied_units: int
+    active_lease_count: int
+    outstanding_rent_cents: int
+    open_work_order_count: int
+    computed_at: int
+
+
+class RentSnapshotOut(BaseModel):
+    year: int
+    month: int
+    charged_cents: int
+    collected_cents: int
+    outstanding_cents: int
+    overdue_cents: int
+    rent_due_day: int
+    grace_period_days: int
+    computed_at: int
+
+
+class PriorityItemOut(BaseModel):
+    kind: str
+    # Lease-expiring fields (Optional)
+    lease_id: Optional[str] = None
+    lease_number: Optional[str] = None
+    unit_id: Optional[str] = None
+    property_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    end_date: Optional[int] = None
+    monthly_rent_cents: Optional[int] = None
+    # Work-order / ticket fields (Optional)
+    work_order_id: Optional[str] = None
+    ticket_id: Optional[str] = None
+    subject: Optional[str] = None
+    title: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    updated_at: Optional[int] = None
+
+
+class PriorityItemsOut(BaseModel):
+    upcoming_expirations: List[PriorityItemOut]
+    open_work_orders: List[PriorityItemOut]
+    items: List[PriorityItemOut]
+    count: int
+
+
+class PortfolioSummaryData(BaseModel):
+    """Dashlet payload for RPT-007 portfolio_summary dashlet."""
+    occupancy_rate: float
+    unit_count: int
+    occupied_units: int
+    active_lease_count: int
+    outstanding_rent_cents: int
+    open_work_order_count: int
+    computed_at: int
+
+
+
+
+# ---------------------------------------------------------------------------
+# Hotel Guest Folio + Payments (HTL-029..HTL-032)
+# ---------------------------------------------------------------------------
+
+
+class FolioLineIn(BaseModel):
+    line_type: Literal["room_night", "addon", "tax", "fee"]
+    description: str
+    quantity: int = Field(ge=1, default=1)
+    unit_price_cents: int = Field(ge=0)
+    sku: str = ""
+
+
+class FolioLineOut(BaseModel):
+    line_id: str
+    line_type: Literal["room_night", "addon", "tax", "fee"]
+    description: str
+    quantity: int
+    unit_price_cents: int
+    amount_cents: int
+    sku: str
+    created_at: int
+
+
+class FolioOut(BaseModel):
+    reservation_id: str
+    folio_id: str
+    hotel_id: str
+    guest_sub: str
+    currency: str
+    status: Literal["open", "closed"]
+    charges_total_cents: int
+    payments_total_cents: int
+    deposit_held_cents: int = 0
+    deposit_policy_kind: Literal["none", "pct", "fixed"] = "none"
+    deposit_pct_bps: int = 0                  # set when deposit_policy_kind == "pct"
+    deposit_fixed_cents: int = 0             # set when deposit_policy_kind == "fixed"
+    balance_due_cents: int                   # computed: charges - payments
+    balance_due_on_arrival_cents: int = 0    # HTL-031: charges - payments - deposit_held
+    line_items: List[FolioLineOut]
+    closed_at: Optional[int] = None
+    created_at: int
+    updated_at: int
+
+
+class FolioAddonIn(BaseModel):
+    sku: str
+    quantity: int = Field(default=1, ge=1)
+
+
+class DepositPolicyIn(BaseModel):
+    kind: Literal["none", "pct", "fixed"] = "none"
+    pct_bps: int = Field(ge=0, le=10_000, default=0)
+    fixed_cents: int = Field(ge=0, default=0)
+
+
+class TakeDepositIn(BaseModel):
+    amount_cents: Optional[int] = Field(default=None, ge=1)
+
+
+class FolioPaymentIn(BaseModel):
+    amount_cents: int = Field(ge=1)
+    method: Literal["wallet", "card_external", "cash", "check", "bank_transfer", "deposit_applied"]
+    reference: str = ""
+
+
+
+
+# ── Purchasing / SCM (PUR-001..PUR-012) ──────────────────────────────────────
+
+class SupplierCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: str = "USD"
+    payment_terms_days: int = Field(default=30, ge=0, le=365)
+
+
+class SupplierPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: Optional[str] = None
+    payment_terms_days: Optional[int] = Field(default=None, ge=0, le=365)
+
+
+class SupplierStatusIn(BaseModel):
+    status: str  # "active" | "inactive"
+
+
+class SupplierOut(BaseModel):
+    supplier_id: str
+    name: str
+    status: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    default_currency: str
+    payment_terms_days: int
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class SupplierListOut(BaseModel):
+    suppliers: List[SupplierOut]
+    cursor: Optional[str] = None
+
+
+class SupplierProductUpsertIn(BaseModel):
+    unit_cost_cents: int = Field(ge=0, le=10_000_000_00)
+    currency: str = "USD"
+    lead_time_days: int = Field(default=0, ge=0, le=3650)
+    min_order_qty: int = Field(default=1, ge=1, le=10_000_000)
+    supplier_sku: Optional[str] = Field(default=None, max_length=256)
+    preferred: bool = False
+
+
+class SupplierProductOut(BaseModel):
+    supplier_id: str
+    sku: str
+    supplier_sku: Optional[str] = None
+    unit_cost_cents: int
+    currency: str
+    lead_time_days: int
+    min_order_qty: int
+    preferred: bool
+    updated_at: int
+
+
+class SupplierProductListOut(BaseModel):
+    products: List[SupplierProductOut]
+
+
+class PurchaseOrderLineIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=256)
+    quantity_ordered: int = Field(ge=1, le=10_000_000)
+    unit_cost_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class PurchaseOrderLineOut(BaseModel):
+    line_no: int
+    sku: str
+    quantity_ordered: int
+    quantity_received: int
+    unit_cost_cents: int
+    line_total_cents: int
+
+
+class PurchaseOrderCreateIn(BaseModel):
+    supplier_id: str
+    lines: List[PurchaseOrderLineIn] = Field(min_length=1)
+    currency: str = "USD"
+    expected_delivery_date: Optional[str] = None
+    correlation_id: Optional[str] = None
+
+
+class PurchaseOrderOut(BaseModel):
+    po_id: str
+    supplier_id: str
+    status: str
+    currency: str
+    subtotal_cents: int
+    expected_delivery_date: Optional[str] = None
+    created_by: str
+    approved_by: Optional[str] = None
+    approved_at: Optional[int] = None
+    rejected_by: Optional[str] = None
+    rejected_reason: Optional[str] = None
+    ledger_entry_sk: Optional[str] = None
+    paid_at: Optional[int] = None
+    correlation_id: str
+    created_at: int
+    updated_at: int
+    lines: List[PurchaseOrderLineOut] = Field(default_factory=list)
+
+
+class PurchaseOrderListOut(BaseModel):
+    purchase_orders: List[PurchaseOrderOut]
+    cursor: Optional[str] = None
+
+
+class PoTransitionIn(BaseModel):
+    reason: Optional[str] = None
+    rejected_reason: Optional[str] = None
+
+
+class PoReceiveLineIn(BaseModel):
+    line_no: int = Field(ge=1)
+    quantity: int = Field(ge=1, le=10_000_000)
+
+
+class PoReceiveIn(BaseModel):
+    lines: List[PoReceiveLineIn] = Field(min_length=1)
+    receipt_correlation_id: Optional[str] = None
+
+
+class PoReceiptOut(BaseModel):
+    receipt_id: str
+    po_id: str
+    received_by: str
+    lines: List[Dict[str, Any]]
+    created_at: int
+
+
+class PoReceiveOut(BaseModel):
+    receipt: PoReceiptOut
+    po: PurchaseOrderOut
+
+
+class ReorderSuggestionOut(BaseModel):
+    sku: str
+    available: int
+    reorder_point: int
+    suggested_qty: int
+    supplier_id: Optional[str] = None
+    supplier_name: Optional[str] = None
+    unit_cost_cents: Optional[int] = None
+    lead_time_days: Optional[int] = None
+    warning: Optional[str] = None
+
+
+class ReorderSuggestionListOut(BaseModel):
+    suggestions: List[ReorderSuggestionOut]
+    no_supplier_skus: List[str] = Field(default_factory=list)
+
+
+class ReorderCreatePoIn(BaseModel):
+    skus: List[str] = Field(min_length=1)
+
+
+class ApPayableOut(BaseModel):
+    po_id: str
+    entry_id: str
+    amount_cents: int
+    state: str
+    ledger_date: str
+    supplier_id: str
+    ts: int
+
+
+class PoSettlePaymentIn(BaseModel):
+    payment_ref: str
+    provider: str = "internal"
+
+
+
+
+# ---------------------------------------------------------------------------
+# CSN-001 / CSN-002: PSD2 AIS/PIS Consents
+# ---------------------------------------------------------------------------
+
+class ConsentCreateIn(BaseModel):
+    consumer_ref: str = Field(..., max_length=256)
+    consent_type: Literal["AIS", "PIS"] = "AIS"
+    account_refs: List[str] = Field(default_factory=list)
+    view_refs: List[str] = Field(default_factory=lambda: ["owner"])
+    payment_ref: Optional[str] = None
+    valid_until: Optional[int] = None
+    recurring: bool = True
+    reason: Optional[str] = Field(None, max_length=512)
+
+
+class ConsentOut(BaseModel):
+    consent_id: str
+    owner_sub: str
+    consumer_ref: str
+    consent_type: str
+    account_refs: List[str]
+    view_refs: List[str]
+    status: str
+    valid_from: int
+    valid_until: int
+    sca_challenge_id: Optional[str]
+    recurring: bool
+    reason: Optional[str]
+    created_at: int
+    updated_at: int
+    revoked_at: Optional[int]
+
+
+class ConsentListOut(BaseModel):
+    consents: List[ConsentOut]
+    cursor: Optional[str]
+    count: int
+
+
+class ConsentScaOut(BaseModel):
+    challenge_id: str
+    required_factors: List[str]
+    consent_id: str
+    status: str
+
+
+# ---------------------------------------------------------------------------
+# CSN-003: Dynamic Entities
+# ---------------------------------------------------------------------------
+
+class DynamicEntityRegisterIn(BaseModel):
+    entity_name: str
+    json_schema: dict
+    description: Optional[str] = None
+    expected_version: Optional[int] = None
+
+
+class DynamicEntityDefOut(BaseModel):
+    entity_name: str
+    json_schema: dict
+    description: Optional[str]
+    version: int
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class DynamicEntityRowIn(BaseModel):
+    data: dict
+
+
+class DynamicEntityRowOut(BaseModel):
+    entity_name: str
+    row_id: str
+    owner_sub: str
+    data: dict
+    created_at: int
+    updated_at: int
+
+
+class DynamicEntityListDefsOut(BaseModel):
+    defs: List[DynamicEntityDefOut]
+    cursor: Optional[str] = None
+
+
+class DynamicEntityListRowsOut(BaseModel):
+    rows: List[DynamicEntityRowOut]
+    cursor: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# CSN-004: Dynamic Endpoints
+# ---------------------------------------------------------------------------
+
+class DynamicEndpointCreateIn(BaseModel):
+    method: Literal["GET", "POST", "PUT", "DELETE"]
+    path: str
+    connector_kind: Literal["static_response", "dynamic_entity_proxy"]
+    connector_config: dict
+    openapi_spec: Optional[dict] = None
+
+
+class DynamicEndpointOut(BaseModel):
+    endpoint_id: str
+    method: str
+    path: str
+    connector_kind: str
+    connector_config: dict
+    openapi_spec: dict
+    created_by: str
+    created_at: int
+    updated_at: int
+
+
+class DynamicEndpointListOut(BaseModel):
+    endpoints: List[DynamicEndpointOut]
+    cursor: Optional[str] = None
+
+
+class DynamicEndpointsOpenApiOut(BaseModel):
+    paths: dict
+
+
+# ---------------------------------------------------------------------------
+# CSN-005: Open Data (Branches + ATMs)
+# ---------------------------------------------------------------------------
+
+class OpeningHours(BaseModel):
+    day: Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    opens: str
+    closes: str
+
+    @field_validator("opens", "closes")
+    @classmethod
+    def _validate_time(cls, v: str) -> str:
+        if not re.match(r"^\d{2}:\d{2}$", v):
+            raise ValueError("must be HH:MM format")
+        return v
+
+    @model_validator(mode="after")
+    def _opens_before_closes(self) -> "OpeningHours":
+        if self.opens >= self.closes:
+            raise ValueError("opens must be before closes")
+        return self
+
+
+class OpenDataAddressIn(BaseModel):
+    line1: str
+    line2: Optional[str] = None
+    city: str
+    region: Optional[str] = None
+    country: str
+    postcode: str
+
+    @field_validator("country")
+    @classmethod
+    def _validate_country(cls, v: str) -> str:
+        if not re.match(r"^[A-Z]{2}$", v):
+            raise ValueError("must be ISO 3166-1 alpha-2 (2 uppercase letters)")
+        return v
+
+
+class LocationIn(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+class BranchIn(BaseModel):
+    name: str
+    address: OpenDataAddressIn
+    location: LocationIn
+    opening_hours: List[OpeningHours] = Field(default_factory=list)
+    accessibility: List[str] = Field(default_factory=list)
+    phone: Optional[str] = None
+    is_active: bool = True
+
+
+class BranchOut(BaseModel):
+    branch_id: str
+    name: str
+    address: OpenDataAddressIn
+    location: LocationIn
+    opening_hours: List[OpeningHours]
+    accessibility: List[str]
+    phone: Optional[str]
+    is_active: bool
+    created_at: int
+    updated_at: int
+
+
+class AtmIn(BaseModel):
+    name: str
+    address: OpenDataAddressIn
+    location: LocationIn
+    is_active: bool = True
+    has_deposit: bool = False
+    is_accessible: bool = False
+
+
+class AtmOut(BaseModel):
+    atm_id: str
+    name: str
+    address: OpenDataAddressIn
+    location: LocationIn
+    is_active: bool
+    has_deposit: bool
+    is_accessible: bool
+    created_at: int
+    updated_at: int
+
+
+class OpenDataListOut(BaseModel):
+    items: List[Any]
+    next_cursor: Optional[str]
+
+
+
+
+# ── EVT-002: CRM Event invitee management ──────────────────────────────────
+
+class CrmEventCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    calendar_event_id: Optional[str] = Field(default=None, max_length=200)
+    max_attendance: Optional[int] = Field(default=None, ge=1)
+
+
+class CrmEventOut(BaseModel):
+    event_id: str
+    owner_sub: str
+    name: str
+    description: str
+    calendar_event_id: Optional[str]
+    max_attendance: Optional[int]
+    created_at: int
+    updated_at: int
+
+
+class CrmInviteeAddIn(BaseModel):
+    invitee_sub: str = Field(min_length=1, max_length=128)
+
+
+class CrmInviteeBulkImportIn(BaseModel):
+    user_subs: List[str] = Field(min_length=1, max_length=500)
+
+    @field_validator("user_subs")
+    @classmethod
+    def validate_subs(cls, v: List[str]) -> List[str]:
+        for sub in v:
+            if not sub or len(sub) > 128:
+                raise ValueError("Each user_sub must be 1-128 characters")
+        return v
+
+
+class CrmInviteeOut(BaseModel):
+    event_id: str
+    invitee_sub: str
+    invite_status: str
+    invited_at: int
+    responded_at: Optional[int]
+    display_name: Optional[str]
+
+
+class CrmInviteeListOut(BaseModel):
+    invitees: List[CrmInviteeOut]
+    cursor: Optional[str]
+
+
+class CrmSendInvitationsOut(BaseModel):
+    sent: int
+    skipped: int
+    failed: int
+
+
+# ── EVT-003: CRM Event registration/RSVP ──────────────────────────────────
+
+class CrmRegistrationOut(BaseModel):
+    event_id: str
+    registrant_sub: str
+    status: str
+    registered_at: int
+    responded_at: Optional[int]
+    checked_in_at: Optional[int]
+    waitlist_position: Optional[int]
+    invited: Optional[bool]
+
+
+class CrmRegistrationListOut(BaseModel):
+    registrations: List[CrmRegistrationOut]
+    cursor: Optional[str]
+
+
+class CrmRespondIn(BaseModel):
+    new_status: str = Field(pattern="^(accepted|declined)$")
+
+
+# ── EVT-004: CRM Event capacity / waitlist ────────────────────────────────
+
+class CrmCapacityOut(BaseModel):
+    event_id: str
+    max_attendance: Optional[int]
+    accepted_count: int
+    waitlisted_count: int
+    available_spots: Optional[int]
+
+
+# ── EVT-008: Survey distribution ──────────────────────────────────────────
+
+class DistributeSurveyReq(BaseModel):
+    recipients: List[str] = Field(min_length=1, max_length=500)
+    subject: str = Field(default="You've been invited to complete a survey", max_length=120)
+    message: Optional[str] = Field(default=None, max_length=2000)
+    contact_list_id: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class DistributeSurveyResp(BaseModel):
+    sent: int
+    skipped: int
+    failed: int
+
+
+class DistributionSummaryResp(BaseModel):
+    total_sent: int
+    total_responses: int
+    response_rate: float
+
+
+# ── EVT-014: CRM Contact SMS ──────────────────────────────────────────────
+
+class CrmContactSmsSendIn(BaseModel):
+    body: str = Field(min_length=1, max_length=1600)
+
+
+class CrmContactSmsOut(BaseModel):
+    sms_id: str
+    contact_id: str
+    contact_phone: str
+    status: str
+    message_id: str
+    sent_at_ts: int
+
+
+class CrmContactSmsLogListOut(BaseModel):
+    items: List[CrmContactSmsOut]
+    cursor: Optional[str]
+
+
+# ── EVT-015: Audit Log Browse ─────────────────────────────────────────────
+
+class AuditLogBrowseOut(BaseModel):
+    items: List[dict]
+    cursor: Optional[str]
+    total_scanned: int
+    category: str
+    from_ts: int
+    to_ts: int
+
+
+class ApiKeyRateLimitOverrides(BaseModel):
+    """PLT-001: Per-key rate-limit overrides (None = use account default)."""
+    minute: Optional[int] = Field(None, ge=0)
+    hour: Optional[int] = Field(None, ge=0)
+    day: Optional[int] = Field(None, ge=0)
+    week: Optional[int] = Field(None, ge=0)
+    month: Optional[int] = Field(None, ge=0)
+
+
+    rate_limit_overrides: Optional[ApiKeyRateLimitOverrides] = None  # PLT-001
+
+
+# ---------------------------------------------------------------------------
+# PLT-002: Metrics Leaderboard
+# ---------------------------------------------------------------------------
+
+class LeaderboardItem(BaseModel):
+    rank: int
+    id: str
+    user_sub: str
+    calls_total: int
+    billable_calls_total: int
+    request_units_total: int
+    cost_subtotal_micros: int
+    unit_price_micros: int = 0
+
+
+class LeaderboardResponse(BaseModel):
+    period_id: str
+    dimension: Literal["consumers", "endpoints"]
+    metric: Literal["calls_total", "cost_subtotal_micros", "request_units_total"]
+    top_n: int
+    scope: Literal["platform", "user"]
+    items: List[LeaderboardItem]
+    total_rows_scanned: int
+
+
+# ---------------------------------------------------------------------------
+# PLT-003: Glossary
+# ---------------------------------------------------------------------------
+
+class GlossaryTermOut(BaseModel):
+    term_id: str
+    term: str
+    definition: str
+    tags: List[str] = []
+    created_at: int
+    updated_at: int
+    updated_by: str
+
+
+class GlossaryListOut(BaseModel):
+    terms: List[GlossaryTermOut]
+    next_cursor: Optional[str] = None
+    count: int
+
+
+class GlossaryCreateIn(BaseModel):
+    term: str = Field(..., min_length=1, max_length=200)
+    definition: str = Field(..., min_length=1, max_length=4096)
+    tags: Optional[List[str]] = None
+
+
+class GlossaryPatchIn(BaseModel):
+    term: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    definition: Optional[str] = Field(default=None, min_length=1, max_length=4096)
+    tags: Optional[List[str]] = None
+
+
+# ---------------------------------------------------------------------------
+# PLT-004: Sandbox JSON import
+# ---------------------------------------------------------------------------
+
+class SandboxCustomerIn(BaseModel):
+    user_sub: Optional[str] = None
+    email: str
+    full_name: Optional[str] = None
+    display_name: Optional[str] = None
+    bio: Optional[str] = None
+
+
+class SandboxAccountIn(BaseModel):
+    user_sub: str
+    initial_balance_cents: int = Field(default=0, ge=0)
+    currency: str = "usd"
+
+
+class SandboxTransactionIn(BaseModel):
+    user_sub: str
+    entry_type: Literal["credit", "debit", "adjustment"]
+    amount_cents: int = Field(ge=0)
+    state: str = "settled"
+    reason: str
+    currency: str = "usd"
+
+
+class SandboxImportIn(BaseModel):
+    customers: List[SandboxCustomerIn] = []
+    accounts: List[SandboxAccountIn] = []
+    transactions: List[SandboxTransactionIn] = []
+
+
+class SandboxRowError(BaseModel):
+    section: str
+    index: int
+    code: str
+    message: str
+
+
+class SandboxImportResult(BaseModel):
+    customers_created: int
+    accounts_created: int
+    transactions_created: int
+    errors: List[SandboxRowError]
+    ok: bool
+
+
+# ---------------------------------------------------------------------------
+# PLT-005: Wallet threshold (account/ledger webhooks)
+# ---------------------------------------------------------------------------
+
+class SetWalletThresholdReq(BaseModel):
+    threshold_cents: int = Field(ge=0, description="0 = disable threshold")
+
+
+class WalletBalanceOut(BaseModel):
+    wallet_balance_cents: int
+    currency: str
+    updated_at: int
+    threshold_cents: Optional[int] = None
+    threshold_active: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Hotel PMS — Cancellation + KPI Reports (HTL-033..HTL-036)
+# ---------------------------------------------------------------------------
+
+
+class CancellationPolicyIn(BaseModel):
+    """Input for PUT /ui/hotels/{hotel_id}/cancellation-policy (HTL-034)."""
+    free_until_days_before: int = Field(default=0, ge=0)
+    penalty_pct: int = Field(default=0, ge=0, le=100)
+    penalty_fixed_cents: int = Field(default=0, ge=0)
+    no_show_fee_cents: int = Field(default=0, ge=0)
+
+
+class CancellationPolicyOut(BaseModel):
+    """Response for GET/PUT /ui/hotels/{hotel_id}/cancellation-policy (HTL-034)."""
+    hotel_id: str
+    policy_id: str
+    scope: str = "default"
+    free_until_days_before: int = 0
+    penalty_pct: int = 0
+    penalty_fixed_cents: int = 0
+    no_show_fee_cents: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class HotelKpisOut(BaseModel):
+    """Response for GET /ui/hotels/{hotel_id}/reports/kpis (HTL-035)."""
+    hotel_id: str
+    from_ts: int
+    to_ts: int
+    rooms_available: int
+    rooms_sold: int
+    occupancy_pct: float
+    room_revenue_cents: int
+    adr_cents: int
+    revpar_cents: int
+    arrivals: int
+    departures: int
+    currency: str
+
+
+# ---------------------------------------------------------------------------
+# MFG-003: Manufacturing / MRP models (additive; visible when flag is off but
+# no endpoint exposes them).
+# ---------------------------------------------------------------------------
+
+class BomComponentIn(BaseModel):
+    """One component line in a new Bill of Materials."""
+    component_sku: str = Field(..., min_length=1, max_length=256)
+    quantity_per: float = Field(..., gt=0)
+    scrap_pct: float = Field(default=0.0, ge=0.0, lt=1.0)
+    unit_of_measure: str = Field(default="each", max_length=64)
+
+
+class BomCreateIn(BaseModel):
+    product_sku: str = Field(..., min_length=1, max_length=256)
+    name: str = Field(..., min_length=1, max_length=256)
+    output_quantity: int = Field(default=1, ge=1)
+    components: List[BomComponentIn] = Field(default_factory=list)
+    correlation_id: Optional[str] = None
+
+
+class BomUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    status: Optional[str] = None
+
+
+class BomComponentOut(BaseModel):
+    component_sku: str
+    quantity_per: float
+    scrap_pct: float
+    unit_of_measure: str
+    seq: int
+
+
+class BomOut(BaseModel):
+    bom_id: str
+    product_sku: str
+    name: str
+    output_quantity: int
+    status: str
+    created_at: int
+    updated_at: int
+    created_by: str
+    components: List[BomComponentOut] = Field(default_factory=list)
+
+
+class ExplodedComponentOut(BaseModel):
+    component_sku: str
+    required_qty: float
+    depth: int
+
+
+class BomExplosionOut(BaseModel):
+    bom_id: str
+    build_qty: int
+    components: List[ExplodedComponentOut]
+
+
+# Work-center models
+
+class WorkCenterCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=256)
+    capacity_per_hour: int = Field(default=0, ge=0)
+    cost_per_hour_cents: int = Field(default=0, ge=0)
+    correlation_id: Optional[str] = None
+
+
+class WorkCenterUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    capacity_per_hour: Optional[int] = Field(default=None, ge=0)
+    cost_per_hour_cents: Optional[int] = Field(default=None, ge=0)
+    status: Optional[str] = None
+
+
+class WorkCenterOut(BaseModel):
+    work_center_id: str
+    name: str
+    capacity_per_hour: int
+    cost_per_hour_cents: int
+    status: str
+    created_at: int
+    updated_at: int
+
+
+# Routing-task models (MFG-005) — per-BOM ordered operations
+
+class RoutingTaskIn(BaseModel):
+    work_center_id: str = Field(..., min_length=1, max_length=256)
+    sequence: int = Field(..., ge=0, le=999)
+    setup_minutes: int = Field(default=0, ge=0, le=100_000)
+    run_minutes_per_unit: int = Field(default=0, ge=0, le=100_000)
+    description: str = Field(default="", max_length=512)
+
+
+class RoutingTaskOut(BaseModel):
+    bom_id: str
+    sequence: int
+    work_center_id: str
+    description: str
+    setup_minutes: int
+    run_minutes_per_unit: int
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class RoutingCostTaskOut(BaseModel):
+    sequence: int
+    work_center_id: str
+    task_minutes: int
+    cost_per_hour_cents: int
+    task_cost_cents: int
+
+
+class RoutingCostOut(BaseModel):
+    bom_id: str
+    quantity: int
+    total_setup_minutes: int
+    total_run_minutes: int
+    total_minutes: int
+    total_labor_cost_cents: int
+    tasks: List[RoutingCostTaskOut] = Field(default_factory=list)
+
+
+# Work-order models
+
+class WorkOrderCreateIn(BaseModel):
+    product_sku: str = Field(..., min_length=1, max_length=256)
+    quantity: int = Field(..., ge=1)
+    bom_id: Optional[str] = None
+    work_center_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+    # MFG-013: optional catalog link for finished-goods stock mirror
+    catalog_category_id: Optional[str] = Field(default=None, max_length=256)
+    catalog_item_id: Optional[str] = Field(default=None, max_length=256)
+
+
+class IssueRowOut(BaseModel):
+    component_sku: str
+    required_quantity: float
+    issued_quantity: float
+    location_id: str
+    issued_at: int
+
+
+class WorkOrderOut(BaseModel):
+    work_order_id: str
+    product_sku: str
+    quantity: int
+    produced_qty: int
+    bom_id: str
+    work_center_id: str
+    status: str
+    correlation_id: str
+    issues_guard: str
+    produce_guard: str
+    created_at: int
+    updated_at: int
+    user_sub: str
+    issues: List[IssueRowOut] = Field(default_factory=list)
+    # MFG-013: catalog link (empty string when not catalog-linked)
+    catalog_category_id: str = ""
+    catalog_item_id: str = ""
+
+
+class WorkOrderCompleteIn(BaseModel):
+    produced_qty: Optional[int] = Field(default=None, ge=1)
+    location_id: str = Field(default="warehouse")
+
+
+class WorkOrderCatalogStockOut(BaseModel):
+    work_order_id: str
+    product_sku: str
+    inventory_available: Optional[int] = None
+    inventory_on_hand: Optional[int] = None
+    catalog_stock_count: Optional[int] = None
+    in_sync: Optional[bool] = None
+
+
+class WorkOrderCancelIn(BaseModel):
+    reason: Optional[str] = None
+
+
+# MRP models
+
+class MrpRunIn(BaseModel):
+    horizon_days: Optional[int] = Field(default=None, ge=1, le=365)
+    location_id: str = Field(default="warehouse")
+    correlation_id: Optional[str] = None
+
+
+class MrpRequirementOut(BaseModel):
+    sku: str
+    gross_requirement: int
+    on_hand_available: int
+    scheduled_receipts: int
+    net_requirement: int
+    suggested_action: str
+    suggested_quantity: int
+    depth: int = 0
+    bom_id: str = ""
+
+
+class MrpRunOut(BaseModel):
+    mrp_run_id: str
+    status: str
+    horizon_days: int
+    location_id: str
+    created_at: int
+    completed_at: int
+    requirement_count: int
+    user_sub: str
+    requirements: List[MrpRequirementOut] = Field(default_factory=list)
+
+
+# ── Human Resources (HRM-003) — Phase M OFBiz HR models ──────────────────────
+
+
+class Position(BaseModel):
+    position_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=200)
+    department: Optional[str] = Field(default=None, max_length=100)
+    status: Literal["OPEN", "FILLED", "CLOSED"]
+    created_at: int
+    updated_at: int
+
+
+PositionOut = Position
+
+
+class CreatePositionIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    department: Optional[str] = Field(default=None, max_length=100)
+    correlation_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class UpdatePositionStatusIn(BaseModel):
+    status: Literal["OPEN", "FILLED", "CLOSED"]
+
+
+class Employment(BaseModel):
+    employment_id: str = Field(..., min_length=1)
+    party_id: str = Field(..., min_length=1)
+    position_id: str = Field(..., min_length=1)
+    org_party_id: str = Field(..., min_length=1)
+    status: Literal["ACTIVE", "TERMINATED", "ON_LEAVE"]
+    start_date: int
+    end_date: Optional[int] = None
+    pay_rate_cents: int = Field(..., ge=0)
+    pay_period: Literal["MONTHLY", "BIWEEKLY", "WEEKLY", "HOURLY"]
+    currency: str = Field(..., min_length=3, max_length=3)
+    created_at: int
+    updated_at: int
+
+
+EmploymentOut = Employment
+
+
+class CreateEmploymentIn(BaseModel):
+    party_id: str = Field(..., min_length=1)
+    position_id: str = Field(..., min_length=1)
+    org_party_id: str = Field(..., min_length=1)
+    start_date: int = Field(..., ge=0)
+    end_date: Optional[int] = Field(default=None, ge=0)
+    pay_rate_cents: int = Field(..., ge=0)
+    pay_period: Literal["MONTHLY", "BIWEEKLY", "WEEKLY", "HOURLY"]
+    currency: str = Field(..., min_length=3, max_length=3)
+    correlation_id: Optional[str] = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _check_dates(self) -> "CreateEmploymentIn":
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("end_date must be >= start_date")
+        return self
+
+
+class TerminateEmploymentIn(BaseModel):
+    end_date: int = Field(..., ge=0)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class PayrollLine(BaseModel):
+    employment_id: str = Field(..., min_length=1)
+    party_id: str = Field(..., min_length=1)
+    gross_cents: int = Field(..., ge=0)
+    currency: str = Field(..., min_length=3, max_length=3)
+
+
+PayrollLineOut = PayrollLine
+
+
+class PayrollRun(BaseModel):
+    payroll_run_id: str = Field(..., min_length=1)
+    period_start: int
+    period_end: int
+    status: Literal["DRAFT", "APPROVED", "POSTED"]
+    lines: List[PayrollLine] = Field(default_factory=list)
+    created_at: int
+    updated_at: int
+    approved_by: Optional[str] = None
+    posted_at: Optional[int] = None
+
+
+PayrollRunOut = PayrollRun
+
+
+class CreatePayrollRunIn(BaseModel):
+    period_start: int = Field(..., ge=0)
+    period_end: int = Field(..., ge=0)
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    correlation_id: Optional[str] = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _check_period(self) -> "CreatePayrollRunIn":
+        if self.period_end < self.period_start:
+            raise ValueError("period_end must be >= period_start")
+        return self
+
+
+# ---------------------------------------------------------------------------
+# OFBiz Fixed Assets — FXA-004 Pydantic models
+# ---------------------------------------------------------------------------
+
+class FixedAssetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    asset_class: str = Field(min_length=1, max_length=50)
+    acquisition_cost_cents: int = Field(gt=0)
+    salvage_value_cents: int = Field(ge=0)
+    useful_life_months: int = Field(ge=1, le=1200)
+    acquired_at: int  # Unix timestamp
+    depreciation_method: Literal["straight_line"] = "straight_line"
+    correlation_id: Optional[str] = None
+    gl_asset_account_id: Optional[str] = None
+    gl_accum_depr_account_id: Optional[str] = None
+    gl_depr_expense_account_id: Optional[str] = None
+    gl_gain_account_id: Optional[str] = None
+    gl_loss_account_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def salvage_below_cost(self) -> "FixedAssetIn":
+        if self.salvage_value_cents >= self.acquisition_cost_cents:
+            raise ValueError("salvage_value_cents must be less than acquisition_cost_cents")
+        return self
+
+
+class FixedAssetPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    asset_class: Optional[str] = None
+    gl_asset_account_id: Optional[str] = None
+    gl_accum_depr_account_id: Optional[str] = None
+    gl_depr_expense_account_id: Optional[str] = None
+    gl_gain_account_id: Optional[str] = None
+    gl_loss_account_id: Optional[str] = None
+
+
+class FixedAssetOut(BaseModel):
+    asset_id: str
+    owner_sub: str
+    name: str
+    asset_class: str
+    acquisition_cost_cents: int
+    salvage_value_cents: int
+    useful_life_months: int
+    acquired_at: int
+    depreciation_method: str
+    status: str  # active / fully_depreciated / disposed
+    accumulated_depreciation_cents: int
+    net_book_value_cents: int  # computed: cost - accumulated, floor = salvage
+    gl_asset_account_id: Optional[str]
+    gl_accum_depr_account_id: Optional[str]
+    gl_depr_expense_account_id: Optional[str]
+    gl_gain_account_id: Optional[str]
+    gl_loss_account_id: Optional[str]
+    created_at: int
+    updated_at: int
+    correlation_id: Optional[str]
+
+
+class FixedAssetDisposeIn(BaseModel):
+    disposal_reason: Optional[str] = Field(default=None, max_length=500)
+    proceeds_payment_intent_id: Optional[str] = None
+    proceeds_amount_cents: Optional[int] = Field(default=None, ge=0)
+    correlation_id: Optional[str] = None
+
+
+class DepreciationPeriodOut(BaseModel):
+    period: int
+    period_start_ts: int
+    period_end_ts: int
+    amount_cents: int
+    schedule_status: str  # scheduled / posted / cancelled
+    journal_entry_id: Optional[str]
+    posted_at: Optional[int]
+
+
+class DepreciationScheduleOut(BaseModel):
+    asset_id: str
+    periods: List[DepreciationPeriodOut]
+    total_periods: int
+    posted_periods: int
+    remaining_periods: int
+
+
+class AssetMaintenanceOrderIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    assignee_sub: Optional[str] = None
+    scheduled_for: Optional[int] = None  # Unix timestamp
+    correlation_id: Optional[str] = None
+
+
+class AssetMaintenanceOrderTransitionIn(BaseModel):
+    target_status: Literal["in_progress", "completed", "cancelled"]
+    cost_cents: Optional[int] = Field(default=None, ge=0)
+    assignee_sub: Optional[str] = None
+
+
+class AssetMaintenanceOrderOut(BaseModel):
+    work_order_id: str
+    asset_id: str
+    title: str
+    description: Optional[str]
+    wo_status: str
+    assignee_sub: Optional[str]
+    cost_cents: Optional[int]
+    scheduled_for: Optional[int]
+    created_at: int
+    completed_at: Optional[int]
+    correlation_id: Optional[str]
+
+
+# ── POS — Point of Sale (POS-001..POS-NNN) ───────────────────────────────────
+
+class RegisterConfig(BaseModel):
+    register_id: Optional[str] = None
+    label: str = Field(min_length=1, max_length=128)
+    location_id: str = Field(min_length=1, max_length=128)
+    default_currency: str = Field(default="USD", min_length=3, max_length=3)
+    created_at: int = 0
+    updated_at: int = 0
+    created_by: Optional[str] = None
+
+
+class RegisterCreateIn(BaseModel):
+    label: str = Field(min_length=1, max_length=128)
+    location_id: str = Field(min_length=1, max_length=128)
+    default_currency: str = Field(default="USD", min_length=3, max_length=3)
+
+
+class TenderKind(str, Enum):
+    cash = "cash"
+    card = "card"
+    wallet = "wallet"
+
+
+class TenderOut(BaseModel):
+    kind: str                          # cash | card | wallet
+    amount_cents: int = 0
+    change_due_cents: int = 0          # only meaningful for kind=cash
+    payment_method_id: Optional[str] = None  # card/wallet
+    card_ref: Optional[str] = None     # opaque processor ref
+
+
+class RegisterSessionOut(BaseModel):
+    session_id: str
+    register_id: str
+    cashier_sub: str
+    status: str                        # open | closed
+    opening_float_cents: int = 0
+    closing_float_cents: Optional[int] = None
+    expected_cash_cents: Optional[int] = None
+    counted_cash_cents: Optional[int] = None
+    over_short_cents: Optional[int] = None    # signed: positive = over
+    opened_at: int = 0
+    closed_at: Optional[int] = None
+
+
+class PosTransactionOut(BaseModel):
+    txn_id: str
+    session_id: str
+    cart_id: Optional[str] = None
+    order_id: Optional[str] = None
+    status: str                        # draft | tendered | voided | refunded
+    subtotal_cents: int = 0
+    discount_cents: int = 0
+    tax_cents: int = 0
+    total_cents: int = 0
+    tenders: List[TenderOut] = Field(default_factory=list)
+    receipt_id: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class OpenSessionIn(BaseModel):
+    register_id: str = Field(min_length=1, max_length=128)
+    opening_float_cents: int = Field(default=0, ge=0, le=100_000_000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=256)
+
+
+class CloseSessionIn(BaseModel):
+    counted_cash_cents: int = Field(ge=0, le=100_000_000)
+
+
+class TenderIn(BaseModel):
+    kind: Literal["cash", "card", "wallet"]
+    amount_cents: int = Field(ge=0, le=100_000_000)
+    change_due_cents: int = Field(default=0, ge=0, le=100_000_000)
+    payment_method_id: Optional[str] = Field(default=None, max_length=256)
+    card_ref: Optional[str] = Field(default=None, max_length=256)
+
+    @model_validator(mode="after")
+    def card_wallet_needs_pm(self) -> "TenderIn":
+        if self.kind in ("card", "wallet") and not self.payment_method_id:
+            raise ValueError("'payment_method_id' is required for card/wallet tenders")
+        return self
+
+
+class TenderRequestIn(BaseModel):
+    tenders: List[TenderIn] = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+    def total_tendered_cents(self) -> int:
+        """Sum of all tender amounts minus change given back."""
+        return sum(t.amount_cents - t.change_due_cents for t in self.tenders)
+
+    def validates_against_total(self, transaction_total_cents: int) -> bool:
+        """Returns True iff net tender covers (equals) the transaction total."""
+        return self.total_tendered_cents() == transaction_total_cents
+
+
+class RefundTxnIn(BaseModel):
+    txn_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class AddLineItemIn(BaseModel):
+    sku: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    category_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    item_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    quantity: int = Field(default=1, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def sku_or_item_id(self) -> "AddLineItemIn":
+        has_sku = bool(self.sku)
+        has_item = bool(self.item_id)
+        if has_sku == has_item:  # both set or neither
+            raise ValueError("Provide exactly one of 'sku' or 'item_id'")
+        if has_item and not self.category_id:
+            raise ValueError("'category_id' is required when 'item_id' is provided")
+        return self
+
+
+class PosAddLineItemIn(BaseModel):
+    # Catalog path: provide item_id (category_id optional)
+    item_id: Optional[str] = Field(default=None, max_length=128)
+    category_id: Optional[str] = Field(default=None, max_length=128)
+    # Raw-SKU path: provide sku + name + unit_price_cents
+    sku: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    unit_price_cents: Optional[conint(ge=0, le=100_000_000)] = None  # type: ignore[valid-type]
+    quantity: conint(ge=1, le=1000) = 1  # type: ignore[valid-type]
+
+    @model_validator(mode="after")
+    def _either_catalog_or_sku(self) -> "PosAddLineItemIn":
+        has_catalog = bool(self.item_id)
+        has_sku = bool(self.sku)
+        if has_catalog == has_sku:
+            raise ValueError("Provide exactly one of item_id or sku")
+        if has_sku and (self.name is None or self.unit_price_cents is None):
+            raise ValueError("name and unit_price_cents required for raw-SKU add")
+        return self
+
+
+class PosSetLineQtyIn(BaseModel):
+    quantity: conint(ge=0, le=1000) = 0  # type: ignore[valid-type]
+
+
+class PosTxnDraftOut(BaseModel):
+    txn_id: str
+    session_id: str
+    cashier_sub: str
+    status: str        # "draft" before settlement; "tendered" / "voided" / "refunded" after
+    cart_id: str
+    subtotal_cents: int
+    tax_cents: int = 0
+    discount_cents: int = 0
+    total_cents: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class PosBindTxnIn(BaseModel):
+    correlation_id: str = Field(min_length=1, max_length=256)
+
+
+class PosCashTenderIn(BaseModel):
+    amount_tendered_cents: int = Field(ge=0, le=100_000_000)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+
+class PosCardTenderIn(BaseModel):
+    # POS-007 — card tender. Charge routes through the shared billing layer.
+    amount_tendered_cents: int = Field(ge=1, le=100_000_000)
+    payment_method_id: str = Field(min_length=1, max_length=256)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    # Display-only card provenance (NO PAN). card_kind="visa", last4="4242".
+    card_kind: Optional[str] = Field(default=None, max_length=64)
+    last4: Optional[str] = Field(default=None, min_length=2, max_length=4)
+
+
+class PosWalletTenderIn(BaseModel):
+    # POS-007 — wallet tender. Debits the cashier-user's in-platform wallet.
+    amount_tendered_cents: int = Field(ge=1, le=100_000_000)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+
+class PosTxnVoidIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class PosSessionReportOut(BaseModel):
+    session_id: str
+    register_id: str
+    cashier_sub: str
+    status: str
+    opening_float_cents: int
+    closing_float_cents: Optional[int] = None
+    expected_cash_cents: Optional[int] = None
+    counted_cash_cents: Optional[int] = None
+    over_short_cents: Optional[int] = None
+    opened_at: int
+    closed_at: Optional[int] = None
+    transaction_count: int = 0
+    total_sales_cents: int = 0
+    total_cash_tendered_cents: int = 0
+    total_change_given_cents: int = 0
+
+
+# ── POS-010: X/Z till-summary report models ──────────────────────────────────
+
+
+class TenderBreakdownItem(BaseModel):
+    kind: str                       # "cash" | "card" | "wallet"
+    gross_cents: int = 0
+    refund_cents: int = 0
+    net_cents: int = 0              # gross_cents - refund_cents
+    transaction_count: int = 0
+
+
+class SessionReportCashSection(BaseModel):
+    opening_float_cents: int = 0
+    cash_in_cents: int = 0
+    change_out_cents: int = 0
+    expected_cash_cents: int = 0
+    counted_cash_cents: Optional[int] = None   # null for X report
+    over_short_cents: Optional[int] = None     # null for X report
+
+
+class SessionReportOut(BaseModel):
+    report_kind: str                # "x" or "z"
+    session_id: str
+    register_id: str
+    cashier_sub: str
+    opened_at: int = 0
+    closed_at: Optional[int] = None
+    generated_at: int = 0
+    z_report_printed_at: Optional[int] = None   # null for X; null if Z not finalized
+
+    gross_sales_cents: int = 0
+    discount_cents: int = 0
+    tax_cents: int = 0
+    net_sales_cents: int = 0        # gross - discount (before tax)
+    refund_total_cents: int = 0
+    void_count: int = 0
+    transaction_count: int = 0      # count of settled transactions
+
+    tender_breakdown: List[TenderBreakdownItem] = Field(default_factory=list)
+    cash: SessionReportCashSection
+
+
+# ── ECM-003: Store integration Pydantic models ──────────────────────────────
+
+
+class StorefrontAvailabilityOut(BaseModel):
+    """Reservation-adjusted availability projection for one SKU/location pair.
+
+    - available: on_hand − reserved (may be negative if oversold)
+    - low_stock: True when available > 0 AND available <= reorder_point
+    - stock_status: mirrors existing catalog vocabulary (in_stock|low_stock|out_of_stock)
+    """
+    available: int
+    on_hand: int
+    reserved: int
+    low_stock: bool
+    stock_status: str
+
+
+class StorefrontVariantOut(BaseModel):
+    """A single product variant (SKU, option selections, per-variant effective price)."""
+    variant_id: str
+    sku: str
+    option_selections: Dict[str, Any]
+    price_cents: int = Field(ge=0)
+    availability: Optional[StorefrontAvailabilityOut] = None
+
+
+class AppliedPricingRuleLineOut(BaseModel):
+    """One rule line from the pricing-rules engine applied to this cart."""
+    rule_id: str
+    rule_name: str
+    discount_type: str
+    discount_cents: int = Field(ge=0)
+    applies_to_skus: List[str] = Field(default_factory=list)
+
+
+class CartPricingBreakdownOut(BaseModel):
+    """Itemised pricing breakdown for a cart."""
+    cart_id: str
+    subtotal_cents: int
+    applied_rules: List[AppliedPricingRuleLineOut] = Field(default_factory=list)
+    discount_cents: int = Field(default=0, ge=0)
+    final_total_cents: int
+    currency: str = "USD"
+
+    @model_validator(mode="after")
+    def _check_invariant(self) -> "CartPricingBreakdownOut":
+        expected = self.subtotal_cents - self.discount_cents
+        if expected < 0:
+            # Clamp: over-discount reduces final to 0
+            object.__setattr__(self, "discount_cents", self.subtotal_cents)
+            object.__setattr__(self, "final_total_cents", 0)
+        elif self.final_total_cents != expected:
+            raise ValueError(
+                f"final_total_cents ({self.final_total_cents}) must equal "
+                f"subtotal_cents ({self.subtotal_cents}) - discount_cents ({self.discount_cents})"
+            )
+        return self
+
+
+class ShipGroupFulfillmentOut(BaseModel):
+    """Fulfillment status for one ship group within an order."""
+    ship_group_id: str
+    status: str
+    items: List[str] = Field(default_factory=list)
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    shipped_at: Optional[int] = None
+    estimated_delivery: Optional[str] = None
+
+
+class OrderFulfillmentStatusOut(BaseModel):
+    """Post-purchase order state: lifecycle phase, ship groups, and tracking numbers."""
+    order_id: str
+    lifecycle_status: Optional[str] = None
+    fulfillment_status: Optional[str] = None
+    ship_groups: List[ShipGroupFulfillmentOut] = Field(default_factory=list)
+    tracking_numbers: List[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Marketing Campaigns module (MKT-003)
+# ---------------------------------------------------------------------------
+
+VALID_SEGMENT_ATTRIBUTES: frozenset = frozenset({
+    "subscription_tier", "total_spend_cents", "profile_country", "profile_city",
+    "display_name", "first_name", "last_name", "gender", "location", "locale",
+    "birthday", "has_active_subscription", "subscription_status",
+    "order_count", "total_paid_cents", "last_order_at",
+})
+
+VALID_SEGMENT_OPERATORS: frozenset = frozenset({
+    "eq", "neq", "gt", "gte", "lt", "lte", "in", "not_in",
+})
+
+
+class SegmentPredicate(BaseModel):
+    attribute: str
+    operator: str
+    value: Any
+
+    @field_validator("attribute")
+    @classmethod
+    def _validate_attribute(cls, v: str) -> str:
+        if v not in VALID_SEGMENT_ATTRIBUTES:
+            raise ValueError(f"Unknown segment attribute: {v!r}. Must be one of {sorted(VALID_SEGMENT_ATTRIBUTES)}")
+        return v
+
+    @field_validator("operator")
+    @classmethod
+    def _validate_operator(cls, v: str) -> str:
+        if v not in VALID_SEGMENT_OPERATORS:
+            raise ValueError(f"Unknown segment operator: {v!r}. Must be one of {sorted(VALID_SEGMENT_OPERATORS)}")
+        return v
+
+
+class MarketingCampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: str = Field(..., pattern=r"^(awareness|traffic|conversions|retention)$")
+    budget_cents: int = Field(..., ge=0)
+    ad_campaign_id: Optional[str] = None
+    promo_code_ids: List[str] = []
+    contact_list_ids: List[str] = []
+    segment_ids: List[str] = []
+    tracking_code: Optional[str] = None
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class MarketingCampaignUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    objective: Optional[str] = Field(default=None, pattern=r"^(awareness|traffic|conversions|retention)$")
+    budget_cents: Optional[int] = Field(default=None, ge=0)
+    status: Optional[str] = None
+    ad_campaign_id: Optional[str] = None
+    promo_code_ids: Optional[List[str]] = None
+    contact_list_ids: Optional[List[str]] = None
+    segment_ids: Optional[List[str]] = None
+    tracking_code: Optional[str] = None
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+
+
+class MarketingCampaignOut(BaseModel):
+    campaign_id: str
+    owner_id: str
+    name: str
+    objective: str
+    status: str
+    budget_cents: int = 0
+    ad_campaign_id: Optional[str] = None
+    ad_account_id: Optional[str] = None
+    promo_code_ids: List[str] = []
+    contact_list_ids: List[str] = []
+    segment_ids: List[str] = []
+    tracking_code: Optional[str] = None
+    start_date: Optional[int] = None
+    end_date: Optional[int] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class CampaignTransitionIn(BaseModel):
+    target_status: str
+
+
+class ContactListCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+
+
+class ContactListUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+
+
+class ContactListOut(BaseModel):
+    list_id: str
+    owner_id: str
+    name: str
+    description: Optional[str] = None
+    member_count: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class ContactListMemberIn(BaseModel):
+    party_id: str
+
+
+class ContactListMemberOut(BaseModel):
+    list_id: str
+    party_id: str
+    joined_at: int = 0
+    suppressed: bool = False
+    display_name: Optional[str] = None
+
+
+class PartySegmentCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    predicates: List[SegmentPredicate] = Field(..., min_length=1)
+    candidate_source: Optional[str] = None
+
+
+class PartySegmentUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    predicates: Optional[List[SegmentPredicate]] = None
+    candidate_source: Optional[str] = None
+
+
+class PartySegmentOut(BaseModel):
+    segment_id: str
+    owner_id: str
+    name: str
+    description: Optional[str] = None
+    predicates: List[SegmentPredicate] = []
+    candidate_source: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class SegmentMemberOut(BaseModel):
+    segment_id: str
+    party_id: str
+    snap_id: str = ""
+    snap_ts: int = 0
+    opted_out: bool = False
+    snapped_at: int = 0
+
+
+class TrackingCodeCreateIn(BaseModel):
+    code_slug: str = Field(..., pattern=r"^[A-Za-z0-9_-]{3,50}$")
+    campaign_id: str
+
+
+class TrackingCodeOut(BaseModel):
+    code_slug: str
+    campaign_id: str
+    owner_id: str
+    visit_count: int = 0
+    order_count: int = 0
+    created_at: int = 0
+
+
+class CampaignAttributionOut(BaseModel):
+    campaign_id: str
+    ad_spend_cents: int = 0
+    promo_discount_cents: int = 0
+    promo_redemptions: int = 0
+    tracking_visits: int = 0
+    tracking_orders: int = 0
+    as_of: int = 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OBP PAY cluster — Counterparties, Standing Orders, Direct-Debit Mandates, FX
+# (PAY-001..PAY-004). Additive, flag-gated default-OFF. Money-out is NEVER done
+# here — standing orders / mandates emit COUNTERPARTY Transaction Requests (TXR).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class CounterpartyRouting(BaseModel):
+    scheme: Literal["IBAN", "ACCOUNT_SORT_CODE", "ACCOUNT_NUMBER", "BANK"]
+    iban: Optional[str] = None
+    account_number: Optional[str] = None
+    sort_code: Optional[str] = None
+    bank_code: Optional[str] = None
+    bank_name: Optional[str] = None
+    account_holder: Optional[str] = None
+    currency: str = "usd"
+
+
+class CounterpartyCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    is_beneficiary: bool = True
+    routing: CounterpartyRouting
+    description: Optional[str] = None
+    bespoke: Optional[Dict[str, Any]] = None
+
+
+class CounterpartyUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    is_beneficiary: Optional[bool] = None
+    description: Optional[str] = None
+    bespoke: Optional[Dict[str, Any]] = None
+
+
+class CounterpartyRoutingOut(BaseModel):
+    scheme: str
+    iban_last4: Optional[str] = None
+    account_number_last4: Optional[str] = None
+    sort_code: Optional[str] = None
+    bank_code: Optional[str] = None
+    bank_name: Optional[str] = None
+    account_holder: Optional[str] = None
+    currency: str = "usd"
+
+
+class CounterpartyOut(BaseModel):
+    counterparty_id: str
+    name: str
+    is_beneficiary: bool
+    routing: CounterpartyRoutingOut
+    description: Optional[str] = None
+    bespoke: Optional[Dict[str, Any]] = None
+    created_at: int
+    updated_at: int
+
+
+class StandingOrderCreateIn(BaseModel):
+    counterparty_id: str
+    amount_cents: int = Field(gt=0)
+    currency: str = "usd"
+    cadence: Literal["weekly", "biweekly", "monthly"]
+    start_at: int
+    end_at: Optional[int] = None
+    reason: Optional[str] = None
+
+
+class StandingOrderUpdateIn(BaseModel):
+    amount_cents: Optional[int] = Field(default=None, gt=0)
+    cadence: Optional[Literal["weekly", "biweekly", "monthly"]] = None
+    end_at: Optional[int] = None
+    paused: Optional[bool] = None
+
+
+class StandingOrderOut(BaseModel):
+    standing_order_id: str
+    counterparty_id: str
+    amount_cents: int
+    currency: str
+    cadence: str
+    status: str
+    next_run_at: Optional[int] = None
+    last_run_at: Optional[int] = None
+    runs_count: int
+    created_at: int
+    updated_at: int
+
+
+class MandateCreateIn(BaseModel):
+    counterparty_id: str
+    max_amount_cents: int = Field(gt=0)
+    currency: str = "usd"
+    cadence: Literal["weekly", "monthly"]
+    start_at: int
+    end_at: Optional[int] = None
+    reference: Optional[str] = None
+
+
+class MandateOut(BaseModel):
+    mandate_id: str
+    counterparty_id: str
+    max_amount_cents: int
+    currency: str
+    cadence: str
+    status: str
+    next_run_at: Optional[int] = None
+    last_run_at: Optional[int] = None
+    pulled_this_window_cents: int
+    runs_count: int
+    created_at: int
+    updated_at: int
+
+
+class FxRateSetIn(BaseModel):
+    source_currency: str = Field(min_length=2, max_length=8)
+    target_currency: str = Field(min_length=2, max_length=8)
+    rate: float = Field(gt=0)
+    source: Literal["admin", "fetched"] = "admin"
+
+
+class FxRateOut(BaseModel):
+    pair: str
+    source_currency: str
+    target_currency: str
+    rate: float
+    source: str
+    as_of: int
+    set_by: str
+
+
+class FxConvertOut(BaseModel):
+    source_currency: str
+    target_currency: str
+    source_amount_cents: int
+    target_amount_cents: int
+    rate: float
+    as_of: int
+
+
+# ---------------------------------------------------------------------------
+# EVT-005: CRM Geocoding models
+# ---------------------------------------------------------------------------
+
+class GeocodedAddressOut(BaseModel):
+    """A single geocoded address item (EVT-005)."""
+    address_id: str
+    lat: float
+    lng: float
+    geocoded_at: int
+    line1: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+
+
+class GeocodedAddressListOut(BaseModel):
+    """List of geocoded addresses with count (EVT-005)."""
+    addresses: List[GeocodedAddressOut]
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# EVT-006: CRM Proximity Search models
+# ---------------------------------------------------------------------------
+
+class ProximityResultItem(BaseModel):
+    """A single result item from the proximity search (EVT-006)."""
+    entity_type: str
+    entity_id: str
+    name: str
+    lat: float
+    lng: float
+    distance_km: float
+    address_id: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+
+
+class ProximitySearchOut(BaseModel):
+    """Proximity search response envelope (EVT-006)."""
+    results: List[ProximityResultItem]
+    count: int
+    center_lat: float
+    center_lng: float
+    radius_km: float
+    entity_type: str
+
+
+# ---------------------------------------------------------------------------
+# EVT-007: CRM Map Feature Flags model
+# ---------------------------------------------------------------------------
+
+class CrmMapFeatureFlagsOut(BaseModel):
+    """Feature flags and map defaults served to the frontend (EVT-007)."""
+    crm_geocoding_enabled: bool
+    default_lat: float
+    default_lng: float
+    default_radius_km: float
+    max_radius_km: float
+    max_pins: int
+
+
+# ---------------------------------------------------------------------------
+# ATI (OpenCATS ATS Integration) — cross-link bridge models (ATI-owned).
+# Additive, append-only. These describe the ATI-owned link rows that bridge
+# the ATS pipeline (candidate / job_order) to the CRM (contact / opportunity).
+# All ATI link rows live in T.ats_integration_links; the link records are
+# opaque-id pointers only — no sibling schema is duplicated here.
+# ---------------------------------------------------------------------------
+
+
+class AtsCandidateContactLinkIn(BaseModel):
+    candidate_id: str = Field(..., min_length=1, max_length=128)
+    contact_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class AtsCandidateContactLinkOut(BaseModel):
+    link_id: str
+    link_type: Literal["candidate_contact"] = "candidate_contact"
+    candidate_id: str
+    contact_id: str
+    owner_sub: str
+    synced: bool = False
+    degraded: bool = False
+    degraded_reason: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class AtsJobOpportunityLinkIn(BaseModel):
+    job_order_id: str = Field(..., min_length=1, max_length=128)
+    opportunity_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class AtsJobOpportunityLinkOut(BaseModel):
+    link_id: str
+    link_type: Literal["job_opportunity"] = "job_opportunity"
+    job_order_id: str
+    opportunity_id: str
+    owner_sub: str
+    synced: bool = False
+    degraded: bool = False
+    degraded_reason: Optional[str] = None
+    created_at: int
+    updated_at: int
+
+
+class AtsIntegrationLinksOut(BaseModel):
+    candidate_contact_links: List[AtsCandidateContactLinkOut] = Field(default_factory=list)
+    job_opportunity_links: List[AtsJobOpportunityLinkOut] = Field(default_factory=list)
+    count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# CCT-001..CCT-006 — SuiteCRM Contacts Extra (party CRM extension)
+# ---------------------------------------------------------------------------
+
+class CctPartyStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    MERGED = "MERGED"
+    ARCHIVED = "ARCHIVED"
+
+
+class CctPartyType(str, Enum):
+    PERSON = "PERSON"
+    PARTY_GROUP = "PARTY_GROUP"
+
+
+class CctRelationshipType(str, Enum):
+    EMPLOYMENT = "EMPLOYMENT"
+    GROUP_MEMBER = "GROUP_MEMBER"
+    CONTACT_REL = "CONTACT_REL"
+    OWNER = "OWNER"
+    PARENT_ORG = "PARENT_ORG"    # CCT-002: org hierarchy
+    REPORTS_TO = "REPORTS_TO"    # CCT-003: manager chain
+
+
+class CctPartyRoleOut(BaseModel):
+    role_type: str
+    org_party_id: Optional[str] = None
+    granted_at: int
+
+
+class CctRelationshipOut(BaseModel):
+    rel_id: str
+    from_party_id: str
+    to_party_id: str
+    relationship_type: str
+    created_at: int
+    meta: Optional[Dict[str, Any]] = None
+
+
+class CctContactMechOut(BaseModel):
+    mech_id: str
+    mech_type: str   # EMAIL / PHONE / POSTAL
+    value: str
+    purpose: Optional[str] = None
+    created_at: int
+
+
+class CctPartyOut(BaseModel):
+    party_id: str
+    party_type: CctPartyType
+    status: CctPartyStatus
+    name: str
+    display_name: Optional[str] = None
+    owner_user_sub: str
+    created_at: int
+    updated_at: int
+    merged_into_party_id: Optional[str] = None
+    manager_party_id: Optional[str] = None        # CCT-003
+    direct_report_count: int = 0                  # CCT-003
+
+
+class CctOrgAccountOut(BaseModel):
+    party_id: str
+    name: str
+    status: CctPartyStatus
+    roles: List[CctPartyRoleOut] = Field(default_factory=list)
+    member_count: int = 0
+    created_at: int
+    updated_at: int
+    # CCT-001: business metadata fields
+    industry: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    employee_count: Optional[int] = None
+    annual_revenue_cents: Optional[int] = None
+    # CCT-002: hierarchy
+    parent_org_party_id: Optional[str] = None
+    child_org_count: int = 0
+
+
+class CctCreatePartyIn(BaseModel):
+    party_type: CctPartyType
+    name: str
+    display_name: Optional[str] = None
+    correlation_id: Optional[str] = None  # idempotency
+
+
+class CctCreateOrgAccountIn(BaseModel):
+    name: str
+    correlation_id: Optional[str] = None
+    # CCT-001 optional business fields
+    industry: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    employee_count: Optional[int] = Field(default=None, ge=0)
+    annual_revenue_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class CctOrgAccountUpdateIn(BaseModel):
+    name: Optional[str] = None
+    industry: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    employee_count: Optional[int] = Field(default=None, ge=0)
+    annual_revenue_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class CctSetParentOrgIn(BaseModel):
+    parent_org_party_id: str
+
+
+class CctSetManagerIn(BaseModel):
+    manager_party_id: str
+
+
+class CctAddContactMechIn(BaseModel):
+    mech_type: str    # EMAIL / PHONE / POSTAL
+    value: str
+    purpose: Optional[str] = None   # WORK / HOME / etc.
+    postal_address: Optional[Dict[str, Any]] = None   # for POSTAL mechs
+
+
+class CctDuplicateCandidateOut(BaseModel):
+    party_a_id: str
+    party_b_id: str
+    score: float
+    match_signals: List[str]
+
+
+class CctDuplicateCandidateListOut(BaseModel):
+    items: List[CctDuplicateCandidateOut]
+    cursor: Optional[str] = None
+
+
+class CctMergePartyIn(BaseModel):
+    winner_party_id: str
+    loser_party_id: str
+
+
+class CctHierarchyOut(BaseModel):
+    ancestors: List[CctRelationshipOut] = Field(default_factory=list)
+    children: List[CctRelationshipOut] = Field(default_factory=list)
+
+
+class CctReportsToOut(BaseModel):
+    direction: str
+    chain: List[CctRelationshipOut] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# CMP-001..CMP-008 — SuiteCRM Campaigns-Extra (campaign waves, templates, etc.)
+# ---------------------------------------------------------------------------
+
+CAMPAIGN_TYPES = {"email", "phone", "mail", "fax", "sms"}
+
+# CMP-001: campaign type + channel support
+class CrmCampaignCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    objective: Optional[str] = Field(default=None, max_length=500)
+    budget_cents: int = Field(default=0, ge=0)
+    ad_campaign_id: Optional[str] = None
+    promo_code_ids: List[str] = Field(default_factory=list)
+    contact_list_ids: List[str] = Field(default_factory=list)
+    segment_ids: List[str] = Field(default_factory=list)
+    tracking_code: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    campaign_type: str = Field(default="email", pattern=r"^(email|phone|mail|fax|sms)$")
+    email_template_id: Optional[str] = None
+    questionnaire_id: Optional[str] = None
+    variants: Optional[List[Dict[str, Any]]] = None
+
+class CrmCampaignUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    objective: Optional[str] = Field(default=None, max_length=500)
+    budget_cents: Optional[int] = Field(default=None, ge=0)
+    contact_list_ids: Optional[List[str]] = None
+    segment_ids: Optional[List[str]] = None
+    tracking_code: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    campaign_type: Optional[str] = Field(default=None, pattern=r"^(email|phone|mail|fax|sms)$")
+    email_template_id: Optional[str] = None
+    questionnaire_id: Optional[str] = None
+    variants: Optional[List[Dict[str, Any]]] = None
+
+class CrmCampaignOut(BaseModel):
+    campaign_id: str
+    owner_id: str
+    name: str
+    status: str = "draft"
+    objective: Optional[str] = None
+    budget_cents: int = 0
+    contact_list_ids: List[str] = Field(default_factory=list)
+    segment_ids: List[str] = Field(default_factory=list)
+    tracking_code: Optional[str] = None
+    email_template_id: Optional[str] = None
+    questionnaire_id: Optional[str] = None
+    questionnaire_url: Optional[str] = None
+    campaign_type: str = "email"
+    variants: Optional[List[Dict[str, Any]]] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+class MarketingCampaignListOut(BaseModel):
+    campaigns: List[CrmCampaignOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    count: int = 0
+
+class MarketingCampaignSendIn(BaseModel):
+    dry_run: bool = False
+    snapshot_ts: Optional[int] = None
+
+class MarketingCampaignSendOut(BaseModel):
+    campaign_id: str
+    total_resolved: int = 0
+    total_sent: int = 0
+    total_skipped: int = 0
+    dry_run: bool = False
+    send_id: Optional[str] = None
+
+class MarketingCampaignAttributionOut(BaseModel):
+    campaign_id: str
+    total_sent: int = 0
+    email_sent: int = 0
+    open_count: int = 0
+    open_rate: float = 0.0
+    click_count: int = 0
+    click_rate: float = 0.0
+
+# CMP-002: HTML email templates
+class MarketingEmailTemplateCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    subject_template: str = Field(..., min_length=1, max_length=500)
+    body_html_template: str = Field(..., min_length=1, max_length=50000)
+
+class MarketingEmailTemplateUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    subject_template: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    body_html_template: Optional[str] = Field(default=None, min_length=1, max_length=50000)
+    status: Optional[str] = Field(default=None, pattern=r"^(draft|active)$")
+
+class MarketingEmailTemplateOut(BaseModel):
+    template_id: str
+    owner_id: str
+    name: str
+    subject_template: str
+    body_html_template: str
+    variables: List[str] = Field(default_factory=list)
+    status: str = "draft"
+    created_at: int = 0
+    updated_at: int = 0
+
+class MarketingEmailTemplateListOut(BaseModel):
+    templates: List[MarketingEmailTemplateOut] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    count: int = 0
+
+class MarketingEmailTemplatePreviewIn(BaseModel):
+    sample_vars: Dict[str, str] = Field(default_factory=dict)
+
+class MarketingEmailTemplatePreviewOut(BaseModel):
+    subject: str
+    body_html: str
+    variables: List[str] = Field(default_factory=list)
+    missing_vars: List[str] = Field(default_factory=list)
+
+# CMP-006: web-to-lead capture
+class WebLeadCaptureIn(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    email: str = Field(..., min_length=1, max_length=200)
+    phone: Optional[str] = Field(default=None, max_length=30)
+    company: Optional[str] = Field(default=None, max_length=200)
+    message: Optional[str] = Field(default=None, max_length=2000)
+    campaign_id: Optional[str] = None
+    honeypot: Optional[str] = Field(default=None, description="Bot trap — must be empty")
+    contact_list_id: Optional[str] = None
+
+class WebLeadCaptureOut(BaseModel):
+    capture_id: str
+    ok: bool = True
+
+class WebLeadListOut(BaseModel):
+    leads: List[Dict[str, Any]] = Field(default_factory=list)
+    cursor: Optional[str] = None
+    count: int = 0
+
+# CMP-004: unsubscribe
+class MarketingUnsubscribeOut(BaseModel):
+    ok: bool = True
+    message: str = "You have been unsubscribed from marketing emails."
+
+# CMP-007: A/B test results
+class MarketingAbVariantStats(BaseModel):
+    variant_id: str
+    label: str = ""
+    sent: int = 0
+    opens: int = 0
+    clicks: int = 0
+    open_rate: float = 0.0
+    click_rate: float = 0.0
+
+class MarketingAbResultsOut(BaseModel):
+    campaign_id: str
+    variant_stats: List[MarketingAbVariantStats] = Field(default_factory=list)
+    significance: Optional[Dict[str, Any]] = None
+
+# CMP-008: merge-tag preview
+class MarketingEmailPreviewIn(BaseModel):
+    sample_party_id: Optional[str] = None
+    sample_vars: Dict[str, str] = Field(default_factory=dict)
+
+class MarketingEmailPreviewOut(BaseModel):
+    subject: str
+    body_text: str
+    body_html: Optional[str] = None
+    merge_vars_used: Dict[str, str] = Field(default_factory=dict)
+    merge_vars_missing: List[str] = Field(default_factory=list)
+
+
+# ===========================================================================
+# Follow-up 1 — ORD: server-side order list (GET /ui/orders)
+# ===========================================================================
+
+class OrderListItem(BaseModel):
+    """Compact order-header projection for the list view."""
+    order_id: str
+    user_id: str
+    status: str  # legacy mirror (also the GSI_STATUS partition)
+    lifecycle_status: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+    source_system: str = ""
+    correlation_id: str = ""
+    amount_cents: int = Field(default=0, ge=0)
+    currency: str = "USD"
+    line_item_count: int = Field(default=0, ge=0)
+
+
+class OrderListOut(BaseModel):
+    orders: List[OrderListItem] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+# ===========================================================================
+# Follow-up 2 — CRM events: list / get-single / update
+# ===========================================================================
+
+class CrmEventListOut(BaseModel):
+    events: List["CrmEventOut"] = Field(default_factory=list)
+    cursor: Optional[str] = None
+
+
+class CrmEventUpdateIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    calendar_event_id: Optional[str] = Field(default=None, max_length=200)
+    max_attendance: Optional[int] = Field(default=None, ge=1)
+
+
+# ===========================================================================
+# Follow-up 3 — PRD: product-bundle membership
+# ===========================================================================
+
+class BundleComponentIn(BaseModel):
+    component_item_id: str = Field(min_length=1, max_length=128)
+    quantity: int = Field(default=1, ge=1, le=100000)
+
+
+class BundleComponentOut(BaseModel):
+    parent_item_id: str
+    component_item_id: str
+    quantity: int = Field(default=1, ge=1)
+    component_sku: Optional[str] = None
+    component_name: Optional[str] = None
+    component_price_cents: Optional[int] = None
+    created_at: int = 0
+
+
+class BundleComponentListOut(BaseModel):
+    parent_item_id: str
+    components: List[BundleComponentOut] = Field(default_factory=list)
+    count: int = 0

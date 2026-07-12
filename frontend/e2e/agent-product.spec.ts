@@ -16,6 +16,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const API = "http://localhost:8000";
 
@@ -39,8 +41,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -315,10 +317,16 @@ test.describe("673. Preference Learning & Config API", () => {
 test.describe("674. Feature Ideas UI", () => {
   let alicePage: Page;
   let cardId = "";
+  // Use a fresh, block-local agent_id so the per-agent pending-ideas cap
+  // (max_ideas_per_review, default 5) starts from zero here. The shared
+  // module-level AGENT_ID accumulates pending ideas across earlier describe
+  // blocks AND prior runs, which trips the cap → create returns 400 →
+  // idea_id is undefined → the card lookup times out.
+  const UI_AGENT_ID = freshAgentId("ideas_ui");
   test.beforeAll(async ({ browser }) => {
     getSessions();
     alicePage = await newIdentityPage(browser, "alice");
-    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ category: "integration" }));
+    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: UI_AGENT_ID, category: "integration" }));
     cardId = ((await r.json()) as Record<string, unknown>).idea_id as string;
   });
   test.afterAll(async () => {
@@ -338,8 +346,10 @@ test.describe("674. Feature Ideas UI", () => {
   });
 
   test("674.3 approve idea via UI", async () => {
-    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ category: "ux" }));
+    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: UI_AGENT_ID, category: "ux" }));
+    expect(r.status()).toBe(201);
     const id = ((await r.json()) as Record<string, unknown>).idea_id as string;
+    expect(id, "create idea returned an idea_id").toBeTruthy();
     await alicePage.goto("http://localhost:3000/agents/pm/ideas");
     await alicePage.locator(`[data-testid="idea-card-${id}"]`).click();
     await expect(alicePage.locator('[data-testid="idea-detail-dialog"]')).toBeVisible({ timeout: 10_000 });
@@ -349,8 +359,10 @@ test.describe("674. Feature Ideas UI", () => {
   });
 
   test("674.4 reject idea via UI", async () => {
-    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ category: "feature" }));
+    const r = await apiPost(alicePage, "alice", "ui/agents/pm/ideas", ideaBody({ agent_id: UI_AGENT_ID, category: "feature" }));
+    expect(r.status()).toBe(201);
     const id = ((await r.json()) as Record<string, unknown>).idea_id as string;
+    expect(id, "create idea returned an idea_id").toBeTruthy();
     await alicePage.goto("http://localhost:3000/agents/pm/ideas");
     await alicePage.locator(`[data-testid="idea-card-${id}"]`).click();
     await expect(alicePage.locator('[data-testid="idea-detail-dialog"]')).toBeVisible({ timeout: 10_000 });

@@ -6,6 +6,8 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -32,8 +34,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -96,6 +98,9 @@ test.describe("85 — Poll API", () => {
     const resp = await feedPost(alicePage, "/posts", {
       body_plain: "What should I stream next?",
       post_type: "poll",
+      // Public visibility so Bob (a non-follower) can cast votes — voting now
+      // enforces the post visibility gate (GAP-0164: can_view_post on /vote).
+      visibility: "public",
       poll_data: {
         questions: [
           {
@@ -328,6 +333,8 @@ test.describe("85 — Poll API", () => {
     const createResp = await feedPost(alicePage, "/posts", {
       body_plain: "No change poll",
       post_type: "poll",
+      // Public so Bob can vote (voting enforces visibility gate, GAP-0164).
+      visibility: "public",
       poll_data: {
         questions: [
           {

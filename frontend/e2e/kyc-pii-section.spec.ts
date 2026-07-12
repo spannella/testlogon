@@ -26,6 +26,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const API = "http://localhost:8000";
@@ -53,8 +55,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -96,7 +98,7 @@ async function apiPost(page: Page, identity: string, path: string, body?: object
 const DDB_PRELUDE = `
 import boto3, os, json
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -247,16 +249,23 @@ test.describe("Section 288 — Sensitive PII tab", () => {
     await expect(charliePage.getByTestId("kyc-pii-rotate")).toHaveCount(0);
   });
 
-  test("288.6 non-assigned admin sees masked values but no Reveal buttons", async () => {
+  test("288.6 non-assigned admin is denied case access (reviewer-scope gate)", async () => {
+    // KYC-023 reviewer-scope: a non-root admin who is NOT the case's assigned
+    // reviewer can no longer view the case detail at all (the admin case-detail
+    // API now enforces _is_scoped_admin_for_case → kyc_access_forbidden). The
+    // detail page therefore never loads, so the PII tab + Reveal buttons are
+    // absent rather than rendered-but-masked.
+    const apiResp = await charliePage.request.get(
+      `${API}/v1/kyc/cases/admin/cases/${unassignedCase.kyc_case_id}`,
+    );
+    expect(apiResp.status()).toBe(403);
+
     await charliePage.goto(`${BASE}/admin/kyc/cases/${unassignedCase.kyc_case_id}`, {
       waitUntil: "domcontentloaded",
     });
-    await charliePage.getByTestId("tab-pii").click();
-    await expect(charliePage.getByTestId("kyc-pii-section")).toBeVisible({ timeout: 10_000 });
-
-    await expect(charliePage.getByTestId("pii-field-document_number")).toBeVisible();
-    await expect(
-      charliePage.locator("[data-testid^='pii-reveal-']"),
-    ).toHaveCount(0);
+    // Access denied → page falls back to the "Case not found." state; no tabs.
+    await expect(charliePage.getByText("Case not found.")).toBeVisible({ timeout: 10_000 });
+    await expect(charliePage.getByTestId("tab-pii")).toHaveCount(0);
+    await expect(charliePage.locator("[data-testid^='pii-reveal-']")).toHaveCount(0);
   });
 });

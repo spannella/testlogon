@@ -11,6 +11,8 @@
  * paginating to cover >1MB scans.
  */
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 export interface CleanupTarget {
   /** Logical table name (env-overridable name resolved server-side by default). */
@@ -35,7 +37,7 @@ export function cleanupDdb(targets: CleanupTarget | CleanupTarget[]): void {
   const py = [
     "import os, json, boto3",
     "from pathlib import Path",
-    "for ln in Path('/home/ubuntu/testlogon/.env.local').read_text().splitlines():",
+    "for ln in Path(REPO_ROOT + '/.env.local').read_text().splitlines():",
     "    ln=ln.strip()",
     "    if ln and not ln.startswith('#') and '=' in ln:",
     "        k,v=ln.split('=',1); os.environ.setdefault(k.strip(), v.strip())",
@@ -64,7 +66,7 @@ export function cleanupDdb(targets: CleanupTarget | CleanupTarget[]): void {
     "    print(f'cleaned {name} {deleted}')",
   ].join("\n");
   try {
-    execSync(`python3 -c "${py}"`, { cwd: "/home/ubuntu/testlogon", timeout: 30_000 });
+    execSync(`python3 -c "${py}"`, { cwd: REPO_ROOT, timeout: 30_000 });
   } catch {
     // best-effort: never fail a test run on cleanup
   }

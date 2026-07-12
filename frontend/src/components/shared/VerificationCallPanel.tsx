@@ -194,13 +194,11 @@ export function VerificationCallPanel({ caseId, initialCallId }: Props) {
       // Prefer the admin per-case endpoint (GAP-0251); fall back to scanning
       // the by-status lists if it is not deployed in this environment.
       try {
-        const resp = await adminGetKycLivenessCallForCase(caseId);
-        const vc = resp.verification_call;
-        if (!vc) return null;
-        // The per-case status view is a status projection; fetch the full
-        // record by id so admin-only fields (result_notes, recording_ref,
-        // verifier_sub) are available.
-        return adminGetKycLivenessCall(vc.call_id);
+        // The admin per-case endpoint returns the full call record directly
+        // (admin-only fields like result_notes/recording_ref/verifier_sub are
+        // already included), so no second fetch-by-id is needed. A missing call
+        // surfaces as a 404, handled below.
+        return await adminGetKycLivenessCallForCase(caseId);
       } catch (err) {
         if (err instanceof ApiError && (err.status === 404 || err.status === 405)) {
           const results = await Promise.all([

@@ -18,6 +18,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -50,8 +52,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -124,7 +126,7 @@ table.put_item(Item={
     'gsi1sk': str(int(time.time())),
 })
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
@@ -167,7 +169,7 @@ table.put_item(Item={
     'gsi_jira_sync_state_sk': f'UPDATED#{now:013d}#CONN#${connectionId}#ACTOR#${userSub}',
 })
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
@@ -240,7 +242,7 @@ item['gsi_jira_sync_state_sk'] = f'UPDATED#{now:013d}#LINK#{lid}'
 table.put_item(Item=item)
 "`,
     {
-      cwd: "/home/ubuntu/testlogon",
+      cwd: REPO_ROOT,
       timeout: 10_000,
       env: { ...process.env, SEED_ITEM: itemJson },
     },
@@ -256,7 +258,7 @@ ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_na
 table = ddb.Table('tickets')
 table.delete_item(Key={'pk': '${pk}', 'sk': '${sk}'})
 "`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } catch {
     // best-effort cleanup

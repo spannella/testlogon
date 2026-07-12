@@ -14,6 +14,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -44,8 +46,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -320,7 +322,7 @@ test.describe("call-history — CALL-004", () => {
   test("206.1 — Call History page loads and shows records", async () => {
     await alicePage.goto(`${BASE}/calls/history`, { waitUntil: "domcontentloaded" });
     // Wait for the page heading
-    await expect(alicePage.getByText("Call History")).toBeVisible({ timeout: 10_000 });
+    await expect(alicePage.getByRole("heading", { name: "Call History" })).toBeVisible({ timeout: 10_000 });
     // Wait for data to load
     await expect(alicePage.getByText("Recent Calls")).toBeVisible({ timeout: 10_000 });
     // Should show at least one call row

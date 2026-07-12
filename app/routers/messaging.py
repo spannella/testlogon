@@ -9,6 +9,11 @@ import json
 import logging
 import os
 import hashlib
+from datetime import datetime as _dt_b9, timezone as _tz_b9
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo_b9
+except Exception:  # pragma: no cover
+    _ZoneInfo_b9 = None
 import hmac
 import re
 import threading
@@ -1269,6 +1274,17 @@ ENCRYPTED_EDIT_ERROR_CODE = "encrypted_message_edit_unsupported"
 NO_AGENTS_ONLINE_NOTICE_TEXT = "No helpdesk agents are online right now. Please try again later."
 NO_AGENTS_NOTICE_THROTTLE_SEC = int(os.getenv("NO_AGENTS_NOTICE_THROTTLE_SEC", "600"))
 HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED = os.getenv("HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# HMH-003: when on, a new helpdesk chat is auto-routed to an available agent at
+# creation (skipping the queue). Default off — flag-off behavior is identical to
+# the historical alert-only fanout path.
+HELPDESK_AUTO_ROUTE_ENABLED = os.getenv("HELPDESK_AUTO_ROUTE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# B9 B-HELP2 #13: when on (default), refuse to create a helpdesk_bridge chat if NO
+# agents are available, so the customer gets a clean "try later" instead of a chat
+# that silently sits unanswered. Disable to fall back to the queue-and-notice path.
+HELPDESK_REFUSE_WHEN_NO_AGENTS = os.getenv("HELPDESK_REFUSE_WHEN_NO_AGENTS", "1").strip().lower() in {"1", "true", "yes", "on"}
+# HMH-006: when on, a going-offline agent's assigned conversation is auto-reassigned
+# to another available group member instead of dropping back to awaiting_agent.
+HELPDESK_AUTO_REASSIGN_ENABLED = os.getenv("HELPDESK_AUTO_REASSIGN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED = bool(getattr(S, "messaging_hidden_timeline_filter_enabled", True))
 
 HELPDESK_ROUTING_EVENT_SCHEMA_VERSION = 1
@@ -1277,6 +1293,7 @@ HELPDESK_ROUTING_LIFECYCLE_EVENT_TYPES = {
     "helpdesk.conversation.assigned",
     "helpdesk.conversation.released",
     "helpdesk.conversation.no_agents_online",
+    "helpdesk.conversation.transferred",
 }
 CONSUMPTION_POLICY_NONE = "none"
 CONSUMPTION_STATE_PENDING = "pending"
@@ -1787,6 +1804,8 @@ class ConversationOut(BaseModel):
     active_agent_user_id: Optional[str] = None
     active_agent_claimed_at: Optional[int] = None
     assignment_version: Optional[int] = None
+    # Identity-free signal for the customer-facing helpdesk banner (HMH-008).
+    agent_connected: Optional[bool] = None
     participants: List["ParticipantOut"] = Field(default_factory=list)
     last_message: Optional["MessageOut"] = None
 
@@ -1812,6 +1831,19 @@ class HelpdeskClaimOut(BaseModel):
     assigned_agent_user_id: str
     assignment_version: int
     idempotent: bool = False
+
+
+class TransferHelpdeskIn(BaseModel):
+    target_agent_user_id: str = Field(min_length=1, max_length=256)
+
+
+class HelpdeskTransferOut(BaseModel):
+    ok: bool
+    conversation_id: str
+    state: str
+    assigned_agent_user_id: str
+    assignment_version: int
+    previous_agent_user_id: str
 
 
 class LinkPreviewIn(BaseModel):
@@ -1886,6 +1918,9 @@ class SendTextMessageIn(BaseModel):
     preview: Optional[LinkPreviewIn] = None
     encryption: Optional[MessageEncryptionEnvelope] = None
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)  # e.g. 500 = $5.00
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
     tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
@@ -1918,6 +1953,7 @@ class SendTextMessageIn(BaseModel):
 
     @model_validator(mode="after")
     def _validate_shape(self):
+        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
         if self.encryption and self.text:
             raise PydanticCustomError(
                 "message_text_encryption_conflict",
@@ -1976,10 +2012,18 @@ class CreateImageMessageIn(BaseModel):
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
     tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
     encryption: Optional[MessageEncryptionEnvelope] = None
     # Blurred preview for locked images — small pixelated thumbnail shown before unlock
     preview_bucket: Optional[str] = Field(default=None, max_length=200)
     preview_key: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _b9_resolve_sched(self):
+        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
+        return self
 
 
 class PresignVoiceMessageRequest(BaseModel):
@@ -2040,12 +2084,16 @@ class CreateGalleryMessageIn(BaseModel):
     lock_description: Optional[str] = Field(default=None, max_length=500)
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=2592000)
     send_at: Optional[int] = None
+    # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
     tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
 
     @model_validator(mode="after")
     def validate_gallery(self):
+        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
         if len(self.free_images) > 20:
             raise ValueError("free_images may not exceed 20 items")
         if len(self.locked_images) > 30:
@@ -2134,7 +2182,14 @@ class SubmitAvailabilityIn(BaseModel):
 class SendCountdownMessageIn(BaseModel):
     """Request model for sending a countdown message (MSG-010)."""
     title: str = Field(min_length=1, max_length=200)
-    target_datetime: int = Field(description="UTC Unix timestamp of the target event")
+    target_datetime: Optional[int] = Field(default=None, description="UTC Unix timestamp of the target event")
+    # B-COUNTDOWN #32: absolute end as wall-clock + IANA tz (parity with scheduling).
+    target_datetime_local: Optional[str] = Field(default=None, max_length=40, description="'YYYY-MM-DDTHH:MM[:SS]' wall-clock end")
+    target_tz: Optional[str] = Field(default=None, max_length=64, description="IANA timezone for target_datetime_local")
+    # B-COUNTDOWN #31: optional payload revealed when the countdown completes.
+    reveal_text: Optional[str] = Field(default=None, max_length=4000)
+    reveal_image: Optional[GalleryImageItemIn] = None
+    reveal_media: Optional[List[GalleryImageItemIn]] = Field(default=None, description="image+video items revealed at completion")
     associated_event_type: str = Field(
         default="custom",
         pattern=r"^(broadcast|call|calendar|custom)$",
@@ -2144,6 +2199,13 @@ class SendCountdownMessageIn(BaseModel):
 
     @model_validator(mode="after")
     def _validate_countdown(self):
+        # #32: resolve a wall-clock+tz end into target_datetime when provided.
+        if self.target_datetime is None and self.target_datetime_local:
+            self.target_datetime = _b9_resolve_send_at(
+                None, self.target_datetime_local, self.target_tz
+            )
+        if self.target_datetime is None:
+            raise ValueError("target_datetime or target_datetime_local is required")
         if self.target_datetime <= now_ts():
             raise ValueError("target_datetime must be in the future")
         if self.associated_event_type != "custom" and not self.associated_event_id:
@@ -2304,9 +2366,19 @@ class CreateFileMessageIn(BaseModel):
     preview: Optional[LinkPreviewIn] = None
     consumption_policy: Literal["none", "view_once", "listen_once"] = "none"
     signature_packet_id: Optional[str] = Field(default=None, max_length=128)
+    # Gating options (parity with image messages): disappearing / view-once / locked PPV / scheduled send.
+    view_once: bool = False
+    expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)
+    lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    lock_description: Optional[str] = Field(default=None, max_length=200)
+    send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _validate_consumption_policy(self):
+        self.send_at = _b9_model_resolve_send_at(self.send_at, self.send_at_local, self.send_at_tz)
         if self.consumption_policy == "view_once" and self.kind != "video":
             raise PydanticCustomError(
                 "invalid_media_kind_for_policy",
@@ -2325,7 +2397,22 @@ class LotteryOutcomeIn(BaseModel):
     weight_bps: int = Field(ge=1, le=10_000)
     payload_type: Literal["text", "image", "video"]
     text_content: Optional[str] = Field(default=None, max_length=4000)
+    # B-LOTTERY2 #24: a single outcome may carry MULTIPLE media assets
+    # (mixed images + videos). media_asset_id stays for single-asset
+    # back-compat; media_asset_ids is the new plural form. When both are
+    # given, media_asset_id is treated as the first element.
     media_asset_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    media_asset_ids: Optional[List[str]] = Field(default=None, max_length=20)
+
+    @model_validator(mode="after")
+    def _b9_merge_media(self):
+        ids = list(self.media_asset_ids or [])
+        if self.media_asset_id and self.media_asset_id not in ids:
+            ids = [self.media_asset_id] + ids
+        if ids:
+            self.media_asset_ids = ids
+            self.media_asset_id = ids[0]
+        return self
 
 
 class LotteryConfigIn(BaseModel):
@@ -2333,10 +2420,43 @@ class LotteryConfigIn(BaseModel):
     outcomes: List[LotteryOutcomeIn] = Field(default_factory=list)
 
 
+class LotteryMessageImageIn(BaseModel):
+    bucket: Optional[str] = Field(default=None, max_length=200)
+    key: str = Field(min_length=1, max_length=500)
+    content_type: Optional[str] = Field(default=None, max_length=100)
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class LotteryMessageImageOut(BaseModel):
+    bucket: str
+    key: str
+    content_type: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
 class CreateLotteryMessageIn(BaseModel):
     message_type: Literal["lottery_dm"] = "lottery_dm"
     conversation_id: str = Field(min_length=1, max_length=128)
     lottery_config: LotteryConfigIn
+    # Optional cover/header image for the lottery message (bucket/key like image messages).
+    image: Optional[LotteryMessageImageIn] = None
+    # B-LOTTERY2 #23: optional message-level cover text shown before unlock.
+    text: Optional[str] = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _b9_require_text_or_cover(self):
+        outcomes = list(self.lottery_config.outcomes or [])
+        any_outcome_text = any((o.text_content or "").strip() for o in outcomes)
+        has_cover = bool((self.text or "").strip()) or (self.image is not None)
+        # #23: media-only options (no per-outcome text) require a lottery
+        # text or a cover image so the message is not blank before unlock.
+        if outcomes and not any_outcome_text and not has_cover:
+            raise ValueError(
+                "lottery text or a cover image is required when options have no text"
+            )
+        return self
 
 
 class LotteryOutcomeOut(BaseModel):
@@ -2347,6 +2467,9 @@ class LotteryOutcomeOut(BaseModel):
     text_content: Optional[str] = None
     media_asset_id: Optional[str] = None
     media_metadata: Optional[Dict[str, Any]] = None
+    # B-LOTTERY2 #24: full list of media assets when an outcome has >1.
+    media_assets: Optional[List[Dict[str, Any]]] = None
+    media_asset_ids: Optional[List[str]] = None
 
 
 class LotteryConfigOut(BaseModel):
@@ -2369,6 +2492,7 @@ class LotteryMessageOut(BaseModel):
     lock_state: Literal["locked", "unlocked"]
     lottery_config: LotteryConfigOut
     selected_outcome: Optional[LotterySelectedOutcomeOut] = None
+    image: Optional[LotteryMessageImageOut] = None
     idempotent: bool = False
     created_at: int
 
@@ -2469,11 +2593,17 @@ class MessageOut(BaseModel):
     lottery: Optional[Dict[str, Any]] = None
     voice_message: Optional[Dict[str, Any]] = None
     voicemail: Optional[Dict[str, Any]] = None
+    # Per-message translation (MVA-005): populated when the viewer has
+    # auto-translate on and a cached translation exists. Best-effort, never set
+    # for viewers without the preference.
+    translation: Optional[Dict[str, Any]] = None
     # Countdown message fields (MSG-010)
     countdown_title: Optional[str] = None
     target_datetime: Optional[int] = None
     associated_event_type: Optional[str] = None
     associated_event_id: Optional[str] = None
+    # B-COUNTDOWN #31: payload (text + mixed media) revealed at completion.
+    countdown_reveal: Optional[Dict[str, Any]] = None
     # GIF message fields (MSG-008)
     gif_url: Optional[str] = None
     gif_alt_text: Optional[str] = None
@@ -2761,6 +2891,49 @@ MESSAGE_CONTROLS_ERROR_RESPONSES = {
 
 def now_ts() -> int:
     return int(time.time())
+
+
+# ---- Backend-A batch-9 helpers ------------------------------------------------
+def _b9_resolve_send_at(send_at, send_at_local=None, send_at_tz=None):
+    """Resolve an effective absolute Unix `send_at` from either an absolute
+    epoch (`send_at`) OR a wall-clock local datetime + IANA timezone
+    (`send_at_local` = 'YYYY-MM-DDTHH:MM[:SS]', `send_at_tz` = e.g.
+    'America/New_York'). Absolute `send_at` wins when both are given. Returns
+    int epoch seconds or None when nothing scheduled. Raises HTTPException 400
+    on a bad timezone / unparseable wall-clock."""
+    if send_at is not None:
+        return int(send_at)
+    if not send_at_local:
+        return None
+    tzname = (send_at_tz or "UTC").strip() or "UTC"
+    if _ZoneInfo_b9 is None:
+        raise HTTPException(400, "timezone scheduling unavailable on this server")
+    try:
+        tz = _tz_b9.utc if tzname.upper() == "UTC" else _ZoneInfo_b9(tzname)
+    except Exception:
+        raise HTTPException(400, f"invalid timezone: {tzname}")
+    raw = str(send_at_local).strip().replace("Z", "")
+    fmts = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")
+    parsed = None
+    for f in fmts:
+        try:
+            parsed = _dt_b9.strptime(raw, f)
+            break
+        except Exception:
+            continue
+    if parsed is None:
+        raise HTTPException(400, "send_at_local must be 'YYYY-MM-DDTHH:MM[:SS]'")
+    return int(parsed.replace(tzinfo=tz).timestamp())
+
+def _b9_model_resolve_send_at(send_at, send_at_local, send_at_tz):
+    """Validator-safe wrapper around _b9_resolve_send_at (raises ValueError)."""
+    if send_at is not None or not send_at_local:
+        return send_at
+    try:
+        return _b9_resolve_send_at(None, send_at_local, send_at_tz)
+    except HTTPException as exc:
+        raise ValueError(str(getattr(exc, "detail", "invalid timezone schedule")))
+
 
 
 def new_id() -> str:
@@ -3240,8 +3413,9 @@ def _lottery_message_item(
     sender_id: str,
     created_at: int,
     persisted_cfg: Mapping[str, Any],
+    image: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
-    return {
+    item: dict[str, Any] = {
         "conversation_id": conversation_id,
         "message_id": message_id,
         "sender_id": sender_id,
@@ -3256,6 +3430,9 @@ def _lottery_message_item(
         },
         "reactions": {},
     }
+    if image and image.get("key"):
+        item["image"] = {k: v for k, v in dict(image).items() if v is not None}
+    return item
 
 
 def _encode_gallery_index_cursor(sort_key: str) -> str:
@@ -3530,8 +3707,11 @@ def _filter_message_visible(message_item: dict, user_id: str) -> bool:
     if message_item.get("moderation_hidden") or message_item.get("moderation_removed_at"):
         if message_item.get("sender_id") != user_id:
             return False
-    # Scheduled messages are only visible to the sender until delivered
-    if message_item.get("status") == "scheduled" and message_item.get("sender_id") != user_id:
+    # B-SCHED2 #20: a scheduled message is HIDDEN from the thread for EVERYONE
+    # (including its own sender) until the background loop delivers it at
+    # deliver_at. Senders manage pending sends via the dedicated
+    # GET .../messages/scheduled endpoint, never the live thread.
+    if message_item.get("status") == "scheduled":
         return False
     return user_id not in deleted_for
 
@@ -3866,6 +4046,12 @@ def _is_view_once_consumed(item: dict, viewer_user_id: str) -> bool:
 def _project_gallery_image(img_dict: dict) -> dict:
     """Project a gallery image item dict to a response dict with URL added in dev mode."""
     out = dict(img_dict)
+    # B-MULTIMEDIA #25/#27: a gallery message may carry MIXED media -- both
+    # images AND videos, and more than one video -- in a single message. Each
+    # item already stores its own content_type; surface an explicit media_kind
+    # ("image"|"video") discriminator so clients render mixed lists correctly.
+    _ct = str(out.get("content_type") or "").lower()
+    out["media_kind"] = "video" if _ct.startswith("video/") else "image"
     if S.dev_mode:
         from urllib.parse import quote as _gi_quote
         bucket = out.get("bucket", "")
@@ -4193,6 +4379,15 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             "duration_seconds": float(merged_item.get("duration_seconds", 0)),
             "waveform_data": [float(v) for v in raw_waveform],
         }
+        # MVA-007: project a persisted transcript (if any) for all participants.
+        if merged_item.get("transcript"):
+            voice_message_out["transcript"] = str(merged_item.get("transcript"))
+            voice_message_out["transcript_lang"] = str(merged_item.get("transcript_lang") or "")
+        # MVA-009: surface TTS provenance/source text.
+        if merged_item.get("is_tts"):
+            voice_message_out["is_tts"] = True
+            if merged_item.get("tts_source_text"):
+                voice_message_out["tts_source_text"] = str(merged_item.get("tts_source_text"))
 
     # Voicemail projection (CALL-014)
     voicemail_out: Optional[Dict[str, Any]] = None
@@ -4235,6 +4430,18 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             countdown_target_out = int(merged_item["target_datetime"])
         countdown_event_type_out = merged_item.get("associated_event_type")
         countdown_event_id_out = merged_item.get("associated_event_id")
+        # B-COUNTDOWN #31: reveal the stashed payload only once the
+        # countdown has completed (now >= target_datetime).
+        _cd_rev = merged_item.get("countdown_reveal")
+        if isinstance(_cd_rev, dict) and countdown_target_out is not None and now_ts() >= countdown_target_out:
+            _rev_out = {}
+            if _cd_rev.get("text"):
+                _rev_out["text"] = _cd_rev.get("text")
+            if _cd_rev.get("media"):
+                _rev_out["media"] = [_project_gallery_image(dict(x)) for x in _cd_rev.get("media")]
+            if _rev_out:
+                _rev_out["revealed"] = True
+                merged_item["_countdown_reveal_out"] = _rev_out
 
     # GIF / Sticker message projection (MSG-008)
     gif_url_out: Optional[str] = None
@@ -4288,6 +4495,7 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         target_datetime=countdown_target_out,
         associated_event_type=countdown_event_type_out,
         associated_event_id=countdown_event_id_out,
+        countdown_reveal=merged_item.get("_countdown_reveal_out"),
         gif_url=gif_url_out,
         gif_alt_text=gif_alt_text_out,
         gif_width=gif_width_out,
@@ -4318,7 +4526,13 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         reactions_counts=counts if counts else None,
         my_reactions=mine if mine else None,
         is_encrypted=bool(merged_item.get("is_encrypted")),
-        encryption=merged_item.get("encryption"),
+        # BK-A: gate the encryption envelope behind the same content_hidden
+        # rule as text/image/file. A locked+encrypted message must NOT leak its
+        # ciphertext/envelope (salt/iv/ciphertext_b64) until the recipient unlocks
+        # (pays); is_encrypted/locked/lock_price_cents still surface so the client
+        # knows what it is looking at. After unlock the (still-encrypted) envelope
+        # is returned and the client decrypts with the passphrase.
+        encryption=(None if content_hidden else merged_item.get("encryption")),
         consumption_policy=policy,
         media_kind=media_kind,
         consumption_state=consumption_state,
@@ -4704,12 +4918,23 @@ def _conversation_out_from_items(*, conversation_id: str, convo: dict, participa
         # Always expose routing_mode to all participants so the UI can identify
         # the conversation as a helpdesk chat (e.g. customer "Your Support Chats" view).
         out.routing_mode = raw_routing_mode
-    if _is_helpdesk_agent_viewer(convo, viewer_user_id):
-        out.routing_group_id = str(convo.get("routing_group_id") or "")
-        out.routing_state = str(convo.get("routing_state") or "")
-        out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")
-        out.active_agent_claimed_at = int(convo.get("active_agent_claimed_at", 0) or 0)
-        out.assignment_version = int(convo.get("assignment_version", 0) or 0)
+        # Customer-safe status: routing_state carries only the lifecycle stage
+        # ("awaiting_agent" / "assigned" / …) — no agent identity — so the
+        # customer's routing banner can render. `agent_connected` is a derived,
+        # identity-free flag so the customer knows an agent is on without learning
+        # who. (HMH-008)
+        routing_state = str(convo.get("routing_state") or "")
+        out.routing_state = routing_state
+        out.agent_connected = bool(
+            routing_state == "assigned" or convo.get("active_agent_user_id")
+        )
+        # Agent-only fields (incl. the agent's identity) stay gated to helpdesk
+        # agents — never sent to the customer.
+        if _is_helpdesk_agent_viewer(convo, viewer_user_id):
+            out.routing_group_id = str(convo.get("routing_group_id") or "")
+            out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")
+            out.active_agent_claimed_at = int(convo.get("active_agent_claimed_at", 0) or 0)
+            out.assignment_version = int(convo.get("assignment_version", 0) or 0)
     return out
 
 
@@ -5316,6 +5541,28 @@ def _resolve_online_helpdesk_members(group_id: str, ts: int) -> list[str]:
     return out
 
 
+def count_available_agents(group_id: str, ts: int) -> int:
+    """HMH-001: number of helpdesk agents currently online/available for a group."""
+    try:
+        return len(_resolve_online_helpdesk_members(group_id, ts))
+    except Exception:
+        return 0
+
+
+def pick_available_agent(group_id: str, ts: int, *, exclude: Optional[set[str]] = None) -> Optional[str]:
+    """HMH-001: choose an online/available agent for the group, or None.
+
+    Excludes any ids in ``exclude``. Selection is first-available (presence
+    order); least-loaded selection is a future refinement. Never raises.
+    """
+    excl = exclude or set()
+    try:
+        online = [u for u in _resolve_online_helpdesk_members(group_id, ts) if u and u not in excl]
+    except Exception:
+        return None
+    return online[0] if online else None
+
+
 
 
 def _normalize_presence_status(status: Optional[str]) -> str:
@@ -5433,7 +5680,37 @@ def _handle_helpdesk_presence_event(*, user_id: str, status: str, ts: int) -> di
                 transitioned += 1
                 released_convo = release_result.get("conversation", {}) if isinstance(release_result, dict) else {}
                 group_id = str(released_convo.get("routing_group_id") or convo.get("routing_group_id") or "")
-                if group_id:
+                released_version = int(released_convo.get("assignment_version") or 0)
+                reassigned = False
+                if group_id and HELPDESK_AUTO_REASSIGN_ENABLED:
+                    replacement = pick_available_agent(group_id, ts, exclude={user_id})
+                    if replacement:
+                        try:
+                            reassign_result = _apply_helpdesk_routing_transition(
+                                conversation_id=cid,
+                                cmd=RoutingTransitionInput(
+                                    action="assign_agent",
+                                    now_ts=ts,
+                                    agent_user_id=replacement,
+                                    expected_assignment_version=released_version,
+                                ),
+                                actor_user_id=user_id,
+                                metadata={"reason": "auto_reassign_on_disconnect", "previous_agent": user_id},
+                            )
+                            reassigned_event = reassign_result.get("event", {}) if isinstance(reassign_result, dict) else {}
+                            reassigned_convo = reassign_result.get("conversation", {}) if isinstance(reassign_result, dict) else {}
+                            _attach_agent_participant(
+                                conversation_id=cid,
+                                agent_user_id=replacement,
+                                ts=ts,
+                                routing_event_id=str(reassigned_event.get("event_id") or ""),
+                                routing_state="assigned",
+                                assignment_version=int(reassigned_convo.get("assignment_version") or 0),
+                            )
+                            reassigned = True
+                        except Exception:
+                            logger.exception("helpdesk auto-reassign failed", extra={"conversation_id": cid, "replacement": replacement})
+                if not reassigned and group_id:
                     delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
                     if delivered > 0:
                         _apply_helpdesk_routing_transition(
@@ -5441,7 +5718,7 @@ def _handle_helpdesk_presence_event(*, user_id: str, status: str, ts: int) -> di
                             cmd=RoutingTransitionInput(
                                 action="alert_awaiting",
                                 now_ts=ts,
-                                expected_assignment_version=int(released_convo.get("assignment_version") or 0),
+                                expected_assignment_version=released_version,
                             ),
                             actor_user_id=user_id,
                             metadata={"reason": "presence_realert", "status": status, "delivered": delivered},
@@ -5670,6 +5947,26 @@ def _fanout_new_message_event(
         payload=enriched_payload,
         respect_mute=respect_mute,
     )
+
+    # Push notifications to each recipient (best-effort; never blocks the send/fanout).
+    try:
+        from app.services.push import send_message_push
+        _mid = str(message_item.get("message_id") or "")
+        _kind = message_item.get("kind") or "text"
+        _body = (message_item.get("text") or "").strip()
+        if message_item.get("is_encrypted"):
+            _body = "\U0001F512 Encrypted message"
+        elif not _body:
+            _body = {"image": "\U0001F4F7 Photo", "voice_message": "\U0001F3A4 Voice message",
+                     "file": "\U0001F4CE File"}.get(_kind, "New message")
+        _title = sender_id.split("@")[0] if "@" in sender_id else sender_id
+        _resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        for _p in _resp.get("Items", []):
+            _pid = _p.get("user_id")
+            if _pid and _pid != sender_id:
+                send_message_push(_pid, _title, _body, conversation_id, _mid)
+    except Exception as _exc:
+        logger.warning("message push fanout failed: %s", _exc)
 
 
 def _reaction_summaries(message_item: dict, viewer_user_id: str) -> tuple[Dict[str, int], List[str]]:
@@ -6129,6 +6426,22 @@ def start_conversation(
                     "message": "helpdesk bridge mode is not enabled for this group/tenant",
                 },
             )
+        # B9 B-HELP2 #13: do NOT create a helpdesk conversation when no agents are
+        # available. Refuse cleanly (409) so the client can show a "no agents online,
+        # try again later" message instead of stranding the user in a dead chat.
+        if HELPDESK_REFUSE_WHEN_NO_AGENTS:
+            available_now = count_available_agents(group_id, created_at)
+            if available_now <= 0:
+                record_helpdesk_no_agents_notice("creation_refused")
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "helpdesk_no_agents_available",
+                        "message": "No helpdesk agents are available right now. Please try again later.",
+                        "any_available": False,
+                        "available_agent_count": 0,
+                    },
+                )
         participant_ids = [user_id, _helpdesk_virtual_participant_id(group_id)]
     else:
         participant_ids = list(dict.fromkeys([user_id] + inp.participant_ids))
@@ -6186,9 +6499,46 @@ def start_conversation(
         )
 
     if routing_mode == "helpdesk_bridge":
-        delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
-        if delivered == 0:
-            _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=created_at)
+        auto_assigned = False
+        # HMH-004: when enabled and an agent is online, assign immediately so the
+        # chat becomes a live messenger DM instead of sitting in the queue.
+        if HELPDESK_AUTO_ROUTE_ENABLED:
+            agent = pick_available_agent(group_id, created_at)
+            if agent:
+                try:
+                    result = _apply_helpdesk_routing_transition(
+                        conversation_id=cid,
+                        cmd=RoutingTransitionInput(
+                            action="assign_agent",
+                            now_ts=created_at,
+                            agent_user_id=agent,
+                            expected_assignment_version=0,
+                        ),
+                        actor_user_id=agent,
+                        metadata={"reason": "auto_route"},
+                    )
+                    updated_routing = result.get("conversation", {}) if isinstance(result, dict) else {}
+                    _attach_agent_participant(
+                        conversation_id=cid,
+                        agent_user_id=agent,
+                        ts=created_at,
+                        routing_event_id=str(result.get("event", {}).get("event_id") or ""),
+                        routing_state=str(updated_routing.get("routing_state") or "assigned"),
+                        assignment_version=int(updated_routing.get("assignment_version") or 1),
+                    )
+                    # Reflect the assignment on the local item used for the response.
+                    convo_item["routing_state"] = str(updated_routing.get("routing_state") or "assigned")
+                    convo_item["active_agent_user_id"] = agent
+                    convo_item["assignment_version"] = int(updated_routing.get("assignment_version") or 1)
+                    record_helpdesk_claim("success")
+                    auto_assigned = True
+                except Exception:
+                    logger.exception("helpdesk auto-route failed; falling back to queue cid=%s", cid)
+                    auto_assigned = False
+        if not auto_assigned:
+            delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
+            if delivered == 0:
+                _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=created_at)
 
     profile_cache: Dict[str, Any] = {}
     convo = ConversationOut(
@@ -6871,6 +7221,77 @@ def delete_conversation_if_last(conversation_id: str, req: Request = None, user_
     return {"ok": True, "deleted": True}
 
 
+def _attach_agent_participant(
+    *,
+    conversation_id: str,
+    agent_user_id: str,
+    ts: int,
+    routing_event_id: str,
+    routing_state: str,
+    assignment_version: int,
+) -> str:
+    """Add an agent as an active admin participant of a helpdesk conversation.
+
+    Shared by the claim path and the auto-route path (HMH-004) so the
+    participant-join + participant_count increment + membership-archive event
+    stay identical (single source of truth). Returns the membership transition
+    ("helpdesk_agent_joined" / "helpdesk_agent_reactivated" / "none").
+    """
+    existing_part = tbl_parts.get_item(
+        Key={"user_id": agent_user_id, "conversation_id": conversation_id}
+    ).get("Item")
+    membership_transition = "none"
+    if not existing_part:
+        tbl_parts.put_item(Item={
+            "user_id": agent_user_id,
+            "conversation_id": conversation_id,
+            "status": "active",
+            "role": "admin",
+            "muted_until": 0,
+            "last_read_at": 0,
+            "unread_count": 0,
+            "joined_at": ts,
+            "left_at": 0,
+            "GSI1PK": conversation_id,
+            "GSI1SK": agent_user_id,
+        })
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="ADD participant_count :inc",
+            ExpressionAttributeValues={":inc": 1},
+        )
+        membership_transition = "helpdesk_agent_joined"
+    elif existing_part.get("status") != "active":
+        tbl_parts.update_item(
+            Key={"user_id": agent_user_id, "conversation_id": conversation_id},
+            UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
+        )
+        membership_transition = "helpdesk_agent_reactivated"
+
+    if membership_transition != "none":
+        _emit_conversation_membership_archive_event_or_503(
+            event_ts=ts,
+            conversation_id=conversation_id,
+            subject_user_id=agent_user_id,
+            actor_user_id=agent_user_id,
+            event_type="conversation.member_joined",
+            payload={
+                "transition": membership_transition,
+                "subject_user_id": agent_user_id,
+                "status": "active",
+                "role": "admin",
+                "timeline_state": {
+                    "routing_event_id": routing_event_id,
+                    "routing_state": routing_state,
+                    "assignment_version": assignment_version,
+                },
+            },
+        )
+    return membership_transition
+
+
 def _claim_helpdesk_conversation_internal(
     *,
     conversation_id: str,
@@ -6949,58 +7370,16 @@ def _claim_helpdesk_conversation_internal(
 
     updated = result.get("conversation", {}) if isinstance(result, dict) else {}
 
-    # Add the claiming agent as an active participant (admin role) so they can send messages.
-    # Use a conditional put to avoid overwriting an existing participant record.
-    existing_part = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": conversation_id}).get("Item")
-    membership_transition = "none"
-    if not existing_part:
-        tbl_parts.put_item(Item={
-            "user_id": user_id,
-            "conversation_id": conversation_id,
-            "status": "active",
-            "role": "admin",
-            "muted_until": 0,
-            "last_read_at": 0,
-            "unread_count": 0,
-            "joined_at": ts,
-            "left_at": 0,
-            "GSI1PK": conversation_id,
-            "GSI1SK": user_id,
-        })
-        tbl_convos.update_item(
-            Key={"conversation_id": conversation_id},
-            UpdateExpression="ADD participant_count :inc",
-            ExpressionAttributeValues={":inc": 1},
-        )
-        membership_transition = "helpdesk_agent_joined"
-    elif existing_part.get("status") != "active":
-        tbl_parts.update_item(
-            Key={"user_id": user_id, "conversation_id": conversation_id},
-            UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
-        )
-        membership_transition = "helpdesk_agent_reactivated"
-
-    if membership_transition != "none":
-        _emit_conversation_membership_archive_event_or_503(
-            event_ts=ts,
-            conversation_id=conversation_id,
-            subject_user_id=user_id,
-            actor_user_id=user_id,
-            event_type="conversation.member_joined",
-            payload={
-                "transition": membership_transition,
-                "subject_user_id": user_id,
-                "status": "active",
-                "role": "admin",
-                "timeline_state": {
-                    "routing_event_id": str(result.get("event", {}).get("event_id") or ""),
-                    "routing_state": str(updated.get("routing_state") or "assigned"),
-                    "assignment_version": int(updated.get("assignment_version") or (current_version + 1)),
-                },
-            },
-        )
+    # Add the claiming agent as an active participant (admin role) so they can
+    # send messages. Shared with the auto-route path (HMH-004).
+    _attach_agent_participant(
+        conversation_id=conversation_id,
+        agent_user_id=user_id,
+        ts=ts,
+        routing_event_id=str(result.get("event", {}).get("event_id") or ""),
+        routing_state=str(updated.get("routing_state") or "assigned"),
+        assignment_version=int(updated.get("assignment_version") or (current_version + 1)),
+    )
 
     audit_event(
         "messaging_helpdesk_conversation_claimed",
@@ -7023,6 +7402,68 @@ def _claim_helpdesk_conversation_internal(
         assignment_version=int(updated.get("assignment_version") or (current_version + 1)),
         idempotent=False,
     )
+
+
+@router.get("/helpdesk/availability")
+def get_helpdesk_availability(
+    group_id: str = Query(..., max_length=128),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """HMH-002: counts of online/available agents for a group.
+
+    Customer-callable (no helpdesk-group membership required) so the client can
+    show "agents online" before starting a chat. Returns counts only — never any
+    agent identity.
+    """
+    count = count_available_agents(group_id, now_ts())
+    return {"available_agent_count": count, "any_available": count > 0}
+
+
+@router.get("/helpdesk/groups/{group_id}/agents")
+def list_helpdesk_group_agents(
+    group_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """HMH-007 support: list a helpdesk group's agents so an assigned agent can
+    pick a transfer target. Membership-gated — only agents in the group may see
+    fellow agents (the customer-facing /availability endpoint deliberately
+    exposes counts only, never identities). Each agent carries display_name +
+    online status; is_self lets the client exclude the current agent.
+    """
+    if not _is_helpdesk_group_member(group_id, user_id):
+        raise HTTPException(status_code=403, detail="not a member of this helpdesk group")
+    ts = now_ts()
+    agents = []
+    for uid in _resolve_helpdesk_group_members(group_id):
+        agents.append({
+            "user_id": uid,
+            "display_name": _helpdesk_agent_display_name(uid),
+            "online": _is_user_online_available(uid, ts),
+            "is_self": uid == user_id,
+        })
+    return {"agents": agents}
+
+
+def _helpdesk_agent_display_name(user_sub: str) -> str:
+    """Resolve an agent's friendly name. The profile row may carry display_name
+    at the top level (e2e/seeded rows) or nested via get_profile_identity; try
+    both, then fall back to the sub."""
+    try:
+        from app.core.tables import T as _T
+        item = _T.profile.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+        name = (item.get("display_name") or item.get("name") or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    try:
+        ident = get_profile_identity(user_sub) or {}
+        name = (ident.get("display_name") or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return user_sub
 
 
 @router.get("/helpdesk/queue", response_model=List[ConversationOut])
@@ -7071,6 +7512,74 @@ def claim_helpdesk_conversation(
     user_id: str = Depends(get_messaging_user_id),
 ):
     return _claim_helpdesk_conversation_internal(conversation_id=conversation_id, user_id=user_id, req=req)
+
+
+@router.post("/helpdesk/conversations/{conversation_id}/transfer", response_model=HelpdeskTransferOut)
+def transfer_helpdesk_conversation(
+    conversation_id: str,
+    body: TransferHelpdeskIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """HMH-007: manually transfer an assigned helpdesk conversation to another agent."""
+    convo = _get_conversation_or_404(conversation_id)
+    if str(convo.get("routing_mode") or "") != "helpdesk_bridge":
+        raise HTTPException(400, detail={"code": "helpdesk_transfer_invalid_mode", "message": "conversation is not helpdesk-routed"})
+
+    group_id = str(convo.get("routing_group_id") or "")
+    if not _is_helpdesk_group_member(group_id, user_id):
+        raise HTTPException(403, detail={"code": "helpdesk_transfer_not_group_member", "message": "caller is not a helpdesk group member"})
+
+    current_state = str(convo.get("routing_state") or "none")
+    if current_state != "assigned":
+        raise HTTPException(409, detail={"code": "helpdesk_transfer_invalid_state", "message": f"conversation must be assigned; current state: {current_state}"})
+
+    current_agent = str(convo.get("active_agent_user_id") or "")
+    if current_agent and current_agent != user_id:
+        if not _is_helpdesk_group_member(group_id, user_id):
+            raise HTTPException(403, detail={"code": "helpdesk_transfer_not_assignee", "message": "only the assigned agent or a group member may transfer"})
+
+    target = str(body.target_agent_user_id).strip()
+    if not _is_helpdesk_group_member(group_id, target):
+        raise HTTPException(400, detail={"code": "helpdesk_transfer_target_not_member", "message": "target agent is not a member of this helpdesk group"})
+
+    if target == current_agent:
+        raise HTTPException(400, detail={"code": "helpdesk_transfer_same_agent", "message": "target agent is already assigned to this conversation"})
+
+    ts = now_ts()
+    version = int(convo.get("assignment_version") or 0)
+    try:
+        transfer_result = _apply_helpdesk_routing_transition(
+            conversation_id=conversation_id,
+            cmd=RoutingTransitionInput(
+                action="transfer_agent",
+                now_ts=ts,
+                agent_user_id=target,
+                expected_assignment_version=version,
+            ),
+            actor_user_id=user_id,
+            metadata={"reason": "manual_transfer", "previous_agent": current_agent},
+        )
+    except RoutingTransitionError as exc:
+        raise HTTPException(409, detail={"code": exc.code, "message": exc.message})
+
+    transferred_event = transfer_result.get("event", {}) if isinstance(transfer_result, dict) else {}
+    transferred_convo = transfer_result.get("conversation", {}) if isinstance(transfer_result, dict) else {}
+    _attach_agent_participant(
+        conversation_id=conversation_id,
+        agent_user_id=target,
+        ts=ts,
+        routing_event_id=str(transferred_event.get("event_id") or ""),
+        routing_state="assigned",
+        assignment_version=int(transferred_convo.get("assignment_version") or 0),
+    )
+    return HelpdeskTransferOut(
+        ok=True,
+        conversation_id=conversation_id,
+        state="assigned",
+        assigned_agent_user_id=target,
+        assignment_version=int(transferred_convo.get("assignment_version") or 0),
+        previous_agent_user_id=current_agent,
+    )
 
 
 def _enforce_helpdesk_send_constraints(*, conversation_id: str, convo: dict, user_id: str, req: Optional[Request] = None) -> None:
@@ -10118,6 +10627,23 @@ def create_countdown_message(
         "target_datetime": inp.target_datetime,
         "associated_event_type": inp.associated_event_type,
     }
+    if inp.target_tz:
+        item["target_tz"] = inp.target_tz
+    # B-COUNTDOWN #31: stash an optional reveal payload (text + mixed media)
+    # revealed to clients once now_ts() >= target_datetime.
+    _cd_reveal = {}
+    if inp.reveal_text:
+        _cd_reveal["text"] = inp.reveal_text
+    _cd_media_in = list(inp.reveal_media or [])
+    if inp.reveal_image is not None:
+        _cd_media_in = [inp.reveal_image] + _cd_media_in
+    if _cd_media_in:
+        _cd_reveal["media"] = [
+            {k: v for k, v in img.model_dump().items() if v is not None}
+            for img in _cd_media_in
+        ]
+    if _cd_reveal:
+        item["countdown_reveal"] = _cd_reveal
     if inp.associated_event_id:
         item["associated_event_id"] = inp.associated_event_id
     if inp.reply_to_message_id:
@@ -10927,6 +11453,15 @@ def create_file_message(
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
+    # Scheduled send (parity with image messages)
+    deliver_at_file: Optional[int] = None
+    is_scheduled_file = False
+    if inp.send_at is not None:
+        if inp.send_at <= now_ts() + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_file = inp.send_at
+        is_scheduled_file = True
+
     path = norm_path(inp.path, is_folder=False)
     node = get_node(user_id, path)
     if node.get("type") != "file":
@@ -10963,6 +11498,22 @@ def create_file_message(
     }
     if preview:
         item["preview"] = preview
+    # Gating options (parity with image messages)
+    file_expires_at = None
+    if inp.expires_in_seconds:
+        _file_expiry_base = deliver_at_file if is_scheduled_file else ts
+        file_expires_at = _file_expiry_base + inp.expires_in_seconds
+        item["expires_at"] = file_expires_at
+    if inp.view_once:
+        item["view_once"] = True
+    if inp.lock_price_cents:
+        item["lock_price_cents"] = inp.lock_price_cents
+        item["unlocked_by"] = {}
+        if inp.lock_description:
+            item["lock_description"] = inp.lock_description
+    if is_scheduled_file:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_file
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
         item["ttl"] = ttl
@@ -11020,6 +11571,14 @@ def create_file_message(
         consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         media_kind=item.get("media_kind") if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        expires_at=file_expires_at,
+        view_once=inp.view_once,
+        locked=bool(inp.lock_price_cents),
+        lock_price_cents=inp.lock_price_cents,
+        lock_description=inp.lock_description,
+        is_unlocked=True,
+        scheduled=is_scheduled_file,
+        deliver_at=deliver_at_file,
     )
     message = _apply_message_receipts(message, item, resp.get("Items", []))
     audit_event(
@@ -13419,6 +13978,53 @@ def fetch_events(
     return {"events": items, "next_after": items[-1]["event_id"] if items else after}
 
 
+@router.get("/events/poll")
+def events_poll(
+    after: Optional[str] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    request: Request = None,
+    x_request_id: Optional[str] = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Reliable JSON poll of the per-user event queue; a backstop for the flaky long-lived SSE.
+
+    The Android realtime client (SseMessagingEventStream) polls this ~every 600ms and dedups events
+    client-side, so we return the newest `limit` events (or those strictly after `after` when given),
+    each projected exactly as the /events/stream generator projects them.
+    """
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="stream_events",
+        request_id=x_request_id or (request.headers.get("x-request-id") if request else None),
+    )
+    if after:
+        raw_events = _ddb_fetch_events(user_id, after, limit)
+    else:
+        resp = tbl_events.query(
+            KeyConditionExpression=Key("user_id").eq(user_id),
+            Limit=limit,
+            ScanIndexForward=False,
+        )
+        raw_events = list(reversed(resp.get("Items", [])))
+    events = []
+    for ev in raw_events:
+        pe = _project_event_for_user(ev, user_id)
+        # Flatten message:new to the shape the Android SseEnvelopeParser expects: it reads
+        # message_id/sender_id/text/kind/created_at from the TOP level, not from payload.message.
+        if str(pe.get("type")) == "message:new" and isinstance(pe.get("payload"), dict):
+            msg = pe["payload"].get("message")
+            if isinstance(msg, dict):
+                pe = dict(pe)
+                pe["message_id"] = msg.get("message_id") or pe.get("message_id")
+                pe["conversation_id"] = msg.get("conversation_id") or pe.get("conversation_id")
+                pe["sender_id"] = msg.get("sender_id") or pe.get("sender_id")
+                pe["text"] = msg.get("text")
+                pe["kind"] = msg.get("kind") or "text"
+                pe["created_at"] = msg.get("created_at")
+        events.append(pe)
+    return {"events": events}
+
+
 @router.get("/events/stream")
 async def events_stream(
     after: Optional[str] = None,
@@ -13511,6 +14117,17 @@ def create_lottery_message(
         )
 
     ts = now_ts()
+    # Optional message-level cover image (bucket/key like image messages).
+    lottery_image: Optional[Dict[str, Any]] = None
+    if payload.image is not None:
+        _img_bucket = (payload.image.bucket or S3_BUCKET_IMAGES)
+        lottery_image = {
+            "bucket": _img_bucket,
+            "key": payload.image.key,
+            "content_type": payload.image.content_type,
+            "width": payload.image.width,
+            "height": payload.image.height,
+        }
     normalized_idempotency_key = (idempotency_key or "").strip()
     if len(normalized_idempotency_key) > 128:
         record_messaging_lottery_send(outcome="invalid_idempotency_key", client_version=client_version)
@@ -13542,13 +14159,23 @@ def create_lottery_message(
         out.setdefault("outcome_id", f"o_{message_id}_{idx + 1}")
         payload_type = str(out.get("payload_type") or "")
         if payload_type in {"image", "video"}:
-            metadata = _resolve_and_validate_lottery_media_asset(
-                media_asset_id=str(out.get("media_asset_id") or ""),
-                conversation_id=payload.conversation_id,
-                owner_user_id=user_id,
-            )
-            out["media_asset_id"] = f"{metadata['bucket']}:{metadata['key']}"
-            out["media_metadata"] = metadata
+            # B-LOTTERY2 #24: resolve every media asset on the outcome.
+            _raw_ids = list(out.get("media_asset_ids") or [])
+            if not _raw_ids and out.get("media_asset_id"):
+                _raw_ids = [str(out.get("media_asset_id"))]
+            _resolved = []
+            for _aid in _raw_ids:
+                _md = _resolve_and_validate_lottery_media_asset(
+                    media_asset_id=str(_aid or ""),
+                    conversation_id=payload.conversation_id,
+                    owner_user_id=user_id,
+                )
+                _resolved.append({"media_asset_id": f"{_md['bucket']}:{_md['key']}", "media_metadata": _md})
+            if _resolved:
+                out["media_asset_id"] = _resolved[0]["media_asset_id"]
+                out["media_metadata"] = _resolved[0]["media_metadata"]
+                out["media_assets"] = _resolved
+                out["media_asset_ids"] = [r["media_asset_id"] for r in _resolved]
         normalized_outcomes.append(out)
     config_payload = {"version": payload.lottery_config.version, "outcomes": normalized_outcomes}
 
@@ -13687,7 +14314,10 @@ def create_lottery_message(
         sender_id=user_id,
         created_at=ts,
         persisted_cfg=persisted_cfg,
+        image=lottery_image,
     )
+    if payload.text and (payload.text or "").strip():
+        message_item["text"] = payload.text.strip()  # #23 cover text
     try:
         tbl_msgs.put_item(Item=message_item, ConditionExpression="attribute_not_exists(message_id)")
     except Exception as exc:
@@ -13731,11 +14361,24 @@ def create_lottery_message(
                     text_content=(str(out.get("text_content") or "") or None),
                     media_asset_id=(str(out.get("media_asset_id") or "") or None),
                     media_metadata=(dict(out.get("media_metadata") or {}) or None),
+                    media_assets=(list(out.get("media_assets") or []) or None),
+                    media_asset_ids=(list(out.get("media_asset_ids") or []) or None),
                 )
                 for out in (persisted_cfg.get("outcomes") or [])
             ],
         ),
         selected_outcome=None,
+        image=(
+            LotteryMessageImageOut(
+                bucket=str(lottery_image.get("bucket") or ""),
+                key=str(lottery_image.get("key") or ""),
+                content_type=lottery_image.get("content_type"),
+                width=lottery_image.get("width"),
+                height=lottery_image.get("height"),
+            )
+            if lottery_image
+            else None
+        ),
         idempotent=False,
         created_at=ts,
     )
@@ -13938,6 +14581,8 @@ def get_lottery_message(
                     text_content=(str(out.get("text_content") or "") or None),
                     media_asset_id=(str(out.get("media_asset_id") or "") or None),
                     media_metadata=(dict(out.get("media_metadata") or {}) or None),
+                    media_assets=(list(out.get("media_assets") or []) or None),
+                    media_asset_ids=(list(out.get("media_asset_ids") or []) or None),
                 )
                 for out in (cfg.get("outcomes") or [])
             ],
@@ -14021,20 +14666,183 @@ def cancel_scheduled_message(
     return {"ok": True, "message_id": message_id}
 
 
+class RescheduleMessageIn(BaseModel):
+    # Edit text, reschedule the delivery time, change media, or any combo.
+    text: Optional[str] = Field(default=None, max_length=MESSAGE_TEXT_MAX_CHARS)
+    send_at: Optional[int] = None  # new Unix delivery timestamp (>= now+5s)
+    # B-SCHED2 #21: reschedule via wall-clock + IANA tz (alt to send_at).
+    send_at_local: Optional[str] = Field(default=None, max_length=40)
+    send_at_tz: Optional[str] = Field(default=None, max_length=64)
+    # B-SCHED2 #22: editing a scheduled message may now also change its
+    # media. image: a single image asset (bucket/key/content_type) for an
+    # image message; file_path: a VFS path for a file/audio/video message;
+    # video_id: a VOD ref for a video_share message; gallery free/locked
+    # image lists for a gallery message. Only the field(s) matching the
+    # scheduled message kind are honored.
+    image: Optional[CreateImageMessageIn] = None
+    file_path: Optional[str] = Field(default=None, max_length=1000)
+    video_id: Optional[str] = Field(default=None, max_length=128)
+    free_images: Optional[List[GalleryImageItemIn]] = None
+    locked_images: Optional[List[GalleryImageItemIn]] = None
+
+
+@router.patch(
+    "/conversations/{conversation_id}/messages/{message_id}/schedule",
+    response_model=MessageOut,
+)
+def reschedule_scheduled_message(
+    conversation_id: str,
+    message_id: str,
+    inp: RescheduleMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Edit the text and/or reschedule a still-pending scheduled message.
+
+    Only the sender can edit, and only while the message is still in
+    ``status == "scheduled"`` (not yet delivered). At least one of ``text`` /
+    ``send_at`` must be supplied.
+    """
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("sender_id") != user_id:
+        raise HTTPException(403, "Only the sender can edit a scheduled message")
+    if msg.get("status") != "scheduled":
+        raise HTTPException(400, "Message is not scheduled")
+    # B-SCHED2 #21: accept a wall-clock + tz reschedule.
+    _resolved_send_at = _b9_resolve_send_at(inp.send_at, inp.send_at_local, inp.send_at_tz)
+    _has_media_edit = any(v is not None for v in (inp.image, inp.file_path, inp.video_id, inp.free_images, inp.locked_images))
+    if inp.text is None and _resolved_send_at is None and not _has_media_edit:
+        raise HTTPException(400, "Provide text, send_at/send_at_local, and/or media to update")
+    _kind = msg.get("kind")
+    if inp.text is not None and _kind not in ("text", "image", "gallery", "file", "audio", "video", "file_share", "video_share"):
+        raise HTTPException(400, "This scheduled message kind does not support a text edit")
+
+    set_parts: List[str] = []
+    expr_names: Dict[str, str] = {}
+    expr_vals: Dict[str, Any] = {}
+    ts = now_ts()
+
+    if inp.text is not None:
+        set_parts.append("#t = :text")
+        expr_names["#t"] = "text"
+        expr_vals[":text"] = inp.text
+
+    # B-SCHED2 #22: media edits, matched to the scheduled message kind.
+    if inp.image is not None and _kind == "image":
+        _img = {"bucket": inp.image.bucket, "key": inp.image.key, "content_type": inp.image.content_type}
+        if inp.image.width is not None: _img["width"] = inp.image.width
+        if inp.image.height is not None: _img["height"] = inp.image.height
+        if inp.image.filename: _img["filename"] = inp.image.filename
+        set_parts.append("image = :img")
+        expr_vals[":img"] = _img
+    if inp.file_path is not None and _kind in ("file", "audio", "video"):
+        _fp = norm_path(inp.file_path, is_folder=False)
+        _fnode = get_node(user_id, _fp)
+        if _fnode.get("type") != "file":
+            raise HTTPException(400, "file_path must reference a file")
+        set_parts.append("#f = :file")
+        expr_names["#f"] = "file"
+        expr_vals[":file"] = {
+            "path": _fnode.get("path"), "name": _fnode.get("name"), "size": _fnode.get("size"),
+            "content_type": _fnode.get("content_type") or "application/octet-stream",
+            "thumbnail": _fnode.get("thumbnail"),
+        }
+    if inp.file_path is not None and _kind == "file_share":
+        _fp = norm_path(inp.file_path, is_folder=None)
+        _fnode = get_node(user_id, _fp)
+        set_parts.append("file_share = :fs")
+        expr_vals[":fs"] = {
+            "path": _fnode.get("path"), "name": _fnode.get("name"),
+            "size": int(_fnode["size"]) if _fnode.get("size") is not None else None,
+            "content_type": _fnode.get("content_type"), "permission": "read", "owner": user_id,
+            "is_encrypted": bool(_fnode.get("is_encrypted")),
+        }
+    if inp.video_id is not None and _kind == "video_share":
+        from app.services.video_metadata_store import get_video as _b9_get_vod
+        try:
+            _v = _b9_get_vod(inp.video_id)
+        except HTTPException:
+            raise HTTPException(404, "video not found")
+        set_parts.append("video_share = :vs")
+        expr_vals[":vs"] = {
+            "video_id": _v.id, "owner_user_id": _v.owner_user_id, "title": _v.title,
+            "thumbnail_url": _v.thumbnail_url, "visibility": _v.visibility,
+        }
+    if (inp.free_images is not None or inp.locked_images is not None) and _kind == "gallery":
+        def _b9_simg(i):
+            return {k: v for k, v in i.model_dump().items() if v is not None}
+        if inp.free_images is not None:
+            set_parts.append("free_images = :fi")
+            expr_vals[":fi"] = [_b9_simg(i) for i in inp.free_images]
+        if inp.locked_images is not None:
+            set_parts.append("locked_images = :li")
+            expr_vals[":li"] = [_b9_simg(i) for i in inp.locked_images]
+
+    new_deliver_at = None
+    if _resolved_send_at is not None:
+        if _resolved_send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        new_deliver_at = _resolved_send_at
+        set_parts.append("deliver_at = :da")
+        expr_vals[":da"] = new_deliver_at
+        # If an expiry timer was based on the old delivery time, re-base it.
+        if msg.get("expires_at") and msg.get("_expires_in_seconds"):
+            set_parts.append("expires_at = :ea")
+            expr_vals[":ea"] = new_deliver_at + int(msg["_expires_in_seconds"])
+
+    update_expr = "SET " + ", ".join(set_parts)
+    kwargs: Dict[str, Any] = {
+        "Key": {"conversation_id": conversation_id, "message_id": message_id},
+        "UpdateExpression": update_expr,
+        "ExpressionAttributeValues": expr_vals,
+    }
+    if expr_names:
+        kwargs["ExpressionAttributeNames"] = expr_names
+    tbl_msgs.update_item(**kwargs)
+
+    updated = _get_message_or_404(conversation_id, message_id)
+    audit_event(
+        "messaging_scheduled_message_edited",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+    )
+    return _message_out_from_item(updated, user_id)
+
+
 def _deliver_scheduled_message(item: dict) -> None:
-    """Promote a scheduled message to delivered status."""
+    """Promote a scheduled message to delivered status.
+
+    B-SCHED FIX: list_messages fetches a single DynamoDB page ordered by the
+    random message_id range key then re-sorts that page by created_at. A
+    scheduled message keeps its schedule-time random message_id; if that id ranks
+    outside the first page the just-delivered message never appears in the thread
+    even though it was promoted (user sees "scheduled messages dont send"). We
+    re-key the row under a fresh message_id with a current created_at so it
+    behaves like a freshly-sent message, and the delivery event below carries the
+    re-keyed item so the live poll/SSE path renders it immediately.
+    """
     conversation_id = item["conversation_id"]
-    message_id = item["message_id"]
+    old_message_id = item["message_id"]
     user_id = item["sender_id"]
     ts = now_ts()
 
-    # Remove scheduled status
-    tbl_msgs.update_item(
-        Key={"conversation_id": conversation_id, "message_id": message_id},
-        UpdateExpression="REMOVE #s, deliver_at SET created_at = :ts",
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":ts": ts},
+    # message_id is the table range key, so re-key via put(new)+delete(old).
+    message_id = "m_" + new_id()
+    new_item = dict(item)
+    new_item["message_id"] = message_id
+    new_item["created_at"] = ts
+    new_item.pop("status", None)
+    new_item.pop("deliver_at", None)
+    tbl_msgs.put_item(Item=new_item)
+    tbl_msgs.delete_item(
+        Key={"conversation_id": conversation_id, "message_id": old_message_id}
     )
+    # Downstream code references the new id / item.
+    item = new_item
 
     # Write deferred tip billing now that the message is actually delivered.
     # (Billing was intentionally skipped at schedule time so that cancelling
@@ -14106,7 +14914,7 @@ def _deliver_scheduled_message(item: dict) -> None:
     delivered_item.pop("deliver_at", None)
     delivered_item["created_at"] = ts
     emit_messaging_archive_event(
-        event_id=f"msg_scheduled_delivery_{conversation_id}_{message_id}_{ts}_{user_id}",
+        event_id=f"msg_scheduled_delivery_{message_id}_{ts}",
         event_ts=ts,
         tenant_id="default",
         conversation_id=conversation_id,
@@ -14216,6 +15024,30 @@ async def _messaging_background_loop() -> None:
             )
             for item in resp.get("Items", []):
                 try:
+                    # BK-B: a LOCKED message that the recipient has UNLOCKED (paid)
+                    # must NOT expire -- they bought permanent access. Clear its
+                    # expires_at so the sweep never re-triggers. A locked message
+                    # that was NEVER unlocked still expires normally below.
+                    if item.get("lock_price_cents") and (item.get("unlocked_by") or {}):
+                        try:
+                            tbl_msgs.update_item(
+                                Key={
+                                    "conversation_id": item["conversation_id"],
+                                    "message_id": item["message_id"],
+                                },
+                                UpdateExpression="REMOVE expires_at",
+                            )
+                            logger.info(
+                                "Skipped expiry for unlocked locked message %s in conversation %s",
+                                item.get("message_id"), item.get("conversation_id"),
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "Failed to clear expiry on unlocked locked message %s: %s",
+                                item.get("message_id"), exc,
+                            )
+                        _processed += 1
+                        continue
                     tbl_msgs.update_item(
                         Key={
                             "conversation_id": item["conversation_id"],
@@ -15201,3 +16033,368 @@ def list_delegated_chat_audit(
         limit=limit,
     )
     return [ChatDelegateAuditEntry(**item) for item in items]
+
+
+# ─── Messenger Voice & Translation AI (MVA-004 / MVA-007 / MVA-009) ──────────
+
+from app.models import (
+    TranslateMessageRequest,
+    TranslateMessageOut,
+    TranscribeMessageOut,
+    TtsVoiceMessageRequest,
+)
+
+
+def _ai_rate_limit_or_429(user_id: str, category: str, max_n: int, win: int) -> None:
+    """DDB-backed fixed-window rate limit on T.message_ai_cache.
+
+    Keyed per (user, category) so each AI feature has an independent bucket,
+    distinct from message-send quotas (MVA-011). Fail-open on store errors so
+    a transient DDB hiccup never blocks the feature.
+    """
+    now = now_ts()
+    bucket_key = f"RL#{category}#{user_id}#{now // win}"
+    try:
+        resp = T.message_ai_cache.update_item(
+            Key={"cache_key": bucket_key},
+            UpdateExpression="ADD #c :one SET #ttl = :ttl",
+            ExpressionAttributeNames={"#c": "count", "#ttl": "ttl"},
+            ExpressionAttributeValues={":one": 1, ":ttl": now + win + 60},
+            ReturnValues="UPDATED_NEW",
+        )
+        count = int(resp.get("Attributes", {}).get("count", 1))
+    except Exception:
+        return  # fail-open
+    if count > max_n:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "messaging_ai_rate_limited", "message": "Too many AI requests"},
+            headers={"Retry-After": str(win)},
+        )
+
+
+def _ai_cache_get(cache_key: str) -> Optional[Dict[str, Any]]:
+    try:
+        item = T.message_ai_cache.get_item(Key={"cache_key": cache_key}).get("Item")
+    except Exception:
+        return None
+    return item if isinstance(item, dict) else None
+
+
+def _ai_cache_put(cache_key: str, payload: Dict[str, Any], ttl_seconds: int) -> None:
+    now = now_ts()
+    item: Dict[str, Any] = {"cache_key": cache_key, "created_at": now, **payload}
+    if ttl_seconds and ttl_seconds > 0:
+        item["ttl"] = now + ttl_seconds
+    try:
+        T.message_ai_cache.put_item(Item=item)
+    except Exception:
+        logger.warning("message_ai_cache put failed key=%s", cache_key, exc_info=True)
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/translate",
+    response_model=TranslateMessageOut,
+)
+def translate_message(
+    conversation_id: str,
+    message_id: str,
+    body: TranslateMessageRequest,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Translate a text message into ``target_lang`` (cached) (MVA-004)."""
+    if not S.messaging_translation_enabled:
+        raise HTTPException(404, "Message translation is not enabled")
+    require_participant_active(user_id, conversation_id)
+    item = _get_message_or_404(conversation_id, message_id)
+
+    # Only plain text content is translatable; reject hidden/locked/view-once.
+    if item.get("kind") != "text":
+        raise HTTPException(400, "Only text messages can be translated")
+    if item.get("view_once") or item.get("is_encrypted"):
+        raise HTTPException(400, "This message cannot be translated")
+    if item.get("lock_price_cents") and item.get("sender_id") != user_id:
+        raise HTTPException(400, "Locked messages cannot be translated")
+    text = str(item.get("text") or "")
+    if not text.strip():
+        raise HTTPException(400, "Message has no translatable text")
+
+    target_lang = body.target_lang.strip()
+    text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    cache_key = "TX#" + hashlib.sha256(
+        f"{message_id}|{target_lang}|{text_hash}".encode("utf-8")
+    ).hexdigest()
+
+    cached = _ai_cache_get(cache_key)
+    if cached and cached.get("translated_text") is not None:
+        return TranslateMessageOut(
+            translated_text=str(cached.get("translated_text") or ""),
+            source_lang=str(cached.get("source_lang") or "auto"),
+            target_lang=target_lang,
+            cached=True,
+        )
+
+    # Rate-limit only the provider-call (cache-miss) path.
+    _ai_rate_limit_or_429(
+        user_id,
+        "translate",
+        S.messaging_ai_translate_max_per_window,
+        S.messaging_ai_translate_window_seconds,
+    )
+
+    from app.services import messaging_ai
+
+    try:
+        translated, source_lang = messaging_ai.translate_text(
+            user_id=user_id, text=text, target_lang=target_lang
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    _ai_cache_put(
+        cache_key,
+        {"translated_text": translated, "source_lang": source_lang, "target_lang": target_lang},
+        S.messaging_translation_cache_ttl_seconds,
+    )
+    return TranslateMessageOut(
+        translated_text=translated,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        cached=False,
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/transcribe",
+    response_model=TranscribeMessageOut,
+)
+def transcribe_message(
+    conversation_id: str,
+    message_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Transcribe a voice message and persist the transcript (MVA-007)."""
+    if not S.messaging_transcription_enabled:
+        raise HTTPException(404, "Message transcription is not enabled")
+    require_participant_active(user_id, conversation_id)
+    item = _get_message_or_404(conversation_id, message_id)
+
+    if item.get("kind") not in ("voice_message", "voicemail"):
+        raise HTTPException(400, "Only voice messages can be transcribed")
+
+    # Idempotent: a stored transcript short-circuits the provider call.
+    existing = item.get("transcript")
+    if existing:
+        return TranscribeMessageOut(
+            transcript=str(existing),
+            transcript_lang=str(item.get("transcript_lang") or ""),
+            cached=True,
+        )
+
+    s3_key = str(item.get("audio_url") or "")
+    if not s3_key:
+        raise HTTPException(400, "Voice message has no audio")
+
+    _ai_rate_limit_or_429(
+        user_id,
+        "transcribe",
+        S.messaging_ai_transcribe_max_per_window,
+        S.messaging_ai_transcribe_window_seconds,
+    )
+
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET_IMAGES, Key=s3_key)
+        audio_bytes = obj["Body"].read()
+    except Exception as exc:
+        logger.warning("transcribe_message s3 get failed key=%s err=%s", s3_key, exc)
+        raise HTTPException(502, "Could not fetch audio for transcription")
+
+    content_type = str(item.get("audio_content_type") or "audio/webm")
+    from app.services import messaging_ai
+
+    try:
+        transcript, lang = messaging_ai.transcribe_audio(
+            user_id=user_id, audio_bytes=audio_bytes, content_type=content_type
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    ts = now_ts()
+    try:
+        tbl_msgs.update_item(
+            Key={"conversation_id": conversation_id, "message_id": message_id},
+            UpdateExpression="SET transcript = :t, transcript_lang = :l, transcribed_at = :ts",
+            ConditionExpression="attribute_not_exists(transcript)",
+            ExpressionAttributeValues={":t": transcript, ":l": lang, ":ts": ts},
+        )
+    except Exception:
+        # Concurrent write won the race; re-read to return the stored value.
+        fresh = _get_message_or_404(conversation_id, message_id)
+        return TranscribeMessageOut(
+            transcript=str(fresh.get("transcript") or transcript),
+            transcript_lang=str(fresh.get("transcript_lang") or lang),
+            cached=True,
+        )
+
+    return TranscribeMessageOut(transcript=transcript, transcript_lang=lang, cached=False)
+
+
+@router.post("/conversations/{conversation_id}/tts-voice-message", response_model=MessageOut)
+def create_tts_voice_message(
+    conversation_id: str,
+    body: TtsVoiceMessageRequest,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Synthesize text into a stored voice message via TTS (MVA-009)."""
+    if not S.messaging_tts_enabled or not S.voice_message_enabled:
+        raise HTTPException(404, "Text-to-speech voice messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    if len(text) > S.messaging_tts_max_chars:
+        raise HTTPException(400, f"text exceeds {S.messaging_tts_max_chars} characters")
+
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    ts = now_ts()
+    deliver_at: Optional[int] = None
+    is_scheduled = False
+    if body.send_at is not None:
+        if body.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at = body.send_at
+        is_scheduled = True
+
+    _validate_reply_target(conversation_id, body.reply_to_message_id)
+
+    _ai_rate_limit_or_429(
+        user_id,
+        "tts",
+        S.messaging_ai_tts_max_per_window,
+        S.messaging_ai_tts_window_seconds,
+    )
+
+    from app.services import messaging_ai
+
+    try:
+        audio_bytes, content_type = messaging_ai.synthesize_speech(
+            user_id=user_id, text=text, voice_id=body.voice_id, model_id=body.model_id
+        )
+    except messaging_ai.MessagingAiError as exc:
+        raise HTTPException(502, detail={"code": exc.code, "message": exc.message})
+
+    mid = "m_" + uuid.uuid4().hex
+    s3_key = f"voice-messages/{conversation_id}/{mid}.mp3"
+    try:
+        s3.put_object(Bucket=S3_BUCKET_IMAGES, Key=s3_key, Body=audio_bytes, ContentType=content_type)
+    except Exception as exc:
+        logger.warning("create_tts_voice_message s3 put failed key=%s err=%s", s3_key, exc)
+        raise HTTPException(502, "Could not store synthesized audio")
+
+    # Estimate duration from byte length (rough; ~16KB/s) and a flat waveform.
+    duration_seconds = max(1.0, round(len(audio_bytes) / 16000.0, 1))
+    from decimal import Decimal as _DecTTS
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "voice_message",
+        "text": text,  # accessibility: keep the source text
+        "audio_url": s3_key,
+        "audio_content_type": content_type,
+        "audio_size_bytes": len(audio_bytes),
+        "duration_seconds": _DecTTS(str(duration_seconds)),
+        "waveform_data": [_DecTTS("0.5")] * 20,
+        "is_tts": True,
+        "tts_source_text": text,
+        "reactions": {},
+    }
+    if is_scheduled:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+    item.update(
+        _build_reply_linkage_fields(
+            conversation_id=conversation_id,
+            reply_to_message_id=body.reply_to_message_id,
+            actor_user_id=user_id,
+            created_at=ts,
+        )
+    )
+
+    tbl_msgs.put_item(Item=item)
+
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        is_scheduled=is_scheduled,
+        preview_text="[Voice message]",
+    )
+
+    from urllib.parse import quote as _tts_quote
+    if S.dev_mode:
+        audio_url_out = f"/mock/s3/{S3_BUCKET_IMAGES}/{_tts_quote(s3_key, safe='/')}"
+    else:
+        audio_url_out = s3_key
+
+    message = MessageOut(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        created_at=ts,
+        kind="voice_message",
+        text=text,
+        voice_message={
+            "audio_url": audio_url_out,
+            "audio_content_type": content_type,
+            "audio_size_bytes": len(audio_bytes),
+            "duration_seconds": duration_seconds,
+            "waveform_data": [0.5] * 20,
+            "is_tts": True,
+            "tts_source_text": text,
+        },
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
+        scheduled=is_scheduled,
+        deliver_at=deliver_at,
+    )
+    if not is_scheduled:
+        message = _apply_message_receipts(message, item, participants)
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="voice_message",
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return message

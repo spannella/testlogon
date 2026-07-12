@@ -1,11 +1,18 @@
 {
-  "version": "v1",
-  "deny_by_default_unmapped_routes": true,
+  "version": 1,
   "capabilities": [
+    "ads:manage",
+    "ads:read",
+    "ads:serve",
     "filemanager:admin",
     "filemanager:read",
     "filemanager:share",
     "filemanager:write",
+    "kyc:admin",
+    "kyc:read",
+    "kyc:submit",
+    "kyc:upload",
+    "kyc:webhook",
     "messager:manage",
     "messager:read",
     "messager:write",
@@ -20,11 +27,22 @@
     "tickets:read",
     "tickets:write"
   ],
+  "deny_by_default_unmapped_routes": true,
   "implications": {
+    "ads:manage": [
+      "ads:read",
+      "ads:serve"
+    ],
     "filemanager:admin": [
       "filemanager:read",
       "filemanager:write",
       "filemanager:share"
+    ],
+    "kyc:admin": [
+      "kyc:read",
+      "kyc:submit",
+      "kyc:upload",
+      "kyc:webhook"
     ],
     "messager:manage": [
       "messager:read",
@@ -38,10 +56,5 @@
       "tickets:read",
       "tickets:write"
     ]
-  },
-  "ownership_model": {
-    "api_key_owner_is_request_principal": true,
-    "capability_grants_do_not_expand_resource_ownership": true,
-    "entitlement_checks_are_additive": true
   }
 }

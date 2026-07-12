@@ -19,7 +19,7 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.metrics import record_auth_event
-from app.services.email_delivery import record_email_failure
+from app.services.email_delivery import record_email_failure, record_email_sent
 from app.services.rate_limit import can_send_alert_channel
 from app.services.profile import get_profile_identity
 from app.services.push import send_push_for_alert
@@ -38,6 +38,7 @@ ALERT_CATEGORIES: Dict[str, set] = {
                  "totp_device_added", "totp_device_removed", "device_new",
                  "rate_limited", "access_denied", "security_event"},
     "updates":  {"calendar_event_created", "calendar_event_updated",
+                 "calendar_event_reminder",
                  "ticket_created", "ticket_assigned", "ticket_replied",
                  "ticket_status_changed", "ticket_reopened"},
     "commerce": {"cart.abandoned", "order_shipped", "order_out_for_delivery", "order_delivered"},
@@ -506,26 +507,71 @@ def _write_dev_log(path: str, entry: str) -> None:
         pass
 
 
-def send_alert_email(to_emails: List[str], subject: str, body_text: str) -> None:
+def send_alert_email(
+    to_emails: List[str],
+    subject: str,
+    body_text: str,
+    *,
+    html_body: Optional[str] = None,
+) -> None:
+    """Send an alert email via SES (prod) or dev log (dev mode).
+
+    EML-001: ``html_body`` is an optional keyword-only parameter.  When set, SES
+    receives a multipart message with both a ``Text`` and an ``Html`` body part.
+    All existing callers that pass only three positional arguments are unaffected.
+    """
     if not to_emails:
         return
     if S.dev_mode:
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for addr in to_emails:
-            entry = f"[{ts}] ALERT_EMAIL TO={addr}\n  Subject: {subject}\n  Body: {body_text}\n\n"
+            html_note = f"  HTML: {len(html_body)} chars\n" if html_body else ""
+            entry = (
+                f"[{ts}] ALERT_EMAIL TO={addr}\n"
+                f"  Subject: {subject}\n"
+                f"  Body: {body_text}\n"
+                f"{html_note}\n"
+            )
             _write_dev_log(S.dev_email_log, entry)
         return
-    if not S.alerts_email_enabled or not S.alerts_from_email:
+
+    # EML-002: read runtime override (best-effort; fall back to S on error)
+    _from_email = S.alerts_from_email
+    _ses_enabled = S.alerts_email_enabled
+    if getattr(S, "admin_email_settings_enabled", False):
+        try:
+            from app.services.email_settings import get_email_settings as _ges
+            _cfg = _ges()
+            if _cfg.get("from_email"):
+                _from_email = _cfg["from_email"]
+            _ses_enabled = _cfg.get("ses_enabled", _ses_enabled)
+        except Exception:
+            pass
+
+    if not _ses_enabled or not _from_email:
         return
     try:
         import boto3
         ses = boto3.client("ses")
-        ses.send_email(
-            Source=S.alerts_from_email,
+        body_dict: dict = {"Text": {"Data": body_text[:8000]}}
+        if html_body:
+            body_dict["Html"] = {"Data": html_body[:50000]}
+        response = ses.send_email(
+            Source=_from_email,
             Destination={"ToAddresses": to_emails},
-            Message={"Subject": {"Data": subject[:120]}, "Body": {"Text": {"Data": body_text[:8000]}}},
+            Message={"Subject": {"Data": subject[:120]}, "Body": body_dict},
         )
+        message_id = response.get("MessageId", "")
+        try:
+            record_email_sent(to_emails, subject, message_id)
+        except Exception:
+            logger.exception("Failed to record email sent for %s", to_emails)
+        if html_body and message_id:
+            try:
+                _stamp_html_flag(to_emails, subject, message_id)
+            except Exception:
+                logger.exception("Failed to stamp has_html flag for %s", to_emails)
     except Exception as exc:
         logger.exception("Failed to send alert email to %s", to_emails)
         try:
@@ -540,6 +586,76 @@ def send_alert_email(to_emails: List[str], subject: str, body_text: str) -> None
             logger.exception("Failed to record email failure for %s", to_emails)
         return None
     return None
+
+
+def _stamp_html_flag(to_emails: List[str], subject: str, message_id: str) -> None:
+    """Mark delivery rows as having an HTML body (EML-001).  Best-effort."""
+    from app.core.time import now_ts as _now_ts
+    ts = _now_ts()
+    for addr in to_emails:
+        try:
+            T.email_delivery.update_item(
+                Key={"pk": f"EMAIL#{addr}", "sk": f"SENT#{ts}#{message_id}"},
+                UpdateExpression="SET has_html = :v",
+                ExpressionAttributeValues={":v": True},
+            )
+        except Exception:
+            pass
+def send_calendar_invite_email(
+    to_emails: List[str],
+    subject: str,
+    body_text: str,
+    ics_content: str,
+    event_name: str,
+) -> None:
+    """Send a calendar invitation email with ICS attachment (ACT-003).
+
+    In dev mode writes a structured entry to S.dev_email_log.
+    In production sends a multipart/mixed MIME message via SES send_raw_email.
+    Never raises — failures are best-effort.
+    """
+    if not to_emails:
+        return
+    if S.dev_mode:
+        from datetime import datetime, timezone as tz
+        ts = datetime.now(tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for addr in to_emails:
+            entry = (
+                f"[{ts}] CALENDAR_INVITE TO={addr}\n"
+                f"  Subject: {subject}\n"
+                f"  Body: {body_text}\n"
+                f"  ICS:\n{ics_content}\n\n"
+            )
+            _write_dev_log(S.dev_email_log, entry)
+        return
+    if not S.alerts_email_enabled or not S.alerts_from_email:
+        return
+    try:
+        import boto3
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
+        ses = boto3.client("ses")
+        for addr in to_emails:
+            msg = MIMEMultipart("mixed")
+            msg["Subject"] = subject[:200]
+            msg["From"] = S.alerts_from_email
+            msg["To"] = addr
+            msg.attach(MIMEText(body_text, "plain", "utf-8"))
+            ics_part = MIMEBase("text", "calendar", charset="UTF-8", method="REQUEST")
+            ics_part.set_payload(ics_content.encode("utf-8"))
+            encoders.encode_base64(ics_part)
+            ics_part.add_header("Content-Disposition", 'attachment; filename="invite.ics"')
+            msg.attach(ics_part)
+            ses.send_raw_email(
+                Source=S.alerts_from_email,
+                Destinations=[addr],
+                RawMessage={"Data": msg.as_string()},
+            )
+    except Exception:
+        logger.exception("Failed to send calendar invite email to %s", to_emails)
+
 
 def send_alert_sms(to_numbers: List[str], body_text: str) -> List[Dict[str, Any]]:
     """Send SMS via the production pipeline. Returns list of result dicts.
@@ -825,7 +941,8 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
                         pass
                 if html_template is not None:
                     subj, body = html_template
-                    send_alert_email(emails, subj, body)
+                    # EML-001: pass html_body so SES receives an Html part
+                    send_alert_email(emails, subj, body, html_body=body)
                 else:
                     subj = f"[Alert] {alert_type}: {event} ({outcome})"
                     lines = [

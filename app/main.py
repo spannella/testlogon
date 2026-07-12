@@ -32,6 +32,7 @@ from app.routers.webauthn import router as webauthn_router
 from app.routers.root_auth import router as root_auth_router
 from app.routers.admin_roles import router as admin_roles_router
 from app.routers.admin_impersonation import router as admin_impersonation_router
+from app.routers.branding import router as branding_router
 from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
 from app.routers.ccbill_mock import router as ccbill_mock_router
@@ -53,22 +54,31 @@ from app.routers.sticker_collections import router as sticker_collections_router
 from app.routers.custom_emojis import router as custom_emojis_router, admin_router as custom_emojis_admin_router
 from app.routers.filemanager import router as filemanager_router
 from app.routers.signature_packets import router as signature_packets_router
+from app.routers.signature_public import router as signature_public_router
 from app.routers.signature_templates import router as signature_templates_router
 from app.routers.addresses import router as addresses_router
 from app.routers.file_share_links import router as file_share_links_router
 from app.routers.file_share_links import public_router as file_share_links_public_router
 from app.routers.calendar import public_router as calendar_public_router
 from app.routers.calendar import public_event_router as calendar_public_event_router
+from app.routers.booking_engine import booking_engine_router
 from app.routers.calendar import integration_router as calendar_integration_router
 from app.routers.calendar import router as calendar_router
+from app.routers.crm_events import router as crm_events_router
+from app.routers.crm_contact_sms import router as crm_contact_sms_router
+from app.routers.audit_export import browse_router as audit_log_browse_router
+from app.routers.ats_integration import router as ats_integration_router
 from app.routers.seo_metadata import seo_metadata_router
 from app.routers.admin_calendar_integrations import router as admin_calendar_integrations_router
 from app.routers.device_trust import router as device_trust_router
-from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_startup
+from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_startup, recsys_internal_router as newsfeed_recsys_internal_router
+from app.services.newsfeed_recsys import start_newsfeed_recsys_refresh_task
 from app.routers.image_optimization import image_optimization_router
 from app.routers.purchase_history import router as purchase_history_router
 from app.routers.shoppingcart import router as shoppingcart_router, start_cart_abandonment_task
 from app.routers.catalog import router as catalog_router
+from app.routers.order_lifecycle import router as order_lifecycle_router
+from app.routers.orders import router as orders_adj_ship_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
 from app.routers.admin_entitlements import router as admin_entitlements_router
@@ -79,6 +89,17 @@ from app.routers.carrier_tracking_mock import router as carrier_tracking_mock_ro
 from app.routers.carrier_tracking_poller import carrier_tracking_poller_router
 from app.routers.projects import router as projects_router
 from app.routers.contacts import router as contacts_router
+from app.routers.party import (  # PTY-011 / PTY-012
+    router as party_router,
+    admin_party_router,
+)
+from app.routers.candidates import router as candidates_router
+from app.routers.job_orders import router as job_orders_router
+from app.routers.opportunities import router as opportunities_router
+from app.routers.opportunities import router_admin as opportunities_admin_router
+from app.routers.leads import router as leads_router  # CRM Leads (LED-013)
+from app.routers.property_tenant import router as property_tenant_router
+from app.routers.hr import router as hr_router  # HRM-009
 from app.routers.social import router as social_router
 from app.routers.activity_feed import router as activity_feed_router
 from app.routers.discovery import router as discovery_router
@@ -104,6 +125,7 @@ from app.routers.browser_ssh_terminal import (
 from app.routers.ssh_key_manager import router as ssh_key_manager_router
 from app.routers.questionnaires import router as questionnaires_router
 from app.routers.vnc_sessions import router as vnc_sessions_router
+from app.routers.rdp_sessions import router as rdp_sessions_router
 from app.routers.kyc_cases import router as kyc_cases_router
 from app.routers.kyc_business import router as kyc_business_router
 from app.routers.kyc_compliance_reports import router as kyc_compliance_reports_router
@@ -175,6 +197,11 @@ from app.services.dmca_claims import start_dmca_timer_task
 from app.services.moderation_lifecycle import start_hold_sweep_task
 from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
 from app.routers.promo_codes import router as promo_codes_router
+from app.routers.marketing_campaigns import (
+    router as marketing_campaigns_router,
+    admin_router as marketing_admin_router,
+    public_router as marketing_public_router,
+)
 from app.routers.affiliate_links import router as affiliate_links_router
 from app.routers.ad_creative_affiliate import ad_creative_affiliate_router
 from app.routers.collaborations import router as collaborations_router
@@ -214,7 +241,11 @@ from app.services.api_key_route_scope_registry import (
     API_KEY_ROUTE_SCOPE_REGISTRY,
     is_route_registered_or_exempt,
     summarize_registry_drift,
+    get_route_exemption,
 )
+from app.services.api_usage_metering import _extract_api_key_id  # PLT-001
+from app.services.api_metering_contract import route_id_from_request  # PLT-001
+from app.services.rate_limit import rate_limit_api_consumer  # PLT-001
 from app.services.api_key_rollout import validate_api_key_rollout_settings
 from app.services.playback_entitlements import validate_playback_entitlement, PlaybackEntitlementError
 from app.services.broadcast_reconciler import start_broadcast_reconciler_task
@@ -229,14 +260,18 @@ from app.routers.i18n import router as i18n_router
 from app.services.unified_scheduler import start_unified_scheduler_task
 from app.routers.csv_export import router as csv_export_router
 from app.routers.audit_export import router as audit_export_router
+from app.routers.legal_export import router as legal_export_router
 from app.routers.refund_requests import router as refund_requests_router
 from app.routers.fraud_detection import router as fraud_detection_router
+from app.routers.security_honeytokens import router as security_honeytokens_router
 from app.routers.billing_disputes import billing_disputes_router
 from app.routers.achievements import router as achievements_router
 from app.routers.admin_jobs import router as admin_jobs_router
 from app.routers.job_dashboard import job_dashboard_router
 from app.routers.admin_sms import router as admin_sms_router
 from app.routers.admin_email import router as admin_email_router
+from app.routers.user_email_accounts import router as user_email_accounts_router
+from app.routers.email_archive import router as email_archive_router
 from app.routers.admin_notifications import router as admin_notifications_router
 from app.routers.ses_notifications import router as ses_notifications_router
 from app.routers.recommendations import (
@@ -298,6 +333,7 @@ from app.routers.license_compliance import (
 from app.routers.k8s_launcher import router as k8s_launcher_router
 from app.services.k8s_launcher import start_k8s_ttl_checker_task
 from app.services.compute_billing import start_compute_billing_timer_task
+from app.services.rent_ledger import start_rent_run_task
 from app.services.agent_worker_provisioner import start_idle_worker_checker_task
 from app.routers.instance_templates import router as instance_templates_router
 from app.services.instance_templates import ensure_system_templates
@@ -306,6 +342,25 @@ from app.services.ssh_session_recording import start_recording_cleanup_task
 from app.routers.ssh_bastion import ssh_bastion_router
 from app.routers.connection_profiles import connection_profiles_router
 from app.routers.host_inventory import host_inventory_router
+from app.routers.inventory import inventory_router
+from app.routers.returns_rma import returns_rma_router
+from app.routers.properties import properties_router
+from app.routers.hotels import hotels_router
+from app.routers.hotel_rate_plans import hotel_rate_plans_router
+from app.routers.hotel_rooms import hotel_rooms_router
+from app.routers.hotel_reservations import hotel_reservations_router
+from app.routers.facilities import facilities_router, fulfillment_router
+from app.routers.hotel_front_desk import hotel_front_desk_router
+from app.routers.maintenance_orders import router as maintenance_orders_router
+from app.routers.customers import router as customers_router
+from app.routers.cards_resource import router as cards_resource_router
+from app.routers.financial_products import router as financial_products_router
+from app.routers.hotel_folios import hotel_folios_router
+# OBP PAY cluster (counterparties / standing orders / mandates / FX) — flag-gated default-OFF
+from app.routers.counterparties import counterparties_router
+from app.routers.standing_orders import standing_orders_router
+from app.routers.direct_debit_mandates import mandates_router
+from app.routers.fx_rates import fx_rates_router
 from app.routers.theme_customization import theme_customization_router
 from app.routers.ads import router as ads_router, admin_router as ads_admin_router
 from app.routers.ads_targeting import router as ads_targeting_router
@@ -316,8 +371,19 @@ from app.routers.agent_orchestrator import router as agent_orchestrator_router
 from app.routers.ads import router as ads_router
 from app.routers.sponsorship_deals import sponsorship_deals_router
 from app.routers.agent_workers import router as agent_workers_router
+from app.routers.agent_session_terminal import (
+    router as agent_session_terminal_router,
+    start_agent_session_reaper_task,
+)
 from app.routers.agent_fleet import router as agent_fleet_router
 from app.routers.agent_memory import router as agent_memory_router
+# CRM Workflow (WFL-001..WFL-009)
+from app.routers.workflow_rules import router as workflow_rules_router
+from app.services.workflow_scheduler import start_workflow_scheduler_task
+# CRM Project Management (PRJ-001)
+from app.routers.crm_projects import router as crm_projects_router
+from app.routers.hotel_availability import hotel_availability_router
+from app.routers.crm_campaigns import router as crm_campaigns_router
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +411,30 @@ def _api_usage_metering_middleware():
             pass
         return response
     return _middleware
+
+def _api_consumer_rate_limit_middleware():
+    """PLT-001: Per-consumer windowed rate limiter registered between IP rate-limit and metering."""
+    async def _middleware(request: Request, call_next):
+        if not (getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "api_consumer_rate_limit_enabled", False)):
+            return await call_next(request)
+        api_key_id = _extract_api_key_id(request)
+        if not api_key_id:
+            return await call_next(request)
+        rid = route_id_from_request(request)
+        if not rid:
+            return await call_next(request)
+        if get_route_exemption(rid) is not None:
+            return await call_next(request)
+        try:
+            rate_limit_api_consumer(api_key_id, rid)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"code": "api_consumer_rate_limited"}
+            win_secs = detail.get("window_seconds", 60)
+            headers = {"Retry-After": str(win_secs), "x-api-limit-code": str(detail.get("code", ""))}
+            return JSONResponse(status_code=429, content={"detail": detail}, headers=headers)
+        return await call_next(request)
+    return _middleware
+
 
 def _playback_entitlement_middleware():
     async def _middleware(request: Request, call_next):
@@ -531,6 +621,7 @@ def create_app() -> FastAPI:
         app.add_middleware(TenantMiddleware)
     app.middleware("http")(_crawler_meta_middleware())
     app.middleware("http")(rate_limit_middleware_factory())
+    app.middleware("http")(_api_consumer_rate_limit_middleware())   # PLT-001: between IP RL and metering
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())
     if METRICS_ENABLED:
@@ -539,10 +630,22 @@ def create_app() -> FastAPI:
         app.get("/metrics")(metrics_endpoint)
 
     app.include_router(ui_session_router)
+    app.include_router(ats_integration_router)
     app.include_router(content_boost_router)
     app.include_router(ui_mfa_router)
     app.include_router(mfa_devices_router)
     app.include_router(api_keys_router)
+    # OAU-001..OAU-005: Open Bank Project OAuth2/OIDC consumer registry + authorization server
+    if _S.open_bank_project_enabled and _S.oauth_provider_enabled:
+        from app.routers.oauth_consumers import router as oauth_consumers_router
+        from app.routers.oauth_authorize import router as oauth_authorize_router
+        from app.routers.oauth_token import router as oauth_token_router
+        app.include_router(oauth_consumers_router)
+        app.include_router(oauth_authorize_router)
+        app.include_router(oauth_token_router)
+        if _S.oauth_provider_oidc_enabled:
+            from app.routers.oauth_oidc import router as oauth_oidc_router
+            app.include_router(oauth_oidc_router)
     app.include_router(api_usage_router)
     app.include_router(alerts_router)
     app.include_router(shipment_tracking_router)  # ECOM D4 shipment tracking
@@ -556,6 +659,7 @@ def create_app() -> FastAPI:
     app.include_router(root_auth_router)
     app.include_router(admin_roles_router)
     app.include_router(admin_impersonation_router)
+    app.include_router(branding_router)
     app.include_router(misc_router)
     app.include_router(billing_ccbill_router)
     app.include_router(ccbill_mock_router)
@@ -588,6 +692,7 @@ def create_app() -> FastAPI:
     app.include_router(custom_emojis_admin_router)
     app.include_router(filemanager_router)
     app.include_router(signature_packets_router)
+    app.include_router(signature_public_router)
     app.include_router(signature_templates_router)
     app.include_router(addresses_router)
     app.include_router(calendar_router)
@@ -595,11 +700,25 @@ def create_app() -> FastAPI:
     app.include_router(admin_calendar_integrations_router)
     app.include_router(calendar_public_router)
     app.include_router(calendar_public_event_router)
+    app.include_router(booking_engine_router)
+    app.include_router(crm_events_router)
+    app.include_router(crm_contact_sms_router)
     app.include_router(file_share_links_router)
     app.include_router(file_share_links_public_router)
     app.include_router(seo_metadata_router)
     app.include_router(device_trust_router)
     app.include_router(newsfeed_router)
+    app.include_router(newsfeed_recsys_internal_router)
+    app.add_event_handler("startup", start_newsfeed_recsys_refresh_task)
+    def _seed_gl_chart_of_accounts_on_startup():
+        # OFBiz GL (OFB-013): seed default chart of accounts. No-op unless
+        # GL_DOUBLE_ENTRY_ENABLED=true.
+        try:
+            from app.services.gl_accounts import seed_chart_of_accounts
+            seed_chart_of_accounts()
+        except Exception:
+            logger.warning("Failed to seed GL chart of accounts", exc_info=True)
+    app.add_event_handler("startup", _seed_gl_chart_of_accounts_on_startup)
     app.include_router(image_optimization_router)
     app.include_router(moderation_router)
     app.include_router(moderation_compat_router)
@@ -670,6 +789,8 @@ def create_app() -> FastAPI:
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
+    app.include_router(order_lifecycle_router)
+    app.include_router(orders_adj_ship_router)
     app.include_router(commercial_checkout_router)
     app.include_router(entitlements_router)
     app.include_router(subscription_server_router)
@@ -680,8 +801,19 @@ def create_app() -> FastAPI:
     app.include_router(ups_router)
     app.include_router(carrier_tracking_mock_router)
     app.include_router(carrier_tracking_poller_router)
+    from app.routers.shipping import shipping_router
+    app.include_router(shipping_router)
     app.include_router(projects_router)
     app.include_router(contacts_router)
+    app.include_router(party_router)  # PTY-011
+    app.include_router(candidates_router)
+    app.include_router(job_orders_router)
+    # Sales pipeline (OPP-001..OPP-006) — always registered; _require_flag() gates all endpoints
+    app.include_router(opportunities_router)
+    app.include_router(opportunities_admin_router)
+    app.include_router(leads_router)  # CRM Leads (LED-013)
+    app.include_router(property_tenant_router)
+    app.include_router(hr_router)  # HRM-009
     app.include_router(social_router)
     app.include_router(activity_feed_router)
     app.include_router(discovery_router)
@@ -695,10 +827,19 @@ def create_app() -> FastAPI:
     app.include_router(broadcast_devtools_router)
     app.include_router(tickets_router)
     app.include_router(ticket_spaces_router)
+    # TKB-003: /boards is an alias of /ticket-spaces, gated behind a flag that
+    # defaults off. When off, only /ticket-spaces is mounted (legacy behavior).
+    if _S.ticket_boards_enabled:
+        from app.routers.ticket_boards import router as ticket_boards_router
+        app.include_router(ticket_boards_router)
     app.include_router(internal_devtools_router)
     app.include_router(admin_jira_integration_router)
     app.include_router(jira_integrations_router)
     app.include_router(browser_ssh_terminal_router)
+    app.include_router(agent_session_terminal_router)
+    # ACS hardening: reap idle/abandoned agent sessions (detached bridges still
+    # hold a PTY + LLM tokens). Flag-gated inside the starter.
+    app.add_event_handler("startup", start_agent_session_reaper_task)
     app.include_router(ssh_key_manager_router)
     app.include_router(questionnaires_router)
     app.include_router(kyc_cases_router)
@@ -726,6 +867,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_analytics_rollup_task)
     app.add_event_handler("startup", start_reco_refresh_task)
     app.include_router(vnc_sessions_router)
+    app.include_router(rdp_sessions_router)
     app.include_router(playback_entitlements_router)
     # Recommendation routes MUST be registered before video_listing_router
     # so /gallery/for-you and /{video_id}/similar match before /{video_id}
@@ -769,8 +911,14 @@ def create_app() -> FastAPI:
     app.include_router(job_dashboard_router)
     app.include_router(admin_sms_router)
     app.include_router(admin_email_router)
+    app.include_router(user_email_accounts_router)
+    app.include_router(email_archive_router)
     app.include_router(admin_notifications_router)
+    app.include_router(admin_party_router)  # PTY-012
     app.include_router(ses_notifications_router)
+    # CRM Workflow (WFL-009)
+    if _S.crm_workflow_enabled:
+        app.include_router(workflow_rules_router)
     app.include_router(privacy_router)
     app.include_router(admin_privacy_router)
     app.include_router(account_deletion_router)
@@ -781,11 +929,23 @@ def create_app() -> FastAPI:
     app.include_router(webhooks_router)
     app.include_router(csv_export_router)
     app.include_router(audit_export_router)
+    app.include_router(legal_export_router)
+    app.include_router(audit_log_browse_router)
     app.include_router(refund_requests_router)
     app.include_router(fraud_detection_router)
+    app.include_router(security_honeytokens_router)
+    # HNY-008: decoy/honeypot endpoints are only mounted when explicitly
+    # enabled, so probing them 404s like any unknown path when off.
+    if getattr(_S, "honeypot_endpoints_enabled", False):
+        from app.routers.security_honeypot import router as security_honeypot_router
+
+        app.include_router(security_honeypot_router)
     app.include_router(billing_disputes_router)
     app.include_router(achievements_router)
     app.include_router(promo_codes_router)
+    app.include_router(marketing_campaigns_router)
+    app.include_router(marketing_admin_router)
+    app.include_router(marketing_public_router)
     app.include_router(affiliate_links_router)
     app.include_router(ad_creative_affiliate_router)
     app.include_router(collaborations_router)
@@ -797,6 +957,14 @@ def create_app() -> FastAPI:
     app.include_router(fan_club_router)
     app.include_router(fan_club_public_router)
     app.include_router(geo_rules_router)
+    # PLT-003: Glossary endpoint (conditionally registered when enabled)
+    if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "glossary_enabled", False):
+        from app.routers.glossary import router as glossary_router
+        app.include_router(glossary_router)
+    # PLT-004: Sandbox import endpoint (conditionally registered when enabled)
+    if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "sandbox_import_enabled", False):
+        from app.routers.sandbox import router as sandbox_router
+        app.include_router(sandbox_router)
     app.include_router(scheduler_router)
     app.include_router(i18n_router)
     app.include_router(watermark_internal_router)
@@ -852,6 +1020,12 @@ def create_app() -> FastAPI:
     app.include_router(k8s_launcher_router)
     app.add_event_handler("startup", start_k8s_ttl_checker_task)
     app.add_event_handler("startup", start_compute_billing_timer_task)
+    # QUO-004/005: AOS contract renewal checker + invoice overdue checker.
+    from app.services.aos_contracts import start_contracts_renewal_check_task
+    from app.services.invoices import start_invoice_overdue_checker_task
+    app.add_event_handler("startup", start_contracts_renewal_check_task)
+    app.add_event_handler("startup", start_invoice_overdue_checker_task)
+    app.add_event_handler("startup", start_rent_run_task)
     app.add_event_handler("startup", start_idle_worker_checker_task)
     app.include_router(instance_templates_router)
     app.add_event_handler("startup", ensure_system_templates)
@@ -859,6 +1033,29 @@ def create_app() -> FastAPI:
     app.include_router(ssh_bastion_router)
     app.include_router(connection_profiles_router)
     app.include_router(host_inventory_router)
+    app.include_router(inventory_router)
+    app.include_router(returns_rma_router)
+    app.include_router(properties_router)
+    app.include_router(hotels_router)
+    app.include_router(hotel_rate_plans_router)
+    app.include_router(hotel_rooms_router)
+    app.include_router(hotel_reservations_router)
+    app.include_router(facilities_router)        # FAC-005: facility CRUD
+    app.include_router(fulfillment_router)       # FAC-011: transfers/receiving/picklists/shipments
+    # FAC-004: ensure default warehouse on startup when flag is on
+    if bool(getattr(__import__("app.core.settings", fromlist=["S"]).S, "facility_fulfillment_enabled", False)):
+        from app.services.facilities import ensure_default_facility
+        app.add_event_handler("startup", ensure_default_facility)
+    app.include_router(hotel_front_desk_router)
+    app.include_router(maintenance_orders_router)
+    app.include_router(customers_router)
+    app.include_router(cards_resource_router)
+    app.include_router(financial_products_router)
+    app.include_router(hotel_folios_router)
+    app.include_router(counterparties_router)
+    app.include_router(standing_orders_router)
+    app.include_router(mandates_router)
+    app.include_router(fx_rates_router)
     app.include_router(theme_customization_router)
     app.add_event_handler("startup", start_recording_cleanup_task)
     app.include_router(ads_router)
@@ -888,6 +1085,9 @@ def create_app() -> FastAPI:
 
     from app.routers.compute_billing import router as compute_billing_router
     app.include_router(compute_billing_router)
+    from app.routers.rent_ledger import router as rent_ledger_router, admin_rent_router
+    app.include_router(rent_ledger_router)
+    app.include_router(admin_rent_router)
     app.include_router(admin_compute_router)
     app.include_router(bulk_payout_tools_router)
     from app.routers.admin_ad_platform import admin_ad_platform_router
@@ -902,6 +1102,12 @@ def create_app() -> FastAPI:
 
     from app.routers.agent_feedback import router as agent_feedback_router
     app.include_router(agent_feedback_router)
+
+    # Agent SSH QA (ADR-003 / AQA). Master-flag gated, default OFF — with the
+    # flag off the router is not registered and the feature is fully dormant.
+    if getattr(_S, "agent_ssh_qa_enabled", False):
+        from app.routers.agent_actions import router as agent_actions_router
+        app.include_router(agent_actions_router)
 
     from app.routers.agent_pr_integration import (
         router as agent_pr_router,
@@ -938,6 +1144,18 @@ def create_app() -> FastAPI:
     from app.routers.invoices import invoices_router, invoices_admin_router
     app.include_router(invoices_router)
     app.include_router(invoices_admin_router)
+    # QUO-001/003/004/005: AOS quotes, contracts, conversion, invoice lifecycle.
+    from app.routers.aos_quotes import aos_quotes_router, aos_quotes_admin_router
+    app.include_router(aos_quotes_router)
+    app.include_router(aos_quotes_admin_router)
+    from app.routers.aos_contracts import aos_contracts_router, aos_contracts_admin_router
+    app.include_router(aos_contracts_router)
+    app.include_router(aos_contracts_admin_router)
+    # INV-002 / INV-005: CRM currency + tax-rate registries (flag-gated).
+    from app.routers.crm_currencies import crm_currencies_router
+    from app.routers.crm_tax_rates import crm_tax_rates_router
+    app.include_router(crm_currencies_router)
+    app.include_router(crm_tax_rates_router)
     from app.routers.consumer_tax_documents import (
         consumer_tax_documents_router,
         consumer_tax_documents_admin_router,
@@ -946,8 +1164,143 @@ def create_app() -> FastAPI:
     app.include_router(consumer_tax_documents_admin_router)
     from app.routers.tax_form_1099 import tax_form_1099_router
     app.include_router(tax_form_1099_router)
+    app.include_router(crm_campaigns_router)
+
+    # CRM Reports & Dashboards (RPT-001..RPT-009)
+    from app.routers.crm_reports import router as crm_reports_router
+    from app.routers.crm_dashboard import router as crm_dashboard_router
+    from app.routers.crm_saved_searches import router as crm_saved_searches_router
+    app.include_router(crm_reports_router)
+    app.include_router(crm_dashboard_router)
+    app.include_router(crm_saved_searches_router)
+    from app.services.crm_report_scheduler import start_report_scheduler_task
+    app.add_event_handler("startup", start_report_scheduler_task)
+    # CRM Project Management (PRJ-001)
+    app.include_router(crm_projects_router)
+    # HTL-010..HTL-013: Hotel PMS / availability (QloApps vertical, default OFF)
+    app.include_router(hotel_availability_router)
+    from app.services.hotel_availability import start_hotel_hold_expiry_task
+    app.add_event_handler("startup", start_hotel_hold_expiry_task)
+    # PIP-008: ATS Recruiting Pipeline (flag-gated, default OFF)
+    if _S.ats_pipeline_enabled:
+        from app.routers.ats_pipeline import router as ats_pipeline_router
+        from app.routers.ats_pipeline import router_admin as ats_pipeline_admin_router
+        app.include_router(ats_pipeline_router)
+        app.include_router(ats_pipeline_admin_router)
+    # RSK-001/RSK-004: ATS skill registry + skill-based search
+    from app.routers.ats_skills import router as ats_skills_router
+    app.include_router(ats_skills_router)
+    # RSK-002: Résumé text extraction (re-extract endpoint)
+    from app.routers.ats_resume import router as ats_resume_router
+    app.include_router(ats_resume_router)
+    # RSK-003/RSK-004: Résumé full-text search + skill-based candidate/job-order search
+    from app.routers.ats_recruiting import router as ats_recruiting_router
+    app.include_router(ats_recruiting_router)
+    from app.routers.txn_requests import router as txn_requests_router
+    app.include_router(txn_requests_router)
+    # PRT-001..PRT-005: ATS Career Portal (admin + public)
+    from app.routers.career_portal import router as career_portal_admin_router
+    from app.routers.career_portal import public_router as career_portal_public_router
+    app.include_router(career_portal_admin_router)
+    app.include_router(career_portal_public_router)
+    if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "account_views_enabled", False):
+        from app.routers.account_views import router as account_views_router, public_router as account_views_public_router
+        app.include_router(account_views_public_router)
+        app.include_router(account_views_router)
+
+    if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "entitlement_requests_enabled", False):
+        from app.routers.entitlement_requests import router as entitlement_requests_router
+        app.include_router(entitlement_requests_router)
+    # PMD cluster — Property Management Dashboard (flag: PROPERTY_DASHBOARD_ENABLED)
+    from app.routers.rent_policy import rent_policy_router
+    app.include_router(rent_policy_router)
+    from app.routers.property_documents import property_documents_router
+    app.include_router(property_documents_router)
+    from app.routers.portfolio_dashboard import portfolio_dashboard_router
+    app.include_router(portfolio_dashboard_router)
+    # Register RPT-007 dashlet provider for portfolio_summary when available
+    try:
+        from app.services import crm_dashlet_data as _pmd_cdd
+        from app.services import portfolio_dashboard as _pmd_pd
+
+        def _provider_portfolio_summary(user_sub: str, config: dict) -> dict:
+            from app.core.settings import S as _pmd_s
+            if not getattr(_pmd_s, "property_dashboard_enabled", False):
+                raise ValueError("unknown_dashlet_type")
+            try:
+                return _pmd_pd.compute_kpis(user_sub)
+            except Exception as exc:
+                raise ValueError("portfolio_summary_unavailable") from exc
+
+        if hasattr(_pmd_cdd, "register_dashlet_provider"):
+            _pmd_cdd.register_dashlet_provider("portfolio_summary", _provider_portfolio_summary)
+        elif hasattr(_pmd_cdd, "_DASHLET_PROVIDERS"):
+            _pmd_cdd._DASHLET_PROVIDERS["portfolio_summary"] = _provider_portfolio_summary
+        # Extend VALID_DASHLET_TYPES when it exists in crm_dashboard
+        try:
+            from app.services import crm_dashboard as _pmd_cdsh
+            if hasattr(_pmd_cdsh, "VALID_DASHLET_TYPES"):
+                object.__setattr__(_pmd_cdsh, "VALID_DASHLET_TYPES",
+                    _pmd_cdsh.VALID_DASHLET_TYPES | frozenset({"portfolio_summary"}))
+        except Exception:
+            pass
+    except Exception:
+        pass  # RPT-007 not yet deployed; dashlet registration is best-effort
+    from app.routers.purchasing import purchasing_router
+    app.include_router(purchasing_router)
+    # CSN: OBP PSD2 Consents (CSN-001/002)
+    if _S.open_bank_project_enabled and _S.psd2_consents_enabled:
+        from app.routers.psd2_consents import router as psd2_consents_router
+        from app.services.psd2_consents import start_consent_expiry_task
+        app.include_router(psd2_consents_router)
+        app.add_event_handler("startup", start_consent_expiry_task)
+
+    # CSN: Dynamic Entities (CSN-003)
+    if _S.dynamic_entities_enabled:
+        from app.routers.dynamic_entities import def_router as dynamic_entity_def_router
+        from app.routers.dynamic_entities import crud_router as dynamic_entity_crud_router
+        app.include_router(dynamic_entity_def_router)
+        app.include_router(dynamic_entity_crud_router)
+
+    # CSN: Dynamic Endpoints (CSN-004)
+    if _S.dynamic_endpoints_enabled:
+        from app.routers.dynamic_endpoints import router as dynamic_endpoints_router
+        from app.routers.dynamic_endpoints import gateway_router as dynamic_endpoints_gateway_router
+        app.include_router(dynamic_endpoints_router)
+        app.include_router(dynamic_endpoints_gateway_router)
+
+    # CSN: Open Data — Branches + ATMs (CSN-005)
+    if _S.open_data_enabled:
+        from app.routers.open_data import router as open_data_admin_router
+        from app.routers.open_data import public_router as open_data_public_router
+        app.include_router(open_data_admin_router)
+        app.include_router(open_data_public_router)
+    # OFBiz Fixed Assets (FXA-007 / FXA-010)
+    from app.routers.fixed_assets import router as fixed_assets_router
+    from app.services.fixed_assets import start_depreciation_poster_task
+    app.include_router(fixed_assets_router)
+    app.add_event_handler("startup", start_depreciation_poster_task)
+    from app.routers.pos import pos_router
+    app.include_router(pos_router)
+    # EVT-005: CRM Geocoding (address-to-lat/lng)
+    from app.routers.crm_geocoding import router as crm_geocoding_router
+    app.include_router(crm_geocoding_router)
+
+    # EVT-006 + EVT-007: CRM Maps (proximity search + feature-flags)
+    from app.routers.crm_maps import router as crm_maps_router
+    app.include_router(crm_maps_router)
+    # CCT-001..CCT-006 (SuiteCRM Contacts Extra) — always register; flag-gated per endpoint
+    from app.routers.party_cct import org_router as party_cct_org_router
+    from app.routers.party_cct import party_router as party_cct_party_router
+    from app.routers.party_cct import vcard_router as party_cct_vcard_router
+    from app.routers.party_cct import admin_router as party_cct_admin_router
+    app.include_router(party_cct_vcard_router)   # /ui/party/vcard-import — before /{party_id}
+    app.include_router(party_cct_org_router)
+    app.include_router(party_cct_party_router)
+    app.include_router(party_cct_admin_router)
 
     app.add_event_handler("startup", start_unified_scheduler_task)
+    app.add_event_handler("startup", start_workflow_scheduler_task)  # WFL-005
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
     app.add_event_handler("startup", start_filemgr_mount_reconcile_task)
@@ -956,9 +1309,57 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_webhook_dispatcher_task)
     app.add_event_handler("startup", start_audit_export_worker_task)
     app.add_event_handler("startup", start_audit_export_scheduler_task)
+    # Agent SSH QA runner (ADR-003 / AQA-006) — self-gates on AGENT_SSH_QA_ENABLED.
+    from app.services.agent_ssh_exec import start_agent_actions_runner_task
+    app.add_event_handler("startup", start_agent_actions_runner_task)
     app.add_event_handler("startup", start_cart_abandonment_task)
     app.add_event_handler("startup", start_marketing_publish_task)
     app.add_event_handler("startup", start_cost_collection_task)
+
+    # OpenBankProject — banking accounts (ACC-001..ACC-004). Umbrella gate
+    # (decision D4): the master flag ANDed with the per-series flag. Both default
+    # OFF, so no /ui/banking/* route is registered in normal deployments.
+    if _S.open_bank_project_enabled and _S.banking_accounts_enabled:
+        from app.routers.banking_accounts import router as banking_accounts_router
+
+        app.include_router(banking_accounts_router)
+    # STU-001/002/003/004: CRM ACL (gated by CRM_ACL_ENABLED)
+    if _S.crm_acl_enabled:
+        from app.routers.crm_acl import router as crm_acl_router
+        app.include_router(crm_acl_router)
+        from app.routers.crm_security_groups import router as crm_sg_router
+        app.include_router(crm_sg_router)
+
+    # STU-011: CRM Studio (gated by CRM_STUDIO_ENABLED)
+    if _S.crm_studio_enabled:
+        from app.routers.crm_studio import router as crm_studio_router
+        app.include_router(crm_studio_router)
+    # Knowledge Base (KB-001..KB-011)
+    from app.routers.kb_articles import router as kb_articles_router, public_router as kb_public_router
+    from app.services.kb_articles import start_kb_expiry_checker_task
+    app.include_router(kb_articles_router)
+    app.include_router(kb_public_router)
+    app.add_event_handler("startup", start_kb_expiry_checker_task)
+    # LSE — open-property Lease subsystem
+    from app.routers.leases import (
+        router as leases_router,
+        admin_router as leases_admin_router,
+        tenant_leases_router,
+    )
+    from app.services.leases import start_leases_renewal_check_task
+    app.include_router(leases_router)
+    app.include_router(leases_admin_router)
+    app.include_router(tenant_leases_router)
+    app.add_event_handler("startup", start_leases_renewal_check_task)
+    # ── CRM Activities (ACT-004, ACT-008, ACT-009, ACT-010) ──────────────────
+    from app.routers.crm_tasks import router as crm_tasks_router
+    app.include_router(crm_tasks_router)
+    from app.routers.crm_notes import router as crm_notes_router
+    app.include_router(crm_notes_router)
+    from app.routers.crm_activity_timeline import router as crm_activity_timeline_router
+    app.include_router(crm_activity_timeline_router)
+    from app.services.crm_event_reminders import start_event_reminder_task
+    app.add_event_handler("startup", start_event_reminder_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:
@@ -1230,6 +1631,11 @@ def create_app() -> FastAPI:
         return app.openapi_schema
 
     app.openapi = _custom_openapi
+
+    # MFG-011: Manufacturing / MRP router (flag-gated: all handlers call
+    # _require_enabled(); safe to mount unconditionally).
+    from app.routers.manufacturing import manufacturing_router
+    app.include_router(manufacturing_router)
 
     return app
 

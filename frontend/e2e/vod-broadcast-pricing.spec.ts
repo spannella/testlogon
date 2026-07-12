@@ -7,10 +7,12 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const API = "http://localhost:8000";
 const ALICE_SUB = "e2e_alice@test.local";
 const BOB_SUB = "e2e_bob@test.local";
@@ -42,8 +44,8 @@ let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _adminSessions = JSON.parse(raw);
   }
@@ -117,7 +119,7 @@ const DDB_BOOTSTRAP = `
 import boto3, os, time, uuid
 from pathlib import Path
 
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -130,7 +132,7 @@ ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL',
 function runPy(script: string): string {
   return execSync(
     `${PYTHON} -c "${DDB_BOOTSTRAP}\n${script}"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   ).toString().trim();
 }
 
@@ -230,9 +232,12 @@ test.afterAll(async () => {
 // Section 113: Subscription-Gated VOD Access
 // =============================================================================
 
-const FREE_VIDEO_ID = `e2e_free_vod_${TS}`;
-const PAID_VIDEO_ID = `e2e_paid_vod_${TS}`;
-const SUB_ONLY_VIDEO_ID = `e2e_sub_vod_${TS}`;
+// The by-creator listing (list_videos_by_creator_public) now filters to
+// real video IDs via Attr("video_id").begins_with("v_"), so seeded videos
+// must use the "v_" prefix to appear in 113.5/113.6.
+const FREE_VIDEO_ID = `v_e2e_free_vod_${TS}`;
+const PAID_VIDEO_ID = `v_e2e_paid_vod_${TS}`;
+const SUB_ONLY_VIDEO_ID = `v_e2e_sub_vod_${TS}`;
 
 test.describe("113 · Subscription-Gated VOD Access", () => {
   test.beforeAll(async () => {

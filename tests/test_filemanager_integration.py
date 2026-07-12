@@ -37,6 +37,10 @@ class FakeS3:
         obj = self.objects[(Bucket, Key)]
         return {"Body": _Body(obj["Body"])}
 
+    def download_fileobj(self, Bucket, Key, Fileobj, **kwargs):
+        obj = self.objects.get((Bucket, Key), {})
+        Fileobj.write(obj.get("Body", b""))
+
 
 class FakeTable:
     def __init__(self):

@@ -10,8 +10,10 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const BASE = "http://localhost:3000";
 const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
@@ -36,8 +38,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -78,7 +80,7 @@ function injectPaymentMethod(userSub: string, pmId: string): void {
     `${PYTHON} -c "
 import boto3, os, time
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -131,7 +133,7 @@ function removePaymentMethod(userSub: string, pmId: string): void {
       `${PYTHON} -c "
 import boto3, os
 from pathlib import Path
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -173,13 +175,23 @@ interface LedgerEntry {
   meta: Record<string, unknown>;
 }
 
+// FIN-018 / GAP-0214: tip credit entries are now NET of the admin-configured
+// platform fee. The tipper is debited the full gross amount; the recipient is
+// credited gross minus the platform fee. Each ledger entry records the applied
+// fee under meta.platform_fee_cents, so the expected net is derived from the
+// entry itself rather than hard-coding the fee BPS (which is runtime-configurable).
+function expectedNet(gross: number, entry: LedgerEntry): number {
+  const fee = Number((entry.meta?.platform_fee_cents as number | string | undefined) ?? 0);
+  return gross - fee;
+}
+
 function queryLedger(userSub: string): LedgerEntry[] {
   const raw = execSync(
     `${PYTHON} -c "
 import boto3, os, json
 from pathlib import Path
 from boto3.dynamodb.conditions import Key
-env_file = Path('/home/ubuntu/testlogon/.env.local')
+env_file = Path('${REPO_ROOT}/.env.local')
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         line = line.strip()
@@ -281,7 +293,7 @@ test.describe("85. Tip Ledger -- Messages", () => {
              e.meta?.content_id === attachedTipMsgId,
     );
     expect(credit).toBeDefined();
-    expect(Number(credit!.amount_cents)).toBe(100);
+    expect(Number(credit!.amount_cents)).toBe(expectedNet(100, credit!));
     expect(credit!.meta.content_type).toBe("message");
   });
 
@@ -311,7 +323,7 @@ test.describe("85. Tip Ledger -- Messages", () => {
              e.meta?.content_id === bobMsgId,
     );
     expect(credit).toBeDefined();
-    expect(Number(credit!.amount_cents)).toBe(200);
+    expect(Number(credit!.amount_cents)).toBe(expectedNet(200, credit!));
   });
 
   test("Tip without payment_method_id still writes ledger entries", async () => {
@@ -361,7 +373,8 @@ test.describe("85. Tip Ledger -- Messages", () => {
     );
     expect(debit).toBeDefined();
     expect(credit).toBeDefined();
-    expect(Number(debit!.amount_cents)).toBe(Number(credit!.amount_cents));
+    // FIN-018: debit is gross; credit is net after the platform fee.
+    expect(Number(credit!.amount_cents)).toBe(expectedNet(Number(debit!.amount_cents), credit!));
     expect(debit!.currency).toBe(credit!.currency);
   });
 });
@@ -425,7 +438,7 @@ test.describe("86. Tip Ledger -- Posts", () => {
              e.meta?.content_id === postId,
     );
     expect(credit).toBeDefined();
-    expect(Number(credit!.amount_cents)).toBe(TIP_AMOUNT);
+    expect(Number(credit!.amount_cents)).toBe(expectedNet(TIP_AMOUNT, credit!));
   });
 
   test("Post tip ledger meta contains post_id and content_type=post", async () => {
@@ -526,7 +539,7 @@ test.describe("87. Tip Ledger -- Comments", () => {
              e.meta?.content_id === commentId,
     );
     expect(credit).toBeDefined();
-    expect(Number(credit!.amount_cents)).toBe(TIP_AMOUNT);
+    expect(Number(credit!.amount_cents)).toBe(expectedNet(TIP_AMOUNT, credit!));
   });
 
   test("Comment tip ledger meta contains post_id, comment_id, content_type=comment", async () => {
@@ -668,7 +681,8 @@ test.describe("88. Tip Ledger -- Cross-Cutting", () => {
     );
     expect(msgDebit).toBeDefined();
     expect(msgCredit).toBeDefined();
-    expect(Number(msgDebit!.amount_cents)).toBe(Number(msgCredit!.amount_cents));
+    // FIN-018: credit is net of the platform fee; debit is gross.
+    expect(Number(msgCredit!.amount_cents)).toBe(expectedNet(Number(msgDebit!.amount_cents), msgCredit!));
 
     // Post tip: Bob debit, Alice credit
     const postDebit = bobLedger.find(
@@ -679,7 +693,7 @@ test.describe("88. Tip Ledger -- Cross-Cutting", () => {
     );
     expect(postDebit).toBeDefined();
     expect(postCredit).toBeDefined();
-    expect(Number(postDebit!.amount_cents)).toBe(Number(postCredit!.amount_cents));
+    expect(Number(postCredit!.amount_cents)).toBe(expectedNet(Number(postDebit!.amount_cents), postCredit!));
   });
 
   test("Tipper billing history shows all tip debits", async () => {

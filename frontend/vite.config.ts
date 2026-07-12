@@ -60,15 +60,37 @@ export default defineConfig({
     host: "0.0.0.0",   // listen on all interfaces so the EC2 server is reachable
     port: 3000,
     strictPort: true,  // fail fast instead of silently falling back to 5173
-    hmr: {
-      // Tell the HMR client to open its WebSocket on the same port the browser
-      // used to load the page.  This works whether the user is on an SSH tunnel
-      // (localhost:3000) or hitting the EC2 IP directly (18.222.237.167:3000).
-      clientPort: 3000,
-    },
+    // Allow the app to be served behind a domain (e.g. via Caddy HTTPS). Leading
+    // dot = match all subdomains. IPs/localhost are always allowed by Vite.
+    allowedHosts: [".bitbazaar.cc", ".amazonaws.com"],
+    hmr: process.env.VITE_PUBLIC_HMR_HOST
+      ? {
+          // Served behind an HTTPS reverse proxy (Caddy): the HMR WebSocket must
+          // go to the public host over wss on 443 (Caddy proxies the upgrade).
+          host: process.env.VITE_PUBLIC_HMR_HOST,
+          protocol: "wss",
+          clientPort: 443,
+        }
+      : {
+          // Direct dev: open the WebSocket on the same port the page loaded from
+          // (SSH tunnel localhost:3000 or EC2 IP :3000).
+          clientPort: 3000,
+        },
     proxy: {
       "/saml": "http://localhost:8000",
       "/ui": "http://localhost:8000",
+      // SuiteCRM Knowledge Base router is mounted at /kb (auth) + /public/kb (public),
+      // not under /ui or /api — proxy them so the KB frontend reaches the backend in dev.
+      "/public/kb": "http://localhost:8000",
+      "/kb": "http://localhost:8000",
+      // OpenCATS public career portal router (mounted at /public/careers, outside /ui).
+      "/public/careers": "http://localhost:8000",
+      // OBP OAuth2/OIDC discovery + authorize/token/jwks (mounted at root, outside /ui).
+      "/oauth": "http://localhost:8000",
+      "/.well-known": "http://localhost:8000",
+      // Browser SSH terminal WebSocket — needs ws:true for the upgrade to proxy.
+      // Must precede the generic "/api" entry so the WS path matches here first.
+      "/api/browser-ssh": { target: "http://localhost:8000", ws: true, changeOrigin: true },
       "/api": "http://localhost:8000",
       "/v1": "http://localhost:8000",
       "/messaging": "http://localhost:8000",
@@ -135,6 +157,18 @@ export default defineConfig({
         },
       },
       "/ticket-spaces": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
+      // TKB-004: /boards mirrors the /tickets bypass — SPA route + API share the
+      // prefix, so browser navigations get index.html and XHR/JSON proxy to backend.
+      "/boards": {
         target: "http://localhost:8000",
         bypass: (req) => {
           const accept = req.headers["accept"] ?? "";

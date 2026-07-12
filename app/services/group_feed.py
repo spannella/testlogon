@@ -160,8 +160,17 @@ def list_group_feed(
         "ScanIndexForward": False,
         "Limit": limit * 2,  # fetch extra to account for audience filtering
     }
-    if cursor:
-        kwargs["ExclusiveStartKey"] = decode_cursor(cursor)
+    # decode_cursor returns None for an absent OR malformed cursor (e.g. the
+    # literal "undefined" a client may send). Only pass ExclusiveStartKey when
+    # it actually decodes to a key — DynamoDB rejects ExclusiveStartKey=None
+    # with a ValidationException (surfaced to the client as a 500). A malformed
+    # cursor is therefore treated as "first page" rather than crashing.
+    start_key = decode_cursor(cursor) if cursor else None
+    if start_key:
+        kwargs["ExclusiveStartKey"] = start_key
+    # Treat a malformed cursor as the first page for the pinned-post inclusion
+    # logic below, so pinned posts still surface.
+    has_valid_cursor = start_key is not None
 
     resp = tbl.query(**kwargs)
     index_records = resp.get("Items", [])
@@ -175,7 +184,7 @@ def list_group_feed(
     # from the feed-index `pinned` flag, which is maintained by a separate write
     # and can drift out of sync. We therefore identify pinned posts via the post
     # items themselves rather than trusting the index record's stale flag.
-    if not cursor:
+    if not has_valid_cursor:
         seen_ids = {r.get("post_id") for r in index_records}
         for pinned_rec in _pinned_index_records(tbl, group_id):
             if pinned_rec.get("post_id") not in seen_ids:

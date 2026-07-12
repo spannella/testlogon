@@ -375,7 +375,42 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
     if discovery_changed:
         _reindex_user_for_discovery(user_sub)
 
+    # PTY-010: re-sync party EMAIL/PHONE contact mechs when those fields change
+    # (best-effort, doubly flag-gated, never rolls back the profile write).
+    _sync_party_mechs_after_profile_update(user_sub, current, updated)
+
     return updated
+
+
+def _sync_party_mechs_after_profile_update(
+    user_sub: str,
+    old: Dict[str, Any],
+    new: Dict[str, Any],
+) -> None:
+    """Best-effort party mech re-sync after a profile update (PTY-010).
+
+    Gated by S.party_crm_enabled AND S.party_crm_profile_sync_enabled. Never
+    raises — failures are logged and suppressed. Lazy imports avoid circular
+    deps and any startup cost when the flags are off.
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    try:
+        from app.core.settings import S as _S
+
+        if not (_S.party_crm_enabled and _S.party_crm_profile_sync_enabled):
+            return
+        from app.services.party import _resync_email_mech, _resync_phone_mech
+
+        if old.get("displayed_email") != new.get("displayed_email"):
+            _resync_email_mech(user_sub, new.get("displayed_email"))
+        if old.get("displayed_telephone_number") != new.get("displayed_telephone_number"):
+            _resync_phone_mech(user_sub, new.get("displayed_telephone_number"))
+    except Exception:
+        _log.exception(
+            "party.sync_mechs_after_profile_update_error user_sub=%s", user_sub
+        )
 
 
 def _reindex_user_for_discovery(user_sub: str) -> None:

@@ -4,6 +4,7 @@ import base64
 import json
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -26,6 +27,14 @@ _TICKET_STATUSES = (
     "investigating",
     "analyzing",
     "tickets_created",
+    # TBT-004: bounty lifecycle ticket statuses. Added to the validation
+    # allowlist unconditionally so update_status does not reject them, but they
+    # are deliberately ABSENT from _STATUS_TRANSITIONS so the generic status
+    # endpoint can never reach them — only the dedicated bounty service paths do.
+    "claimed",
+    "pending_approval",
+    "paid_out",
+    "cancelled",
 )
 _STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "open": ("in_progress", "done", "blocked"),
@@ -38,6 +47,39 @@ _STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "qa_approved": ("done", "in_progress", "open"),
     "blocked": ("open", "in_progress"),
 }
+
+# TBT-004: separate transition map applied ONLY when a ticket carries an active
+# bounty (keyed on bounty_status). paid_out and cancelled are terminal and have
+# no outgoing edges here — they are only reachable via the dedicated bounty
+# approve/cancel endpoints (TBT-006/007).
+_BOUNTY_STATUSES = ("funded", "claimed", "submitted", "paid_out", "cancelled")
+_BOUNTY_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "funded": ("in_progress",),       # claim → in_progress (TBT-005)
+    "claimed": ("pending_approval",),  # submit → pending_approval (TBT-004 gate)
+    "pending_approval": ("in_progress",),  # reject → back to in_progress (TBT-006)
+}
+
+
+def bounty_id_for_ticket(ticket_id: str) -> str:
+    """Deterministic 24-hex bounty id (TBT-002). Used by TBT-003/007."""
+    import hashlib
+
+    return hashlib.sha256(f"bounty:{ticket_id}".encode()).hexdigest()[:24]
+
+
+def _set_bounty_gsi_keys(item: dict[str, Any], *, funded: bool, created_at: int) -> dict[str, Any]:
+    """Set or clear the sparse ByBounty GSI keys on a ticket item (TBT-002).
+
+    funded=True sets gsi_bounty_pk/sk; funded=False sets them to None (omitted
+    by the None-filter on put_item, so the ticket drops off the board).
+    """
+    if funded:
+        item["gsi_bounty_pk"] = "BOUNTY#OPEN"
+        item["gsi_bounty_sk"] = int(created_at)
+    else:
+        item["gsi_bounty_pk"] = None
+        item["gsi_bounty_sk"] = None
+    return item
 
 # AGENT-008: label index partition prefix. Label fan-out rows live in the base
 # tickets table under pk="LABELIDX#{label}" so the coder agent can query eligible
@@ -53,11 +95,143 @@ def _label_index_sk(created_at: int, ticket_id: str) -> str:
     return f"{created_at:013d}#{ticket_id}"
 
 
+# TKB-006/TKB-007: default board columns mirror the legacy hardcoded 4-column
+# Kanban (Open / In Progress / Waiting on User / Done). Each column re-skins an
+# underlying ticket status_key that MUST be a member of _TICKET_STATUSES — the
+# stored ticket `status` never leaves _TICKET_STATUSES (free-form statuses are a
+# TKB-016 follow-up spike). Columns are display-only relabelings.
+_DEFAULT_BOARD_COLUMNS: tuple[dict[str, Any], ...] = (
+    {"column_id": "col_open", "title": "Open", "status_key": "open", "order": 0},
+    {"column_id": "col_in_progress", "title": "In Progress", "status_key": "in_progress", "order": 1},
+    {"column_id": "col_waiting", "title": "Waiting on User", "status_key": "waiting_on_user", "order": 2},
+    {"column_id": "col_done", "title": "Done", "status_key": "done", "order": 3},
+)
+
+
+def default_board_columns() -> list[dict[str, Any]]:
+    return [dict(col) for col in _DEFAULT_BOARD_COLUMNS]
+
+
+class BoardColumnError(Exception):
+    """Raised when board column input fails validation (maps to HTTP 400)."""
+
+    def __init__(self, detail: dict[str, Any]):
+        super().__init__(str(detail.get("code", "invalid_board_columns")))
+        self.detail = detail
+
+
+def normalize_board_columns(columns: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Validate + normalize an inbound board column list.
+
+    Rejects unknown status_keys and duplicate column_ids. Returns a clean list
+    with sequential `order` values. Raises BoardColumnError on bad input.
+    """
+    if not columns:
+        raise BoardColumnError({"code": "board_columns_required", "message": "at least one column required"})
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for idx, raw in enumerate(columns):
+        if not isinstance(raw, dict):
+            raise BoardColumnError({"code": "invalid_board_column", "message": "column must be an object", "index": idx})
+        column_id = str(raw.get("column_id") or "").strip() or f"col_{uuid.uuid4().hex[:8]}"
+        if column_id in seen_ids:
+            raise BoardColumnError({"code": "duplicate_column_id", "message": "column_id must be unique", "column_id": column_id})
+        seen_ids.add(column_id)
+        status_key = str(raw.get("status_key") or "").strip().lower()
+        if status_key not in _TICKET_STATUSES:
+            raise BoardColumnError({
+                "code": "invalid_status_key",
+                "message": "status_key must be a valid ticket status",
+                "status_key": status_key,
+                "allowed_status_keys": list(_TICKET_STATUSES),
+            })
+        title = str(raw.get("title") or "").strip()
+        if not title:
+            raise BoardColumnError({"code": "column_title_required", "message": "column title required", "column_id": column_id})
+        col: dict[str, Any] = {
+            "column_id": column_id,
+            "title": title,
+            "status_key": status_key,
+            "order": idx,
+        }
+        if raw.get("wip_limit") is not None:
+            try:
+                col["wip_limit"] = int(raw["wip_limit"])
+            except (TypeError, ValueError):
+                raise BoardColumnError({"code": "invalid_wip_limit", "message": "wip_limit must be an integer", "column_id": column_id})
+        if raw.get("color"):
+            col["color"] = str(raw["color"]).strip()
+        normalized.append(col)
+    return normalized
+
+
+def _columns_from_meta(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read-time back-fill: boards stored before TKB-006 have no `columns`
+    attribute → return the default column set so they behave identically."""
+    stored = meta.get("columns")
+    if not stored:
+        return default_board_columns()
+    out: list[dict[str, Any]] = []
+    for col in stored:
+        if not isinstance(col, dict):
+            continue
+        entry: dict[str, Any] = {
+            "column_id": str(col.get("column_id", "")),
+            "title": str(col.get("title", "")),
+            "status_key": str(col.get("status_key", "")),
+            "order": int(col.get("order", 0) or 0),
+        }
+        if col.get("wip_limit") is not None:
+            entry["wip_limit"] = int(col["wip_limit"])
+        if col.get("color"):
+            entry["color"] = str(col["color"])
+        out.append(entry)
+    out.sort(key=lambda c: c.get("order", 0))
+    return out or default_board_columns()
+
+
 def _complexity_from_labels(labels: list[str]) -> str | None:
     for level in ("critical", "high", "medium", "low"):
         if f"complexity:{level}" in labels:
             return level
     return None
+
+
+# CAS-002: sequential case numbers
+def _next_case_number() -> str:
+    """Atomically allocate the next sequential case number.
+
+    Uses DynamoDB ADD on the counter row so concurrent ticket creation
+    never produces duplicate numbers.  Returns a zero-padded string such
+    as "CASE-0042".  The attribute is auto-initialised to 1 on first call
+    (DynamoDB ADD creates missing numeric attributes at 0 then adds :one).
+    """
+    resp = T.crm_cases_counters.update_item(
+        Key={"counter_id": "TICKETS", "scope": "GLOBAL"},
+        UpdateExpression="ADD #n :one",
+        ExpressionAttributeNames={"#n": "n"},
+        ExpressionAttributeValues={":one": 1},
+        ReturnValues="UPDATED_NEW",
+    )
+    n = int(resp["Attributes"]["n"])
+    return f"CASE-{n:04d}"
+
+
+# CAS-003: priority field helpers
+_PRIORITY_VALUES: tuple[str, ...] = ("urgent", "high", "medium", "low")
+
+
+def _priority_index_pk(priority: str) -> str:
+    return f"PRIORITY#{priority}"
+
+
+# CAS-005: contact / account link helpers
+def _contact_index_pk(contact_id: str) -> str:
+    return f"CONTACT#{contact_id}"
+
+
+def _account_index_pk(account_id: str) -> str:
+    return f"ACCOUNT#{account_id}"
 
 
 class TicketStateError(Exception):
@@ -152,21 +326,31 @@ class TicketStore:
     def create_space(self, *, owner_sub: str, name: str, visibility: str = "private") -> dict[str, Any]:
         ts = now_ts()
         space_id = f"spc_{uuid.uuid4().hex[:12]}"
-        self._table.put_item(Item={
+        meta_item: dict[str, Any] = {
             "pk": _space_pk(space_id),
             "sk": "META",
             "entity_type": "ticket_space",
+            # TKB-002: sibling attribute so consumers can filter on either the
+            # legacy `entity_type` or the new board-named alias without a migration.
+            "board_entity_type": "ticket_board",
             "space_id": space_id,
             "owner_sub": owner_sub,
             "name": name,
             "visibility": visibility,
             "created_at": ts,
             "updated_at": ts,
-        })
+        }
+        # TKB-006: seed default columns (flag-gated). With the flag off, no
+        # `columns` attribute is written; get_space still back-fills the default
+        # set at read time, so the stored row is byte-for-byte legacy-shaped.
+        if S.ticket_boards_enabled:
+            meta_item["columns"] = default_board_columns()
+        self._table.put_item(Item=meta_item)
         self._table.put_item(Item={
             "pk": _space_pk(space_id),
             "sk": _space_member_sk(owner_sub),
             "entity_type": "space_membership",
+            "board_entity_type": "board_membership",
             "space_id": space_id,
             "member_sub": owner_sub,
             "role": "owner",
@@ -186,6 +370,7 @@ class TicketStore:
             "pk": _space_pk(space_id),
             "sk": _space_member_sk(member_sub),
             "entity_type": "space_membership",
+            "board_entity_type": "board_membership",
             "space_id": space_id,
             "member_sub": member_sub,
             "role": role,
@@ -214,16 +399,24 @@ class TicketStore:
             ExpressionAttributeValues={":pk": _space_pk(space_id), ":sk_prefix": "MEMBER#"},
             ScanIndexForward=True,
         ).get("Items", [])
+        resolved_id = meta.get("space_id", space_id)
         return {
-            "space_id": meta.get("space_id", space_id),
+            "space_id": resolved_id,
+            # TKB-001: board_id is the canonical public alias; board_id == space_id
+            # for every row (physical PK stays SPACE#{id}, no migration).
+            "board_id": resolved_id,
             "owner_sub": meta.get("owner_sub", ""),
             "name": meta.get("name", ""),
             "visibility": meta.get("visibility", "private"),
             "created_at": int(meta.get("created_at", 0) or 0),
             "updated_at": int(meta.get("updated_at", 0) or 0),
+            # TKB-006: read-time back-fill — legacy boards with no stored columns
+            # get the default 4-column set so they behave exactly as before.
+            "columns": _columns_from_meta(meta),
             "members": [
                 {
                     "space_id": item.get("space_id", space_id),
+                    "board_id": item.get("space_id", space_id),
                     "member_sub": item.get("member_sub", ""),
                     "role": item.get("role", "viewer"),
                     "created_at": int(item.get("created_at", 0) or 0),
@@ -249,7 +442,50 @@ class TicketStore:
             space = self.get_space(space_id)
             if space:
                 spaces.append(space)
-        return {"spaces": spaces, "next_cursor": next_cursor}
+        # TKB-001: expose `boards` alongside legacy `spaces` (same list).
+        return {"spaces": spaces, "boards": spaces, "next_cursor": next_cursor}
+
+    # ------------------------------------------------------------------
+    # TKB-001: board aliases. board_id == space_id; these thin wrappers
+    # delegate to the existing space methods so callers can migrate gradually.
+    # ------------------------------------------------------------------
+    def create_board(self, *, owner_sub: str, name: str, visibility: str = "private") -> dict[str, Any]:
+        return self.create_space(owner_sub=owner_sub, name=name, visibility=visibility)
+
+    def get_board(self, board_id: str) -> dict[str, Any] | None:
+        return self.get_space(board_id)
+
+    def add_board_member(self, *, board_id: str, member_sub: str, role: str) -> dict[str, Any] | None:
+        return self.add_space_member(space_id=board_id, member_sub=member_sub, role=role)
+
+    def remove_board_member(self, *, board_id: str, member_sub: str) -> dict[str, Any] | None:
+        return self.remove_space_member(space_id=board_id, member_sub=member_sub)
+
+    def list_boards_for_member(self, *, member_sub: str, limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+        return self.list_spaces_for_member(member_sub=member_sub, limit=limit, cursor=cursor)
+
+    def list_board_tickets(self, *, board_id: str, limit: int = 25, cursor: str | None = None, status: str | None = None, assigned_to_sub: str | None = None) -> dict[str, Any]:
+        return self.list_space_tickets(space_id=board_id, limit=limit, cursor=cursor, status=status, assigned_to_sub=assigned_to_sub)
+
+    def update_board_columns(self, *, board_id: str, columns: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """TKB-006/TKB-008: replace a board's column configuration.
+
+        Validates every status_key is a real ticket status and column_ids are
+        unique (raises BoardColumnError → HTTP 400). Returns None if the board
+        does not exist. Persists onto the board META row only (no GSI changes).
+        """
+        meta = self._table.get_item(Key=_space_meta_key(board_id)).get("Item")
+        if not meta:
+            return None
+        normalized = normalize_board_columns(columns)
+        ts = now_ts()
+        self._table.update_item(
+            Key=_space_meta_key(board_id),
+            UpdateExpression="SET #columns = :columns, updated_at = :updated_at",
+            ExpressionAttributeNames={"#columns": "columns"},
+            ExpressionAttributeValues={":columns": normalized, ":updated_at": ts},
+        )
+        return self.get_board(board_id)
 
     def create_ticket(
         self,
@@ -258,13 +494,21 @@ class TicketStore:
         subject: str,
         description: str,
         space_id: str | None = None,
+        board_id: str | None = None,
         ticket_id: str | None = None,
         category: str | None = None,
         metadata: dict[str, Any] | None = None,
         labels: list[str] | None = None,
         estimated_effort_hours: int | None = None,
+        priority: str | None = None,        # CAS-003
+        contact_id: str | None = None,      # CAS-005
+        account_id: str | None = None,      # CAS-005
     ) -> dict[str, Any]:
         ts = now_ts()
+        # TKB-001: board_id is an alias for space_id (same physical attribute).
+        # Either keyword writes the same `space_id` attribute + space GSI keys.
+        if space_id is None and board_id is not None:
+            space_id = board_id
         resolved_ticket_id = ticket_id or f"tkt_{uuid.uuid4().hex[:12]}"
         existing = self.get_ticket(resolved_ticket_id)
         if existing:
@@ -274,6 +518,16 @@ class TicketStore:
 
         norm_labels = sorted({str(l).strip() for l in (labels or []) if str(l).strip()})
         complexity = _complexity_from_labels(norm_labels)
+
+        # CAS-002: sequential case number (allocated AFTER idempotency guard)
+        case_number: str | None = None
+        if S.crm_cases_enabled:
+            case_number = _next_case_number()
+
+        # CAS-003: validated priority
+        resolved_priority: str | None = None
+        if S.crm_cases_enabled:
+            resolved_priority = priority if priority in _PRIORITY_VALUES else "medium"
 
         header = {
             "pk": _ticket_pk(resolved_ticket_id),
@@ -310,6 +564,19 @@ class TicketStore:
             "gsi_space_status_sk": _updated_index_sk(ts, resolved_ticket_id) if space_id else None,
             "gsi_space_assignee_pk": _space_assignee_index_pk(space_id, "unassigned") if space_id else None,
             "gsi_space_assignee_sk": _updated_index_sk(ts, resolved_ticket_id) if space_id else None,
+            # CAS-002
+            "case_number": case_number,
+            # CAS-003
+            "priority": resolved_priority,
+            "gsi_priority_pk": _priority_index_pk(resolved_priority) if resolved_priority else None,
+            "gsi_priority_sk": _updated_index_sk(ts, resolved_ticket_id) if resolved_priority else None,
+            # CAS-005 (only when flag on — gate to avoid writing spurious GSI rows)
+            "contact_id": contact_id if S.crm_cases_enabled else None,
+            "account_id": account_id if S.crm_cases_enabled else None,
+            "gsi_contact_pk": _contact_index_pk(contact_id) if (contact_id and S.crm_cases_enabled) else None,
+            "gsi_contact_sk": _updated_index_sk(ts, resolved_ticket_id) if (contact_id and S.crm_cases_enabled) else None,
+            "gsi_account_pk": _account_index_pk(account_id) if (account_id and S.crm_cases_enabled) else None,
+            "gsi_account_sk": _updated_index_sk(ts, resolved_ticket_id) if (account_id and S.crm_cases_enabled) else None,
         }
         self._table.put_item(Item={k: v for k, v in header.items() if v is not None})
         # AGENT-008: fan-out one label index row per label for agent eligibility queries.
@@ -347,7 +614,13 @@ class TicketStore:
             "actor_sub": owner_sub,
             "created_at": ts,
         })
-        return self.get_ticket(resolved_ticket_id) or {}
+        result = self.get_ticket(resolved_ticket_id) or {}
+        try:
+            from app.services.workflow_hooks import fire_on_save_hook
+            fire_on_save_hook(module="ticket", record=result, event="create")
+        except Exception:
+            pass
+        return result
 
     def _query_partition_prefix(self, *, ticket_id: str, sk_prefix: str) -> list[dict[str, Any]]:
         resp = self._table.query(
@@ -378,6 +651,7 @@ class TicketStore:
             ),
             "status": header.get("status", "open"),
             "space_id": header.get("space_id"),
+            "board_id": header.get("space_id"),
             "assigned_admin_sub": header.get("assigned_admin_sub"),
             "assigned_to_sub": header.get("assigned_to_sub"),
             "assigned_by": header.get("assigned_by"),
@@ -385,6 +659,13 @@ class TicketStore:
             "created_at": int(header.get("created_at", 0) or 0),
             "updated_at": int(header.get("updated_at", 0) or 0),
             "version": int(header.get("version", 0) or 0),
+            # CAS-002
+            "case_number": header.get("case_number"),
+            # CAS-003
+            "priority": header.get("priority"),
+            # CAS-005
+            "contact_id": header.get("contact_id"),
+            "account_id": header.get("account_id"),
             "messages": [{
                 "message_id": item.get("message_id", ""),
                 "sender_sub": item.get("sender_sub", ""),
@@ -400,10 +681,56 @@ class TicketStore:
                 "status": item.get("status"),
                 "created_at": int(item.get("created_at", 0) or 0),
             } for item in activities],
+            # --- TBT-002: bounty fields (None for non-bounty tickets) ---
+            "bounty_amount_cents": (
+                int(header["bounty_amount_cents"])
+                if header.get("bounty_amount_cents") is not None else None
+            ),
+            "bounty_currency": header.get("bounty_currency"),
+            "bounty_status": header.get("bounty_status"),
+            "bounty_id": header.get("bounty_id"),
+            "claimed_by_sub": header.get("claimed_by_sub"),
+            "claimed_at": (
+                int(header["claimed_at"]) if header.get("claimed_at") is not None else None
+            ),
+            "bounty_funded_at": (
+                int(header["bounty_funded_at"])
+                if header.get("bounty_funded_at") is not None else None
+            ),
+            "bounty_submitted_at": (
+                int(header["bounty_submitted_at"])
+                if header.get("bounty_submitted_at") is not None else None
+            ),
+            "bounty_paid_at": (
+                int(header["bounty_paid_at"])
+                if header.get("bounty_paid_at") is not None else None
+            ),
+            "bounty_cancelled_at": (
+                int(header["bounty_cancelled_at"])
+                if header.get("bounty_cancelled_at") is not None else None
+            ),
+            "bounty_repost_count": (
+                int(header["bounty_repost_count"])
+                if header.get("bounty_repost_count") is not None else None
+            ),
+            # TKA-002: attachments projection (always [] when the flag is off; never raises)
+            "attachments": self._attachments_projection(ticket_id),
         }
 
+    @staticmethod
+    def _attachments_projection(ticket_id: str) -> list[dict[str, Any]]:
+        from app.services import ticket_attachments
+        return ticket_attachments.list_attachments_for_projection(ticket_id)
+
     def _encode_cursor(self, token: dict[str, Any]) -> str:
-        raw = json.dumps(token, separators=(",", ":")).encode("utf-8")
+        # DynamoDB LastEvaluatedKey values come back as Decimal — coerce them
+        # to plain int/float so json.dumps doesn't raise.
+        def _default(o: Any) -> Any:
+            if isinstance(o, Decimal):
+                return int(o) if o == o.to_integral_value() else float(o)
+            raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+        raw = json.dumps(token, separators=(",", ":"), default=_default).encode("utf-8")
         return base64.urlsafe_b64encode(raw).decode("utf-8")
 
     def _decode_cursor(self, cursor: str | None) -> dict[str, Any] | None:
@@ -448,8 +775,141 @@ class TicketStore:
                 out.append(assembled)
         return out
 
-    def list_tickets(self, *, limit: int = 25, cursor: str | None = None, status: str | None = None, assignee_sub: str | None = None, owner_sub: str | None = None) -> dict[str, Any]:
+    def update_priority(
+        self,
+        *,
+        ticket_id: str,
+        new_priority: str,
+        actor_sub: str,
+    ) -> dict[str, Any] | None:
+        """Update the priority field via optimistic-locking. Returns None if ticket not found."""
+        if new_priority not in _PRIORITY_VALUES:
+            raise ValueError(f"invalid priority: {new_priority!r}")
+
+        def _build_values(cur: dict[str, Any]) -> dict[str, Any]:
+            ts = now_ts()
+            tid = cur["ticket_id"]
+            space_id = cur.get("space_id")
+            assigned = cur.get("assigned_admin_sub")
+            return {
+                ":status": cur["status"],
+                ":assigned_admin_sub": assigned,
+                ":assigned_to_sub": cur.get("assigned_to_sub"),
+                ":assigned_by": cur.get("assigned_by"),
+                ":assigned_at": cur.get("assigned_at"),
+                ":updated_at": ts,
+                ":last_message_at": cur.get("last_message_at", ts),
+                ":last_message_by_role": cur.get("last_message_by_role", "user"),
+                ":gsi1sk": _updated_index_sk(ts, tid),
+                ":gsi2pk": _status_index_pk(cur["status"]),
+                ":gsi2sk": _updated_index_sk(ts, tid),
+                ":gsi3pk": _assignee_index_pk(assigned or "unassigned"),
+                ":gsi3sk": _updated_index_sk(ts, tid),
+                ":gsi_space_pk": _space_index_pk(space_id) if space_id else None,
+                ":gsi_space_sk": _updated_index_sk(ts, tid) if space_id else None,
+                ":gsi_space_status_pk": _space_status_index_pk(space_id, cur["status"]) if space_id else None,
+                ":gsi_space_status_sk": _updated_index_sk(ts, tid) if space_id else None,
+                ":gsi_space_assignee_pk": _space_assignee_index_pk(space_id, cur.get("assigned_to_sub") or "unassigned") if space_id else None,
+                ":gsi_space_assignee_sk": _updated_index_sk(ts, tid) if space_id else None,
+            }
+
+        result = self._apply_header_update_once(ticket_id=ticket_id, build_values=_build_values)
+        if result is None:
+            return None
+
+        # Write priority attributes in a second unconditional update (annotation pattern,
+        # same as kyc_cases.escalate_case — no version bump needed)
+        ts = now_ts()
+        self._table.update_item(
+            Key={"pk": _ticket_pk(ticket_id), "sk": "META"},
+            UpdateExpression=(
+                "SET priority = :priority, gsi_priority_pk = :gpk, gsi_priority_sk = :gsk"
+            ),
+            ExpressionAttributeValues={
+                ":priority": new_priority,
+                ":gpk": _priority_index_pk(new_priority),
+                ":gsk": _updated_index_sk(ts, ticket_id),
+            },
+        )
+        return self.get_ticket(ticket_id)
+
+    def update_contact_account(
+        self,
+        *,
+        ticket_id: str,
+        contact_id: str | None,
+        account_id: str | None,
+        actor_sub: str,
+    ) -> dict[str, Any] | None:
+        """Update the contact_id / account_id soft foreign keys. Returns None if not found."""
+        cur = self.get_ticket(ticket_id)
+        if not cur:
+            return None
+        ts = now_ts()
+        expr_parts = []
+        expr_values: dict[str, Any] = {}
+        expr_names: dict[str, str] = {"#updated_at": "updated_at"}
+        expr_parts.append("#updated_at = :updated_at")
+        expr_values[":updated_at"] = ts
+
+        if contact_id is not None:
+            expr_parts.append("contact_id = :contact_id, gsi_contact_pk = :gsi_contact_pk, gsi_contact_sk = :gsi_contact_sk")
+            expr_values[":contact_id"] = contact_id
+            expr_values[":gsi_contact_pk"] = _contact_index_pk(contact_id)
+            expr_values[":gsi_contact_sk"] = _updated_index_sk(ts, ticket_id)
+        if account_id is not None:
+            expr_parts.append("account_id = :account_id, gsi_account_pk = :gsi_account_pk, gsi_account_sk = :gsi_account_sk")
+            expr_values[":account_id"] = account_id
+            expr_values[":gsi_account_pk"] = _account_index_pk(account_id)
+            expr_values[":gsi_account_sk"] = _updated_index_sk(ts, ticket_id)
+
+        self._table.update_item(
+            Key={"pk": _ticket_pk(ticket_id), "sk": "META"},
+            UpdateExpression=f"SET {', '.join(expr_parts)}",
+            ExpressionAttributeNames=expr_names,
+            ExpressionAttributeValues=expr_values,
+        )
+        return self.get_ticket(ticket_id)
+
+    def list_tickets_by_contact(self, *, contact_id: str, limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+        """CAS-005: list all tickets linked to a given contact."""
         page_limit = max(1, min(int(limit or 25), 100))
+        headers, next_cursor = self._query_headers_by_index(
+            index_name=S.tickets_contact_index_name,
+            pk=_contact_index_pk(contact_id),
+            key_expr="gsi_contact_pk = :pk",
+            limit=page_limit,
+            cursor=cursor,
+        )
+        return {"tickets": self._assemble_headers(headers), "next_cursor": next_cursor}
+
+    def list_tickets_by_account(self, *, account_id: str, limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+        """CAS-005: list all tickets linked to a given account."""
+        page_limit = max(1, min(int(limit or 25), 100))
+        headers, next_cursor = self._query_headers_by_index(
+            index_name=S.tickets_account_index_name,
+            pk=_account_index_pk(account_id),
+            key_expr="gsi_account_pk = :pk",
+            limit=page_limit,
+            cursor=cursor,
+        )
+        return {"tickets": self._assemble_headers(headers), "next_cursor": next_cursor}
+
+    def list_tickets(self, *, limit: int = 25, cursor: str | None = None, status: str | None = None, assignee_sub: str | None = None, owner_sub: str | None = None, priority: str | None = None) -> dict[str, Any]:
+        page_limit = max(1, min(int(limit or 25), 100))
+
+        # CAS-003: priority filter (checked before owner_sub to give explicit priority filter precedence)
+        if priority and S.crm_cases_enabled:
+            if priority not in _PRIORITY_VALUES:
+                return {"tickets": [], "next_cursor": None}
+            headers, next_cursor = self._query_headers_by_index(
+                index_name=S.tickets_priority_index_name,
+                pk=_priority_index_pk(priority),
+                key_expr="gsi_priority_pk = :pk",
+                limit=page_limit,
+                cursor=cursor,
+            )
+            return {"tickets": self._assemble_headers(headers), "next_cursor": next_cursor}
 
         if owner_sub:
             headers, next_cursor = self._query_headers_by_index(
@@ -620,6 +1080,13 @@ class TicketStore:
                 ExpressionAttributeNames=names,
                 ExpressionAttributeValues=expr_values,
             )
+            try:
+                from app.services.workflow_hooks import fire_on_save_hook
+                ticket = self.get_ticket(ticket_id)
+                if ticket:
+                    fire_on_save_hook(module="ticket", record=ticket, event="update")
+            except Exception:
+                pass
             return True
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
@@ -747,7 +1214,118 @@ class TicketStore:
             return None
         return self.get_ticket(ticket_id)
 
-    def update_status(self, *, ticket_id: str, actor_sub: str, status: str) -> dict[str, Any] | None:
+    def _write_bounty_activity(self, *, ticket_id: str, actor_sub: str, ts: int, from_status: str, to_status: str) -> None:
+        act_id = f"act_{uuid.uuid4().hex[:12]}"
+        self._table.put_item(Item={
+            "pk": _ticket_pk(ticket_id),
+            "sk": _act_sk(ts, act_id),
+            "entity_type": "ticket_activity",
+            "ticket_id": ticket_id,
+            "activity_id": act_id,
+            "activity_type": "bounty_status_changed",
+            "actor_sub": actor_sub,
+            "status": to_status,
+            "bounty_status_from": from_status,
+            "bounty_status_to": to_status,
+            "created_at": ts,
+        })
+
+    def _update_status_bounty(
+        self,
+        *,
+        ticket_id: str,
+        cur: dict[str, Any],
+        actor_sub: str,
+        requested_status: str,
+        bounty_status: str,
+        current_status: str,
+        ts: int,
+        is_admin: bool,
+    ) -> dict[str, Any] | None:
+        # paid_out / cancelled are reachable only via dedicated endpoints.
+        if requested_status in ("paid_out", "cancelled"):
+            raise TicketStateError({
+                "code": "bounty_terminal_via_dedicated_endpoint",
+                "ticket_id": ticket_id,
+                "requested_status": requested_status,
+            })
+
+        expected_version = int(cur.get("version", 1))
+        new_bounty_status = bounty_status
+        new_ticket_status = requested_status
+        set_extra: dict[str, Any] = {}
+
+        # Submit path: claimant (or admin) marks work done on a claimed bounty →
+        # reroute to pending_approval / bounty_status=submitted.
+        if requested_status == "done" and bounty_status == "claimed":
+            new_ticket_status = "pending_approval"
+            new_bounty_status = "submitted"
+            set_extra["bounty_submitted_at"] = ts
+        elif is_admin and current_status == "pending_approval" and requested_status == "in_progress":
+            # Reject carve-out: caller already reverted bounty_status to claimed.
+            new_ticket_status = "in_progress"
+        else:
+            allowed = _BOUNTY_TRANSITIONS.get(bounty_status, ())
+            if requested_status not in allowed:
+                raise TicketStateError({
+                    "code": "invalid_bounty_transition",
+                    "ticket_id": ticket_id,
+                    "bounty_status": bounty_status,
+                    "requested_status": requested_status,
+                    "allowed_next_statuses": list(allowed),
+                })
+
+        names = {
+            "#status": "status",
+            "#updated_at": "updated_at",
+            "#version": "version",
+            "#gsi2pk": "gsi2pk",
+            "#gsi2sk": "gsi2sk",
+            "#bounty_status": "bounty_status",
+        }
+        values: dict[str, Any] = {
+            ":status": new_ticket_status,
+            ":updated_at": ts,
+            ":expected_version": expected_version,
+            ":next_version": expected_version + 1,
+            ":gsi2pk": _status_index_pk(new_ticket_status),
+            ":gsi2sk": _updated_index_sk(ts, ticket_id),
+            ":bounty_status": new_bounty_status,
+        }
+        set_parts = [
+            "#status = :status", "#updated_at = :updated_at", "#version = :next_version",
+            "#gsi2pk = :gsi2pk", "#gsi2sk = :gsi2sk", "#bounty_status = :bounty_status",
+        ]
+        for k, v in set_extra.items():
+            alias = f"#{k}"
+            ph = f":{k}"
+            names[alias] = k
+            values[ph] = v
+            set_parts.append(f"{alias} = {ph}")
+        update_expr = f"SET {', '.join(set_parts)} REMOVE gsi_bounty_pk, gsi_bounty_sk"
+        try:
+            self._table.update_item(
+                Key=_meta_item_key(ticket_id),
+                UpdateExpression=update_expr,
+                ConditionExpression="#version = :expected_version",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise TicketStateError({
+                    "code": "ticket_update_conflict",
+                    "ticket_id": ticket_id,
+                    "expected_version": expected_version,
+                })
+            raise
+        self._write_bounty_activity(
+            ticket_id=ticket_id, actor_sub=actor_sub, ts=ts,
+            from_status=bounty_status, to_status=new_bounty_status,
+        )
+        return self.get_ticket(ticket_id)
+
+    def update_status(self, *, ticket_id: str, actor_sub: str, status: str, is_admin: bool = False) -> dict[str, Any] | None:
         requested_status = _coerce_status(status)
         if requested_status not in _TICKET_STATUSES:
             raise TicketStateError({
@@ -761,6 +1339,24 @@ class TicketStore:
         if not cur:
             return None
         current_status = cur.get("status", "open")
+
+        # --- TBT-004: bounty gate. Tickets carrying an active bounty route
+        # through the dedicated bounty state machine instead of the generic
+        # _STATUS_TRANSITIONS map. Non-bounty tickets (bounty_status is None)
+        # and a flag-off process bypass this entirely.
+        bounty_status = cur.get("bounty_status")
+        if bounty_status and getattr(S, "ticket_bounties_enabled", False):
+            return self._update_status_bounty(
+                ticket_id=ticket_id,
+                cur=cur,
+                actor_sub=actor_sub,
+                requested_status=requested_status,
+                bounty_status=bounty_status,
+                current_status=current_status,
+                ts=ts,
+                is_admin=is_admin,
+            )
+
         allowed_next = _STATUS_TRANSITIONS.get(current_status, ())
         if requested_status not in allowed_next and requested_status != current_status:
             raise TicketStateError({

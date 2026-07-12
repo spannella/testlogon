@@ -22,6 +22,8 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -50,8 +52,8 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _adminSessions = JSON.parse(raw);
@@ -113,7 +115,7 @@ function seedEvents(): void {
 import boto3, os, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
-env = Path('/home/ubuntu/testlogon/.env.local')
+env = Path('${REPO_ROOT}/.env.local')
 for line in env.read_text().splitlines():
     line = line.strip()
     if line and not line.startswith('#') and '=' in line:
@@ -136,7 +138,7 @@ for i,(grp,it,iv,ep,m,st) in enumerate(seeds):
     tbl.put_item(Item={'pk': f'DATE#{date_str}', 'sk': f'{ts}#{eid}', 'endpoint_group': grp, 'identity_type': it, 'identity_value': iv, 'endpoint': ep, 'method': m, 'status': st, 'count': 5, 'limit': 3, 'ttl_epoch': ts + 86400})
 print('seeded', len(seeds))
 "`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
+    { cwd: REPO_ROOT, timeout: 15_000 },
   );
 }
 

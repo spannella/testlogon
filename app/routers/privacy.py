@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
 from app.core.settings import S
@@ -52,6 +52,7 @@ admin_router = APIRouter(prefix="/ui/admin/privacy", tags=["admin-privacy"])
 @router.post("/export", status_code=201)
 def request_export(
     body: ExportRequestIn,
+    background_tasks: BackgroundTasks,
     ctx: Dict[str, Any] = Depends(require_ui_session),
 ) -> DataRequestOut:
     if not S.privacy_export_enabled:
@@ -71,25 +72,14 @@ def request_export(
     item = create_export_request(user_sub, categories)
 
     # Run the export in the BACKGROUND (GAP-0338). A large multi-table query +
-    # ZipFile build + S3 upload must not block the HTTP request. Schedule the
-    # work as a fire-and-forget asyncio task and return the pending request
-    # immediately. _run_export_safe flips the request to "failed" on error so
-    # it never sticks at "pending".
-    _schedule_export(user_sub, item["request_id"], categories)
+    # ZipFile build + S3 upload must not block the HTTP request. FastAPI
+    # BackgroundTasks runs after the response is sent and works from this sync
+    # handler (asyncio.create_task would raise "no running event loop" here,
+    # since sync endpoints execute in a threadpool worker). _run_export_safe
+    # flips the request to "failed" on error so it never sticks at "pending".
+    background_tasks.add_task(_run_export_safe, user_sub, item["request_id"], categories)
 
     return DataRequestOut(**_item_to_out(item))
-
-
-# Hold strong references to in-flight background tasks so the event loop does
-# not garbage-collect them mid-run (standard asyncio fire-and-forget idiom).
-_export_tasks: set[asyncio.Task] = set()
-
-
-def _schedule_export(user_sub: str, request_id: str, categories: Dict[str, bool]) -> None:
-    """Schedule the GDPR export to run in the background, returning immediately."""
-    task = asyncio.create_task(_run_export_safe(user_sub, request_id, categories))
-    _export_tasks.add(task)
-    task.add_done_callback(_export_tasks.discard)
 
 
 async def _run_export_safe(user_sub: str, request_id: str, categories: Dict[str, bool]) -> None:
@@ -185,6 +175,24 @@ def request_deletion(
     # Check retention hold
     if has_retention_hold(user_sub):
         raise HTTPException(status_code=403, detail="Account has a retention hold")
+
+    # LEX-007: standalone legal hold blocks deletion. Only consulted when the
+    # legal-export feature is enabled (flag DEFAULTS OFF — with it off this is a
+    # no-op and existing behavior is byte-for-byte unchanged).
+    if S.legal_export_enabled:
+        try:
+            from app.services.legal_hold import is_user_on_hold
+
+            if is_user_on_hold(user_sub):
+                logger.warning("privacy.deletion_blocked_legal_hold user=%s", user_sub)
+                raise HTTPException(
+                    status_code=403,
+                    detail="Account is under a legal hold and cannot be deleted",
+                )
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001 - hold lookup failure must not block legitimate flows silently here
+            logger.exception("privacy.legal_hold_check_error user=%s", user_sub)
 
     # Check for existing pending deletion
     if has_pending_deletion(user_sub):

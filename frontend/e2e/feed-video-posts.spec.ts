@@ -14,6 +14,8 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -45,8 +47,8 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const raw = execSync(
-      "python3 /home/ubuntu/testlogon/e2e_session_setup.py",
-      { cwd: "/home/ubuntu/testlogon", timeout: 30_000 },
+      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
+      { cwd: REPO_ROOT, timeout: 30_000 },
     ).toString();
     _sessions = JSON.parse(raw);
   }
@@ -99,7 +101,7 @@ function seedVideo(opts: {
 
   const script = `
 import sys, os
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 os.environ.setdefault('DDB_ENDPOINT_URL', 'http://localhost:8001')
 os.environ.setdefault('AWS_ACCESS_KEY_ID', 'test')
 os.environ.setdefault('AWS_SECRET_ACCESS_KEY', 'test')
@@ -125,15 +127,15 @@ table.put_item(Item={
 print('ok')
 `;
   execSync(
-    `/home/ubuntu/testlogon/.venv/bin/python3 -c "${script.replace(/"/g, '\\"')}"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    `${REPO_ROOT}/.venv/bin/python3 -c "${script.replace(/"/g, '\\"')}"`,
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 
 function deleteVideo(videoId: string): void {
   const script = `
 import sys, os
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 os.environ.setdefault('DDB_ENDPOINT_URL', 'http://localhost:8001')
 os.environ.setdefault('AWS_ACCESS_KEY_ID', 'test')
 os.environ.setdefault('AWS_SECRET_ACCESS_KEY', 'test')
@@ -145,8 +147,8 @@ print('ok')
 `;
   try {
     execSync(
-      `/home/ubuntu/testlogon/.venv/bin/python3 -c "${script.replace(/"/g, '\\"')}"`,
-      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+      `${REPO_ROOT}/.venv/bin/python3 -c "${script.replace(/"/g, '\\"')}"`,
+      { cwd: REPO_ROOT, timeout: 10_000 },
     );
   } catch {
     /* ignore cleanup errors */
@@ -156,7 +158,7 @@ print('ok')
 function injectPaymentMethod(userSub: string, pmId: string): void {
   const script = `
 import sys, os
-sys.path.insert(0, '/home/ubuntu/testlogon')
+sys.path.insert(0, '${REPO_ROOT}')
 os.environ.setdefault('DDB_ENDPOINT_URL', 'http://localhost:8001')
 os.environ.setdefault('AWS_ACCESS_KEY_ID', 'test')
 os.environ.setdefault('AWS_SECRET_ACCESS_KEY', 'test')
@@ -188,8 +190,8 @@ tbl.put_item(Item={
 print('ok')
 `;
   execSync(
-    `/home/ubuntu/testlogon/.venv/bin/python3 -c "${script.replace(/"/g, '\\"')}"`,
-    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+    `${REPO_ROOT}/.venv/bin/python3 -c "${script.replace(/"/g, '\\"')}"`,
+    { cwd: REPO_ROOT, timeout: 10_000 },
   );
 }
 

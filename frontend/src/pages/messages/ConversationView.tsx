@@ -23,6 +23,8 @@ import {
   sendVoiceMessage,
   markRead,
   claimHelpdeskConversation,
+  transferHelpdeskConversation,
+  listHelpdeskGroupAgents,
   createCallInvite,
   acceptCallInvite,
   declineCallInvite,
@@ -645,6 +647,34 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     onError: () => toast.error("Failed to send voice message"),
   });
 
+  // MVA-010: synthesize the current draft into a TTS voice message.
+  const sendTts = useMutation({
+    mutationFn: async (args: { text: string; reply_to_message_id?: string | null }) => {
+      const { createTtsVoiceMessage } = await import("@/api/endpoints/messagingAi");
+      return createTtsVoiceMessage(convoId, {
+        text: args.text,
+        reply_to_message_id: args.reply_to_message_id ?? undefined,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      toast.success("Voice message sent");
+    },
+    onError: async (err) => {
+      const { ApiError } = await import("@/api/client");
+      if (err instanceof ApiError && err.status === 404) {
+        toast.error("Text-to-speech is not enabled on this server");
+      } else if (err instanceof ApiError && err.status === 429) {
+        toast.error("Too many requests — try again shortly");
+      } else if (err instanceof ApiError && err.status === 400) {
+        toast.error("Text is too long to synthesize");
+      } else {
+        toast.error("Failed to synthesize voice message");
+      }
+    },
+  });
+
   const claimMutation = useMutation({
     mutationFn: () => claimHelpdeskConversation(convoId),
     onSuccess: (data) => {
@@ -656,6 +686,30 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     onError: () => toast.error("Failed to claim conversation"),
   });
 
+  const [transferTarget, setTransferTarget] = React.useState("");
+  const [transferDialogOpen, setTransferDialogOpen] = React.useState(false);
+  const transferMutation = useMutation({
+    mutationFn: (targetId: string) => transferHelpdeskConversation(convoId, targetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["helpdesk-queue"] });
+      setTransferDialogOpen(false);
+      setTransferTarget("");
+      toast.success("Conversation transferred");
+    },
+    onError: () => toast.error("Failed to transfer conversation"),
+  });
+
+  // HMH-007: fellow agents in this helpdesk group, for the transfer picker.
+  const transferGroupId = conversation.routing_group_id ?? "";
+  const transferAgentsQuery = useQuery({
+    queryKey: ["helpdesk-group-agents", transferGroupId],
+    queryFn: () => listHelpdeskGroupAgents(transferGroupId),
+    enabled: transferDialogOpen && !!transferGroupId,
+    staleTime: 30_000,
+  });
+  const transferAgents = (transferAgentsQuery.data ?? []).filter((a) => !a.is_self);
+
   // ── Conversation title / header ────────────────────────────────
 
   const title = conversation.title
@@ -665,6 +719,20 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         .join(", ") || "Conversation");
 
   const participantCount = conversation.participants.length;
+
+  // Resolve a sender id to a friendly display name for message/reply labels
+  // (falls back to the raw id when a participant isn't found).
+  const senderNameById = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of conversation.participants) {
+      if (p.display_name) m.set(p.user_id, p.display_name);
+    }
+    return m;
+  }, [conversation.participants]);
+  const resolveSenderName = React.useCallback(
+    (id: string) => (id === userId ? "You" : senderNameById.get(id) ?? id),
+    [senderNameById, userId],
+  );
 
   // DM partner for presence dot
   const dmPartner = !isGroup
@@ -1206,12 +1274,55 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
 
       {/* Helpdesk routing banner */}
       {conversation.routing_mode === "helpdesk_bridge" && conversation.routing_state && (
-        <HelpdeskRoutingBanner
-          conversation={conversation}
-          currentUserId={userId ?? ""}
-          onClaim={() => claimMutation.mutate()}
-          isClaiming={claimMutation.isPending}
-        />
+        <>
+          <HelpdeskRoutingBanner
+            conversation={conversation}
+            currentUserId={userId ?? ""}
+            onClaim={() => claimMutation.mutate()}
+            isClaiming={claimMutation.isPending}
+            onTransfer={() => setTransferDialogOpen(true)}
+          />
+          {transferDialogOpen && (
+            <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs">
+              <select
+                value={transferTarget}
+                onChange={(e) => setTransferTarget(e.target.value)}
+                className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+                aria-label="Transfer to agent"
+              >
+                <option value="">
+                  {transferAgentsQuery.isLoading
+                    ? "Loading agents…"
+                    : transferAgents.length === 0
+                      ? "No other agents available"
+                      : "Select an agent…"}
+                </option>
+                {transferAgents.map((a) => (
+                  <option key={a.user_id} value={a.user_id}>
+                    {a.display_name}{a.online ? " · online" : " · offline"}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                variant="default"
+                className="h-7 shrink-0"
+                onClick={() => transferMutation.mutate(transferTarget.trim())}
+                disabled={!transferTarget.trim() || transferMutation.isPending}
+              >
+                {transferMutation.isPending ? "Transferring…" : "Transfer"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 shrink-0"
+                onClick={() => { setTransferDialogOpen(false); setTransferTarget(""); }}
+              >
+                Cancel
+              </Button>
+            </div>
+          )}
+        </>
       )}
 
       {/* Messages */}
@@ -1262,6 +1373,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
                 replyToMessage={msg.reply_to_message_id ? messageById.get(msg.reply_to_message_id) : undefined}
                 viewedOnceIds={viewedOnceIds}
                 onViewOnce={handleViewOnce}
+                resolveSenderName={resolveSenderName}
               />
             </div>
           ))
@@ -1364,7 +1476,10 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendCountdown={(params) => sendCountdown.mutate(params)}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}
         onSendVoiceMessage={(blob, meta) => sendVoice.mutate({ blob, meta })}
-        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || videoShareMut.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendCountdown.isPending || sendLottery.isPending || sendVoice.isPending}
+        onSendTtsVoice={(ttsText, opts) =>
+          sendTts.mutateAsync({ text: ttsText, reply_to_message_id: opts.reply_to_message_id }).then(() => setReplyingTo(null))
+        }
+        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || videoShareMut.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendCountdown.isPending || sendLottery.isPending || sendVoice.isPending || sendTts.isPending}
         onKeystroke={onKeystroke}
         replyingTo={replyingTo}
         onCancelReply={() => setReplyingTo(null)}
@@ -1376,6 +1491,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           open={galleryOpen}
           onOpenChange={setGalleryOpen}
           conversationId={convoId}
+          resolveSenderName={resolveSenderName}
           onJumpToMessage={(messageId) => {
             setGalleryOpen(false);
             jumpToMessage(messageId);
@@ -1577,23 +1693,47 @@ interface HelpdeskRoutingBannerProps {
   currentUserId: string;
   onClaim: () => void;
   isClaiming: boolean;
+  onTransfer?: () => void;
 }
 
-function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaiming }: HelpdeskRoutingBannerProps) {
+function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaiming, onTransfer }: HelpdeskRoutingBannerProps) {
   const state = conversation.routing_state ?? "";
   const assignedAgent = conversation.active_agent_user_id ?? "";
+  // Agent-only fields (routing_group_id / active_agent_user_id) are present in
+  // the payload only for helpdesk agents (HMH-008), so their presence tells us
+  // the viewer is an agent vs the customer.
+  const isAgent = Boolean(conversation.routing_group_id);
 
   let bgClass = "bg-muted";
   let text = "";
   let showClaim = false;
+  let showTransfer = false;
 
-  if (state === "awaiting_agent") {
+  if (!isAgent) {
+    // Customer-facing status — never a Claim action, never an agent identity.
+    if (state === "awaiting_agent") {
+      bgClass = "bg-amber-50 border-amber-200 text-amber-800";
+      text = "Connecting you to an agent…";
+    } else if (state === "assigned") {
+      bgClass = "bg-green-50 border-green-200 text-green-800";
+      text = "An agent has joined this chat";
+    } else if (state === "paused_no_agents_online") {
+      bgClass = "bg-red-50 border-red-200 text-red-800";
+      text = "No agents are online right now — we'll connect you as soon as one is available";
+    } else if (state === "closed") {
+      bgClass = "bg-muted border-border text-muted-foreground";
+      text = "This support chat is closed";
+    } else {
+      return null;
+    }
+  } else if (state === "awaiting_agent") {
     bgClass = "bg-amber-50 border-amber-200 text-amber-800";
     text = "Waiting for agent";
     showClaim = true;
   } else if (state === "assigned" && assignedAgent === currentUserId) {
     bgClass = "bg-green-50 border-green-200 text-green-800";
     text = "You are handling this conversation";
+    showTransfer = true;
   } else if (state === "assigned") {
     bgClass = "bg-yellow-50 border-yellow-200 text-yellow-800";
     text = "Assigned to another agent";
@@ -1620,6 +1760,17 @@ function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaimin
           aria-label="Claim this helpdesk conversation"
         >
           {isClaiming ? "Claiming…" : "Claim"}
+        </Button>
+      )}
+      {showTransfer && onTransfer && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 shrink-0"
+          onClick={onTransfer}
+          aria-label="Transfer this helpdesk conversation"
+        >
+          Transfer
         </Button>
       )}
     </div>

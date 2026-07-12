@@ -12,9 +12,14 @@
  */
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import * as path from "path";
+const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const TS = Date.now();
+// GAP-0372: DRM key IDs/URIs are tenant-scoped. All tokens in this spec are
+// issued for this tenant, and the info endpoint requires it to derive key_id.
+const TENANT = `tenant_${TS}`;
 
 interface SessionData {
   user_sub: string;
@@ -30,8 +35,8 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 /home/ubuntu/testlogon/e2e_admin_session_setup.py", {
-      cwd: "/home/ubuntu/testlogon",
+    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
+      cwd: REPO_ROOT,
       timeout: 30_000,
     }).toString();
     _sessions = JSON.parse(raw);
@@ -63,7 +68,7 @@ let _issueCounter = 0;
 async function issueToken(page: Page, identity: string, assetId: string): Promise<string> {
   _issueCounter++;
   const resp = await apiPost(page, identity, "/v1/playback/entitlements/issue", {
-    tenant_id: `tenant_${TS}`,
+    tenant_id: TENANT,
     asset_id: assetId,
     session_id: `sess_${TS}_${_issueCounter}`,
     device_id: `dev_${TS}_${_issueCounter}`,
@@ -79,7 +84,9 @@ async function issueToken(page: Page, identity: string, assetId: string): Promis
 // ─── Helper: Get DRM key_id for an asset via the info endpoint ──────────────
 
 async function getKeyId(page: Page, assetId: string): Promise<string> {
-  const resp = await apiGet(page, `/v1/vod/drm/info/${assetId}`);
+  // GAP-0372: key_id is tenant-scoped; the info endpoint only returns it when
+  // a matching tenant is supplied.
+  const resp = await apiGet(page, `/v1/vod/drm/info/${assetId}?tenant=${TENANT}`);
   expect(resp.status()).toBe(200);
   const data = await resp.json();
   return data.key_id;
@@ -146,7 +153,8 @@ test.describe.serial("109 — VOD DRM Key Server", () => {
   });
 
   test("109.5 DRM info endpoint returns key server URI info", async () => {
-    const resp = await apiGet(alicePage, `/v1/vod/drm/info/${ASSET_ID}`);
+    // GAP-0372: key_id/key_uri are tenant-scoped — supply the tenant.
+    const resp = await apiGet(alicePage, `/v1/vod/drm/info/${ASSET_ID}?tenant=${TENANT}`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
 
@@ -192,8 +200,9 @@ test.describe.serial("109 — VOD DRM Key Server", () => {
   });
 
   test("109.8 DRM info for different assets returns different key_ids", async () => {
-    const resp1 = await apiGet(alicePage, `/v1/vod/drm/info/asset_a_${TS}`);
-    const resp2 = await apiGet(alicePage, `/v1/vod/drm/info/asset_b_${TS}`);
+    // GAP-0372: tenant required to derive tenant-scoped key_ids.
+    const resp1 = await apiGet(alicePage, `/v1/vod/drm/info/asset_a_${TS}?tenant=${TENANT}`);
+    const resp2 = await apiGet(alicePage, `/v1/vod/drm/info/asset_b_${TS}?tenant=${TENANT}`);
 
     expect(resp1.status()).toBe(200);
     expect(resp2.status()).toBe(200);

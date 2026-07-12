@@ -24,3 +24,10 @@ google-services.json
 /app/static_demo.gif
 /bcast_*.png
 /ing_at_*.png
+frontend/e2e/demo/
+frontend/public/demo/
+.claire/
+docs/suitecrm/testlogon/
+
+# In-place edit backups from parallel agent sessions
+*.bak_*

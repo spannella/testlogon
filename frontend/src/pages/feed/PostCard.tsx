@@ -354,8 +354,9 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
   const lotteryTipText = post.lottery_tip_cents != null ? `$${(post.lottery_tip_cents / 100).toFixed(2)}` : "N/A";
   const lotteryQuietText = post.lottery_quiet_period_seconds != null ? `${post.lottery_quiet_period_seconds}s` : "N/A";
   const lotteryStateText = post.lottery_state ?? "open";
-  const initials = post.author_id.slice(0, 2).toUpperCase();
-  const authorProfilePath = resolveCanonicalProfilePath({ userId: post.author_id, displayName: post.author_id });
+  const authorName = post.author_display_name || post.author_id;
+  const initials = authorName.slice(0, 2).toUpperCase();
+  const authorProfilePath = resolveCanonicalProfilePath({ userId: post.author_id, displayName: authorName });
 
   const REACTION_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮"];
 
@@ -419,7 +420,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         <div className="flex items-center gap-3">
           <a
             href={authorProfilePath ?? "#"}
-            aria-label={`Open ${post.author_id} profile`}
+            aria-label={`Open ${authorName} profile`}
             className="rounded-full hover:opacity-90"
           >
             <Avatar className="h-9 w-9">
@@ -429,10 +430,10 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
           <div className="min-w-0 flex-1">
             <a
               href={authorProfilePath ?? "#"}
-              aria-label={`Open ${post.author_id} profile`}
+              aria-label={`Open ${authorName} profile`}
               className="text-sm font-medium hover:underline"
             >
-              {post.author_id}
+              {authorName}
             </a>
             <p className="text-[10px] text-muted-foreground">
               {formatRelative(post.created_at)}
@@ -667,6 +668,8 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
             className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => setShowComments((o) => !o)}
             disabled={isOfflinePost}
+            aria-label={showComments ? "Hide comments" : "Show comments"}
+            aria-expanded={showComments}
           >
             <MessageCircle className="h-4 w-4" />
             <span>{post.comment_count}</span>
