@@ -2733,10 +2733,15 @@ class PayoutMarkPaidIn(BaseModel):
 # -- Payout Methods (GAP-0195 / FIN-009) --
 
 class PayoutMethodIn(BaseModel):
-    method_type: str = Field(..., pattern="^(bank_ach|bank_wire|paypal|check)$")
+    method_type: str = Field(..., pattern="^(bank_ach|bank_wire|paypal|check|stripe_connect)$")
+    # SEC-004: full account/routing are WRITE-ONLY — tokenized server-side, never
+    # stored. Only the last-4 (below) + an opaque token are persisted.
+    account_number: str = Field(default="", max_length=17, pattern=r"^\d{0,17}$")
+    routing_number: str = Field(default="", max_length=9, pattern=r"^\d{0,9}$")
     account_last4: str = Field(default="", max_length=4, pattern=r"^\d{0,4}$")
     routing_last4: str = Field(default="", max_length=4, pattern=r"^\d{0,4}$")
     paypal_email: str = Field(default="", max_length=254)
+    connect_account_id: str = Field(default="", max_length=64)
     nickname: str = Field(default="", max_length=100)
     set_as_default: bool = False
 
@@ -2753,12 +2758,29 @@ class PayoutMethodOut(BaseModel):
     paypal_email: str = ""
     nickname: str = ""
     is_default: bool = False
+    method_status: str = "unverified"
+    connect_account_id: str = ""
+    external_account_ref: str = ""
     created_at: int
     updated_at: int
 
 
 class PayoutMethodListOut(BaseModel):
     methods: List[PayoutMethodOut]
+
+
+class ConnectAccountOut(BaseModel):
+    connect_account_id: str = ""
+    onboarding_status: str = "pending"
+    payouts_enabled: bool = False
+
+
+class ConnectOnboardingOut(BaseModel):
+    connect_account_id: str = ""
+    onboarding_url: str = ""
+    onboarding_status: str = "pending"
+    payouts_enabled: bool = False
+    real: bool = False
 
 
 # ─── Tip Leaderboards (SOCIAL-005) ──────────────────────────────────
