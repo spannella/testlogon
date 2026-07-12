@@ -9,6 +9,12 @@ import com.testlogon.android.data.payouts.Payout
 import com.testlogon.android.data.payouts.PayoutBatch
 import com.testlogon.android.data.payouts.PayoutBatchItem
 import com.testlogon.android.data.payouts.PayoutBatchStatus
+import com.testlogon.android.data.payouts.AddPayoutMethodInput
+import com.testlogon.android.data.payouts.ConnectAccount
+import com.testlogon.android.data.payouts.ConnectOnboarding
+import com.testlogon.android.data.payouts.PayoutMethod
+import com.testlogon.android.data.payouts.PayoutMethodStatus
+import com.testlogon.android.data.payouts.RoutableMethodType
 import com.testlogon.android.data.payouts.PayoutActionResult
 import com.testlogon.android.data.payouts.PayoutBalance
 import com.testlogon.android.data.payouts.PayoutCreateResult
@@ -90,6 +96,40 @@ class FakePayoutSetupRepository : PayoutSetupRepository {
         lastDraft = draft
         return requestOutcome
     }
+
+    // ---- PAY-13: routable payout-method doubles ----
+
+    var methodsResult: ApiResult<List<PayoutMethod>> = ApiResult.Success(emptyList())
+    var addMethodResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod())
+    var verifyResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod(status = PayoutMethodStatus.VERIFIED))
+    var setDefaultResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod(isDefault = true))
+    var deleteResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var connectResult: ApiResult<ConnectAccount> = ApiResult.Success(ConnectAccount("acct_mock_x", "complete", true))
+    var onboardingResult: ApiResult<ConnectOnboarding> =
+        ApiResult.Success(ConnectOnboarding("acct_mock_x", "", "complete", true, false))
+
+    var addMethodCalls = 0
+        private set
+    var lastAddInput: AddPayoutMethodInput? = null
+        private set
+    var verifyCalls = 0
+        private set
+
+    override suspend fun loadMethods(): ApiResult<List<PayoutMethod>> = methodsResult
+    override suspend fun addMethod(input: AddPayoutMethodInput): ApiResult<PayoutMethod> {
+        addMethodCalls++
+        lastAddInput = input
+        return addMethodResult
+    }
+    override suspend fun verifyMethod(methodId: String): ApiResult<PayoutMethod> {
+        verifyCalls++
+        return verifyResult
+    }
+    override suspend fun setDefaultMethod(methodId: String): ApiResult<PayoutMethod> = setDefaultResult
+    override suspend fun deleteMethod(methodId: String): ApiResult<Unit> = deleteResult
+    override suspend fun getConnect(): ApiResult<ConnectAccount> = connectResult
+    override suspend fun createConnectAccount(): ApiResult<ConnectAccount> = connectResult
+    override suspend fun createConnectOnboardingLink(): ApiResult<ConnectOnboarding> = onboardingResult
 }
 
 /**
@@ -187,4 +227,26 @@ fun sampleTierStatus(
     requiredTierForPayouts = KycTier(required),
     eligibleForPayoutTier = eligible,
     unmetRequirements = unmet,
+)
+
+
+fun sampleMethod(
+    id: String = "pm_1",
+    type: RoutableMethodType = RoutableMethodType.BANK_ACH,
+    status: PayoutMethodStatus = PayoutMethodStatus.UNVERIFIED,
+    isDefault: Boolean = false,
+): PayoutMethod = PayoutMethod(
+    methodId = id,
+    type = type,
+    rawType = type.wire,
+    accountLast4 = if (type.isBank) "6789" else "",
+    routingLast4 = if (type.isBank) "0021" else "",
+    paypalEmail = if (type == RoutableMethodType.PAYPAL) "creator@example.com" else "",
+    nickname = "Primary",
+    isDefault = isDefault,
+    status = status,
+    connectAccountId = if (type == RoutableMethodType.STRIPE_CONNECT) "acct_mock_x" else "",
+    externalAccountRef = "btok_mock_abc",
+    createdAtEpochSeconds = 1_748_628_251L,
+    updatedAtEpochSeconds = 1_748_800_800L,
 )

@@ -2047,6 +2047,43 @@
     <string name="payout_gate_unknown_title">Verification status unavailable</string>
     <string name="payout_gate_unknown_body">We couldn\'t confirm your verification status. Payouts are disabled until we can.</string>
 
+    <!-- PAY-13 - routable payout methods (bank / PayPal / Stripe Connect) -->
+    <string name="payout_methods_section_title">Payout destinations</string>
+    <string name="payout_methods_empty">No payout destinations yet. Add one to receive payouts.</string>
+    <string name="payout_methods_loading">Loading destinations…</string>
+    <string name="payout_methods_sec_note">For your security we store only the last 4 digits - never the full account number.</string>
+    <string name="payout_method_add">Add payout destination</string>
+    <string name="payout_method_add_cancel">Cancel</string>
+    <string name="payout_method_type_label">Destination type</string>
+    <string name="payout_method_type_bank">Bank account</string>
+    <string name="payout_method_type_paypal">PayPal</string>
+    <string name="payout_method_type_connect">Stripe Connect</string>
+    <string name="payout_method_routing_label">Routing number</string>
+    <string name="payout_method_account_label">Account number</string>
+    <string name="payout_method_wire_label">Send as wire (instead of ACH)</string>
+    <string name="payout_method_paypal_email_label">PayPal email</string>
+    <string name="payout_method_nickname_label">Nickname (optional)</string>
+    <string name="payout_method_set_default">Set as default</string>
+    <string name="payout_method_add_submit">Add destination</string>
+    <string name="payout_method_connect_blurb">Connect a Stripe account to receive payouts. We open Stripe onboarding; under the current sandbox it completes automatically (no real account is linked).</string>
+    <string name="payout_method_connect_action">Connect with Stripe</string>
+    <string name="payout_method_added">Payout destination added.</string>
+    <string name="payout_method_verify_action">Verify</string>
+    <string name="payout_method_verify_done">Destination verified.</string>
+    <string name="payout_method_default_action">Set default</string>
+    <string name="payout_method_default_badge">Default</string>
+    <string name="payout_method_remove_action">Remove</string>
+    <string name="payout_method_verify_note">Only a verified destination can receive a payout.</string>
+    <string name="payout_method_status_unverified">Unverified</string>
+    <string name="payout_method_status_verifying">Verifying…</string>
+    <string name="payout_method_status_verified">Verified</string>
+    <string name="payout_method_status_failed">Verification failed</string>
+    <string name="payout_method_status_unknown">Unknown</string>
+    <string name="payout_method_bank_display">Bank ••••%1$s</string>
+    <string name="payout_method_routing_display">Routing ••%1$s</string>
+    <string name="payout_method_paypal_display">PayPal: %1$s</string>
+    <string name="payout_method_connect_display">Stripe Connect: %1$s</string>
+
     <!-- AND-261 — READ-ONLY bulk/batch payout tools -->
     <string name="more_entry_bulk_payouts">Bulk payouts</string>
     <string name="bulk_payouts_title">Bulk payouts</string>

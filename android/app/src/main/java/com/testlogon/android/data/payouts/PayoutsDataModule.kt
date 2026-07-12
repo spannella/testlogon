@@ -28,6 +28,12 @@ object PayoutsApiModule {
     @Singleton
     fun provideBulkPayoutsApi(retrofit: Retrofit): BulkPayoutsApi =
         retrofit.create(BulkPayoutsApi::class.java)
+
+    // PAY-13 — the ROUTABLE payout-methods API (methods CRUD + verify + Stripe Connect seam).
+    @Provides
+    @Singleton
+    fun providePayoutMethodsApi(retrofit: Retrofit): PayoutMethodsApi =
+        retrofit.create(PayoutMethodsApi::class.java)
 }
 
 /**
@@ -62,4 +68,9 @@ abstract class PayoutsDataModule {
     @Binds
     @Singleton
     abstract fun bindBulkPayoutsRepository(impl: BulkPayoutsRepositoryImpl): BulkPayoutsRepository
+
+    // PAY-13 — the ROUTABLE payout-methods repository (add/verify/default/connect).
+    @Binds
+    @Singleton
+    abstract fun bindPayoutMethodsRepository(impl: PayoutMethodsRepositoryImpl): PayoutMethodsRepository
 }

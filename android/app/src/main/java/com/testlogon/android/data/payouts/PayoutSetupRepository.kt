@@ -77,6 +77,32 @@ interface PayoutSetupRepository {
      * While the stub is NotConfigured this NEVER calls the backend / executes a payout.
      */
     suspend fun requestPayout(draft: PayoutRequestDraft, currency: String): PayoutRequestOutcome
+
+    // ---- PAY-13: routable payout-method management (delegated to PayoutMethodsRepository) ----
+
+    /** List the creator's routable payout methods (status + default flag). */
+    suspend fun loadMethods(): ApiResult<List<PayoutMethod>>
+
+    /** Add a routable destination (bank tokenized server-side / paypal email / connect id). */
+    suspend fun addMethod(input: AddPayoutMethodInput): ApiResult<PayoutMethod>
+
+    /** PAY-12 — verify a method so a payout may target it. */
+    suspend fun verifyMethod(methodId: String): ApiResult<PayoutMethod>
+
+    /** Set the default payout destination. */
+    suspend fun setDefaultMethod(methodId: String): ApiResult<PayoutMethod>
+
+    /** Remove a method. */
+    suspend fun deleteMethod(methodId: String): ApiResult<Unit>
+
+    /** PAY-11 — the creator's Stripe Connect account status. */
+    suspend fun getConnect(): ApiResult<ConnectAccount>
+
+    /** PAY-11 — create (or return) the creator's Connect account id. */
+    suspend fun createConnectAccount(): ApiResult<ConnectAccount>
+
+    /** PAY-11 — a Connect onboarding link (real when keyed; mock self-completes). */
+    suspend fun createConnectOnboardingLink(): ApiResult<ConnectOnboarding>
 }
 
 @Singleton
@@ -84,6 +110,7 @@ class PayoutSetupRepositoryImpl @Inject constructor(
     private val payoutsRepository: PayoutsRepository,
     private val kycRepository: KycRepository,
     private val billingAuthorizer: BillingAuthorizer,
+    private val methodsRepository: PayoutMethodsRepository,
 ) : PayoutSetupRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -141,4 +168,28 @@ class PayoutSetupRepositoryImpl @Inject constructor(
                 BillingResult.NotConfigured -> PayoutRequestOutcome.NotConfigured
             }
         }
+
+    // ---- PAY-13: pure delegations to the routable payout-methods repository ----
+
+    override suspend fun loadMethods(): ApiResult<List<PayoutMethod>> = methodsRepository.listMethods()
+
+    override suspend fun addMethod(input: AddPayoutMethodInput): ApiResult<PayoutMethod> =
+        methodsRepository.addMethod(input)
+
+    override suspend fun verifyMethod(methodId: String): ApiResult<PayoutMethod> =
+        methodsRepository.verifyMethod(methodId)
+
+    override suspend fun setDefaultMethod(methodId: String): ApiResult<PayoutMethod> =
+        methodsRepository.setDefault(methodId)
+
+    override suspend fun deleteMethod(methodId: String): ApiResult<Unit> =
+        methodsRepository.deleteMethod(methodId)
+
+    override suspend fun getConnect(): ApiResult<ConnectAccount> = methodsRepository.getConnect()
+
+    override suspend fun createConnectAccount(): ApiResult<ConnectAccount> =
+        methodsRepository.createConnectAccount()
+
+    override suspend fun createConnectOnboardingLink(): ApiResult<ConnectOnboarding> =
+        methodsRepository.createConnectOnboardingLink()
 }

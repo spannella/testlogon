@@ -5,11 +5,14 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.R
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.ui.i18n.UiText
+import com.testlogon.android.data.payouts.AddPayoutMethodInput
+import com.testlogon.android.data.payouts.ConnectAccount
 import com.testlogon.android.data.payouts.DEFAULT_PAYOUT_METHOD
 import com.testlogon.android.data.payouts.Payout
 import com.testlogon.android.data.payouts.PayoutBalance
 import com.testlogon.android.data.payouts.PayoutGate
 import com.testlogon.android.data.payouts.PayoutGateEvaluator
+import com.testlogon.android.data.payouts.PayoutMethod
 import com.testlogon.android.data.payouts.PayoutRequestDraft
 import com.testlogon.android.data.payouts.PayoutRequestOutcome
 import com.testlogon.android.data.payouts.PayoutSetupRepository
@@ -26,23 +29,25 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * AND-259 — payout-setup + KYC-gate presentation logic.
+ * AND-259 / PAY-13 — payout-setup + KYC-gate + ROUTABLE payout-method management presentation logic.
  *
- * Loads balance + recent payouts + tier in parallel (fail-closed gate when tier is unavailable),
- * derives a [PayoutGate], validates the amount form client-side against
- * minimum_payout_cents <= amount <= available_cents, and submits via [PayoutSetupRepository.requestPayout]
- * which is GATED through the BillingAuthorizer stub (so no real payout is ever executed —
- * [PayoutRequestOutcome.NotConfigured] is surfaced as "payouts unavailable").
+ * Loads balance + recent payouts + tier (fail-closed gate) AND the routable payout methods + Connect
+ * account status. Derives a [PayoutGate], validates the amount form client-side, and submits via
+ * [PayoutSetupRepository.requestPayout] (gated through the BillingAuthorizer stub — no real payout).
  *
- * The "Verify identity" action navigates to the KYC route (screen-owned); on return [onReturnedFromKyc]
- * calls evaluate() and re-derives the gate. The KYC vendor flow itself is the FLAGGED [com.testlogon.
- * android.data.payouts.KycVerifier] stub and is never launched here.
+ * PAY-13: the user can ADD a routable destination (bank routing+account -> tokenized server-side, only
+ * last-4 kept; PayPal email; Stripe Connect via an onboarding button), set a default, see each method's
+ * verification STATUS, and trigger the PAY-12 verification seam ("Verify"). A payout can only target a
+ * VERIFIED method — the backend request_payout enforces this; the UI surfaces the status honestly.
  */
 @HiltViewModel
 class PayoutSetupViewModel @Inject constructor(
     private val repo: PayoutSetupRepository,
     private val errorMapper: BillingErrorMapper,
 ) : ViewModel() {
+
+    /** PAY-13 — the destination type the add-method form is collecting. */
+    enum class MethodChoice { BANK, PAYPAL, CONNECT }
 
     data class UiState(
         val isLoading: Boolean = true,
@@ -52,6 +57,16 @@ class PayoutSetupViewModel @Inject constructor(
         val form: FormState = FormState(),
         val isSubmitting: Boolean = false,
         val evaluating: Boolean = false,
+        // ---- PAY-13: routable methods ----
+        val methods: List<PayoutMethod> = emptyList(),
+        val methodsLoading: Boolean = false,
+        val connect: ConnectAccount? = null,
+        /** Non-null when the add-method form is expanded. */
+        val addForm: AddMethodForm? = null,
+        val addSubmitting: Boolean = false,
+        /** The method currently running a verify/default/delete action (spinner + disable). */
+        val busyMethodId: String? = null,
+        val connectBusy: Boolean = false,
         /** Set on a successful create; the screen shows a confirmation referencing it. */
         val lastCreatedPayoutId: String? = null,
         /** A retryable, non-blocking error message (form values are preserved). */
@@ -64,15 +79,53 @@ class PayoutSetupViewModel @Inject constructor(
         val amountText: String = "",
         val method: String = DEFAULT_PAYOUT_METHOD,
         val notes: String = "",
-        /** Inline amount-field error (string res), or null. */
         val amountError: UiText? = null,
         val canSubmit: Boolean = false,
     )
+
+    /** PAY-13 — the add-routable-method form. Bank number/routing are WRITE-ONLY (tokenized server-side). */
+    data class AddMethodForm(
+        val choice: MethodChoice = MethodChoice.BANK,
+        val routingNumber: String = "",
+        val accountNumber: String = "",
+        val wire: Boolean = false,
+        val paypalEmail: String = "",
+        val nickname: String = "",
+        val setAsDefault: Boolean = false,
+    ) {
+        /** Client-side gate for the submit button (server re-validates). */
+        val canSubmit: Boolean
+            get() = when (choice) {
+                MethodChoice.BANK -> routingNumber.length in 4..9 && accountNumber.length in 4..17
+                MethodChoice.PAYPAL -> paypalEmail.contains("@") && paypalEmail.length in 3..254
+                // Connect is added via the onboarding button, not this Submit.
+                MethodChoice.CONNECT -> false
+            }
+
+        fun toInput(): AddPayoutMethodInput? = when (choice) {
+            MethodChoice.BANK -> AddPayoutMethodInput.Bank(
+                routingNumber = routingNumber,
+                accountNumber = accountNumber,
+                wire = wire,
+                nickname = nickname,
+                setAsDefault = setAsDefault,
+            )
+            MethodChoice.PAYPAL -> AddPayoutMethodInput.Paypal(
+                email = paypalEmail,
+                nickname = nickname,
+                setAsDefault = setAsDefault,
+            )
+            MethodChoice.CONNECT -> null
+        }
+    }
 
     /** One-shot effects (Channel-backed so rotation cannot replay them). */
     sealed interface Effect {
         data object NavigateToKyc : Effect
         data class ShowMessage(val text: UiText) : Effect
+
+        /** PAY-13 — open a real Stripe Connect onboarding URL (only when keyed; mock self-completes). */
+        data class OpenUrl(val url: String) : Effect
     }
 
     private val _state = MutableStateFlow(UiState())
@@ -83,6 +136,7 @@ class PayoutSetupViewModel @Inject constructor(
 
     init {
         load()
+        loadMethods()
     }
 
     fun load() {
@@ -110,7 +164,163 @@ class PayoutSetupViewModel @Inject constructor(
         }
     }
 
-    fun retry() = load()
+    fun retry() {
+        load()
+        loadMethods()
+    }
+
+    // ---- PAY-13: routable payout methods ----
+
+    /** Load the routable methods + Connect account status. Non-blocking (never fails the screen). */
+    fun loadMethods() {
+        _state.update { it.copy(methodsLoading = true) }
+        viewModelScope.launch {
+            val methodsResult = repo.loadMethods()
+            val methods = (methodsResult as? ApiResult.Success)?.data.orEmpty()
+            val connect = (repo.getConnect() as? ApiResult.Success)?.data
+            _state.update { it.copy(methodsLoading = false, methods = methods, connect = connect) }
+            if (methodsResult !is ApiResult.Success) {
+                _state.update { it.copy(error = errorMapper.map(methodsResult).message) }
+            }
+        }
+    }
+
+    fun onAddMethodClicked() = _state.update {
+        it.copy(addForm = it.addForm ?: AddMethodForm())
+    }
+
+    fun onCancelAddMethod() = _state.update { it.copy(addForm = null) }
+
+    fun onAddChoiceSelected(choice: MethodChoice) = _state.update {
+        it.copy(addForm = (it.addForm ?: AddMethodForm()).copy(choice = choice))
+    }
+
+    fun onAddFieldChanged(transform: (AddMethodForm) -> AddMethodForm) = _state.update {
+        it.copy(addForm = (it.addForm ?: AddMethodForm()).let(transform))
+    }
+
+    /** Submit the bank/PayPal add-method form. Bank number/routing are tokenized server-side (SEC-004). */
+    fun submitAddMethod() {
+        val s = _state.value
+        val form = s.addForm ?: return
+        val input = form.toInput() ?: return
+        if (!form.canSubmit || s.addSubmitting) return
+        _state.update { it.copy(addSubmitting = true, error = null) }
+        viewModelScope.launch {
+            when (val result = repo.addMethod(input)) {
+                is ApiResult.Success -> {
+                    _state.update { it.copy(addSubmitting = false, addForm = null) }
+                    _effects.send(Effect.ShowMessage(UiText.Res(R.string.payout_method_added)))
+                    loadMethods()
+                }
+                else -> _state.update {
+                    it.copy(addSubmitting = false, error = errorMapper.map(result).message)
+                }
+            }
+        }
+    }
+
+    /** PAY-12 — verify a method so a payout may target it. */
+    fun verifyMethod(methodId: String) {
+        if (_state.value.busyMethodId != null) return
+        _state.update { it.copy(busyMethodId = methodId, error = null) }
+        viewModelScope.launch {
+            when (val result = repo.verifyMethod(methodId)) {
+                is ApiResult.Success -> {
+                    _state.update { it.copy(busyMethodId = null, methods = it.methods.upsert(result.data)) }
+                    _effects.send(Effect.ShowMessage(UiText.Res(R.string.payout_method_verify_done)))
+                }
+                else -> _state.update {
+                    it.copy(busyMethodId = null, error = errorMapper.map(result).message)
+                }
+            }
+        }
+    }
+
+    fun setDefaultMethod(methodId: String) {
+        if (_state.value.busyMethodId != null) return
+        _state.update { it.copy(busyMethodId = methodId, error = null) }
+        viewModelScope.launch {
+            when (val result = repo.setDefaultMethod(methodId)) {
+                is ApiResult.Success -> {
+                    _state.update { it.copy(busyMethodId = null) }
+                    loadMethods()
+                }
+                else -> _state.update {
+                    it.copy(busyMethodId = null, error = errorMapper.map(result).message)
+                }
+            }
+        }
+    }
+
+    fun deleteMethod(methodId: String) {
+        if (_state.value.busyMethodId != null) return
+        _state.update { it.copy(busyMethodId = methodId, error = null) }
+        viewModelScope.launch {
+            when (val result = repo.deleteMethod(methodId)) {
+                is ApiResult.Success -> {
+                    _state.update {
+                        it.copy(
+                            busyMethodId = null,
+                            methods = it.methods.filterNot { m -> m.methodId == methodId },
+                        )
+                    }
+                }
+                else -> _state.update {
+                    it.copy(busyMethodId = null, error = errorMapper.map(result).message)
+                }
+            }
+        }
+    }
+
+    /**
+     * PAY-11 — Stripe Connect onboarding. Creates (or reuses) the Connect account, requests an
+     * onboarding link, opens the real URL when keyed, then registers a routable stripe_connect method.
+     * Under the mock the onboarding self-completes and the method is immediately verifiable.
+     */
+    fun startConnectOnboarding(setAsDefault: Boolean) {
+        if (_state.value.connectBusy) return
+        _state.update { it.copy(connectBusy = true, error = null) }
+        viewModelScope.launch {
+            val account = repo.createConnectAccount()
+            if (account !is ApiResult.Success) {
+                _state.update { it.copy(connectBusy = false, error = errorMapper.map(account).message) }
+                return@launch
+            }
+            when (val link = repo.createConnectOnboardingLink()) {
+                is ApiResult.Success -> {
+                    if (link.data.needsBrowser) {
+                        _effects.send(Effect.OpenUrl(link.data.onboardingUrl))
+                    }
+                    // Register a routable stripe_connect method targeting this Connect account.
+                    val add = repo.addMethod(
+                        AddPayoutMethodInput.Connect(
+                            connectAccountId = account.data.connectAccountId,
+                            nickname = "Stripe Connect",
+                            setAsDefault = setAsDefault,
+                        ),
+                    )
+                    _state.update { it.copy(connectBusy = false, addForm = null) }
+                    if (add is ApiResult.Success) {
+                        _effects.send(Effect.ShowMessage(UiText.Res(R.string.payout_method_added)))
+                    } else {
+                        _state.update { it.copy(error = errorMapper.map(add).message) }
+                    }
+                    loadMethods()
+                }
+                else -> _state.update {
+                    it.copy(connectBusy = false, error = errorMapper.map(link).message)
+                }
+            }
+        }
+    }
+
+    private fun List<PayoutMethod>.upsert(updated: PayoutMethod): List<PayoutMethod> {
+        val idx = indexOfFirst { it.methodId == updated.methodId }
+        return if (idx >= 0) toMutableList().also { it[idx] = updated } else this + updated
+    }
+
+    // ---- amount form (unchanged) ----
 
     fun onAmountChanged(text: String) = _state.update {
         it.copy(form = it.form.copy(amountText = text).recomputed(it.balance, it.gate))
