@@ -2715,6 +2715,49 @@ class PayoutActionOut(BaseModel):
     status: str
 
 
+class WalletSummaryOut(BaseModel):
+    available_cents: int = 0
+    held_cents: int = 0
+    held_count: int = 0
+    held_release_at: Optional[int] = None
+    pending_cents: int = 0
+    pending_count: int = 0
+    lifetime_paid_cents: int = 0
+    total_earned_cents: int = 0
+    currency: str = "USD"
+    minimum_payout_cents: int = 1000
+
+
+class PayoutTimelineEvent(BaseModel):
+    status: str
+    ts: int = 0
+    note: str = ""
+
+
+class PayoutDetailOut(BaseModel):
+    payout_id: str
+    user_id: str
+    amount_cents: int
+    method: str = "bank_transfer"
+    method_id: str = ""
+    method_last4: str = ""
+    status: str
+    created_at: int
+    updated_at: int
+    completed_at: Optional[int] = None
+    notes: str = ""
+    reject_reason: str = ""
+    fail_reason: str = ""
+    approved_by: str = ""
+    manual_hold: bool = False
+    hold_reason: str = ""
+    debit_reversed: bool = False
+    transfer_provider: str = ""
+    transfer_ref: str = ""
+    transfer_attempts: int = 0
+    timeline: List[PayoutTimelineEvent] = []
+
+
 class PayoutStatsOut(BaseModel):
     total_requested: int = 0
     total_requested_amount_cents: int = 0

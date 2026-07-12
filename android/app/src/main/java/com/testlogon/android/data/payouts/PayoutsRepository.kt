@@ -20,11 +20,10 @@ import javax.inject.Singleton
  * is re-thrown; HTTP errors fold to Failure (via [ApiErrorParser]); transport failures to NetworkError.
  * DTOs are mapped to domain before returning (no raw DTOs leak out).
  *
- * GET reads (balance/list) are idempotent (the core-network RetryInterceptor handles bounded retry).
- * The write paths are mutations, NEVER auto-retried, and — per the AND-258/259 policy — request-payout
- * is GATED THROUGH THE [com.testlogon.android.data.messaging.BillingAuthorizer] STUB so no real payout
- * is ever executed (see AND-259's PayoutSetupRepository which owns the gate; this layer exposes the raw
- * request call only for that gated caller).
+ * GET reads (balance/wallet/detail/list) are idempotent (the core-network RetryInterceptor handles
+ * bounded retry). The write paths are mutations, NEVER auto-retried. PAY-52: request-payout now hits
+ * the REAL gate-enforced POST ui/payouts/request (the AND-259 BillingAuthorizer stub is gone); the
+ * backend enforces the PAY-C KYC + W-9 gate (403), available balance (400) and target method (400).
  *
  * Per-payout currency: PayoutOut has none, so callers may pass the balance currency; it defaults to "USD".
  */
@@ -33,17 +32,25 @@ interface PayoutsRepository {
     /** The current user's payout balance/state. Idempotent GET. */
     suspend fun getBalance(): ApiResult<PayoutBalance>
 
+    /** PAY-50 wallet home summary (available/held/pending/lifetime-paid). Idempotent GET. */
+    suspend fun getWallet(): ApiResult<WalletSummary>
+
+    /** PAY-50 payout statement/detail (lifecycle timeline + transfer ref + last-4 + reason). Idempotent GET. */
+    suspend fun getPayoutDetail(payoutId: String): ApiResult<PayoutDetail>
+
     /** One page of payout history (cursor pagination; null cursor = first page). Idempotent GET. */
     suspend fun getPayouts(cursor: String? = null, limit: Int = PayoutsApi.DEFAULT_LIMIT): ApiResult<PayoutPage>
 
     /**
-     * Request a payout. Mutation; NEVER auto-retried. AND-259 routes this ONLY after the
-     * BillingAuthorizer stub authorizes (which it never does while NotConfigured), so a real payout is
-     * never executed. [currency] stamps the create result's [PayoutMoney].
+     * PAY-52: request a REAL payout. Mutation; NEVER auto-retried. The backend enforces the PAY-C gate
+     * (403 {code,message,kyc_status} on kyc_required/tax_info_required), insufficient-balance (400) and
+     * an invalid/unverified [methodId] (400); those surface as [ApiResult.Failure]. [methodId] targets
+     * the verified PAY-B destination; [currency] stamps the create result's [PayoutMoney].
      */
     suspend fun requestPayout(
         amountCents: Long,
         method: String = DEFAULT_PAYOUT_METHOD,
+        methodId: String? = null,
         notes: String = "",
         currency: String = DEFAULT_PAYOUT_CURRENCY,
     ): ApiResult<PayoutCreateResult>
@@ -64,6 +71,16 @@ class PayoutsRepositoryImpl @Inject constructor(
         call { api.getBalance() }.map { it.toDomain() }
     }
 
+    override suspend fun getWallet(): ApiResult<WalletSummary> = withContext(io) {
+        call { api.getWallet() }.map { it.toDomain() }
+    }
+
+    override suspend fun getPayoutDetail(payoutId: String): ApiResult<PayoutDetail> = withContext(io) {
+        // The detail carries no per-payout currency; the wallet/balance currency is authoritative, so
+        // callers may re-stamp. Default USD keeps the mapper total.
+        call { api.getPayoutDetail(payoutId) }.map { it.toDomain() }
+    }
+
     override suspend fun getPayouts(cursor: String?, limit: Int): ApiResult<PayoutPage> = withContext(io) {
         call { api.listPayouts(limit = limit, cursor = cursor) }.map { it.toDomain() }
     }
@@ -71,11 +88,15 @@ class PayoutsRepositoryImpl @Inject constructor(
     override suspend fun requestPayout(
         amountCents: Long,
         method: String,
+        methodId: String?,
         notes: String,
         currency: String,
     ): ApiResult<PayoutCreateResult> = withContext(io) {
-        call { api.requestPayout(PayoutRequestDto(amountCents = amountCents, method = method, notes = notes)) }
-            .map { it.toDomain(currency) }
+        call {
+            api.requestPayout(
+                PayoutRequestDto(amountCents = amountCents, method = method, methodId = methodId, notes = notes),
+            )
+        }.map { it.toDomain(currency) }
     }
 
     override suspend fun cancelPayout(payoutId: String): ApiResult<PayoutActionResult> = withContext(io) {

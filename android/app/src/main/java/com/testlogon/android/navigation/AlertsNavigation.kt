@@ -26,6 +26,11 @@ fun NavGraphBuilder.alertsDestination(navController: NavHostController) {
             onOpenTracking = { shipGroupId ->
                 navController.navigate(OrderTrackingDest.build(shipGroupId)) { launchSingleTop = true }
             },
+            // PAY-51: a payout lifecycle alert (initiated/paid/failed/returned) deep-links to that
+            // payout's statement/detail (action_url `/wallet/payouts/{payout_id}`).
+            onOpenPayout = { payoutId ->
+                navController.navigate(PayoutDetailDest.build(payoutId)) { launchSingleTop = true }
+            },
             // SUB-E5: a subscription alert deep-links to Subscribers (creator) or manage-subscription.
             // The backend sets a per-recipient action_url; we route on its path, using the event to
             // disambiguate the bare "/subscriptions" path (creator-new-subscriber vs gift-recipient).

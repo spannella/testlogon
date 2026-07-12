@@ -13,6 +13,12 @@ import com.testlogon.android.feature.payouts.PayoutDetailRoute
 import com.testlogon.android.feature.payouts.PayoutDetailViewModel
 import com.testlogon.android.feature.payouts.PayoutHistoryRoute
 import com.testlogon.android.feature.payouts.PayoutSetupRoute
+import com.testlogon.android.feature.payouts.WalletRoute
+
+/** PAY-52 — the money-OUT Wallet home route (More > Wallet hub). Deep-link base `/wallet/payouts`. */
+data object WalletDest {
+    const val ROUTE = "wallet"
+}
 
 /** AND-260 — the payout history list route (reached from earnings / billing / the More hub). */
 data object PayoutHistoryDest {
@@ -55,6 +61,14 @@ data object BulkPayoutDetailDest {
  * navigate() to the KYC route once it lands.
  */
 fun NavGraphBuilder.payoutsDestinations(navController: NavHostController) {
+    // PAY-52 - money-OUT Wallet home: available/held/pending/lifetime + Withdraw CTA + history entry.
+    composable(WalletDest.ROUTE) {
+        WalletRoute(
+            onWithdraw = { navController.navigate(PayoutSetupDest.ROUTE) { launchSingleTop = true } },
+            onViewHistory = { navController.navigate(PayoutHistoryDest.ROUTE) { launchSingleTop = true } },
+            onBack = { navController.popBackStack() },
+        )
+    }
     composable(PayoutHistoryDest.ROUTE) {
         PayoutHistoryRoute(
             onPayoutClick = { payoutId ->

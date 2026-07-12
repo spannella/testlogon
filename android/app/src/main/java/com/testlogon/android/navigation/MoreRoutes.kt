@@ -128,10 +128,13 @@ object MoreRoutes {
     // AND-253: the per-content revenue list (sortable, cursor-paged).
     const val PER_CONTENT_REVENUE = PerContentRevenueDest.ROUTE
 
+    // PAY-52: the money-OUT Wallet home (real available/held/pending/lifetime + Withdraw CTA + history).
+    const val WALLET = WalletDest.ROUTE
+
     // AND-260: the creator payout history list (paged amount/status/date + detail).
     const val PAYOUTS = PayoutHistoryDest.ROUTE
 
-    // AND-259: the payout setup + KYC gate (request a payout; FLAGGED identity-verification gate).
+    // AND-259 / PAY-52: the withdraw screen — payout methods + KYC/W-9 gate + amount flow (real request_payout).
     const val PAYOUT_SETUP = PayoutSetupDest.ROUTE
 
     // AND-261: the READ-ONLY bulk/batch payout tools (admin batch list + detail; no execute action).
@@ -513,6 +516,7 @@ object MoreRoutes {
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,
+            WALLET,
             EARNINGS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,

@@ -1986,17 +1986,56 @@
 
     <!-- AND-258/259/260 — creator payouts -->
     <string name="more_entry_payouts">Payout history</string>
-    <string name="more_entry_payout_setup">Request a payout</string>
+    <string name="more_entry_payout_setup">Withdraw</string>
+    <!-- PAY-52 — Wallet home entry -->
+    <string name="more_entry_wallet">Wallet</string>
 
-    <!-- Payout status labels (AND-260) -->
+    <!-- Payout status labels (AND-260 + PAY-52 lifecycle extensions) -->
     <string name="payout_status_requested">Requested</string>
     <string name="payout_status_approved">Approved</string>
     <string name="payout_status_processing">Processing</string>
+    <string name="payout_status_paid">Paid</string>
     <string name="payout_status_completed">Completed</string>
+    <string name="payout_status_failed">Failed</string>
+    <string name="payout_status_returned">Returned</string>
+    <string name="payout_status_held">On hold</string>
     <string name="payout_status_rejected">Rejected</string>
     <string name="payout_status_cancelled">Cancelled</string>
     <string name="payout_status_unknown">Unknown</string>
     <string name="payout_status_cd">Status: %1$s</string>
+
+    <!-- PAY-52 — Wallet home (money-OUT surface) -->
+    <string name="wallet_title">Wallet</string>
+    <string name="wallet_loading">Loading your wallet…</string>
+    <string name="wallet_error_generic">Couldn\'t load your wallet.</string>
+    <string name="wallet_available_label">Available to withdraw</string>
+    <string name="wallet_withdraw_action">Withdraw</string>
+    <string name="wallet_minimum_note">Minimum payout: %1$s</string>
+    <string name="wallet_held_label">On hold</string>
+    <string name="wallet_held_until">Releases %1$s</string>
+    <string name="wallet_held_none">No funds on hold</string>
+    <string name="wallet_pending_label">Pending payouts</string>
+    <string name="wallet_pending_count">%1$d in progress</string>
+    <string name="wallet_lifetime_paid_label">Lifetime paid out</string>
+    <string name="wallet_total_earned_label">Total earned</string>
+    <string name="wallet_view_history">Payout history &amp; statements</string>
+
+    <!-- PAY-52 — withdraw destination picker -->
+    <string name="payout_withdraw_no_verified_method">Add and verify a payout destination above before you can withdraw.</string>
+
+    <!-- PAY-53 — payout statement/detail -->
+    <string name="payout_detail_loading">Loading payout…</string>
+    <string name="payout_detail_error_generic">Couldn\'t load this payout.</string>
+    <string name="payout_detail_provider">Transfer provider</string>
+    <string name="payout_detail_provider_unknown">Pending</string>
+    <string name="payout_detail_transfer_ref">Transfer reference</string>
+    <string name="payout_detail_attempts">Transfer attempts</string>
+    <string name="payout_detail_fail_reason">Reason</string>
+    <string name="payout_detail_hold_reason">On hold</string>
+    <string name="payout_detail_debit_reversed">Your balance has been restored.</string>
+    <string name="payout_detail_timeline_title">Timeline</string>
+    <string name="payout_timeline_hold_released">Hold released</string>
+    <string name="payout_date_pending">Pending</string>
 
     <!-- Payout method labels (AND-259/260) -->
     <string name="payout_method_bank_transfer">Bank Transfer</string>

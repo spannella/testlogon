@@ -69,6 +69,10 @@ object PayoutSetupTestTags {
     const val FORM = "payout_setup_form"
     const val AMOUNT = "payout_setup_amount"
     const val SUBMIT = "payout_setup_submit"
+
+    // PAY-52 - withdraw destination picker (verified PAY-B methods).
+    const val NO_VERIFIED_METHOD = "payout_withdraw_no_verified_method"
+    fun withdrawMethod(id: String) = "payout_withdraw_method_$id"
     const val GATE_PANEL = "payout_setup_gate_panel"
     const val VERIFY = "payout_setup_verify"
     const val GATE_UNKNOWN = "payout_setup_gate_unknown"
@@ -914,10 +918,27 @@ private fun PayoutForm(
             modifier = Modifier.fillMaxWidth().testTag(PayoutSetupTestTags.AMOUNT),
         )
 
+        // PAY-52: the withdraw targets a VERIFIED PAY-B destination (not a free-string type). If none is
+        // verified yet, block the form and point the user at the destinations section above.
         Text(stringResource(R.string.payout_method_label), style = MaterialTheme.typography.labelLarge)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PayoutMethodOption("bank_transfer", R.string.payout_method_bank_transfer, form.method, onMethodSelected)
-            PayoutMethodOption("paypal", R.string.payout_method_paypal, form.method, onMethodSelected)
+        val verifiedMethods = state.methods.filter { it.status == PayoutMethodStatus.VERIFIED }
+        if (verifiedMethods.isEmpty()) {
+            Text(
+                text = stringResource(R.string.payout_withdraw_no_verified_method),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag(PayoutSetupTestTags.NO_VERIFIED_METHOD),
+            )
+        } else {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                verifiedMethods.forEach { method ->
+                    PayoutMethodOption(
+                        method = method,
+                        selectedMethodId = form.selectedMethodId,
+                        onSelected = onMethodSelected,
+                    )
+                }
+            }
         }
 
         OutlinedTextField(
@@ -941,17 +962,20 @@ private fun PayoutForm(
     }
 }
 
+/** PAY-52: a selectable VERIFIED destination chip for the withdraw form (labelled by nickname/type + last-4). */
 @Composable
 private fun PayoutMethodOption(
-    method: String,
-    labelRes: Int,
-    selected: String,
+    method: PayoutMethod,
+    selectedMethodId: String?,
     onSelected: (String) -> Unit,
 ) {
+    val label = method.nickname.ifBlank { methodTypeLabel(method.type) } +
+        (if (method.accountLast4.isNotBlank()) " ••${method.accountLast4}" else "")
     FilterChip(
-        selected = selected == method,
-        onClick = { onSelected(method) },
-        label = { Text(stringResource(labelRes)) },
+        selected = selectedMethodId == method.methodId,
+        onClick = { onSelected(method.methodId) },
+        label = { Text(label) },
+        modifier = Modifier.testTag(PayoutSetupTestTags.withdrawMethod(method.methodId)),
     )
 }
 

@@ -1031,6 +1031,15 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.WALLET,
             section = MoreSection.ACCOUNT,
         ),
+        // PAY-52: the money-OUT Wallet home (available/held/pending/lifetime + Withdraw CTA + history).
+        MoreEntry(
+            id = "wallet",
+            labelRes = R.string.more_entry_wallet,
+            icon = Icons.Outlined.AccountBalanceWallet,
+            route = MoreRoutes.WALLET,
+            hub = MoreHub.WALLET,
+            section = MoreSection.ACCOUNT,
+        ),
         MoreEntry(
             id = "payout_setup",
             labelRes = R.string.more_entry_payout_setup,

@@ -16,6 +16,8 @@ from app.models import (
     PayoutCreateOut,
     PayoutActionOut,
     PayoutListOut,
+    WalletSummaryOut,
+    PayoutDetailOut,
     PayoutOut,
     PayoutRequestIn,
     PayoutMethodIn,
@@ -30,6 +32,8 @@ from app.models import (
 from app.services.creator_payouts import (
     cancel_payout,
     get_available_balance,
+    get_wallet_summary,
+    get_payout_detail,
     list_user_payouts,
     request_payout,
     list_payout_methods,
@@ -62,6 +66,24 @@ def payout_balance(session=Depends(require_ui_session)):
         total_earned_cents=result["total_earned_cents"],
         hold_cents=result["hold_cents"],
         currency="USD",
+        minimum_payout_cents=S.payout_minimum_cents,
+    )
+
+
+@router.get("/wallet", response_model=WalletSummaryOut)
+def wallet_summary(session=Depends(require_ui_session)):
+    """PAY-50 wallet home: available + held(+release date) + pending + lifetime paid."""
+    result = get_wallet_summary(session["user_sub"])
+    return WalletSummaryOut(
+        available_cents=result["available_cents"],
+        held_cents=result["held_cents"],
+        held_count=result["held_count"],
+        held_release_at=result["held_release_at"],
+        pending_cents=result["pending_cents"],
+        pending_count=result["pending_count"],
+        lifetime_paid_cents=result["lifetime_paid_cents"],
+        total_earned_cents=result["total_earned_cents"],
+        currency=result["currency"],
         minimum_payout_cents=S.payout_minimum_cents,
     )
 
@@ -261,3 +283,23 @@ def connect_onboarding_link(session=Depends(require_ui_session)):
     onboarding-complete otherwise) (PAY-11)."""
     result = create_connect_onboarding_link(session["user_sub"])
     return ConnectOnboardingOut(**result)
+
+
+# ---------------------------------------------------------------------------
+# PAY-50 (PAY-F): per-payout statement/detail. Registered LAST so the literal
+# GET routes (/balance, /wallet, /methods, /tax-info, /connect) always win over
+# this catch-all {payout_id} param route.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{payout_id}", response_model=PayoutDetailOut)
+def payout_detail(payout_id: str, session=Depends(require_ui_session)):
+    """Payout statement/detail: lifecycle timeline + transfer ref + method last-4
+    + fail/return/hold reason. User-scoped (403 on another creator's payout)."""
+    try:
+        result = get_payout_detail(session["user_sub"], payout_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Not your payout")
+    return PayoutDetailOut(**result)

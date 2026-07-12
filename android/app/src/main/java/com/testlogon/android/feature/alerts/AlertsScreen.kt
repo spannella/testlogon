@@ -82,6 +82,8 @@ fun AlertsRoute(
     // D4: tapping a buyer shipment alert opens the buyer order-tracking view (by ship-group id).
     onOpenTracking: (String) -> Unit = {},
     onOpenSubscription: (String, String) -> Unit = { _, _ -> },  // SUB-E5 route(A1): (event, actionUrl)
+    // PAY-51: tapping a payout alert opens that payout statement/detail (by payout_id from action_url).
+    onOpenPayout: (String) -> Unit = {},
     viewModel: AlertsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -113,6 +115,7 @@ fun AlertsRoute(
         onOpenSale = onOpenSale,
         onOpenTracking = onOpenTracking,
         onOpenSubscription = onOpenSubscription,  // SUB-E5 route(A2)
+        onOpenPayout = onOpenPayout,  // PAY-51
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -182,6 +185,30 @@ private val SUBSCRIPTION_ALERT_EVENTS: Set<String> = setOf(
 internal fun isSubscriptionAlert(event: String?): Boolean =
     event != null && event.trim().lowercase() in SUBSCRIPTION_ALERT_EVENTS
 
+/**
+ * PAY-51 payout lifecycle alert events (backend PAY-D emit; default-ON). Tapping one deep-links to the
+ * payout statement/detail via its action_url `/wallet/payouts/{payout_id}`.
+ */
+private val PAYOUT_ALERT_EVENTS: Set<String> = setOf(
+    "payout_initiated", "payout_paid", "payout_failed", "payout_returned",
+)
+
+internal fun isPayoutAlert(event: String?): Boolean =
+    event != null && event.trim().lowercase() in PAYOUT_ALERT_EVENTS
+
+/** Parses the payout_id from a payout alert action_url path `/wallet/payouts/{payout_id}`. */
+internal fun payoutIdFromActionUrl(actionUrl: String?): String? {
+    val path = (actionUrl ?: return null).substringBefore('?')
+    val marker = "/wallet/payouts/"
+    val idx = path.indexOf(marker)
+    if (idx < 0) return null
+    return path.substring(idx + marker.length)
+        .trim('/')
+        .substringBefore('/')
+        .let { android.net.Uri.decode(it) }
+        .takeIf { it.isNotBlank() }
+}
+
 /** Parses the ship_group id from a buyer shipment alert action_url query. */
 internal fun shipGroupFromActionUrl(actionUrl: String?): String? {
     val url = actionUrl ?: return null
@@ -211,6 +238,7 @@ fun AlertsScreen(
     onOpenSale: (String) -> Unit = {},
     onOpenTracking: (String) -> Unit = {},
     onOpenSubscription: (String, String) -> Unit = { _, _ -> },  // SUB-E5 route(A3): (event, actionUrl)
+    onOpenPayout: (String) -> Unit = {},  // PAY-51: (payoutId)
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -327,6 +355,10 @@ fun AlertsScreen(
                                         // (creator-new-subscriber vs gift-recipient).
                                         if (isSubscriptionAlert(alert.event)) {
                                             onOpenSubscription(alert.event ?: "", alert.actionUrl ?: "")
+                                        }
+                                        // PAY-51: a payout alert deep-links to that payout's statement.
+                                        if (isPayoutAlert(alert.event)) {
+                                            payoutIdFromActionUrl(alert.actionUrl)?.let(onOpenPayout)
                                         }
                                     },
                                 )

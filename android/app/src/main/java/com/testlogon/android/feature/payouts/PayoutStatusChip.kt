@@ -6,10 +6,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -57,7 +60,10 @@ private fun statusIcon(status: PayoutStatus): ImageVector = when (status) {
     PayoutStatus.REQUESTED -> Icons.Filled.Schedule
     PayoutStatus.APPROVED -> Icons.Filled.ThumbUp
     PayoutStatus.PROCESSING -> Icons.Filled.Sync
-    PayoutStatus.COMPLETED -> Icons.Filled.CheckCircle
+    PayoutStatus.PAID, PayoutStatus.COMPLETED -> Icons.Filled.CheckCircle
+    PayoutStatus.FAILED -> Icons.Filled.ErrorOutline
+    PayoutStatus.RETURNED -> Icons.Filled.Undo
+    PayoutStatus.HELD -> Icons.Filled.PauseCircle
     PayoutStatus.REJECTED -> Icons.Filled.Cancel
     PayoutStatus.CANCELLED -> Icons.Filled.Cancel
     PayoutStatus.UNKNOWN -> Icons.Filled.HelpOutline
@@ -65,8 +71,8 @@ private fun statusIcon(status: PayoutStatus): ImageVector = when (status) {
 
 @Composable
 private fun statusColor(status: PayoutStatus): Color = when (status) {
-    PayoutStatus.COMPLETED, PayoutStatus.APPROVED -> MaterialTheme.colorScheme.primary
-    PayoutStatus.REQUESTED, PayoutStatus.PROCESSING -> MaterialTheme.colorScheme.tertiary
-    PayoutStatus.REJECTED -> MaterialTheme.colorScheme.error
+    PayoutStatus.PAID, PayoutStatus.COMPLETED, PayoutStatus.APPROVED -> MaterialTheme.colorScheme.primary
+    PayoutStatus.REQUESTED, PayoutStatus.PROCESSING, PayoutStatus.HELD -> MaterialTheme.colorScheme.tertiary
+    PayoutStatus.FAILED, PayoutStatus.RETURNED, PayoutStatus.REJECTED -> MaterialTheme.colorScheme.error
     PayoutStatus.CANCELLED, PayoutStatus.UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant
 }

@@ -907,6 +907,7 @@ def _finalize_paid(item: Dict[str, Any], now: int) -> dict:
             "payout_paid",
             recipient=user_id,
             title="Your withdrawal was paid",
+            action_url=f"/wallet/payouts/{payout_id}",
             details={"payout_id": payout_id, "amount_cents": _to_int(item.get("amount_cents", 0)), "transfer_provider": transfer["transfer_provider"]},
         )
     except Exception:
@@ -986,11 +987,153 @@ def fail_payout(payout_id: str, *, reason: str = "", returned: bool = False) -> 
             "payout_returned" if returned else "payout_failed",
             recipient=user_id,
             title=("Your withdrawal was returned" if returned else "Your withdrawal failed"),
+            action_url=f"/wallet/payouts/{payout_id}",
             details={"payout_id": payout_id, "amount_cents": _to_int(item.get("amount_cents", 0)), "returned": bool(returned), "reason": reason},
         )
     except Exception:
         pass
     return _payout_to_dict(item)
+
+
+# --- PAY-50 (PAY-F): app-facing money-OUT read surface ---------------------
+# Wallet summary + per-payout statement/detail for the Android wallet. All are
+# strictly user-scoped (own records only) and reconcile to the PAY-A ledger:
+#   available/held/pending == get_available_balance; lifetime_paid == settled
+#   (non-reversed) payout debits. NO new state; pure read over existing rows.
+
+def _held_release_info(user_id: str):
+    """(earliest_release_ts, held_count) over credits still inside the 7-day hold."""
+    pk = f"USER#{user_id}"
+    now = now_ts()
+    hold_period = S.payout_hold_period_seconds
+    key_cond = Key("pk").eq(pk) & Key("sk").begins_with("LEDGER#")
+    filter_expr = (
+        Attr("type").eq("credit")
+        & Attr("state").ne("reversed")
+        & Attr("amount_cents").gt(0)
+    )
+    next_release = None
+    held_count = 0
+    kwargs = {"KeyConditionExpression": key_cond, "FilterExpression": filter_expr}
+    while True:
+        resp = T.billing.query(**kwargs)
+        for item in resp.get("Items", []):
+            ts = _to_int(item.get("ts", 0))
+            rel = ts + hold_period
+            if rel > now:
+                held_count += 1
+                if next_release is None or rel < next_release:
+                    next_release = rel
+        lk = resp.get("LastEvaluatedKey")
+        if not lk:
+            break
+        kwargs["ExclusiveStartKey"] = lk
+    return next_release, held_count
+
+
+def _count_active_payouts(user_id: str) -> int:
+    """Count of the user's in-flight (requested/approved/processing) payouts."""
+    count = 0
+    kwargs = {
+        "IndexName": "ByUserCreatedAt",
+        "KeyConditionExpression": Key("user_id").eq(user_id),
+        "ScanIndexForward": False,
+    }
+    while True:
+        resp = T.creator_payouts.query(**kwargs)
+        for item in resp.get("Items", []):
+            if not _is_real_payout(item):
+                continue
+            if item.get("status", "") in ACTIVE_PAYOUT_STATES:
+                count += 1
+        lk = resp.get("LastEvaluatedKey")
+        if not lk:
+            break
+        kwargs["ExclusiveStartKey"] = lk
+    return count
+
+
+def get_wallet_summary(user_id: str) -> dict:
+    """PAY-50 wallet home: available / held(+release) / pending / lifetime-paid.
+
+    Reconciles to the PAY-A ledger -- available/pending/held/paid_out all come
+    from get_available_balance (single source of truth for the money-OUT math),
+    plus the earliest hold-release timestamp and in-flight payout count."""
+    bal = get_available_balance(user_id)
+    next_release, held_count = _held_release_info(user_id)
+    return {
+        "available_cents": bal["available_cents"],
+        "held_cents": bal["hold_cents"],
+        "held_count": held_count,
+        "held_release_at": next_release,
+        "pending_cents": bal["pending_cents"],
+        "pending_count": _count_active_payouts(user_id),
+        "lifetime_paid_cents": bal["paid_out_cents"],
+        "total_earned_cents": bal["total_earned_cents"],
+        "currency": "USD",
+    }
+
+
+def _resolve_method_last4(item) -> str:
+    """Best-effort last-4 for the destination a payout targeted (bank acct or
+    a masked PayPal handle). Looks up the co-located payout_method row."""
+    method_id = item.get("method_id", "")
+    if method_id:
+        mitem = T.creator_payouts.get_item(Key={"payout_id": method_id}).get("Item")
+        if mitem and _is_payout_method(mitem):
+            l4 = mitem.get("account_last4", "")
+            if l4:
+                return l4
+            email = mitem.get("paypal_email", "")
+            if email:
+                return email
+    return item.get("paypal_email", "") or ""
+
+
+def _build_payout_timeline(item):
+    """Honest lifecycle timeline from the record's real timestamps (best-effort;
+    states without a dedicated timestamp carry ts=0 but still order correctly)."""
+    events = []
+    events.append({"status": "requested", "ts": _to_int(item.get("created_at", 0)), "note": ""})
+    if item.get("approved_by"):
+        events.append({"status": "approved", "ts": 0, "note": f"by {item.get('approved_by')}"})
+    if item.get("held_at"):
+        events.append({"status": "held", "ts": _to_int(item.get("held_at", 0)), "note": item.get("hold_reason", "")})
+    if item.get("hold_released_at"):
+        events.append({"status": "hold_released", "ts": _to_int(item.get("hold_released_at", 0)), "note": ""})
+    status = item.get("status", "")
+    attempts = _to_int(item.get("transfer_attempts", 0))
+    completed_at = _to_int(item.get("completed_at", 0))
+    if status in ("processing", "completed", "failed", "returned") or attempts:
+        events.append({"status": "processing", "ts": 0, "note": (f"{attempts} transfer attempt(s)" if attempts else "")})
+    if completed_at:
+        events.append({"status": "paid", "ts": completed_at, "note": item.get("transfer_provider", "")})
+    if status in ("failed", "returned"):
+        events.append({"status": status, "ts": _to_int(item.get("updated_at", 0)), "note": item.get("fail_reason", "")})
+    if status in ("cancelled", "rejected"):
+        events.append({"status": status, "ts": _to_int(item.get("updated_at", 0)), "note": item.get("reject_reason", "")})
+    return events
+
+
+def get_payout_detail(user_id: str, payout_id: str) -> dict:
+    """PAY-50 statement/detail for ONE payout (user-scoped; 403 if not owner)."""
+    item = T.creator_payouts.get_item(Key={"payout_id": payout_id}).get("Item")
+    if not item or not _is_real_payout(item):
+        raise LookupError("Payout not found")
+    if item.get("user_id") != user_id:
+        raise PermissionError("Not your payout")
+    d = _payout_to_dict(item)
+    d["method_id"] = item.get("method_id", "")
+    d["method_last4"] = _resolve_method_last4(item)
+    d["fail_reason"] = item.get("fail_reason", "")
+    d["manual_hold"] = bool(item.get("manual_hold", False))
+    d["hold_reason"] = item.get("hold_reason", "")
+    d["debit_reversed"] = bool(item.get("debit_reversed", False))
+    d["transfer_provider"] = item.get("transfer_provider", "")
+    d["transfer_ref"] = item.get("transfer_ref", "")
+    d["transfer_attempts"] = _to_int(item.get("transfer_attempts", 0))
+    d["timeline"] = _build_payout_timeline(item)
+    return d
 
 
 def get_payout_stats() -> dict:
@@ -1614,6 +1757,7 @@ def process_one_payout(payout_id: str, now: Optional[int] = None) -> Dict[str, A
             "payout_initiated",
             recipient=user_id,
             title="Your withdrawal is processing",
+            action_url=f"/wallet/payouts/{payout_id}",
             details={"payout_id": payout_id, "amount_cents": amount, "status": "processing"},
         )
 

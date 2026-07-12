@@ -86,6 +86,9 @@ class PayoutSetupViewModel @Inject constructor(
     data class FormState(
         val amountText: String = "",
         val method: String = DEFAULT_PAYOUT_METHOD,
+        // PAY-52: the VERIFIED PAY-B destination the withdraw targets. A payout cannot be submitted
+        // without one (mirrors request_payout's server-side verified-method guard).
+        val selectedMethodId: String? = null,
         val notes: String = "",
         val amountError: UiText? = null,
         val canSubmit: Boolean = false,
@@ -281,7 +284,24 @@ class PayoutSetupViewModel @Inject constructor(
             val methodsResult = repo.loadMethods()
             val methods = (methodsResult as? ApiResult.Success)?.data.orEmpty()
             val connect = (repo.getConnect() as? ApiResult.Success)?.data
-            _state.update { it.copy(methodsLoading = false, methods = methods, connect = connect) }
+            _state.update { st ->
+                // PAY-52: auto-select a verified destination for the withdraw form — the current
+                // selection if still verified, else the default verified method, else the first.
+                val verified = methods.filter { it.status.isVerified }
+                val selected = st.form.selectedMethodId
+                    ?.takeIf { id -> verified.any { it.methodId == id } }
+                    ?: verified.firstOrNull { it.isDefault }?.methodId
+                    ?: verified.firstOrNull()?.methodId
+                val method = methods.firstOrNull { it.methodId == selected }?.type?.wire
+                    ?: st.form.method
+                st.copy(
+                    methodsLoading = false,
+                    methods = methods,
+                    connect = connect,
+                    form = st.form.copy(selectedMethodId = selected, method = method)
+                        .recomputed(st.balance, st.withdrawGate),
+                )
+            }
             if (methodsResult !is ApiResult.Success) {
                 _state.update { it.copy(error = errorMapper.map(methodsResult).message) }
             }
@@ -429,8 +449,14 @@ class PayoutSetupViewModel @Inject constructor(
         it.copy(form = it.form.copy(amountText = text).recomputed(it.balance, it.withdrawGate))
     }
 
-    fun onMethodSelected(method: String) = _state.update {
-        it.copy(form = it.form.copy(method = method))
+    /**
+     * PAY-52: select the VERIFIED destination the withdraw targets. [methodId] is the PAY-B method id;
+     * the free-string [method] is derived from that method's type (for display + as a server fallback).
+     */
+    fun onMethodSelected(methodId: String) = _state.update {
+        val method = it.methods.firstOrNull { m -> m.methodId == methodId }?.type?.wire
+            ?: it.form.method
+        it.copy(form = it.form.copy(selectedMethodId = methodId, method = method).recomputed(it.balance, it.withdrawGate))
     }
 
     fun onNotesChanged(notes: String) = _state.update {
@@ -452,23 +478,43 @@ class PayoutSetupViewModel @Inject constructor(
         }
     }
 
-    /** FR-3/FR-8: submit a payout request. Defensive gate guard + double-submit guard. */
+    /**
+     * PAY-52: submit a REAL payout request. Defensive gate + double-submit guards; a VERIFIED
+     * destination is required. A backend gate race (403 kyc_required/tax_info_required) re-resolves the
+     * gate; every other failure (insufficient balance, invalid/unverified method, duplicate-pending,
+     * transport) surfaces the mapped message. On success the amount is cleared + the balance/methods are
+     * reloaded so the shown available balance reflects the real debit.
+     */
     fun submit() {
         val s = _state.value
         if (!s.withdrawGate.canWithdraw) return // defensive: never request when the gate is not open
         if (s.isSubmitting) return // double-submit guard
         val amount = s.form.parsedAmountCents()
-        if (amount == null || !s.form.canSubmit) return // local validation blocks submit
+        val methodId = s.form.selectedMethodId
+        if (amount == null || methodId == null || !s.form.canSubmit) return // local validation blocks submit
 
         _state.update { it.copy(isSubmitting = true, error = null, lastCreatedPayoutId = null) }
         viewModelScope.launch {
             val outcome = repo.requestPayout(
-                PayoutRequestDraft(amountCents = amount, method = s.form.method, notes = s.form.notes),
+                PayoutRequestDraft(
+                    amountCents = amount,
+                    method = s.form.method,
+                    methodId = methodId,
+                    notes = s.form.notes,
+                ),
                 currency = s.balance?.currency ?: "USD",
             )
             when (outcome) {
-                is PayoutRequestOutcome.Created -> _state.update {
-                    it.copy(isSubmitting = false, lastCreatedPayoutId = outcome.result.payoutId)
+                is PayoutRequestOutcome.Created -> {
+                    _state.update {
+                        it.copy(
+                            isSubmitting = false,
+                            lastCreatedPayoutId = outcome.result.payoutId,
+                            form = it.form.copy(amountText = "", notes = "", amountError = null, canSubmit = false),
+                        )
+                    }
+                    // Reload the balance so the available/held figures reflect the just-made debit.
+                    load()
                 }
                 is PayoutRequestOutcome.Error -> {
                     // A backend gate race (403 kyc_required / tax_info_required) -> re-resolve the gate.
@@ -481,14 +527,6 @@ class PayoutSetupViewModel @Inject constructor(
                             it.copy(isSubmitting = false, error = errorMapper.map(outcome.result).message)
                         }
                     }
-                }
-                PayoutRequestOutcome.Cancelled -> _state.update { it.copy(isSubmitting = false) }
-                is PayoutRequestOutcome.Declined -> _state.update {
-                    it.copy(isSubmitting = false, error = UiText.Res(R.string.payout_request_declined))
-                }
-                // STOP-AND-FLAG: BillingAuthorizer stub -> no real payout was executed.
-                PayoutRequestOutcome.NotConfigured -> _state.update {
-                    it.copy(isSubmitting = false, error = UiText.Res(R.string.payout_request_unavailable))
                 }
             }
         }
@@ -518,7 +556,8 @@ class PayoutSetupViewModel @Inject constructor(
             cents > balance.availableCents -> UiText.Res(R.string.payout_amount_above_available)
             else -> null
         }
-        return copy(amountError = error, canSubmit = error == null)
+        // PAY-52: a verified destination must be chosen before the request can be submitted.
+        return copy(amountError = error, canSubmit = error == null && selectedMethodId != null)
     }
 
     companion object {
