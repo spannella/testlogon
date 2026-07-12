@@ -1169,6 +1169,8 @@ def create_app() -> FastAPI:
     app.include_router(consumer_tax_documents_admin_router)
     from app.routers.tax_form_1099 import tax_form_1099_router
     app.include_router(tax_form_1099_router)
+    from app.routers.tax_1099 import tax_1099_router  # PAY-E (PAY-40)
+    app.include_router(tax_1099_router)
     app.include_router(crm_campaigns_router)
 
     # CRM Reports & Dashboards (RPT-001..RPT-009)
