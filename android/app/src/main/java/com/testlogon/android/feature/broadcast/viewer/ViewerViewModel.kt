@@ -8,7 +8,12 @@ import androidx.lifecycle.LifecycleOwner
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.analytics.PlaybackReporter
 import com.testlogon.android.data.analytics.PlaybackTarget
+import com.testlogon.android.data.broadcast.BroadcastAdEvents
+import com.testlogon.android.data.broadcast.BroadcastPreRoll
 import com.testlogon.android.data.broadcast.BroadcastRepository
+import com.testlogon.android.data.ads.AdCtaClicker
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.data.broadcast.BroadcastViewerAdRepository
 import com.testlogon.android.data.broadcast.BroadcastViewerCountRepository
 import com.testlogon.android.data.broadcast.ViewerPresence
 import com.testlogon.android.feature.player.MediaSourceSpec
@@ -16,7 +21,10 @@ import com.testlogon.android.feature.player.PlayerMediaType
 import com.testlogon.android.feature.player.VideoPlayerController
 import com.testlogon.android.feature.player.VideoPlayerFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,11 +47,13 @@ import javax.inject.Inject
 class ViewerViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repo: BroadcastRepository,
+    private val adRepo: BroadcastViewerAdRepository,
     private val playerFactory: VideoPlayerFactory,
     private val reporter: PlaybackReporter,
     private val presence: ViewerPresence,
     private val viewerCountRepo: BroadcastViewerCountRepository,
     private val clock: Clock,
+    private val adCtaClicker: AdCtaClicker,
 ) : ViewModel() {
 
     val sessionId: String = requireNotNull(savedStateHandle[ARG_SESSION_ID]) {
@@ -97,7 +107,7 @@ class ViewerViewModel @Inject constructor(
                             _uiState.value = ViewerUiState.Unavailable(PlaybackUnavailable.SESSION_ENDED)
                         SessionPlaybackState.SCHEDULED ->
                             _uiState.value = ViewerUiState.Unavailable(PlaybackUnavailable.NOT_STARTED)
-                        SessionPlaybackState.LIVE -> acquireAndPlay(title)
+                        SessionPlaybackState.LIVE -> adGateThenPlay(title)
                     }
                 }
                 is ApiResult.Failure -> _uiState.value = session.error.toUnavailableOrError()
@@ -172,12 +182,236 @@ class ViewerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        adBreakPollJob?.cancel()
         // Detaching the reporter emits the viewer `leave` (best-effort, exactly once) and cancels the
         // bounded heartbeat — AND-285 FR-3/FR-9. No separate presence teardown loop exists.
         reporter.detach()
         presence.reset()
         controllerOrNull?.release()
         controllerOrNull = null
+    }
+
+    // ─── ADV FEATURE 1 — broadcast pre-roll gate ─────────────────────────────
+
+    /**
+     * Serves + gates a pre-roll ad before the live join. Calls POST .../ad-join; if a pre-roll is served
+     * AND the viewer is not ad-free (subscriber / the broadcaster themselves — self-exclusion is enforced
+     * server-side in serve_ad), enter the [ViewerUiState.PreRoll] AD phase and DEFER the live mint until
+     * the ad completes/skips. Any ad-join failure / no-fill / ad-free viewer -> play live immediately
+     * (an ad problem must NEVER block the broadcast).
+     */
+    private suspend fun adGateThenPlay(title: String) {
+        val join = adRepo.adJoin(sessionId)
+        val pre = (join as? ApiResult.Success)?.data?.preRoll
+        val adFree = (join as? ApiResult.Success)?.data?.adFree ?: false
+        if (pre != null && !adFree) {
+            enterPreRoll(title, pre)
+        } else {
+            acquireAndPlay(title)
+        }
+    }
+
+    private fun enterPreRoll(title: String, pre: BroadcastPreRoll) {
+        val skipMs = pre.skipAfterSeconds * 1000L
+        // Image creative: hold for skip-after + a short tail (auto-completes -> charge). Video creative:
+        // completion is driven by the player ENDED; the cap only bounds the countdown display.
+        val durationMs = if (pre.isImage) skipMs + PREROLL_IMAGE_HOLD_MS else skipMs + PREROLL_VIDEO_CAP_MS
+        _uiState.value = ViewerUiState.PreRoll(
+            sessionId = sessionId,
+            title = title,
+            ad = pre,
+            durationMs = durationMs,
+            remainingMs = if (pre.isImage) durationMs else skipMs,
+            skipEnabled = false,
+            skipCountdownMs = skipMs,
+        )
+        // Impression fires once at the start of the pre-roll (charges advertiser + credits broadcaster;
+        // funds-guarded + idempotent per broadcast_preroll:{ad_click_id} on the backend).
+        trackPreRoll(pre, BroadcastAdEvents.IMPRESSION, 0)
+    }
+
+    /** Composable-driven ad clock: [elapsedMs] since the pre-roll started. Updates remaining / skip state. */
+    fun onPreRollPosition(elapsedMs: Long) {
+        val s = _uiState.value as? ViewerUiState.PreRoll ?: return
+        val skipMs = s.ad.skipAfterSeconds * 1000L
+        val skipCountdown = (skipMs - elapsedMs).coerceAtLeast(0L)
+        val remaining = if (s.ad.isImage) (s.durationMs - elapsedMs).coerceAtLeast(0L) else skipCountdown
+        _uiState.update {
+            (it as? ViewerUiState.PreRoll)?.copy(
+                remainingMs = remaining,
+                skipCountdownMs = skipCountdown,
+                skipEnabled = elapsedMs >= skipMs,
+            ) ?: it
+        }
+    }
+
+    /** The pre-roll finished (image hold elapsed / video ENDED) — charge complete, then join live. */
+    fun onPreRollCompleted() {
+        val s = _uiState.value as? ViewerUiState.PreRoll ?: return
+        trackPreRoll(s.ad, BroadcastAdEvents.COMPLETE, s.durationMs.toInt())
+        proceedToLive(s.title)
+    }
+
+    /** The viewer skipped the pre-roll — record skip (no charge), then join live. */
+    fun onPreRollSkip() {
+        val s = _uiState.value as? ViewerUiState.PreRoll ?: return
+        trackPreRoll(s.ad, BroadcastAdEvents.SKIP, 0)
+        proceedToLive(s.title)
+    }
+
+    private fun proceedToLive(title: String) {
+        _uiState.value = ViewerUiState.Loading
+        viewModelScope.launch { acquireAndPlay(title) }
+    }
+
+    private fun trackPreRoll(pre: BroadcastPreRoll, event: String, viewTimeMs: Int) {
+        viewModelScope.launch {
+            adRepo.track(sessionId, pre.creativeId, event, pre.adClickId, viewTimeMs)
+        }
+    }
+
+    // ADV2-105 - broadcast MID-ROLL interrupt / resume
+
+    /** Break identity (started-at) already served, so the SAME break is never re-entered (ADV2-105 guard). */
+    private var lastServedBreakStartedAt: Long? = null
+    private var adBreakPollJob: Job? = null
+
+    /**
+     * Bounded poll (reuses the ~2s chat-poll cadence) that runs WHILE the viewer watches live. Poll-based on
+     * purpose: on-device SSE is unreliable, so detection reads the persisted ad_break state. On a newly-active
+     * break it serves + interrupts. Cancelled in [onCleared]; stopped while a mid-roll shows, re-armed on resume.
+     */
+    private fun startAdBreakPoll() {
+        adBreakPollJob?.cancel()
+        adBreakPollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(AD_BREAK_POLL_INTERVAL_MS)
+                val ready = _uiState.value as? ViewerUiState.Ready ?: continue
+                val data = (adRepo.adBreakState(sessionId) as? ApiResult.Success)?.data ?: continue
+                if (data.adBreakActive && data.adBreakStartedAt != lastServedBreakStartedAt) {
+                    if (enterMidRoll(ready, data.adBreakStartedAt)) {
+                        return@launch // paused for the break; resume re-arms the poll
+                    }
+                    // else: fell open (ad-free / no-fill / serve failed) -> keep watching + polling.
+                }
+            }
+        }
+    }
+
+    /**
+     * Serves a per-viewer mid-roll and, IF a billable creative comes back, PAUSES the live media and shows the
+     * ad overlay (returns true = interrupted). ADV2-107 client guard: a null creative / ad-free viewer / the
+     * broadcaster themselves (server returns ad_free + no creative) is NEVER interrupted - fail open, keep
+     * watching live (returns false). An ad must NEVER block the broadcast, so any serve failure stays live too.
+     */
+    private suspend fun enterMidRoll(live: ViewerUiState.Ready, breakStartedAt: Long?): Boolean {
+        // Mark the break handled up-front so a serve failure / ad-free viewer never re-triggers this break.
+        lastServedBreakStartedAt = breakStartedAt
+        val serve = (adRepo.serveMidRoll(sessionId) as? ApiResult.Success)?.data
+        val ad = serve?.ad
+        if (serve == null || serve.adFree || ad == null) return false
+        controllerOrNull?.pause() // OVERLAY-ONLY: pause our view of the still-running live stream
+        val skipMs = ad.skipAfterSeconds * 1000L
+        val durationMs = if (ad.isImage) skipMs + PREROLL_IMAGE_HOLD_MS else skipMs + PREROLL_VIDEO_CAP_MS
+        _uiState.value = ViewerUiState.MidRoll(
+            live = live,
+            ad = ad,
+            durationMs = durationMs,
+            remainingMs = if (ad.isImage) durationMs else skipMs,
+            skipEnabled = false,
+            skipCountdownMs = skipMs,
+        )
+        // Impression charges the advertiser (CPM) + credits the broadcaster 70/30 (surface=broadcast_midroll),
+        // funds-guarded + idempotent per broadcast_midroll:{ad_click_id} on the backend.
+        trackMidRoll(ad, BroadcastAdEvents.IMPRESSION, 0)
+        return true
+    }
+
+    /** Composable-driven ad clock for the mid-roll; mirrors [onPreRollPosition]. */
+    fun onMidRollPosition(elapsedMs: Long) {
+        val s = _uiState.value as? ViewerUiState.MidRoll ?: return
+        val skipMs = s.ad.skipAfterSeconds * 1000L
+        val skipCountdown = (skipMs - elapsedMs).coerceAtLeast(0L)
+        val remaining = if (s.ad.isImage) (s.durationMs - elapsedMs).coerceAtLeast(0L) else skipCountdown
+        _uiState.update {
+            (it as? ViewerUiState.MidRoll)?.copy(
+                remainingMs = remaining,
+                skipCountdownMs = skipCountdown,
+                skipEnabled = elapsedMs >= skipMs,
+            ) ?: it
+        }
+    }
+
+    /** The mid-roll finished (image hold elapsed / video ENDED) - charge complete, then resume to live edge. */
+    fun onMidRollCompleted() {
+        val s = _uiState.value as? ViewerUiState.MidRoll ?: return
+        trackMidRoll(s.ad, BroadcastAdEvents.COMPLETE, s.durationMs.toInt())
+        resumeLiveFromMidRoll(s)
+    }
+
+    /** The viewer skipped the mid-roll - record skip (no charge), then resume to live edge. */
+    fun onMidRollSkip() {
+        val s = _uiState.value as? ViewerUiState.MidRoll ?: return
+        trackMidRoll(s.ad, BroadcastAdEvents.SKIP, 0)
+        resumeLiveFromMidRoll(s)
+    }
+
+    /**
+     * ADV2-211 (F2) - a CTA tap on the pre-roll / mid-roll CTA bar. Money side via the shared
+     * [AdCtaClicker]: a NON-tip CTA fires the CPC charge (funds-guarded, idempotent) + stashes the
+     * served ad_click_id so a resulting purchase/subscribe attributes CPA; a tip fires NO advertiser
+     * charge. Navigation is the screen's concern (AdCtaRouter).
+     */
+    fun onCtaTap(action: CtaAction) {
+        val ad = when (val st = _uiState.value) {
+            is ViewerUiState.PreRoll -> st.ad
+            is ViewerUiState.MidRoll -> st.ad
+            else -> return
+        }
+        adCtaClicker.onTap(viewModelScope, ad.adClickId, action)
+    }
+
+    private fun trackMidRoll(ad: BroadcastPreRoll, event: String, viewTimeMs: Int) {
+        viewModelScope.launch {
+            adRepo.track(sessionId, ad.creativeId, event, ad.adClickId, viewTimeMs, BroadcastAdEvents.SLOT_MID_ROLL)
+        }
+    }
+
+    /**
+     * Resumes the LIVE stream after the mid-roll. Re-mints the signed URL if it expired while the ad played
+     * (else re-attaches the saved URL when an ad VIDEO replaced the live media on the shared controller),
+     * snaps to the LIVE EDGE, restores [ViewerUiState.Ready], and re-arms the break poll.
+     */
+    private fun resumeLiveFromMidRoll(s: ViewerUiState.MidRoll) {
+        val live = s.live
+        val servedVideo = !s.ad.isImage
+        viewModelScope.launch {
+            val expired = live.expiresAtEpochMs?.let { it - clock.now() <= MIN_REMAINING_MS } ?: false
+            val restored: ViewerUiState.Ready = if (expired) {
+                when (val mint = repo.mintPlaybackUrl(sessionId)) {
+                    is ApiResult.Success -> {
+                        controller.setMedia(mediaSpec(mint.data.playbackUrl, live.title), autoPlay = true)
+                        live.copy(
+                            playbackUrl = mint.data.playbackUrl,
+                            expiresAtEpochMs = mint.data.expiresAt.toEpochMilli(),
+                            atLiveEdge = true,
+                        )
+                    }
+                    is ApiResult.Failure -> { _uiState.value = mint.error.toUnavailableOrError(); return@launch }
+                    is ApiResult.NetworkError -> { _uiState.value = ViewerUiState.Offline; return@launch }
+                }
+            } else {
+                if (servedVideo) {
+                    controller.setMedia(mediaSpec(live.playbackUrl, live.title), autoPlay = true)
+                } else {
+                    controllerOrNull?.play()
+                }
+                live.copy(atLiveEdge = true)
+            }
+            controllerOrNull?.seekTo(Long.MAX_VALUE) // clamp to the LIVE EDGE
+            _uiState.value = restored
+            startAdBreakPoll()
+        }
     }
 
     private suspend fun acquireAndPlay(title: String) {
@@ -192,6 +426,7 @@ class ViewerViewModel @Inject constructor(
                     viewerCount = presence.viewerCount.value,
                 )
                 seedViewerCount()
+                startAdBreakPoll()
             }
             is ApiResult.Failure -> _uiState.value = mint.error.toUnavailableOrError()
             is ApiResult.NetworkError -> _uiState.value = ViewerUiState.Offline
@@ -232,6 +467,15 @@ class ViewerViewModel @Inject constructor(
     companion object {
         const val ARG_SESSION_ID = "sessionId"
         const val DEFAULT_TITLE = "Live broadcast"
+
+        /** ADV FEATURE 1 — image pre-roll auto-completes this long after the skip-after point. */
+        const val PREROLL_IMAGE_HOLD_MS = 3_000L
+
+        /** ADV FEATURE 1 — upper bound on the video pre-roll countdown display (completion is via ENDED). */
+        const val PREROLL_VIDEO_CAP_MS = 60_000L
+
+        /** ADV2-105 - mid-roll break poll cadence while watching live (reuses the ~2s chat-poll cadence). */
+        const val AD_BREAK_POLL_INTERVAL_MS = 2_000L
 
         /** Below this remaining window the web client skips scheduling a refresh (≤10s). */
         const val MIN_REMAINING_MS = 10_000L

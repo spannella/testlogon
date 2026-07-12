@@ -1,0 +1,27 @@
+--- a/app/routers/messaging.py
++++ b/app/routers/messaging.py
+@@ events_poll(): before `return {"events": events}` @@
+             if _cp.get("mode") is not None:
+                 pe["mode"] = _cp.get("mode")
+         events.append(pe)
++    # GHOST-CALL SUPPRESSION: never re-serve a STALE `call.invite` from the backlog. The per-user event
++    # queue keeps old call.invite events with no TTL; a call rings server-side for only
++    # `messaging_webrtc_call_ringing_timeout_seconds` before it is timed out to `missed`, so any
++    # call.invite older than a generous multiple of that window is already terminal and MUST NOT reach a
++    # client (days-old invites caused a "ghost" incoming-call overlay on app launch). Live invites are
++    # only seconds old, so this never drops a genuine current ring. Age-only (no per-event DDB read).
++    try:
++        _gc_now = int(now_ts())
++        _gc_max_age = max(3 * int(S.messaging_webrtc_call_ringing_timeout_seconds), 180)
++        def _gc_stale_invite(_e):
++            if str(_e.get("type") or "") != "call.invite":
++                return False
++            try:
++                _ca = int(_e.get("created_at") or 0)
++            except (TypeError, ValueError):
++                return False
++            return _ca > 0 and (_gc_now - _ca) > _gc_max_age
++        events = [e for e in events if not _gc_stale_invite(e)]
++    except Exception:
++        pass
+     return {"events": events}

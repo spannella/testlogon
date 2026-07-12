@@ -33,6 +33,8 @@ data class CheckoutLineItem(
     val sku: String,
     val name: String,
     val quantity: Int,
+    val unitPriceCents: Long = 0,
+    val lineTotalCents: Long = 0,
 )
 
 /**
@@ -58,7 +60,17 @@ private fun Map<String, Any?>.toLineItem(): CheckoutLineItem {
         is String -> q.toIntOrNull() ?: 1
         else -> 1
     }
-    return CheckoutLineItem(sku = sku, name = name, quantity = quantity)
+    // The response carries no `name`, but it does carry amount_cents and pricing_ref.unit_price_cents.
+    val lineTotal = (this["amount_cents"] as? Number)?.toLong() ?: 0L
+    val unit = ((this["pricing_ref"] as? Map<*, *>)?.get("unit_price_cents") as? Number)?.toLong()
+        ?: if (quantity > 0 && lineTotal > 0) lineTotal / quantity else lineTotal
+    return CheckoutLineItem(
+        sku = sku,
+        name = name,
+        quantity = quantity,
+        unitPriceCents = unit,
+        lineTotalCents = lineTotal,
+    )
 }
 
 /**

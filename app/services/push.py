@@ -316,7 +316,7 @@ def send_message_push(user_sub: str, title: str, body: str, conversation_id: str
         logger.warning("send_message_push failed for %s: %s", user_sub, exc)
 
 
-def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, alert_id: str) -> None:
+def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, alert_id: str, action_url: Optional[str] = None) -> None:
     """Send push notification for an alert to all user's devices.
 
     Dispatches to web_push_send() for web devices and fcm_send() for
@@ -325,16 +325,31 @@ def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, a
     """
     if not S.push_enabled:
         return
-    from app.services.alerts import get_alert_prefs
+    from app.services.alerts import get_alert_prefs, DEFAULT_PUSH_EVENT_TYPES
     prefs = get_alert_prefs(user_sub)
-    enabled = set(prefs.get("push_event_types") or [])
+    # P2 (ECOM-SELLER): effective push allowlist = explicitly-enabled events UNION the
+    # default-on transactional events the user has NOT opted out of (opt-out, not opt-in).
+    explicit = set(prefs.get("push_event_types") or [])
+    opted_out = set(prefs.get("push_opt_out_event_types") or [])
+    enabled = explicit | (set(DEFAULT_PUSH_EVENT_TYPES) - opted_out)
     if alert_type not in enabled:
         return
     if not can_send_alert_channel(user_sub, "push"):
         return
 
-    # Build type-specific URL for notification click target
-    url = _alert_url(alert_type, alert_id)
+    # P1 (ECOM-SELLER): resolve the deep-link - prefer an explicit action_url, else read
+    # it off the persisted alert row (generic: every alert stores its action_url).
+    if not action_url and alert_id:
+        try:
+            _it = T.alerts.get_item(Key={"user_sub": user_sub, "alert_id": alert_id}).get("Item")
+            if _it:
+                action_url = _it.get("action_url") or None
+        except Exception:
+            action_url = action_url or None
+
+    # Build the notification click target: the alert deep-link when present (P1),
+    # otherwise the type-specific fallback URL.
+    url = action_url or _alert_url(alert_type, alert_id)
 
     try:
         r = T.push_devices.query(KeyConditionExpression=Key("user_sub").eq(user_sub), Limit=200)
@@ -380,10 +395,11 @@ def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, a
                         )
 
             elif platform != "web" and S.fcm_enabled:
-                fcm_send(
-                    tok, title, body,
-                    data={"alert_id": alert_id, "alert_type": alert_type},
-                )
+                fcm_data = {"alert_id": alert_id, "alert_type": alert_type}
+                # P1: carry the deep-link so a tapped system-tray push routes to the target.
+                if action_url:
+                    fcm_data["action_url"] = action_url
+                fcm_send(tok, title, body, data=fcm_data)
 
     except Exception:
         logger.exception("Push delivery error: user=%s, alert_type=%s", user_sub, alert_type)

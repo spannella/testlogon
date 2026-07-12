@@ -82,6 +82,14 @@ interface FilesRepository {
      */
     suspend fun move(src: String, dst: String): ApiResult<Unit>
 
+    /**
+     * FM3 - copies the FILE at [src] to the full destination path [dst] via the BK1 copy endpoint. On
+     * success signals [FolderRefreshBus] for the destination's parent folder so its listing re-pages
+     * (the source folder is unchanged by a copy). FOLDER copy is unsupported by the backend (the caller
+     * only offers Copy for files).
+     */
+    suspend fun copy(src: String, dst: String): ApiResult<Unit>
+
     companion object {
         const val PAGE_SIZE = 50
         const val SEARCH_LIMIT = 50
@@ -166,6 +174,14 @@ class FilesRepositoryImpl @Inject constructor(
                 api.move(MoveRequest(src = src, dst = dst))
                 Unit
             }.onCrudSuccess(FilePath.parent(src), dst)
+        }
+
+    override suspend fun copy(src: String, dst: String): ApiResult<Unit> =
+        withContext(io) {
+            call {
+                api.copy(MoveRequest(src = src, dst = dst))
+                Unit
+            }.onCrudSuccess(FilePath.parent(dst))
         }
 
     /**

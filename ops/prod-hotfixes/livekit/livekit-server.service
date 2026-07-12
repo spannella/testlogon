@@ -1,0 +1,13 @@
+[Unit]
+Description=LiveKit Server (SFU)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/livekit-server --config /etc/livekit/livekit.yaml
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=500000
+
+[Install]
+WantedBy=multi-user.target

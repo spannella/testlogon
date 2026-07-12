@@ -391,6 +391,17 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
         item["item_id"] = payload["item_id"]
     if payload.get("creator_user_id"):
         item["creator_user_id"] = payload["creator_user_id"]
+    elif payload.get("item_id") and payload.get("category_id"):
+        # ECOM fix: enrich creator_user_id from the catalog so seller-credit fires for
+        # clients (the Android app) that add via POST /items without a creator field.
+        try:
+            _cat_it = T.catalog.get_item(
+                Key=_catalog_item_key(payload["category_id"], payload["item_id"])
+            ).get("Item")
+            if _cat_it and _cat_it.get("creator_id"):
+                item["creator_user_id"] = _cat_it["creator_id"]
+        except Exception:
+            pass
     T.shopping_cart.put_item(Item=item)
     _touch_cart_activity(user_sub, cart_id)
     _ecm_reserve(user_sub, cart_id, sku, int(payload.get("quantity", 1)))
@@ -423,6 +434,8 @@ def add_catalog_item(
         "quantity": quantity,
         "unit_price_cents": int(item.get("price_cents", 0)),
         "creator_user_id": item.get("creator_id"),
+        "category_id": category_id,
+        "item_id": item_id,
     }
     return add_item(user_sub, cart_id, payload)
 
@@ -510,6 +523,8 @@ def purchase_cart(
     idempotency_key: str | None = None,
     promo_code: str | None = None,
     promo_code_id: str | None = None,
+    broadcast_session_id: str | None = None,  # LIVECOM L3
+    host_id: str | None = None,
 ) -> Dict[str, Any]:
     cart = get_cart(user_sub, cart_id)
     if cart.get("status") == "PURCHASED":
@@ -617,6 +632,9 @@ def purchase_cart(
         line_items=line_items,
         metadata={
             "cart_id": cart_id,
+            "broadcast_session_id": broadcast_session_id,  # LIVECOM L3
+            "host_id": host_id,
+            "is_stream_attributed": bool(broadcast_session_id),
             "idempotency_key": canonical_idempotency_key,
             "request_idempotency_key": request_idempotency_key,
             "promo_code_id": resolved_promo["code_id"] if resolved_promo else None,
@@ -714,6 +732,59 @@ def purchase_cart(
         )
     except Exception:
         pass
+
+    # SHOP seller earnings credit (ECOM fix): write a billing credit ledger
+    # entry per creator so shop sales surface in /ui/earnings and /ui/payouts
+    # (mirrors vod_purchase seller-credit but uses type="credit", which is what
+    # creator_earnings._query_credit_entries and creator_payouts.get_available_balance
+    # actually filter on). Best-effort; never blocks the purchase.
+    try:
+        import logging as _logging
+        from app.services.billing_shared import new_ledger_entry as _nle, user_pk as _seller_pk
+        _by_creator = {}
+        _stream_attributed = bool(broadcast_session_id)  # LIVECOM L4
+        for _ci in items:
+            _cid = _ci.get("creator_user_id") or _ci.get("seller_id")
+            if not _cid or _cid == user_sub:
+                continue
+            _by_creator[_cid] = _by_creator.get(_cid, 0) + int(_ci.get("line_total_cents", 0) or 0)
+        _gross = sum(_by_creator.values())
+        for _cid, _amt in ({}.items() if _stream_attributed else _by_creator.items()):  # LIVECOM L4
+            _credit = int(round(_amt * (final_total / _gross))) if _gross > 0 else int(_amt)
+            if _credit <= 0:
+                continue
+            _sk, _credit_item = _nle(
+                key_name="pk",
+                key_value=_seller_pk(_cid),
+                entry_type="credit",
+                amount_cents=_credit,
+                state="settled",
+                reason="Shop sale",
+                meta={
+                    "content_type": "shop",
+                    "order_id": order_id,
+                    "cart_id": cart_id,
+                    "buyer_id": user_sub,
+                    "purchase_txn_id": txn_id,
+                },
+            )
+            T.billing.put_item(Item=_credit_item)
+    except Exception:
+        _logging.getLogger(__name__).exception("Failed to write seller credit ledger for cart %s", cart_id)
+
+    # LIVECOM L4: stream-attributed commission split (host commission + seller
+    # net + platform fee), idempotent per order. Replaces the legacy seller
+    # credit for in-stream sales (skipped above when broadcast_session_id set).
+    if broadcast_session_id:
+        try:
+            from app.services.live_commerce_split import settle_stream_order as _settle_livecom
+            _settle_livecom(order_id=order_id, session_id=broadcast_session_id,
+                            host_id=host_id, buyer_sub=user_sub, items=items,
+                            final_total=final_total, currency=cart.get("currency", "USD"),
+                            cart_id=cart_id, txn_id=txn_id)
+        except Exception:
+            import logging as _lg_lc
+            _lg_lc.getLogger(__name__).exception("livecom split failed for order %s", order_id)
 
     # SHOP-003: Remove TTL from purchased carts (permanent records)
     try:

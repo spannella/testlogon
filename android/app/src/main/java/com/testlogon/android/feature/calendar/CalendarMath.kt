@@ -144,6 +144,8 @@ object CalendarMath {
                 val days = weekDays(focusEpochDay, weekStartIso)
                 DayRange(days.first(), days.last() + 1L)
             }
+            // Day view loads exactly the focus day.
+            CalendarViewMode.DAY -> DayRange(focusEpochDay, focusEpochDay + 1L)
             // Agenda loads an initial window of focus +/- 7 days.
             CalendarViewMode.AGENDA -> DayRange(focusEpochDay - 7L, focusEpochDay + 8L)
         }
@@ -152,6 +154,7 @@ object CalendarMath {
     fun step(mode: CalendarViewMode, focusEpochDay: Long, direction: Int): Long = when (mode) {
         CalendarViewMode.MONTH -> toEpochDay(addMonths(fromEpochDay(focusEpochDay), direction))
         CalendarViewMode.WEEK -> focusEpochDay + direction.toLong() * DAYS_PER_WEEK
+        CalendarViewMode.DAY -> focusEpochDay + direction.toLong()
         CalendarViewMode.AGENDA -> focusEpochDay + direction.toLong()
     }
 

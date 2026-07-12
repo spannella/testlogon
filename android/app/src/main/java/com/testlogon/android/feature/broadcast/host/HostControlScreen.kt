@@ -52,9 +52,17 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.data.broadcast.BroadcastSession
+import com.testlogon.android.feature.broadcast.host.ads.AdControlViewModel
+import com.testlogon.android.feature.broadcast.host.livecommerce.LiveCommerceHostSection
+import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
 import com.testlogon.android.data.broadcast.BroadcastSessionStatus
 import com.testlogon.android.data.broadcast.HealthLevel
 import com.testlogon.android.data.broadcast.HostHealthReport
+import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
+import com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer
+import com.testlogon.android.core.webrtc.ui.VideoRenderer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
 import kotlinx.coroutines.delay
 import java.text.NumberFormat
 import java.time.Duration
@@ -102,6 +110,18 @@ object HostControlTestTags {
 
     /** AND-316 — opens the ad-break / ad-config surface. */
     const val MANAGE_ADS = "host_manage_ads"
+    const val MANAGE_QA = "host_manage_qa"
+
+    /** ADV2-106 - the primary-screen Start ad break / End early control + its countdown card. */
+    const val AD_BREAK_CARD = "host_ad_break_card"
+    const val AD_BREAK_START = "host_ad_break_start"
+    const val AD_BREAK_END = "host_ad_break_end"
+
+    /** #7c — the live self-view PIP of the host's own camera while managing. */
+    const val SELF_VIEW = "host_self_view"
+
+    /** Bidirectional host live-chat read/compose panel. */
+    const val LIVE_CHAT = "host_live_chat"
 }
 
 /**
@@ -127,6 +147,7 @@ fun HostControlRoute(
     onPrivateShows: () -> Unit = {},
     // AND-316 — open the ad-break / ad-config surface for this session.
     onManageAds: () -> Unit = {},
+    onManageQa: () -> Unit = {},
     viewModel: HostControlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -137,6 +158,17 @@ fun HostControlRoute(
     }
     HostControlScreen(
         state = state,
+        videoRenderer = viewModel.videoRenderer,
+        // Bidirectional live chat for the host: the SAME viewer LiveChatPanel + LiveChatViewModel,
+        // keyed by this broadcast session id, so the host can READ the live chat and POST messages
+        // (not just moderate). Only shown once the session id resolves.
+        chatPanel = { state.session?.id?.let { sid -> HostLiveChatSection(sessionId = sid) } },
+        // ADV2-106 - Start ad break (+ countdown / End early) on the PRIMARY live screen. Shares the host
+        // route's NavBackStackEntry (same sessionId arg) so AdControlViewModel resolves without extra wiring.
+        adBreakControls = { HostAdBreakSection() },
+        // LIVECOM L5 - "Feature/Pin product" (shop this stream) control. Shares the host route's
+        // NavBackStackEntry (same sessionId arg) so LiveCommerceHostViewModel resolves without extra wiring.
+        liveCommerceControls = { LiveCommerceHostSection() },
         onStart = viewModel::onStart,
         onStop = viewModel::onStop,
         onConfirmStop = viewModel::onConfirmStopDialog,
@@ -151,6 +183,7 @@ fun HostControlRoute(
         onManageTips = onManageTips,
         onPrivateShows = onPrivateShows,
         onManageAds = onManageAds,
+        onManageQa = onManageQa,
         onBack = onBack,
     )
 }
@@ -165,6 +198,17 @@ fun HostControlRoute(
 fun HostControlScreen(
     state: HostControlUiState,
     onStart: () -> Unit,
+    // #7c — the native-WebRTC renderer for the live self-view PIP. Defaulted to the placeholder so
+    // existing call sites / tests are unaffected.
+    videoRenderer: VideoRenderer = PlaceholderVideoRenderer,
+    // Bidirectional live-chat panel slot (host read + compose). Defaulted empty so existing call
+    // sites / Compose tests that render the stateless surface without Hilt are unaffected.
+    chatPanel: @Composable () -> Unit = {},
+    // ADV2-106 - the Start ad break / countdown / End early control slot on the primary live screen.
+    adBreakControls: @Composable () -> Unit = {},
+    // LIVECOM L5 - the "Feature/Pin product" (shop this stream) control slot. Defaulted empty so existing
+    // call sites / Compose tests that render the stateless surface without Hilt are unaffected.
+    liveCommerceControls: @Composable () -> Unit = {},
     onStop: () -> Unit,
     onConfirmStop: (Boolean) -> Unit,
     onResume: () -> Unit,
@@ -187,6 +231,7 @@ fun HostControlScreen(
     onPrivateShows: () -> Unit = {},
     // AND-316 — open the ad-break / ad-config surface; defaulted so existing call sites/tests are unaffected.
     onManageAds: () -> Unit = {},
+    onManageQa: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.testTag(HostControlTestTags.SCREEN),
@@ -214,6 +259,18 @@ fun HostControlScreen(
         ) {
             StatusHeader(session = state.session)
 
+            // #7c — live self-view PIP of the host's own camera while managing the broadcast. Renders the
+            // running local track (published by the ingest preview/publisher) via the native renderer; the
+            // renderer paints its own placeholder when no track is present yet.
+            LocalVideoPreview(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .testTag(HostControlTestTags.SELF_VIEW),
+                hasTrack = true,
+                renderer = videoRenderer,
+            )
+
             HealthReportCard(
                 health = state.health,
                 stale = state.healthStale,
@@ -235,6 +292,16 @@ fun HostControlScreen(
                 onResume = onResume,
                 onReschedule = onReschedule,
             )
+
+            // ADV2-106 - Start ad break (+ live countdown / End early) on the PRIMARY live host screen.
+            adBreakControls()
+
+            // LIVECOM L5 - "Feature/Pin product" (shop this stream): pick own OR affiliate any product,
+            // show the pinned list + unpin.
+            liveCommerceControls()
+
+            // Bidirectional live chat (read + compose) for the host, alongside the moderation controls.
+            chatPanel()
 
             // AND-310 — manage this broadcast's inputs (list / activate / promote to live program).
             OutlinedButton(
@@ -322,6 +389,18 @@ fun HostControlScreen(
                     .testTag(HostControlTestTags.MANAGE_ADS),
             ) {
                 Text(stringResource(R.string.host_control_manage_ads))
+            }
+
+            // Live Q&A host console: toggle Q&A mode, moderate the question queue (feature / answer /
+            // dismiss / pin / remove), view engagement stats.
+            OutlinedButton(
+                onClick = onManageQa,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(HostControlTestTags.MANAGE_QA),
+            ) {
+                Text(stringResource(R.string.host_control_manage_qa))
             }
         }
     }
@@ -664,6 +743,98 @@ private fun RescheduleDialog(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 TimePicker(state = timePickerState)
+            }
+        }
+    }
+}
+
+
+/**
+ * Host live-chat section: a labelled LiveChatPanel keyed by the broadcast [sessionId]. Reuses the exact
+ * viewer panel + LiveChatViewModel so the host reads the live chat and posts messages through the same
+ * send path (attributed to the host = session creator). The panel poll backstop keeps it usable even
+ * when the SSE will not connect on-device.
+ */
+@Composable
+private fun HostLiveChatSection(sessionId: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.live_chat_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        LiveChatPanel(
+            sessionId = sessionId,
+            isHost = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(HostControlTestTags.LIVE_CHAT),
+        )
+    }
+}
+
+/**
+ * ADV2-106 - the "Start ad break" control (+ live countdown / End early) surfaced on the PRIMARY live host
+ * screen, reusing [AdControlViewModel.triggerAdBreak]/[endAdBreak]. The VM shares the host route's
+ * NavBackStackEntry (same "sessionId" arg), so no extra nav wiring is needed. Backend guardrails (min
+ * interval + max breaks/session, ADV2-104) surface as a transient error under the button.
+ */
+@Composable
+private fun HostAdBreakSection(vm: AdControlViewModel = hiltViewModel()) {
+    val s by vm.uiState.collectAsStateWithLifecycle()
+    Card(modifier = Modifier.fillMaxWidth().testTag(HostControlTestTags.AD_BREAK_CARD)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.host_ad_break_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            if (s.adBreakActive) {
+                Text(
+                    text = stringResource(R.string.host_ad_break_active, s.remainingSeconds),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                OutlinedButton(
+                    onClick = vm::endAdBreak,
+                    enabled = !s.mutationInFlight,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(HostControlTestTags.AD_BREAK_END),
+                ) {
+                    if (s.mutationInFlight) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    } else {
+                        Text(stringResource(R.string.host_ad_break_end))
+                    }
+                }
+            } else {
+                Button(
+                    onClick = vm::triggerAdBreak,
+                    enabled = !s.mutationInFlight && !s.loading,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(HostControlTestTags.AD_BREAK_START),
+                ) {
+                    if (s.mutationInFlight) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    } else {
+                        Text(stringResource(R.string.host_ad_break_start))
+                    }
+                }
+            }
+            s.error?.let { msg ->
+                Text(
+                    text = msg,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }

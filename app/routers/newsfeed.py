@@ -47,7 +47,7 @@ from app.services.analytics_events import (
     record_engagement_event,
     record_revenue_event,
 )
-from app.services.subscription_access import can_access_creator
+from app.services.subscription_access import can_access_creator, content_locked_for_viewer
 from app.services.social_alerts import (
     BATCH_KEY_PATTERNS,
     emit_mention_alerts,
@@ -161,11 +161,15 @@ def _fetch_sponsored_post(
             "body": ad.get("body_text", ""),
             "cta_text": ad.get("cta_text"),
             "cta_url": ad.get("cta_url"),
+            "ctas": ad.get("ctas") or [],
             "image_urls": [ad["image_url"]] if ad.get("image_url") else [],
             "impression_url": ad.get("impression_url"),
             "click_url": ad.get("click_url"),
             "creative_id": creative_id,
             "campaign_id": ad.get("campaign_id"),
+            "account_id": ad.get("account_id", ""),
+            "ad_click_id": ad.get("ad_click_id", ""),
+            "content_owner_id": ad.get("content_owner_id", ""),
             "reactions_counts": {},
             "comment_count": 0,
             "comments_enabled": False,
@@ -1414,6 +1418,7 @@ class CreatePostRequest(ContentFieldsMixin):
     tags: List[str] = Field(default_factory=list)
     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     visibility: Literal["followers", "public"] = "followers"
+    subscriber_only: bool = False  # SUB-E3: per-post subscriber-only gate
     # B8 B-LOCK: accept "price"/"none" aliases so a fixed-price locked post created
     # by the app (which sent "price") or an explicit unlock ("none") validates; the
     # value is normalized to the canonical fixed_price/tip_lottery/None below.
@@ -1688,6 +1693,12 @@ def _validate_comment_image_url(url: str) -> str:
 
 class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
+    # TIP-302: a comment can CARRY a tip. When tip_amount_cents is present the
+    # create-comment handler charges it (recipient = the POST author) via
+    # charge_tip BEFORE the comment row is written, then stamps tip_total_cents.
+    tip_amount_cents: Optional[int] = Field(default=None, ge=1)
+    tip_currency: str = "usd"
+    tip_payment_method_id: Optional[str] = None
     # FEED-004: emoji/GIF/sticker comments. `kind` selects the content type.
     # For kind="text" the existing ContentFieldsMixin body_* fields are used.
     kind: Literal["text", "gif", "sticker", "image"] = "text"
@@ -1815,6 +1826,10 @@ class CommentResponse(BaseModel):
 class TipRequest(BaseModel):
     amount_cents: int = Field(..., ge=1)
     currency: str = "usd"
+    # TIP-301: name an explicit / tip-default payment method for the comment
+    # tip so charge_tip can resolve the tipper's saved PM (falls back to
+    # tip-default -> default when None).
+    payment_method_id: Optional[str] = None
 
 
 class UnfollowRequest(BaseModel):
@@ -1981,6 +1996,8 @@ class PresignUploadResponse(BaseModel):
 class UnlockPostRequest(BaseModel):
     post_id: str
     payment_method_id: Optional[str] = None
+    # ADV-404: optional last-click CPA attribution handle carried from an ad CTA.
+    ad_click_id: Optional[str] = None
     idempotency_key: Optional[str] = Field(
         default=None,
         min_length=1,
@@ -2266,6 +2283,17 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     """
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
     status, publish_at, published_at, schedule_timezone, scheduled_at_local = _resolve_post_lifecycle_fields(post)
+    # SUB-E3: per-post subscriber-only gate -> non-destructive lock marker.
+    _sub_author = str(post.get("user_id") or "")
+    _sub_locked = False
+    if (not locked_body) and viewer_id and _sub_author and _sub_author != viewer_id and bool(post.get("subscriber_only")):
+        try:
+            from app.services.subscription_access import content_locked_for_viewer as _clfv
+            _sub_locked = _clfv(viewer_id, _sub_author, subscriber_only=True)
+        except Exception:
+            _sub_locked = False
+    if _sub_locked:
+        locked_body = True
 
     # Support both old image_url (str) and new image_urls (list)
     image_urls = list(post.get("image_urls") or [])
@@ -2346,6 +2374,9 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "video": video_embed,
         "file_attachments": file_attachments,
         "visibility": post.get("visibility", "followers"),
+        "subscriber_only": bool(post.get("subscriber_only")),
+        "subscriber_locked": _sub_locked,
+        "creator_id": _sub_author,
         "locked": bool(post.get("locked")),
         "lock_expired": lock_expired,
         "lock_type": lock_type,
@@ -2365,6 +2396,13 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "like_count": int(post.get("like_count", 0)),
         "comment_count": int(post.get("comment_count", 0)),
         "tip_total_cents": int(post.get("tip_total_cents", 0)),
+        "tip_reactions": [
+            {"tipper_id": _r.get("tipper_id"), "emoji": _r.get("emoji"),
+             "amount_cents": int(_r.get("amount_cents") or 0),
+             "tip_payment_id": _r.get("tip_payment_id"),
+             "created_at": _r.get("created_at")}
+            for _r in (post.get("tip_reactions") or [])
+        ],
         "liked_by_me": liked_by_me,
         "reactions_counts": reactions_counts,
         "my_reactions": my_reactions,
@@ -2387,6 +2425,19 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "sponsored_by": post.get("sponsored_by"),
         "deal_id": post.get("deal_id"),
         "ftc_disclosure": post.get("ftc_disclosure"),
+        # ADV2-403 (F4): sponsored-as-creator (paid partnership) fields.
+        # DISTINCT from the standalone is_sponsored ad unit -- the post stays
+        # a NORMAL creator post (tippable/likeable/commentable, no forced
+        # label); these drive advertiser BILLING + attribution + analytics
+        # only. Additive/defaulted so organic posts are unchanged.
+        "paid_partnership": bool(post.get("paid_partnership", False)),
+        "promoted_by_advertiser": bool(post.get("promoted_by_advertiser", False)),
+        "sponsor_account_id": post.get("sponsor_account_id"),
+        "sponsor_label": post.get("sponsor_label"),
+        "paid_partnership_disclosure": post.get("paid_partnership_disclosure"),
+        "campaign_id": post.get("campaign_id"),
+        "creative_id": post.get("creative_id"),
+        "content_owner_id": post.get("content_owner_id"),
         # ENGAGE-002: Poll data
         **_poll_fields_for_post(post, locked_body, viewer_id),
         # FEED-005: Countdown fields (countdown_title hidden when post body is locked)
@@ -2451,6 +2502,13 @@ def _comment_to_dict(it: Dict[str, Any], viewer_id: Optional[str] = None) -> Dic
         "body_version": _body_version,
         "version": int(it.get("version", 1)),
         "tip_total_cents": int(it.get("tip_total_cents", 0)),
+        "tip_reactions": [
+            {"tipper_id": _r.get("tipper_id"), "emoji": _r.get("emoji"),
+             "amount_cents": int(_r.get("amount_cents") or 0),
+             "tip_payment_id": _r.get("tip_payment_id"),
+             "created_at": _r.get("created_at")}
+            for _r in (it.get("tip_reactions") or [])
+        ],
         # Emoji reactions on comments (additive — legacy items lack these)
         "reactions_counts": reactions_counts,
         "my_reactions": my_reactions,
@@ -2737,6 +2795,18 @@ def list_hidden_posts(
 def has_unlocked(user_id: str, post_id: str) -> bool:
     it = ddb_get_item({"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"})
     return bool(it and it.get("unlocked") is True)
+
+
+def _subscriber_locked_post(post: Dict[str, Any], viewer_id) -> bool:
+    """SUB-E3: True when a per-post subscriber-only item must be locked for the
+    viewer (owner/admin/active-subscriber bypass via content_locked_for_viewer)."""
+    author = str(post.get("user_id") or "")
+    if not author or author == viewer_id or not bool(post.get("subscriber_only")):
+        return False
+    try:
+        return content_locked_for_viewer(viewer_id, author, subscriber_only=True)
+    except Exception:
+        return False
 
 
 def can_view_post(viewer_id: str, post: Dict[str, Any]) -> bool:
@@ -3755,6 +3825,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "image_variants": list(getattr(req, "image_variants", None) or []),
         "video_id": video_id,
         "visibility": req.visibility,
+        "subscriber_only": bool(getattr(req, "subscriber_only", False)),
         "locked": locked,
         "lock_type": lock_type,
         "unlock_price_cents": unlock_price_cents,
@@ -4362,6 +4433,8 @@ def get_post(post_id: str, user_id: UserIdDep):
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     author = post.get("user_id")
+    if (post.get("moderation_removed") or post.get("moderation_removed_at")) and author != user_id:
+        raise HTTPException(status_code=404, detail="Post not found")
     if author and author != user_id and not can_view_post(user_id, post):
         raise HTTPException(status_code=403, detail="Not authorized to view this post")
     locked = bool(post.get("locked"))
@@ -4764,6 +4837,8 @@ def get_post_file(post_id: str, file_index: int, user_id: UserIdDep):
     locked = bool(post.get("locked"))
     if locked and author != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required")
+    if _subscriber_locked_post(post, user_id):
+        raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to unlock this content", "creator_id": author})
     attachments = post.get("file_attachments") or []
     if file_index < 0 or file_index >= len(attachments):
         raise HTTPException(status_code=404, detail="File attachment not found")
@@ -4913,6 +4988,8 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("is_sponsored"):
+        raise HTTPException(status_code=400, detail={"code": "tip_not_allowed_on_ad", "message": "Tipping is not available on sponsored posts."})
     if post.get("user_id") == user_id:
         raise HTTPException(status_code=400, detail="Cannot tip your own post")
 
@@ -4931,36 +5008,32 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
         if req.payment_method_id not in pm_ids:
             raise HTTPException(status_code=400, detail="Payment method not found")
 
-    pi = payments.create_payment_intent(
-        user_id=user_id,
-        amount_cents=req.amount_cents,
-        currency=req.currency,
-        metadata={"type": "tip_post", "post_id": post_id},
-    )
-    conf = payments.confirm_payment_intent(payment_intent_id=pi["payment_intent_id"])
-    if conf.get("status") != "succeeded":
-        raise HTTPException(status_code=402, detail="Payment failed")
-
+    # TIP-007: the mock PaymentProvider stub is replaced by the centralized
+    # charge_tip seam (called below, after the tip_total bump). The stub always
+    # "succeeded", so removing it changes no behavior.
     updated = ddb_update_item(
         key={"pk": pk_post(post_id), "sk": sk_post()},
         update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
         expr_vals={":z": 0, ":amt": req.amount_cents},
     )
 
-    # Write billing ledger debit + credit entries (best-effort)
+    # Write billing ledger debit + credit entries via the centralized charge_tip seam.
     post_author = post.get("user_id")
+    _tip_txn_id = ""
     if post_author and post_author != user_id:
-        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-        write_tip_ledger(TipLedgerEntry(
-            tipper_user_id=user_id,
-            recipient_user_id=post_author,
+        from app.services.tips import charge_tip
+        _tp = charge_tip(
+            tipper_id=user_id,
+            recipient_id=post_author,
             amount_cents=req.amount_cents,
             currency=req.currency,
+            payment_method_id=req.payment_method_id,
             content_type="post",
             content_id=post_id,
-            payment_method_id=req.payment_method_id,
-            extra_meta={"post_id": post_id},
-        ))
+            meta={"post_id": post_id},
+            idempotency_key=new_id("posttip"),
+        )
+        _tip_txn_id = _tp.tip_payment_id
         try:
             from app.services.activity_feed import record_social_interaction
             record_social_interaction(recipient_id=post_author, actor_id=user_id, kind="tip", target_type="post", target_id=post_id, extra={"amount_cents": req.amount_cents, "currency": req.currency})
@@ -4976,7 +5049,7 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
             licensee_id=user_id,
             source_type="post_tip",
             source_amount_cents=req.amount_cents,
-            source_txn_id=pi["payment_intent_id"],
+            source_txn_id=_tip_txn_id or post_id,
             currency=str(req.currency or "usd").lower(),
         )
     except Exception:
@@ -5124,6 +5197,90 @@ def add_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
     # NRS-003: For-You engagement signal (no-op unless flag on).
     _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="reaction")
     return {"ok": True}
+
+
+class PostTipReactRequest(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    currency: str = "usd"
+    emoji: Optional[str] = None
+    payment_method_id: Optional[str] = None
+
+
+@router.post("/posts/{post_id}/reactions/tip")
+def tip_react_to_post(post_id: str, req: PostTipReactRequest, user_id: UserIdDep, _kyc: object = Depends(require_kyc_tier(2))):  # GAP-0268 (inert unless enforcement flag on)
+    """TIP-202: money-reaction (tip-react) on a POST -- DISTINCT from the free emoji
+    add_reaction. Routes through the single charge_tip money-path
+    (content_type="post_react"), crediting the POST AUTHOR, rejecting a self-tip,
+    and -- only AFTER a successful charge -- recording a money-reaction badge +
+    bumping tip_total_cents + emitting a social alert."""
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("is_sponsored"):
+        raise HTTPException(status_code=400, detail={"code": "tip_not_allowed_on_ad", "message": "Tipping is not available on sponsored posts."})
+    author = post.get("user_id")
+    if not author:
+        raise HTTPException(status_code=400, detail="Post has no author to tip")
+    if author == user_id:
+        raise HTTPException(status_code=400, detail="Cannot tip your own post")
+
+    emoji = (req.emoji or "\U0001F4B8").strip() or "\U0001F4B8"
+
+    # Money-path via the single funnel. A self-tip (400) or a failed charge (402)
+    # raises BEFORE any badge/ledger side effect -> no badge, no ledger on failure.
+    from app.services.tips import charge_tip
+    receipt = charge_tip(
+        tipper_id=user_id,
+        recipient_id=author,
+        amount_cents=req.amount_cents,
+        currency=req.currency,
+        payment_method_id=req.payment_method_id,
+        content_type="post_react",
+        content_id=post_id,
+        meta={"post_id": post_id, "emoji": emoji},
+        idempotency_key=new_id("postreacttip"),
+    )
+
+    # Only reached on a successful charge. Record the money-reaction badge + running
+    # tip total on the post (distinct from the free emoji `reactions` map).
+    badge = {
+        "tipper_id": user_id,
+        "emoji": emoji,
+        "amount_cents": int(req.amount_cents),
+        "tip_payment_id": receipt.tip_payment_id,
+        "created_at": now_iso(),
+    }
+    updated = ddb_update_item(
+        key={"pk": pk_post(post_id), "sk": sk_post()},
+        update_expr="SET tip_reactions = list_append(if_not_exists(tip_reactions, :empty), :new), tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
+        expr_vals={":empty": [], ":new": [badge], ":z": 0, ":amt": int(req.amount_cents)},
+    )
+
+    # GAP-0355: social alert to the post author (best-effort; never break the tip).
+    try:
+        actor_name = _post_fadt_display_name(user_id)
+        emit_social_alert(
+            recipient_user_id=author,
+            alert_type="post_tip",
+            actor_user_id=user_id,
+            actor_display_name=actor_name,
+            batch_key=BATCH_KEY_PATTERNS["post_tip"].format(post_id=post_id),
+            title=f"{actor_name} sent you a tip reaction {emoji}",
+            details={"post_id": post_id, "amount_cents": int(req.amount_cents), "emoji": emoji},
+            action_url=f"/feed/posts/{post_id}",
+        )
+    except Exception:
+        logger.warning("post tip-react social alert failed post_id=%s", post_id, exc_info=True)
+
+    return {
+        "ok": True,
+        "tip_payment_id": receipt.tip_payment_id,
+        "charged_cents": receipt.charged_cents,
+        "net_cents": receipt.net_cents,
+        "recipient_id": author,
+        "emoji": emoji,
+        "tip_total_cents": int(updated.get("tip_total_cents", 0)),
+    }
 
 
 @router.post("/posts/{post_id}/unreact")
@@ -5503,7 +5660,7 @@ def view_feed(
                 status, _publish_at, _published_at, _schedule_timezone, _scheduled_at_local = _resolve_post_lifecycle_fields(post)
                 if status != "published":
                     continue
-                if post.get("moderation_removed") or post.get("moderation_removed_at"):
+                if (post.get("moderation_removed") or post.get("moderation_removed_at")) and post.get("user_id") != user_id:
                     continue
                 if is_hidden(user_id, post_id):
                     continue
@@ -6001,6 +6158,9 @@ def download_post_attachment(
     if bool(post.get("locked")) and author != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required")
 
+    if _subscriber_locked_post(post, user_id):
+        raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to unlock this content", "creator_id": author})
+
     attachment = None
     for it in post.get("attachments") or []:
         if str((it or {}).get("attachment_id") or "") == attachment_id:
@@ -6070,6 +6230,9 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to comment")
 
+    if _subscriber_locked_post(post, user_id):
+        raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to comment on this content", "creator_id": post.get("user_id")})
+
     # FEED-004: gate media comments behind feature flag
     if req.kind in ("gif", "sticker", "image") and not bool(getattr(S, "rich_comments_enabled", True)):
         raise HTTPException(status_code=400, detail="Media comments are not enabled")
@@ -6077,6 +6240,26 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
     comment_id = new_id("cmt")
     created_at = now_iso()
     parent = req.parent_comment_id
+
+    # TIP-302: comment-CARRYING tip. Charge FIRST (recipient = the POST author)
+    # so a declined/failed charge raises BEFORE any comment row is written --
+    # no orphan comment, no orphan stamp, no ledger. A tip on your OWN post
+    # self-tips -> charge_tip raises 400 cannot_tip_self.
+    comment_tip_total = 0
+    if getattr(req, "tip_amount_cents", None):
+        from app.services.tips import charge_tip
+        charge_tip(
+            tipper_id=user_id,
+            recipient_id=post_author,
+            amount_cents=int(req.tip_amount_cents),
+            currency=(getattr(req, "tip_currency", "usd") or "usd"),
+            payment_method_id=getattr(req, "tip_payment_method_id", None),
+            content_type="comment",
+            content_id=comment_id,
+            meta={"post_id": post_id, "comment_id": comment_id, "carried": True},
+            idempotency_key=new_id("cmtcarry"),
+        )
+        comment_tip_total = int(req.tip_amount_cents)
 
     # FEED-004: media comments (gif/sticker/image) carry no body content; text
     # comments use the existing ContentFieldsMixin envelope.
@@ -6123,7 +6306,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         **content,
         **media_fields,
         "version": 1,
-        "tip_total_cents": 0,
+        "tip_total_cents": comment_tip_total,
         "GSI2PK": pk_post_comments(post_id),
         "GSI2SK": f"{created_at}#CMT#{comment_id}",
     }
@@ -6260,7 +6443,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         body_format=content["body_format"],
         body_version=content["body_version"],
         version=1,
-        tip_total_cents=0,
+        tip_total_cents=comment_tip_total,
         kind=req.kind,
         gif_url=req.gif_url,
         gif_alt_text=req.gif_alt_text,
@@ -6291,6 +6474,9 @@ def list_comments(
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to view comments")
 
+    if _subscriber_locked_post(post, user_id):
+        raise HTTPException(status_code=403, detail={"code": "SUBSCRIBER_ONLY", "detail": "Subscribe to view comments on this content", "creator_id": post.get("user_id")})
+
     eks = decode_cursor_or_400(cursor)
     resp = ddb_query(
         IndexName="GSI2",
@@ -6303,7 +6489,7 @@ def list_comments(
     items = [
         _comment_to_dict(it, viewer_id=user_id)
         for it in resp.get("Items", [])
-        if not it.get("moderation_removed")
+        if (not it.get("moderation_removed")) or it.get("user_id") == user_id
     ]
     return {"items": items, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
 
@@ -6453,15 +6639,30 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
     if target.get("deleted"):
         raise HTTPException(status_code=409, detail="Comment deleted")
 
-    pi = payments.create_payment_intent(
-        user_id=tipper_id,
-        amount_cents=req.amount_cents,
-        currency=req.currency,
-        metadata={"type": "tip", "post_id": post_id, "comment_id": comment_id},
-    )
-    conf = payments.confirm_payment_intent(payment_intent_id=pi["payment_intent_id"])
-    if conf.get("status") != "succeeded":
-        raise HTTPException(status_code=402, detail="Payment failed")
+    # TIP-008: the mock PaymentProvider stub is replaced by the centralized
+    # charge_tip seam (called below). Keep a stub-shaped receipt for the response.
+    pi = {"provider": "stub", "payment_intent_id": None, "status": "succeeded"}
+
+    comment_author = target.get("user_id")
+
+    # TIP-301: charge via the centralized charge_tip seam BEFORE stamping the
+    # comment, so a declined/failed charge (402) leaves NO tip_total bump and
+    # NO ledger. payment_method_id now flows from TipRequest (explicit ->
+    # tip-default -> default fallback inside charge_tip).
+    if comment_author and comment_author != tipper_id:
+        from app.services.tips import charge_tip
+        _ct = charge_tip(
+            tipper_id=tipper_id,
+            recipient_id=comment_author,
+            amount_cents=req.amount_cents,
+            currency=req.currency,
+            payment_method_id=getattr(req, "payment_method_id", None),
+            content_type="comment",
+            content_id=comment_id,
+            meta={"post_id": post_id, "comment_id": comment_id},
+            idempotency_key=new_id("cmttip"),
+        )
+        pi["payment_intent_id"] = _ct.tip_payment_id
 
     key = {"pk": target["pk"], "sk": target["sk"]}
     updated = ddb_update_item(
@@ -6469,22 +6670,6 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
         update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
         expr_vals={":z": 0, ":amt": req.amount_cents},
     )
-
-    comment_author = updated.get("user_id")
-
-    # Write billing ledger debit + credit entries for comment tip (best-effort)
-    if comment_author and comment_author != tipper_id:
-        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-        write_tip_ledger(TipLedgerEntry(
-            tipper_user_id=tipper_id,
-            recipient_user_id=comment_author,
-            amount_cents=req.amount_cents,
-            currency=req.currency,
-            content_type="comment",
-            content_id=comment_id,
-            payment_method_id=getattr(req, "payment_method_id", None),
-            extra_meta={"post_id": post_id, "comment_id": comment_id},
-        ))
 
     if comment_author and comment_author != tipper_id:
         put_notification(
@@ -6959,6 +7144,19 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep, _kyc: object = Depen
         advance_progress(user_id, "unlock_count")
     except Exception:
         logger.debug("achievement hook: unlock_count", exc_info=True)
+
+    # ADV-404: attribute this paid unlock to the unlocker's last ad click
+    # (explicit ad_click_id or last-click 7d) and charge the CPA bid. Best-effort.
+    try:
+        from app.services.ad_attribution import attribute_conversion
+        attribute_conversion(
+            viewer_sub=user_id,
+            conversion_type="unlock",
+            conversion_value_cents=int(price or 0),
+            ad_click_id=getattr(req, "ad_click_id", "") or "",
+        )
+    except Exception:
+        logger.warning("ad_conversion_attribution_failed unlock post=%s", req.post_id, exc_info=True)
 
     return UnlockPostResponse(post_id=req.post_id, payment_intent=pi)
 

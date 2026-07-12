@@ -9,16 +9,27 @@ import androidx.paging.cachedIn
 import androidx.paging.filter
 import androidx.paging.map
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.ads.AdClickAttributionStore
+import com.testlogon.android.data.ads.AdCtaClicker
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.data.ads.AdEvent
+import com.testlogon.android.data.ads.AdTrackRepository
 import com.testlogon.android.data.bookmarks.FeedBookmarkRepository
 import com.testlogon.android.data.feed.FeedPost
+import com.testlogon.android.data.feed.FeedRefreshBus
 import com.testlogon.android.data.feed.FeedRepository
 import com.testlogon.android.data.feed.LikeState
 import com.testlogon.android.data.feed.Poll
 import com.testlogon.android.data.feed.PollRepository
 import com.testlogon.android.data.feed.PollVoteResult
 import com.testlogon.android.data.feed.PostActionsRepository
+import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.data.feed.PostEngagementRepository
+import com.testlogon.android.data.feed.applyResultsPage
 import com.testlogon.android.data.feed.applyVote
+import com.testlogon.android.data.feed.applyWriteIn
+import com.testlogon.android.data.feed.reactedByMe
+import com.testlogon.android.data.feed.toggledReaction
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -57,12 +68,62 @@ class FeedViewModel @Inject constructor(
     private val actions: PostActionsRepository,
     private val bookmarks: FeedBookmarkRepository,
     private val polls: PollRepository,
+    private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
+    private val currentUser: CurrentUserRepository,
+    private val feedRefreshBus: FeedRefreshBus,
+    private val adTracker: AdTrackRepository,
+    private val adAttribution: AdClickAttributionStore,
+    private val adCtaClicker: AdCtaClicker,
+    // ADV2-409 (F4): billing for creator-authored paid_partnership posts (advertiser charged per
+    // impression/click via the ad ledger; creator credited the placement share). Distinct from the
+    // standalone is_sponsored unit above — the post itself stays a normal tippable creator post.
+    private val sponsoredPostRepo: com.testlogon.android.feature.sponsoredpost.data.SponsoredPostRepository,
 ) : ViewModel() {
 
+    /** author id (email/user_sub) -> display name, resolved lazily for visible posts. */
+    val authorNames: StateFlow<Map<String, String>> = displayNames.names
+
+    /** ID15 - author id -> profile_photo_url, resolved alongside the name for visible posts. */
+    val authorPhotos: StateFlow<Map<String, String>> = displayNames.photos
+
+    // FD12/FD13 — the signed-in user's id, so the feed can show an Edit affordance and hide the
+    // Tip action on the viewer's own posts. Resolved once; null until known (treat as 'not mine').
+    private val _currentUserSub = MutableStateFlow<String?>(null)
+    val currentUserSub: StateFlow<String?> = _currentUserSub.asStateFlow()
+
+    // #18 — declared BEFORE init{}: the FeedRefreshBus is a replay=1 SharedFlow, so a refresh signalled
+    // before this VM subscribes (e.g. a post just published, incl. a group post) is delivered the instant
+    // init{} starts collecting. refresh() touches refreshTrigger, so it MUST already be initialized here
+    // or that replayed signal NPEs during construction (crashes the Feed tab on open).
     private val refreshTrigger = MutableStateFlow(0L)
+
+    init {
+        viewModelScope.launch {
+            val r = currentUser.currentUserSub()
+            if (r is ApiResult.Success) _currentUserSub.value = r.data
+        }
+        // #18 — re-page the feed from the head whenever a post is published (#18a) or edited (#18b),
+        // so the main feed is a shared source of truth that updates in place without a restart.
+        viewModelScope.launch {
+            feedRefreshBus.refreshes.collect { refresh() }
+        }
+    }
+
+    /** Kick off (cached) resolution of an author's display name; UI reads it from [authorNames]. */
+    fun resolveAuthor(authorId: String) {
+        displayNames.resolve(authorId)
+    }
 
     private val likeOverrides = MutableStateFlow<Map<String, LikeState>>(emptyMap())
     private val likeJobs = mutableMapOf<String, Job>()
+
+    // #20 — optimistic emoji-reaction overlay (post id -> tallies), applied like the like overlay.
+    private val reactionOverrides = MutableStateFlow<Map<String, List<com.testlogon.android.data.feed.ReactionTally>>>(emptyMap())
+
+    // TIP-204 - money-reaction (tip) overlay (post id -> tip badges), applied like the reaction overlay
+    // so a tip-react shows a money-reaction chip immediately (before a feed refetch).
+    private val tipReactionOverrides = MutableStateFlow<Map<String, List<com.testlogon.android.data.feed.TipReactionBadge>>>(emptyMap())
+    private val reactionJobs = mutableMapOf<String, Job>()
 
     // AND-176 — per-post bookmark toggle serialization (last-write-wins).
     private val bookmarkJobs = mutableMapOf<String, Job>()
@@ -87,10 +148,14 @@ class FeedViewModel @Inject constructor(
             .cachedIn(viewModelScope)
 
     val items: Flow<PagingData<FeedPost>> =
-        combine(pager, likeOverrides, actions.suppressed) { data, overrides, suppressed ->
+        combine(pager, likeOverrides, actions.suppressed, reactionOverrides, tipReactionOverrides) { data, overrides, suppressed, reactions, tipReactions ->
             data
                 .filter { it.id !in suppressed }
-                .map { post -> overrides[post.id]?.let { post.applyLike(it) } ?: post }
+                .map { post ->
+                    val withLike = overrides[post.id]?.let { post.applyLike(it) } ?: post
+                    val withReactions = reactions[post.id]?.let { withLike.copy(reactions = it) } ?: withLike
+                    tipReactions[post.id]?.let { withReactions.copy(tipReactions = it) } ?: withReactions
+                }
         }
 
     /** AND-176 — reactive set of saved post ids (drives the per-post bookmark icon). */
@@ -142,6 +207,43 @@ class FeedViewModel @Inject constructor(
     private fun rollbackLike(postId: String, before: LikeState, message: String) {
         likeOverrides.update { it + (postId to before) }
         _events.trySend(FeedEvent.ShowError(message))
+    }
+
+    // ---- #20: emoji reactions (distinct from like) ----
+
+    fun onToggleReaction(post: FeedPost, emoji: String) {
+        val before = reactionOverrides.value[post.id] ?: post.reactions
+        val after = before.toggledReaction(emoji)
+        val add = after.reactedByMe(emoji)
+        reactionOverrides.update { it + (post.id to after) }
+        reactionJobs.remove(post.id)?.cancel()
+        val job = viewModelScope.launch {
+            try {
+                when (val r = engagement.setReaction(post.id, emoji, add)) {
+                    is ApiResult.Success -> Unit
+                    is ApiResult.Failure -> {
+                        reactionOverrides.update { it + (post.id to before) }
+                        _events.trySend(FeedEvent.ShowError(r.error.message))
+                    }
+                    is ApiResult.NetworkError -> {
+                        reactionOverrides.update { it + (post.id to before) }
+                        _events.trySend(FeedEvent.ShowError(OFFLINE_LIKE_MESSAGE))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e // superseded by a newer tap
+            }
+        }
+        reactionJobs[post.id] = job
+        job.invokeOnCompletion { if (reactionJobs[post.id] === job) reactionJobs.remove(post.id) }
+    }
+
+    /**
+     * TIP-204 - record a successful post tip-REACTION so the money-reaction chip renders immediately
+     * (overlay). The authoritative badge lands on the next feed refetch.
+     */
+    fun applyTipReactionBadge(postId: String, badge: com.testlogon.android.data.feed.TipReactionBadge) {
+        tipReactionOverrides.update { it + (postId to (it[postId].orEmpty() + badge)) }
     }
 
     // ---- AND-175: hide / not-interested ----
@@ -228,7 +330,7 @@ class FeedViewModel @Inject constructor(
     fun ensurePollState(post: FeedPost) {
         val poll = post.poll ?: return
         if (pollStates.value.containsKey(post.id)) return
-        pollStates.update { it + (post.id to initialPollStateFor(poll)) }
+        pollStates.update { it + (post.id to pollStateFor(poll)) }
     }
 
     fun onPollOptionSelected(postId: String, questionId: String, optionId: String) {
@@ -239,7 +341,9 @@ class FeedViewModel @Inject constructor(
         pollStates.update { it + (postId to PollCardState.Voting(poll, questionId, optionId)) }
         viewModelScope.launch {
             val next: PollCardState = when (val r = polls.vote(postId, questionId, optionId)) {
-                is ApiResult.Success -> PollCardState.Results(poll.applyVote(r.data))
+                // Stay INTERACTIVE while the poll is open so a MULTI question keeps toggling options and a
+                // single question can change its vote (allow_vote_change) — full multi-select on newsfeed.
+                is ApiResult.Success -> pollStateFor(poll.applyVote(r.data))
                 is ApiResult.Failure -> PollCardState.Error(poll, questionId, r.error.message)
                 is ApiResult.NetworkError -> PollCardState.Error(poll, questionId, OFFLINE_POLL_MESSAGE)
             }
@@ -254,10 +358,101 @@ class FeedViewModel @Inject constructor(
         onPollOptionSelected(postId, questionId, optionId)
     }
 
+    /** Submit a voter write-in (sender-enabled polls only); consolidates/appends the option + votes it. */
+    fun onPollWriteIn(postId: String, questionId: String, text: String) {
+        val current = pollStates.value[postId] ?: return
+        val poll = current.poll
+        if (!poll.isInteractive || text.isBlank()) return
+        viewModelScope.launch {
+            val next: PollCardState = when (val r = polls.writeIn(postId, questionId, text.trim())) {
+                is ApiResult.Success ->
+                    pollStateFor(poll.applyWriteIn(questionId, r.data, _currentUserSub.value))
+                is ApiResult.Failure -> PollCardState.Error(poll, questionId, r.error.message)
+                is ApiResult.NetworkError -> PollCardState.Error(poll, questionId, OFFLINE_POLL_MESSAGE)
+            }
+            pollStates.update { it + (postId to next) }
+        }
+    }
+
+    /** Page the next slice of a write-in question's options (sorted by count desc) into the poll. */
+    fun onPollShowMore(postId: String, questionId: String, offset: Int) {
+        val current = pollStates.value[postId] ?: return
+        val poll = current.poll
+        viewModelScope.launch {
+            when (val r = polls.pollResults(postId, questionId, offset, POLL_WRITE_IN_PAGE)) {
+                is ApiResult.Success ->
+                    pollStates.update { it + (postId to pollStateFor(poll.applyResultsPage(r.data))) }
+                else -> Unit // best-effort refresh; the card reveals locally from the snapshot it holds
+            }
+        }
+    }
+
+    // ---- ADV-106: sponsored-unit impression / click tracking ----
+
+    // Impression is fired at most once per served unit (keyed on the per-serve ad_click_id, falling back
+    // to the creative id) so a scroll-away/return or a recomposition never double-counts.
+    private val impressedAds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Fire an impression the first time a sponsored card becomes visible. Best-effort (never throws). */
+    fun onSponsoredImpression(post: FeedPost) {
+        val ad = post.sponsored ?: return
+        val key = ad.adClickId?.takeIf { it.isNotBlank() } ?: ad.creativeId
+        if (!impressedAds.add(key)) return
+        viewModelScope.launch { adTracker.track(AdEvent.IMPRESSION, ad) }
+    }
+
+    /** Fire a click when the viewer taps the sponsored card / its CTA. Best-effort (never throws). */
+    fun onSponsoredClick(post: FeedPost) {
+        val ad = post.sponsored ?: return
+        // ADV-405: remember this serve as the session last-click so a later subscribe/unlock/checkout
+        // attributes the conversion back to it (backend ad_attribution.attribute_conversion).
+        adAttribution.record(ad.adClickId)
+        viewModelScope.launch { adTracker.track(AdEvent.CLICK, ad) }
+    }
+
+    // ---- ADV2-409 (F4): paid_partnership (sponsored-as-creator) billing ----
+
+    // Impression fired at most once per post (deduped on post id) so a scroll-away/return never
+    // double-mints; the backend mint + charge are additionally idempotent per (viewer, post).
+    private val paidPartnershipImpressed = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
+     * Fire an IMPRESSION the first time a creator-authored paid_partnership post becomes visible. Lazy-mints
+     * the per-viewer ad-click then bills the advertiser (funds-guarded) + credits the creator the placement
+     * share. Best-effort — a failure never disturbs the normal post. No-op for an organic post.
+     */
+    fun onPaidPartnershipImpression(post: FeedPost) {
+        if (!post.paidPartnership) return
+        if (!paidPartnershipImpressed.add(post.id)) return
+        viewModelScope.launch { sponsoredPostRepo.fireImpression(post.id) }
+    }
+
+    /**
+     * Fire a CLICK when the viewer engages (opens) a paid_partnership post — an additional advertiser charge
+     * (idempotent per ad_click_id#click). The viewer's TIP on the same post is untouched (it still credits
+     * the creator; this is a normal creator post, distinct flag). Best-effort. No-op for an organic post.
+     */
+    fun onPaidPartnershipClick(post: FeedPost) {
+        if (!post.paidPartnership) return
+        viewModelScope.launch { sponsoredPostRepo.fireClick(post.id) }
+    }
+
+    /**
+     * ADV2-209 (F2) — a structured CTA tap on a sponsored unit. Money side via the shared [AdCtaClicker]:
+     * a NON-tip CTA fires the CPC charge (funds-guarded, idempotent) + stashes the ad_click_id so a
+     * resulting purchase/subscribe attributes CPA; a tip fires NO advertiser charge. Routing is the
+     * screen's concern (AdCtaRouter).
+     */
+    fun onCtaTap(post: FeedPost, action: CtaAction) {
+        val ad = post.sponsored ?: return
+        adCtaClicker.onTap(viewModelScope, ad.adClickId, action)
+    }
+
     private companion object {
         const val PAGE_SIZE = 20
         const val PREFETCH_DISTANCE = 10
         const val INITIAL_LOAD_SIZE = 20
+        const val POLL_WRITE_IN_PAGE = 5
         const val OFFLINE_LIKE_MESSAGE = "Couldn't update like. Try again."
         const val OFFLINE_HIDE_MESSAGE = "Couldn't hide post. Tap to retry."
         const val BOOKMARK_FAIL_MESSAGE = "Couldn't save post. Retry."
@@ -275,13 +470,14 @@ sealed interface PollCardState {
     data class Error(override val poll: Poll, val questionId: String, val message: String) : PollCardState
 }
 
-/** Seed state: a closed poll or one already voted on every question opens read-only; else selectable. */
-internal fun initialPollStateFor(poll: Poll): PollCardState =
-    if (poll.closed || (poll.questions.isNotEmpty() && poll.questions.all { it.hasVoted })) {
-        PollCardState.Results(poll)
-    } else {
-        PollCardState.Idle(poll)
-    }
+/**
+ * State for a poll snapshot: a CLOSED poll opens read-only (Results); an OPEN poll stays interactive
+ * (Idle) even after voting, so multi-select questions can keep toggling options, single questions can
+ * change their vote (allow_vote_change) and voters can add write-ins. Per-option interactivity (e.g. a
+ * single already-voted question with vote-change disabled) is enforced in the card + by the backend.
+ */
+internal fun pollStateFor(poll: Poll): PollCardState =
+    if (poll.closed) PollCardState.Results(poll) else PollCardState.Idle(poll)
 
 /** A hide / not-interested action carrying the post id and its captured feed index (for rollback). */
 sealed interface FeedAction {

@@ -59,6 +59,12 @@ data class SyndicateFeedItem(
     val reactionCount: Int? = null,
     val commentCount: Int? = null,
     val tipCount: Int? = null,
+    val poll: com.testlogon.android.core.model.poll.ArbitraryPoll? = null,
+    /**
+     * ADV syndicate-feed ads — non-null when this row is a server-injected SPONSORED (paid) unit. When set,
+     * the UI renders the distinct (non-tippable) Sponsored card instead of a normal feed post.
+     */
+    val sponsored: com.testlogon.android.core.model.ads.SponsoredAd? = null,
 )
 
 /** The treasury summary. All amounts are *_cents (Int); [currency] is an UPPER-cased ISO code. */
@@ -172,6 +178,17 @@ enum class LicensingContentType(val wire: String) {
 }
 
 /**
+ * Batch-7 - one row of the caller's syndicate list (GET ui/syndicates -> a bare array). [role] is the
+ * caller's role token (e.g. admin|member), kept raw for a small badge; [joinedAt] is a Long epoch.
+ */
+data class SyndicateListItem(
+    val id: String,
+    val name: String,
+    val role: String? = null,
+    val joinedAt: Long? = null,
+)
+
+/**
  * AND-357 - one open-licensing content row. [contentType] is the typed enum (UNKNOWN fallback); [exempt]
  * gates the "Exempt" vs "Auto-licensed" label; [registeredAt] is kept a Long epoch-SECONDS value
  * (relative-time at the UI), null when absent.
@@ -191,4 +208,12 @@ data class OpenLicensingContent(
 data class RegistrationResult(
     val contentId: String? = null,
     val licensesCreated: Int = 0,
+)
+
+/** Batch-9 (#12) - one syndicate member row. [joinedAt] is a Long epoch (relative-time at UI). */
+data class SyndicateMember(
+    val userId: String,
+    val displayName: String,
+    val role: String,
+    val joinedAt: Long = 0,
 )

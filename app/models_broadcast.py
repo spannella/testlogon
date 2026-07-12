@@ -88,6 +88,7 @@ class BroadcastSessionModel(BaseModel):
 
     # Viewer Clip Creation (ENGAGE-005)
     clips_enabled: bool = True
+    subscriber_only: bool = False  # SUB-E3: subscriber-only broadcast gate
 
     # Go-Private / Visibility (BCAST-011)
     # "public": discoverable + open to any authenticated viewer
@@ -103,6 +104,7 @@ class BroadcastSessionModel(BaseModel):
     ad_break_active: bool = False
     ad_break_started_at: Optional[int] = None
     total_ad_breaks: int = 0
+    last_ad_break_at: Optional[int] = None  # ADV2-104 min-interval guardrail
 
 
 class BroadcastOutputModel(BaseModel):

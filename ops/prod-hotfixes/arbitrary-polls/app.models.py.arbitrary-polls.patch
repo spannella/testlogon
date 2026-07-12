@@ -1,0 +1,10 @@
+--- app/models.py.bak_polls_1783435257	2026-07-07 14:40:57.972991931 +0000
++++ app/models.py	2026-07-07 14:40:57.996786429 +0000
+@@ -12345,6 +12345,7 @@
+     comment_count: int = 0
+     reaction_counts: Dict[str, int] = Field(default_factory=dict)
+     tip_total_cents: int = 0
++    poll: Optional[Dict[str, Any]] = None
+ 
+ 
+ class SyndicateFeedOut(BaseModel):

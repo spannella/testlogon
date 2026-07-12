@@ -4,6 +4,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.calendar.Calendar
 import com.testlogon.android.data.calendar.CalendarEvent
 import com.testlogon.android.data.calendar.CalendarRepository
+import com.testlogon.android.data.calendar.EventCreateReqDto
 import com.testlogon.android.data.calendar.EventsPage
 import java.time.Instant
 
@@ -24,6 +25,16 @@ class FakeCalendarRepository : CalendarRepository {
     var lastEventId: String? = null
     var eventCalls = 0
     var publicEventCalls = 0
+
+    var createResult: ApiResult<CalendarEvent> = ApiResult.Success(sampleEvent("evt_new"))
+    var updateResult: ApiResult<CalendarEvent> = ApiResult.Success(sampleEvent("evt_1"))
+    var deleteResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var lastCreateBody: EventCreateReqDto? = null
+    var lastUpdateBody: EventCreateReqDto? = null
+    var lastDeletedEventId: String? = null
+    var createCalls = 0
+    var updateCalls = 0
+    var deleteCalls = 0
 
     override suspend fun calendars(limit: Int?): ApiResult<List<Calendar>> = calendarsResult
 
@@ -57,6 +68,51 @@ class FakeCalendarRepository : CalendarRepository {
                 ApiResult.Success(r.data.copy(eventId = eventId, calendarId = calendarId, isPublic = true))
             else -> r
         }
+    }
+
+    override suspend fun createEvent(
+        calendarId: String,
+        body: EventCreateReqDto,
+    ): ApiResult<CalendarEvent> {
+        createCalls++
+        lastEventCalendarId = calendarId
+        lastCreateBody = body
+        return createResult
+    }
+
+    override suspend fun updateEvent(
+        calendarId: String,
+        eventId: String,
+        body: EventCreateReqDto,
+    ): ApiResult<CalendarEvent> {
+        updateCalls++
+        lastEventCalendarId = calendarId
+        lastEventId = eventId
+        lastUpdateBody = body
+        return updateResult
+    }
+
+    override suspend fun deleteEvent(calendarId: String, eventId: String): ApiResult<Unit> {
+        deleteCalls++
+        lastEventCalendarId = calendarId
+        lastDeletedEventId = eventId
+        return deleteResult
+    }
+
+    var excludeResult: ApiResult<CalendarEvent> = ApiResult.Success(sampleEvent("evt_1"))
+    var lastExcludeOccurrenceUtc: String? = null
+    var excludeCalls = 0
+
+    override suspend fun excludeOccurrence(
+        calendarId: String,
+        eventId: String,
+        occurrenceStartUtc: String,
+    ): ApiResult<CalendarEvent> {
+        excludeCalls++
+        lastEventCalendarId = calendarId
+        lastEventId = eventId
+        lastExcludeOccurrenceUtc = occurrenceStartUtc
+        return excludeResult
     }
 
     companion object {

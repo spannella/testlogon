@@ -36,10 +36,26 @@ import com.squareup.moshi.JsonClass
 @JsonClass(generateAdapter = true)
 data class SendCountdownMessageReq(
     @Json(name = "title") val title: String,
-    @Json(name = "target_datetime") val targetDatetime: Long,
+    // #32 — absolute target wins when set; otherwise the server resolves target_datetime_local in target_tz.
+    @Json(name = "target_datetime") val targetDatetime: Long? = null,
+    @Json(name = "target_datetime_local") val targetDatetimeLocal: String? = null,
+    @Json(name = "target_tz") val targetTz: String? = null,
     @Json(name = "associated_event_type") val associatedEventType: String = "custom",
     @Json(name = "associated_event_id") val associatedEventId: String? = null,
     @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    // #31 (B-COUNTDOWN) — optional reveal payload surfaced once the countdown completes.
+    @Json(name = "reveal_text") val revealText: String? = null,
+    @Json(name = "reveal_image") val revealImage: CountdownRevealImageReq? = null,
+)
+
+/** #31 — a single reveal image ref attached to a countdown (mirrors LotteryMessageImageReq). `key` required. */
+@JsonClass(generateAdapter = true)
+data class CountdownRevealImageReq(
+    @Json(name = "bucket") val bucket: String? = null,
+    @Json(name = "key") val key: String,
+    @Json(name = "content_type") val contentType: String? = null,
+    @Json(name = "width") val width: Int? = null,
+    @Json(name = "height") val height: Int? = null,
 )
 
 // ─── AND-138: calendar-event / calendar-share attachments (nested on MessageOut) ───
@@ -118,6 +134,138 @@ data class TipOutDto(
     @Json(name = "currency") val currency: String = "USD",
 )
 
+/**
+ * TIP-203 - message tip-REACTION request (distinct from SendTipReq direct tip). Body for
+ * POST /messaging/conversations/{cid}/messages/{mid}/reactions/tip. amount_cents min 1; emoji optional
+ * (money-reaction glyph); payment_method_id optional (falls back to the tip-default PM server-side).
+ */
+@JsonClass(generateAdapter = true)
+data class TipReactReq(
+    @Json(name = "amount_cents") val amountCents: Long,
+    @Json(name = "emoji") val emoji: String? = null,
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+)
+
+/** TIP-203 - message tip-reaction receipt. */
+@JsonClass(generateAdapter = true)
+data class TipReactOutDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "tip_payment_id") val tipPaymentId: String? = null,
+    @Json(name = "charged_cents") val chargedCents: Long = 0L,
+    @Json(name = "net_cents") val netCents: Long = 0L,
+    @Json(name = "recipient_id") val recipientId: String? = null,
+    @Json(name = "emoji") val emoji: String? = null,
+)
+
+/** TIP-203 - one money-reaction badge stored on a message (wire shape of the backend tip_reactions). */
+@JsonClass(generateAdapter = true)
+data class TipReactionDto(
+    @Json(name = "tipper_id") val tipperId: String? = null,
+    @Json(name = "emoji") val emoji: String? = null,
+    @Json(name = "amount_cents") val amountCents: Long = 0L,
+    @Json(name = "tip_payment_id") val tipPaymentId: String? = null,
+    @Json(name = "created_at") val createdAt: Long? = null,
+)
+
+// ─── MSG: new composers (lottery create / find-datetime / calendar-event / calendar-share) ───
+
+/** LotteryOutcomeIn — one possible draw outcome. weight_bps 1..10000 (sum to 10000 across outcomes). */
+@JsonClass(generateAdapter = true)
+data class LotteryOutcomeReq(
+    @Json(name = "display_label") val displayLabel: String? = null,
+    @Json(name = "weight_bps") val weightBps: Int,
+    @Json(name = "payload_type") val payloadType: String = "text",
+    @Json(name = "text_content") val textContent: String? = null,
+    // #13 — per-option media: an S3 key (or "bucket:key") under {conversation_id}/{owner}/ in the
+    // image bucket, required when payload_type is "image"|"video" (Backend B-LOT contract).
+    @Json(name = "media_asset_id") val mediaAssetId: String? = null,
+    // #24 — a single outcome may carry MULTIPLE media assets (mixed images + videos). The server
+    // treats media_asset_id as the first element; media_asset_ids is the full list (B-LOTTERY2).
+    @Json(name = "media_asset_ids") val mediaAssetIds: List<String>? = null,
+)
+
+/** LotteryConfigIn — {version, outcomes[]}. */
+@JsonClass(generateAdapter = true)
+data class LotteryConfigReq(
+    val version: String = "v1",
+    val outcomes: List<LotteryOutcomeReq>,
+)
+
+/**
+ * CreateLotteryMessageIn. NOTE: conversation_id is in the BODY (not the path) for this endpoint.
+ * message_type is the literal "lottery_dm".
+ */
+@JsonClass(generateAdapter = true)
+data class CreateLotteryReq(
+    @Json(name = "message_type") val messageType: String = "lottery_dm",
+    @Json(name = "conversation_id") val conversationId: String,
+    @Json(name = "lottery_config") val lotteryConfig: LotteryConfigReq,
+    // C10 — optional cover/header image on the lottery message (Backend B3).
+    @Json(name = "image") val image: LotteryMessageImageReq? = null,
+    // #23 — optional message-level cover text shown before unlock (B-LOTTERY2). EITHER this or an
+    // image satisfies the server's text-or-cover requirement for media-only options.
+    @Json(name = "text") val text: String? = null,
+)
+
+/** C10 — LotteryMessageImageIn (Backend B3): message-level cover image ref. `key` required. */
+@JsonClass(generateAdapter = true)
+data class LotteryMessageImageReq(
+    @Json(name = "bucket") val bucket: String? = null,
+    @Json(name = "key") val key: String,
+    @Json(name = "content_type") val contentType: String? = null,
+    @Json(name = "width") val width: Int? = null,
+    @Json(name = "height") val height: Int? = null,
+)
+
+/**
+ * CreateFindDateTimeMessageIn (the "custom poll"). end_hour > start_hour;
+ * slot_duration_minutes ∈ {15,30,60}; deadline_hours 1..336.
+ */
+@JsonClass(generateAdapter = true)
+data class CreateFindDateTimeReq(
+    val title: String,
+    @Json(name = "from_date") val fromDate: String,
+    @Json(name = "to_date") val toDate: String,
+    @Json(name = "start_hour") val startHour: Int,
+    @Json(name = "end_hour") val endHour: Int,
+    @Json(name = "slot_duration_minutes") val slotDurationMinutes: Int = 30,
+    @Json(name = "deadline_hours") val deadlineHours: Int = 48,
+    val text: String? = null,
+)
+
+/** MessageOut.find_datetime (nested render attachment for a kind="find_datetime" message). */
+@JsonClass(generateAdapter = true)
+data class FindDateTimeAttachmentDto(
+    @Json(name = "poll_id") val pollId: String = "",
+    @Json(name = "creator_id") val creatorId: String = "",
+    val title: String = "",
+    @Json(name = "from_date") val fromDate: String? = null,
+    @Json(name = "to_date") val toDate: String? = null,
+    @Json(name = "start_hour") val startHour: Int? = null,
+    @Json(name = "end_hour") val endHour: Int? = null,
+    @Json(name = "slot_duration_minutes") val slotDurationMinutes: Int? = null,
+    val status: String? = null,
+)
+
+/** CreateCalendarEventMessageIn. */
+@JsonClass(generateAdapter = true)
+data class CreateCalendarEventReq(
+    @Json(name = "calendar_id") val calendarId: String,
+    @Json(name = "event_id") val eventId: String,
+    val text: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
+)
+
+/** CreateCalendarShareMessageIn. */
+@JsonClass(generateAdapter = true)
+data class CreateCalendarShareReq(
+    @Json(name = "calendar_id") val calendarId: String,
+    val permission: String = "read",
+    @Json(name = "include_booking_link") val includeBookingLink: Boolean = false,
+    val text: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
+)
+
 // ─── AND-139: lottery (separate lottery_dm message type) ───
 
 /** LotterySelectedOutcome — the revealed payload after a draw (text or media reference). */
@@ -127,6 +275,9 @@ data class LotterySelectedOutcomeDto(
     @Json(name = "payload_type") val payloadType: String = "text",
     @Json(name = "text_content") val textContent: String? = null,
     @Json(name = "media_asset_id") val mediaAssetId: String? = null,
+    // #24 — the full list of revealed media assets when the winning outcome carries >1 image/video.
+    // media_asset_id stays as the first element for single-asset back-compat (B-LOTTERY2 reveal).
+    @Json(name = "media_asset_ids") val mediaAssetIds: List<String>? = null,
 )
 
 /**
@@ -155,10 +306,43 @@ data class LotteryMessageOutDto(
 /**
  * MessageOut.lottery (nested sub-object on a lottery_dm message). lock_state gates the locked teaser
  * vs the revealed outcome.
+ *
+ * #15 (B-LOTSENDER) — the SENDER's projection of their OWN lottery is distinct: lock_state is
+ * "sender_view" + is_sender=true and the object carries the FULL config (every outcome with its
+ * weight/label/payload) PLUS each recipient's unlock result. The recipient still only ever sees their
+ * own (post-unlock) outcome via [selectedOutcome]. All sender-only fields are nullable so a recipient
+ * frame (no sender block) decodes unchanged.
  */
 @JsonClass(generateAdapter = true)
 data class LotteryAttachmentDto(
     @Json(name = "message_type") val messageType: String = "lottery_dm",
     @Json(name = "lock_state") val lockState: String = "locked",
     @Json(name = "selected_outcome") val selectedOutcome: LotterySelectedOutcomeDto? = null,
+    // ── #15 sender-view fields (present only when lock_state == "sender_view") ──
+    @Json(name = "is_sender") val isSender: Boolean? = null,
+    @Json(name = "version") val version: String? = null,
+    @Json(name = "total_weight_bps") val totalWeightBps: Int? = null,
+    @Json(name = "outcomes") val outcomes: List<LotterySenderOutcomeDto>? = null,
+    @Json(name = "unlock_count") val unlockCount: Int? = null,
+    @Json(name = "unlocks") val unlocks: List<LotterySenderUnlockDto>? = null,
+)
+
+/** #15 — one configured lottery outcome as seen by the SENDER (full config, incl. weight + label). */
+@JsonClass(generateAdapter = true)
+data class LotterySenderOutcomeDto(
+    @Json(name = "outcome_id") val outcomeId: String = "",
+    @Json(name = "display_label") val displayLabel: String? = null,
+    @Json(name = "weight_bps") val weightBps: Int = 0,
+    @Json(name = "payload_type") val payloadType: String = "text",
+    @Json(name = "text_content") val textContent: String? = null,
+    @Json(name = "media_asset_id") val mediaAssetId: String? = null,
+    @Json(name = "media_asset_ids") val mediaAssetIds: List<String>? = null,
+)
+
+/** #15 — one recipient's unlock record on the sender's lottery (who drew what). */
+@JsonClass(generateAdapter = true)
+data class LotterySenderUnlockDto(
+    @Json(name = "recipient_id") val recipientId: String = "",
+    @Json(name = "unlocked_at") val unlockedAt: Long? = null,
+    @Json(name = "selected_outcome") val selectedOutcome: LotterySenderOutcomeDto? = null,
 )

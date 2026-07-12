@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,27 +23,40 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +78,8 @@ import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.catalog.CatalogItem
+import com.testlogon.android.data.catalog.CatalogReview
+import androidx.compose.ui.text.input.ImeAction
 
 /** AND-206 — stable test tags for the product detail screen. */
 object ProductDetailTestTags {
@@ -76,6 +93,20 @@ object ProductDetailTestTags {
     const val ADD_TO_CART = "product_detail_add_to_cart"
     const val NOT_FOUND = "product_detail_not_found"
     const val ERROR = "product_detail_error"
+
+    // ECOM — wishlist heart + reviews section.
+    const val WISHLIST_TOGGLE = "wishlist_toggle"
+    const val REVIEW_SECTION = "review_section"
+    const val REVIEW_SUMMARY = "review_summary"
+    const val REVIEW_LIST = "review_list"
+    const val REVIEW_ROW = "review_row"
+    const val REVIEW_EMPTY = "review_empty"
+    const val REVIEW_TITLE_INPUT = "review_title_input"
+    const val REVIEW_BODY_INPUT = "review_body_input"
+    const val REVIEW_SUBMIT = "review_submit"
+    const val REVIEW_RATING = "review_rating_input"
+    const val REVIEW_DELETE = "review_delete"
+    fun ratingStar(index: Int) = "review_rating_star_$index"
 }
 
 /**
@@ -90,14 +121,23 @@ fun ProductDetailRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val addState by viewModel.addState.collectAsStateWithLifecycle()
+    val reviewsState by viewModel.reviewsState.collectAsStateWithLifecycle()
+    val reviewSubmitState by viewModel.reviewSubmitState.collectAsStateWithLifecycle()
+    val isSaved by viewModel.isSaved.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val addedLabel = stringResource(R.string.catalog_detail_added)
+    val reviewSubmittedLabel = stringResource(R.string.review_submitted)
+    val reviewDeletedLabel = stringResource(R.string.review_deleted)
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
                 is ProductDetailEvent.AddedToCart -> snackbarHostState.showSnackbar(addedLabel)
                 is ProductDetailEvent.AddToCartFailed -> snackbarHostState.showSnackbar(event.message)
+                is ProductDetailEvent.ReviewSubmitted -> snackbarHostState.showSnackbar(reviewSubmittedLabel)
+                is ProductDetailEvent.ReviewDeleted -> snackbarHostState.showSnackbar(reviewDeletedLabel)
+                is ProductDetailEvent.ReviewSubmitFailed -> snackbarHostState.showSnackbar(event.message)
+                is ProductDetailEvent.WishlistFailed -> snackbarHostState.showSnackbar(event.message)
             }
         }
     }
@@ -105,8 +145,15 @@ fun ProductDetailRoute(
     ProductDetailScreen(
         state = state,
         addState = addState,
+        reviewsState = reviewsState,
+        reviewSubmitState = reviewSubmitState,
+        isSaved = isSaved,
         snackbarHostState = snackbarHostState,
         onAddToCart = { viewModel.addToCart() },
+        onToggleWishlist = viewModel::toggleWishlist,
+        onSubmitReview = viewModel::submitReview,
+        onDeleteReview = viewModel::deleteReview,
+        onRetryReviews = viewModel::retryReviews,
         onRetry = viewModel::retry,
         onBack = onBack,
         modifier = modifier,
@@ -117,8 +164,15 @@ fun ProductDetailRoute(
 fun ProductDetailScreen(
     state: ProductDetailUiState,
     addState: AddToCartStatus,
+    reviewsState: ReviewsUiState,
+    reviewSubmitState: ReviewSubmitStatus,
+    isSaved: Boolean,
     snackbarHostState: SnackbarHostState,
     onAddToCart: () -> Unit,
+    onToggleWishlist: () -> Unit,
+    onSubmitReview: (rating: Int, title: String, body: String) -> Unit,
+    onDeleteReview: (reviewId: String) -> Unit,
+    onRetryReviews: () -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -136,6 +190,26 @@ fun ProductDetailScreen(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.action_back),
                         )
+                    }
+                },
+                actions = {
+                    if (state is ProductDetailUiState.Ready) {
+                        val heartCd = stringResource(
+                            if (isSaved) R.string.wishlist_remove else R.string.wishlist_add,
+                        )
+                        IconButton(
+                            onClick = onToggleWishlist,
+                            modifier = Modifier
+                                .testTag(ProductDetailTestTags.WISHLIST_TOGGLE)
+                                .semantics { contentDescription = heartCd },
+                        ) {
+                            Icon(
+                                imageVector = if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                contentDescription = heartCd,
+                                tint = if (isSaved) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 },
             )
@@ -165,14 +239,28 @@ fun ProductDetailScreen(
                         modifier = Modifier.testTag(ProductDetailTestTags.ERROR),
                     )
 
-                is ProductDetailUiState.Ready -> ProductDetailContent(item = state.item)
+                is ProductDetailUiState.Ready -> ProductDetailContent(
+                    item = state.item,
+                    reviewsState = reviewsState,
+                    reviewSubmitState = reviewSubmitState,
+                    onSubmitReview = onSubmitReview,
+                    onDeleteReview = onDeleteReview,
+                    onRetryReviews = onRetryReviews,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ProductDetailContent(item: CatalogItem) {
+private fun ProductDetailContent(
+    item: CatalogItem,
+    reviewsState: ReviewsUiState,
+    reviewSubmitState: ReviewSubmitStatus,
+    onSubmitReview: (rating: Int, title: String, body: String) -> Unit,
+    onDeleteReview: (reviewId: String) -> Unit,
+    onRetryReviews: () -> Unit,
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -200,6 +288,235 @@ private fun ProductDetailContent(item: CatalogItem) {
                 modifier = Modifier.testTag(ProductDetailTestTags.DESCRIPTION),
             )
             AttributeList(item = item)
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            ReviewsSection(
+                state = reviewsState,
+                submitState = reviewSubmitState,
+                onSubmitReview = onSubmitReview,
+                onDeleteReview = onDeleteReview,
+                onRetryReviews = onRetryReviews,
+            )
+        }
+    }
+}
+
+/** ECOM (reviews) — the reviews section: summary + list + compose row + delete-own. */
+@Composable
+private fun ReviewsSection(
+    state: ReviewsUiState,
+    submitState: ReviewSubmitStatus,
+    onSubmitReview: (rating: Int, title: String, body: String) -> Unit,
+    onDeleteReview: (reviewId: String) -> Unit,
+    onRetryReviews: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .testTag(ProductDetailTestTags.REVIEW_SECTION),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.review_section_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        when (state) {
+            is ReviewsUiState.Loading ->
+                CircularProgressIndicator(Modifier.size(24.dp))
+
+            is ReviewsUiState.Error ->
+                TextButton(onClick = onRetryReviews) {
+                    Text(stringResource(R.string.review_load_error_retry))
+                }
+
+            is ReviewsUiState.Ready -> {
+                ReviewSummary(state)
+                if (state.reviews.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.review_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag(ProductDetailTestTags.REVIEW_EMPTY),
+                    )
+                } else {
+                    Column(
+                        Modifier.testTag(ProductDetailTestTags.REVIEW_LIST),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        state.reviews.forEach { review ->
+                            ReviewRow(
+                                review = review,
+                                isOwn = review.isOwnedBy(state.currentUserSub),
+                                onDelete = { onDeleteReview(review.reviewId) },
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                ReviewComposer(submitState = submitState, onSubmitReview = onSubmitReview)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReviewSummary(state: ReviewsUiState.Ready) {
+    Row(
+        Modifier.testTag(ProductDetailTestTags.REVIEW_SUMMARY),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val avg = state.averageRating
+        if (avg != null) {
+            StarRow(rating = avg.toInt())
+            Text(
+                text = stringResource(R.string.review_summary, avg, state.count),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        } else {
+            Text(
+                text = stringResource(R.string.review_no_ratings),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReviewRow(review: CatalogReview, isOwn: Boolean, onDelete: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .testTag(ProductDetailTestTags.REVIEW_ROW),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StarRow(rating = review.rating)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = review.reviewer?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.review_anonymous),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = review.createdAt.take(10),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (isOwn) {
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .testTag(ProductDetailTestTags.REVIEW_DELETE),
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = stringResource(R.string.review_delete),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+        review.title?.takeIf { it.isNotBlank() }?.let {
+            Text(it, style = MaterialTheme.typography.titleSmall)
+        }
+        review.body?.takeIf { it.isNotBlank() }?.let {
+            Text(it, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/** A static row of 5 stars filled up to [rating]. */
+@Composable
+private fun StarRow(rating: Int) {
+    Row(Modifier.clearAndSetSemantics {}) {
+        repeat(5) { i ->
+            Icon(
+                imageVector = if (i < rating) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                contentDescription = null,
+                tint = if (i < rating) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+/** ECOM (reviews) — star-rating + title + body + submit. */
+@Composable
+private fun ReviewComposer(
+    submitState: ReviewSubmitStatus,
+    onSubmitReview: (rating: Int, title: String, body: String) -> Unit,
+) {
+    var rating by remember { mutableIntStateOf(0) }
+    var title by remember { mutableStateOf("") }
+    var body by remember { mutableStateOf("") }
+    val inFlight = submitState == ReviewSubmitStatus.InFlight
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = stringResource(R.string.review_write_title),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        // Interactive star picker.
+        Row(Modifier.testTag(ProductDetailTestTags.REVIEW_RATING)) {
+            repeat(5) { i ->
+                val filled = i < rating
+                val starCd = stringResource(R.string.review_rate_stars, i + 1)
+                Icon(
+                    imageVector = if (filled) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                    contentDescription = starCd,
+                    tint = if (filled) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .testTag(ProductDetailTestTags.ratingStar(i + 1))
+                        .clickable { rating = i + 1 }
+                        .semantics { contentDescription = starCd },
+                )
+            }
+        }
+        OutlinedTextField(
+            value = title,
+            onValueChange = { title = it },
+            label = { Text(stringResource(R.string.review_title_label)) },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(ProductDetailTestTags.REVIEW_TITLE_INPUT),
+        )
+        OutlinedTextField(
+            value = body,
+            onValueChange = { body = it },
+            label = { Text(stringResource(R.string.review_body_label)) },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(96.dp)
+                .testTag(ProductDetailTestTags.REVIEW_BODY_INPUT),
+        )
+        OutlinedButton(
+            onClick = {
+                onSubmitReview(rating, title, body)
+                rating = 0
+                title = ""
+                body = ""
+            },
+            enabled = rating in 1..5 && !inFlight,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(ProductDetailTestTags.REVIEW_SUBMIT),
+        ) {
+            if (inFlight) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(stringResource(R.string.review_submit))
         }
     }
 }

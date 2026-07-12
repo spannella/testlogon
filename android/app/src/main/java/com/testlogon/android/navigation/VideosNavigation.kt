@@ -1,5 +1,6 @@
 package com.testlogon.android.navigation
 
+import com.testlogon.android.feature.ads.cta.navigateCta
 import android.net.Uri
 import androidx.navigation.NavDeepLink
 import androidx.navigation.NavGraphBuilder
@@ -8,6 +9,8 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.feature.videos.VideosRoute
 import com.testlogon.android.feature.videos.detail.VideoDetailRoute
 import com.testlogon.android.feature.videos.detail.VideoDetailViewModel
@@ -37,10 +40,28 @@ data object VideoDetailDest {
 
 /** AND-189 — registers the videos library; its tiles open [VideoDetailDest]. */
 fun NavGraphBuilder.videosLibraryDestination(navController: NavHostController) {
-    composable(VideosLibraryDest.ROUTE) {
+    composable(VideosLibraryDest.ROUTE) { entry ->
+        val viewModel: com.testlogon.android.feature.videos.VideosViewModel =
+            androidx.hilt.navigation.compose.hiltViewModel()
+        // #5 — consume the upload result written by the upload screen: register the just-uploaded
+        // video as a pending tile + refresh, then clear the keys so it fires once.
+        val handle = entry.savedStateHandle
+        val uploadedId by handle.getStateFlow<String?>(VideoUploadResult.UPLOADED_ID, null)
+            .collectAsStateWithLifecycle()
+        androidx.compose.runtime.LaunchedEffect(uploadedId) {
+            val id = uploadedId ?: return@LaunchedEffect
+            val title = handle.get<String>(VideoUploadResult.UPLOADED_TITLE).orEmpty()
+            viewModel.onUploaded(id, title)
+            handle[VideoUploadResult.UPLOADED_ID] = null
+            handle[VideoUploadResult.UPLOADED_TITLE] = null
+        }
         VideosRoute(
+            viewModel = viewModel,
             onOpenVideo = { id ->
                 navController.navigate(VideoDetailDest.build(id)) { launchSingleTop = true }
+            },
+            onUploadVideo = {
+                navController.navigate(VideoUploadDest.ROUTE) { launchSingleTop = true }
             },
             onBack = { navController.popBackStack() },
         )
@@ -51,8 +72,10 @@ fun NavGraphBuilder.videosLibraryDestination(navController: NavHostController) {
 fun NavGraphBuilder.vodCatalogDestination(navController: NavHostController) {
     composable(VodCatalogDest.ROUTE) {
         VodCatalogRoute(
+            // ADV-202 - the on-demand (AVOD) surface opens the pre-roll player: a live pre-roll ad
+            // (serve_ad surface=preroll) plays before the gated title, then the video plays inline.
             onVodClick = { id ->
-                navController.navigate(VideoDetailDest.build(id)) { launchSingleTop = true }
+                navController.navigate(AdSupportedPlayerDest.build(id)) { launchSingleTop = true }
             },
             onBack = { navController.popBackStack() },
         )
@@ -82,6 +105,8 @@ fun NavGraphBuilder.videoDetailDestination(navController: NavHostController) {
             onOpenVideo = { id ->
                 navController.navigate(VideoDetailDest.build(id)) { launchSingleTop = true }
             },
+            // ADV2-210 (F2): route a pre-roll CTA tap to the existing product/cart/subscribe/profile dests.
+            onCtaNavigate = { dest -> navController.navigateCta(dest) },
         )
     }
 }

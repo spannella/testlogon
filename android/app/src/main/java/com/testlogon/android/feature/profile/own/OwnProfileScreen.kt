@@ -57,6 +57,7 @@ fun OwnProfileRoute(
     onOpenSessions: () -> Unit,
     onOpenMfaDevices: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenMyPosts: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: OwnProfileViewModel = hiltViewModel(),
     mediaViewModel: ProfileMediaViewModel = hiltViewModel(),
@@ -101,6 +102,7 @@ fun OwnProfileRoute(
         onOpenSessions = onOpenSessions,
         onOpenMfaDevices = onOpenMfaDevices,
         onOpenSettings = onOpenSettings,
+        onOpenMyPosts = onOpenMyPosts,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -117,6 +119,7 @@ fun OwnProfileScreen(
     onOpenSessions: () -> Unit,
     onOpenMfaDevices: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenMyPosts: () -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     accountActions: @Composable () -> Unit = {
@@ -156,6 +159,7 @@ fun OwnProfileScreen(
                         onRetry = onRetry,
                         onEdit = onEdit,
                         onChangePhoto = onChangePhoto,
+                        onOpenMyPosts = onOpenMyPosts,
                         accountActions = accountActions,
                     )
             }
@@ -171,6 +175,7 @@ private fun OwnProfileContent(
     onRetry: () -> Unit,
     onEdit: () -> Unit,
     onChangePhoto: () -> Unit,
+    onOpenMyPosts: () -> Unit = {},
     accountActions: @Composable () -> Unit,
 ) {
     Column(
@@ -221,6 +226,13 @@ private fun OwnProfileContent(
                 text = stringResource(R.string.profile_edit_action),
                 onClick = onEdit,
                 modifier = Modifier.fillMaxWidth().testTag(ProfileTestTags.OWN_EDIT),
+            )
+            // FD1 -- entry point to the user's own posts (view + edit/delete).
+            TlButton(
+                text = "Your posts",
+                onClick = onOpenMyPosts,
+                variant = TlButtonVariant.Secondary,
+                modifier = Modifier.fillMaxWidth().testTag("own_my_posts"),
             )
             TlButton(
                 text = stringResource(R.string.profile_change_photo),

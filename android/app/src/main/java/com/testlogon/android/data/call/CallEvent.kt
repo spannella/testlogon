@@ -24,6 +24,13 @@ sealed interface CallEvent {
         val callerAvatarUrl: String?,
         val mode: CallMode,
         val expiresAtEpochSeconds: Long?,
+        /**
+         * Epoch SECONDS the invite event was created server-side (from the event `created_at`), or null
+         * when unknown. Used by [com.testlogon.android.feature.call.incoming.IncomingCallController] to
+         * DROP a stale/replayed invite (the /events/poll queue re-serves days-old invites on launch)
+         * before it ever rings.
+         */
+        val createdAtEpochSeconds: Long? = null,
     ) : CallEvent
 
     /** The peer accepted [callId]. */

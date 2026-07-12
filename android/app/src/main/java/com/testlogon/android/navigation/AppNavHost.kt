@@ -1,6 +1,7 @@
 package com.testlogon.android.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -10,6 +11,9 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.rememberNavController
 import com.testlogon.android.core.ui.navigation.TLTransitions
+import com.testlogon.android.feature.call.domain.CallPhase
+import com.testlogon.android.feature.call.nav.CallRoutes
+import com.testlogon.android.feature.report.LocalDmcaLauncher
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
@@ -32,6 +36,7 @@ fun AppNavHost(
     // magic-link deep links. Defaulted to a no-op so previews / tests don't need to supply it.
     onNavControllerReady: (NavHostController) -> Unit = {},
     viewModel: AuthRoutingViewModel = hiltViewModel(),
+    callRoutingViewModel: CallRoutingViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(navController) { onNavControllerReady(navController) }
 
@@ -60,17 +65,48 @@ fun AppNavHost(
         }
     }
 
-    NavHost(
-        navController = navController,
-        startDestination = TlGraphs.UNAUTHENTICATED,
-        modifier = modifier,
-        enterTransition = { TLTransitions.enter() },
-        exitTransition = { TLTransitions.exit() },
-        popEnterTransition = { TLTransitions.popEnter() },
-        popExitTransition = { TLTransitions.popExit() },
+    // Route to the in-call (video) screen the moment a 1:1 call reaches Connecting/Connected. The
+    // caller is otherwise stranded on the text-only outgoing screen and the callee returns to home
+    // after IncomingCallActivity finishes; this surfaces the connected media view for both sides.
+    LaunchedEffect(navController) {
+        callRoutingViewModel.callState
+            .map { st ->
+                st.call?.callId?.takeIf {
+                    st.phase is CallPhase.Connecting || st.phase is CallPhase.Connected
+                }
+            }
+            .distinctUntilChanged()
+            .collect { callId ->
+                if (callId == null) return@collect
+                val onIncall = navController.currentDestination?.route
+                    ?.startsWith("call/incall/") == true
+                if (!onIncall) {
+                    runCatching {
+                        navController.navigate(CallRoutes.incall(callId)) { launchSingleTop = true }
+                    }
+                }
+            }
+    }
+
+    // MOD-C3 - provide the DMCA launcher once so any content Report sheet can route a licensing/IP
+    // violation into the pre-filled DMCA claim flow without threading a lambda through every screen.
+    CompositionLocalProvider(
+        LocalDmcaLauncher provides { contentType, contentId ->
+            navController.navigateToDmca(contentType = contentType, contentId = contentId)
+        },
     ) {
-        unauthenticatedGraph(navController)
-        authenticatedGraph(navController)
+        NavHost(
+            navController = navController,
+            startDestination = TlGraphs.UNAUTHENTICATED,
+            modifier = modifier,
+            enterTransition = { TLTransitions.enter() },
+            exitTransition = { TLTransitions.exit() },
+            popEnterTransition = { TLTransitions.popEnter() },
+            popExitTransition = { TLTransitions.popExit() },
+        ) {
+            unauthenticatedGraph(navController)
+            authenticatedGraph(navController)
+        }
     }
 }
 

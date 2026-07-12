@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.cart.CartRepository
+import com.testlogon.android.data.checkout.CheckoutLineItem
 import com.testlogon.android.data.checkout.CheckoutRepository
 import com.testlogon.android.data.checkout.CheckoutSession
 import com.testlogon.android.data.checkout.CheckoutSessionRequest
@@ -40,6 +41,9 @@ sealed interface OrderReviewUiState {
 sealed interface CheckoutEvent {
     data object PaymentsUnavailable : CheckoutEvent
     data class PaymentFailed(val message: String) : CheckoutEvent
+
+    /** FIX (ecom residual #1) — the purchase completed; [txnId] routes to order confirmation. */
+    data class PurchaseComplete(val txnId: String?, val orderId: String) : CheckoutEvent
 }
 
 /**
@@ -55,6 +59,7 @@ sealed interface CheckoutEvent {
 class CheckoutSessionViewModel @Inject constructor(
     private val checkoutRepository: CheckoutRepository,
     private val cartRepository: CartRepository,
+    private val adAttribution: com.testlogon.android.data.ads.AdClickAttributionStore,
     private val billingAuthorizer: BillingAuthorizer,
     private val savedState: SavedStateHandle,
 ) : ViewModel() {
@@ -95,38 +100,58 @@ class CheckoutSessionViewModel @Inject constructor(
                 currency = currency,
             )
             _state.value = when (val r = checkoutRepository.createSession(request)) {
-                is ApiResult.Success -> OrderReviewUiState.Ready(r.data)
+                is ApiResult.Success -> OrderReviewUiState.Ready(enrichFromCart(r.data))
                 is ApiResult.Failure -> OrderReviewUiState.Error(r.error.message, retryable = true)
                 is ApiResult.NetworkError -> OrderReviewUiState.Error(OFFLINE_MESSAGE, retryable = true)
             }
         }
     }
 
+    /**
+     * The checkout-session response carries line items WITHOUT product names (only sku + amounts), so
+     * the screen would otherwise show raw skus and no prices. The cart has the real names + unit/line
+     * prices — merge them in. Falls back to the session's own items if the cart can't be read.
+     */
+    private suspend fun enrichFromCart(session: CheckoutSession): CheckoutSession {
+        val items = (cartRepository.loadCart() as? ApiResult.Success)?.data?.items
+        if (items.isNullOrEmpty()) return session
+        return session.copy(
+            lineItems = items.map {
+                CheckoutLineItem(
+                    sku = it.sku,
+                    name = it.name,
+                    quantity = it.quantity,
+                    unitPriceCents = it.unitPriceCents,
+                    lineTotalCents = it.lineTotalCents,
+                )
+            },
+        )
+    }
+
     fun retry() = start()
 
     /**
-     * AND-213 / AND-031 — attempts payment for the created session via the billing stub. The stub
-     * returns NotConfigured, so this surfaces PaymentsUnavailable and never charges. When AND-031 wires
-     * a real authorizer, the Authorized branch will carry the payment_method_id to a billing call.
+     * FIX (ecom residual #1) — completes the purchase via the reliable cart-purchase endpoint
+     * (POST ui/shoppingcart/carts/{cart_id}/purchase, X-Idempotency-Key). This actually creates the
+     * order, decrements stock and credits the seller. Previously "Place order" routed through the
+     * never-authorizing [BillingAuthorizer] stub, so no in-app purchase could ever complete.
      */
     fun placeOrder() {
-        val ready = _state.value as? OrderReviewUiState.Ready ?: return
+        _state.value as? OrderReviewUiState.Ready ?: return
+        val cart = cartId
+        if (cart.isNullOrBlank()) {
+            viewModelScope.launch { _events.send(CheckoutEvent.PaymentFailed(GENERIC_PAYMENT_ERROR)) }
+            return
+        }
         if (_placing.value) return
         _placing.update { true }
         viewModelScope.launch {
-            val result = billingAuthorizer.authorize(
-                amountMinorUnits = ready.session.totalCents,
-                currency = ready.session.currency,
-            )
-            when (result) {
-                is BillingResult.NotConfigured -> _events.send(CheckoutEvent.PaymentsUnavailable)
-                is BillingResult.Cancelled -> Unit
-                is BillingResult.Declined -> _events.send(CheckoutEvent.PaymentFailed(result.reason))
-                is BillingResult.Failed ->
-                    _events.send(CheckoutEvent.PaymentFailed(result.cause.message ?: GENERIC_PAYMENT_ERROR))
-                // The stub never returns Authorized. The real charge call is owned by AND-227/AND-031;
-                // this ViewModel must NOT call a charge endpoint, so Authorized is intentionally inert.
-                is BillingResult.Authorized -> _events.send(CheckoutEvent.PaymentsUnavailable)
+            // ADV-405: attach the session last-click ad_click_id so checkout converts the ad (ADV-403).
+            when (val r = cartRepository.purchase(cart, idempotencyKey, adClickId = adAttribution.peek())) {
+                is ApiResult.Success ->
+                    _events.send(CheckoutEvent.PurchaseComplete(r.data.purchaseTxnId, r.data.orderId))
+                is ApiResult.Failure -> _events.send(CheckoutEvent.PaymentFailed(r.error.message))
+                is ApiResult.NetworkError -> _events.send(CheckoutEvent.PaymentFailed(OFFLINE_MESSAGE))
             }
             _placing.update { false }
         }

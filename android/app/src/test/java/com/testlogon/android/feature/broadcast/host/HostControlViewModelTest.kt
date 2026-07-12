@@ -127,6 +127,7 @@ class HostControlViewModelTest {
         var stopCalls = 0
         private val _state = MutableStateFlow<PublishState>(PublishState.Idle)
         override val state: StateFlow<PublishState> = _state.asStateFlow()
+        override suspend fun startPreview() {}
         override suspend fun goLive(sessionId: String, inputId: String): GoLiveResult =
             GoLiveResult.NotConfigured
         override fun stop() { stopCalls++ }
@@ -141,7 +142,12 @@ class HostControlViewModelTest {
         val saved = SavedStateHandle(
             if (sessionId != null) mapOf(HostControlViewModel.ARG_SESSION_ID to sessionId) else emptyMap(),
         )
-        return HostControlViewModel(repo, publisher, saved).also { it.pollIntervalMillis = pollIntervalMillis }
+        return HostControlViewModel(
+            repo,
+            publisher,
+            saved,
+            com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer,
+        ).also { it.pollIntervalMillis = pollIntervalMillis }
     }
 
     @Test

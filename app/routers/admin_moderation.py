@@ -139,6 +139,7 @@ class OffenderHistorySummaryOut(BaseModel):
     total_tickets: int = 0
     open_tickets: int = 0
     total_reports: int = 0
+    total_enforcements: int = 0  # MOD-1: precise count of ALL enforcement records
 
 
 class ModerationTicketDetailOut(BaseModel):
@@ -147,6 +148,9 @@ class ModerationTicketDetailOut(BaseModel):
     linked_reports: list[LinkedReportOut] = Field(default_factory=list)
     offender_history_summary: OffenderHistorySummaryOut
     prior_enforcement_history: list[dict[str, Any]] = Field(default_factory=list)
+    case_state: str = ""
+    hold_until: int | None = None
+    owner_user_id: str | None = None
 
 
 class ModerationDecisionIn(BaseModel):
@@ -370,6 +374,24 @@ def _content_snapshot(ticket: dict[str, Any], reports: list[dict[str, Any]]) -> 
             "profile_photo_url": str((profile.get("profile") or {}).get("profile_photo_url") or "") or None,
         }
 
+    if content_type == "syndicate_post":
+        from app.services import syndicate_feed as _sf
+        from app.services import moderation_case as _mc2
+        syndicate_id = str(meta.get("syndicate_id") or "")
+        if not syndicate_id:
+            _c = _mc2.get_case_for_content(content_type, content_id) or {}
+            syndicate_id = str((_c.get("content_metadata") or {}).get("syndicate_id") or "")
+        post = (_sf._get_post(syndicate_id, content_id) if syndicate_id else None) or {}
+        return {
+            "kind": content_type,
+            "exists": bool(post),
+            "post_id": content_id,
+            "syndicate_id": syndicate_id,
+            "author_user_id": str(post.get("author_id") or "") or None,
+            "text": str(post.get("text") or ""),
+            "created_at": _parse_int(post.get("created_at"), 0),
+        }
+
     return {"kind": content_type, "exists": False}
 
 
@@ -413,25 +435,93 @@ def _query_enforcement_history(user_id: str, *, limit: int = 25) -> list[dict[st
     return out[:limit]
 
 
+def _project_enforcement_row(row: dict[str, Any], fallback_user_id: str) -> dict[str, Any]:
+    return {
+        "user_id": str(row.get("user_id") or fallback_user_id),
+        "enforcement_id": str(row.get("enforcement_id") or ""),
+        "enforcement_type": str(row.get("enforcement_type") or ""),
+        "status": str(row.get("status") or ""),
+        "source_ticket_id": str(row.get("source_ticket_id") or ""),
+        "created_at": _parse_int(row.get("created_at"), 0),
+        "created_by_admin_user_id": str(row.get("created_by_admin_user_id") or "") or None,
+        "duration_days": _parse_int(row.get("duration_days"), 0),
+        "note": str(row.get("note") or ""),
+    }
+
+
+def _query_enforcement_history_by_offender(offender_user_id: str, *, cap: int | None = None) -> list[dict[str, Any]]:
+    """MOD-1: COMPLETE query of ALL enforcement records for an offender. Prefers the
+    ByOffenderCreatedAt GSI (user_id HASH -- the offender -- + created_at RANGE, so the
+    DB returns them newest-first); falls back to a COMPLETE paginated base-table Query
+    (also keyed on user_id) whenever the index is not queryable, so the admin offender
+    summary counts are ALWAYS precise -- never Limit-truncated like the old bounded
+    query, and never dependent on index availability."""
+    if not offender_user_id:
+        return []
+    raw_rows: list[dict[str, Any]] = []
+    try:
+        exclusive_start_key: dict[str, Any] | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "IndexName": "ByOffenderCreatedAt",
+                "KeyConditionExpression": Key("user_id").eq(offender_user_id),
+                "ScanIndexForward": False,
+            }
+            if exclusive_start_key:
+                kwargs["ExclusiveStartKey"] = exclusive_start_key
+            resp = T.user_enforcement_history.query(**kwargs)
+            raw_rows.extend(resp.get("Items", []))
+            exclusive_start_key = resp.get("LastEvaluatedKey")
+            if not exclusive_start_key:
+                break
+    except ClientError:
+        # Index missing / not ACTIVE -> COMPLETE base-table query (user_id is the HASH
+        # key, so this returns every enforcement record for the offender).
+        raw_rows = []
+        exclusive_start_key = None
+        while True:
+            kwargs = {"KeyConditionExpression": Key("user_id").eq(offender_user_id)}
+            if exclusive_start_key:
+                kwargs["ExclusiveStartKey"] = exclusive_start_key
+            resp = T.user_enforcement_history.query(**kwargs)
+            raw_rows.extend(resp.get("Items", []))
+            exclusive_start_key = resp.get("LastEvaluatedKey")
+            if not exclusive_start_key:
+                break
+    out: list[dict[str, Any]] = [
+        _project_enforcement_row(row, offender_user_id)
+        for row in raw_rows
+        if row.get("entity_type") == "user_enforcement"
+    ]
+    out.sort(key=lambda i: (int(i.get("created_at") or 0), str(i.get("enforcement_id") or "")), reverse=True)
+    return out[:cap] if cap else out
+
+
 def _prior_enforcement_history(offender_user_id: str | None) -> list[dict[str, Any]]:
     if not offender_user_id:
         return []
-    return _query_enforcement_history(offender_user_id, limit=25)
+    return _query_enforcement_history_by_offender(offender_user_id, cap=25)
 
 def _offender_history_summary(offender_user_id: str | None, reports: list[dict[str, Any]]) -> OffenderHistorySummaryOut:
     if not offender_user_id:
         return OffenderHistorySummaryOut(offender_user_id=None, total_tickets=0, open_tickets=0, total_reports=len(reports))
 
-    # Best-effort summary from moderation tickets table (future: dedicated offender index).
-    scanned = T.moderation_tickets.scan(FilterExpression=Attr("offender_user_id").eq(offender_user_id)).get("Items", [])
-    ticket_rows = [r for r in scanned if r.get("entity_type") == "moderation_ticket"]
-    open_tickets = sum(1 for r in ticket_rows if str(r.get("status") or "") == "open")
+    # MOD-1: COMPLETE indexed query over the ByOffenderCreatedAt GSI -- EVERY
+    # enforcement record for the offender, not a Limit-bounded base-table page --
+    # so total_tickets (distinct source tickets), open_tickets (active
+    # enforcements) and total_enforcements are PRECISE counts.
+    history = _query_enforcement_history_by_offender(offender_user_id)
+    distinct_tickets = {str(h.get("source_ticket_id") or "") for h in history if h.get("source_ticket_id")}
+    active_enforcements = sum(
+        1 for h in history if str(h.get("status") or "").lower() in ("active", "banned", "open")
+    )
 
     return OffenderHistorySummaryOut(
         offender_user_id=offender_user_id,
-        total_tickets=len(ticket_rows),
-        open_tickets=open_tickets,
+        total_tickets=len(distinct_tickets),
+        open_tickets=active_enforcements,
         total_reports=len(reports),
+        total_enforcements=len(history),
     )
 
 
@@ -533,7 +623,7 @@ def get_user_enforcement_history(
     _admin: AuthenticatedUser = Depends(require_content_moderation_admin),
 ) -> UserEnforcementHistoryListOut:
     ensure_admin_board_enabled(_admin)
-    items = _query_enforcement_history(user_id, limit=limit)
+    items = _query_enforcement_history_by_offender(user_id, cap=limit)
     return UserEnforcementHistoryListOut(items=[UserEnforcementHistoryOut(**row) for row in items])
 
 
@@ -614,9 +704,19 @@ def get_moderation_ticket_detail(
     snapshot = _content_snapshot(ticket_item, reports)
     offender_user_id = _infer_offender_user_id(ticket_item, snapshot)
 
+    from app.services import moderation_case as _mc
+    _case = _mc.get_case_for_content(str(ticket_item.get("content_type") or ""), str(ticket_item.get("content_id") or "")) or {}
+    _case_state = str(_case.get("state") or ticket_item.get("moderation_case_state") or "")
+    _hold_until_raw = _case.get("hold_until") if _case.get("hold_until") is not None else ticket_item.get("hold_until")
+    _hold_until = _parse_int(_hold_until_raw, 0) or None
+    _owner = str(_case.get("owner_user_id") or offender_user_id or "") or None
+
     return ModerationTicketDetailOut(
         ticket=_to_ticket_out(ticket_item),
         content_snapshot=snapshot,
+        case_state=_case_state,
+        hold_until=_hold_until,
+        owner_user_id=_owner,
         linked_reports=[
             LinkedReportOut(
                 report_id=str(r.get("report_id") or ""),
@@ -970,3 +1070,190 @@ def resolve_moderation_ticket(
 
     updated = _get_ticket_or_404(ticket_id)
     return _to_ticket_out(updated)
+
+
+# ── MODAB (MOD-A4): moderation_case triage — dismiss / confirm-30d-hold / final-call ──
+class _CaseActionOut(BaseModel):
+    ok: bool
+    ticket_id: str
+    case_id: str
+    state: str
+    hidden: bool = False
+    hold_until: int | None = None
+    owner_user_id: str | None = None
+    enforcement_id: str | None = None
+
+
+class _FinalCallIn(BaseModel):
+    action: Literal["reinstate", "delete"]
+    note: str | None = Field(default=None, max_length=2000)
+    ban: bool = False
+    ban_duration_days: int | None = Field(default=None, ge=0, le=3650)
+    second_approver_admin_user_id: str | None = Field(default=None, max_length=256)
+
+
+def _modab_case_and_meta(ticket_id: str):
+    from app.services import moderation_case as _mc
+    ticket = _get_ticket_or_404(ticket_id)
+    reports = _linked_reports(ticket_id)
+    snapshot = _content_snapshot(ticket, reports)
+    ct = str(ticket.get("content_type") or "")
+    cid = str(ticket.get("content_id") or "")
+    meta = (reports[0].get("metadata") if reports else {}) or {}
+    case = _mc.get_case_for_content(ct, cid)
+    if not case:
+        owner = _infer_offender_user_id(ticket, snapshot)
+        case = _mc.aggregate_report(
+            content_type=ct,
+            content_id=cid,
+            categories=_to_topic_list(ticket.get("aggregated_topics")),
+            owner_user_id=owner,
+            ticket_id=ticket_id,
+            metadata=meta,
+        )
+    return ticket, case, meta
+
+
+def _modab_tag_ticket(ticket_id: str, *, status: str, admin_sub: str, case_state: str, resolution: str | None = None, hold_until: int | None = None) -> None:
+    now = str(int(time.time()))
+    names = {"#s": "status", "#ua": "updated_at", "#cs": "moderation_case_state"}
+    vals: dict[str, Any] = {":s": status, ":ua": now, ":cs": case_state}
+    sets = ["#s = :s", "#ua = :ua", "#cs = :cs"]
+    if resolution is not None:
+        names["#r"] = "resolution"; vals[":r"] = resolution; sets.append("#r = :r")
+        names["#ra"] = "resolved_at"; vals[":ra"] = now; sets.append("#ra = :ra")
+        names["#rb"] = "resolved_by_admin_user_id"; vals[":rb"] = admin_sub; sets.append("#rb = :rb")
+    if hold_until is not None:
+        names["#hu"] = "hold_until"; vals[":hu"] = hold_until; sets.append("#hu = :hu")
+    T.moderation_tickets.update_item(
+        Key={"ticket_id": ticket_id},
+        UpdateExpression="SET " + ", ".join(sets),
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=vals,
+    )
+
+
+@router.post("/tickets/{ticket_id}/dismiss", response_model=_CaseActionOut)
+def dismiss_moderation_case(
+    ticket_id: str,
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> _CaseActionOut:
+    ensure_admin_actions_enabled(admin)
+    from app.services import moderation_lifecycle as _life
+    ticket, case, meta = _modab_case_and_meta(ticket_id)
+    res = _life.admin_dismiss(case=case, metadata=meta, admin_user_id=admin.sub)
+    _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="no_violation")
+    write_moderation_audit_event(
+        action="content_case_dismissed",
+        actor_user_id=admin.sub,
+        ticket_id=ticket_id,
+        content_type=str(ticket.get("content_type") or ""),
+        content_id=str(ticket.get("content_id") or ""),
+        target_user_id=str(res.get("owner_user_id") or ""),
+        metadata={"case_id": case["case_id"], "state": res["state"]},
+    )
+    return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=False, owner_user_id=res.get("owner_user_id"))
+
+
+@router.post("/tickets/{ticket_id}/confirm", response_model=_CaseActionOut)
+def confirm_moderation_case(
+    ticket_id: str,
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> _CaseActionOut:
+    ensure_admin_actions_enabled(admin)
+    from app.services import moderation_lifecycle as _life
+    ticket, case, meta = _modab_case_and_meta(ticket_id)
+    res = _life.admin_confirm_hold(case=case, metadata=meta, admin_user_id=admin.sub)
+    _modab_tag_ticket(ticket_id, status="open", admin_sub=admin.sub, case_state=res["state"], hold_until=res.get("hold_until"))
+    write_moderation_audit_event(
+        action="content_violation_confirmed",
+        actor_user_id=admin.sub,
+        ticket_id=ticket_id,
+        content_type=str(ticket.get("content_type") or ""),
+        content_id=str(ticket.get("content_id") or ""),
+        target_user_id=str(res.get("owner_user_id") or ""),
+        metadata={"case_id": case["case_id"], "hold_until": res.get("hold_until")},
+    )
+    return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=True, hold_until=res.get("hold_until"), owner_user_id=res.get("owner_user_id"))
+
+
+@router.post("/tickets/{ticket_id}/final-call", response_model=_CaseActionOut)
+def final_call_moderation_case(
+    ticket_id: str,
+    inp: _FinalCallIn,
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> _CaseActionOut:
+    ensure_admin_actions_enabled(admin)
+    from app.services import moderation_lifecycle as _life
+    ticket, case, meta = _modab_case_and_meta(ticket_id)
+    note = str(inp.note or "").strip()
+
+    if inp.action == "reinstate":
+        res = _life.admin_final_reinstate(case=case, metadata=meta, admin_user_id=admin.sub)
+        _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="no_violation")
+        write_moderation_audit_event(
+            action="content_case_reinstated",
+            actor_user_id=admin.sub,
+            ticket_id=ticket_id,
+            content_type=str(ticket.get("content_type") or ""),
+            content_id=str(ticket.get("content_id") or ""),
+            target_user_id=str(res.get("owner_user_id") or ""),
+            metadata={"case_id": case["case_id"]},
+        )
+        return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=False, owner_user_id=res.get("owner_user_id"))
+
+    # action == "delete"
+    permanent = bool(inp.ban) and int(inp.ban_duration_days or 0) <= 0
+    if permanent:
+        _require_senior_moderation_for_permanent_ban(admin=admin)
+        ensure_permanent_ban_scope_rollout(admin)
+        _require_dual_approval_for_permanent_ban(admin=admin, second_approver_admin_user_id=inp.second_approver_admin_user_id)
+
+    res = _life.admin_final_delete(case=case, metadata=meta, admin_user_id=admin.sub, source_ticket_id=ticket_id, note=note or "admin_final_delete")
+    owner = str(res.get("owner_user_id") or "")
+
+    if inp.ban and owner:
+        ban_enf_id = f"enf_{uuid.uuid4().hex[:20]}"
+        now = str(int(time.time()))
+        T.user_enforcement_history.put_item(
+            Item={
+                "user_id": owner,
+                "enforcement_id": ban_enf_id,
+                "entity_type": "user_enforcement",
+                "status": "active",
+                "enforcement_type": "ban",
+                "source_ticket_id": ticket_id,
+                "created_at": now,
+                "created_by_admin_user_id": admin.sub,
+                "note": note,
+                "duration_days": int(inp.ban_duration_days or 0),
+            }
+        )
+        apply_ban(
+            offender_user_id=owner,
+            ticket_id=ticket_id,
+            admin_user_id=admin.sub,
+            note=note,
+            duration_days=inp.ban_duration_days,
+            policy_category="content_violation",
+            enforcement_id=ban_enf_id,
+        )
+        write_moderation_audit_event(
+            action="enforcement_banned",
+            actor_user_id=admin.sub,
+            ticket_id=ticket_id,
+            target_user_id=owner,
+            metadata={"duration_days": int(inp.ban_duration_days or 0), "permanent": permanent},
+        )
+
+    _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="content_removed")
+    write_moderation_audit_event(
+        action="content_case_deleted",
+        actor_user_id=admin.sub,
+        ticket_id=ticket_id,
+        content_type=str(ticket.get("content_type") or ""),
+        content_id=str(ticket.get("content_id") or ""),
+        target_user_id=owner,
+        metadata={"case_id": case["case_id"], "enforcement_id": res.get("enforcement_id"), "banned": bool(inp.ban)},
+    )
+    return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=True, owner_user_id=owner, enforcement_id=res.get("enforcement_id"))

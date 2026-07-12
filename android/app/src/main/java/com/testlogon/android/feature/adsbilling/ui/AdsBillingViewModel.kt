@@ -7,7 +7,10 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdAccountSummary
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.data.billing.BillingRepository
+import com.testlogon.android.data.billing.PaymentMethod
 import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
+import com.testlogon.android.navigation.AdsBillingDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,12 +37,14 @@ import javax.inject.Inject
 @HiltViewModel
 class AdsBillingViewModel @Inject constructor(
     private val repository: AdsBillingRepository,
+    private val billingRepository: BillingRepository,
     private val errorParser: ApiErrorParser,
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
-    val accountId: String =
+    var accountId: String =
         checkNotNull(savedState[ARG_ACCOUNT_ID]) { "missing $ARG_ACCOUNT_ID nav arg" }
+        private set
 
     private val _uiState = MutableStateFlow<AdsBillingUiState>(AdsBillingUiState.Loading)
     val uiState: StateFlow<AdsBillingUiState> = _uiState.asStateFlow()
@@ -54,6 +59,14 @@ class AdsBillingViewModel @Inject constructor(
     /** Raw USD amount text the user typed in the deposit sheet. */
     private val _amountText = MutableStateFlow("")
     val amountText: StateFlow<String> = _amountText.asStateFlow()
+
+    /** ADV-306 - the caller saved payment methods for the deposit card picker (empty -> wallet fallback). */
+    private val _paymentMethods = MutableStateFlow<List<PaymentMethod>>(emptyList())
+    val paymentMethods: StateFlow<List<PaymentMethod>> = _paymentMethods.asStateFlow()
+
+    /** ADV-306 - the card selected to fund the deposit (null until methods load / when the wallet is empty). */
+    private val _selectedPaymentMethodId = MutableStateFlow<String?>(null)
+    val selectedPaymentMethodId: StateFlow<String?> = _selectedPaymentMethodId.asStateFlow()
 
     init {
         load()
@@ -70,6 +83,12 @@ class AdsBillingViewModel @Inject constructor(
             _uiState.value = AdsBillingUiState.Loading
         }
         viewModelScope.launch {
+            // The More-hub stub opens a placeholder sample id; resolve it to the caller's first real
+            // ad account so the entry shows real balance/ledger/deposit instead of "Account not found".
+            if (accountId == AdsBillingDest.SAMPLE_ACCOUNT_ID) {
+                (repository.listAccounts() as? ApiResult.Success)?.data
+                    ?.firstOrNull()?.accountId?.let { accountId = it }
+            }
             when (val accountResult = repository.getAccount(accountId)) {
                 is ApiResult.Success -> {
                     val ledger = (repository.getBillingHistory(accountId) as? ApiResult.Success)?.data
@@ -111,6 +130,43 @@ class AdsBillingViewModel @Inject constructor(
         _amountText.value = ""
         _depositState.value = DepositState.Idle
         _depositSheetVisible.value = true
+        loadPaymentMethods()
+    }
+
+    /** ADV-306 - the user picked a card in the deposit sheet. */
+    fun onPaymentMethodSelected(id: String) {
+        _selectedPaymentMethodId.value = id
+    }
+
+    /**
+     * ADV-306 - loads the caller saved payment methods when the deposit sheet opens so the deposit charges a
+     * CARD (payment_method_id) instead of the wallet fallback. Pre-selects via the PM chain (keep the current
+     * pick when still valid -> the wallet default -> the first saved method). A read failure is non-fatal:
+     * the picker stays empty and the deposit falls back to the wallet (server-authoritative).
+     */
+    private fun loadPaymentMethods() {
+        viewModelScope.launch {
+            val r = billingRepository.getPaymentMethods()
+            if (r is ApiResult.Success) {
+                _paymentMethods.value = r.data
+                val current = _selectedPaymentMethodId.value
+                if (current == null || r.data.none { it.id == current }) {
+                    _selectedPaymentMethodId.value =
+                        r.data.firstOrNull { it.isDefault }?.id ?: r.data.firstOrNull()?.id
+                }
+            }
+        }
+    }
+
+    /**
+     * ADV-306 - resolves the payment_method_id to charge: the explicit pick when still valid -> the wallet
+     * default (is_default) -> the first saved method -> null (no saved card -> server wallet fallback).
+     */
+    private fun resolvePaymentMethodId(): String? {
+        val methods = _paymentMethods.value
+        val selected = _selectedPaymentMethodId.value
+        if (selected != null && methods.any { it.id == selected }) return selected
+        return methods.firstOrNull { it.isDefault }?.id ?: methods.firstOrNull()?.id
     }
 
     /** Dismisses the deposit sheet (only when not submitting) -> Idle. */
@@ -131,10 +187,11 @@ class AdsBillingViewModel @Inject constructor(
      * new_balance_cents + the ledger is refreshed. On a 400 "Minimum deposit" / other failure:
      * [DepositState.Error] with a friendly message (the read state stays intact). NON-idempotent -> NO retry.
      */
-    fun deposit(paymentMethodId: String? = null) {
+    fun deposit() {
         if (_depositState.value is DepositState.Submitting) return
         val cents = parsedAmountCents() ?: return
         if (cents !in MIN_DEPOSIT_CENTS..MAX_DEPOSIT_CENTS) return
+        val paymentMethodId = resolvePaymentMethodId()
 
         _depositState.value = DepositState.Submitting
         viewModelScope.launch {

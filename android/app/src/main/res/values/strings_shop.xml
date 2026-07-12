@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ECOM - reviews + wishlist + seller-store strings (externalized; no hardcoded composable literals). -->
+<resources>
+    <!-- Reviews -->
+    <string name="review_section_title">Reviews</string>
+    <string name="review_write_title">Write a review</string>
+    <string name="review_title_label">Title (optional)</string>
+    <string name="review_body_label">Your review (optional)</string>
+    <string name="review_submit">Submit review</string>
+    <string name="review_submitted">Review posted</string>
+    <string name="review_deleted">Review removed</string>
+    <string name="review_delete">Delete your review</string>
+    <string name="review_empty">No reviews yet. Be the first to review this item.</string>
+    <string name="review_no_ratings">No ratings yet</string>
+    <string name="review_anonymous">Anonymous</string>
+    <string name="review_load_error_retry">Couldn\'t load reviews. Tap to retry.</string>
+    <string name="review_summary">%1$.1f average · %2$d reviews</string>
+    <string name="review_rate_stars">Rate %1$d stars</string>
+
+    <!-- Wishlist -->
+    <string name="wishlist_title">Wishlist</string>
+    <string name="more_entry_wishlist">Wishlist</string>
+    <string name="wishlist_add">Add to wishlist</string>
+    <string name="wishlist_remove">Remove from wishlist</string>
+    <string name="wishlist_unavailable">No longer available</string>
+    <string name="wishlist_empty_title">Your wishlist is empty</string>
+    <string name="wishlist_empty_body">Tap the heart on any product to save it here.</string>
+
+    <!-- Seller store: More entries -->
+    <string name="more_entry_seller_store">My store</string>
+    <string name="more_entry_seller_orders">Orders received</string>
+
+    <!-- Seller store: manage listings -->
+    <string name="seller_store_title">My store</string>
+    <string name="seller_store_new_category">New category</string>
+    <string name="seller_store_create">Create</string>
+    <string name="seller_store_category_name">Category name</string>
+    <string name="seller_store_category_desc">Description (optional)</string>
+    <string name="seller_store_add_item">Add listing</string>
+    <string name="seller_store_delete_category">Delete this category</string>
+    <string name="seller_store_edit_listing">Edit listing</string>
+    <string name="seller_store_delete_listing">Delete listing</string>
+    <string name="seller_store_boost_listing">Boost listing</string>
+    <string name="seller_store_boost_title">Boost this product</string>
+    <string name="seller_store_boost_body">Promote this listing as a sponsored product. We build the ad from your listing (image, name, price) with a Buy now button. Pick a budget and a per-click bid.</string>
+    <string name="seller_store_boost_budget">Lifetime budget (USD)</string>
+    <string name="seller_store_boost_bid">Max cost per click (cents)</string>
+    <string name="seller_store_boost_submit">Start boost</string>
+    <string name="seller_store_stock">%1$d in stock</string>
+    <string name="seller_store_no_categories_title">No categories yet</string>
+    <string name="seller_store_no_categories_body">Create a category to start listing products.</string>
+    <string name="seller_store_no_items_title">No listings yet</string>
+    <string name="seller_store_no_items_body">Tap + to add your first product to this category.</string>
+
+    <!-- Seller store: listing editor -->
+    <string name="listing_editor_new_title">New listing</string>
+    <string name="listing_editor_edit_title">Edit listing</string>
+    <string name="listing_name">Name</string>
+    <string name="listing_description">Description</string>
+    <string name="listing_price">Price</string>
+    <string name="listing_stock">Stock (optional)</string>
+    <string name="listing_pick_image">Add photo</string>
+    <string name="listing_image">Listing photo</string>
+    <string name="listing_save">Save</string>
+    <string name="listing_delete">Delete</string>
+
+    <!-- Seller store: orders received -->
+    <string name="seller_orders_title">Orders received</string>
+    <string name="seller_orders_empty_title">No orders</string>
+    <string name="seller_orders_empty_body">No orders in this status yet.</string>
+    <string name="seller_orders_buyer">Buyer: %1$s</string>
+    <string name="seller_orders_items">%1$d items</string>
+    <string name="seller_orders_status">Status: %1$s</string>
+    <string name="seller_orders_fulfil">Fulfilment</string>
+    <string name="seller_orders_no_actions">No fulfilment actions available in this status.</string>
+    <string name="seller_orders_cancel">Cancel order</string>
+    <!-- Seller store: my sales / orders-received (seller-scoped, non-admin) -->
+    <string name="more_entry_seller_sales">My sales</string>
+    <string name="seller_sales_title">My sales</string>
+    <string name="seller_sales_empty_title">No sales yet</string>
+    <string name="seller_sales_empty_body">When someone buys one of your items, it shows up here so you can ship it.</string>
+    <string name="seller_sales_buyer">Buyer: %1$s</string>
+    <string name="seller_sales_items">%1$d items</string>
+    <string name="seller_sales_status">Status: %1$s</string>
+    <string name="seller_sales_ship_to">Ship to</string>
+    <string name="seller_sales_no_address">No shipping address on file.</string>
+    <string name="seller_sales_line_items">Items to send</string>
+    <string name="seller_sales_subtotal">Subtotal</string>
+    <string name="seller_sales_fulfil">Fulfilment</string>
+    <string name="seller_sales_mark_shipped">Mark as shipped</string>
+    <string name="seller_sales_no_actions">No fulfilment actions available in this status.</string>
+    <string name="seller_sales_tracking">Tracking number (optional)</string>
+    <string name="seller_sales_carrier">Carrier (optional)</string>
+    <string name="seller_sales_tracked">Tracking: %1$s %2$s</string>
+</resources>

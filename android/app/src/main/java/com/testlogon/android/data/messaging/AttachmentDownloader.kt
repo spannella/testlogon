@@ -76,21 +76,20 @@ class DefaultAttachmentDownloader @Inject constructor(
         // Attempt at most twice: a rejected grant/GET triggers exactly one fresh-grant retry.
         repeat(MAX_GRANT_ATTEMPTS) { attempt ->
             try {
-                val grant = api.createAttachmentGrant(conversationId, messageId)
+                // Normal (non-once) files download directly: the once-media grant endpoint
+                // 422s for them ("not configured for once-media access"). Only view_once/
+                // listen_once need a grant.
+                val grantToken: String? =
+                    if (consumptionPolicy == POLICY_VIEW_ONCE || consumptionPolicy == POLICY_LISTEN_ONCE) {
+                        api.createAttachmentGrant(conversationId, messageId).grantToken
+                    } else {
+                        null
+                    }
 
-                if (consumptionPolicy == POLICY_VIEW_ONCE || consumptionPolicy == POLICY_LISTEN_ONCE) {
-                    api.consumeAttachment(
-                        id = conversationId,
-                        messageId = messageId,
-                        grantToken = grant.grantToken,
-                        body = ConsumeAttachmentReq(
-                            consumptionAttemptId = UUID.randomUUID().toString(),
-                            trigger = if (consumptionPolicy == POLICY_LISTEN_ONCE) "play" else "open",
-                        ),
-                    )
-                }
-
-                val body = api.downloadAttachment(conversationId, messageId, grant.grantToken)
+                // Fetch the bytes FIRST. Consuming a once-media message before the GET marks it
+                // consumed, after which the byte GET 409s (already_consumed) and the view fails.
+                // Consumption is recorded AFTER the bytes are safely saved (below).
+                val body = api.downloadAttachment(conversationId, messageId, grantToken)
                 val total = body.contentLength()
                 val part = File(target.parentFile, target.name + ".part")
                 part.parentFile?.mkdirs()
@@ -114,6 +113,21 @@ class DefaultAttachmentDownloader @Inject constructor(
                     // Fall back to copy+delete if rename across the same dir somehow fails.
                     part.copyTo(target, overwrite = true)
                     part.delete()
+                }
+                // Now that the bytes are safely on disk, record consumption for once-media
+                // (best-effort: a consume failure must not discard a successfully viewed image).
+                if (consumptionPolicy == POLICY_VIEW_ONCE || consumptionPolicy == POLICY_LISTEN_ONCE) {
+                    runCatching {
+                        api.consumeAttachment(
+                            id = conversationId,
+                            messageId = messageId,
+                            grantToken = grantToken.orEmpty(),
+                            body = ConsumeAttachmentReq(
+                                consumptionAttemptId = UUID.randomUUID().toString(),
+                                trigger = if (consumptionPolicy == POLICY_LISTEN_ONCE) "play" else "open",
+                            ),
+                        )
+                    }
                 }
                 emit(DownloadProgress.Downloading(1f))
                 emit(DownloadProgress.Done(target))

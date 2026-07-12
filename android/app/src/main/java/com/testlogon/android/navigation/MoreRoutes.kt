@@ -58,6 +58,9 @@ object MoreRoutes {
     // AND-191: the public VOD catalog (browse on-demand titles).
     val VOD_CATALOG: String get() = VodCatalogDest.ROUTE
 
+    // "My Rentals": the viewer's time-limited rentals + view-once purchases. Web parity: vod/rentals.
+    val VOD_RENTALS: String get() = VodRentalsDest.ROUTE
+
     // AND-196: the clips vertical-pager feed.
     val CLIPS: String get() = ClipsFeedDest.ROUTE
 
@@ -82,11 +85,23 @@ object MoreRoutes {
     // AND-211: the shopping cart.
     val CART: String get() = CartDest.ROUTE
 
+    // ECOM: the wishlist / favourites (saved catalog items).
+    val WISHLIST: String get() = WishlistDest.ROUTE
+    val SELLER_STORE: String get() = SellerStoreDest.ROUTE
+    val SELLER_ORDERS: String get() = SellerOrdersDest.ROUTE
+    val SELLER_SALES: String get() = SellerSalesDest.BASE
+
+    // AND-332: the server file manager (path-based browse + upload/download/share/Drive-import).
+    const val FILES = FilesDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
     // AND-224: saved payment-methods management (list / set-default / remove + add-card CTA).
     val PAYMENT_METHODS: String get() = PaymentMethodsDest.ROUTE
+
+    // PW18: Wallet transactions (ledger) history — date/amount/type/status from BK3.
+    val WALLET_TRANSACTIONS: String get() = WalletTransactionsDest.ROUTE
 
     // AND-243: the invoices list (paged number/date/amount/status + detail/email/PDF).
     const val INVOICES = InvoicesListDest.ROUTE
@@ -122,6 +137,10 @@ object MoreRoutes {
     // AND-261: the READ-ONLY bulk/batch payout tools (admin batch list + detail; no execute action).
     const val BULK_PAYOUTS = BulkPayoutsDest.ROUTE
 
+    // Web-parity admin bulk-payout PROMOTE console (eligible -> preview -> EXECUTE; admin-gated; execute
+    // moves real funds behind a confirm). The write half of /admin/bulk-payouts.
+    const val BULK_PAYOUTS_PROMOTE = BulkPayoutPromoteDest.ROUTE
+
     // AND-254: the creator engagement-rate analytics (server rate + trend chart). Base route (no arg);
     // the registered composable route carries an optional `?period=` deep-link arg.
     const val ENGAGEMENT = EngagementDest.ROUTE_BASE
@@ -133,6 +152,54 @@ object MoreRoutes {
 
     // AND-264: referrals dashboard (referral code/link + stats + share/copy + create-code).
     const val REFERRALS = ReferralsDest.ROUTE
+
+    // Alerts (system notifications) inbox — mirrors web /alerts.
+    const val ALERTS = AlertsDest.ROUTE
+
+    // MOD-D2: poster "My content under review" (moderation cases + respond/close).
+    const val MY_CONTENT_REVIEW = ModerationReviewDest.ROUTE
+
+    // Account-action appeals - mirrors web /appeals.
+    const val APPEALS = AppealsDest.ROUTE
+
+    // Web-route parity batch.
+    const val IDEAS = IdeasDest.ROUTE
+    const val LICENSES = LicensesDest.ROUTE
+    const val AGENT_CONFIGS = AgentConfigsHubDest.ROUTE
+
+    // AGENTS-BASICS web-parity: workers (list/detail/sessions + create). require_ui_session (usable).
+    val WORKERS: String get() = WorkersListDest.ROUTE
+    // AGENTS-BASICS web-parity: LLM provider keys (list/add/test/revoke). require_ui_session (usable).
+    val LLM_KEYS: String get() = LlmKeysListDest.ROUTE
+    // AGENTS-BASICS web-parity: fleet dashboard (status/capacity/bulk/templates). require_ui_session (usable).
+    val FLEET: String get() = FleetDashboardDest.ROUTE
+    // AGENTS-BASICS web-parity: agent-types dashboard/picker -> feeds the B4 type-config screens.
+    val AGENT_TYPES: String get() = AgentTypesDashboardDest.ROUTE
+
+    // AGENTS-BASICS web-parity: worker feedback queue (respond/skip). require_ui_session (usable).
+    val AGENT_FEEDBACK: String get() = AgentFeedbackDest.ROUTE
+    // AGENTS-BASICS web-parity: READ-ONLY agent pull-requests (list -> detail). require_ui_session (usable).
+    val AGENT_PRS: String get() = AgentPrsListDest.ROUTE
+    // AGENTS-BASICS web-parity: per-worker agent memory (worker picker -> identity/project/entries).
+    val AGENT_MEMORY: String get() = AgentMemoryPickerDest.ROUTE
+    // AGENTS-BASICS web-parity: doc-coverage dashboard (+ doc templates). require_ui_session (usable).
+    val DOC_COVERAGE: String get() = DocCoverageDest.ROUTE
+
+    // B4 web-parity: Stylist / UI-design agent (web /agents/stylist). require_ui_session (usable).
+    const val STYLIST = StylistOverviewDest.ROUTE
+
+    // B4 web-parity: Marketing content agent (web /agents/marketing). require_ui_session (usable).
+    const val MARKETING = MarketingDashboardDest.ROUTE
+    // B4 web-parity: Accountant/cost-tracking agent (web /agents/costs). require_ui_session (usable).
+    const val COSTS = CostOverviewDest.ROUTE
+    // B4 web-parity: Compliance agent (web /agents/compliance). require_ui_session (usable).
+    const val COMPLIANCE = ComplianceDest.ROUTE
+    // B4 web-parity: Security agent (web /agents/security == compliance page). require_ui_session (usable).
+    const val SECURITY = SecurityDest.ROUTE
+    // B4 web-parity: PM feature-idea triage (web /agents/pm/ideas). require_ui_session (usable).
+    const val PM_IDEAS = PmIdeasDest.ROUTE
+    const val WATCH_PARTIES = WatchPartiesDest.LIST
+    const val BOTS = BotsDest.LIST
 
     // AND-265: affiliates dashboard (client-aggregated earnings + reusable chart + affiliate links).
     const val AFFILIATES = AffiliatesDest.ROUTE
@@ -150,6 +217,9 @@ object MoreRoutes {
     // AND-237: manage / cancel the viewer's current subscription (arg-less route).
     const val MANAGE_SUBSCRIPTION = ManageSubscriptionDest.ROUTE
 
+    // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
+    const val CREATOR_SUBSCRIBERS = CreatorSubscribersDest.ROUTE
+
     // AND-238: "My fan clubs" — self-browse the viewer's fan-club channels (SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val FAN_CLUB = "fanclub/channels/${FanClubChannelsDest.SELF}"
@@ -163,7 +233,21 @@ object MoreRoutes {
     // AND-356: READ-ONLY syndicate overview (Feed/Treasury/Revenue-split). No discovery list this wave, so
     // the hub opens a known sample syndicate id for manual testing (plain constant, no Uri.encode, so the
     // JVM MoreCatalog integrity test stays Android-free).
-    const val SYNDICATES = SyndicateOverviewDest.STUB_ROUTE
+    const val SYNDICATES = SyndicateListDest.ROUTE
+
+    // Web-parity: My Bundles (the caller's active syndicate bundle subscriptions + per-bundle cancel).
+    const val MY_BUNDLES = MyBundlesDest.ROUTE
+
+    // Web-parity: syndicate-advertising campaign DETAIL. No per-syndicate campaigns list this wave, so the
+    // hub opens a known sample syndicate+campaign id (plain constant, no Uri.encode, so the JVM MoreCatalog
+    // integrity test stays Android-free).
+    const val SYNDICATE_CAMPAIGN = CampaignDetailDest.STUB_ROUTE
+
+    // ADV2-709/710/711 (F7): SYNDICATE-ADS management (create/fund a syndicate ad account + campaign
+    // + creative + the placement split). No syndicate-admin picker this wave, so the hub opens a known
+    // sample syndicate id (plain constant, no Uri.encode, so the JVM MoreCatalog integrity test stays
+    // Android-free).
+    const val SYNDICATE_ADS = SyndicateAdsDest.STUB_ROUTE
 
     // AND-358: READ-ONLY collaborations (Paging-3 list -> detail; two parties + status + revenue split).
     const val COLLABORATIONS = CollaborationsListDest.ROUTE
@@ -171,6 +255,26 @@ object MoreRoutes {
     // AND-365: READ-ONLY sponsorship inbox (single GET list of inbound brand deals + client-side status
     // filter -> deal-detail placeholder; the real detail is AND-366).
     const val SPONSORSHIPS = SponsorshipInboxDest.ROUTE
+
+    // ADV2-407 (F4): advertiser "propose a sponsored post to a creator" composer (draft body + billing
+    // linkage -> POST a proposal; nothing publishes until the creator approves).
+    const val SPONSORED_POST_COMPOSE = SponsoredPostComposeDest.ROUTE
+
+    // ADV2-408 (F4): creator APPROVAL QUEUE for advertiser-drafted sponsored posts (pending proposals ->
+    // approve publishes a normal creator post carrying the DISTINCT paid_partnership flag / reject).
+    const val SPONSORED_POST_QUEUE = SponsoredPostQueueDest.ROUTE
+
+    // ADV2-E5 (F5): advertiser "propose a sponsored MESSAGE to a creator" composer (draft body + billing
+    // linkage -> POST an offer; nothing sends until the creator approves — then it sends AS the creator).
+    const val AD_MESSAGE_COMPOSE = AdMessageComposeDest.ROUTE
+
+    // ADV2-E5 (F5): creator APPROVAL QUEUE for advertiser-drafted sponsored MESSAGES (pending offers ->
+    // approve SENDS the message to the creator's audience as the creator / reject).
+    const val AD_MESSAGE_QUEUE = AdMessageQueueDest.ROUTE
+
+    // ADV2-E5 (F6): advertiser DIRECT mass-DM composer (compose + send AS the advertiser to eligible
+    // relationships only — followers/subscribers minus ad opt-outs; platform-100%).
+    const val AD_MASS_DM = AdMassDmComposeDest.ROUTE
 
     // AND-367: ads-account billing read view (balance/lifetime-spend + ledger + monthly invoice) + the
     // DEPOSIT add-funds sheet. No ads-accounts list yet, so the hub opens a known sample account id (plain
@@ -182,6 +286,30 @@ object MoreRoutes {
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
     const val AD_ANALYTICS = AdAnalyticsDest.STUB_ROUTE
 
+    // AND-369: READ-ONLY ads-campaigns list (per-account campaigns: name/status/budget/spend). No
+    // ads-accounts list yet, so the hub opens a known sample account id (plain constant, no Uri.encode,
+    // so the JVM MoreCatalog integrity test stays Android-free).
+    const val ADS_CAMPAIGNS = AdsCampaignsDest.STUB_ROUTE
+
+    // ADV-107/108/109: advertiser CREATE flow (create ad account -> campaign -> creative + upload +
+    // submit-for-review). No nav arg: the pickers/steps carry the account/campaign via AdsStudioSelection.
+    const val ADS_CREATE_ACCOUNT = CreateAdAccountDest.ROUTE
+    const val ADS_CREATE_CAMPAIGN = CreateCampaignDest.ROUTE
+    const val ADS_CREATE_CREATIVE = CreateCreativeDest.ROUTE
+
+    // Web-parity ads STUDIO editors. Each VM self-resolves the caller's first account then campaign
+    // (no campaign-picker nav yet), so the hub registers the plain route constants directly.
+    const val ADS_TARGETING = AdTargetingDest.ROUTE
+    const val ADS_SCHEDULING = AdSchedulingDest.ROUTE
+    const val ADS_OPTIMIZATION = AdOptimizationDest.ROUTE
+
+    // Web-parity CONTENT AD-CONTROLS (per-content overrides + revenue share + transparency). Caller-
+    // scoped; no nav arg, so the hub registers the plain route constant directly.
+    const val CONTENT_AD_CONTROLS = ContentAdControlsDest.ROUTE
+
+    // Web-parity boost MANAGEMENT: the boosts LIST (/ads/boost). Rows open the detail-by-boostId screen.
+    const val BOOSTS = BoostManageDest.LIST_ROUTE
+
     // AND-400: READ-ONLY public SEO metadata inspector (title / og / twitter / json-ld a crawler sees).
     // No per-resource detail surface wires it this wave, so the hub opens a known sample profile resource
     // (plain constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
@@ -189,6 +317,9 @@ object MoreRoutes {
 
     // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> ticket list -> thread.
     const val TICKETS = TicketSpacesListDest.ROUTE
+
+    // B-SUP (batch 7): the role-branched Support landing (USER help / ADMIN helpdesk queue).
+    const val SUPPORT = SupportDest.ROUTE
 
     // AND-398: WEBHOOKS config (light) - list outbound webhook endpoints -> detail -> a LIGHT create.
     const val WEBHOOKS = WebhooksListDest.ROUTE
@@ -203,6 +334,98 @@ object MoreRoutes {
     // sees no admin data. Two concrete entry routes off the shared `{channel}` destination template.
     const val ADMIN_EMAIL_DASHBOARD = MessagingDashboardDest.EMAIL_ROUTE
     const val ADMIN_SMS_DASHBOARD = MessagingDashboardDest.SMS_ROUTE
+
+    // B5: admin content-moderation board (queue + ticket detail + claim/decision/resolve).
+    const val ADMIN_MODERATION = ModerationBoardDest.ROUTE
+
+    // Web-parity admin ADS surfaces (all require_admin_or_root; ad-platform kill-switch toggle is
+    // root-only -> surfaced read-only). Each self-gates via the backend 403.
+    const val ADMIN_AD_CREATIVE_REVIEW = AdCreativeReviewDest.ROUTE
+    const val ADMIN_AD_FRAUD = AdFraudDest.ROUTE
+    const val ADMIN_AD_PLATFORM = AdPlatformDest.ROUTE
+
+    // Web-parity admin 1099 MANAGER (year list + generate/correct/batch; require_admin_or_root). Distinct
+    // from the user-facing own-1099 view (TAX_FORMS_1099).
+    const val ADMIN_TAX_FORMS_1099 = AdminTaxFormDest.ROUTE
+
+    // B6: admin-ops read dashboards. ADMIN-drivable reads (financials/payment-health/risk/compute/jobs)
+    // + ROOT-gated (rate-limits/audit-exports -> Forbidden for admin). Each self-gates via the backend 403.
+    const val ADMIN_FINANCIALS = AdminOpsFinancialsDest.ROUTE
+    const val ADMIN_PAYMENT_HEALTH = AdminOpsPaymentHealthDest.ROUTE
+    const val ADMIN_RISK = AdminOpsRiskDest.ROUTE
+    const val ADMIN_COMPUTE = AdminOpsComputeDest.ROUTE
+    const val ADMIN_JOBS = AdminOpsJobsDest.ROUTE
+    const val ADMIN_RATE_LIMITS = AdminOpsRateLimitsDest.ROUTE
+    const val ADMIN_AUDIT_EXPORTS = AdminOpsAuditExportsDest.ROUTE
+
+    // Web-parity ROOT/ADMIN governance. tenants/SSO/role-mgmt are require_root_session/require_root ->
+    // ROOT-GATED (render Forbidden for our admin account); the subscription-tier MANAGER is
+    // require_admin_or_root -> ADMIN-drivable. Each self-gates via the backend 403.
+    const val ADMIN_TENANTS = AdminTenantsDest.ROUTE
+    const val ADMIN_SSO = AdminSsoDest.ROUTE
+    const val ADMIN_ROLES = AdminRolesDest.ROUTE
+    const val ADMIN_SUBSCRIPTION_TIER_MANAGER = AdminTierManagerDest.ROUTE
+
+    // B5: admin video-review queue (approve/reject).
+    const val ADMIN_VIDEO_REVIEW = VideoReviewDest.ROUTE
+
+    // B5: admin DMCA claims dashboard (claims queue + resolve).
+    const val ADMIN_DMCA = DmcaAdminDest.ROUTE
+
+    // B5: admin refund-requests queue (status filter + approve/reject).
+    const val ADMIN_REFUNDS = RefundAdminDest.ROUTE
+
+    // B5: admin billing-disputes queue (status filter + respond/resolve).
+    const val ADMIN_DISPUTES = DisputeAdminDest.ROUTE
+
+    // B5: admin appeals review queue (claim + decide).
+    const val ADMIN_APPEALS = AppealAdminDest.ROUTE
+
+    // B5: admin fraud-review queue (flags review + cases resolve).
+    const val ADMIN_FRAUD = FraudAdminDest.ROUTE
+
+    // B5: admin payment-incidents queue (status filter + submit-response).
+    const val ADMIN_PAYMENT_INCIDENTS = IncidentAdminDest.ROUTE
+
+    // Web-parity KYC-admin review queues (A1..A8). Each admin-gated; self-gates via backend 403.
+    const val ADMIN_KYC_CASES = KycCaseAdminDest.ROUTE
+    const val ADMIN_KYC_DOCUMENTS = KycDocAdminDest.ROUTE
+    const val ADMIN_KYC_RESIDENCY = KycResidencyAdminDest.ROUTE
+    const val ADMIN_KYC_PROOF_OF_FUNDS = KycPofAdminDest.ROUTE
+    const val ADMIN_KYC_LIVENESS = KycLivenessAdminDest.ROUTE
+    const val ADMIN_KYC_SCREENING = KycScreeningAdminDest.ROUTE
+    const val ADMIN_KYC_ID_SCANNER = KycIdScanAdminDest.ROUTE
+    const val ADMIN_KYC_BUSINESS = KycBusinessAdminDest.ROUTE
+
+    // Web-parity KYC-admin dashboards + config (B2..B9). Admin-gated; each self-gates via backend 403.
+    const val ADMIN_KYC_WORKLOAD = KycWorkloadAdminDest.ROUTE
+    const val ADMIN_KYC_METRICS = KycMetricsAdminDest.ROUTE
+    const val ADMIN_KYC_ANALYTICS = KycAnalyticsAdminDest.ROUTE
+    const val ADMIN_KYC_MONITORING = KycMonitoringAdminDest.ROUTE
+    const val ADMIN_KYC_ADDRESS_VERIFICATION = KycAddressVerifAdminDest.ROUTE
+    const val ADMIN_KYC_COMPLIANCE = KycComplianceAdminDest.ROUTE
+    const val ADMIN_KYC_TEMPLATES = KycTemplatesAdminDest.ROUTE
+    const val ADMIN_KYC_TRANSLATIONS = KycTranslationsAdminDest.ROUTE
+
+    // B7 web-parity CLOUD-INFRA management surfaces. Owner-scoped require_ui_session (NOT admin); each
+    // self-gates via the backend 403. Surfaced in the operator/Infra hub (operatorOnly in MoreCatalog).
+    const val INFRA_EC2 = Ec2Dest.ROUTE
+    const val INFRA_K8S = K8sDest.ROUTE
+    const val INFRA_SECURITY_GROUPS = SecurityGroupsDest.ROUTE
+    const val INFRA_HOSTS = HostInventoryDest.ROUTE
+    const val INFRA_MONITORING = InstanceMonitoringDest.ROUTE
+    const val INFRA_BILLING = ComputeBillingDest.ROUTE
+
+    // B7 web-parity REMOTE-ACCESS surfaces (mirror the web /remote/* + /remote-desktop pages). Backends
+    // are owner-scoped require_ui_session control planes; each self-gates via the backend 403. Surfaced in
+    // the operator/Infra hub (operatorOnly in MoreCatalog). remote-desktop is FLAGGED on web (default ON);
+    // the Android live viewer is an honest open-on-desktop state.
+    const val REMOTE_SSH_KEYS = SshKeysDest.ROUTE
+    const val REMOTE_SSH_RECORDINGS = SshRecordingsDest.ROUTE
+    const val REMOTE_BASTION = SshBastionDest.ROUTE
+    const val REMOTE_CONNECTION_PROFILES = ConnProfilesDest.ROUTE
+    const val REMOTE_TEMPLATES = InstanceTemplatesDest.ROUTE
+    const val REMOTE_DESKTOP = RemoteDesktopDest.ROUTE
 
     // AND-374: projects (paged list -> detail + the account-scoped Google Drive provider connect flow).
     const val PROJECTS = ProjectsListDest.ROUTE
@@ -219,6 +442,34 @@ object MoreRoutes {
 
     // AND-385: privacy & data export (request -> status -> download lifecycle; Room-cached offline history).
     const val PRIVACY_EXPORT = PrivacyExportDest.ROUTE
+
+    // B-KYC (batch 7): identity verification. Lands on the READ-ONLY KYC case list (current verification
+    // status + the ongoing-monitoring banner); "Start verification" deep-links onward to the tier-status
+    // requirements checklist + Evaluate, and the case steps (document capture, etc.). Already registered.
+    const val KYC = KycCasesDest.ROUTE
+
+    // B-APIKEY (batch 7): developer API-keys management (list / create-shown-once / revoke).
+    const val API_KEYS = ApiKeysListDest.ROUTE
+
+    // Web-parity: questionnaire BUILDER (creator authoring: drafts list -> create -> sections +
+    // questions of 9 types -> publish). Distinct from the respondent renderer.
+    const val QUESTIONNAIRE_BUILDER = QuestionnaireBuilderListDest.ROUTE
+
+    // Web-parity: delegation-API keys (/delegation-api) - DELEGATED-access keys (a tool acting on a
+    // creator's behalf), distinct from API_KEYS (personal developer keys).
+    const val DELEGATION_KEYS = DelegationKeysDest.ROUTE
+
+    // Settings: custom emojis (personal emoji manager). Web parity: settings/emojis.
+    val CUSTOM_EMOJIS: String get() = MainDest.SettingsEmojis.route
+
+    // Settings: geo-blocking rules (detected country + dry-run check). Web parity: settings/geo.
+    val GEO_RULES: String get() = MainDest.SettingsGeo.route
+
+    // Settings: call rate (paid-calls per-minute rate). Web parity: settings/call-rate.
+    val CALL_RATE: String get() = MainDest.SettingsCallRate.route
+
+    // Settings: message privacy (TIP-B4 pay-to-message gate + tip-free allowlist).
+    val MESSAGE_PRIVACY: String get() = MainDest.SettingsMessagePrivacy.route
 
     // AND-077: the Settings hub landing.
     val SETTINGS: String get() = MainDest.Settings.route
@@ -245,6 +496,7 @@ object MoreRoutes {
             ACHIEVEMENTS,
             VIDEOS,
             VOD_CATALOG,
+            VOD_RENTALS,
             CLIPS,
             CALENDAR,
             GOOGLE_CALENDAR,
@@ -253,19 +505,48 @@ object MoreRoutes {
             GALLERY,
             CATALOG,
             CART,
+            WISHLIST,
+            SELLER_STORE,
+            SELLER_ORDERS,
+            SELLER_SALES,
+            FILES,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
+            WALLET_TRANSACTIONS,
             EARNINGS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,
             ANALYTICS_DASHBOARD,
             REFERRALS,
+            ALERTS,
+            MY_CONTENT_REVIEW,
+            APPEALS,
+            IDEAS,
+            LICENSES,
+            AGENT_CONFIGS,
+            WORKERS,
+            LLM_KEYS,
+            FLEET,
+            AGENT_TYPES,
+            AGENT_FEEDBACK,
+            AGENT_PRS,
+            AGENT_MEMORY,
+            DOC_COVERAGE,
+            STYLIST,
+            MARKETING,
+            COSTS,
+            COMPLIANCE,
+            SECURITY,
+            PM_IDEAS,
+            WATCH_PARTIES,
+            BOTS,
             AFFILIATES,
             PROMO_CODES,
             DISCOUNTS,
             PAYOUTS,
             PAYOUT_SETUP,
             BULK_PAYOUTS,
+            BULK_PAYOUTS_PROMOTE,
             INVOICES,
             REFUNDS,
             DISPUTES,
@@ -273,25 +554,103 @@ object MoreRoutes {
             TAX_FORMS_1099,
             BILLING_CONFIG,
             SUBSCRIPTION_TIERS,
+            CREATOR_SUBSCRIBERS,
             MANAGE_SUBSCRIPTION,
             FAN_CLUB,
             ORGS_MEMBERS,
             GROUPS,
             SYNDICATES,
+            MY_BUNDLES,
+            SYNDICATE_CAMPAIGN,
+            SYNDICATE_ADS,
             COLLABORATIONS,
             SPONSORSHIPS,
+            SPONSORED_POST_COMPOSE,
+            SPONSORED_POST_QUEUE,
+            AD_MESSAGE_COMPOSE,
+            AD_MESSAGE_QUEUE,
+            AD_MASS_DM,
             ADS_BILLING,
             AD_ANALYTICS,
+            ADS_CAMPAIGNS,
+            ADS_CREATE_ACCOUNT,
+            ADS_CREATE_CAMPAIGN,
+            ADS_CREATE_CREATIVE,
+            ADS_TARGETING,
+            ADS_SCHEDULING,
+            ADS_OPTIMIZATION,
+            CONTENT_AD_CONTROLS,
+            BOOSTS,
             SEO,
             TICKETS,
+            SUPPORT,
             WEBHOOKS,
             ADMIN_DASHBOARD,
             ADMIN_EMAIL_DASHBOARD,
             ADMIN_SMS_DASHBOARD,
+            ADMIN_MODERATION,
+            ADMIN_AD_CREATIVE_REVIEW,
+            ADMIN_AD_FRAUD,
+            ADMIN_AD_PLATFORM,
+            ADMIN_TAX_FORMS_1099,
+            ADMIN_VIDEO_REVIEW,
+            ADMIN_DMCA,
+            ADMIN_REFUNDS,
+            ADMIN_DISPUTES,
+            ADMIN_APPEALS,
+            ADMIN_FRAUD,
+            ADMIN_PAYMENT_INCIDENTS,
+            ADMIN_KYC_CASES,
+            ADMIN_KYC_DOCUMENTS,
+            ADMIN_KYC_RESIDENCY,
+            ADMIN_KYC_PROOF_OF_FUNDS,
+            ADMIN_KYC_LIVENESS,
+            ADMIN_KYC_SCREENING,
+            ADMIN_KYC_ID_SCANNER,
+            ADMIN_KYC_BUSINESS,
+            ADMIN_KYC_WORKLOAD,
+            ADMIN_KYC_METRICS,
+            ADMIN_KYC_ANALYTICS,
+            ADMIN_KYC_MONITORING,
+            ADMIN_KYC_ADDRESS_VERIFICATION,
+            ADMIN_KYC_COMPLIANCE,
+            ADMIN_KYC_TEMPLATES,
+            ADMIN_KYC_TRANSLATIONS,
+            ADMIN_FINANCIALS,
+            ADMIN_PAYMENT_HEALTH,
+            ADMIN_RISK,
+            ADMIN_COMPUTE,
+            ADMIN_JOBS,
+            ADMIN_RATE_LIMITS,
+            ADMIN_AUDIT_EXPORTS,
+            ADMIN_TENANTS,
+            ADMIN_SSO,
+            ADMIN_ROLES,
+            ADMIN_SUBSCRIPTION_TIER_MANAGER,
+            INFRA_EC2,
+            INFRA_K8S,
+            INFRA_SECURITY_GROUPS,
+            INFRA_HOSTS,
+            INFRA_MONITORING,
+            INFRA_BILLING,
+            REMOTE_SSH_KEYS,
+            REMOTE_SSH_RECORDINGS,
+            REMOTE_BASTION,
+            REMOTE_CONNECTION_PROFILES,
+            REMOTE_TEMPLATES,
+            REMOTE_DESKTOP,
             PROJECTS,
             DELEGATE_CONSOLE,
             DMCA,
             PRIVACY_EXPORT,
+            KYC,
+            API_KEYS,
+            QUESTIONNAIRE_BUILDER,
+            DELEGATION_KEYS,
+            CUSTOM_EMOJIS,
+            GEO_RULES,
+            CALL_RATE,
+            MESSAGE_PRIVACY,
             SETTINGS,
             HELP,
             ABOUT,

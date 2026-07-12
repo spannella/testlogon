@@ -71,3 +71,43 @@ data class CatalogItemListDto(
     @Json(name = "items") val items: List<CatalogItemDto> = emptyList(),
     @Json(name = "next_token") val nextToken: String? = null,
 )
+
+// ─── Reviews (ECOM) ──────────────────────────────────────────────────────────
+
+/**
+ * One catalog item review (schema CatalogReviewOut). The server stores a free-form `reviewer` string
+ * (there is no user_sub on the row); the client writes its own user_sub there so it can detect
+ * delete-own. required: item_id, review_id, rating, created_at.
+ */
+@JsonClass(generateAdapter = true)
+data class CatalogReviewDto(
+    @Json(name = "item_id") val itemId: String,
+    @Json(name = "review_id") val reviewId: String,
+    @Json(name = "rating") val rating: Int,
+    @Json(name = "created_at") val createdAt: String,
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "body") val body: String? = null,
+    @Json(name = "reviewer") val reviewer: String? = null,
+)
+
+/** POST body (schema CatalogReviewCreateIn). rating is 1..5; the rest are optional. */
+@JsonClass(generateAdapter = true)
+data class CatalogReviewCreateDto(
+    @Json(name = "rating") val rating: Int,
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "body") val body: String? = null,
+    @Json(name = "reviewer") val reviewer: String? = null,
+)
+
+/** Paged review list (schema CatalogReviewListOut): items + next_token. */
+@JsonClass(generateAdapter = true)
+data class CatalogReviewListDto(
+    @Json(name = "items") val items: List<CatalogReviewDto> = emptyList(),
+    @Json(name = "next_token") val nextToken: String? = null,
+)
+
+/** Generic { ok: true } acknowledgement (review delete). */
+@JsonClass(generateAdapter = true)
+data class OkRespCatalogDto(
+    @Json(name = "ok") val ok: Boolean = true,
+)

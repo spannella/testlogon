@@ -54,6 +54,9 @@ interface BoostRepository {
 
     /** POST a cancel of an ACTIVE boost; returns the refund result (mapped). */
     suspend fun cancelBoost(boostId: String): ApiResult<BoostCancelResult>
+
+    /** GET the caller's boosts (mapped). Idempotent GET. Used by the boost list/detail screens. */
+    suspend fun listBoosts(): ApiResult<List<ContentBoost>>
 }
 
 @Singleton
@@ -93,6 +96,11 @@ class BoostRepositoryImpl @Inject constructor(
     override suspend fun cancelBoost(boostId: String): ApiResult<BoostCancelResult> =
         withContext(Dispatchers.IO) {
             call { api.cancelBoost(boostId).toDomain() }
+        }
+
+    override suspend fun listBoosts(): ApiResult<List<ContentBoost>> =
+        withContext(Dispatchers.IO) {
+            call { api.listBoosts().all.map { it.toDomain() } }
         }
 
     /**

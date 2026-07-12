@@ -72,7 +72,7 @@ class RichMessageMapperTest {
             messageId = "m5", conversationId = "c1", senderId = "u1", createdAt = 100, kind = "meeting_poll",
             meetingPoll = MeetingPollAttachmentDto(
                 pollId = "poll_9", creatorId = "user_1", title = "Sprint sync time?",
-                durationMinutes = 30, status = "open", confirmedSlotId = null,
+                durationMinutesRaw = 30, status = "open", confirmedSlotId = null,
             ),
         )
         val media = dto.toMedia() as MessageMedia.MeetingPoll

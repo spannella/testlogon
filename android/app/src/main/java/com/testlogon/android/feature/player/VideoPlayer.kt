@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -61,6 +62,7 @@ object VideoPlayerTestTags {
     const val ERROR_PANEL = "video_player_error"
     const val RETRY = "video_player_retry"
     const val FULLSCREEN = "video_player_fullscreen"
+    const val PIP = "video_player_pip"
     const val LIVE_BADGE = "video_player_live_badge"
     const val QUALITY = "video_player_quality"
 }
@@ -106,6 +108,15 @@ fun VideoPlayer(
 ) {
     val uiState by controller.state.collectAsStateWithLifecycle()
     var showQualitySheet by remember { mutableStateOf(false) }
+
+    // #8 — system Picture-in-Picture. Register this player as the active video while it is composed +
+    // playing so the Activity can auto-enter PiP on Home; the PiP control enters on demand.
+    val pipController = LocalPipController.current
+    DisposableEffect(uiState.isPlaying) {
+        // FAIL #7/#8 — register the controller's player so PiP (auto or explicit) shows the video.
+        pipController.setVideoActive(uiState.isPlaying, controller.player())
+        onDispose { pipController.setVideoActive(false, controller.player()) }
+    }
 
     // Pause on ON_STOP; unbind the surface on dispose (player release is the controller owner's job).
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -156,10 +167,12 @@ fun VideoPlayer(
                 state = uiState,
                 config = config,
                 isFullscreen = isFullscreen,
+                showPip = pipController.isPipSupported,
                 onPlayPause = { controller.playPause() },
                 onSkip = { controller.skipBy(it) },
                 onSeek = { controller.seekTo(it) },
                 onFullscreenToggle = { onFullscreenToggle(!isFullscreen) },
+                onEnterPip = { pipController.enterPipWith(controller.player()) },
             )
         }
 
@@ -210,10 +223,12 @@ private fun ControlsOverlay(
     state: PlayerUiState,
     config: VideoPlayerControlsConfig,
     isFullscreen: Boolean,
+    showPip: Boolean,
     onPlayPause: () -> Unit,
     onSkip: (Long) -> Unit,
     onSeek: (Long) -> Unit,
     onFullscreenToggle: () -> Unit,
+    onEnterPip: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -291,6 +306,20 @@ private fun ControlsOverlay(
                 )
             } else {
                 androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+            }
+            if (showPip) {
+                val pipLabel = stringResource(R.string.player_pip)
+                IconButton(
+                    onClick = onEnterPip,
+                    modifier = Modifier.testTag(VideoPlayerTestTags.PIP),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PictureInPictureAlt,
+                        contentDescription = pipLabel,
+                        tint = Color.White,
+                        modifier = Modifier.semantics { role = Role.Button; contentDescription = pipLabel },
+                    )
+                }
             }
             if (config.showFullscreen) {
                 val fsLabel = if (isFullscreen) {

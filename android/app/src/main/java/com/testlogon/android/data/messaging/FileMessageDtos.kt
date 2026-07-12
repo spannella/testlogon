@@ -28,9 +28,18 @@ import com.squareup.moshi.JsonClass
 data class CreateFileMessageReq(
     @Json(name = "path") val path: String,
     @Json(name = "kind") val kind: String = "file",
+    // #10 — a file message can carry a text caption (parity with image/gallery). The server persists
+    // and projects it back as MessageOut.text so the bubble renders it with the file.
+    @Json(name = "text") val text: String? = null,
     @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
     @Json(name = "duration_seconds") val durationSeconds: Int? = null,
     @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    // C9 — gating options (parity with image/text; Backend B2 accepts these on file messages).
+    @Json(name = "view_once") val viewOnce: Boolean = false,
+    @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
+    @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
+    @Json(name = "lock_description") val lockDescription: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
 )
 
 /** CreateFileShareMessageIn. Required: `file_path` (1..1000). */
@@ -50,6 +59,10 @@ data class MessageFileDto(
     val size: Long? = null,
     @Json(name = "content_type") val contentType: String? = null,
     val url: String? = null,
+    // RG20 fix — the message-CREATE response carries bucket/key (no url); kept so kind="video"
+    // (and files) can derive a directly-playable /mock/s3 object url on the sender's just-sent bubble.
+    val bucket: String? = null,
+    val key: String? = null,
     @Json(name = "duration_seconds") val durationSeconds: Int? = null,
     // file_share-only metadata.
     val permission: String? = null,

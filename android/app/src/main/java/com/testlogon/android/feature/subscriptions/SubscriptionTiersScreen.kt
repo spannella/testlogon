@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -30,6 +31,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -47,6 +49,7 @@ import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.subscriptions.TierBenefit
 
 /** AND-235 — stable test tags for the subscription tiers browse screen. */
 object SubscriptionTiersTestTags {
@@ -70,6 +73,7 @@ object SubscriptionTiersTestTags {
 fun SubscriptionTiersRoute(
     onNavigateToCheckout: (SubscriptionsEvent.NavigateToCheckout) -> Unit,
     onNavigateToManage: () -> Unit,
+    onNavigateToGift: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SubscriptionTiersViewModel = hiltViewModel(),
@@ -94,6 +98,7 @@ fun SubscriptionTiersRoute(
         snackbarHostState = snackbarHostState,
         onSubscribeClick = viewModel::onSubscribeClick,
         onManageClick = viewModel::onManageClick,
+        onGiftClick = onNavigateToGift,
         onRetry = viewModel::onRetry,
         onRefresh = viewModel::onRefresh,
         onBack = onBack,
@@ -107,6 +112,7 @@ fun SubscriptionTiersScreen(
     snackbarHostState: SnackbarHostState,
     onSubscribeClick: (String) -> Unit,
     onManageClick: () -> Unit,
+    onGiftClick: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
@@ -125,6 +131,12 @@ fun SubscriptionTiersScreen(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.action_back),
                         )
+                    }
+                },
+                actions = {
+                    // SUB-E2: gift a subscription of this creator to another user.
+                    TextButton(onClick = onGiftClick) {
+                        Text(stringResource(R.string.gift_sub_action))
                     }
                 },
             )
@@ -178,6 +190,40 @@ private fun TierList(
     ) {
         items(items = tiers, key = { it.id }) { tier ->
             TierCard(tier = tier, onSubscribeClick = onSubscribeClick, onManageClick = onManageClick)
+        }
+    }
+}
+
+/** SUB-E0 - renders a tier's structured benefits as a checkmarked perk list (label + optional detail). */
+@Composable
+private fun TierBenefitList(benefits: List<TierBenefit>) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        benefits.forEach { benefit ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.Top,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp).heightIn(min = 18.dp),
+                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(benefit.label, style = MaterialTheme.typography.bodyMedium)
+                    benefit.detail?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -250,6 +296,11 @@ private fun TierCard(
 
                 tier.description?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium)
+                }
+
+                // SUB-E0: the creator-authored structured benefits (label + optional detail).
+                if (tier.benefits.isNotEmpty()) {
+                    TierBenefitList(tier.benefits)
                 }
 
                 if (tier.perks.isNotEmpty()) {

@@ -6,6 +6,8 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.testlogon.android.feature.subscriptions.GiftSubscriptionRoute
+import com.testlogon.android.feature.subscriptions.GiftSubscriptionViewModel
 import com.testlogon.android.feature.subscriptions.ManageSubscriptionRoute
 import com.testlogon.android.feature.subscriptions.ManageSubscriptionViewModel
 import com.testlogon.android.feature.subscriptions.SubscribeRoute
@@ -51,7 +53,7 @@ fun NavGraphBuilder.subscriptionTiersDestination(navController: NavHostControlle
                 defaultValue = null
             },
         ),
-    ) {
+    ) { entry ->
         SubscriptionTiersRoute(
             // AND-236: the (flag-gated, BillingAuthorizer-gated) Subscribe CTA opens the subscribe
             // confirmation flow for the chosen tier.
@@ -71,6 +73,16 @@ fun NavGraphBuilder.subscriptionTiersDestination(navController: NavHostControlle
             // AND-237: the current-plan "Manage" action opens the manage / cancel screen.
             onNavigateToManage = {
                 navController.navigate(ManageSubscriptionDest.ROUTE) { launchSingleTop = true }
+            },
+            // SUB-E2: gift a subscription of THIS creator to another user.
+            onNavigateToGift = {
+                val creatorId = entry.arguments?.getString(SubscriptionTiersDest.ARG_CREATOR_ID)
+                val displayName = entry.arguments?.getString(SubscriptionTiersDest.ARG_DISPLAY_NAME)
+                if (!creatorId.isNullOrBlank()) {
+                    navController.navigate(
+                        GiftSubscriptionDest.build(creatorId = creatorId, displayName = displayName),
+                    ) { launchSingleTop = true }
+                }
             },
             onBack = { navController.popBackStack() },
         )
@@ -165,6 +177,43 @@ fun NavGraphBuilder.manageSubscriptionDestination(navController: NavHostControll
                     ),
                 ) { launchSingleTop = true }
             },
+            onBack = { navController.popBackStack() },
+        )
+    }
+}
+
+/**
+ * SUB-E2 PART 2 - gift-a-subscription flow route. Args carry the creator whose plans can be gifted
+ * (+ optional display name). The recipient + tier are chosen in-flow.
+ */
+data object GiftSubscriptionDest {
+    const val ARG_CREATOR_ID = GiftSubscriptionViewModel.ARG_CREATOR_ID
+    const val ARG_DISPLAY_NAME = GiftSubscriptionViewModel.ARG_DISPLAY_NAME
+
+    const val ROUTE = "subscriptions/gift/{$ARG_CREATOR_ID}"
+    const val ROUTE_WITH_ARGS = "$ROUTE?$ARG_DISPLAY_NAME={$ARG_DISPLAY_NAME}"
+
+    fun build(creatorId: String, displayName: String? = null): String {
+        val base = "subscriptions/gift/${Uri.encode(creatorId)}"
+        return if (displayName.isNullOrBlank()) base else "$base?$ARG_DISPLAY_NAME=${Uri.encode(displayName)}"
+    }
+}
+
+/** SUB-E2 PART 2 - registers the gift-a-subscription destination. */
+fun NavGraphBuilder.giftSubscriptionDestination(navController: NavHostController) {
+    composable(
+        route = GiftSubscriptionDest.ROUTE_WITH_ARGS,
+        arguments = listOf(
+            navArgument(GiftSubscriptionDest.ARG_CREATOR_ID) { type = NavType.StringType },
+            navArgument(GiftSubscriptionDest.ARG_DISPLAY_NAME) {
+                type = NavType.StringType
+                nullable = true
+                defaultValue = null
+            },
+        ),
+    ) {
+        GiftSubscriptionRoute(
+            onGifted = { navController.popBackStack() },
             onBack = { navController.popBackStack() },
         )
     }

@@ -36,6 +36,9 @@ class CallPushParser @Inject constructor() {
                 callerAvatarUrl = data.bounded("caller_avatar_url", MAX_URL),
                 mode = CallMode.fromWire(data["initial_mode"]),
                 expiresAtEpochSeconds = data["expires_at"]?.toLongOrNull()?.takeIf { it > 0 },
+                // Server event creation time (epoch seconds) — powers the stale-invite drop guard so a
+                // days-old replayed invite from /events/poll never rings.
+                createdAtEpochSeconds = data["created_at"]?.toLongOrNull()?.takeIf { it > 0 },
             )
             CallEventType.ACCEPT -> CallEvent.Accepted(callId)
             CallEventType.DECLINE -> CallEvent.Declined(callId)

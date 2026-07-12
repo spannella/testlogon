@@ -1,0 +1,32 @@
+--- app/routers/ui_session.py.bak_b7me_1782369112	2026-06-25 06:31:52.658596949 +0000
++++ app/routers/ui_session.py	2026-06-25 06:31:52.668123956 +0000
+@@ -210,7 +210,28 @@
+ 
+ @router.get("/me")
+ async def ui_me(req: Request, ctx: Dict[str, str] = Depends(require_ui_session)):
+-    return {"user_sub": ctx["user_sub"], "session_id": ctx["session_id"], "ip": client_ip_from_request(req)}
++    # B7-SUPPORT: surface the caller's role + is_admin so cookie-session clients
++    # (the Android app) have an AUTHORITATIVE admin signal without a readable JWT.
++    # The support/helpdesk + admin screens use this to show the USER vs ADMIN
++    # surface. Best-effort: a lookup failure degrades to a normal user (role="user").
++    role_value = "user"
++    is_admin = False
++    try:
++        from app.auth.deps import get_authenticated_user as _gau
++        from app.auth.roles import Role as _Role
++        _au = await _gau(req)
++        role_value = getattr(_au.role, "value", str(_au.role))
++        is_admin = _au.role in {_Role.ADMIN, _Role.ROOT}
++    except Exception:
++        role_value = "user"
++        is_admin = False
++    return {
++        "user_sub": ctx["user_sub"],
++        "session_id": ctx["session_id"],
++        "ip": client_ip_from_request(req),
++        "role": role_value,
++        "is_admin": is_admin,
++    }
+ 
+ @router.get("/sessions")
+ async def ui_sessions(ctx: Dict[str, str] = Depends(require_ui_session)):

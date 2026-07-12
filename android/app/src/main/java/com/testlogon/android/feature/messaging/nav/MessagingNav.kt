@@ -126,6 +126,7 @@ fun NavGraphBuilder.messagingGraph(navController: NavHostController) {
             entry.arguments?.getString(ThreadViewModel.ARG_CONVERSATION_ID).orEmpty()
         ThreadRoute(
             onBack = { navController.popBackStack() },
+            onPlaceCall = { route -> navController.navigate(route) },
             onOpenGroupDetails = {
                 if (conversationId.isNotBlank()) {
                     navController.navigate(MessagingRoutes.groupDetails(conversationId)) {

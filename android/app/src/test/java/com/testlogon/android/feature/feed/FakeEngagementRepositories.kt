@@ -37,6 +37,13 @@ class FakeEngagementRepository(
         gate?.await()
         return result(postId, liked, desiredCount)
     }
+
+    val reactionCalls = mutableListOf<Triple<String, String, Boolean>>()
+
+    override suspend fun setReaction(postId: String, emoji: String, add: Boolean): ApiResult<Unit> {
+        reactionCalls += Triple(postId, emoji, add)
+        return ApiResult.Success(Unit)
+    }
 }
 
 /**
@@ -160,16 +167,105 @@ class FakeCommentsRepository(
         return ApiResult.Success(pagesByCursor[cursor] ?: CommentPage(emptyList(), null))
     }
 
-    override suspend fun addComment(postId: String, body: String, parentId: String?): ApiResult<Comment> {
+    val addImageWithTextCalls = mutableListOf<String?>()
+    val tipCarryCalls = mutableListOf<Int?>()
+    override suspend fun addComment(
+        postId: String,
+        body: String,
+        parentId: String?,
+        imageUrl: String?,
+        imageAltText: String?,
+        tipAmountCents: Int?,
+        tipPaymentMethodId: String?,
+    ): ApiResult<Comment> {
         addCalls += Triple(postId, body, parentId)
+        addImageWithTextCalls += imageUrl
+        tipCarryCalls += tipAmountCents
         return addResult ?: ApiResult.Success(
-            comment(id = "srv_${addCalls.size}", postId = postId, body = body, parentId = parentId),
+            comment(id = "srv_${addCalls.size}", postId = postId, body = body, parentId = parentId)
+                .copy(imageUrl = imageUrl),
         )
     }
 
     override suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit> {
         deleteCalls += postId to commentId
         return deleteResult
+    }
+
+    val gifCalls = mutableListOf<Pair<String, String>>()
+    val stickerCalls = mutableListOf<Pair<String, String>>()
+    val tipCalls = mutableListOf<Triple<String, String, Int>>()
+    val editCalls = mutableListOf<Triple<String, String, String>>()
+
+    override suspend fun addGifComment(
+        postId: String,
+        gifUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> {
+        gifCalls += postId to gifUrl
+        return addResult ?: ApiResult.Success(
+            comment(id = "srv_gif_${gifCalls.size}", postId = postId, body = gifUrl, parentId = parentId),
+        )
+    }
+
+    override suspend fun addStickerComment(
+        postId: String,
+        stickerId: String,
+        collectionId: String,
+        stickerUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> {
+        stickerCalls += postId to stickerId
+        return addResult ?: ApiResult.Success(
+            comment(id = "srv_sticker_${stickerCalls.size}", postId = postId, body = stickerUrl, parentId = parentId),
+        )
+    }
+
+    val imageCalls = mutableListOf<Pair<String, String>>()
+    val commentReactionCalls = mutableListOf<Triple<String, String, Boolean>>()
+
+    override suspend fun addImageComment(
+        postId: String,
+        imageUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> {
+        imageCalls += postId to imageUrl
+        return addResult ?: ApiResult.Success(
+            comment(id = "srv_img_${imageCalls.size}", postId = postId, body = imageUrl, parentId = parentId),
+        )
+    }
+
+    override suspend fun tipComment(postId: String, commentId: String, amountCents: Int, paymentMethodId: String?): ApiResult<Unit> {
+        tipCalls += Triple(postId, commentId, amountCents)
+        return ApiResult.Success(Unit)
+    }
+
+    override suspend fun setCommentReaction(
+        postId: String,
+        commentId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Unit> {
+        commentReactionCalls += Triple(commentId, emoji, add)
+        return ApiResult.Success(Unit)
+    }
+
+    val editImageCalls = mutableListOf<String?>()
+    override suspend fun editComment(
+        postId: String,
+        commentId: String,
+        body: String,
+        imageUrl: String?,
+        imageAltText: String?,
+    ): ApiResult<Comment> {
+        editCalls += Triple(postId, commentId, body)
+        editImageCalls += imageUrl
+        return addResult ?: ApiResult.Success(
+            comment(id = commentId, postId = postId, body = body),
+        )
     }
 
     companion object {
@@ -196,3 +292,55 @@ class FakeCommentsRepository(
         fun network() = ApiResult.NetworkError(IOException("offline"))
     }
 }
+
+/**
+ * Minimal [com.testlogon.android.data.profile.ProfileRepository] fake for tests that only need a
+ * [com.testlogon.android.data.profile.DisplayNameResolver] instance (whose `names` StateFlow must be
+ * real, not a Mockito mock). Public-profile lookups resolve to NotFound, so `names` stays empty.
+ */
+class FakeProfileRepository : com.testlogon.android.data.profile.ProfileRepository {
+    override suspend fun getOwnProfile(forceRefresh: Boolean) =
+        ApiResult.Failure(ApiError(status = 0, message = "stub"))
+
+    override fun cachedOwnProfile(): com.testlogon.android.core.model.profile.Profile? = null
+
+    override suspend fun getPublicProfile(identifier: String) =
+        com.testlogon.android.data.profile.ProfileResult.NotFound
+
+    override suspend fun updateProfile(patch: com.testlogon.android.core.model.profile.ProfilePatch) =
+        ApiResult.Failure(ApiError(status = 0, message = "stub"))
+
+    override suspend fun uploadPhoto(
+        kind: com.testlogon.android.data.profile.MediaKind,
+        upload: com.testlogon.android.data.profile.ProfileMediaUploader.PreparedUpload,
+    ) = ApiResult.Failure(ApiError(status = 0, message = "stub"))
+}
+
+/**
+ * Real [com.testlogon.android.data.profile.DisplayNameResolver] over a stub repository, so the Feed /
+ * comment ViewModels' `displayNames.names` StateFlow is valid (empty). Use in VM tests.
+ */
+fun fakeDisplayNameResolver() =
+    com.testlogon.android.data.profile.DisplayNameResolver(FakeProfileRepository())
+
+/** #24 — no-op [com.testlogon.android.data.feed.CommentImageUploader] for the comments VM test. */
+class FakeCommentImageUploader(
+    var result: ApiResult<String> = ApiResult.Success("/uploads/object?s3_key=test"),
+) : com.testlogon.android.data.feed.CommentImageUploader {
+    val calls = mutableListOf<android.net.Uri>()
+    override suspend fun uploadImage(uri: android.net.Uri): ApiResult<String> {
+        calls += uri
+        return result
+    }
+}
+
+/** #25 — real [com.testlogon.android.data.feed.CurrentUserRepository] over a canned `user_sub`. */
+fun fakeCurrentUserRepository(sub: String? = "me") =
+    com.testlogon.android.data.feed.CurrentUserRepository(
+        api = object : com.testlogon.android.data.feed.CurrentUserApi {
+            override suspend fun me() = com.testlogon.android.data.feed.CurrentUserDto(userSub = sub)
+        },
+        errorParser = com.testlogon.android.core.network.error.ApiErrorParser(
+            com.squareup.moshi.Moshi.Builder().build(),
+        ),
+    )

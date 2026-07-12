@@ -45,6 +45,10 @@ function crawlerMetaInjectPlugin(): Plugin {
 }
 
 export default defineConfig({
+  // The prod FastAPI serves the built SPA from the app/static StaticFiles
+  // mount ("/static") and returns index.html at "/". Assets must therefore be
+  // referenced under /static/ so they resolve when the shell is served from /.
+  base: "/static/",
   plugins: [crawlerMetaInjectPlugin(), react(), tailwindcss()],
   resolve: {
     alias: {

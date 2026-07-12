@@ -94,6 +94,12 @@ class FilesViewModelTest {
             moveCalls += src to dst
             return crudResult
         }
+
+        val copyCalls = mutableListOf<Pair<String, String>>()
+        override suspend fun copy(src: String, dst: String): ApiResult<Unit> {
+            copyCalls += src to dst
+            return crudResult
+        }
     }
 
     private class FakeSortPrefs(var stored: FileSort = FileSort()) : SortPrefs {

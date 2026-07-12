@@ -1,0 +1,266 @@
+--- app/services/filemanager.py.bak_r1_1782230504	2026-06-23 16:01:44.081855228 +0000
++++ app/services/filemanager.py	2026-06-30 14:05:54.311607006 +0000
+@@ -479,10 +479,17 @@
+     started = time.perf_counter()
+     tbl = _table()
+ 
++    owner_pk = pk_user(owner)
++
+     def _filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
++        # R1 FIX: GSI2 is keyed only by PARENT#<path> with NO owner namespacing, so a raw
++        # GSI2 query returns EVERY user's nodes at that parent path (cross-user listing leak;
++        # also the cause of rename/delete 404 -> get_node is owner-scoped). Constrain to the
++        # requesting owner here. The PK/SK ClientError fallback below is already owner-scoped.
++        scoped = [it for it in items if it.get("PK") == owner_pk]
+         if include_deleted:
+-            return items
+-        return [it for it in items if not it.get("deleted_at")]
++            return scoped
++        return [it for it in scoped if not it.get("deleted_at")]
+ 
+     def _query_kwargs() -> Dict[str, Any]:
+         kwargs: Dict[str, Any] = {}
+@@ -2158,7 +2165,9 @@
+     p = norm_path(path, is_folder=False)
+     parent, name = split_parent_name(p)
+     _ensure_folder_tree(user, parent)
+-    require_not_exists(user, p)
++    # B-DUPFILE #30: auto-suffix on collision (web direct-upload parity).
++    p = _b9_unique_upload_path(user, p)
++    parent, name = split_parent_name(p)
+ 
+     obj_id = str(uuid.uuid4())
+     s3_key = f"{user}/objects/{obj_id}"
+@@ -2243,12 +2252,42 @@
+     return {"path": p, "size": size}
+ 
+ 
++
++
++def _b9_unique_upload_path(owner: str, path: str) -> str:
++    """B-DUPFILE #30: sending the SAME filename twice in one conversation must
++    succeed. The messaging file pipeline uploads to a VFS path
++    /messages/<conversation_id>/<filename>; a second identical filename would
++    collide and require_not_exists() would 409. Instead, derive a unique sibling
++    path by inserting ' (1)', ' (2)', ... before the extension until the path is
++    free. Returns the original path when it is already free."""
++    p = norm_path(path, is_folder=False)
++    tbl = _table()
++    if "Item" not in tbl.get_item(Key=node_key(owner, p), ConsistentRead=True):
++        return p
++    parent, name = split_parent_name(p)
++    if "." in name and not name.startswith("."):
++        stem, ext = name.rsplit(".", 1)
++        ext = "." + ext
++    else:
++        stem, ext = name, ""
++    parent_prefix = "" if parent in ("/", "") else parent.rstrip("/")
++    for n in range(1, 1000):
++        cand_name = f"{stem} ({n}){ext}"
++        cand = norm_path(f"{parent_prefix}/{cand_name}", is_folder=False)
++        if "Item" not in tbl.get_item(Key=node_key(owner, cand), ConsistentRead=True):
++            return cand
++    raise HTTPException(409, "too many duplicate filenames")
++
+ def presign_upload(user: str, path: str, *, content_type: Optional[str]) -> Dict[str, Any]:
+     bucket = _bucket()
+     p = norm_path(path, is_folder=False)
+     parent, name = split_parent_name(p)
+     _ensure_folder_tree(user, parent)
+-    require_not_exists(user, p)
++    # B-DUPFILE #30: auto-suffix on collision instead of 409 so a duplicate
++    # filename in the same conversation succeeds with a distinct VFS path.
++    p = _b9_unique_upload_path(user, p)
++    parent, name = split_parent_name(p)
+ 
+     obj_id = str(uuid.uuid4())
+     s3_key = f"{user}/objects/{obj_id}"
+@@ -2310,11 +2349,6 @@
+     encryption_meta: Optional[Dict[str, Any]] = None,
+ ) -> Dict[str, Any]:
+     started = time.perf_counter()
+-    p = norm_path(path, is_folder=False)
+-    parent, name = split_parent_name(p)
+-    ensure_folder_exists(user, parent)
+-    require_not_exists(user, p)
+-
+     required_prefix = f"{user}/objects/"
+     if not s3_key.startswith(required_prefix):
+         raise HTTPException(403, "invalid upload key")
+@@ -2326,7 +2360,15 @@
+     ticket = ticket_resp.get("Item")
+     if not ticket:
+         raise HTTPException(403, "invalid upload ticket")
+-    if ticket.get("path") != p or ticket.get("s3_key") != s3_key:
++    # B-DUPFILE #30: the authoritative node path is the one chosen at presign
++    # time (it may carve a " (n)" suffix to dodge a same-filename collision).
++    # Trust the ticket path so the dedup survives even though the client
++    # re-sends its original path. ticket_id + s3_key already authenticate.
++    p = norm_path(ticket.get("path") or path, is_folder=False)
++    parent, name = split_parent_name(p)
++    ensure_folder_exists(user, parent)
++    require_not_exists(user, p)
++    if ticket.get("s3_key") != s3_key:
+         raise HTTPException(403, "upload ticket mismatch")
+     ticket_expiry = _parse_iso(ticket.get("expires_at"))
+     if not ticket_expiry or ticket_expiry <= datetime.now(timezone.utc):
+@@ -2658,6 +2700,14 @@
+     try:
+         obj = _s3.get_object(Bucket=node["s3_bucket"], Key=node["s3_key"])
+     except ClientError as exc:
++        # B-FILECOPY/preview: a node can outlive its S3 object (e.g. a DEV backend
++        # restart wipes the in-process mock S3 but keeps DDB nodes). A missing
++        # object is a 404 (not a 500 server error) so callers/preview degrade
++        # gracefully instead of surfacing an opaque server error.
++        _err = str(exc.response.get("Error", {}).get("Code") or "")
++        _st = int((exc.response.get("ResponseMetadata", {}) or {}).get("HTTPStatusCode") or 0)
++        if _err in ("NoSuchKey", "NoSuchBucket", "404", "NotFound") or _st == 404:
++            raise HTTPException(404, "file content not found") from exc
+         raise HTTPException(500, f"s3 error: {exc}") from exc
+ 
+     tbl = _table()
+@@ -2689,6 +2739,10 @@
+     try:
+         obj = _s3.get_object(Bucket=thumb["bucket"], Key=thumb["key"])
+     except ClientError as exc:
++        _err = str(exc.response.get("Error", {}).get("Code") or "")
++        _st = int((exc.response.get("ResponseMetadata", {}) or {}).get("HTTPStatusCode") or 0)
++        if _err in ("NoSuchKey", "NoSuchBucket", "404", "NotFound") or _st == 404:
++            raise HTTPException(404, "thumbnail content not found") from exc
+         raise HTTPException(500, f"s3 error: {exc}") from exc
+     return {"node": node, "thumbnail": thumb, "object": obj}
+ 
+@@ -3324,29 +3378,26 @@
+     if existing_new and allow_existing_dst:
+         return "already_moved"
+ 
+-    ddb.meta.client.transact_write_items(
+-        TransactItems=[
+-            {
+-                "ConditionCheck": {
+-                    "TableName": tbl.name,
+-                    "Key": node_key(user, target),
+-                    "ConditionExpression": "attribute_not_exists(PK)",
+-                }
+-            },
+-            {
+-                "Delete": {
+-                    "TableName": tbl.name,
+-                    "Key": node_key(user, old_path),
+-                }
+-            },
+-            {
+-                "Put": {
+-                    "TableName": tbl.name,
+-                    "Item": new_item,
+-                }
+-            },
+-        ]
+-    )
++    # R1 FIX (rename/move 500): the prior transaction had BOTH a ConditionCheck and a Put on the
++    # SAME item key (target) -> DynamoDB rejects "multiple operations on one item" with a
++    # ValidationException. Fold the existence guard onto the Put itself (attribute_not_exists(PK)) so
++    # the transaction touches each key exactly once (Delete old_path, conditional Put target).
++    transact_items = [
++        {
++            "Delete": {
++                "TableName": tbl.name,
++                "Key": node_key(user, old_path),
++            }
++        },
++        {
++            "Put": {
++                "TableName": tbl.name,
++                "Item": new_item,
++                "ConditionExpression": "attribute_not_exists(PK)",
++            }
++        },
++    ]
++    ddb.meta.client.transact_write_items(TransactItems=transact_items)
+     _delete_token_entries(user, item)
+     _put_token_entries(user, new_item)
+     _move_shares(owner=user, old_path=old_path, new_path=target)
+@@ -3621,6 +3672,83 @@
+     return {"type": "file", "src": src_p, "dst": dst_p}
+ 
+ 
++def copy_node(user: str, src: str, dst: str) -> Dict[str, Any]:
++    """Duplicate a FILE node (DDB metadata + its S3 object) to a new path.
++
++    Recursive folder copy is intentionally OUT OF SCOPE (would require a
++    checkpointed multi-object copy like move); copying a folder raises 400 so
++    the client can surface a clear message. Reuses the move plumbing's node
++    shape, token-index writes, and storage accounting.
++    """
++    started = time.perf_counter()
++    src_p = norm_path(src, is_folder=None)
++    node = get_node(user, src_p if src_p.endswith("/") else src_p)
++    if node.get("type") == "folder":
++        raise HTTPException(400, "recursive folder copy is not supported")
++
++    dst_p = norm_path(dst, is_folder=False)
++    dst_parent, dst_name = split_parent_name(dst_p)
++    _ensure_folder_tree(user, dst_parent)
++    # B-FILECOPY: a copy into the SAME directory used to 409 (require_not_exists).
++    # Auto-suffix " (1)", " (2)", ... on collision (same as the b9 dup-filename
++    # upload fix) so a same-dir copy succeeds with a distinct sibling path.
++    dst_p = _b9_unique_upload_path(user, dst_p)
++    dst_parent, dst_name = split_parent_name(dst_p)
++
++    new_item = dict(node)
++    new_item["path"] = dst_p
++    new_item["parent"] = dst_parent
++    new_item["name"] = dst_name
++    new_item["name_lc"] = dst_name.lower()
++    new_item["created_at"] = now_iso()
++    new_item["updated_at"] = now_iso()
++    new_item["SK"] = sk_node(dst_p)
++    new_item["GSI1PK"] = pk_user(user)
++    new_item["GSI1SK"] = f"NAME#{new_item['name_lc']}#PATH#{dst_p}"
++    new_item["GSI2PK"] = f"PARENT#{dst_parent}"
++    new_item["GSI2SK"] = f"TYPE#file#NAME#{new_item['name_lc']}#PATH#{dst_p}"
++    # Drop any soft-delete markers so the copy lands live.
++    for k in ("deleted_at", "deleted_by", "purge_after"):
++        new_item.pop(k, None)
++
++    # Duplicate the underlying S3 object to a fresh key so the two nodes do not
++    # alias the same object (independent lifecycle for delete/expire/tagging).
++    src_bucket = node.get("s3_bucket")
++    src_key = node.get("s3_key")
++    if src_bucket and src_key:
++        obj_id = uuid.uuid4().hex
++        new_key = f"{user}/objects/{obj_id}"
++        try:
++            _s3.copy_object(
++                Bucket=src_bucket,
++                Key=new_key,
++                CopySource={"Bucket": src_bucket, "Key": src_key},
++            )
++        except ClientError as exc:
++            raise HTTPException(502, f"failed to copy object: {exc}") from exc
++        new_item["s3_key"] = new_key
++        # Refresh deterministic derivative layout for the new source key.
++        try:
++            new_item.update(
++                build_media_derivative_layout(
++                    user, new_key, new_item.get("etag"), int(new_item.get("size") or 0)
++                )
++            )
++        except Exception:
++            pass
++
++    put_node(new_item)
++    _put_token_entries(user, new_item)
++    try:
++        _enqueue_media_preview_job(user, new_item)
++    except Exception:
++        pass
++    record_storage_delta(user, dst_p, int(new_item.get("size") or 0), source="copy_create")
++    record_filemgr_bytes("copied", "copy", int(new_item.get("size") or 0))
++    record_filemgr_operation_latency("copy", time.perf_counter() - started)
++    return {"type": "file", "src": src_p, "dst": dst_p, "size": int(new_item.get("size") or 0)}
++
++
+ def download_zip(user: str, paths: List[str]) -> tuple[zipstream.ZipFile, int]:
+     entries: List[tuple[Dict[str, Any], str]] = []
+     entry_names: Dict[str, int] = {}

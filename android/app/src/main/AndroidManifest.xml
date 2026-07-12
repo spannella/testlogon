@@ -37,6 +37,8 @@
     <application
         android:name=".TestLogonApp"
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.TestLogon">
@@ -46,6 +48,8 @@
             android:exported="true"
             android:label="@string/app_name"
             android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"
             android:theme="@style/Theme.TestLogon">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -130,6 +134,27 @@
                 <data
                     android:scheme="testlogon"
                     android:host="u" />
+            </intent-filter>
+
+            <!-- Broadcast ingest (host) + viewer custom-scheme deep links. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="broadcast" />
+            </intent-filter>
+
+            <!-- ADV-202: video pre-roll (AVOD) player custom-scheme deep link.
+                 testlogon://avod/{videoId} -> plays a live pre-roll ad, then the gated video. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="testlogon"
+                    android:host="avod" />
             </intent-filter>
 
             <!-- AND-100: read-only post detail App Link on the production host (HTTPS, auto-verified).

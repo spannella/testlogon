@@ -68,6 +68,15 @@ fun NavGraphBuilder.orderReviewDestination(navController: NavHostController) {
                     launchSingleTop = true
                 }
             },
+            // FIX (ecom residual #1): the reliable purchase completed -> go to the order confirmation
+            // (tracking/detail) screen, clearing the cart+checkout off the back stack.
+            onOrderComplete = { txnId, _ ->
+                val dest = if (txnId != null) TrackingDest.build(txnId) else PurchaseHistoryDest.ROUTE
+                navController.navigate(dest) {
+                    popUpTo(CartDest.ROUTE) { inclusive = true }
+                    launchSingleTop = true
+                }
+            },
         )
     }
 }

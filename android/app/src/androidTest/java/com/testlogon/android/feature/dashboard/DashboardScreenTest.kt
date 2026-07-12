@@ -1,6 +1,8 @@
 package com.testlogon.android.feature.dashboard
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
@@ -68,15 +70,18 @@ class DashboardScreenTest {
         setState(DashboardUiState(phase = DashboardUiState.Phase.Content, dashboard = sample()))
         rule.onNodeWithTag(DashboardTestTags.LIST).assertIsDisplayed()
         rule.onNodeWithTag(DashboardTestTags.SUMMARY_WIDGET).assertIsDisplayed()
-        rule.onNodeWithTag(DashboardTestTags.QUICK_LINKS_WIDGET).assertIsDisplayed()
+        // Launchpad quick actions always render (Home is useful even with content).
+        rule.onNodeWithTag(DashboardTestTags.ACTION_POST).assertIsDisplayed()
     }
 
     @Test
     fun empty_showsEmptyStateAndRefreshInvokes() {
         var refreshes = 0
         setState(DashboardUiState(phase = DashboardUiState.Phase.Empty), onRetry = { refreshes++ })
+        // The launchpad always renders; the slim inline activity note carries the EMPTY tag.
+        rule.onNodeWithTag(DashboardTestTags.LIST)
+            .performScrollToNode(androidx.compose.ui.test.hasTestTag(DashboardTestTags.EMPTY))
         rule.onNodeWithTag(DashboardTestTags.EMPTY).assertIsDisplayed()
-        // EmptyState renders its action as a TlButton (no dedicated tag); the empty surface is shown.
         assertEquals(0, refreshes)
     }
 
@@ -99,14 +104,39 @@ class DashboardScreenTest {
     }
 
     @Test
-    fun quickLink_tap_invokesCallback() {
-        var tapped: QuickLink? = null
-        setState(
-            DashboardUiState(phase = DashboardUiState.Phase.Content, dashboard = sample()),
-            onQuickLink = { tapped = it },
-        )
-        rule.onNodeWithTag("dashboard_quick_link_profile").performClick()
-        assertEquals(QuickLink.Profile, tapped)
+    fun profileAction_tap_invokesOnOpenProfile() {
+        var opened = 0
+        rule.setContent {
+            TestLogonTheme(dynamicColor = false) {
+                DashboardScreen(
+                    state = DashboardUiState(phase = DashboardUiState.Phase.Content, dashboard = sample()),
+                    onRefresh = {},
+                    onRetry = {},
+                    onQuickLink = {},
+                    onOpenProfile = { opened++ },
+                )
+            }
+        }
+        rule.onNodeWithTag(DashboardTestTags.PROFILE_ACTION).performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test
+    fun quickAction_post_invokesOnOpenRoute() {
+        var route: String? = null
+        rule.setContent {
+            TestLogonTheme(dynamicColor = false) {
+                DashboardScreen(
+                    state = DashboardUiState(phase = DashboardUiState.Phase.Empty),
+                    onRefresh = {},
+                    onRetry = {},
+                    onQuickLink = {},
+                    onOpenRoute = { route = it },
+                )
+            }
+        }
+        rule.onNodeWithTag(DashboardTestTags.ACTION_POST).performClick()
+        assertEquals("compose_post", route)
     }
 
     @Test

@@ -34,4 +34,44 @@ object AdsNetworkModule {
     @Singleton
     fun provideContentBoostApi(retrofit: Retrofit): ContentBoostApi =
         retrofit.create(ContentBoostApi::class.java)
+
+    /**
+     * Web-parity ads STUDIO control planes (targeting / scheduling / optimization), from the shared singleton
+     * [Retrofit]. All three sets of DTOs decode reflectively (raw String / Map fields, no custom enum), so no
+     * provideMoshi change is needed. Folded here (same ads surface) rather than a separate module.
+     */
+    @Provides
+    @Singleton
+    fun provideAdTargetingApi(retrofit: Retrofit): AdTargetingApi =
+        retrofit.create(AdTargetingApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideAdSchedulingApi(retrofit: Retrofit): AdSchedulingApi =
+        retrofit.create(AdSchedulingApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideAdOptimizationApi(retrofit: Retrofit): AdOptimizationApi =
+        retrofit.create(AdOptimizationApi::class.java)
+    /**
+     * The CONTENT AD-CONTROLS transport ([ContentAdControlsApi]) from the shared singleton [Retrofit].
+     * The DTOs decode reflectively (no custom enum / adapter), so no provideMoshi change is needed.
+     * Folded here (same ads surface) rather than a separate module.
+     */
+    @Provides
+    @Singleton
+    fun provideContentAdControlsApi(retrofit: Retrofit): ContentAdControlsApi =
+        retrofit.create(ContentAdControlsApi::class.java)
+
+    /**
+     * ADV2-709/710/711 (F7) — the SYNDICATE-owned advertiser transport ([SyndicateAdsApi]) from the shared
+     * singleton [Retrofit]. Its DTOs decode reflectively (raw String status, no custom enum), so no
+     * provideMoshi change is needed. Folded here (same ads surface) rather than a separate module.
+     */
+    @Provides
+    @Singleton
+    fun provideSyndicateAdsApi(retrofit: Retrofit): SyndicateAdsApi =
+        retrofit.create(SyndicateAdsApi::class.java)
 }
+

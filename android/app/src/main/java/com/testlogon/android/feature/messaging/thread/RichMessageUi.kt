@@ -1,4 +1,5 @@
 @file:OptIn(
+    androidx.compose.ui.ExperimentalComposeUiApi::class,
     androidx.compose.material3.ExperimentalMaterial3Api::class,
     androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
 )
@@ -6,6 +7,7 @@
 package com.testlogon.android.feature.messaging.thread
 
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,6 +94,55 @@ object RichMessageTestTags {
     const val POLL_COMPOSER = "thread_poll_composer"
     const val ATTACH_MEDIA = "thread_attach_media"
     const val ATTACH_POLL = "thread_attach_poll"
+
+    // ---- MSG: new in-app composers ----
+    const val ATTACH_LOTTERY = "thread_attach_lottery"
+    const val LOTTERY_COMPOSER = "thread_lottery_composer"
+    const val LOTTERY_OUTCOME_LABEL = "thread_lottery_outcome_label_"
+    const val LOTTERY_OUTCOME_TEXT = "thread_lottery_outcome_text_"
+    const val LOTTERY_OUTCOME_WEIGHT = "thread_lottery_outcome_weight_"
+    const val LOTTERY_OUTCOME_PCT = "thread_lottery_outcome_pct_"
+    const val LOTTERY_ADD_OUTCOME = "thread_lottery_add_outcome"
+    const val LOTTERY_ADD_IMAGE = "thread_lottery_add_image"
+    const val LOTTERY_IMAGE_PREVIEW = "thread_lottery_image_preview"
+    const val LOTTERY_REMOVE_IMAGE = "thread_lottery_remove_image"
+    // #13 — per-OPTION media (image/video) pickers + reveal thumbnail.
+    const val LOTTERY_OUTCOME_ADD_IMAGE = "thread_lottery_outcome_add_image_"
+    const val LOTTERY_OUTCOME_ADD_VIDEO = "thread_lottery_outcome_add_video_"
+    const val LOTTERY_OUTCOME_MEDIA_PREVIEW = "thread_lottery_outcome_media_preview_"
+    const val LOTTERY_OUTCOME_REMOVE_MEDIA = "thread_lottery_outcome_remove_media_"
+    const val LOTTERY_REVEAL_MEDIA = "thread_lottery_reveal_media"
+    // #23 - inline validation error when a media-only lottery has no cover text/image.
+    const val LOTTERY_VALIDATION_ERROR = "thread_lottery_validation_error"
+    // #23 - optional message-level cover text (satisfies the "text or cover" requirement).
+    const val LOTTERY_COVER_TEXT = "thread_lottery_cover_text"
+    const val LOTTERY_SEND = "thread_lottery_send"
+
+    const val ATTACH_FADT = "thread_attach_find_datetime"
+    const val FADT_COMPOSER = "thread_find_datetime_composer"
+    const val FADT_TITLE = "thread_fadt_title"
+    const val FADT_FROM_DATE = "thread_fadt_from_date"
+    const val FADT_TO_DATE = "thread_fadt_to_date"
+    const val FADT_START_HOUR = "thread_fadt_start_hour"
+    const val FADT_END_HOUR = "thread_fadt_end_hour"
+    const val FADT_SEND = "thread_fadt_send"
+
+    const val ATTACH_CAL_EVENT = "thread_attach_calendar_event"
+    const val CAL_EVENT_COMPOSER = "thread_calendar_event_composer"
+    const val CAL_EVENT_CALENDAR_ROW = "thread_cal_event_calendar_"
+    const val CAL_EVENT_EVENT_ROW = "thread_cal_event_event_"
+
+    const val ATTACH_CAL_SHARE = "thread_attach_calendar_share"
+    const val CAL_SHARE_COMPOSER = "thread_calendar_share_composer"
+    const val CAL_SHARE_CALENDAR_ROW = "thread_cal_share_calendar_"
+    const val CAL_SHARE_SEND = "thread_cal_share_send"
+
+    const val ATTACH_FILE_SHARE = "thread_attach_file_share"
+    const val FILE_SHARE_COMPOSER = "thread_file_share_composer"
+    const val FILE_SHARE_FILE_ROW = "thread_file_share_file_"
+
+    const val FADT_CARD = "thread_find_datetime_card"
+    const val ENCRYPTED_INDICATOR = "thread_encrypted_indicator"
 }
 
 /** AND-135 — animated GIF bubble (Coil GIF decoder is registered on the app ImageLoader). */
@@ -191,7 +242,7 @@ fun MediaPickerSheet(
     onEmojiSelect: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(RichMessageTestTags.MEDIA_PICKER)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(RichMessageTestTags.MEDIA_PICKER).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp).height(420.dp)) {
             TabRow(selectedTabIndex = state.tab.ordinal) {
                 MediaTab.entries.forEach { tab ->
@@ -441,7 +492,7 @@ fun MeetingPollComposerSheet(
 
     val valid = title.trim().length in 1..200 && slots.size in 2..5
 
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(RichMessageTestTags.POLL_COMPOSER)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(RichMessageTestTags.POLL_COMPOSER).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
             Text(stringResource(R.string.poll_composer_title), style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(

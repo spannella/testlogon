@@ -57,6 +57,8 @@ class NotificationPreferencesRepositoryImpl @Inject constructor(
         throw e
     } catch (e: HttpException) {
         ApiResult.Failure(errorParser.from(e))
+    } catch (e: com.squareup.moshi.JsonDataException) {
+        ApiResult.Failure(errorParser.fromThrowable(e))
     } catch (e: IOException) {
         ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
     }

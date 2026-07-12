@@ -9,12 +9,16 @@ import com.testlogon.android.core.model.syndicates.OpenLicensingContent
 import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
+import com.testlogon.android.core.model.syndicates.SyndicateListItem
+import com.testlogon.android.core.model.syndicates.SyndicateMember
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.syndicates.SyndicateApi
+import com.testlogon.android.core.network.syndicates.SyndicateCreateIn
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegisterIn
+import com.testlogon.android.core.network.syndicates.SyndicatePostCreateIn
 import com.testlogon.android.data.auth.AuthStateStore
 import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.JsonEncodingException
@@ -46,6 +50,15 @@ import javax.inject.Singleton
  * persistence across process death is DEFERRED to a later ticket.
  */
 interface SyndicateRepository {
+
+    /** Batch-7 - GET the caller's syndicates (bare-array list -> mapped). Idempotent GET. */
+    suspend fun listMySyndicates(): ApiResult<List<SyndicateListItem>>
+
+    /**
+     * Batch-7 - POST a new syndicate (creator becomes admin). On success returns the created
+     * [SyndicateListItem]; a 4xx surfaces as Failure; transport failures -> NetworkError.
+     */
+    suspend fun createSyndicate(name: String, description: String?): ApiResult<SyndicateListItem>
 
     /** GET the syndicate overview / profile, mapped (role badge derived from the viewer's user id). */
     suspend fun getOverview(syndicateId: String): ApiResult<SyndicateOverview>
@@ -79,6 +92,17 @@ interface SyndicateRepository {
         contentType: LicensingContentType,
     ): ApiResult<RegistrationResult>
 
+    /** Batch-9 (#12) - POST a new syndicate feed post (text + optional single image). */
+    suspend fun createPost(
+        syndicateId: String,
+        text: String,
+        imageUrl: String? = null,
+        poll: com.testlogon.android.core.network.poll.PollInputDto? = null,
+    ): ApiResult<SyndicateFeedItem>
+
+    /** Batch-9 (#12) - GET the syndicate member roster (bare array -> mapped). */
+    suspend fun listMembers(syndicateId: String): ApiResult<List<SyndicateMember>>
+
     companion object {
         const val PAGE_SIZE = 20
         const val PREFETCH_DISTANCE = 6
@@ -91,6 +115,22 @@ class SyndicateRepositoryImpl @Inject constructor(
     private val authStateStore: AuthStateStore,
     private val errorParser: ApiErrorParser,
 ) : SyndicateRepository {
+
+    override suspend fun listMySyndicates(): ApiResult<List<SyndicateListItem>> =
+        withContext(Dispatchers.IO) {
+            call { api.listMySyndicates().map { it.toDomain() } }
+        }
+
+    override suspend fun createSyndicate(
+        name: String,
+        description: String?,
+    ): ApiResult<SyndicateListItem> = withContext(Dispatchers.IO) {
+        call {
+            api.createSyndicate(
+                SyndicateCreateIn(name = name, description = description?.takeIf { it.isNotBlank() }),
+            ).toListItem()
+        }
+    }
 
     override suspend fun getOverview(syndicateId: String): ApiResult<SyndicateOverview> =
         withContext(Dispatchers.IO) {
@@ -141,6 +181,29 @@ class SyndicateRepositoryImpl @Inject constructor(
             ).toDomain()
         }
     }
+
+    override suspend fun createPost(
+        syndicateId: String,
+        text: String,
+        imageUrl: String?,
+        poll: com.testlogon.android.core.network.poll.PollInputDto?,
+    ): ApiResult<SyndicateFeedItem> = withContext(Dispatchers.IO) {
+        call {
+            api.createPost(
+                syndicateId,
+                SyndicatePostCreateIn(
+                    text = text,
+                    imageUrl = imageUrl?.takeIf { it.isNotBlank() },
+                    poll = poll,
+                ),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun listMembers(syndicateId: String): ApiResult<List<SyndicateMember>> =
+        withContext(Dispatchers.IO) {
+            call { api.listMembers(syndicateId).map { it.toDomain() } }
+        }
 
     private fun pagingConfig() = PagingConfig(
         pageSize = SyndicateRepository.PAGE_SIZE,

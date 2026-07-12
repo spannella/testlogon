@@ -1,0 +1,19 @@
+--- app/routers/messaging.py.bak_pollwritein_1783440214
++++ app/routers/messaging.py
+@@ -10344,6 +10344,7 @@
+     choice_mode: Literal["single", "multi"] = "single"
+     max_selections: Optional[int] = Field(default=None, ge=1, le=10)
+     closes_at: Optional[int] = Field(default=None)
++    allow_write_in: bool = False
+     text: Optional[str] = Field(default=None, max_length=2000)
+ 
+ 
+@@ -10366,7 +10367,7 @@
+     snap = _apolls.create_poll(
+         owner=user_id, question=inp.question, options=list(inp.options),
+         choice_mode=inp.choice_mode, max_selections=inp.max_selections,
+-        closes_at=inp.closes_at, surface="messaging", ref_id=conversation_id,
++        closes_at=inp.closes_at, allow_write_in=inp.allow_write_in, surface="messaging", ref_id=conversation_id,
+     )
+ 
+     ts = now_ts()

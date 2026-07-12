@@ -122,6 +122,14 @@ fun NotificationPreferencesScreen(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    item {
+                        Text(
+                            text = stringResource(R.string.notif_prefs_subtitle),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("notif_prefs_subtitle"),
+                        )
+                    }
                     if (state.isStale) {
                         item {
                             Text(
@@ -131,6 +139,16 @@ fun NotificationPreferencesScreen(
                                 modifier = Modifier.testTag("notif_prefs_stale"),
                             )
                         }
+                    }
+                    item {
+                        Text(
+                            text = stringResource(R.string.notif_prefs_section_header),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .padding(top = 4.dp)
+                                .testTag("notif_prefs_section_header"),
+                        )
                     }
                     items(state.rows, key = { it.alertType }) { row ->
                         CategoryCard(row = row, onToggle = onToggle)
@@ -148,10 +166,16 @@ private fun CategoryCard(
     Card(modifier = Modifier.fillMaxWidth().testTag("notif_category_${row.alertType}")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(row.titleRes), style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = stringResource(row.descRes),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             ChannelToggle(
                 alertType = row.alertType,
                 channel = NotificationChannel.PUSH,
                 labelRes = R.string.notif_prefs_channel_push,
+                descRes = R.string.notif_prefs_channel_push_desc,
                 checked = row.pref.push,
                 onToggle = onToggle,
             )
@@ -159,6 +183,7 @@ private fun CategoryCard(
                 alertType = row.alertType,
                 channel = NotificationChannel.EMAIL,
                 labelRes = R.string.notif_prefs_channel_email,
+                descRes = R.string.notif_prefs_channel_email_desc,
                 checked = row.pref.email,
                 onToggle = onToggle,
             )
@@ -166,6 +191,7 @@ private fun CategoryCard(
                 alertType = row.alertType,
                 channel = NotificationChannel.SMS,
                 labelRes = R.string.notif_prefs_channel_sms,
+                descRes = R.string.notif_prefs_channel_sms_desc,
                 checked = row.pref.sms,
                 onToggle = onToggle,
             )
@@ -178,22 +204,31 @@ private fun ChannelToggle(
     alertType: String,
     channel: NotificationChannel,
     labelRes: Int,
+    descRes: Int,
     checked: Boolean,
     onToggle: (alertType: String, channel: NotificationChannel, enabled: Boolean) -> Unit,
 ) {
     val label = stringResource(labelRes)
+    val desc = stringResource(descRes)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("notif_toggle_${alertType}_${channel.name.lowercase()}")
             .semantics {
-                contentDescription = label
+                contentDescription = "$label, $desc"
                 toggleableState = if (checked) ToggleableState.On else ToggleableState.Off
             },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = desc,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Switch(
             checked = checked,
             onCheckedChange = { onToggle(alertType, channel, it) },

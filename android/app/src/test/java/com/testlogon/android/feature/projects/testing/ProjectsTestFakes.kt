@@ -53,6 +53,13 @@ class FakeProjectsApi(
         return projects()
     }
 
+    val createProjectArgs = mutableListOf<com.testlogon.android.core.network.projects.ProjectCreateIn>()
+
+    override suspend fun createProject(body: com.testlogon.android.core.network.projects.ProjectCreateIn): ProjectOut {
+        createProjectArgs += body
+        return project()
+    }
+
     override suspend fun getProject(projectId: String): ProjectOut {
         getProjectIds += projectId
         return project()
@@ -135,6 +142,14 @@ class FakeProjectsRepo(
     var isDriveConnectedCallCount = 0
 
     override fun projectsPager(): Flow<PagingData<Project>> = flowOf(PagingData.empty())
+
+    var createProjectResult: ApiResult<Project>? = null
+
+    override suspend fun createProject(
+        name: String,
+        description: String?,
+        tags: List<String>,
+    ): ApiResult<Project> = createProjectResult ?: error("no createProjectResult configured")
 
     override suspend fun getProjectDetail(projectId: String): ApiResult<Project> {
         getProjectDetailCallCount++

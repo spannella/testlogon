@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.ui.i18n.asString
 import com.testlogon.android.core.ui.i18n.resolve
+import com.testlogon.android.data.subscriptions.TierBenefit
 
 /** AND-236 — stable test tags for the subscribe confirmation flow. */
 object SubscribeTestTags {
@@ -53,7 +56,10 @@ object SubscribeTestTags {
     const val UNAVAILABLE = "subscribe_unavailable"
     const val ERROR = "subscribe_error"
     const val RETRY = "subscribe_retry"
+    const val ADD_CARD_HINT = "subscribe_add_card"
+    const val BENEFITS = "subscribe_benefits"
     const val DONE = "subscribe_done"
+    const val START_TRIAL = "subscribe_start_trial"
 }
 
 /**
@@ -86,6 +92,7 @@ fun SubscribeRoute(
         state = state,
         snackbarHostState = snackbarHostState,
         onConfirm = viewModel::confirm,
+        onStartTrial = viewModel::startTrial,
         onRetry = viewModel::retry,
         onBack = onBack,
         modifier = modifier,
@@ -97,6 +104,7 @@ fun SubscribeScreen(
     state: SubscribeUiState,
     snackbarHostState: SnackbarHostState,
     onConfirm: () -> Unit,
+    onStartTrial: () -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -128,7 +136,12 @@ fun SubscribeScreen(
             when (state.status) {
                 SubscribeUiState.Status.Success -> SuccessContent()
                 SubscribeUiState.Status.PaymentsUnavailable -> UnavailableContent(onBack = onBack)
-                else -> ReviewContent(state = state, onConfirm = onConfirm, onRetry = onRetry)
+                else -> ReviewContent(
+                    state = state,
+                    onConfirm = onConfirm,
+                    onStartTrial = onStartTrial,
+                    onRetry = onRetry,
+                )
             }
         }
     }
@@ -138,6 +151,7 @@ fun SubscribeScreen(
 private fun ReviewContent(
     state: SubscribeUiState,
     onConfirm: () -> Unit,
+    onStartTrial: () -> Unit,
     onRetry: () -> Unit,
 ) {
     val freeLabel = stringResource(R.string.subs_tiers_free)
@@ -165,6 +179,25 @@ private fun ReviewContent(
                 state.tier.description?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium)
                 }
+
+                // SUB-E0: the structured benefits the subscriber is paying for.
+                if (state.tier.benefits.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().testTag(SubscribeTestTags.BENEFITS),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        state.tier.benefits.forEach { BenefitRow(it) }
+                    }
+                }
+
+                // SUB-E0: state the real charge explicitly (the backend REALLY charges this now).
+                if (state.tier.priceCents > 0L) {
+                    Text(
+                        text = stringResource(R.string.subscribe_charge_notice, "$price$intervalLabel"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 Text(
                     stringResource(R.string.subscribe_review_blurb),
                     style = MaterialTheme.typography.bodySmall,
@@ -180,6 +213,14 @@ private fun ReviewContent(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag(SubscribeTestTags.ERROR),
             )
+            if (state.requiresPaymentMethod) {
+                Text(
+                    text = stringResource(R.string.subscribe_add_card_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag(SubscribeTestTags.ADD_CARD_HINT),
+                )
+            }
             OutlinedButton(
                 onClick = onRetry,
                 modifier = Modifier
@@ -211,6 +252,51 @@ private fun ReviewContent(
                     .testTag(SubscribeTestTags.CONFIRM),
             ) {
                 Text(stringResource(R.string.subscribe_confirm))
+            }
+        }
+
+        // SUB-E2 - card-required free trial (no charge now; auto-charges at trial end).
+        if (!state.isWorking && state.tier.priceCents > 0L) {
+            Text(
+                text = stringResource(R.string.subscribe_trial_notice, state.trialDays),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = onStartTrial,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag(SubscribeTestTags.START_TRIAL),
+            ) {
+                Text(stringResource(R.string.subscribe_start_trial, state.trialDays))
+            }
+        }
+    }
+}
+
+/** SUB-E0 - a single tier benefit (checkmark + label + optional detail) on the confirm sheet. */
+@Composable
+private fun BenefitRow(benefit: TierBenefit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Check,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        Column(Modifier.fillMaxWidth()) {
+            Text(benefit.label, style = MaterialTheme.typography.bodyMedium)
+            benefit.detail?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

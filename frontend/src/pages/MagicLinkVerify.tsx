@@ -33,7 +33,7 @@ export default function MagicLinkVerify() {
         if (resp.status === "ok" && resp.session_id) {
           setStatus("success");
           const me = await getMe();
-          login(me.user_sub, "");
+          login(me.user_sub, "", { role: me.role ?? null, isAdmin: me.is_admin ?? false, adminProfile: me.admin_profile ?? null });
           // Brief delay to show success state before redirect
           setTimeout(() => {
             if (!cancelled) navigate("/", { replace: true });

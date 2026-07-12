@@ -1,4 +1,5 @@
 @file:OptIn(
+    androidx.compose.ui.ExperimentalComposeUiApi::class,
     androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
     androidx.compose.material3.ExperimentalMaterial3Api::class,
 )
@@ -6,13 +7,28 @@
 package com.testlogon.android.feature.messaging.thread
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
@@ -41,14 +57,21 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
+import coil.imageLoader
 import com.testlogon.android.R
 import com.testlogon.android.data.messaging.MessageEdit
+import com.testlogon.android.data.messaging.MessageMedia
 import com.testlogon.android.data.messaging.Reaction
 import com.testlogon.android.data.messaging.Reactor
+import kotlinx.coroutines.launch
 
 /** AND-140 — test tags for the message-action UI (used by Compose UI tests). */
 object MessageActionTestTags {
     const val ACTIONS_SHEET = "msg_actions_sheet"
+    // TIP-203 - money-reaction (tip) affordances.
+    const val TIP_REACT_OPEN = "tip_react_message_open"
+    const val TIP_REACT_CHIPS = "tip_react_message_chips"
+    fun tipReactChip(key: String): String = "tip_react_message_chip_" + key
     const val EMOJI_PICKER = "msg_emoji_picker"
     const val REACTION_CHIPS = "msg_reaction_chips"
     const val REACTION_DETAILS_SHEET = "msg_reaction_details_sheet"
@@ -67,6 +90,8 @@ object MessageActionTestTags {
 }
 
 /** AND-140 — curated quick-reaction emoji row (matches common chat clients). */
+internal const val TIP_REACT_EMOJI = "💰"
+
 internal val QUICK_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
 
 /**
@@ -80,10 +105,16 @@ fun MessageActionsSheet(
     onAction: (ThreadAction) -> Unit,
     onTip: (String) -> Unit,
     onDismiss: () -> Unit,
+    // #2 — save an image/video message to the device gallery; null when the message has no saveable
+    // media (only image/video clips are offered). Reuses the image save-to-phone path.
+    onSaveMedia: ((ThreadMessageUi) -> Unit)? = null,
+    // #9 — download/save a FILE or PDF attachment to the phone's Downloads (download-if-needed then
+    // save-to-phone). Null hides the row.
+    onSaveFile: ((ThreadMessageUi) -> Unit)? = null,
 ) {
     // AND-164 — destructive/mutating actions are suppressed entirely when the message is on legal hold.
     val allowed = message.allowedActions()
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.ACTIONS_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.ACTIONS_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
             // Quick-reaction emoji row (always available unless the message is a tombstone).
             if (!message.isTombstone) {
@@ -97,6 +128,18 @@ fun MessageActionsSheet(
                 Divider()
             }
 
+            // TIP-203 - money-REACTION: opens the shared tip sheet (amount + a money glyph) and, on
+            // confirm, POSTs the message tip-react. Distinct from the free emoji reactions above and
+            // the direct "Send a tip" action below. Not offered on your own message (self-tip 400).
+            if (!message.isTombstone && !message.isOwn) {
+                AssistChip(
+                    onClick = { onAction(ThreadAction.TipReact(message.key, TIP_REACT_EMOJI)); onDismiss() },
+                    label = { Text(TIP_REACT_EMOJI + "  " + stringResource(R.string.msg_tip_react)) },
+                    modifier = Modifier.padding(horizontal = 12.dp).testTag(MessageActionTestTags.TIP_REACT_OPEN),
+                )
+                Divider()
+            }
+
             // AND-164 — explain WHY destructive controls are gone (accessible supporting text).
             if (message.onHold && !message.isTombstone) {
                 ListItem(
@@ -104,6 +147,33 @@ fun MessageActionsSheet(
                     modifier = Modifier.fillMaxWidth().testTag(MessageActionTestTags.HOLD_NOTICE)
                         .semantics { stateDescription = "disabled" },
                 )
+            }
+
+            if (!message.isTombstone) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_reply),
+                    tag = "msg_action_reply",
+                ) { onAction(ThreadAction.Reply(message.key)); onDismiss() }
+            }
+
+            // #2 — Download/save-to-phone for an image or (unlocked/own) video message. Gated content
+            // that hasn't been revealed (still a Paid/teaser bubble) has no saveable media, so the row
+            // only appears once the media is actually present in the bubble.
+            if (onSaveMedia != null && !message.isTombstone && message.hasSaveableMedia()) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_save_to_phone),
+                    tag = "msg_action_save_media",
+                ) { onSaveMedia(message); onDismiss() }
+            }
+
+            // #9 — Download for a file/PDF attachment: saves to the phone's Downloads (download-if-needed).
+            if (onSaveFile != null && !message.isTombstone &&
+                message.media is MessageMedia.File && !message.isDownloadGated()
+            ) {
+                ActionRow(
+                    label = stringResource(R.string.msg_action_download),
+                    tag = "msg_action_download_file",
+                ) { onSaveFile(message); onDismiss() }
             }
 
             if (MessageAction.PIN in allowed) {
@@ -250,13 +320,40 @@ fun ReactionChipsRow(
     }
 }
 
+/**
+ * TIP-203 - under-bubble MONEY-reaction chip row (tip reactions), visually distinct from the free
+ * emoji [ReactionChipsRow]. Each chip shows the tip glyph + amount (e.g. money + "$5.00").
+ */
+@Composable
+fun TipReactionChipsRow(
+    tipReactions: List<com.testlogon.android.data.messaging.TipReaction>,
+    modifier: Modifier = Modifier,
+) {
+    if (tipReactions.isEmpty()) return
+    FlowRow(
+        modifier = modifier.padding(top = 4.dp).testTag(MessageActionTestTags.TIP_REACT_CHIPS),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        tipReactions.forEach { t ->
+            val amount = String.format(java.util.Locale.US, "$%.2f", t.amountCents / 100.0)
+            val glyph = t.emoji.ifBlank { TIP_REACT_EMOJI }
+            AssistChip(
+                onClick = {},
+                label = { Text(glyph + " " + amount) },
+                colors = AssistChipDefaults.assistChipColors(),
+                modifier = Modifier.testTag(MessageActionTestTags.tipReactChip(t.tipPaymentId ?: t.emoji)),
+            )
+        }
+    }
+}
+
 /** AND-140 — reactor-details sheet: reactors grouped by emoji. */
 @Composable
 fun ReactionDetailsSheet(
     state: Async<List<Reactor>>,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.REACTION_DETAILS_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.REACTION_DETAILS_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(stringResource(R.string.msg_action_who_reacted))
             when (state) {
@@ -285,7 +382,7 @@ fun PinnedMessagesSheet(
     onJumpTo: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.PINS_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.PINS_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(stringResource(R.string.msg_pins_title))
             when (state) {
@@ -317,7 +414,7 @@ fun EditHistorySheet(
     state: Async<List<MessageEdit>>,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.EDIT_HISTORY_SHEET)) {
+    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag(MessageActionTestTags.EDIT_HISTORY_SHEET).semantics { testTagsAsResourceId = true }) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(stringResource(R.string.msg_edit_history_title))
             when (state) {
@@ -337,35 +434,166 @@ fun EditHistorySheet(
     }
 }
 
-/** AND-140 — edit composer dialog pre-filled with the original text. */
+/**
+ * AND-140 / B-MSGEDIT #5 — edit dialog pre-filled with the original text, now with full media control:
+ * add/replace a photo, file, or library video (promoting a text message), or remove existing media.
+ */
 @Composable
 fun EditMessageDialog(
     target: EditTarget,
     onSubmit: (String) -> Unit,
     onCancel: () -> Unit,
+    onPickPhoto: () -> Unit = {},
+    onPickFile: () -> Unit = {},
+    onPickVideo: () -> Unit = {},
+    onClearStaged: () -> Unit = {},
+    onToggleRemoveMedia: () -> Unit = {},
 ) {
     var value by rememberSaveable(target.messageId, stateSaver = androidx.compose.ui.text.input.TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(target.originalText, androidx.compose.ui.text.TextRange(target.originalText.length)))
     }
+    val hasStagedMedia = target.draftImageLocalUri != null ||
+        target.draftImage != null || target.draftFilePath != null || target.draftVideoId != null
     AlertDialog(
         onDismissRequest = onCancel,
         modifier = Modifier.testTag(MessageActionTestTags.EDIT_DIALOG),
         title = { Text(stringResource(R.string.msg_edit_title)) },
         text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { value = it },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Column {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+                when {
+                    target.attaching -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.msg_edit_attaching),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                    // A staged photo shows a thumbnail; a staged file/video shows a labelled chip.
+                    target.draftImageLocalUri != null -> StagedMediaRow(
+                        imageUri = target.draftImageLocalUri,
+                        label = stringResource(R.string.msg_edit_photo_attached),
+                        onRemove = onClearStaged,
+                    )
+                    target.draftFilePath != null || target.draftFileName != null -> StagedMediaRow(
+                        imageUri = null,
+                        label = target.draftFileName ?: stringResource(R.string.msg_edit_file_attached),
+                        leadingIcon = Icons.Filled.AttachFile,
+                        onRemove = onClearStaged,
+                    )
+                    target.draftVideoId != null -> StagedMediaRow(
+                        imageUri = null,
+                        label = target.draftVideoTitle ?: stringResource(R.string.msg_edit_video_attached),
+                        leadingIcon = Icons.Filled.Movie,
+                        onRemove = onClearStaged,
+                    )
+                    target.removeMedia -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = stringResource(R.string.msg_edit_media_will_be_removed),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = onToggleRemoveMedia) { Text(stringResource(R.string.action_undo)) }
+                        }
+                    }
+                    else -> {
+                        // No staged change yet: offer add-photo / add-file / add-video, and (when the
+                        // message already carries media) a remove-media affordance.
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(
+                                onClick = onPickPhoto,
+                                modifier = Modifier.testTag("thread_edit_add_photo"),
+                            ) {
+                                Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(stringResource(R.string.msg_edit_add_photo))
+                            }
+                            TextButton(
+                                onClick = onPickFile,
+                                modifier = Modifier.testTag("thread_edit_add_file"),
+                            ) {
+                                Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(stringResource(R.string.msg_edit_add_file))
+                            }
+                            TextButton(
+                                onClick = onPickVideo,
+                                modifier = Modifier.testTag("thread_edit_add_video"),
+                            ) {
+                                Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(stringResource(R.string.msg_edit_add_video))
+                            }
+                        }
+                        if (target.hasMedia) {
+                            TextButton(
+                                onClick = onToggleRemoveMedia,
+                                modifier = Modifier.testTag("thread_edit_remove_media"),
+                            ) {
+                                Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(stringResource(R.string.msg_edit_remove_media))
+                            }
+                        }
+                    }
+                }
+                target.error?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                }
+            }
         },
         confirmButton = {
+            // Saveable when there's text, a staged media change, or a pending media removal.
+            val canSave = !target.attaching &&
+                (value.text.isNotBlank() || hasStagedMedia || target.removeMedia)
             TextButton(
                 onClick = { onSubmit(value.text) },
-                enabled = value.text.isNotBlank(),
+                enabled = canSave,
             ) { Text(stringResource(R.string.msg_edit_save)) }
         },
         dismissButton = { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } },
     )
+}
+
+/** B-MSGEDIT #5 — one staged-media row: optional thumbnail (photo) or leading icon (file/video) + remove. */
+@Composable
+private fun StagedMediaRow(
+    imageUri: String?,
+    label: String,
+    onRemove: () -> Unit,
+    leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (imageUri != null) {
+            coil.compose.AsyncImage(
+                model = imageUri,
+                contentDescription = label,
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .testTag("thread_edit_staged_thumb"),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            )
+            Spacer(Modifier.width(8.dp))
+        } else if (leadingIcon != null) {
+            Icon(leadingIcon, contentDescription = null, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        IconButton(onClick = onRemove, modifier = Modifier.testTag("thread_edit_staged_remove")) {
+            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_remove))
+        }
+    }
 }
 
 /** AND-140 — delete-for-me confirmation dialog. */
@@ -406,10 +634,15 @@ fun MessageActionsHost(
     onAction: (ThreadAction) -> Unit,
     onTip: (String) -> Unit,
     onJumpToPinned: (String) -> Unit,
+    onSaveFile: ((ThreadMessageUi) -> Unit)? = null,
     onCloseSheet: () -> Unit,
 ) {
     var pendingDelete by remember { mutableStateOf<String?>(null) }
     var pendingRevoke by remember { mutableStateOf<String?>(null) }
+    // #2 — save-to-phone is self-contained here (no VM/repo): saves the image via the shared Coil loader
+    // and the video by streaming its url, both to MediaStore, exactly like the full-screen viewers.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val saveScope = androidx.compose.runtime.rememberCoroutineScope()
 
     target?.let { msg ->
         MessageActionsSheet(
@@ -423,6 +656,30 @@ fun MessageActionsHost(
             },
             onTip = onTip,
             onDismiss = onCloseSheet,
+            onSaveFile = onSaveFile,
+            onSaveMedia = { m ->
+                val media = m.media
+                saveScope.launch {
+                    val ok = when (media) {
+                        is com.testlogon.android.data.messaging.MessageMedia.Image ->
+                            media.url?.let {
+                                com.testlogon.android.feature.messaging.media.saveImageToGallery(
+                                    context, it, context.imageLoader,
+                                )
+                            } ?: false
+                        is com.testlogon.android.data.messaging.MessageMedia.VideoClip ->
+                            media.playbackUrl?.let {
+                                com.testlogon.android.feature.messaging.media.saveVideoToGallery(context, it)
+                            } ?: false
+                        else -> false
+                    }
+                    android.widget.Toast.makeText(
+                        context,
+                        if (ok) "Saved to phone" else "Couldn't save",
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            },
         )
     }
 
@@ -439,13 +696,8 @@ fun MessageActionsHost(
         )
     }
 
-    actions.editing?.let { editTarget ->
-        EditMessageDialog(
-            target = editTarget,
-            onSubmit = { onAction(ThreadAction.SubmitEdit(editTarget.messageId, it)) },
-            onCancel = { onAction(ThreadAction.CancelEdit) },
-        )
-    }
+    // B-MSGEDIT #5 — the edit dialog is now rendered by ThreadRoute (it drives the system pickers +
+    // the shared library-video picker), so it is intentionally NOT rendered here.
 
     if (actions.reactionDetailsVisible) {
         ReactionDetailsSheet(state = actions.reactionDetails, onDismiss = { onAction(ThreadAction.DismissSheets) })
@@ -469,10 +721,34 @@ private fun CenterLoader() {
     }
 }
 
+/**
+ * #2 — true when the message currently has saveable media in the bubble: a displayable image (url
+ * present) or a playable video clip (playbackUrl present). A still-locked/encrypted/view-once teaser
+ * has no resolved media url, so the Save row is correctly hidden until the content is revealed.
+ */
+internal fun ThreadMessageUi.hasSaveableMedia(): Boolean = when (val m = media) {
+    is MessageMedia.Image -> !m.url.isNullOrBlank()
+    is MessageMedia.VideoClip -> !m.playbackUrl.isNullOrBlank()
+    else -> false
+}
+
+/**
+ * #9 — a file message is download-gated (no save offered yet) when it is still behind a paywall the
+ * viewer hasn't unlocked, or an unconsumed view-once. Own messages and already-available files are
+ * never gated.
+ */
+internal fun ThreadMessageUi.isDownloadGated(): Boolean {
+    if (isOwn) return false
+    if (lockPriceCents != null && (media as? MessageMedia.Paid)?.monetization?.unlocked == false) return true
+    if (viewOnce && !consumed) return true
+    return false
+}
+
 /** AND-140 — tombstone bubble text for a deleted/revoked message. */
 @Composable
 fun tombstoneLabel(message: ThreadMessageUi): String = when {
     message.isRevoked -> stringResource(R.string.msg_tombstone_revoked)
     message.isDeleted -> stringResource(R.string.msg_tombstone_deleted)
+    message.isExpired -> "This message has expired"
     else -> ""
 }

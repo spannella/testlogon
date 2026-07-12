@@ -1,0 +1,40 @@
+Prod hotfix record — ECOM Bug #2 (order lifecycle stuck at pending_payment).
+Applied live to the running serving path /home/ubuntu/testlogon/app/services/shoppingcart.py
+(backup app/services/shoppingcart.py.bak_ecom2_1783144144) + restart_backend.sh; openapi 200.
+Prod-only file (order_lifecycle router/service + the diverged purchase_cart do NOT exist in
+the android-impl dev clone), so this is a prod-apply record, not a runnable branch fold.
+
+--- a/app/services/shoppingcart.py
++++ b/app/services/shoppingcart.py
+@@ -805,6 +805,31 @@
+     # ECM-008: convert this cart's soft reservations into committed stock.
+     _ecm_commit(user_sub, cart_id)
+ 
++    # ECOM Bug #2: advance the /ui/orders lifecycle header out of pending_payment.
++    # purchase_cart captures payment synchronously (buyer debit COMPLETED, stock
++    # decremented, seller credited) so the order is paid -- move it from the seeded
++    # `created` (legacy "pending_payment") state to `approved` (legacy "approved")
++    # via the canonical order_lifecycle state machine. Best-effort + idempotent
++    # (keyed off the canonical cart idempotency key); never blocks the purchase and
++    # only fires on the first successful purchase (replays return earlier).
++    try:
++        if S.order_lifecycle_enabled and order_id:
++            from app.services import order_lifecycle as _ol
++            _hdr = _ol.get_order_header(order_id)
++            if _hdr and str(_hdr.get("lifecycle_status") or "") == "created":
++                _ol.transition_order(
++                    order_id,
++                    "approved",
++                    actor=user_sub,
++                    reason="Cart purchase paid",
++                    idempotency_key=canonical_idempotency_key,
++                )
++    except Exception:
++        import logging as _logging_ol
++        _logging_ol.getLogger(__name__).exception(
++            "Failed to advance order lifecycle for cart %s order %s", cart_id, order_id
++        )
++
+     return {
+         "cart_id": cart_id,
+         "order_id": order_id,

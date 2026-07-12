@@ -1,0 +1,44 @@
+--- app/services/messaging_lottery_store.py.bak_b9lotA_1782436180	2026-06-26 01:09:40.997762845 +0000
++++ app/services/messaging_lottery_store.py	2026-06-29 06:15:18.880119252 +0000
+@@ -60,6 +60,9 @@
+                 f"outcome[{idx}] payload_type is invalid",
+                 issues=[{"field": f"lottery_config.outcomes[{idx}].payload_type", "code": "invalid-payload-type"}],
+             )
++        # B-LOTTERY2 #24: a media outcome may carry a list of assets.
++        _media_assets = raw.get("media_assets")
++        _media_asset_ids = raw.get("media_asset_ids")
+         item = {
+             "outcome_id": str(raw.get("outcome_id") or "").strip(),
+             "display_label": str(raw.get("display_label") or "").strip() or None,
+@@ -68,6 +71,8 @@
+             "text_content": str(raw.get("text_content") or "").strip() or None,
+             "media_asset_id": str(raw.get("media_asset_id") or "").strip() or None,
+             "media_metadata": dict(raw.get("media_metadata") or {}) if isinstance(raw.get("media_metadata"), Mapping) else None,
++            "media_assets": list(_media_assets) if isinstance(_media_assets, (list, tuple)) else None,
++            "media_asset_ids": list(_media_asset_ids) if isinstance(_media_asset_ids, (list, tuple)) else None,
+         }
+         if not item["outcome_id"]:
+             raise LotteryConfigValidationError(
+@@ -166,3 +171,22 @@
+ def get_lottery_unlock(*, message_id: str, recipient_id: str, table: Any = None) -> dict[str, Any] | None:
+     table = table or _unlocks_table()
+     return table.get_item(Key={"message_id": str(message_id), "recipient_id": str(recipient_id)}).get("Item")
++
++
++def list_lottery_unlocks(*, message_id: str, table: Any = None) -> list[dict[str, Any]]:
++    """B-LOTSENDER (#15): enumerate EVERY recipient's unlock for one lottery so the
++    sender can see who unlocked it and which outcome they got. Unlocks are keyed
++    (message_id HASH, recipient_id RANGE), so a single Query on message_id returns
++    all of them."""
++    from boto3.dynamodb.conditions import Key as _Key
++    table = table or _unlocks_table()
++    items: list[dict[str, Any]] = []
++    kwargs: dict[str, Any] = {"KeyConditionExpression": _Key("message_id").eq(str(message_id))}
++    while True:
++        resp = table.query(**kwargs)
++        items.extend(resp.get("Items", []) or [])
++        lek = resp.get("LastEvaluatedKey")
++        if not lek:
++            break
++        kwargs["ExclusiveStartKey"] = lek
++    return items

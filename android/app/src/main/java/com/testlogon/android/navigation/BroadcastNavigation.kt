@@ -24,11 +24,16 @@ import com.testlogon.android.feature.broadcast.layout.LayoutViewModel
 import com.testlogon.android.feature.broadcast.moderation.ModerationLogRoute
 import com.testlogon.android.feature.broadcast.moderation.ModerationViewModel
 import com.testlogon.android.feature.broadcast.privateshow.PrivateShowRoute
+import com.testlogon.android.feature.broadcast.qna.LiveQaHostRoute
+import com.testlogon.android.feature.broadcast.qna.LiveQaHostViewModel
 import com.testlogon.android.feature.broadcast.privateshow.PrivateShowViewModel
 import com.testlogon.android.feature.broadcast.tipsconfig.TipsConfigRoute
 import com.testlogon.android.feature.broadcast.tipsconfig.TipsConfigViewModel
 import com.testlogon.android.feature.broadcasthost.manage.GoalsProductsViewModel
 import com.testlogon.android.feature.broadcasthost.manage.ManageRoute
+import com.testlogon.android.feature.broadcast.audioroom.AudioRoomRoute
+import com.testlogon.android.feature.broadcast.audioroom.AudioRoomViewModel
+import com.testlogon.android.feature.ads.cta.navigateCta
 import com.testlogon.android.feature.broadcast.viewer.ViewerScreen
 import com.testlogon.android.feature.broadcast.viewer.ViewerViewModel
 import com.testlogon.android.feature.guest.GuestAcceptRoute
@@ -48,12 +53,30 @@ data object BroadcastViewerDest {
     fun build(sessionId: String): String = "broadcast/viewer/${Uri.encode(sessionId)}"
 }
 
+/** #104 AUDIO ROOM (LiveKit) — the audio-room stage destination (host/speaker/listener), keyed by sessionId. */
+data object AudioRoomDest {
+    const val ROUTE = "broadcast/audioroom/{${AudioRoomViewModel.ARG_SESSION_ID}}"
+
+    fun build(sessionId: String): String = "broadcast/audioroom/${Uri.encode(sessionId)}"
+}
+
 /** AND-307 — the host create/schedule (Go Live) destination, keyed by the broadcast profile id. */
 data object BroadcastCreateDest {
     const val ROUTE = "broadcast/create/{${CreateBroadcastViewModel.ARG_PROFILE_ID}}"
 
     fun build(profileId: String): String = "broadcast/create/${Uri.encode(profileId)}"
 }
+
+/**
+ * Default broadcast profile id used by the mobile host "Go Live" entry.
+ *
+ * T3 — this MUST be the profile's DDB key (`profile_id`), NOT its display name. create_session stores the
+ * value verbatim, but going live calls `get_profile(session.profile_id)` (key lookup on `profile_id`); a
+ * non-existent id (e.g. the name "mobile") 404s at start, so the session never reaches `live` and no viewer
+ * can discover it. This is the id of the seeded "mobile" broadcast profile (region us-east-2, 720p) on prod.
+ */
+const val HOST_BROADCAST_PROFILE_ID = "a0fcbf38-9797-47bc-bc8b-04b5522d0513"
+
 
 /** AND-308 — the host ingest (camera/mic publish) destination, keyed by sessionId. */
 data object BroadcastIngestDest {
@@ -160,6 +183,13 @@ data object GuestAcceptDest {
     )
 }
 
+/** Live-QA HOST console destination (web LiveQaPage host view), keyed by sessionId. */
+data object BroadcastLiveQaHostDest {
+    const val ROUTE = "broadcast/{${LiveQaHostViewModel.ARG_SESSION_ID}}/live-qa"
+
+    fun build(sessionId: String): String = "broadcast/${Uri.encode(sessionId)}/live-qa"
+}
+
 /** AND-279/AND-280/AND-307 — registers the broadcast browse + viewer + host create destinations. */
 fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
     composable(
@@ -184,6 +214,11 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         route = BroadcastIngestDest.ROUTE,
         arguments = listOf(
             navArgument(IngestViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+        deepLinks = listOf(
+            navDeepLink {
+                uriPattern = "testlogon://broadcast/ingest/{${IngestViewModel.ARG_SESSION_ID}}"
+            },
         ),
     ) { entry ->
         val sessionId = entry.arguments?.getString(IngestViewModel.ARG_SESSION_ID).orEmpty()
@@ -238,6 +273,10 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             // AND-316 — the host can trigger / end ad breaks + edit the ad-config (pre-roll + mid-roll bounds).
             onManageAds = {
                 navController.navigate(BroadcastAdsDest.build(sessionId)) { launchSingleTop = true }
+            },
+            // Live Q&A host console (toggle mode + moderate the question queue).
+            onManageQa = {
+                navController.navigate(BroadcastLiveQaHostDest.build(sessionId)) { launchSingleTop = true }
             },
         )
     }
@@ -317,11 +356,46 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
     ) {
         AdControlRoute(onBack = { navController.popBackStack() })
     }
+    // Live Q&A HOST console (toggle Q&A mode + moderate the question queue).
+    composable(
+        route = BroadcastLiveQaHostDest.ROUTE,
+        arguments = listOf(
+            navArgument(LiveQaHostViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+    ) {
+        LiveQaHostRoute(onBack = { navController.popBackStack() })
+    }
+    // #104 AUDIO ROOM — the LiveKit audio-room stage destination (deep-linkable for share/join).
+    composable(
+        route = AudioRoomDest.ROUTE,
+        arguments = listOf(
+            navArgument(AudioRoomViewModel.ARG_SESSION_ID) { type = NavType.StringType },
+        ),
+        deepLinks = listOf(
+            navDeepLink {
+                uriPattern = "testlogon://broadcast/audioroom/{${AudioRoomViewModel.ARG_SESSION_ID}}"
+            },
+        ),
+    ) {
+        AudioRoomRoute(onBack = { navController.popBackStack() })
+    }
     composable(BroadcastBrowseDest.ROUTE) {
         BroadcastBrowseRoute(
             onBack = { navController.popBackStack() },
             onSessionClick = { sessionId, _ ->
                 navController.navigate(BroadcastViewerDest.build(sessionId)) { launchSingleTop = true }
+            },
+            // #104 — open (or, after Start, create+open) a LiveKit audio room.
+            onOpenAudioRoom = { sessionId ->
+                navController.navigate(AudioRoomDest.build(sessionId)) { launchSingleTop = true }
+            },
+            // Host "Go Live": enter the real create -> ingest (camera/mic publish) flow. The backend treats
+            // profile_id as an opaque grouping key (the session is owned by the authenticated user via
+            // created_by), so a stable mobile profile id is sufficient to create + publish.
+            onGoLiveHost = {
+                navController.navigate(BroadcastCreateDest.build(HOST_BROADCAST_PROFILE_ID)) {
+                    launchSingleTop = true
+                }
             },
         )
     }
@@ -330,6 +404,11 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
         arguments = listOf(
             navArgument(ViewerViewModel.ARG_SESSION_ID) { type = NavType.StringType },
         ),
+        deepLinks = listOf(
+            navDeepLink {
+                uriPattern = "testlogon://broadcast/viewer/{${ViewerViewModel.ARG_SESSION_ID}}"
+            },
+        ),
     ) {
         ViewerScreen(
             onBack = { navController.popBackStack() },
@@ -337,6 +416,8 @@ fun NavGraphBuilder.broadcastDestinations(navController: NavHostController) {
             onBuyProduct = { categoryId, itemId ->
                 navController.navigate(ProductDetailDest.build(categoryId, itemId)) { launchSingleTop = true }
             },
+            // ADV2-211 (F2): route a live ad CTA tap to product/cart/subscribe/profile dests.
+            onCtaNavigate = { dest -> navController.navigateCta(dest) },
         )
     }
 }

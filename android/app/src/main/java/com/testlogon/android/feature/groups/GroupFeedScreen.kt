@@ -1,0 +1,531 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
+package com.testlogon.android.feature.groups
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Comment
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.outlined.Paid
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.material.icons.outlined.Flag
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.feature.feed.SponsoredFeedCard
+import com.testlogon.android.feature.feed.TipEffect
+import com.testlogon.android.feature.feed.TipSheet
+import com.testlogon.android.feature.feed.TipViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.collectAsLazyPagingItems
+import coil.compose.AsyncImage
+import com.testlogon.android.R
+import com.testlogon.android.core.model.groups.GroupFeedPost
+import com.testlogon.android.core.ui.state.EmptyState
+import com.testlogon.android.core.ui.state.ErrorState
+import com.testlogon.android.core.ui.state.LoadingState
+import kotlinx.coroutines.flow.collectLatest
+
+/** Batch-8/9 (#10,#11) - stable testTags for the group-feed screen. */
+object GroupFeedTestTags {
+    const val SCREEN = "group_feed_screen"
+    const val COMPOSE_INPUT = "group_feed_compose_input"
+    const val COMPOSE_SEND = "group_feed_compose_send"
+    const val COMPOSE_ATTACH = "group_feed_compose_attach"
+    const val SETTINGS = "group_feed_settings"
+    const val EMPTY = "group_feed_empty"
+    const val ERROR_RETRY = "group_feed_error_retry"
+
+    fun row(postId: String) = "group_feed_post_$postId"
+    fun comments(postId: String) = "group_feed_comments_$postId"
+    // TIP-306 — per-post group tip button (reuses the feed TipViewModel + shared TipSheet).
+    fun tip(postId: String) = "tip_group_post_$postId"
+}
+
+/**
+ * Batch-8/9 (#10,#11) - route-level group-feed entry (the DEFAULT group landing). The TopAppBar GEAR
+ * ([onOpenHub]) reaches the group hub (members / treasury / settings / etc.). Each post opens a comments
+ * sheet; the composer attaches images + a paid-lock price (full-newsfeed parity).
+ */
+@Composable
+fun GroupFeedRoute(
+    onBack: () -> Unit,
+    onOpenHub: () -> Unit,
+    // #4 (B-GROUPUNIFY) — open the SHARED newsfeed composer, locked to this group's audience.
+    onComposePost: () -> Unit = {},
+    viewModel: GroupFeedViewModel = hiltViewModel(),
+) {
+    val posts = viewModel.posts.collectAsLazyPagingItems()
+    val composeState by viewModel.composeState.collectAsStateWithLifecycle()
+    val currentUserId by viewModel.currentUserId.collectAsStateWithLifecycle()
+    LaunchedEffect(viewModel) {
+        viewModel.refreshSignal.collectLatest { posts.refresh() }
+    }
+    GroupFeedScreen(
+        groupId = viewModel.groupId,
+        posts = posts,
+        composeState = composeState,
+        pollVoter = viewModel.pollVoter,
+        currentUserId = currentUserId,
+        onBack = onBack,
+        onOpenHub = onOpenHub,
+        onComposePost = onComposePost,
+        onTextChange = viewModel::onTextChange,
+        onAttachImage = viewModel::attachImage,
+        onRemoveImage = viewModel::removeImage,
+        onSubmit = viewModel::submit,
+        onSponsoredImpression = viewModel::onSponsoredImpression,
+        onSponsoredClick = viewModel::onSponsoredClick,
+    )
+}
+
+@Composable
+fun GroupFeedScreen(
+    groupId: String,
+    posts: LazyPagingItems<GroupFeedPost>,
+    composeState: GroupComposeState,
+    pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
+    currentUserId: String? = null,
+    onBack: () -> Unit,
+    onOpenHub: () -> Unit,
+    onComposePost: () -> Unit = {},
+    onTextChange: (String) -> Unit,
+    onAttachImage: (android.net.Uri) -> Unit,
+    onRemoveImage: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onSponsoredImpression: (GroupFeedPost) -> Unit = {},
+    onSponsoredClick: (GroupFeedPost) -> Unit = {},
+    modifier: Modifier = Modifier,
+    tipViewModel: TipViewModel = hiltViewModel(),
+) {
+    // The post whose comments sheet is open (null = closed).
+    var commentsForPost by remember { mutableStateOf<String?>(null) }
+    // MOD-C1 - group post report target (group posts share the newsfeed POST# ids -> feed_post).
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
+    // TIP-306 — shared feed tip machine drives the group-post tip sheet + confirmation snackbar.
+    val tipState by tipViewModel.state.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(tipViewModel) {
+        tipViewModel.effects.collect { e ->
+            if (e is TipEffect.ShowSnackbar) snackbarHostState.showSnackbar(e.message)
+        }
+    }
+
+    Scaffold(
+        modifier = modifier.testTag(GroupFeedTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.group_feed_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.group_feed_back),
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = onOpenHub,
+                        modifier = Modifier.testTag(GroupFeedTestTags.SETTINGS),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Settings,
+                            contentDescription = stringResource(R.string.group_feed_hub),
+                        )
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            // #4 (B-GROUPUNIFY) — post to this group via the SHARED newsfeed composer (same composer as
+            // a normal post; the group is the selected, locked audience). The inline quick-composer below
+            // remains for a fast text/image post.
+            androidx.compose.material3.ExtendedFloatingActionButton(
+                onClick = onComposePost,
+                icon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                text = { Text(stringResource(R.string.group_feed_compose_send)) },
+                modifier = Modifier.testTag("group_feed_compose_fab"),
+            )
+        },
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            ComposeBox(
+                state = composeState,
+                onTextChange = onTextChange,
+                onAttachImage = onAttachImage,
+                onRemoveImage = onRemoveImage,
+                onSubmit = onSubmit,
+            )
+            HorizontalDivider()
+            val refresh = posts.loadState.refresh
+            PullToRefreshBox(
+                isRefreshing = refresh is LoadState.Loading && posts.itemCount > 0,
+                onRefresh = { posts.refresh() },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                when {
+                    refresh is LoadState.Loading && posts.itemCount == 0 ->
+                        LoadingState()
+
+                    refresh is LoadState.Error && posts.itemCount == 0 ->
+                        ErrorState(
+                            modifier = Modifier.testTag(GroupFeedTestTags.ERROR_RETRY),
+                            message = stringResource(R.string.group_feed_error),
+                            onRetry = { posts.retry() },
+                        )
+
+                    posts.itemCount == 0 ->
+                        EmptyState(
+                            modifier = Modifier.testTag(GroupFeedTestTags.EMPTY),
+                            title = stringResource(R.string.group_feed_empty_title),
+                            body = stringResource(R.string.group_feed_empty_body),
+                        )
+
+                    else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(
+                            count = posts.itemCount,
+                            key = { index -> posts[index]?.postId ?: "post_$index" },
+                        ) { index ->
+                            val post = posts[index] ?: return@items
+                            GroupPostRow(
+                                post = post,
+                                pollVoter = pollVoter,
+                                currentUserId = currentUserId,
+                                onOpenComments = { commentsForPost = post.postId },
+                                onReport = { reportTarget = ReportTarget.Content(post.postId, "feed_post") },
+                                onTip = { tipViewModel.open(post.postId) },
+                                onSponsoredImpression = onSponsoredImpression,
+                                onSponsoredClick = onSponsoredClick,
+                            )
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    val openPostId = commentsForPost
+    if (openPostId != null) {
+        GroupCommentsSheet(
+            groupId = groupId,
+            postId = openPostId,
+            onDismiss = { commentsForPost = null },
+            onCountChanged = { /* count refreshes on next feed load */ },
+        )
+    }
+
+    // MOD-C1/C3 - group post report sheet host (six categories + licensing/IP -> DMCA).
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
+
+    // TIP-306 — shared TipSheet for a group post; routes through the same POST /posts/{id}/tip money-path.
+    TipSheet(
+        state = tipState,
+        onSelectPreset = tipViewModel::selectPreset,
+        onCustomAmount = tipViewModel::setCustomAmount,
+        onSend = tipViewModel::send,
+        onDismiss = tipViewModel::dismiss,
+        onVisibility = tipViewModel::setVisibility,
+    )
+}
+
+@Composable
+private fun ComposeBox(
+    state: GroupComposeState,
+    onTextChange: (String) -> Unit,
+    onAttachImage: (android.net.Uri) -> Unit,
+    onRemoveImage: (String) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) onAttachImage(uri) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = state.text,
+            onValueChange = onTextChange,
+            enabled = !state.sending,
+            label = { Text(stringResource(R.string.group_feed_compose_hint)) },
+            modifier = Modifier.fillMaxWidth().testTag(GroupFeedTestTags.COMPOSE_INPUT),
+        )
+        if (state.imageUrls.isNotEmpty()) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(state.imageUrls, key = { it }) { url ->
+                    Box {
+                        AsyncImage(
+                            model = url,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)),
+                        )
+                        IconButton(
+                            onClick = { onRemoveImage(url) },
+                            modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
+                        ) {
+                            Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.group_feed_remove_image))
+                        }
+                    }
+                }
+            }
+        }
+        val err = state.error
+        if (err != null) {
+            Text(text = err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            IconButton(
+                onClick = { imagePicker.launch("image/*") },
+                enabled = !state.uploadingImage && !state.sending && state.imageUrls.size < GroupFeedViewModel.MAX_IMAGES,
+                modifier = Modifier.testTag(GroupFeedTestTags.COMPOSE_ATTACH),
+            ) {
+                if (state.uploadingImage) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.Image, contentDescription = stringResource(R.string.group_feed_attach_image))
+                }
+            }
+            Box(modifier = Modifier.weight(1f))
+            Button(
+                onClick = onSubmit,
+                enabled = (state.text.isNotBlank() || state.imageUrls.isNotEmpty()) && !state.sending,
+                modifier = Modifier.testTag(GroupFeedTestTags.COMPOSE_SEND),
+            ) {
+                if (state.sending) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(stringResource(R.string.group_feed_compose_send))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupPostRow(
+    post: GroupFeedPost,
+    pollVoter: com.testlogon.android.data.poll.PollVoter?,
+    currentUserId: String?,
+    onOpenComments: () -> Unit,
+    onReport: () -> Unit = {},
+    onTip: () -> Unit = {},
+    onSponsoredImpression: (GroupFeedPost) -> Unit = {},
+    onSponsoredClick: (GroupFeedPost) -> Unit = {},
+) {
+    // ADV group-feed ads — a server-injected sponsored (paid) unit renders as the shared, NON-tippable
+    // Sponsored card (no comment/tip action row); FEATURE 2 (no tip on sponsored) holds here by omission.
+    val ad = post.sponsored
+    if (ad != null) {
+        SponsoredFeedCard(
+            label = ad.label,
+            headline = ad.headline,
+            body = ad.body,
+            ctaText = ad.ctaText,
+            impressionKey = ad.impressionKey,
+            modifier = Modifier.testTag(GroupFeedTestTags.row(post.postId)),
+            onImpression = { onSponsoredImpression(post) },
+            onClick = { onSponsoredClick(post) },
+            media = {
+                if (ad.imageUrls.isNotEmpty()) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(ad.imageUrls.take(8), key = { it }) { url ->
+                            AsyncImage(
+                                model = url,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(120.dp).clip(RoundedCornerShape(8.dp)),
+                            )
+                        }
+                    }
+                }
+            },
+        )
+        return
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(GroupFeedTestTags.row(post.postId))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = post.authorName,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (post.pinned) {
+                Text(
+                    text = stringResource(R.string.group_feed_pinned),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        val text = post.text
+        if (post.locked) {
+            val price = post.unlockPriceCents
+            Text(
+                text = if (price != null && price > 0) {
+                    stringResource(R.string.group_feed_locked_price, price / 100.0)
+                } else {
+                    stringResource(R.string.group_feed_locked)
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else if (!text.isNullOrBlank()) {
+            Text(text = text, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        val poll = post.poll
+        if (poll != null && pollVoter != null) {
+            com.testlogon.android.feature.common.poll.ArbitraryPollCard(
+                initial = poll,
+                isOwner = currentUserId != null && currentUserId == post.authorId,
+                voter = pollVoter,
+            )
+        }
+
+        // Multi-image grid (newsfeed parity): show up to 4 thumbnails in a row.
+        if (!post.locked && post.imageUrls.isNotEmpty()) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(post.imageUrls.take(8), key = { it }) { url ->
+                    AsyncImage(
+                        model = url,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(120.dp).clip(RoundedCornerShape(8.dp)),
+                    )
+                }
+            }
+        }
+
+        // Attached video indicator.
+        if (!post.locked && post.videoId != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.PlayArrow,
+                    contentDescription = stringResource(R.string.group_feed_video),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                onClick = onOpenComments,
+                modifier = Modifier.testTag(GroupFeedTestTags.comments(post.postId)),
+            ) {
+                Icon(Icons.AutoMirrored.Outlined.Comment, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(
+                    text = if (post.commentCount > 0) {
+                        stringResource(R.string.group_feed_comments_count, post.commentCount)
+                    } else {
+                        stringResource(R.string.group_feed_comment)
+                    },
+                    modifier = Modifier.padding(start = 6.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+            // TIP-306 — tip a group post's author (newsfeed parity). Hidden on your OWN post so you never
+            // self-tip; the backend also rejects a self-tip with 400 cannot_tip_self.
+            val canTip = post.authorId.isNotBlank() && currentUserId != null && post.authorId != currentUserId
+            if (canTip) {
+                IconButton(
+                    onClick = onTip,
+                    modifier = Modifier.size(44.dp).testTag(GroupFeedTestTags.tip(post.postId)),
+                ) {
+                    Icon(
+                        Icons.Outlined.Paid,
+                        contentDescription = stringResource(R.string.tip_action),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            // MOD-C1 - report another member's group post (hidden on your own post).
+            val canReport = post.authorId.isNotBlank() && currentUserId != null && post.authorId != currentUserId
+            if (canReport) {
+                IconButton(
+                    onClick = onReport,
+                    modifier = Modifier.size(44.dp).testTag("group_post_report_" + post.postId),
+                ) {
+                    Icon(
+                        Icons.Outlined.Flag,
+                        contentDescription = stringResource(R.string.msg_action_report),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}

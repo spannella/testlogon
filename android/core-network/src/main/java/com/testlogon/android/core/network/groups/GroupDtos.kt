@@ -43,6 +43,21 @@ data class UserGroupDto(
     @Json(name = "my_role") val myRole: String? = null,
     @Json(name = "admin_user_id") val adminUserId: String? = null,
     @Json(name = "cover_image_url") val coverImageUrl: String? = null,
+    @Json(name = "topic") val topic: String? = null,
+    @Json(name = "visibility") val visibility: String? = null,
+    @Json(name = "status") val status: String? = null,
+)
+
+/**
+ * Body for POST ui/groups (create a social group). `name` is required (3..100 chars server-side);
+ * description/visibility/topic are optional. `visibility` is "public" or "private" (defaults public
+ * server-side). Nulls are omitted by the shared Moshi (serializeNulls off on the production client).
+ */
+data class GroupCreateIn(
+    @Json(name = "name") val name: String,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "visibility") val visibility: String? = null,
+    @Json(name = "topic") val topic: String? = null,
 )
 
 /** ENVELOPE for GET ui/groups (NOT a bare array). */

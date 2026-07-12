@@ -40,6 +40,12 @@ import com.squareup.moshi.Json
 data class AdAccountDto(
     @Json(name = "account_id") val accountId: String,
     @Json(name = "name") val name: String? = null,
+    // ADV2-R5: the backend account item labels the account with `company_name` (NOT `name`), so the
+    // picker label was blank. Read company_name as the primary display name; `name` stays a lenient
+    // fallback for any older/alternate wire. owner_type / owner_syndicate_id flag a SYNDICATE account.
+    @Json(name = "company_name") val companyName: String? = null,
+    @Json(name = "owner_type") val ownerType: String? = null,
+    @Json(name = "owner_syndicate_id") val ownerSyndicateId: String? = null,
     @Json(name = "status") val status: AdAccountStatus = AdAccountStatus.UNKNOWN,
     @Json(name = "balance_cents") val balanceCents: Long,
     @Json(name = "lifetime_spend_cents") val lifetimeSpendCents: Long,
@@ -208,4 +214,28 @@ data class AdBreakdownEntryDto(
     @Json(name = "clicks") val clicks: Long,
     @Json(name = "spend_cents") val spendCents: Long,
     @Json(name = "ctr_pct") val ctrPct: Double? = null,
+)
+
+/**
+ * ADV-501/503 - the ROAS report (GET ui/ads/roas). [totals] is the account aggregate; [campaigns] is the
+ * per-campaign breakdown (each row the same shape). All *_cents are Long; ctr_pct/cpa_cents/roas are Doubles.
+ */
+data class AdRoasReportDto(
+    @Json(name = "account_id") val accountId: String? = null,
+    @Json(name = "days") val days: Int? = null,
+    @Json(name = "totals") val totals: AdCampaignRoasDto,
+    @Json(name = "campaigns") val campaigns: List<AdCampaignRoasDto> = emptyList(),
+)
+
+/** ADV-501/503 - ROAS figures for one campaign (or the account total, campaign_id absent). */
+data class AdCampaignRoasDto(
+    @Json(name = "campaign_id") val campaignId: String? = null,
+    @Json(name = "impressions") val impressions: Long = 0,
+    @Json(name = "clicks") val clicks: Long = 0,
+    @Json(name = "conversions") val conversions: Long = 0,
+    @Json(name = "spend_cents") val spendCents: Long = 0,
+    @Json(name = "conversion_value_cents") val conversionValueCents: Long = 0,
+    @Json(name = "ctr_pct") val ctrPct: Double = 0.0,
+    @Json(name = "cpa_cents") val cpaCents: Double = 0.0,
+    @Json(name = "roas") val roas: Double = 0.0,
 )

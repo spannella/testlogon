@@ -16,7 +16,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** AND-067 — Compose UI tests for the three availability states + navigation. */
+/**
+ * AND-067 — Compose UI tests for the More hub-detail screen (the three availability states +
+ * navigation). The top-level More tab now renders hub tiles; item cards live on [MoreHubScreen].
+ */
 @RunWith(AndroidJUnit4::class)
 class MoreScreenTest {
 
@@ -29,13 +32,10 @@ class MoreScreenTest {
             labelRes = R.string.more_entry_profile,
             icon = Icons.Outlined.Person,
             route = "route/$id",
+            hub = MoreHub.ACCOUNT,
             section = MoreSection.ACCOUNT,
         ),
         availability = availability,
-    )
-
-    private fun content(vararg items: MoreItemUi) = MoreUiState.Content(
-        listOf(MoreSectionUi(MoreSection.ACCOUNT, items.toList())),
     )
 
     @Test
@@ -43,8 +43,10 @@ class MoreScreenTest {
         var navigated: String? = null
         rule.setContent {
             TestLogonTheme(dynamicColor = false) {
-                MoreScreen(
-                    state = content(item("a", EntryAvailability.Available)),
+                MoreHubScreen(
+                    hub = MoreHub.ACCOUNT,
+                    items = listOf(item("a", EntryAvailability.Available)),
+                    onBack = {},
                     onNavigate = { navigated = it },
                 )
             }
@@ -57,8 +59,12 @@ class MoreScreenTest {
     fun disabled_isNotClickable() {
         rule.setContent {
             TestLogonTheme(dynamicColor = false) {
-                MoreScreen(
-                    state = content(item("b", EntryAvailability.Disabled(R.string.more_unavailable_coming_soon))),
+                MoreHubScreen(
+                    hub = MoreHub.ACCOUNT,
+                    items = listOf(
+                        item("b", EntryAvailability.Disabled(R.string.more_unavailable_coming_soon)),
+                    ),
+                    onBack = {},
                     onNavigate = {},
                 )
             }
@@ -73,9 +79,34 @@ class MoreScreenTest {
     fun empty_showsEmptyState() {
         rule.setContent {
             TestLogonTheme(dynamicColor = false) {
-                MoreScreen(state = MoreUiState.Empty, onNavigate = {})
+                MoreHubScreen(
+                    hub = MoreHub.ACCOUNT,
+                    items = emptyList(),
+                    onBack = {},
+                    onNavigate = {},
+                )
             }
         }
-        rule.onNodeWithTag("more_empty").assertIsDisplayed()
+        rule.onNodeWithTag("more_hub_empty").assertIsDisplayed()
+    }
+
+    @Test
+    fun hubTiles_renderAndDrillIn() {
+        var openedHub: MoreHub? = null
+        rule.setContent {
+            TestLogonTheme(dynamicColor = false) {
+                MoreScreen(
+                    state = MoreUiState.Content(
+                        hubs = listOf(
+                            MoreHubUi(MoreHub.ACCOUNT, listOf(item("a", EntryAvailability.Available))),
+                        ),
+                        sections = emptyList(),
+                    ),
+                    onOpenHub = { openedHub = it },
+                )
+            }
+        }
+        rule.onNodeWithTag("more_hub_account").assertHasClickAction().performClick()
+        assertEquals(MoreHub.ACCOUNT, openedHub)
     }
 }

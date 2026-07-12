@@ -442,6 +442,27 @@ class MessagingRepositoryTest {
             searchContactsThrows?.let { throw it }
             return searchContactsResult
         }
+
+        // ---- MSG: new in-app composer endpoints (test stubs) ----
+        var lotteryResult: MessageDto? = null
+        override suspend fun createLottery(body: CreateLotteryReq): MessageDto =
+            lotteryResult ?: error("unused")
+        var findDateTimeResult: MessageDto? = null
+        override suspend fun createFindDateTime(id: String, body: CreateFindDateTimeReq): MessageDto =
+            findDateTimeResult ?: error("unused")
+        var calendarEventResult: MessageDto? = null
+        override suspend fun createCalendarEventMessage(id: String, body: CreateCalendarEventReq): MessageDto =
+            calendarEventResult ?: error("unused")
+        var calendarShareResult: MessageDto? = null
+        override suspend fun createCalendarShareMessage(id: String, body: CreateCalendarShareReq): MessageDto =
+            calendarShareResult ?: error("unused")
+        var calendarsResult: List<CalendarAccessDto> = emptyList()
+        override suspend fun listCalendars(): List<CalendarAccessDto> = calendarsResult
+        var calendarEventsResult: CalendarEventsPageDto = CalendarEventsPageDto()
+        override suspend fun listCalendarEvents(calendarId: String, limit: Int): CalendarEventsPageDto =
+            calendarEventsResult
+        var filesResult: FsListRespDto = FsListRespDto()
+        override suspend fun listFiles(path: String, limit: Int): FsListRespDto = filesResult
     }
 
     data class SearchAllCall(

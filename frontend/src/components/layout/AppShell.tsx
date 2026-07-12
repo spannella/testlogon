@@ -17,6 +17,8 @@ import { useServiceWorkerSync } from "@/hooks/useServiceWorkerSync";
 import { useQueryClient } from "@tanstack/react-query";
 import { DeadLetterPanel } from "@/components/shared/DeadLetterPanel";
 import { useUiStore } from "@/stores/uiStore";
+import { useAuthStore } from "@/stores/authStore";
+import { getMe } from "@/api/endpoints/auth";
 import {
   Sheet,
   SheetContent,
@@ -61,9 +63,31 @@ export default function AppShell() {
     }
   }, [prefsLoaded, loadServerPreferences]);
 
+  // Hydrate admin identity (role/is_admin) from /ui/me for sessions that were
+  // established via the cookie login before role was cached, so admin nav
+  // gating (which falls back to the stored role) resolves without a re-login.
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const role = useAuthStore((s) => s.role);
+  const setIdentity = useAuthStore((s) => s.setIdentity);
+  React.useEffect(() => {
+    if (isAuthenticated && role === null) {
+      getMe()
+        .then((me) =>
+          setIdentity({
+            role: me.role ?? null,
+            isAdmin: me.is_admin ?? false,
+            adminProfile: me.admin_profile ?? null,
+          }),
+        )
+        .catch(() => {
+          // Best-effort; nav simply stays non-admin until next login.
+        });
+    }
+  }, [isAuthenticated, role, setIdentity]);
+
   return (
     <AppDropZone>
-      <div className="flex h-screen overflow-hidden bg-background">
+      <div className="flex h-[100dvh] overflow-hidden bg-background">
         {/* Skip to content link for keyboard/screen reader users */}
         <a
           href="#main-content"

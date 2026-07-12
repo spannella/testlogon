@@ -3,6 +3,7 @@ package com.testlogon.android.data.cart
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -65,6 +66,17 @@ interface CartApi {
 
     @DELETE("ui/shoppingcart/carts/{cartId}")
     suspend fun deleteCart(@Path("cartId") cartId: String): OkRespDto
+
+    /**
+     * FIX (ecom residual #1) — the one-shot complete-purchase endpoint. Requires X-Idempotency-Key;
+     * body carries an optional promo. Returns the created order + purchase txn.
+     */
+    @POST("ui/shoppingcart/carts/{cartId}/purchase")
+    suspend fun purchaseCart(
+        @Path("cartId") cartId: String,
+        @Header("X-Idempotency-Key") idempotencyKey: String,
+        @Body body: CartPurchaseInDto,
+    ): CartPurchaseOutDto
 
     companion object {
         /**

@@ -65,6 +65,9 @@ class BoostViewModelTest {
         override suspend fun getSpend(boostId: String): ApiResult<BoostSpend> =
             ApiResult.Success(BoostSpend(spentCents = 100L, remainingCents = 400L))
 
+        override suspend fun listBoosts(): ApiResult<List<ContentBoost>> =
+            ApiResult.Success(emptyList())
+
         override suspend fun cancelBoost(boostId: String): ApiResult<BoostCancelResult> {
             cancelCount++
             return cancelOutcome

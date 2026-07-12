@@ -55,6 +55,11 @@ object KycNetworkModule {
 
     @Provides
     @Singleton
+    fun provideKycVerifyApi(retrofit: Retrofit): KycVerifyApi =
+        retrofit.create(KycVerifyApi::class.java)
+
+    @Provides
+    @Singleton
     fun provideKycDocumentsApi(retrofit: Retrofit): KycDocumentsApi =
         retrofit.create(KycDocumentsApi::class.java)
 

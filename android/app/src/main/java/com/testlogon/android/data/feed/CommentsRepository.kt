@@ -39,11 +39,66 @@ interface CommentsRepository {
         postId: String,
         body: String,
         parentId: String? = null,
+        /** #4 — optional uploaded image URL to attach alongside the text (text+image comment). */
+        imageUrl: String? = null,
+        imageAltText: String? = null,
+        /** TIP-302 — optional CARRYING tip (cents) charged to the post author on comment create. */
+        tipAmountCents: Int? = null,
+        tipPaymentMethodId: String? = null,
     ): ApiResult<Comment>
+
+    /** Post a GIF comment (kind="gif"). */
+    suspend fun addGifComment(
+        postId: String,
+        gifUrl: String,
+        altText: String? = null,
+        parentId: String? = null,
+    ): ApiResult<Comment>
+
+    /** Post a sticker comment (kind="sticker"). */
+    suspend fun addStickerComment(
+        postId: String,
+        stickerId: String,
+        collectionId: String,
+        stickerUrl: String,
+        altText: String? = null,
+        parentId: String? = null,
+    ): ApiResult<Comment>
+
+    /** Post an image comment (kind="image"); [imageUrl] must be a platform upload or https URL. #24 */
+    suspend fun addImageComment(
+        postId: String,
+        imageUrl: String,
+        altText: String? = null,
+        parentId: String? = null,
+    ): ApiResult<Comment>
+
+    /** TIP-301 — tip a comment (amount in integer cents); [paymentMethodId] picks an explicit/tip-default PM. 2xx ack. */
+    suspend fun tipComment(postId: String, commentId: String, amountCents: Int, paymentMethodId: String? = null): ApiResult<Unit>
+
+    /** #23 — toggle an emoji reaction on a comment. [add] true => react, false => unreact. 2xx ack. */
+    suspend fun setCommentReaction(
+        postId: String,
+        commentId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Unit>
 
     suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit>
 
-    /** Capability flag; false by default (no replies endpoint / flat web rendering). */
+    /**
+     * Edit an own comment. #5 — [imageUrl] follows the B-COMMENT2 edit contract: null = KEEP the
+     * current image, "" (empty) = REMOVE it, a URL = REPLACE it.
+     */
+    suspend fun editComment(
+        postId: String,
+        commentId: String,
+        body: String,
+        imageUrl: String? = null,
+        imageAltText: String? = null,
+    ): ApiResult<Comment>
+
+    /** Capability flag for threaded replies (backend accepts parent_comment_id). */
     val repliesSupported: Boolean
 }
 
@@ -56,7 +111,7 @@ class CommentsRepositoryImpl @Inject constructor(
 
     private val io: CoroutineDispatcher = Dispatchers.IO
 
-    override val repliesSupported: Boolean = false
+    override val repliesSupported: Boolean = true
 
     override suspend fun getComments(
         postId: String,
@@ -72,15 +127,136 @@ class CommentsRepositoryImpl @Inject constructor(
         postId: String,
         body: String,
         parentId: String?,
+        imageUrl: String?,
+        imageAltText: String?,
+        tipAmountCents: Int?,
+        tipPaymentMethodId: String?,
+    ): ApiResult<Comment> = withContext(io) {
+        val me = authStateStore.userSub.first()
+        // #4 — when an image is attached the backend (B-COMMENT2) validates it on a kind="text" comment,
+        // so text+image ride together; a plain text comment keeps kind null.
+        val kind = if (imageUrl != null) "text" else null
+        apiCall {
+            api.addComment(
+                postId,
+                CreateCommentRequest(
+                    body = body,
+                    parentCommentId = parentId,
+                    kind = kind,
+                    imageUrl = imageUrl,
+                    imageAltText = imageAltText,
+                    // TIP-302 — carry the tip; backend charges (recipient = post author) then stamps the comment.
+                    tipAmountCents = tipAmountCents,
+                    tipCurrency = if (tipAmountCents != null) "usd" else null,
+                    tipPaymentMethodId = tipPaymentMethodId,
+                ),
+            )
+        }.map { it.toDomain(me) }
+    }
+
+    override suspend fun addGifComment(
+        postId: String,
+        gifUrl: String,
+        altText: String?,
+        parentId: String?,
     ): ApiResult<Comment> = withContext(io) {
         val me = authStateStore.userSub.first()
         apiCall {
-            api.addComment(postId, CreateCommentRequest(body = body, parentCommentId = parentId))
+            api.addComment(
+                postId,
+                CreateCommentRequest(body = "", parentCommentId = parentId, kind = "gif", gifUrl = gifUrl, gifAltText = altText),
+            )
         }.map { it.toDomain(me) }
+    }
+
+    override suspend fun addStickerComment(
+        postId: String,
+        stickerId: String,
+        collectionId: String,
+        stickerUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> = withContext(io) {
+        val me = authStateStore.userSub.first()
+        apiCall {
+            api.addComment(
+                postId,
+                CreateCommentRequest(
+                    body = "",
+                    parentCommentId = parentId,
+                    kind = "sticker",
+                    stickerId = stickerId,
+                    stickerCollectionId = collectionId,
+                    stickerUrl = stickerUrl,
+                    stickerAltText = altText,
+                ),
+            )
+        }.map { it.toDomain(me) }
+    }
+
+    override suspend fun addImageComment(
+        postId: String,
+        imageUrl: String,
+        altText: String?,
+        parentId: String?,
+    ): ApiResult<Comment> = withContext(io) {
+        val me = authStateStore.userSub.first()
+        apiCall {
+            api.addComment(
+                postId,
+                CreateCommentRequest(
+                    body = "",
+                    parentCommentId = parentId,
+                    kind = "image",
+                    imageUrl = imageUrl,
+                    imageAltText = altText,
+                ),
+            )
+        }.map { it.toDomain(me) }
+    }
+
+    override suspend fun tipComment(postId: String, commentId: String, amountCents: Int, paymentMethodId: String?): ApiResult<Unit> =
+        withContext(io) {
+            ackCall {
+                api.tipComment(
+                    postId,
+                    commentId,
+                    TipRequest(amountCents = amountCents, paymentMethodId = paymentMethodId),
+                )
+            }
+        }
+
+    override suspend fun setCommentReaction(
+        postId: String,
+        commentId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Unit> = withContext(io) {
+        ackCall {
+            if (add) api.reactComment(postId, commentId, ReactionRequest(emoji))
+            else api.unreactComment(postId, commentId, ReactionRequest(emoji))
+        }
     }
 
     override suspend fun deleteComment(postId: String, commentId: String): ApiResult<Unit> =
         withContext(io) { ackCall { api.deleteComment(postId, commentId) } }
+
+    override suspend fun editComment(
+        postId: String,
+        commentId: String,
+        body: String,
+        imageUrl: String?,
+        imageAltText: String?,
+    ): ApiResult<Comment> = withContext(io) {
+        val me = authStateStore.userSub.first()
+        apiCall {
+            api.editComment(
+                postId,
+                commentId,
+                EditCommentRequest(body = body, imageUrl = imageUrl, imageAltText = imageAltText),
+            )
+        }.map { it.toDomain(me) }
+    }
 
     private suspend fun <T> apiCall(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

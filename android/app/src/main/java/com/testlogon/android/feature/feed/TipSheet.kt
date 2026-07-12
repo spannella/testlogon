@@ -1,21 +1,16 @@
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@file:OptIn(ExperimentalMaterial3Api::class)
 
 package com.testlogon.android.feature.feed
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.Icons
@@ -26,10 +21,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.testlogon.android.R
 import com.testlogon.android.core.ui.input.TlButton
+import com.testlogon.android.feature.common.tip.TipComposerContent
+import com.testlogon.android.feature.common.tip.TipVisibility
 
 /** Stable test tags for the tip sheet (AND-178). */
 object TipSheetTestTags {
@@ -41,9 +37,12 @@ object TipSheetTestTags {
 }
 
 /**
- * AND-178 — modal tip bottom sheet. Stateless: state arrives via [state]; events are hoisted up. Dismiss
+ * AND-178 - modal tip bottom sheet. Stateless: state arrives via [state]; events are hoisted up. Dismiss
  * is blocked while Submitting (FR-10). The Send button shows a spinner + disables inputs during
  * Submitting (FR-5/FR-8); Confirmed shows "Tip sent". Hidden => the sheet is not shown.
+ *
+ * TIP-504 - the Entry body is now the shared [TipComposerContent] used by every tip surface. TIP-505 -
+ * the public/private visibility toggle is rendered when [onVisibility] is wired.
  */
 @Composable
 fun TipSheet(
@@ -52,6 +51,7 @@ fun TipSheet(
     onCustomAmount: (text: String) -> Unit,
     onSend: () -> Unit,
     onDismiss: () -> Unit,
+    onVisibility: (TipVisibility) -> Unit = {},
 ) {
     if (state is TipSheetState.Hidden) return
     val submitting = state is TipSheetState.Submitting
@@ -72,7 +72,7 @@ fun TipSheet(
                 fontWeight = FontWeight.SemiBold,
             )
             when (state) {
-                is TipSheetState.Entry -> TipEntryBody(state, onSelectPreset, onCustomAmount, onSend)
+                is TipSheetState.Entry -> TipEntryBody(state, onSelectPreset, onCustomAmount, onSend, onVisibility)
                 is TipSheetState.Submitting -> TipSubmittingBody()
                 is TipSheetState.Confirmed -> TipConfirmedBody(state)
                 is TipSheetState.Hidden -> Unit
@@ -87,37 +87,26 @@ private fun TipEntryBody(
     onSelectPreset: (Int) -> Unit,
     onCustomAmount: (String) -> Unit,
     onSend: () -> Unit,
+    onVisibility: (TipVisibility) -> Unit,
 ) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        state.config.presetsCents.forEach { cents ->
-            FilterChip(
-                selected = state.selectedCents == cents && state.customAmountText.isBlank(),
-                onClick = { onSelectPreset(cents) },
-                label = { Text(PriceFormatter.format(cents) ?: "$cents") },
-                modifier = Modifier.testTag(TipSheetTestTags.preset(cents)),
-            )
-        }
-    }
-    OutlinedTextField(
-        value = state.customAmountText,
-        onValueChange = onCustomAmount,
-        label = { Text(stringResource(R.string.tip_custom_amount)) },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth().testTag(TipSheetTestTags.CUSTOM),
-    )
-    if (state.error != null) {
-        Text(
-            text = state.error,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-        )
-    }
-    TlButton(
-        text = stringResource(R.string.tip_send),
-        onClick = onSend,
-        enabled = state.canSend,
-        modifier = Modifier.fillMaxWidth().testTag(TipSheetTestTags.SEND),
+    // TIP-504 - shared composer body. Feed preset cents are Int; the shared component is Long-cents, so
+    // adapt at the boundary. Test tags are preserved (tip_preset_<cents>/tip_custom/tip_send).
+    TipComposerContent(
+        presetsCents = state.config.presetsCents.map(Int::toLong),
+        selectedCents = state.selectedCents?.toLong(),
+        customText = state.customAmountText,
+        canSend = state.canSend,
+        inFlight = false,
+        onSelectPreset = { onSelectPreset(it.toInt()) },
+        onCustomAmount = onCustomAmount,
+        onSend = onSend,
+        currency = state.config.currency,
+        error = state.error,
+        visibility = state.visibility,
+        onVisibility = onVisibility,
+        presetTag = { TipSheetTestTags.preset(it.toInt()) },
+        customTag = TipSheetTestTags.CUSTOM,
+        sendTag = TipSheetTestTags.SEND,
     )
 }
 
@@ -134,7 +123,13 @@ private fun TipSubmittingBody() {
 
 @Composable
 private fun TipConfirmedBody(state: TipSheetState.Confirmed) {
+    // TIP-505 - the tipper always sees their own amount; a private tip is labelled "sent privately".
     val amount = PriceFormatter.format(state.receipt.amountCents) ?: "${state.receipt.amountCents}"
+    val label = if (state.visibility.isPrivate) {
+        stringResource(R.string.tip_sent_private) + " · " + amount
+    } else {
+        stringResource(R.string.tip_sent) + " · " + amount
+    }
     Column(
         modifier = Modifier.fillMaxWidth().testTag(TipSheetTestTags.CONFIRMED),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -147,7 +142,7 @@ private fun TipConfirmedBody(state: TipSheetState.Confirmed) {
             modifier = Modifier.size(40.dp),
         )
         Text(
-            text = "${stringResource(R.string.tip_sent)} · $amount",
+            text = label,
             style = MaterialTheme.typography.titleMedium,
         )
     }

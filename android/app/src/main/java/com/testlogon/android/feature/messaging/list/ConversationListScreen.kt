@@ -246,17 +246,13 @@ internal fun ConversationRowItem(row: ConversationRow, onClick: () -> Unit) {
             },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.size(40.dp).clip(CircleShape),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = row.title.firstOrNull()?.uppercase() ?: "?",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            }
-        }
+        com.testlogon.android.feature.common.TlAvatar(
+            name = row.title,
+            photoUrl = row.iconUrl,
+            size = 40.dp,
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Column(
             modifier = Modifier.weight(1f).padding(start = 12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),

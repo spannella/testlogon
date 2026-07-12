@@ -64,9 +64,59 @@ interface LiveQaApi {
         @Path("questionId") questionId: String,
     ): Response<QaQuestionDto>
 
+    // ---- HOST CONSOLE (web LiveQaPage) — host/moderator-only ui/live-qa endpoints. ----
+
+    /** Enable / disable Q&A mode for the session (host only). Body { enabled }. */
+    @POST("ui/live-qa/sessions/{id}/mode")
+    suspend fun setMode(
+        @Path("id") sessionId: String,
+        @Body body: SetModeDto,
+    ): Response<QaModeDto>
+
+    /** Q&A engagement stats (host/moderator only). */
+    @GET("ui/live-qa/sessions/{id}/stats")
+    suspend fun getStats(@Path("id") sessionId: String): Response<QaStatsDto>
+
+    /** Feature a question on the broadcast overlay (host/moderator). Returns the updated question. */
+    @POST("ui/live-qa/sessions/{id}/questions/{questionId}/feature")
+    suspend fun feature(
+        @Path("id") sessionId: String,
+        @Path("questionId") questionId: String,
+    ): Response<QaQuestionDto>
+
+    /** Mark a question answered (host/moderator). Returns the updated question. */
+    @POST("ui/live-qa/sessions/{id}/questions/{questionId}/answer")
+    suspend fun answer(
+        @Path("id") sessionId: String,
+        @Path("questionId") questionId: String,
+    ): Response<QaQuestionDto>
+
+    /** Dismiss a question (host/moderator). Returns the updated question. */
+    @POST("ui/live-qa/sessions/{id}/questions/{questionId}/dismiss")
+    suspend fun dismiss(
+        @Path("id") sessionId: String,
+        @Path("questionId") questionId: String,
+    ): Response<QaQuestionDto>
+
+    /** Pin / unpin a question to the top of the queue (host/moderator). Body { pinned }. */
+    @POST("ui/live-qa/sessions/{id}/questions/{questionId}/pin")
+    suspend fun pin(
+        @Path("id") sessionId: String,
+        @Path("questionId") questionId: String,
+        @Body body: PinQuestionDto,
+    ): Response<QaQuestionDto>
+
+    /** Soft-delete (remove) a question (host/moderator). Returns { ok, question_id }. */
+    @POST("ui/live-qa/sessions/{id}/questions/{questionId}/remove")
+    suspend fun remove(
+        @Path("id") sessionId: String,
+        @Path("questionId") questionId: String,
+    ): Response<QaRemoveResultDto>
+
     companion object {
         const val STATUS_FEATURED = "featured"
         const val STATUS_ANSWERED = "answered"
+        const val STATUS_PENDING = "pending"
         const val DEFAULT_LIMIT = 50
     }
 }
@@ -107,4 +157,36 @@ data class QaModeDto(
 @JsonClass(generateAdapter = true)
 data class AskQuestionDto(
     @Json(name = "text") val text: String,
+)
+
+/** LiveQaModeToggleIn — { enabled }. */
+@JsonClass(generateAdapter = true)
+data class SetModeDto(
+    @Json(name = "enabled") val enabled: Boolean,
+)
+
+/** LiveQaPinIn — { pinned }. */
+@JsonClass(generateAdapter = true)
+data class PinQuestionDto(
+    @Json(name = "pinned") val pinned: Boolean,
+)
+
+/** LiveQaStats — host engagement summary. */
+@JsonClass(generateAdapter = true)
+data class QaStatsDto(
+    @Json(name = "total_questions") val totalQuestions: Int = 0,
+    @Json(name = "answered") val answered: Int = 0,
+    @Json(name = "dismissed") val dismissed: Int = 0,
+    @Json(name = "featured") val featured: Int = 0,
+    @Json(name = "pending") val pending: Int = 0,
+    @Json(name = "total_upvotes") val totalUpvotes: Int = 0,
+    @Json(name = "avg_upvotes") val avgUpvotes: Double = 0.0,
+    @Json(name = "answer_rate") val answerRate: Double = 0.0,
+)
+
+/** remove response — { ok, question_id }. */
+@JsonClass(generateAdapter = true)
+data class QaRemoveResultDto(
+    @Json(name = "ok") val ok: Boolean = true,
+    @Json(name = "question_id") val questionId: String = "",
 )

@@ -2,7 +2,10 @@ package com.testlogon.android.data.billing
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.POST
+import retrofit2.http.Query
 
 /**
  * AND-248 — Retrofit binding + Moshi DTOs + domain for the read-only ADMIN billing configuration.
@@ -28,6 +31,68 @@ interface AdminBillingConfigApi {
     /** The effective (override-or-default) platform billing configuration. Idempotent GET, no params. */
     @GET("ui/admin/billing-config")
     suspend fun getAdminBillingConfig(): AdminBillingConfigDto
+
+    /** Change history (ADMIN-drivable: require_admin_or_root). Newest first. */
+    @GET("ui/admin/billing-config/audit")
+    suspend fun getBillingConfigAudit(@Query("limit") limit: Int = 50): BillingConfigAuditLogDto
+
+    /** Project the impact of proposed changes (ADMIN-drivable: require_admin_or_root). */
+    @POST("ui/admin/billing-config/preview")
+    suspend fun previewBillingConfig(@Body body: Map<String, @JvmSuppressWildcards Any?>): BillingConfigPreviewDto
+
+    /** Reset keys to defaults (ROOT-only: require_root -> 403 for our admin account). */
+    @POST("ui/admin/billing-config/reset")
+    suspend fun resetBillingConfig(@Body body: BillingConfigResetReqDto): AdminBillingConfigDto
+}
+
+// ---- Billing-config audit / preview / reset (web /admin/billing-config parity) ----
+
+@JsonClass(generateAdapter = true)
+data class BillingConfigAuditEntryDto(
+    @Json(name = "admin_sub") val adminSub: String = "",
+    @Json(name = "changes") val changes: List<Map<String, Any?>> = emptyList(),
+    @Json(name = "created_at") val createdAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class BillingConfigAuditLogDto(
+    @Json(name = "entries") val entries: List<BillingConfigAuditEntryDto> = emptyList(),
+    @Json(name = "count") val count: Int = 0,
+    @Json(name = "cursor") val cursor: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class BillingConfigPreviewDto(
+    @Json(name = "affected_tx_types") val affectedTxTypes: List<String> = emptyList(),
+    @Json(name = "projected_daily_delta_cents") val projectedDailyDeltaCents: Long = 0,
+    @Json(name = "sample_before") val sampleBefore: Map<String, Any?> = emptyMap(),
+    @Json(name = "sample_after") val sampleAfter: Map<String, Any?> = emptyMap(),
+)
+
+@JsonClass(generateAdapter = true)
+data class BillingConfigResetReqDto(
+    @Json(name = "keys") val keys: List<String>? = null,
+)
+
+/** A single audit entry projected to display strings. */
+data class BillingConfigAuditEntry(
+    val adminSub: String,
+    val changeSummary: String,
+    val createdAtEpochSeconds: Long,
+)
+
+internal fun BillingConfigAuditEntryDto.toDomain(): BillingConfigAuditEntry {
+    val summary = changes.joinToString("; ") { c ->
+        val field = c["field"]?.toString() ?: "?"
+        val old = c["old_value"]?.toString() ?: ""
+        val new = c["new_value"]?.toString() ?: ""
+        "$field: $old -> $new"
+    }
+    return BillingConfigAuditEntry(
+        adminSub = adminSub,
+        changeSummary = summary.ifBlank { "(no field detail)" },
+        createdAtEpochSeconds = createdAt,
+    )
 }
 
 // ---- DTO (AND-248) — field names verified 1:1 against BillingConfigOut ----

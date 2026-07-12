@@ -197,6 +197,16 @@ def list_syndicate_posts(
         items = [p for p in items if p.get("visibility") != "members_only"]
         filtered_count = before - len(items)
 
+    # MOD-SYND: owner-aware moderation hide — reported/hidden syndicate posts
+    # vanish for everyone except their author (admins use the board). Applied
+    # BEFORE the limit trim so a hidden row does not consume a page slot.
+    def _mod_hidden_syndicate(p: Dict[str, Any]) -> bool:
+        if not (p.get("moderation_hidden") or p.get("moderation_removed") or p.get("moderation_removed_at")):
+            return False
+        return not (viewer_sub and str(p.get("author_id")) == str(viewer_sub))
+
+    items = [p for p in items if not _mod_hidden_syndicate(p)]
+
     # Trim to requested limit.
     visible = items[:limit]
     posts = [_post_out(p) for p in visible]
@@ -212,6 +222,14 @@ def list_syndicate_posts(
             extra={"syndicate_id": syndicate_id, "viewer_id": viewer_sub, "filtered_count": filtered_count},
         )
 
+    if viewer_sub:
+        try:
+            from app.services.sponsored_feed import inject_sponsored_syndicate
+            posts = inject_sponsored_syndicate(
+                posts, viewer_sub, syndicate_id=syndicate_id
+            )
+        except Exception:
+            pass
     return {
         "posts": posts,
         "next_cursor": next_cursor,

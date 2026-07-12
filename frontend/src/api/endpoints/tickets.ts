@@ -1,13 +1,35 @@
 import { api } from "@/api/client";
 
-export type TicketStatus = "open" | "in_progress" | "waiting_on_user" | "done";
+export type TicketStatus = "open" | "in_progress" | "waiting_on_user" | "done" | "cancelled";
 export type TicketStatusWritable = TicketStatus | "reopened";
+
+// B8/B9 B-SUP2 #15 / B-HELP2 #17: the ticket OWNER may close ("close" -> done)
+// or cancel ("cancel" -> cancelled) their own ticket via the dedicated endpoint.
+export type TicketCloseAction = "close" | "cancel";
+
+// B-HELP-SHAPE / B10 B-HELPMEDIA: typed projection of one ticket-message media
+// item. Numeric fields are plain JSON numbers (backend coerces DDB Decimals).
+export interface TicketMedia {
+  kind: string; // "image" | "video" | "file" | ...
+  url?: string | null;
+  path?: string | null;
+  name?: string | null;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  width?: number | null;
+  height?: number | null;
+  thumbnail?: string | null;
+}
 
 export interface TicketMessage {
   message_id: string;
   sender_sub: string;
   sender_role: string;
   body: string;
+  // B9 B-HELP2 #14: optional inline image attachment.
+  image_url?: string | null;
+  // B10 B-HELPMEDIA: images/videos/files + file-mgr refs on a ticket message.
+  media?: TicketMedia[];
   created_at: number;
   email_alert_queued_for: string[];
 }
@@ -111,11 +133,29 @@ export const getTicket = (ticketId: string) => api.get<TicketEnvelope>(`/tickets
 export const assignTicket = (ticketId: string, assigneeAdminSub: string) =>
   api.post<TicketEnvelope>(`/tickets/${ticketId}/assign`, { assignee_admin_sub: assigneeAdminSub });
 
-export const addTicketMessage = (ticketId: string, body: string) =>
-  api.post<TicketEnvelope>(`/tickets/${ticketId}/messages`, { body });
+export const addTicketMessage = (
+  ticketId: string,
+  body: string,
+  opts?: { image_url?: string; media?: Array<Record<string, unknown>> },
+) =>
+  api.post<TicketEnvelope>(`/tickets/${ticketId}/messages`, {
+    body,
+    ...(opts?.image_url ? { image_url: opts.image_url } : {}),
+    ...(opts?.media ? { media: opts.media } : {}),
+  });
 
 export const setTicketStatus = (ticketId: string, status: TicketStatusWritable) =>
   api.post<TicketEnvelope>(`/tickets/${ticketId}/status`, { status });
+
+// B8 B-SUP2 #15: the ticket OWNER (or an admin) closes/cancels their OWN ticket.
+// close -> "done"; cancel -> "cancelled". Owner-authorized (unlike setTicketStatus,
+// which is admin-only server-side).
+export const closeOwnTicket = (ticketId: string, action: TicketCloseAction = "close") =>
+  api.post<TicketEnvelope>(`/tickets/${ticketId}/close`, { action });
+
+// B9 B-HELP2 #17: the ticket OWNER (or an admin) reopens a closed/cancelled ticket.
+export const reopenOwnTicket = (ticketId: string) =>
+  api.post<TicketEnvelope>(`/tickets/${ticketId}/reopen`, {});
 
 export const getAdminTicketSummary = (staleAfterSeconds?: number) =>
   api.get<TicketAdminSummaryEnvelope>(

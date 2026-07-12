@@ -156,6 +156,7 @@ fun DiscoverScreen(
                         onRecommendationNotInterested = onRecommendationNotInterested,
                         onRecommendationRetry = onRecommendationRetry,
                         onStaleRetry = onRetry,
+                        onOpenSearch = onOpenSearch,
                         emptyDiscover = true,
                     )
                 is DiscoverUiState.Error -> ErrorState(message = state.message, onRetry = onRetry)
@@ -175,6 +176,7 @@ fun DiscoverScreen(
                         onRecommendationNotInterested = onRecommendationNotInterested,
                         onRecommendationRetry = onRecommendationRetry,
                         onStaleRetry = onRetry,
+                        onOpenSearch = onOpenSearch,
                         emptyDiscover = false,
                     )
             }
@@ -193,6 +195,7 @@ private fun DiscoverContentList(
     onRecommendationNotInterested: (String) -> Unit,
     onRecommendationRetry: () -> Unit,
     onStaleRetry: () -> Unit,
+    onOpenSearch: () -> Unit,
     emptyDiscover: Boolean,
 ) {
     // Resolve strings in composition (the LazyColumn content lambda is not @Composable).
@@ -200,6 +203,7 @@ private fun DiscoverContentList(
     val trendingCreatorsTitle = stringResource(R.string.discover_section_trending_creators)
     val trendingTagsTitle = stringResource(R.string.discover_section_trending_tags)
     val emptyTitle = stringResource(R.string.discover_empty)
+    val ctaLabel = stringResource(R.string.discover_empty_cta)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag(DiscoverTestTags.LIST),
@@ -243,6 +247,8 @@ private fun DiscoverContentList(
             item {
                 EmptyState(
                     title = emptyTitle,
+                    actionLabel = ctaLabel,
+                    onAction = onOpenSearch,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

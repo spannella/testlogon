@@ -300,6 +300,10 @@ def record_cart_purchase(
             reason=f"Cart purchase – order {order_id}",
             meta={"cart_id": cart_id, "order_id": order_id, "txn_id": txn_id},
         )
+        # ECOM: expose the buyer purchase-debit under the txn_id the client holds
+        # so an order-detail "Request a refund" (which passes the txn_id) resolves
+        # this ledger entry; new_ledger_entry auto-ids are otherwise unreachable.
+        led_item["entry_id"] = txn_id
         ddb_put(T.billing, led_item)
     except Exception:
         pass  # Ledger write failure is non-fatal

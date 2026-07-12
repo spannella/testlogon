@@ -1,0 +1,32 @@
+--- app/routers/syndicate_feed.py.bak_polls_1783435257	2026-07-07 14:40:57.978595860 +0000
++++ app/routers/syndicate_feed.py	2026-07-07 14:40:58.011029186 +0000
+@@ -26,6 +26,12 @@
+ )
+ from app.services import syndicate_feed as svc
+ from app.services.sessions import require_ui_session
++from app.services.arbitrary_polls import PollCreateIn
++from typing import Optional as _Optional
++
++
++class SyndicatePostCreateWithPollIn(SyndicatePostCreateIn):
++    poll: _Optional[PollCreateIn] = None
+ 
+ syndicate_feed_router = APIRouter(prefix="/ui/syndicates/feed", tags=["syndicate-feed"])
+ 
+@@ -89,7 +95,7 @@
+ @syndicate_feed_router.post("/{syndicate_id}", response_model=SyndicatePostOut, status_code=201)
+ def create_post(
+     syndicate_id: str,
+-    body: SyndicatePostCreateIn,
++    body: SyndicatePostCreateWithPollIn,
+     session=Depends(require_ui_session),
+ ):
+     try:
+@@ -100,6 +106,7 @@
+             visibility=body.visibility,
+             image_url=body.image_url,
+             author_name=session.get("display_name") or "",
++            poll=(body.poll.model_dump() if getattr(body, "poll", None) else None),
+         )
+     except PermissionError as e:
+         raise HTTPException(403, str(e))

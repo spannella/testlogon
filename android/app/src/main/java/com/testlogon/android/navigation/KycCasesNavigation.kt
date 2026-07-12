@@ -34,8 +34,9 @@ fun NavGraphBuilder.kycCasesDestinations(navController: NavHostController) {
     composable(KycCasesDest.ROUTE) {
         KycCaseListRoute(
             onOpenCase = { caseId -> navController.navigate(KycCaseDetailDest.build(caseId)) },
-            // Start verification deep-links to the AND-320 tier-status screen.
-            onStartVerification = { navController.navigate(KycTierDest.ROUTE) },
+            // KYC-ENTRY (batch 13): "Start / Continue verification" launches the guided STEP WIZARD
+            // (email -> phone -> ID -> done) directly, so the KYC entry is never a read-only dead end.
+            onStartVerification = { navController.navigate(KycWizardDest.ROUTE) },
             onBack = { navController.popBackStack() },
         )
     }

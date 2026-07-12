@@ -75,6 +75,14 @@ class SystemIncomingCallNotifier @Inject constructor(
                 )
                 .build()
             NotificationManagerCompat.from(context).notify(notifId(invite.callId), notification)
+            // A full-screen intent only auto-launches the activity when the device is locked/screen-off;
+            // when the app is foreground (the hub delivers the invite in-app) start it directly too.
+            runCatching {
+                context.startActivity(
+                    IncomingCallActivity.intent(context, invite.callId, IncomingCallActivity.ACTION_SHOW)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
             PushLog.d("call notif posted fullScreen=${canUseFullScreenIntent()}")
             true
         }.getOrElse {

@@ -2,6 +2,7 @@
 
 package com.testlogon.android.feature.broadcast
 
+import com.testlogon.android.feature.broadcast.audioroom.AudioRoomDiscoverySection
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,8 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -67,6 +70,9 @@ object BroadcastBrowseTestTags {
     const val REMINDER_SWITCH = "broadcast_reminder_switch"
 }
 
+/** Stable testTag for the host "Go Live" (create -> ingest) FAB on the broadcast browse screen. */
+const val BROADCAST_GO_LIVE_FAB = "broadcast_go_live_fab"
+
 /**
  * AND-279 — browse entry point. Collects the ViewModel state, resolves transient reminder-failure
  * effects against [LocalContext], and forwards the session-tap callback to the host (the viewer route
@@ -76,6 +82,8 @@ object BroadcastBrowseTestTags {
 fun BroadcastBrowseRoute(
     onBack: () -> Unit,
     onSessionClick: (sessionId: String, status: BroadcastSessionStatus) -> Unit,
+    onGoLiveHost: () -> Unit = {},
+    onOpenAudioRoom: (String) -> Unit = {},
     viewModel: BroadcastBrowseViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -96,6 +104,8 @@ fun BroadcastBrowseRoute(
         onSessionClick = onSessionClick,
         onToggleReminder = viewModel::toggleReminder,
         onRetry = viewModel::retry,
+        onGoLiveHost = onGoLiveHost,
+        onOpenAudioRoom = onOpenAudioRoom,
     )
 }
 
@@ -107,6 +117,8 @@ fun BroadcastBrowseScreen(
     onSessionClick: (String, BroadcastSessionStatus) -> Unit,
     onToggleReminder: (String, Boolean) -> Unit,
     onRetry: () -> Unit,
+    onGoLiveHost: () -> Unit = {},
+    onOpenAudioRoom: (String) -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -122,8 +134,21 @@ fun BroadcastBrowseScreen(
                 },
             )
         },
+        floatingActionButton = {
+            // Host entry to the camera/mic publish flow (create session -> ingest). Previously the only
+            // broadcast surface reachable from the dashboard "Go Live" was this viewer list, so the real
+            // host go-live (camera publish) screen was unreachable. This FAB wires it up.
+            ExtendedFloatingActionButton(
+                onClick = onGoLiveHost,
+                icon = { Icon(Icons.Outlined.Videocam, contentDescription = null) },
+                text = { Text(stringResource(R.string.broadcast_go_live_title)) },
+                modifier = Modifier.testTag(BROADCAST_GO_LIVE_FAB),
+            )
+        },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // #104 AUDIO ROOM — audio-rooms strip (Start + live audio rooms), distinct from the video list.
+            AudioRoomDiscoverySection(onOpenAudioRoom = onOpenAudioRoom)
             val content = state.contentOrCached()
             if (content != null) {
                 BucketTabs(content = content, onSelectBucket = onSelectBucket)

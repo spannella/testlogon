@@ -9,13 +9,19 @@ import org.junit.Test
 
 class MoreAvailabilityResolverTest {
 
-    private fun entry(route: String, comingSoon: Boolean = false) = MoreEntry(
+    private fun entry(
+        route: String,
+        comingSoon: Boolean = false,
+        operatorOnly: Boolean = false,
+    ) = MoreEntry(
         id = route,
         labelRes = R.string.more_entry_profile,
         icon = Icons.Outlined.Person,
         route = route,
+        hub = MoreHub.ACCOUNT,
         section = MoreSection.ACCOUNT,
         comingSoon = comingSoon,
+        operatorOnly = operatorOnly,
     )
 
     private class FakeRegistry(private val routes: Set<String>) : RouteRegistry() {
@@ -40,6 +46,24 @@ class MoreAvailabilityResolverTest {
         val r = resolver(setOf("a")).resolve(entry("a", comingSoon = true))
         assertTrue(r is EntryAvailability.Disabled)
         assertEquals(R.string.more_unavailable_coming_soon, (r as EntryAvailability.Disabled).reasonRes)
+    }
+
+    @Test
+    fun operatorOnly_hidden() {
+        // Operator/admin-only entries are not advertised to members (no client role signal exists;
+        // the backend 403 is the final authority). They resolve to Hidden so the VM filters them out.
+        assertEquals(
+            EntryAvailability.Hidden,
+            resolver(setOf("a")).resolve(entry("a", operatorOnly = true)),
+        )
+    }
+
+    @Test
+    fun operatorOnly_hiddenEvenIfComingSoon() {
+        assertEquals(
+            EntryAvailability.Hidden,
+            resolver(setOf("a")).resolve(entry("a", comingSoon = true, operatorOnly = true)),
+        )
     }
 
     @Test

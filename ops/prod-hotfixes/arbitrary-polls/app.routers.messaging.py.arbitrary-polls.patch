@@ -1,0 +1,146 @@
+--- app/routers/messaging.py.bak_polls_1783435257	2026-07-07 14:40:57.975227888 +0000
++++ app/routers/messaging.py	2026-07-07 14:40:58.008227955 +0000
+@@ -2600,7 +2600,7 @@
+     message_id: str
+     sender_id: str
+     created_at: int
+-    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail", "countdown", "gif", "sticker", "find_datetime"]
++    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail", "countdown", "gif", "sticker", "find_datetime", "poll"]
+     text: Optional[str] = None
+     image: Optional[Dict[str, Any]] = None
+     file: Optional[Dict[str, Any]] = None
+@@ -2608,6 +2608,8 @@
+     calendar_share: Optional[Dict[str, Any]] = None
+     calendar_event: Optional[Dict[str, Any]] = None
+     meeting_poll: Optional[Dict[str, Any]] = None
++    # Arbitrary text poll message field (single/multi-choice, live counts)
++    poll: Optional[Dict[str, Any]] = None
+     # Find-a-DateTime message fields (MSG-009)
+     find_datetime: Optional[Dict[str, Any]] = None
+     video_share: Optional[Dict[str, Any]] = None
+@@ -4315,6 +4317,19 @@
+         meeting_poll_out = {k: raw.get(k) for k in
+             ["poll_id", "creator_id", "title", "duration_minutes", "status", "confirmed_slot_id"]}
+ 
++    poll_out: Optional[Dict[str, Any]] = None
++    if merged_item.get("kind") == "poll":
++        _pmeta = merged_item.get("poll") or {}
++        _pid = _pmeta.get("poll_id")
++        _snap = None
++        if _pid:
++            try:
++                from app.services import arbitrary_polls as _apolls
++                _snap = _apolls.get_snapshot(_pid, viewer_user_id)
++            except Exception:
++                _snap = None
++        poll_out = _snap or _pmeta
++
+     # Find-a-DateTime message projection (MSG-009)
+     find_datetime_out: Optional[Dict[str, Any]] = None
+     if merged_item.get("kind") == "find_datetime":
+@@ -4513,6 +4528,7 @@
+         calendar_share=calendar_share_out,
+         calendar_event=calendar_event_out,
+         meeting_poll=meeting_poll_out,
++        poll=poll_out,
+         find_datetime=find_datetime_out,
+         video_share=video_share_out,
+         voice_message=voice_message_out,
+@@ -10319,6 +10335,97 @@
+     )
+     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+     return _message_out_from_item(item, user_id)
++
++
++class CreatePollMessageIn(BaseModel):
++    """Arbitrary text-option poll message (single/multi-choice, live counts)."""
++    question: str = Field(min_length=1, max_length=300)
++    options: List[str] = Field(min_length=2, max_length=10)
++    choice_mode: Literal["single", "multi"] = "single"
++    max_selections: Optional[int] = Field(default=None, ge=1, le=10)
++    closes_at: Optional[int] = Field(default=None)
++    text: Optional[str] = Field(default=None, max_length=2000)
++
++
++@router.post("/conversations/{conversation_id}/messages/poll", response_model=MessageOut, status_code=201)
++def create_poll_message(
++    conversation_id: str,
++    inp: CreatePollMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    require_participant_active(user_id, conversation_id)
++    convo = _get_conversation_or_404(conversation_id)
++    try:
++        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
++        participants = resp.get("Items", [])
++    except Exception:
++        participants = []
++
++    from app.services import arbitrary_polls as _apolls
++    snap = _apolls.create_poll(
++        owner=user_id, question=inp.question, options=list(inp.options),
++        choice_mode=inp.choice_mode, max_selections=inp.max_selections,
++        closes_at=inp.closes_at, surface="messaging", ref_id=conversation_id,
++    )
++
++    ts = now_ts()
++    mid = "m_" + new_id()
++    poll_meta: Dict[str, Any] = {
++        "poll_id": snap["poll_id"],
++        "creator_id": user_id,
++        "question": inp.question,
++        "choice_mode": inp.choice_mode,
++        "status": "open",
++    }
++    item: Dict[str, Any] = {
++        "conversation_id": conversation_id,
++        "message_id": mid,
++        "sender_id": user_id,
++        "created_at": ts,
++        "kind": "poll",
++        "reactions": {},
++        "poll": poll_meta,
++        "poll_id": snap["poll_id"],
++    }
++    if inp.text:
++        item["text"] = inp.text
++    ttl = _message_retention_ttl(convo, ts)
++    if ttl:
++        item["ttl"] = ttl
++    tbl_msgs.put_item(Item=item)
++
++    _bump_unread_counts(conversation_id, user_id, participants)
++    _record_delivery_receipts(conversation_id, mid, user_id, participants)
++    preview_text = inp.text or ("[Poll: " + inp.question + "]")
++    tbl_convos.update_item(
++        Key={"conversation_id": conversation_id},
++        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
++        ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
++    )
++    _fanout_new_message_event(
++        conversation_id=conversation_id,
++        sender_id=user_id,
++        message_item=item,
++        payload={
++            "message_id": mid,
++            "created_at": ts,
++            "message": _serialize_message_event_payload(item, user_id),
++        },
++        respect_mute=False,
++    )
++    audit_event(
++        "messaging_message_sent", user_id, req, outcome="success",
++        conversation_id=conversation_id, message_id=mid, kind="poll",
++    )
++    _emit_message_lifecycle_archive_event_or_503(
++        mutation="send", event_ts=ts,
++        conversation_id=conversation_id, message_id=mid, actor_user_id=user_id,
++        event_type="message.sent",
++        payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
++    )
++    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
++    return _message_out_from_item(item, user_id)
+ 
+ 
+ @router.post("/conversations/{conversation_id}/messages/meeting-poll", response_model=MessageOut)

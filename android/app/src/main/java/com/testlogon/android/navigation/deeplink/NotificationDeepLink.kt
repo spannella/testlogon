@@ -9,9 +9,16 @@ import com.testlogon.android.notifications.PushPayload
  * Pure/framework-free model (no android.* deps) so the mapping + parser logic is JVM-unit-testable.
  */
 sealed interface NotificationDeepLink {
-    data class Message(val threadId: String) : NotificationDeepLink
+    data class Message(val threadId: String, val messageId: String? = null) : NotificationDeepLink
     data class Broadcast(val broadcastId: String) : NotificationDeepLink
-    data class Alert(val alertId: String) : NotificationDeepLink
+
+    /**
+     * ECOM-SELLER P1 — an alert push. [actionUrl] is the alert's relative deep-link
+     * (e.g. `/seller/orders?sale={ship_group_id}`) carried in the FCM `data` payload so a
+     * tapped system-tray push can route to the SAME destination as the in-app Alerts row
+     * (e.g. the seller sale detail), not the app home. Null falls back to the alerts center.
+     */
+    data class Alert(val alertId: String, val actionUrl: String? = null) : NotificationDeepLink
 
     /** Generic in-app destination for kinds without a per-entity detail screen (route to a list). */
     data class Generic(val entityId: String) : NotificationDeepLink
@@ -26,6 +33,9 @@ object DeepLinkContract {
     const val EXTRA_ID = "tl.deeplink.id"
     const val EXTRA_DEEP_LINK = "tl.deeplink.uri"
     const val EXTRA_CONSUMED = "tl.deeplink.consumed"
+    const val EXTRA_MESSAGE_ID = "tl.deeplink.message_id"
+    // P1: the alert deep-link (relative action_url) carried on an app-built alert PendingIntent.
+    const val EXTRA_ACTION_URL = "tl.deeplink.action_url"
 
     const val TYPE_MESSAGE = "message"
     const val TYPE_BROADCAST = "broadcast"
@@ -34,9 +44,10 @@ object DeepLinkContract {
 
     /** Maps a parsed AND-107 [PushPayload] to the canonical deep-link target. Total over the kind. */
     fun fromPayload(payload: PushPayload): NotificationDeepLink = when (payload.kind) {
-        NotificationKind.MESSAGE -> NotificationDeepLink.Message(payload.entityId)
+        NotificationKind.MESSAGE -> NotificationDeepLink.Message(payload.entityId, payload.messageId)
         NotificationKind.BROADCAST -> NotificationDeepLink.Broadcast(payload.entityId)
-        NotificationKind.ALERT -> NotificationDeepLink.Alert(payload.entityId)
+        // P1: carry the alert's deep-link (parsed from the FCM `deep_link`/`action_url` key).
+        NotificationKind.ALERT -> NotificationDeepLink.Alert(payload.entityId, payload.deepLink)
         NotificationKind.UNKNOWN -> NotificationDeepLink.Generic(payload.entityId)
     }
 
@@ -55,12 +66,18 @@ object DeepLinkContract {
     }
 
     /** Reconstructs a [NotificationDeepLink] from a (type, id) pair, or null if unmappable. */
-    fun fromTypeAndId(type: String?, id: String?): NotificationDeepLink? {
+    fun fromTypeAndId(
+        type: String?,
+        id: String?,
+        messageId: String? = null,
+        actionUrl: String? = null,
+    ): NotificationDeepLink? {
         val nonBlankId = id?.takeIf { it.isNotBlank() } ?: return null
         return when (type) {
-            TYPE_MESSAGE -> NotificationDeepLink.Message(nonBlankId)
+            TYPE_MESSAGE -> NotificationDeepLink.Message(nonBlankId, messageId?.takeIf { it.isNotBlank() })
             TYPE_BROADCAST -> NotificationDeepLink.Broadcast(nonBlankId)
-            TYPE_ALERT -> NotificationDeepLink.Alert(nonBlankId)
+            // P1: carry the alert deep-link so the tap can resolve to the sale detail.
+            TYPE_ALERT -> NotificationDeepLink.Alert(nonBlankId, actionUrl?.takeIf { it.isNotBlank() })
             TYPE_GENERIC -> NotificationDeepLink.Generic(nonBlankId)
             else -> null
         }

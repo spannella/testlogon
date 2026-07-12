@@ -41,6 +41,9 @@ sealed interface NotificationTarget {
     data class Profile(val identifier: String) : NotificationTarget
     data object Sessions : NotificationTarget
     data object Settings : NotificationTarget
+
+    /** MOD-D1 — a poster moderation alert lands on the "My content under review" screen. */
+    data object ModerationReview : NotificationTarget
     data object Unknown : NotificationTarget
 }
 
@@ -56,6 +59,8 @@ object NotificationTargetResolver {
         NotificationType.FOLLOW, NotificationType.MENTION ->
             stringValue(data, "u_identifier")?.let(NotificationTarget::Profile) ?: NotificationTarget.Unknown
         NotificationType.SYSTEM -> NotificationTarget.Settings
+        // MOD-D1 — moderation alerts deep-link to the poster's content-review screen.
+        NotificationType.MODERATION -> NotificationTarget.ModerationReview
         // like / comment / tip / message have no first-party destination yet -> fail safe.
         else -> NotificationTarget.Unknown
     }

@@ -30,7 +30,7 @@ class NotificationPreferencesRepositoryContractTest {
     fun getTypePreferences_decodesTolerantList() = runTest {
         backend.enqueue(
             Fixtures.okBody(
-                """{"type_preferences":[{"alert_type":"security_alerts","push":true,"email":true,"sms":false}]}""",
+                """{"type_preferences":{"security_alerts":{"enabled":true,"push":true,"email":true,"sms":false,"in_app":true}}}""",
             ),
         )
         val result = repo().getTypePreferences()
@@ -51,7 +51,7 @@ class NotificationPreferencesRepositoryContractTest {
         backend.enqueue(Fixtures.okBody("""{"ok":true}"""))
         backend.enqueue(
             Fixtures.okBody(
-                """{"type_preferences":[{"alert_type":"marketing","push":false,"email":true,"sms":true}]}""",
+                """{"type_preferences":{"marketing":{"enabled":true,"push":false,"email":true,"sms":true,"in_app":false}}}""",
             ),
         )
 

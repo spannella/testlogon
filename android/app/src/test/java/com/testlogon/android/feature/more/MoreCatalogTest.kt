@@ -19,6 +19,7 @@ class MoreCatalogTest {
         labelRes = R.string.more_entry_profile,
         icon = Icons.Outlined.Person,
         route = route,
+        hub = MoreHub.ACCOUNT,
         section = section,
         comingSoon = comingSoon,
     )
@@ -59,6 +60,37 @@ class MoreCatalogTest {
         val resolver = MoreAvailabilityResolver(FakeRegistry(emptySet()))
         val state = listOf(entry("a", MoreSection.APP)).toUiState(resolver)
         assertEquals(MoreUiState.Empty, state)
+    }
+
+    @Test
+    fun operatorOnlyEntries_areFlaggedAndResolveHiddenForMembers() {
+        val operatorIds = setOf(
+            "admin_dashboard",
+            "admin_email_dashboard",
+            "admin_sms_dashboard",
+            "billing_config",
+            "bulk_payouts",
+            "helpdesk_queue",
+            "helpdesk_dashboard",
+            "moderation_board",
+            "video_review",
+            "dmca_admin",
+            "refund_admin",
+            "dispute_admin",
+            "appeal_admin",
+            "fraud_admin",
+            "incident_admin",
+            "agent_configs",
+        )
+        val resolver = MoreAvailabilityResolver(RouteRegistry())
+        val entries = MoreCatalog().entries
+        operatorIds.forEach { id ->
+            val e = entries.single { it.id == id }
+            assertTrue("expected operatorOnly: \$id", e.operatorOnly)
+            assertEquals(EntryAvailability.Hidden, resolver.resolve(e))
+        }
+        // No OTHER catalog entry is operator-only.
+        assertEquals(operatorIds, entries.filter { it.operatorOnly }.map { it.id }.toSet())
     }
 
     @Test

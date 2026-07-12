@@ -32,6 +32,13 @@ interface PostEngagementRepository {
      * the returned [LikeState] because the API returns no count.
      */
     suspend fun setLiked(postId: String, liked: Boolean, desiredCount: Int): ApiResult<LikeState>
+
+    /**
+     * #20 — toggle an emoji reaction on a post. [add] true => react, false => unreact. The endpoints
+     * return only an ack so the caller keeps its optimistic tallies; the authoritative counts land on
+     * the next post refetch. 2xx => Success, non-2xx => Failure, IO => NetworkError.
+     */
+    suspend fun setReaction(postId: String, emoji: String, add: Boolean): ApiResult<Unit>
 }
 
 @Singleton
@@ -49,6 +56,16 @@ class PostEngagementRepositoryImpl @Inject constructor(
     ): ApiResult<LikeState> = withContext(io) {
         ackCall { if (liked) api.like(postId) else api.unlike(postId) }
             .map { LikeState(liked = liked, likeCount = desiredCount.coerceAtLeast(0)) }
+    }
+
+    override suspend fun setReaction(
+        postId: String,
+        emoji: String,
+        add: Boolean,
+    ): ApiResult<Unit> = withContext(io) {
+        ackCall {
+            if (add) api.react(postId, ReactionRequest(emoji)) else api.unreact(postId, ReactionRequest(emoji))
+        }
     }
 
     /** Runs an ack-only call: a 2xx completes (Success), non-2xx -> HttpException -> mapped Failure. */

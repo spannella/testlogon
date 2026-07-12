@@ -75,7 +75,7 @@ data class Recurrence(
 )
 
 /** Recurrence frequency. The backend only emits DAILY|WEEKLY|MONTHLY; unknown maps to UNKNOWN. */
-enum class RecurrenceFreq { DAILY, WEEKLY, MONTHLY, UNKNOWN }
+enum class RecurrenceFreq { DAILY, WEEKLY, MONTHLY, YEARLY, UNKNOWN }
 
 /** One cursor-paged page of events (EventsPageOut). */
 data class EventsPage(

@@ -39,6 +39,8 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.core.ui.state.StaleBanner
 import com.testlogon.android.data.billing.AdminBillingConfig
+import androidx.compose.material3.OutlinedButton
+import com.testlogon.android.data.billing.BillingConfigAuditEntry
 import com.testlogon.android.data.billing.PayoutSchedule
 
 /** AND-248 — stable testTags for the read-only billing-config screen. */
@@ -48,6 +50,7 @@ object BillingConfigTestTags {
     const val EMPTY = "billing_config_empty"
     const val ERROR = "billing_config_error"
     const val ROW = "billing_config_row"
+    const val RESET = "billing_config_reset"
 }
 
 /** AND-248 — route-level read-only billing-config screen, reachable from the More hub. */
@@ -62,6 +65,7 @@ fun BillingConfigRoute(
         state = state,
         onRetry = viewModel::retry,
         onRefresh = viewModel::refresh,
+        onReset = viewModel::resetToDefaults,
         onBack = onBack,
         modifier = modifier,
     )
@@ -72,6 +76,7 @@ fun BillingConfigScreen(
     state: BillingConfigUiState,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
+    onReset: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -111,9 +116,12 @@ fun BillingConfigScreen(
 
                 is BillingConfigUiState.Content -> BillingConfigContent(
                     config = s.config,
+                    audit = s.audit,
+                    resetMessage = s.resetMessage,
                     isStale = s.isStale,
                     isRefreshing = s.isRefreshing,
                     onRefresh = onRefresh,
+                    onReset = onReset,
                 )
             }
         }
@@ -129,9 +137,12 @@ private sealed interface ConfigItem {
 @Composable
 private fun BillingConfigContent(
     config: AdminBillingConfig,
+    audit: List<BillingConfigAuditEntry>,
+    resetMessage: String?,
     isStale: Boolean,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
+    onReset: () -> Unit,
 ) {
     val configItems = buildConfigItems(config)
     PullToRefreshBox(
@@ -147,6 +158,30 @@ private fun BillingConfigContent(
                 when (entry) {
                     is ConfigItem.Header -> SectionHeader(entry.title)
                     is ConfigItem.Row -> ConfigRow(label = entry.label, value = entry.value)
+                }
+            }
+            item { SectionHeader(stringResource(R.string.billing_config_section_audit)) }
+            if (audit.isEmpty()) {
+                item {
+                    Text(
+                        text = stringResource(R.string.billing_config_audit_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
+            items(audit) { e ->
+                ConfigRow(label = e.adminSub, value = e.changeSummary)
+            }
+            item {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    resetMessage?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 8.dp))
+                    }
+                    OutlinedButton(
+                        onClick = onReset,
+                        modifier = Modifier.testTag(BillingConfigTestTags.RESET),
+                    ) { Text(stringResource(R.string.billing_config_reset)) }
                 }
             }
         }

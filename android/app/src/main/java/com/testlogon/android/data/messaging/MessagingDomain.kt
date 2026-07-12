@@ -1,4 +1,5 @@
 package com.testlogon.android.data.messaging
+import com.testlogon.android.data.poll.toDomain
 
 /**
  * AND-120..AND-124 — domain models for the messaging feature (no Moshi/Room leakage past the
@@ -33,6 +34,25 @@ sealed interface MessageMedia {
         val uploadProgress: Float? = null,
     ) : MessageMedia
 
+    /**
+     * C6 — multiple images sent as ONE message (kind="gallery"). Renders as a grid; each item opens
+     * full-screen. [images] are the free (always-visible) images projected by the server.
+     */
+    data class Gallery(
+        val images: List<GalleryImage>,
+    ) : MessageMedia
+
+    /** C6 / #25 / #27 — one item inside a [Gallery] (a photo OR a short video). */
+    data class GalleryImage(
+        val url: String?,
+        val width: Int? = null,
+        val height: Int? = null,
+        /** #25/#27 — true when this gallery item is a video (renders a poster + play glyph). */
+        val isVideo: Boolean = false,
+        /** #25/#27 — a video item's poster (preview frame) url, when the server provides one. */
+        val posterUrl: String? = null,
+    )
+
     /** Shared library video — inline HLS playback (AND-131). */
     data class VideoShare(
         val videoId: String,
@@ -44,6 +64,19 @@ sealed interface MessageMedia {
         val drmEnabled: Boolean,
         val width: Int? = null,
         val height: Int? = null,
+    ) : MessageMedia
+
+    /**
+     * MV2 — a SHORT uploaded video clip (kind="video"). Unlike [VideoShare] (HLS library video), this
+     * is a single object-URL clip. [playbackUrl] is the server-relative /mock/s3 object url (used as the
+     * ExoPlayer source AND the Coil video-frame poster); [localUri] is the optimistic local source while
+     * an outbox row is still uploading. Renders a poster + play glyph; tapping plays it in-app.
+     */
+    data class VideoClip(
+        val playbackUrl: String?,
+        val localUri: String? = null,
+        val durationSeconds: Int? = null,
+        val uploadProgress: Float? = null,
     ) : MessageMedia
 
     /**
@@ -73,6 +106,8 @@ sealed interface MessageMedia {
         val waveform: List<Float>,
         val localUri: String? = null,
         val uploadProgress: Float? = null,
+        /** "none" | "listen_once" — listen-once plays exactly once then is consumed. */
+        val consumptionPolicy: String = "none",
     ) : MessageMedia
 
     /**
@@ -124,6 +159,32 @@ sealed interface MessageMedia {
     ) : MessageMedia
 
     /**
+     * Arbitrary text-option poll (custom question + 2..N text options, single OR multi-select) embedded
+     * in a message. Distinct from [MeetingPoll] / [FindDateTime] (time-based). Votes/results go through
+     * the surface-agnostic /ui/polls client; the card re-renders from the returned snapshot.
+     */
+    data class Poll(
+        val poll: com.testlogon.android.core.model.poll.ArbitraryPoll,
+    ) : MessageMedia
+
+    /**
+     * MSG-009 — a Find-a-DateTime poll ("custom poll"). Distinct from [MeetingPoll]; renders a
+     * simple "Find a time" card from the create/list response. Availability voting is out of scope
+     * for the composer demo (the card is read-mostly).
+     */
+    data class FindDateTime(
+        val pollId: String,
+        val title: String,
+        val creatorId: String,
+        val status: String,
+        val fromDate: String? = null,
+        val toDate: String? = null,
+        val startHour: Int? = null,
+        val endHour: Int? = null,
+        val slotDurationMinutes: Int? = null,
+    ) : MessageMedia
+
+    /**
      * AND-137 — a countdown. [targetEpochSeconds] is UTC; the live remaining time is DERIVED from
      * the device clock at render time (never stored), so it self-corrects after backgrounding.
      */
@@ -132,6 +193,8 @@ sealed interface MessageMedia {
         val targetEpochSeconds: Long,
         val associatedEventType: AssociatedEventType = AssociatedEventType.CUSTOM,
         val associatedEventId: String? = null,
+        /** #31 — reveal payload surfaced ONLY once the countdown completes (null until then). */
+        val reveal: CountdownReveal? = null,
     ) : MessageMedia
 
     /** AND-138 — an inline calendar event (render + add-to-calendar). No title/location/rsvp fields. */
@@ -169,6 +232,35 @@ sealed interface MessageMedia {
 /** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
 enum class AssociatedEventType { BROADCAST, CALL, CALENDAR, CUSTOM, UNKNOWN }
 
+/** #31 — countdown reveal content (text and/or mixed image+video media), shown once the target passes. */
+data class CountdownReveal(
+    val text: String? = null,
+    val media: List<CountdownRevealMedia> = emptyList(),
+) {
+    val isEmpty: Boolean get() = text.isNullOrBlank() && media.isEmpty()
+}
+
+/** #31 — one revealed media item; [isVideo] selects player vs image rendering. */
+data class CountdownRevealMedia(
+    val url: String,
+    val isVideo: Boolean,
+)
+
+/**
+ * #6 (B-COUNTDOWN3) — a countdown attached as an OPTION to ANY message (text/image/video/file),
+ * surfaced in addition to whatever [MessageMedia] the message carries. The bubble overlays a live
+ * ticker and, once [targetEpochSeconds] passes, the [reveal] payload. Transient: derived from the
+ * wire flat fields on every fetch/realtime, never persisted to Room (re-derivable on refetch, like
+ * the receipt counts). Distinct from the legacy standalone [MessageMedia.Countdown].
+ */
+data class MessageCountdown(
+    val targetEpochSeconds: Long,
+    /** Optional headline shown above the ticker (the legacy standalone countdown's title). */
+    val title: String? = null,
+    /** Reveal payload surfaced ONLY once the target passes (server emits it then; null until). */
+    val reveal: CountdownReveal? = null,
+)
+
 /** AND-138 — calendar-share permission ("read"|"write" on the wire). */
 enum class SharePermission { READ, WRITE, UNKNOWN }
 
@@ -187,7 +279,102 @@ data class MessageMonetization(
     val teaser: String?,
     /** AND-139 — revealed text content after a successful unlock/draw (else null while locked). */
     val revealedText: String? = null,
+    // #13 — revealed lottery option MEDIA after a draw: a server-relative object url derived from the
+    // winning outcome's media_asset_id (image or video). Null for text-only or while locked.
+    // (Kept as the FIRST element for single-asset back-compat / Room round-trip.)
+    val revealedMediaUrl: String? = null,
+    val revealedMediaIsVideo: Boolean = false,
+    // #24 — the FULL list of revealed media assets when the winning outcome carries >1 image/video.
+    val revealedMedia: List<RevealedMediaItem> = emptyList(),
+    // #15 (B-LOTSENDER) — present only on the SENDER's own lottery message: the full config (all
+    // outcomes + weights) plus each recipient's drawn result. Null for recipients and non-lotteries.
+    val lotterySenderView: LotterySenderView? = null,
 )
+
+/**
+ * #15 — the SENDER-facing detail of their OWN lottery message: every configured outcome with its
+ * weight/label/payload, plus each recipient's unlock result (what they drew). Lets the sender see
+ * exactly what they sent and who won what, instead of a blind "locked" bubble.
+ */
+data class LotterySenderView(
+    val version: String,
+    val totalWeightBps: Int,
+    val outcomes: List<LotterySenderOutcome>,
+    val unlocks: List<LotterySenderUnlock>,
+) {
+    val unlockCount: Int get() = unlocks.size
+}
+
+/** #15 — one configured outcome in the sender view (weight + label + the option's content/media). */
+data class LotterySenderOutcome(
+    val outcomeId: String,
+    val displayLabel: String?,
+    val weightBps: Int,
+    val payloadType: String,
+    val textContent: String?,
+    val media: List<RevealedMediaItem>,
+)
+
+/** #15 — one recipient's unlock record in the sender view (who unlocked + the outcome they drew). */
+data class LotterySenderUnlock(
+    val recipientId: String,
+    val unlockedAtEpochSeconds: Long?,
+    val selectedOutcome: LotterySenderOutcome?,
+)
+
+/** #24 — one revealed media asset (image or video) on the drawn lottery outcome. */
+data class RevealedMediaItem(
+    val url: String,
+    val isVideo: Boolean,
+)
+
+/**
+ * #24 — build the revealed media list for a drawn outcome. Prefers the plural media_asset_ids list
+ * (each resolved to a server-relative url); falls back to the single media_asset_id. The per-item
+ * isVideo follows the outcome payload_type (the server stores one payload_type per outcome).
+ */
+internal fun buildRevealedMedia(
+    mediaAssetIds: List<String>?,
+    mediaAssetId: String?,
+    isVideo: Boolean,
+): List<RevealedMediaItem> {
+    val ids = (mediaAssetIds?.takeIf { it.isNotEmpty() }
+        ?: listOfNotNull(mediaAssetId?.takeIf { it.isNotBlank() }))
+    return ids.mapNotNull { id ->
+        deriveMediaAssetUrl(id)?.let { RevealedMediaItem(url = it, isVideo = isVideo) }
+    }
+}
+
+/** #15 — map the wire sender-view lottery sub-object into the domain [LotterySenderView]. */
+internal fun LotteryAttachmentDto.toSenderView(): LotterySenderView = LotterySenderView(
+    version = version ?: "v1",
+    totalWeightBps = totalWeightBps ?: 10_000,
+    outcomes = (outcomes ?: emptyList()).map { it.toSenderOutcome() },
+    unlocks = (unlocks ?: emptyList()).map {
+        LotterySenderUnlock(
+            recipientId = it.recipientId,
+            unlockedAtEpochSeconds = it.unlockedAt,
+            selectedOutcome = it.selectedOutcome?.toSenderOutcome(),
+        )
+    },
+)
+
+/** #15 — map a wire sender-view outcome (full config) into the domain [LotterySenderOutcome]. */
+internal fun LotterySenderOutcomeDto.toSenderOutcome(): LotterySenderOutcome {
+    val isVideo = payloadType == "video"
+    return LotterySenderOutcome(
+        outcomeId = outcomeId,
+        displayLabel = displayLabel?.takeIf { it.isNotBlank() },
+        weightBps = weightBps,
+        payloadType = payloadType,
+        textContent = textContent?.takeIf { it.isNotBlank() },
+        media = if (payloadType == "image" || payloadType == "video") {
+            buildRevealedMedia(mediaAssetIds, mediaAssetId, isVideo)
+        } else {
+            emptyList()
+        },
+    )
+}
 
 /** AND-139 — fixed-price unlock vs server-resolved lottery unlock. */
 enum class UnlockType { FIXED, LOTTERY }
@@ -223,6 +410,18 @@ internal fun String?.toSharePermission(): SharePermission = when (this) {
  */
 data class Reaction(val emoji: String, val count: Int, val reactedByMe: Boolean)
 
+/**
+ * TIP-203 - a money-reaction badge on a message (distinct from the free emoji [Reaction]). One entry
+ * per tip-react: who tipped, the glyph, the gross amount (minor units), and the tip payment id (used
+ * to de-dup the optimistic overlay against the server-hydrated list).
+ */
+data class TipReaction(
+    val tipperId: String?,
+    val emoji: String,
+    val amountCents: Long,
+    val tipPaymentId: String? = null,
+)
+
 /** AND-140 — a reactor row for the reaction-details sheet (flattened from emoji -> reactor list). */
 data class Reactor(
     val userSub: String,
@@ -241,6 +440,57 @@ data class MessageEdit(val revision: Int, val body: String, val editedAtEpochSec
  */
 enum class MessageLifecycle { ACTIVE, EDITED, DELETED, REVOKED }
 
+/**
+ * MSG — a client-side encryption envelope carried on a message (AES-256-GCM / PBKDF2-SHA256). Mirrors
+ * [MessageEncryptionEnvelopeDto] but stays a domain type so the UI can decrypt on passphrase entry.
+ * Persisted to Room so the receiver renders the locked state + can unlock after a process restart.
+ */
+data class MessageEncryption(
+    val version: Int,
+    val alg: String,
+    val kdf: String,
+    val iterations: Int,
+    val saltB64: String,
+    val ivB64: String,
+    val ciphertextB64: String?,
+)
+
+/**
+ * #8 — a single still-pending scheduled message in the scheduled-messages manager. Lightweight on
+ * purpose (only what the manager list/edit needs); separate from [Message] which models a delivered
+ * thread row. [text] is the editable body (blank for non-text kinds, which are display-only here).
+ */
+data class ScheduledMessage(
+    /** Server message id (always present for a persisted scheduled row). */
+    val id: String,
+    val conversationId: String,
+    /** Message discriminator ("text" | "image" | ... ); only "text" is editable server-side. */
+    val kind: String,
+    /** Body for text scheduled messages; may be blank for media kinds. */
+    val text: String,
+    /** Server-rendered one-line preview (used when [text] is blank, e.g. media kinds). */
+    val preview: String,
+    /** Epoch SECONDS the message is due to be delivered. */
+    val deliverAtEpochSeconds: Long,
+) {
+    /** True when the body can be edited (text-kind only, matching the server constraint). */
+    val isTextEditable: Boolean get() = kind == "text"
+    /** What the manager row shows: the body, else the preview, else a kind fallback. */
+    val displayText: String
+        get() = text.ifBlank { preview.ifBlank { kind.replaceFirstChar { it.uppercase() } } }
+}
+
+/** #8 — map a scheduled MessageOut to the manager's [ScheduledMessage]. */
+internal fun MessageDto.toScheduledDomain(): ScheduledMessage = ScheduledMessage(
+    id = messageId,
+    conversationId = conversationId,
+    kind = kind,
+    text = text.orEmpty(),
+    preview = preview.orEmpty(),
+    // Fall back to created_at if the server ever omits deliver_at on a scheduled row.
+    deliverAtEpochSeconds = deliverAt ?: createdAt,
+)
+
 /** A single message in a conversation, merged from history + the local outbox at render time. */
 data class Message(
     /** Server message id; null until a send is acked (outbox rows have no server id yet). */
@@ -250,6 +500,8 @@ data class Message(
     val conversationId: String,
     val senderId: String,
     val text: String,
+    /** Server id of the message this one replies to (null when not a reply). */
+    val replyToMessageId: String? = null,
     /** Epoch SECONDS. Local placeholder for an optimistic row until the server ack replaces it. */
     val createdAtEpochSeconds: Long,
     val sendStatus: SendStatus = SendStatus.SENT,
@@ -275,6 +527,51 @@ data class Message(
     val readByCount: Int = 0,
     /** Reader user ids (read_by_user_ids), for self-exclusion + roster seeding. */
     val readByUserIds: List<String> = emptyList(),
+    /** Self-destruct expiry epoch seconds (null = never); [expired] = server-confirmed. */
+    val expiresAtEpochSeconds: Long? = null,
+    val expired: Boolean = false,
+    /** MSG — true when the message is client-side encrypted. */
+    val isEncrypted: Boolean = false,
+    /** MSG — the encryption envelope (persisted to Room) used to decrypt on the receiver. */
+    val encryption: MessageEncryption? = null,
+    /** MSG — true when the message is view-once (hidden on the receiver until opened). */
+    val viewOnce: Boolean = false,
+    /** MSG — true once the view-once message has been consumed (permanently hidden). */
+    val consumed: Boolean = false,
+    val consumptionPolicy: String = "none",
+    /**
+     * R2 — pay-to-unlock price in minor units when this message was sent locked (PPV), else null.
+     * Carried even for the SENDER's own copy (whose gated media IS present, so it maps to
+     * MessageMedia.Image not MessageMedia.Paid) so the sender's own bubble can badge "Locked $X".
+     */
+    val lockPriceCents: Long? = null,
+    /** R2 — ISO-4217 currency for [lockPriceCents] (defaults to USD when the wire omits it). */
+    val lockCurrency: String = "USD",
+    /** #20 — true while this is a still-pending scheduled (not-yet-delivered) message. */
+    val scheduled: Boolean = false,
+    /** #20 — epoch SECONDS the scheduled message is due to be delivered (0 when not scheduled). */
+    val deliverAtEpochSeconds: Long = 0L,
+    /**
+     * #6 (B-COUNTDOWN3) — an optional countdown attached to THIS message regardless of [kind]/[media]
+     * (text/image/video/file may all carry one). Transient (mapped from the wire flat fields; NOT
+     * Room-persisted — re-derived on every refetch, like the receipt counts).
+     */
+    val countdown: MessageCountdown? = null,
+    /**
+     * TIP-203 - money-reaction (tip) badges on this message. Transient (re-derived from the wire
+     * tip_reactions on each fetch, like the receipt counts); never Room-persisted.
+     */
+    val tipReactions: List<TipReaction> = emptyList(),
+    /**
+     * ADV2-E5 (F5+F6) — sponsored ad-message metadata (transient; re-derived from the wire on each
+     * fetch). [isAdMessage] marks a delivered sponsored DM; [adClickId] is the per-recipient billing
+     * handle the recipient round-trips to report open/click; [ctaUrl] is the CTA link; [sponsorLabel]
+     * is the disclosure label to render.
+     */
+    val isAdMessage: Boolean = false,
+    val adClickId: String? = null,
+    val adCtaUrl: String? = null,
+    val sponsorLabel: String? = null,
 )
 
 /** A conversation summary for the inbox list. */
@@ -289,6 +586,16 @@ data class Conversation(
 ) {
     val isUnread: Boolean get() = unreadCount > 0
 }
+
+/**
+ * #18 — minimal peer info for the thread audio/video-call menu, resolved from the conversation record's
+ * participants (not message senders). [type] is the conversation type ("dm"/"group"); [otherUserSubs]
+ * are the participants other than the local user. A 1:1 DM has exactly one entry.
+ */
+data class ConversationPeers(
+    val type: String,
+    val otherUserSubs: List<String>,
+)
 
 /**
  * AND-153 — a contact (people-search) result. Mapped from [ContactDto]; carries only what the
@@ -325,17 +632,80 @@ internal fun MessageDto.toDomain(
         conversationId = conversationId,
         senderId = senderId,
         text = safeText,
+        replyToMessageId = replyToMessageId,
         createdAtEpochSeconds = createdAt,
         sendStatus = sendStatus,
         kind = kind,
         media = mappedMedia,
         reactions = toReactions(),
+        tipReactions = toTipReactions(),
         lifecycle = deriveLifecycle(),
         editedAtEpochSeconds = editedAt,
         // AND-147 — receipt counts ride the message payload (not persisted to Room; recomputed on fetch).
         deliveredToCount = deliveredToCount ?: 0,
         readByCount = readByCount ?: 0,
         readByUserIds = readByUserIds ?: emptyList(),
+        expiresAtEpochSeconds = expiresAt,
+        expired = expired ?: false,
+        // RG22 — a locked+encrypted message has its `is_encrypted` flag/`encryption` envelope
+        // WITHHELD by the server while still locked (paywall-first); after the recipient pays,
+        // the re-fetch returns the envelope. Treat the presence of an envelope as encrypted even
+        // if the flag lags, so the bubble keeps showing the ENCRYPTED teaser (enter passphrase)
+        // after unlock instead of falling through to a blank/normal bubble.
+        isEncrypted = (isEncrypted ?: false) || encryption != null,
+        viewOnce = (viewOnce ?: false) || consumptionPolicy == "view_once",
+        consumed = consumptionState == "consumed",
+        consumptionPolicy = consumptionPolicy ?: "none",
+        // R2 — capture the lock price whenever the message was sent locked (even if it maps to a
+        // plain Image for the sender / unlocked viewer) so the bubble can badge "Locked $X".
+        lockPriceCents = if (locked == true) lockPriceCents else null,
+        lockCurrency = tipCurrency ?: "USD",
+        encryption = encryption?.let {
+            MessageEncryption(
+                version = it.version,
+                alg = it.alg,
+                kdf = it.kdf,
+                iterations = it.iterations,
+                saltB64 = it.saltB64,
+                ivB64 = it.ivB64,
+                ciphertextB64 = it.ciphertextB64,
+            )
+        },
+        // #20 — server marks still-pending scheduled sends; the thread hides these (managed separately).
+        scheduled = scheduled ?: false,
+        deliverAtEpochSeconds = deliverAt ?: 0L,
+        // #6 (B-COUNTDOWN3) — a countdown can now ride ANY message (not just kind="countdown"):
+        // the server surfaces target_datetime + countdown_title + countdown_reveal on the message
+        // itself. Map it to the transient attribute whenever a target is present.
+        countdown = toMessageCountdown(),
+        // ADV2-E5 (F5+F6) — carry the sponsored ad-message fields through to the thread UI.
+        isAdMessage = adMessage == true,
+        adClickId = adClickId,
+        adCtaUrl = ctaUrl,
+        sponsorLabel = sponsorLabel,
+    )
+}
+
+/**
+ * #6 (B-COUNTDOWN3) — maps the flat wire countdown fields (target_datetime / countdown_title /
+ * countdown_reveal) onto the transient [MessageCountdown] for ANY message that carries a target.
+ * The reveal is mapped only once the server marks it revealed (now >= target). Pure / JVM-testable.
+ */
+internal fun MessageDto.toMessageCountdown(): MessageCountdown? {
+    val target = targetDatetime ?: return null
+    return MessageCountdown(
+        targetEpochSeconds = target,
+        title = countdownTitle?.takeIf { it.isNotBlank() },
+        reveal = countdownReveal?.takeIf { it.revealed }?.let { rv ->
+            CountdownReveal(
+                text = rv.text?.takeIf { it.isNotBlank() },
+                media = rv.media.orEmpty().mapNotNull { m ->
+                    m.url?.takeIf { it.isNotBlank() }?.let { u ->
+                        CountdownRevealMedia(url = u, isVideo = (m.mediaKind == "video"))
+                    }
+                },
+            )
+        }?.takeIf { !it.isEmpty },
     )
 }
 
@@ -352,6 +722,19 @@ internal fun MessageDto.toReactions(): List<Reaction> {
         .map { (emoji, count) -> Reaction(emoji, count, reactedByMe = emoji in mine) }
         .sortedWith(compareByDescending<Reaction> { it.count }.thenBy { it.emoji })
 }
+
+/**
+ * TIP-203 - maps the wire tip_reactions list into the domain money-reaction badges. Pure / JVM-testable.
+ */
+internal fun MessageDto.toTipReactions(): List<TipReaction> =
+    tipReactions.orEmpty().map { d ->
+        TipReaction(
+            tipperId = d.tipperId,
+            emoji = d.emoji.orEmpty(),
+            amountCents = d.amountCents,
+            tipPaymentId = d.tipPaymentId,
+        )
+    }
 
 /**
  * AND-140 — derives [MessageLifecycle] from the wire markers (there is no `state` field): a non-null
@@ -382,6 +765,20 @@ internal fun List<EditHistoryEntryDto>.toMessageEdits(): List<MessageEdit> =
 
 /** Maps the wire media object to the domain [MessageMedia] (pure; no Android types). */
 internal fun MessageDto.toMedia(): MessageMedia = when {
+    // C6 — gallery (multi-image) message. Sender + unlocked recipients get free_images here.
+    kind == "gallery" && !freeImages.isNullOrEmpty() -> MessageMedia.Gallery(
+        images = freeImages.map { gi ->
+            // #25/#27 — a mixed gallery carries photos AND videos. Prefer the server-derived media_kind;
+            // fall back to sniffing content_type so older payloads still render videos correctly.
+            val isVideo = gi.mediaKind?.equals("video", ignoreCase = true)
+                ?: gi.contentType?.startsWith("video/") == true
+            MessageMedia.GalleryImage(
+                url = gi.url?.takeIf { it.isNotBlank() } ?: deriveS3Url(gi.bucket, gi.key),
+                isVideo = isVideo,
+                posterUrl = deriveS3Url(gi.previewBucket, gi.previewKey),
+            )
+        },
+    )
     image != null -> MessageMedia.Image(
         url = image.url?.takeIf { it.isNotBlank() }
             ?: deriveS3Url(image.bucket, image.key),
@@ -403,6 +800,7 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         audioUrl = voiceMessage.audioUrl?.takeIf { it.isNotBlank() },
         durationSeconds = voiceMessage.durationSeconds ?: 0.0,
         waveform = voiceMessage.waveformData ?: emptyList(),
+        consumptionPolicy = consumptionPolicy ?: "none",
     )
     voicemail != null -> MessageMedia.Voicemail(
         mediaUrl = (voicemail.videoUrl ?: voicemail.audioUrl)?.takeIf { it.isNotBlank() },
@@ -425,6 +823,7 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         stickerId = stickerId,
         collectionId = stickerCollectionId,
     )
+    poll != null -> MessageMedia.Poll(poll.toDomain())
     meetingPoll != null -> MessageMedia.MeetingPoll(
         pollId = meetingPoll.pollId,
         title = meetingPoll.title,
@@ -432,13 +831,9 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         status = meetingPoll.status,
         confirmedSlotId = meetingPoll.confirmedSlotId,
     )
-    // AND-137 — countdown (flat title + target_datetime).
-    kind == "countdown" && countdownTitle != null && targetDatetime != null -> MessageMedia.Countdown(
-        title = countdownTitle,
-        targetEpochSeconds = targetDatetime,
-        associatedEventType = associatedEventType.toAssociatedEventType(),
-        associatedEventId = associatedEventId,
-    )
+    // #6 (B-COUNTDOWN3) — a countdown is no longer its own media kind; it rides ANY message as the
+    // transient Message.countdown attribute (mapped in toMessageCountdown) and renders as an overlay.
+    // A standalone kind="countdown" message therefore carries no separate media here (falls through).
     // AND-138 — calendar event / share (nested attachments).
     calendarEvent != null -> MessageMedia.CalendarEvent(
         eventId = calendarEvent.eventId,
@@ -459,17 +854,48 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         permission = calendarShare.permission.toSharePermission(),
         bookingPublicUrl = calendarShare.bookingPublicUrl,
     )
-    // AND-139 — lottery paid message (nested lottery sub-object). Reveal only when unlocked.
-    lottery != null -> MessageMedia.Paid(
-        MessageMonetization(
-            type = UnlockType.LOTTERY,
-            unlocked = lottery.lockState == "unlocked",
-            priceMinorUnits = null,
-            currency = tipCurrency ?: "USD",
-            teaser = lockDescription,
-            revealedText = lottery.selectedOutcome?.takeIf { lottery.lockState == "unlocked" }?.textContent,
-        ),
+    // MSG-009 — find-a-datetime poll (nested find_datetime attachment).
+    findDatetime != null -> MessageMedia.FindDateTime(
+        pollId = findDatetime.pollId,
+        title = findDatetime.title,
+        creatorId = findDatetime.creatorId,
+        status = findDatetime.status ?: "open",
+        fromDate = findDatetime.fromDate,
+        toDate = findDatetime.toDate,
+        startHour = findDatetime.startHour,
+        endHour = findDatetime.endHour,
+        slotDurationMinutes = findDatetime.slotDurationMinutes,
     )
+        // AND-139 — lottery paid message (nested lottery sub-object). Reveal only when unlocked.
+    lottery != null -> run {
+        val lot = lottery!!
+        val revealed = lot.selectedOutcome?.takeIf { lot.lockState == "unlocked" }
+        val revealedIsVideo = revealed?.payloadType == "video"
+        // #15 — when the server hands us the SENDER projection ("sender_view") of our own lottery,
+        // map the full config + per-recipient results into the domain so the bubble can show what we
+        // sent + who won what (instead of a blind locked bubble). Recipients never see this block.
+        val senderView = lot.takeIf { it.lockState == "sender_view" || it.isSender == true }
+            ?.toSenderView()
+        MessageMedia.Paid(
+            MessageMonetization(
+                type = UnlockType.LOTTERY,
+                unlocked = lot.lockState == "unlocked",
+                priceMinorUnits = null,
+                currency = tipCurrency ?: "USD",
+                // #23 - the locked teaser shows the cover text (message text) when no separate
+                // lock_description is set, so a media-only lottery is never blank before unlock.
+                teaser = lockDescription?.takeIf { it.isNotBlank() } ?: text?.takeIf { it.isNotBlank() },
+                revealedText = revealed?.takeIf { it.payloadType == "text" }?.textContent,
+                revealedMediaUrl = revealed?.takeIf { it.payloadType == "image" || it.payloadType == "video" }
+                    ?.let { deriveMediaAssetUrl(it.mediaAssetIds?.firstOrNull() ?: it.mediaAssetId) },
+                revealedMediaIsVideo = revealedIsVideo,
+                revealedMedia = revealed?.takeIf { it.payloadType == "image" || it.payloadType == "video" }
+                    ?.let { buildRevealedMedia(it.mediaAssetIds, it.mediaAssetId, revealedIsVideo) }
+                    ?: emptyList(),
+                lotterySenderView = senderView,
+            ),
+        )
+    }
     // AND-139 — fixed-price locked paid message (flat lock_* fields). Gated body never carried while locked.
     locked == true && isUnlocked != true -> MessageMedia.Paid(
         MessageMonetization(
@@ -482,6 +908,18 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
         ),
     )
     fileShare != null -> fileShare.toFileMedia(consumptionPolicy ?: "none", isShare = true)
+    // MV2 — an uploaded short video clip (server stores it as a `file` object with kind="video").
+    // Render it as an inline video bubble (poster + play) rather than a plain file bubble. The server
+    // populates file.url with the directly-playable /mock/s3 object url (dev) used by ExoPlayer + Coil.
+    kind == "video" && file != null -> MessageMedia.VideoClip(
+        // RG20 fix — the message-CREATE response omits file.url (only bucket/key), so derive the
+        // /mock/s3 object url from bucket/key (same as images' deriveS3Url) instead of rendering a
+        // blank, un-tappable bubble until a thread refetch repopulates url.
+        playbackUrl = file.url?.takeIf { it.isNotBlank() }
+            ?: file.path?.takeIf { it.isNotBlank() }
+            ?: deriveS3Url(file.bucket, file.key),
+        durationSeconds = file.durationSeconds,
+    )
     file != null -> file.toFileMedia(consumptionPolicy ?: "none", isShare = false)
     else -> MessageMedia.None
 }
@@ -502,17 +940,46 @@ internal fun MessageFileDto.toFileMedia(policy: String, isShare: Boolean): Messa
  */
 internal fun deriveS3Url(bucket: String?, key: String?): String? {
     if (bucket.isNullOrBlank() || key.isNullOrBlank()) return null
-    return "https://$bucket.s3.amazonaws.com/$key"
+    // The backend serves uploaded objects through its storage gateway at /mock/s3/<bucket>/<key> --
+    // the same server-relative path the list/get endpoints return as image.url and that presign hands
+    // out for upload. The image-CREATE response omits url, so the sender's just-sent bubble must
+    // derive it here; Coil's RelativeUrlMapper resolves the leading-"/" path against the API origin.
+    // (Without this the sender saw a broken/blank thumbnail until a thread refresh re-fetched url.)
+    return "/mock/s3/$bucket/$key"
+}
+
+/**
+ * #13 — resolve a lottery outcome's media_asset_id to a server-relative object url. The backend
+ * persists/echoes media_asset_id as "bucket:key" (or "s3://bucket/key", or a bare key under the image
+ * bucket). Coil's RelativeUrlMapper resolves the leading-"/" path against the API origin.
+ */
+internal fun deriveMediaAssetUrl(mediaAssetId: String?): String? {
+    val raw = mediaAssetId?.trim().takeUnless { it.isNullOrEmpty() } ?: return null
+    val (bucket, key) = when {
+        raw.startsWith("s3://") -> raw.removePrefix("s3://").substringBefore('/', "") to raw.removePrefix("s3://").substringAfter('/', "")
+        ':' in raw -> raw.substringBefore(':') to raw.substringAfter(':')
+        else -> null to raw
+    }
+    if (key.isBlank()) return null
+    // A bare key (no bucket) is served from the same /mock/s3 gateway; without a bucket we cannot build
+    // the path, so fall back to a key-only relative url the gateway also accepts.
+    return if (bucket.isNullOrBlank()) "/mock/s3/$key" else "/mock/s3/$bucket/$key"
 }
 
 internal fun ConversationDto.toDomain(): Conversation = Conversation(
     id = conversationId,
     title = title?.takeIf { it.isNotBlank() } ?: deriveTitle(),
-    iconUrl = icon,
+    // ID15 - prefer a set conversation icon; for a DM (no icon) fall back to a participant's
+    // profile photo so the row avatar shows the person instead of an initial.
+    iconUrl = icon?.takeIf { it.isNotBlank() } ?: deriveParticipantPhoto(),
     lastMessagePreview = lastMessagePreview ?: lastMessage?.preview ?: lastMessage?.text,
     lastActivityEpochSeconds = lastMessageAt ?: createdAt,
     unreadCount = unreadCount,
 )
+
+/** ID15 - first participant with a profile photo (the other party in a DM); null otherwise. */
+private fun ConversationDto.deriveParticipantPhoto(): String? =
+    participants.firstNotNullOfOrNull { it.profilePhotoUrl?.takeIf(String::isNotBlank) }
 
 /** DM title fallback: the other participant's display name, else a generic label. */
 private fun ConversationDto.deriveTitle(): String =

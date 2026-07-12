@@ -134,6 +134,31 @@ class PaymentMethodsViewModelTest {
     }
 
     @Test
+    fun remove_failure_dropsRowLocally_noErrorState() = runTest {
+        // #15 — a post-delete re-fetch failure (masks delete success) must NOT leave a stale row or a
+        // permanent Error screen: the deleted row is pruned locally and the list stays Loaded.
+        val repo = FakeBillingRepository().apply {
+            methods = ApiResult.Success(listOf(card("pm_1", default = true), card("pm_2")))
+            removeResult = ApiResult.NetworkError(IOException("boom"))
+        }
+        val model = vm(repo)
+        val job = launch { model.uiState.collect {} }
+        val events = mutableListOf<PaymentMethodsEvent>()
+        val ejob = launch { model.events.collect { events += it } }
+        advanceUntilIdle()
+
+        model.remove("pm_2")
+        advanceUntilIdle()
+
+        // Loaded (NOT Error); pm_2 pruned; row cleared; one Failure event surfaced.
+        assertTrue(model.uiState.value.load is PaymentMethodsLoadState.Loaded)
+        assertEquals(listOf("pm_1"), model.uiState.value.methods.map { it.id })
+        assertTrue(model.uiState.value.rowInFlight.isEmpty())
+        assertTrue(events.single() is PaymentMethodsEvent.Failure)
+        job.cancel(); ejob.cancel()
+    }
+
+    @Test
     fun mutationFailure_leavesRow_andEmitsFailure_noListChange() = runTest {
         val repo = FakeBillingRepository().apply {
             methods = ApiResult.Success(listOf(card("pm_1", default = true), card("pm_2")))
@@ -206,6 +231,25 @@ class FakeBillingRepository : BillingRepository {
     override suspend fun removePaymentMethod(id: String): ApiResult<List<PaymentMethod>> {
         removeCalls++
         return removeResult
+    }
+
+    var addCardResult: ApiResult<List<PaymentMethod>> = ApiResult.Success(emptyList())
+    var addBankResult: ApiResult<List<PaymentMethod>> = ApiResult.Success(emptyList())
+    var addCardCalls = 0
+    var addBankCalls = 0
+
+    override suspend fun addCard(
+        req: com.testlogon.android.data.billing.AddCardReqDto,
+    ): ApiResult<List<PaymentMethod>> {
+        addCardCalls++
+        return addCardResult
+    }
+
+    override suspend fun addBank(
+        req: com.testlogon.android.data.billing.AddBankReqDto,
+    ): ApiResult<List<PaymentMethod>> {
+        addBankCalls++
+        return addBankResult
     }
 
     override suspend fun getConfig(): ApiResult<BillingConfig> =

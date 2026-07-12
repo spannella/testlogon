@@ -60,6 +60,12 @@ object BroadcastApiModule {
     @Singleton
     fun provideHostAdApi(retrofit: Retrofit): HostAdApi =
         retrofit.create(HostAdApi::class.java)
+
+    /** ADV FEATURE 1 — viewer broadcast pre-roll ad surface (ad-join + track) on the SAME shared Retrofit. */
+    @Provides
+    @Singleton
+    fun provideBroadcastViewerAdApi(retrofit: Retrofit): BroadcastViewerAdApi =
+        retrofit.create(BroadcastViewerAdApi::class.java)
 }
 
 @Module
@@ -132,4 +138,14 @@ abstract class BroadcastDataModule {
     abstract fun bindHostAdRepository(
         impl: HostAdRepositoryImpl,
     ): HostAdRepository
+
+    /**
+     * ADV FEATURE 1 — separate VIEWER broadcast pre-roll repository. Kept distinct from the shared
+     * BroadcastRepository so its fakes / contract tests are NOT touched. No new API/DAO/migration.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindBroadcastViewerAdRepository(
+        impl: BroadcastViewerAdRepositoryImpl,
+    ): BroadcastViewerAdRepository
 }

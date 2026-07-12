@@ -43,4 +43,19 @@ data class CreateImageMessageReq(
     @Json(name = "filesize") val filesize: Long? = null,
     @Json(name = "width") val width: Int? = null,
     @Json(name = "height") val height: Int? = null,
+    // C5 — optional caption (Backend B1: request field `caption`; read back as MessageOut.text).
+    @Json(name = "caption") val caption: String? = null,
+    // Gating options (parity with text): server accepts these on image messages.
+    @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
+    @Json(name = "view_once") val viewOnce: Boolean = false,
+    @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
+    @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
+    @Json(name = "encryption") val encryption: MessageEncryptionEnvelopeDto? = null,
+    // TIP-106 - attach a tip to this message on send (money-path via charge_tip on the backend).
+    // tip_recipient_id is required only for a GROUP attached tip (backend 400 otherwise); a DM
+    // resolves the other participant server-side. Not combinable with lock_price_cents (backend 400).
+    @Json(name = "tip_amount_cents") val tipAmountCents: Long? = null,
+    @Json(name = "tip_payment_method_id") val tipPaymentMethodId: String? = null,
+    @Json(name = "tip_recipient_id") val tipRecipientId: String? = null,
 )

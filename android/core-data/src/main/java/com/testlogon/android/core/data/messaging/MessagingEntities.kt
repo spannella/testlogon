@@ -47,6 +47,14 @@ data class MessageEntity(
     val conversationId: String,
     val senderId: String,
     val text: String,
+    val replyToMessageId: String? = null,
+    // AND-147 — delivery/read receipt counts (DB schema v9). Persisted so the Sent/Delivered/Read
+    // indicator survives the Room render path (counts arrive on the wire but were previously transient).
+    val deliveredToCount: Int = 0,
+    val readByCount: Int = 0,
+    // Self-destruct expiry (DB schema v10): epoch-seconds deadline + server-confirmed flag.
+    val expiresAtEpochSeconds: Long? = null,
+    val serverExpired: Boolean = false,
     val createdAtEpochSeconds: Long,
     /** Locally-attached client correlation id (for outbox cleanup); the server never returns it. */
     val clientId: String?,
@@ -56,6 +64,9 @@ data class MessageEntity(
     val imageUrl: String? = null,
     val imageWidth: Int? = null,
     val imageHeight: Int? = null,
+    // C6 — gallery (multi-image) images for kind="gallery" (DB schema v12). Serialized as one
+    // "url|width|height" record per line so the grid survives the Room round-trip. Null otherwise.
+    val galleryImagesJson: String? = null,
     /** AND-131 — shared library video fields. The playback_token is intentionally NOT persisted. */
     val videoId: String? = null,
     val videoTitle: String? = null,
@@ -68,6 +79,8 @@ data class MessageEntity(
     val fileSizeBytes: Long? = null,
     val fileMimeType: String? = null,
     val fileIsShare: Boolean = false,
+    /** MV2 — directly-playable object url for an uploaded video clip (kind="video"). Null otherwise. */
+    val fileUrl: String? = null,
     /** "none" | "view_once" | "listen_once" — gates once-media cache reuse. */
     val consumptionPolicy: String = "none",
     // AND-133 — voice columns (DB schema v3). Null for non-voice kinds.
@@ -91,6 +104,8 @@ data class MessageEntity(
     val stickerAltText: String? = null,
     val stickerId: String? = null,
     val stickerCollectionId: String? = null,
+    // Arbitrary text-option poll snapshot JSON (kind="poll"). Null for non-poll kinds.
+    val pollJson: String? = null,
     // AND-136 — meeting-poll envelope columns (DB schema v4). Null for non-poll kinds.
     val pollId: String? = null,
     val pollTitle: String? = null,
@@ -129,6 +144,40 @@ data class MessageEntity(
     val lockTeaser: String? = null,
     /** Revealed text written ONLY after a successful unlock/draw. */
     val revealedText: String? = null,
+    // #13 — revealed lottery option MEDIA (image/video) after an unlock/draw. Server-relative object
+    // url derived from the selected outcome's media_asset_id; null for text-only/locked.
+    val revealedMediaUrl: String? = null,
+    val revealedMediaIsVideo: Boolean = false,
+    // #24 (DB schema v15) - the FULL revealed media list as "url|isVideo" records (one per line);
+    // null/blank for text-only or single-media lotteries that only set revealedMediaUrl.
+    val revealedMediaJson: String? = null,
+    // MSG (DB schema v11) — find_datetime detail columns (the FindDateTime card needs the range/hours).
+    val fadtFromDate: String? = null,
+    val fadtToDate: String? = null,
+    val fadtStartHour: Int? = null,
+    val fadtEndHour: Int? = null,
+    val fadtSlotDurationMinutes: Int? = null,
+    // MSG (DB schema v11) — lottery lock_state + selected outcome text (so a lottery round-trips through Room).
+    /** "locked" | "unlocked" for a lottery_dm message; null for non-lottery. */
+    val lotteryLockState: String? = null,
+    val lotterySelectedText: String? = null,
+    // #15 (DB schema v16) — the SENDER's full lottery sender-view (config + per-recipient results) as a
+    // compact JSON blob, so the sender's own detail survives a Room round-trip / app restart. Null for
+    // recipients and non-lottery messages.
+    val lotterySenderViewJson: String? = null,
+    // MSG (DB schema v11) — client-side encryption: is_encrypted flag + the AES-GCM envelope fields so
+    // the receiver renders a locked bubble and can decrypt on passphrase entry after a Room round-trip.
+    val isEncrypted: Boolean = false,
+    val encVersion: Int? = null,
+    val encAlg: String? = null,
+    val encKdf: String? = null,
+    val encIterations: Int? = null,
+    val encSaltB64: String? = null,
+    val encIvB64: String? = null,
+    val encCiphertextB64: String? = null,
+    // MSG (DB schema v11) — view-once gating: hidden on the receiver until opened, then consumed.
+    val viewOnce: Boolean = false,
+    val consumed: Boolean = false,
     // AND-140 — reactions / pins / edits / lifecycle / hide columns (DB schema v6).
     /** Moshi-serialized List<Reaction> (emoji+count+reactedByMe) for the chip row. */
     val reactionsJson: String? = null,

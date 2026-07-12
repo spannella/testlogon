@@ -33,6 +33,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +58,8 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.billing.CardBrand
 import com.testlogon.android.data.billing.PaymentMethod
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 /** Stable testTags for the Payment Methods screen (AND-224). */
 object PaymentMethodsTestTags {
@@ -68,6 +72,8 @@ object PaymentMethodsTestTags {
     const val EMPTY = "payment_methods_empty"
     const val ERROR = "payment_methods_error"
     const val ROW_SPINNER = "payment_methods_row_spinner"
+    const val SET_TIP_DEFAULT = "payment_methods_set_tip_default"
+    const val TIP_DEFAULT_BADGE = "payment_methods_tip_default_badge"
 }
 
 /** AND-224 — route-level Payment Methods entry, reached from the More hub. */
@@ -76,19 +82,43 @@ fun PaymentMethodsRoute(
     onBack: () -> Unit,
     onAddCard: () -> Unit,
     modifier: Modifier = Modifier,
+    // PW14 — a one-shot signal (true) emitted by the add-card flow on return so the list refreshes
+    // IMMEDIATELY (not only on the next ON_RESUME). Defaulted off so other callers are unaffected.
+    refreshSignal: Flow<Boolean> = emptyFlow(),
+    onRefreshSignalConsumed: () -> Unit = {},
     viewModel: PaymentMethodsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // PW14 — when the add-card flow signals a freshly-added method, force a refresh right away and
+    // clear the signal so a later return doesn't re-trigger it. This is the reliable path; the
+    // ON_RESUME re-fetch below is kept only as a backstop.
+    val added by refreshSignal.collectAsStateWithLifecycle(initialValue = false)
+    LaunchedEffect(added) {
+        if (added) {
+            viewModel.refresh()
+            onRefreshSignalConsumed()
+        }
+    }
+
+    // Re-fetch when returning to this screen (e.g. after adding a method) so the list stays fresh.
+    // Skip the very first resume — the ViewModel's init already performs the initial load.
+    val firstResume = remember { mutableStateOf(true) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (firstResume.value) firstResume.value = false else viewModel.refresh()
+    }
+
     val removedMsg = stringResource(R.string.payment_methods_removed)
     val defaultMsg = stringResource(R.string.payment_methods_default_set)
+    val tipDefaultMsg = "Tip default updated"
     val resources = LocalContext.current.resources
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             val message = when (event) {
                 is PaymentMethodsEvent.Removed -> removedMsg
                 is PaymentMethodsEvent.DefaultSet -> defaultMsg
+                is PaymentMethodsEvent.TipDefaultSet -> tipDefaultMsg
                 is PaymentMethodsEvent.Failure -> event.message.resolve(resources)
             }
             snackbarHostState.showSnackbar(message)
@@ -100,6 +130,7 @@ fun PaymentMethodsRoute(
         snackbarHostState = snackbarHostState,
         onAdd = onAddCard,
         onSetDefault = viewModel::setDefault,
+        onSetTipDefault = viewModel::setTipDefault,
         onRemove = viewModel::remove,
         onRetry = viewModel::retry,
         onBack = onBack,
@@ -114,6 +145,7 @@ fun PaymentMethodsScreen(
     snackbarHostState: SnackbarHostState,
     onAdd: () -> Unit,
     onSetDefault: (String) -> Unit,
+    onSetTipDefault: (String) -> Unit,
     onRemove: (String) -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
@@ -159,8 +191,10 @@ fun PaymentMethodsScreen(
                         PaymentMethodsList(
                             methods = load.methods,
                             rowInFlight = state.rowInFlight,
+                            tipDefaultId = state.tipDefaultId,
                             onAdd = onAdd,
                             onSetDefault = onSetDefault,
+                            onSetTipDefault = onSetTipDefault,
                             onRemove = { pendingRemoval = it },
                         )
                     }
@@ -192,8 +226,10 @@ fun PaymentMethodsScreen(
 private fun PaymentMethodsList(
     methods: List<PaymentMethod>,
     rowInFlight: Set<String>,
+    tipDefaultId: String?,
     onAdd: () -> Unit,
     onSetDefault: (String) -> Unit,
+    onSetTipDefault: (String) -> Unit,
     onRemove: (PaymentMethod) -> Unit,
 ) {
     LazyColumn(
@@ -203,7 +239,9 @@ private fun PaymentMethodsList(
             PaymentMethodRow(
                 method = method,
                 inFlight = method.id in rowInFlight,
+                isTipDefault = method.id == tipDefaultId,
                 onSetDefault = { onSetDefault(method.id) },
+                onSetTipDefault = { onSetTipDefault(method.id) },
                 onRemove = { onRemove(method) },
             )
             HorizontalDivider()
@@ -224,7 +262,9 @@ private fun PaymentMethodsList(
 private fun PaymentMethodRow(
     method: PaymentMethod,
     inFlight: Boolean,
+    isTipDefault: Boolean,
     onSetDefault: () -> Unit,
+    onSetTipDefault: () -> Unit,
     onRemove: () -> Unit,
 ) {
     val label = method.displayLabel()
@@ -263,15 +303,32 @@ private fun PaymentMethodRow(
             CircularProgressIndicator(
                 modifier = Modifier.size(24.dp).testTag(PaymentMethodsTestTags.ROW_SPINNER),
             )
-        } else if (method.isDefault) {
-            AssistChip(
-                onClick = {},
-                enabled = false,
-                label = { Text(stringResource(R.string.payment_methods_default_badge)) },
-            )
         } else {
-            TextButton(onClick = onSetDefault, modifier = Modifier.testTag(PaymentMethodsTestTags.SET_DEFAULT)) {
-                Text(stringResource(R.string.payment_methods_set_default))
+            Column(horizontalAlignment = Alignment.End) {
+                if (method.isDefault) {
+                    AssistChip(
+                        onClick = {},
+                        enabled = false,
+                        label = { Text(stringResource(R.string.payment_methods_default_badge)) },
+                    )
+                } else {
+                    TextButton(onClick = onSetDefault, modifier = Modifier.testTag(PaymentMethodsTestTags.SET_DEFAULT)) {
+                        Text(stringResource(R.string.payment_methods_set_default))
+                    }
+                }
+                // TIP-104 - mark this method as the tip default (used for tips when no explicit PM is given).
+                if (isTipDefault) {
+                    AssistChip(
+                        onClick = {},
+                        enabled = false,
+                        label = { Text("Tip default") },
+                        modifier = Modifier.testTag(PaymentMethodsTestTags.TIP_DEFAULT_BADGE),
+                    )
+                } else {
+                    TextButton(onClick = onSetTipDefault, modifier = Modifier.testTag(PaymentMethodsTestTags.SET_TIP_DEFAULT)) {
+                        Text("Set tip default")
+                    }
+                }
             }
         }
         Spacer(Modifier.width(4.dp))

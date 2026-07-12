@@ -8,6 +8,7 @@
     <string name="tab_me">Profile</string>
     <string name="tab_more">More</string>
     <string name="tab_discover">Discover</string>
+    <string name="tab_inbox">Inbox</string>
 
     <!-- Dashboard (AND-066 / AND-068 / AND-069) -->
     <string name="dashboard_title">Dashboard</string>
@@ -34,6 +35,15 @@
     <string name="dashboard_offline_body">Offline — showing last-known data.</string>
     <string name="dashboard_offline_stale_as_of">Showing saved data from %1$s.</string>
     <string name="dashboard_refresh_failed_stale">Refresh failed — showing saved data.</string>
+    <!-- Home launchpad (dead-first-impression fix) -->
+    <string name="dashboard_greeting">Welcome back</string>
+    <string name="dashboard_shortcuts_title">Jump back in</string>
+    <string name="dashboard_action_create_post">Create post</string>
+    <string name="dashboard_action_go_live">Go live</string>
+    <string name="dashboard_action_messages">Messages</string>
+    <string name="dashboard_action_wallet">Wallet</string>
+    <string name="dashboard_activity_placeholder_title">No activity yet</string>
+    <string name="dashboard_activity_placeholder_body">Your activity will show up here.</string>
 
     <!-- "More" hub (AND-067) -->
     <string name="more_title">More</string>
@@ -44,6 +54,18 @@
     <string name="more_section_support">Support</string>
     <string name="more_unavailable_coming_soon">Coming soon</string>
     <string name="more_unavailable_account">Not available for your account</string>
+    <!-- AND-067 drill-down hubs -->
+    <string name="more_hub_wallet">Wallet</string>
+    <string name="more_hub_studio">Creator Studio</string>
+    <string name="more_hub_growth">Growth</string>
+    <string name="more_hub_community">Community</string>
+    <string name="more_hub_shop">Shop</string>
+    <string name="more_hub_inbox">Inbox</string>
+    <string name="more_hub_account">Account &amp; Settings</string>
+    <string name="more_hub_support">Support</string>
+    <string name="more_hub_admin">Admin</string>
+    <string name="more_hub_item_count">%1$d items</string>
+    <string name="more_hub_back">Back</string>
     <string name="more_entry_profile">Profile</string>
     <string name="more_entry_sessions">Active sessions</string>
     <string name="more_entry_mfa_devices">Two-factor devices</string>
@@ -144,6 +166,12 @@
     <string name="settings_section_alerts_subtitle">Manage email and SMS alert targets</string>
     <string name="settings_section_media_title">Media</string>
     <string name="settings_section_media_subtitle">Call audio, video and quality</string>
+    <string name="settings_section_emojis_title">Custom emojis</string>
+    <string name="settings_section_emojis_subtitle">Upload and manage your personal emojis</string>
+    <string name="settings_section_geo_title">Geo-blocking</string>
+    <string name="settings_section_geo_subtitle">Region rules and dry-run check</string>
+    <string name="settings_section_call_rate_title">Call rate</string>
+    <string name="settings_section_call_rate_subtitle">Your per-minute paid-call rate</string>
     <string name="settings_section_appearance_title">Appearance</string>
     <string name="settings_section_appearance_subtitle">Theme and dynamic color</string>
     <!-- AND-114: in-app language picker entry -->
@@ -180,7 +208,7 @@
     <string name="media_prefs_resolution_1080">1080p (Full HD)</string>
 
     <!-- Notification preferences (AND-080) -->
-    <string name="notif_prefs_title">Notifications</string>
+    <string name="notif_prefs_title">Notification settings</string>
     <string name="notif_prefs_empty">No notification categories available.</string>
     <string name="notif_prefs_stale_banner">Showing saved settings — couldn\'t reach the server.</string>
     <string name="notif_prefs_channel_push">Push</string>
@@ -192,6 +220,18 @@
     <string name="notif_prefs_category_product">Product updates</string>
     <string name="notif_prefs_category_billing">Billing</string>
     <string name="notif_prefs_category_marketing">Marketing</string>
+    <!-- SC17: settings screen clarity -->
+    <string name="notif_prefs_subtitle">Choose how you want to be notified. Toggle each delivery channel per category.</string>
+    <string name="notif_prefs_section_header">Notification categories</string>
+    <string name="notif_prefs_channel_push_desc">Alerts on this device</string>
+    <string name="notif_prefs_channel_email_desc">Sent to your email address</string>
+    <string name="notif_prefs_channel_sms_desc">Text messages to your phone</string>
+    <string name="notif_prefs_category_generic_desc">General notifications.</string>
+    <string name="notif_prefs_category_security_desc">Sign-ins, password changes, and suspicious activity.</string>
+    <string name="notif_prefs_category_account_desc">Updates about your account and profile.</string>
+    <string name="notif_prefs_category_product_desc">New features and product announcements.</string>
+    <string name="notif_prefs_category_billing_desc">Payments, invoices, and subscription changes.</string>
+    <string name="notif_prefs_category_marketing_desc">Tips, offers, and promotional messages.</string>
 
     <!-- Account settings &amp; status (AND-082) -->
     <string name="account_settings_title">Account</string>
@@ -298,6 +338,7 @@
     <string name="search_prompt_title">Search your messages</string>
     <string name="search_error_short">Search failed</string>
     <string name="search_match_cursor">%1$d of %2$d</string>
+    <string name="search_result_no_text">(no text)</string>
     <string name="search_result_count">%1$d results in %2$d conversations</string>
 
     <!-- AND-120..124: messaging (conversation list + thread + composer) -->
@@ -356,6 +397,7 @@
     <string name="player_rewind_10">Rewind 10 seconds</string>
     <string name="player_forward_10">Forward 10 seconds</string>
     <string name="player_fullscreen">Enter fullscreen</string>
+    <string name="player_pip">Picture-in-picture</string>
     <string name="player_exit_fullscreen">Exit fullscreen</string>
     <string name="player_retry">Retry</string>
     <string name="player_live_badge">LIVE</string>
@@ -368,6 +410,9 @@
     <string name="videos_library_error">Couldn\'t load videos. Try again.</string>
     <string name="videos_append_error">Couldn\'t load more</string>
     <string name="video_untitled">Untitled</string>
+    <string name="videos_action_refresh">Refresh</string>
+    <string name="videos_upload_action">Upload video</string>
+    <string name="videos_status_processing">Processing</string>
 
     <!-- AND-190: video detail + player -->
     <string name="video_detail_like">Like</string>
@@ -484,9 +529,19 @@
     <string name="countdown_preset_1d">In 1 day</string>
     <string name="countdown_preset_1w">In 1 week</string>
     <string name="countdown_send">Send countdown</string>
+    <string name="countdown_attach_to_message">Attach to next message</string>
+    <string name="countdown_remaining_inline">%1$s left</string>
     <string name="countdown_done">Event reached</string>
     <string name="countdown_cd_remaining">Countdown: %1$s, %2$s remaining</string>
     <string name="countdown_cd_done">Countdown: %1$s, event reached</string>
+    <!-- #32 exact date/time/tz + #31 reveal payload -->
+    <string name="countdown_pick_datetime">Pick date &amp; time</string>
+    <string name="countdown_reveal_label">Reveal when it ends (optional)</string>
+    <string name="countdown_reveal_hint">Text revealed when the countdown completes</string>
+    <string name="countdown_reveal_add_image">Add reveal image</string>
+    <string name="countdown_reveal_remove_image">Remove</string>
+    <string name="countdown_reveal_revealed">Revealed</string>
+    <string name="countdown_reveal_play_video">Play revealed video</string>
 
     <!-- AND-138: calendar event / share -->
     <string name="calendar_event_label">Calendar event</string>
@@ -502,10 +557,71 @@
 
     <!-- AND-271/AND-272: calendar views + event detail -->
     <string name="more_entry_calendar">Calendar</string>
+    <!-- SC16: social activity feed -->
+    <string name="activity_screen_title">Activity</string>
+    <string name="activity_screen_subtitle">Follows, likes, comments, and tips on your content.</string>
+    <string name="activity_empty_title">No activity yet</string>
+    <string name="activity_empty_body">When people follow, like, comment on, or tip your content, it shows up here.</string>
     <string name="calendar_title">Calendar</string>
     <string name="calendar_view_month">Month</string>
     <string name="calendar_view_week">Week</string>
     <string name="calendar_view_agenda">Agenda</string>
+    <!-- SC19: real calendar (month/week/day + CRUD) -->
+    <string name="calendar_view_day">Day</string>
+    <string name="calendar_weekday_mon">Mon</string>
+    <string name="calendar_weekday_tue">Tue</string>
+    <string name="calendar_weekday_wed">Wed</string>
+    <string name="calendar_weekday_thu">Thu</string>
+    <string name="calendar_weekday_fri">Fri</string>
+    <string name="calendar_weekday_sat">Sat</string>
+    <string name="calendar_weekday_sun">Sun</string>
+    <string name="calendar_add_event">Add event</string>
+    <string name="calendar_edit_event">Edit event</string>
+    <string name="calendar_delete_event">Delete event</string>
+    <string name="calendar_new_event_title">New event</string>
+    <string name="calendar_event_actions">Event options</string>
+    <string name="calendar_field_name">Title</string>
+    <string name="calendar_field_description">Description (optional)</string>
+    <string name="calendar_field_all_day">All day</string>
+    <string name="calendar_field_start">Start time (HH:MM)</string>
+    <string name="calendar_field_end">End time (HH:MM)</string>
+    <string name="calendar_field_calendar">Calendar</string>
+    <string name="calendar_field_timezone">Timezone</string>
+    <string name="calendar_field_repeat">Repeat</string>
+    <string name="calendar_repeat_none">Does not repeat</string>
+    <string name="calendar_repeat_daily">Daily</string>
+    <string name="calendar_repeat_weekly">Weekly</string>
+    <string name="calendar_repeat_monthly">Monthly</string>
+    <string name="calendar_repeat_yearly">Yearly</string>
+    <string name="calendar_repeat_interval">Every (interval)</string>
+    <string name="calendar_repeat_count">End after (occurrences, optional)</string>
+    <string name="calendar_ics_failed">Couldn\'t create the .ics file.</string>
+    <string name="calendar_ics_no_app">No app can open .ics files.</string>
+    <string name="calendar_save">Save</string>
+    <string name="calendar_cancel">Cancel</string>
+    <string name="calendar_delete">Delete</string>
+    <string name="calendar_today_label">Today</string>
+    <string name="calendar_no_calendar">No calendar available to add events.</string>
+    <string name="calendar_saved">Event saved</string>
+    <string name="calendar_deleted">Event deleted</string>
+    <string name="calendar_save_failed">Couldn\'t save the event. Try again.</string>
+    <string name="calendar_delete_failed">Couldn\'t delete the event. Try again.</string>
+    <!-- #12 weekly BYDAY multi-select (2-letter day toggles) -->
+    <string name="calendar_repeat_on_days">Repeat on</string>
+    <string name="calendar_byday_mo">Mo</string>
+    <string name="calendar_byday_tu">Tu</string>
+    <string name="calendar_byday_we">We</string>
+    <string name="calendar_byday_th">Th</string>
+    <string name="calendar_byday_fr">Fr</string>
+    <string name="calendar_byday_sa">Sa</string>
+    <string name="calendar_byday_su">Su</string>
+    <!-- #13 delete-a-recurring-event choices -->
+    <string name="calendar_delete_recurring_title">Delete recurring event</string>
+    <string name="calendar_delete_this">This event only</string>
+    <string name="calendar_delete_following">This and following events</string>
+    <string name="calendar_delete_all">All events</string>
+    <string name="calendar_name_required">Enter a title</string>
+    <string name="calendar_day_no_events">No events on this day. Long-press to add one.</string>
     <string name="calendar_nav_previous">Previous</string>
     <string name="calendar_nav_next">Next</string>
     <string name="calendar_today">Today</string>
@@ -594,14 +710,37 @@
     <string name="paid_unlocked">Unlocked</string>
     <string name="paid_lottery_label">Surprise unlock</string>
     <string name="paid_lottery_price">Tap to unlock</string>
+    <string name="paid_sender_locked_badge">%1$s to unlock</string>
+    <string name="paid_sender_locked_lottery">Surprise unlock</string>
+    <string name="paid_encrypted_indicator">Encrypted</string>
+    <!-- #15 (B-LOTSENDER) — sender-facing lottery detail (what you sent + who won what). -->
+    <string name="lottery_sender_show_details">View details (%1$d options, %2$d opened)</string>
+    <string name="lottery_sender_hide_details">Hide details</string>
+    <string name="lottery_sender_options_header">Options &amp; chances</string>
+    <string name="lottery_sender_option_n">Option %1$d</string>
+    <string name="lottery_sender_option_media">%1$d media item(s)</string>
+    <string name="lottery_sender_results_header">Results (%1$d opened)</string>
+    <string name="lottery_sender_results_empty">No one has opened this yet.</string>
+    <string name="lottery_sender_result_line">%1$s drew: %2$s</string>
+    <string name="lottery_sender_result_unknown">(opened)</string>
     <string name="tip_title">Send a tip</string>
     <string name="tip_custom_amount">Custom amount</string>
     <string name="tip_note">Note (optional)</string>
     <string name="tip_send">Send tip</string>
+    <!-- TIP-505 shared tip composer visibility toggle -->
+    <string name="tip_visibility_label">Tip visibility</string>
+    <string name="tip_visibility_public">Public</string>
+    <string name="tip_visibility_private">Private</string>
+    <string name="tip_visibility_public_hint">Your name and amount are shown on this tip.</string>
+    <string name="tip_visibility_private_hint">Only you and the recipient can see this tip.</string>
+    <string name="tip_sent_private">Tip sent privately</string>
 
     <!-- AND-140 — message actions (reactions / pins / edits / delete / revoke / hide) -->
     <string name="action_cancel">Cancel</string>
     <string name="msg_action_pin">Pin</string>
+    <string name="msg_action_reply">Reply</string>
+    <string name="msg_action_save_to_phone">Save to phone</string>
+    <string name="msg_action_download">Download</string>
     <string name="msg_action_unpin">Unpin</string>
     <string name="msg_action_edit">Edit</string>
     <string name="msg_action_edit_history">Edit history</string>
@@ -610,18 +749,44 @@
     <string name="msg_action_hide">Hide</string>
     <string name="msg_action_unhide">Unhide</string>
     <string name="msg_action_tip">Send a tip</string>
+    <string name="msg_tip_react">Tip a reaction</string>
     <string name="msg_action_who_reacted">See who reacted</string>
     <string name="msg_reaction_you_reacted">You reacted</string>
     <string name="msg_reaction_chip_cd">%1$s reacted by %2$d people</string>
     <string name="msg_pinned_indicator">Pinned</string>
     <string name="msg_edited_label">edited</string>
     <string name="msg_pins_title">Pinned messages</string>
+    <!-- #8 scheduled-messages manager -->
+    <string name="msg_scheduled_title">Scheduled messages</string>
+    <string name="msg_scheduled_empty">No scheduled messages.</string>
+    <string name="msg_scheduled_empty_hint">Compose a message, set a send time in options, and it will appear here until it is delivered.</string>
+    <string name="msg_scheduled_edit">Edit</string>
+    <string name="msg_scheduled_remove">Remove</string>
+    <string name="msg_scheduled_remove_cd">Remove scheduled message</string>
+    <string name="msg_scheduled_edit_title">Edit scheduled message</string>
+    <string name="msg_scheduled_send_time">Send time</string>
+    <string name="msg_scheduled_save">Save</string>
+    <string name="msg_scheduled_photo_add">Add a photo</string>
+    <string name="msg_scheduled_photo_attaching">Attaching photo…</string>
+    <string name="msg_scheduled_photo_attached">Photo attached</string>
+    <string name="action_remove">Remove</string>
     <string name="msg_pins_empty">No pinned messages</string>
     <string name="msg_pins_media">Attachment</string>
     <string name="msg_edit_history_title">Edit history</string>
     <string name="msg_edit_history_empty">No earlier versions</string>
     <string name="msg_edit_title">Edit message</string>
     <string name="msg_edit_save">Save</string>
+    <!-- B-MSGEDIT #5 — full media control on the normal message edit. -->
+    <string name="msg_edit_add_photo">Photo</string>
+    <string name="msg_edit_add_file">File</string>
+    <string name="msg_edit_add_video">Video</string>
+    <string name="msg_edit_remove_media">Remove media</string>
+    <string name="msg_edit_attaching">Attaching…</string>
+    <string name="msg_edit_photo_attached">Photo attached</string>
+    <string name="msg_edit_file_attached">File attached</string>
+    <string name="msg_edit_video_attached">Video attached</string>
+    <string name="msg_edit_media_will_be_removed">Media will be removed</string>
+    <string name="action_undo">Undo</string>
     <string name="msg_delete_title">Delete message?</string>
     <string name="msg_delete_body">This removes the message for you. Others can still see it.</string>
     <string name="msg_revoke_title">Unsend for everyone?</string>
@@ -715,7 +880,61 @@
     <!-- More hub entries (AND-160 / AND-161) -->
     <string name="more_entry_mass_messages">Mass messages</string>
     <string name="more_entry_helpdesk_queue">Helpdesk queue</string>
+    <string name="more_entry_moderation_board">Moderation board</string>
+    <string name="more_entry_video_review">Video review</string>
+    <string name="more_entry_dmca_admin">DMCA claims</string>
+    <string name="more_entry_refund_admin">Refund requests</string>
+    <string name="more_entry_dispute_admin">Disputes</string>
+    <string name="more_entry_appeal_admin">Appeals review</string>
+    <string name="more_entry_fraud_admin">Fraud review</string>
+    <string name="more_entry_incident_admin">Payment incidents</string>
+    <string name="more_entry_kyc_admin_cases">KYC review queue</string>
+    <string name="more_entry_kyc_admin_documents">KYC document review</string>
+    <string name="more_entry_kyc_admin_residency">KYC residency review</string>
+    <string name="more_entry_kyc_admin_pof">KYC proof of funds</string>
+    <string name="more_entry_kyc_admin_liveness">KYC liveness verifier</string>
+    <string name="more_entry_kyc_admin_screening">KYC screening review</string>
+    <string name="more_entry_kyc_admin_id_scanner">KYC ID scanner review</string>
+    <string name="more_entry_kyc_admin_business">Business KYC review</string>
+    <string name="more_entry_kyc_admin_workload">KYC workload</string>
+    <string name="more_entry_kyc_admin_metrics">KYC metrics</string>
+    <string name="more_entry_kyc_admin_analytics">KYC analytics</string>
+    <string name="more_entry_kyc_admin_monitoring">KYC monitoring</string>
+    <string name="more_entry_kyc_admin_address_verif">KYC address verification</string>
+    <string name="more_entry_kyc_admin_compliance">KYC compliance reports</string>
+    <string name="more_entry_kyc_admin_templates">KYC document templates</string>
+    <string name="more_entry_kyc_admin_translations">KYC translations</string>
+    <string name="more_entry_ad_creative_review">Creative review</string>
+    <string name="more_entry_ad_fraud">Ad fraud</string>
+    <string name="more_entry_ad_platform">Ad platform</string>
+    <string name="more_entry_admin_tax_forms_1099">1099 forms (admin)</string>
+    <string name="more_entry_bulk_payouts_promote">Bulk payout console</string>
     <string name="more_entry_helpdesk_dashboard">Helpdesk dashboard</string>
+    <!-- B6 admin-ops read dashboards -->
+    <string name="more_entry_admin_financials">Platform financials</string>
+    <string name="more_entry_admin_payment_health">Payment health</string>
+    <string name="more_entry_admin_risk">Risk dashboard</string>
+    <string name="more_entry_admin_compute">Compute</string>
+    <!-- B7 web-parity cloud-infra management surfaces (operator/Infra hub). -->
+    <string name="more_entry_infra_ec2">EC2 instances</string>
+    <string name="more_entry_infra_k8s">Containers</string>
+    <string name="more_entry_infra_security_groups">Security groups</string>
+    <string name="more_entry_infra_hosts">Host inventory</string>
+    <string name="more_entry_infra_monitoring">Instance monitoring</string>
+    <string name="more_entry_infra_billing">Compute spend</string>
+    <string name="more_entry_remote_ssh_keys">SSH keys</string>
+    <string name="more_entry_remote_ssh_recordings">SSH recordings</string>
+    <string name="more_entry_remote_bastion">SSH bastion</string>
+    <string name="more_entry_remote_connection_profiles">Connection profiles</string>
+    <string name="more_entry_remote_templates">Instance templates</string>
+    <string name="more_entry_remote_desktop">Remote desktop</string>
+    <string name="more_entry_admin_jobs">Background jobs</string>
+    <string name="more_entry_admin_rate_limits">Rate limits</string>
+    <string name="more_entry_admin_tenants">Tenants</string>
+    <string name="more_entry_admin_sso">SSO providers</string>
+    <string name="more_entry_admin_roles">Role management</string>
+    <string name="more_entry_admin_subscription_tiers">Subscription tier manager</string>
+    <string name="more_entry_admin_audit_exports">Audit exports</string>
 
     <!-- AND-295/296/297 — 1:1 calling -->
     <string name="more_entry_call_history">Call history</string>
@@ -932,6 +1151,12 @@
     <string name="report_reason_criminal">Criminal activity</string>
     <string name="report_reason_spam">Spam</string>
     <string name="report_reason_racist">Hate / racism</string>
+    <!-- MOD-C1/C3 — the six live moderation categories + the licensing/IP entry point. -->
+    <string name="report_reason_harassment">Harassment or bullying</string>
+    <string name="report_reason_hate">Hate speech</string>
+    <string name="report_reason_violence">Violence or threats</string>
+    <string name="report_reason_other">Something else</string>
+    <string name="report_flow_licensing">Report a copyright / licensing violation</string>
 
     <!-- AND-383 — cross-cutting report flow (user / content / message) -->
     <string name="report_flow_title">Report this</string>
@@ -1019,6 +1244,7 @@
 
     <!-- Feed: tips on posts (AND-178) -->
     <string name="tip_action">Tip</string>
+    <string name="post_tip_react">Tip</string>
     <string name="tip_sheet_title">Send a tip</string>
     <!-- tip_custom_amount + tip_send already defined for messaging tips (AND-139); reused here. -->
     <string name="tip_sending">Sending</string>
@@ -1042,6 +1268,8 @@
     <!-- AND-182: Discover screen -->
     <string name="discover_title">Discover</string>
     <string name="discover_empty">Nothing to discover yet</string>
+    <string name="discover_empty_cta">Search creators</string>
+    <string name="feed_empty_cta">Find creators to follow</string>
     <string name="discover_offline">You\'re offline. Tap to retry.</string>
     <string name="discover_section_suggested">Suggested for you</string>
     <string name="discover_section_trending_creators">Trending creators</string>
@@ -1129,6 +1357,7 @@
     <string name="avod_skip_in">Skip in %1$d</string>
     <string name="avod_skip_ad">Skip Ad</string>
     <string name="avod_ad_remaining">%1$d seconds remaining</string>
+    <string name="avod_title">Video</string>
     <string name="avod_error">Couldn\'t start ad-supported playback</string>
     <string name="avod_retry">Retry</string>
     <string name="avod_skip_cd">Skip the ad</string>
@@ -1173,6 +1402,7 @@
 
     <!-- AND-199 / AND-200: Stories tray + viewer -->
     <string name="more_entry_gallery">Gallery</string>
+    <string name="more_entry_files">Files</string>
     <string name="story_ring_unseen">Story from %1$s, unseen</string>
     <string name="story_ring_seen">Story from %1$s, seen</string>
     <string name="story_close">Close stories</string>
@@ -1342,11 +1572,27 @@
     <string name="payment_methods_row_cd">%1$s%2$s</string>
 
     <!-- AND-226: Add card (Stripe) — FLAGGED scaffold; card entry routed through the stub seam -->
-    <string name="add_card_title">Add card</string>
-    <string name="add_card_unavailable_title">Card entry unavailable</string>
-    <string name="add_card_unavailable_body">Payments aren\'t configured yet, so cards can\'t be added on this device.</string>
-    <string name="add_card_button">Add card</string>
-    <string name="add_card_not_configured">Card entry unavailable — payments not configured.</string>
+    <string name="add_card_title">Add payment method</string>
+    <string name="add_card_tab_card">Card</string>
+    <string name="add_card_tab_bank">Bank</string>
+    <string name="add_card_test_hint">Test mode: enter a fake test card (e.g. 4242 4242 4242 4242) or a fake US bank account.</string>
+    <string name="add_card_field_number">Card number</string>
+    <string name="add_card_field_exp_month">MM</string>
+    <string name="add_card_field_exp_year">YYYY</string>
+    <string name="add_card_field_cvc">CVC</string>
+    <string name="add_card_field_cardholder">Cardholder name (optional)</string>
+    <string name="add_card_field_routing">Routing number</string>
+    <string name="add_card_field_account">Account number</string>
+    <string name="add_card_field_account_holder">Account holder name (optional)</string>
+    <string name="add_card_account_type_checking">Checking</string>
+    <string name="add_card_account_type_savings">Savings</string>
+    <string name="add_card_save">Save payment method</string>
+    <string name="add_card_err_number">Enter a valid card number</string>
+    <string name="add_card_err_exp_month">MM</string>
+    <string name="add_card_err_exp_year">YYYY</string>
+    <string name="add_card_err_cvc">CVC</string>
+    <string name="add_card_err_routing">9 digits</string>
+    <string name="add_card_err_account">Enter an account number</string>
 
     <!-- AND-227/228/229: redirect checkout (hosted checkout / PayPal / CCBill via Custom Tabs) -->
     <string name="redirect_checkout_title">Checkout</string>
@@ -1387,6 +1633,9 @@
     <string name="billing_err_processing">There was a processing error. Please try again.</string>
     <string name="billing_err_auth_required">Your bank needs to verify this payment. Please complete the verification step.</string>
     <string name="billing_err_microdeposits_pending">Microdeposit verification is still pending.</string>
+    <!-- SUB-E0: real-charge money-path 402 codes -->
+    <string name="billing_err_no_payment_method">No payment method on file. Add a card to subscribe.</string>
+    <string name="billing_err_payment_failed">Payment failed. Try a different payment method.</string>
 
     <!-- AND-235: subscription tiers browse -->
     <string name="subs_tiers_title">Subscription tiers</string>
@@ -1409,6 +1658,9 @@
     <string name="subscribe_success_title">Subscription active</string>
     <string name="subscribe_success_body">You\'re all set. Your subscription is now active.</string>
     <string name="subscribe_unavailable_title">Payments unavailable</string>
+    <!-- SUB-E0: real charge + benefits -->
+    <string name="subscribe_charge_notice">You will be charged %1$s now, then each billing period.</string>
+    <string name="subscribe_add_card_hint">Add a payment method in Payments settings, then try subscribing again.</string>
 
     <!-- AND-237: manage / cancel subscription -->
     <string name="manage_sub_title">Manage subscription</string>
@@ -1431,6 +1683,34 @@
     <string name="manage_sub_status_canceled">Canceled</string>
     <string name="manage_sub_status_expired">Expired</string>
     <string name="manage_sub_status_unknown">Unknown</string>
+
+    <!-- SUB-E2: upgrade/downgrade + immediate-cancel-refund + trial + gifting -->
+    <string name="manage_sub_change_title">Change your plan</string>
+    <string name="manage_sub_change_upgrade">Upgrade</string>
+    <string name="manage_sub_change_downgrade">Downgrade</string>
+    <string name="manage_sub_change_confirm_title">Switch to %1$s?</string>
+    <string name="manage_sub_change_upgrade_body">You\'ll be charged a prorated amount for the rest of this billing period now, and switch to the new tier immediately.</string>
+    <string name="manage_sub_change_downgrade_body">Your plan changes at the end of the current period (%1$s). You won\'t be charged now.</string>
+    <string name="manage_sub_change_upgrade_confirm">Upgrade now</string>
+    <string name="manage_sub_change_downgrade_confirm">Schedule change</string>
+    <string name="manage_sub_change_needs_payment">Add a payment method to upgrade, then try again.</string>
+    <string name="manage_sub_confirm_choose_body">Cancel at period end keeps your access until %1$s with no refund. Cancel now ends access immediately and refunds the unused time.</string>
+    <string name="manage_sub_cancel_period_end_action">Cancel at period end</string>
+    <string name="manage_sub_cancel_immediate_action">Cancel now &amp; refund</string>
+    <string name="subscribe_trial_notice">Free for %1$d days. Your card is required now but won\'t be charged until the trial ends, when it auto-charges the plan price.</string>
+    <string name="subscribe_start_trial">Start %1$d-day free trial</string>
+    <string name="gift_sub_action">Gift</string>
+    <string name="gift_sub_title">Gift a subscription</string>
+    <string name="gift_sub_blurb">Pay for one billing cycle as a gift. The recipient gets access for the period and is never charged; the gift does not auto-renew.</string>
+    <string name="gift_sub_recipient_label">Recipient user ID</string>
+    <string name="gift_sub_pick_tier">Choose a tier</string>
+    <string name="gift_sub_message_label">Message (optional)</string>
+    <string name="gift_sub_charge_notice">You\'ll be charged %1$s now for one cycle.</string>
+    <string name="gift_sub_confirm">Gift subscription</string>
+    <string name="gift_sub_success_title">Gift sent</string>
+    <string name="gift_sub_success_body">They now have access for one billing cycle. It won\'t renew unless they subscribe themselves.</string>
+    <string name="gift_sub_empty_title">No giftable tiers</string>
+    <string name="gift_sub_empty_body">This creator has no paid tiers to gift.</string>
 
     <!-- AND-238/239/240: fan club (creator community) -->
     <string name="more_entry_fan_club">My fan clubs</string>
@@ -1576,6 +1856,9 @@
 
     <!-- AND-248: billing config (read-only) -->
     <string name="more_entry_billing_config">Billing configuration</string>
+    <string name="billing_config_section_audit">Change history</string>
+    <string name="billing_config_audit_empty">No configuration changes recorded.</string>
+    <string name="billing_config_reset">Reset to defaults</string>
     <string name="billing_config_title">Billing configuration</string>
     <string name="billing_config_loading">Loading billing configuration…</string>
     <string name="billing_config_empty">No billing configuration</string>
@@ -1982,6 +2265,11 @@
     <string name="viewer_unavailable_generic">This broadcast isn\'t available right now.</string>
     <string name="viewer_go_live">Go live</string>
     <string name="viewer_loading">Connecting to broadcast…</string>
+    <!-- ADV2-105/106: broadcast mid-roll ad break (host-triggered) -->
+    <string name="host_ad_break_title">Ad break</string>
+    <string name="host_ad_break_start">Start ad break</string>
+    <string name="host_ad_break_end">End ad break</string>
+    <string name="host_ad_break_active">Ad break running · %1$d s left</string>
 
     <!-- AND-281: live chat -->
     <string name="live_chat_title">Live chat</string>
@@ -1999,6 +2287,28 @@
     <string name="live_chat_jump_latest">Jump to latest</string>
     <string name="live_chat_error_generic">Couldn\'t load chat.</string>
     <string name="live_chat_react_cd">React to message</string>
+    <string name="live_chat_reply">Reply</string>
+    <string name="live_chat_options_title">Message options</string>
+    <string name="live_chat_opt_view_once">View once</string>
+    <string name="live_chat_opt_schedule">Schedule (in 1 min)</string>
+    <string name="live_chat_opt_expire">Disappear after 5 min</string>
+    <string name="live_chat_opt_lock">Lock ($1.00)</string>
+    <string name="live_chat_done">Done</string>
+    <string name="live_chat_badge_scheduled">SCHEDULED</string>
+    <string name="live_chat_badge_view_once">VIEW ONCE</string>
+    <string name="live_chat_badge_expiring">EXPIRING</string>
+    <string name="live_chat_expired">This message expired</string>
+    <string name="live_chat_view_once_viewed">Viewed</string>
+    <string name="live_chat_view_once_tap">Tap to view once</string>
+    <string name="live_chat_locked">Locked message</string>
+    <string name="live_chat_unlock_price">Unlock $%1$s</string>
+    <string name="live_chat_image_cd">Chat image</string>
+    <string name="live_chat_video_cd">Play video</string>
+    <string name="live_chat_sending">Sending…</string>
+    <string name="live_chat_replying_to">Replying to %1$s</string>
+    <string name="live_chat_cancel_reply">Cancel reply</string>
+    <string name="live_chat_attach_cd">Attach photo or video</string>
+    <string name="live_chat_uploading">Uploading…</string>
 
     <!-- Broadcast tips + goals (AND-282) -->
     <string name="bcast_tip_action">Tip</string>
@@ -2305,6 +2615,30 @@
 
     <!-- AND-316 — host ad-break / ad-config surface -->
     <string name="host_control_manage_ads">Ads</string>
+    <string name="host_control_manage_qa">Live Q&amp;A</string>
+    <!-- Live Q&A host console (web LiveQaPage host view) -->
+    <string name="live_qa_host_title">Live Q&amp;A</string>
+    <string name="live_qa_host_back_cd">Back</string>
+    <string name="live_qa_host_mode_label">Q&amp;A mode</string>
+    <string name="live_qa_host_mode_on">Collecting audience questions.</string>
+    <string name="live_qa_host_mode_off">Turn on to collect audience questions.</string>
+    <string name="live_qa_host_disabled_title">Q&amp;A is off</string>
+    <string name="live_qa_host_disabled_body">Turn on Q&amp;A mode to collect questions from your audience.</string>
+    <string name="live_qa_host_empty_title">No questions</string>
+    <string name="live_qa_host_empty_body">Questions in this queue will appear here.</string>
+    <string name="live_qa_host_stats_title">Engagement</string>
+    <string name="live_qa_host_stats_line">%1$d total · %2$d pending · %3$d answered · %4$d featured</string>
+    <string name="live_qa_host_stats_line2">%1$d upvotes · %2$.0f%% answer rate</string>
+    <string name="live_qa_host_filter_pending">Pending</string>
+    <string name="live_qa_host_filter_featured">Featured</string>
+    <string name="live_qa_host_filter_answered">Answered</string>
+    <string name="live_qa_host_votes">%1$d</string>
+    <string name="live_qa_host_action_feature">Feature</string>
+    <string name="live_qa_host_action_answer">Mark answered</string>
+    <string name="live_qa_host_action_dismiss">Dismiss</string>
+    <string name="live_qa_host_action_pin">Pin</string>
+    <string name="live_qa_host_action_unpin">Unpin</string>
+    <string name="live_qa_host_action_remove">Remove</string>
     <string name="ads_title">Ads</string>
     <string name="ads_back_cd">Back</string>
     <string name="ads_error_title">Couldn\'t load ad settings</string>
@@ -2351,6 +2685,9 @@
     <string name="kyc_tier_updated_at">Updated %1$s</string>
     <string name="kyc_tier_requirements_header">Requirements for %1$s</string>
     <string name="kyc_tier_check_eligibility">Check eligibility</string>
+    <!-- Batch 8 (#16): interactive verification CTAs on the tier-status (first) screen -->
+    <string name="kyc_tier_begin_verification">Begin verification</string>
+    <string name="kyc_tier_req_action">Continue</string>
     <string name="kyc_tier_eligible">You meet the requirements for %1$s. Check eligibility to advance.</string>
     <string name="kyc_tier_max_reached">You\'ve reached the highest verification level.</string>
     <string name="kyc_tier_promoted">You\'ve advanced to %1$s.</string>
@@ -2432,6 +2769,34 @@
     <string name="idscan_status_unknown">Pending review</string>
     <string name="idscan_restart">Start over</string>
     <string name="idscan_done">Done</string>
+
+    <!-- Batch-9 (#18): guided KYC verification wizard (email -> phone -> ID -> done) -->
+    <string name="kyc_wizard_title">Verify your identity</string>
+    <string name="kyc_wizard_step_of">Step %1$d of %2$d</string>
+    <string name="kyc_wizard_step_email">Email</string>
+    <string name="kyc_wizard_step_phone">Phone</string>
+    <string name="kyc_wizard_step_id">ID</string>
+    <string name="kyc_wizard_continue">Continue</string>
+    <string name="kyc_wizard_send_code">Send code</string>
+    <string name="kyc_wizard_resend_code">Resend code</string>
+    <string name="kyc_wizard_confirm_code">Confirm</string>
+    <string name="kyc_wizard_code_label">Verification code</string>
+    <string name="kyc_wizard_code_sent_to">We sent a code to %1$s. Enter it below.</string>
+    <string name="kyc_wizard_email_title">Verify your email</string>
+    <string name="kyc_wizard_email_body">We will email you a code to confirm this is your address.</string>
+    <string name="kyc_wizard_email_label">Email address (optional)</string>
+    <string name="kyc_wizard_email_verified">Your email is verified.</string>
+    <string name="kyc_wizard_phone_title">Verify your phone</string>
+    <string name="kyc_wizard_phone_body">We will text you a code to confirm your phone number.</string>
+    <string name="kyc_wizard_phone_label">Phone number</string>
+    <string name="kyc_wizard_phone_verified">Your phone is verified.</string>
+    <string name="kyc_wizard_id_title">Scan your ID</string>
+    <string name="kyc_wizard_id_body">Take clear photos of the front and back of a government ID. We will guide you through each side.</string>
+    <string name="kyc_wizard_id_start">Start ID capture</string>
+    <string name="kyc_wizard_id_done">Your ID was submitted.</string>
+    <string name="kyc_wizard_done_title">You are all set</string>
+    <string name="kyc_wizard_done_body">We are reviewing what you submitted. Your tier updates automatically when checks pass.</string>
+    <string name="kyc_wizard_finish">Done</string>
 
     <!-- AND-323: KYC facial comparison (selfie vs. ID, compared server-side) -->
     <string name="face_capture_prompt">Take a selfie to verify your identity</string>
@@ -2638,6 +3003,8 @@
     <string name="kyc_cases_empty_title">No verification cases yet</string>
     <string name="kyc_cases_empty_body">Start identity verification to open your first case.</string>
     <string name="kyc_cases_start_verification">Start verification</string>
+    <string name="kyc_cases_continue_verification">Start / Continue verification</string>
+    <string name="kyc_cases_verify_prompt">Continue your identity verification</string>
     <string name="kyc_case_status_heading">Status</string>
     <string name="kyc_case_reason_codes_heading">Reasons</string>
     <string name="kyc_case_reverify">Re-verify</string>
@@ -2686,6 +3053,7 @@
     <string name="files_folder_cd">Folder %1$s</string>
     <string name="files_file_cd">File %1$s</string>
     <string name="files_empty_folder">This folder is empty</string>
+    <string name="files_download_opening">Opening file…</string>
     <string name="files_empty_search">No matches</string>
     <string name="files_error">Couldn\'t load this folder.</string>
     <string name="files_search_error">Couldn\'t run the search.</string>
@@ -2711,6 +3079,45 @@
     <string name="files_upload_state_done">Uploaded</string>
     <string name="files_upload_state_failed">Upload failed</string>
     <string name="files_upload_state_cancelled">Cancelled</string>
+
+    <!-- F13 file context menu (long-press a row) -->
+    <string name="files_menu_title">%1$s</string>
+    <string name="files_menu_rename">Rename</string>
+    <string name="files_menu_delete">Delete</string>
+    <string name="files_menu_copy">Copy</string>
+    <string name="files_menu_move">Move</string>
+    <string name="files_menu_new_folder">New folder</string>
+    <string name="files_rename_title">Rename</string>
+    <string name="files_rename_label">Name</string>
+    <string name="files_rename_confirm">Rename</string>
+    <string name="files_delete_title">Delete?</string>
+    <string name="files_delete_message">Delete \u201c%1$s\u201d? This can\u2019t be undone.</string>
+    <string name="files_delete_confirm">Delete</string>
+    <string name="files_new_folder_title">New folder</string>
+    <string name="files_new_folder_label">Folder name</string>
+    <string name="files_new_folder_confirm">Create</string>
+    <string name="files_move_title">Move to folder</string>
+    <string name="files_move_label">Destination folder path</string>
+    <string name="files_move_confirm">Move</string>
+    <string name="files_copy_unavailable">Copy isn\u2019t available yet.</string>
+    <!-- FM3/FM4/FM6 file-manager copy + inline-rename + move/copy destination picker -->
+    <string name="files_move_banner">Moving “%1$s” — tap a folder, then Move here</string>
+    <string name="files_copy_banner">Copying “%1$s” — tap a folder, then Copy here</string>
+    <string name="files_move_here">Move here</string>
+    <string name="files_copy_here">Copy here</string>
+    <!-- B13 KYC/Files: CRUD outcome toasts so file ops (incl. same-dir copy) are never silent. -->
+    <string name="files_crud_copy_ok">File copied</string>
+    <string name="files_crud_copy_failed">Couldn\'t copy the file. Try again.</string>
+    <string name="files_crud_move_ok">File moved</string>
+    <string name="files_crud_move_failed">Couldn\'t move the file. Try again.</string>
+    <string name="files_crud_rename_ok">Renamed</string>
+    <string name="files_crud_rename_failed">Couldn\'t rename. Try again.</string>
+    <string name="files_crud_delete_ok">Deleted</string>
+    <string name="files_crud_delete_failed">Couldn\'t delete. Try again.</string>
+    <string name="files_crud_create_folder_ok">Folder created</string>
+    <string name="files_crud_create_folder_failed">Couldn\'t create the folder. Try again.</string>
+    <string name="files_transfer_destination">Destination: %1$s</string>
+    <string name="files_row_menu_cd">More actions for %1$s</string>
 
     <!-- AND-335 share links (owner sheet) -->
     <string name="share_title">Share link</string>
@@ -2946,6 +3353,25 @@
     <string name="groups_section_pending">Pending invites</string>
     <string name="groups_members_empty_title">No members yet</string>
     <string name="groups_members_empty_body">This group has no members yet.</string>
+    <string name="groups_member_you">You</string>
+    <string name="group_feed_open">Group feed</string>
+    <string name="group_feed_title">Group feed</string>
+    <string name="group_feed_back">Back</string>
+    <string name="group_feed_empty_title">No posts yet</string>
+    <string name="group_feed_empty_body">Be the first to post in this group.</string>
+    <string name="group_feed_error">Couldn\'t load the feed. Pull down to retry.</string>
+    <string name="group_feed_compose_hint">Share something with the group...</string>
+    <string name="group_feed_compose_send">Post</string>
+    <string name="group_feed_compose_sending">Posting...</string>
+    <string name="group_feed_locked">Locked post</string>
+    <string name="group_feed_pinned">Pinned</string>
+    <string name="group_feed_hub">Group options</string>
+    <string name="group_feed_attach_image">Attach image</string>
+    <string name="group_feed_remove_image">Remove image</string>
+    <string name="group_feed_locked_price">Locked - unlock for $%1$.2f</string>
+    <string name="group_feed_video">Video</string>
+    <string name="group_feed_comment">Comment</string>
+    <string name="group_feed_comments_count">%1$d comments</string>
     <string name="groups_invite">Invite</string>
     <string name="groups_invite_user_id_label">User ID</string>
     <string name="groups_remove">Remove</string>
@@ -2955,6 +3381,14 @@
     <string name="groups_role_moderator">Moderator</string>
     <string name="groups_role_member">Member</string>
     <string name="groups_role_unknown">Unknown</string>
+    <!-- Batch-7: create-group flow -->
+    <string name="groups_create_title">Create group</string>
+    <string name="groups_create_name_label">Group name</string>
+    <string name="groups_create_description_label">Description (optional)</string>
+    <string name="groups_create_visibility_public">Public</string>
+    <string name="groups_create_visibility_private">Private</string>
+    <string name="groups_create_submit">Create</string>
+    <string name="groups_create_cancel">Cancel</string>
     <!-- AND-356: READ-ONLY syndicate overview (Feed / Treasury / Revenue-split) -->
     <string name="more_entry_syndicates">Syndicates</string>
     <string name="syndicate_overview_title">Syndicate</string>
@@ -2965,6 +3399,13 @@
     <string name="syndicate_tab_feed">Feed</string>
     <string name="syndicate_tab_treasury">Treasury</string>
     <string name="syndicate_tab_split">Revenue split</string>
+    <string name="syndicate_tab_members">Members</string>
+    <string name="syndicate_compose_hint">Share something with the syndicate...</string>
+    <string name="syndicate_compose_send">Post</string>
+    <string name="syndicate_compose_attach_image">Attach image</string>
+    <string name="syndicate_compose_remove_image">Remove image</string>
+    <string name="syndicate_members_empty_title">No members yet</string>
+    <string name="syndicate_members_empty_body">This syndicate has no members yet.</string>
     <string name="syndicate_stale_banner">Showing the last loaded data. Pull down to retry.</string>
     <string name="syndicate_author_unknown">Member</string>
     <string name="syndicate_post_image_cd">Post image</string>
@@ -2987,8 +3428,19 @@
     <string name="syndicate_split_mode_performance">Performance</string>
     <string name="syndicate_split_mode_unknown">Unknown</string>
     <string name="syndicate_bps_format">%1$d bps</string>
-    <string name="syndicate_not_member_title">Not a member</string>
-    <string name="syndicate_not_member_body">You need to be a member of this syndicate to view it.</string>
+    <string name="syndicate_not_member_title">You are not in a syndicate yet</string>
+    <string name="syndicate_not_member_body">Syndicates you join will appear here.</string>
+    <!-- Batch-7: syndicate list + create flow -->
+    <string name="syndicates_list_title">Syndicates</string>
+    <string name="syndicates_list_empty_title">No syndicates yet</string>
+    <string name="syndicates_list_empty_body">Create a syndicate to get started.</string>
+    <string name="syndicates_list_error">Couldn\'t load your syndicates.</string>
+    <string name="syndicate_create_title">Create syndicate</string>
+    <string name="syndicate_create_name_label">Syndicate name</string>
+    <string name="syndicate_create_description_label">Description (optional)</string>
+    <string name="syndicate_create_submit">Create</string>
+    <string name="syndicate_create_cancel">Cancel</string>
+    <string name="syndicate_role_label">%1$s</string>
 
     <!-- AND-357: syndicate open-licensing sub-screen (list + register) -->
     <string name="syndicate_open_licensing_action">Open licensing</string>
@@ -3066,10 +3518,17 @@
     <string name="delegate_console_post_action">Post</string>
     <string name="delegate_console_compose_message_hint">Send a message…</string>
     <string name="delegate_console_send_action">Send</string>
+    <string name="delegate_console_open_conversation">Open full conversation</string>
     <string name="delegate_console_post_pending">Pending approval</string>
     <string name="delegate_console_load_failed">Couldn\'t load delegate data.</string>
     <string name="delegate_console_action_failed">Couldn\'t complete that action.</string>
     <string name="delegate_console_revoked">Your delegate access ended. You\'re acting as yourself again.</string>
+    <!-- T4: managed-creators picker (enter delegate mode). -->
+    <string name="delegate_console_managed_heading">Creators you can manage</string>
+    <string name="delegate_console_managed_enter">Enter</string>
+    <string name="delegate_console_managed_empty">No creators have added you as a delegate yet.</string>
+    <string name="delegate_console_managed_error">Couldn\'t load the creators you can manage.</string>
+    <string name="delegate_console_managed_retry">Retry</string>
 
     <!-- AND-364: content boost (paid post promotion). -->
     <string name="boost_title">Boost post</string>
@@ -3094,6 +3553,32 @@
     <string name="boost_ends_in">in %1$d min</string>
     <string name="boost_ends_passed">Ended</string>
 
+    <!-- ADV2-E4 (F4): sponsored-as-creator (paid partnership) — advertiser composer + creator queue. -->
+    <string name="more_entry_sponsored_post_compose">Propose a sponsored post</string>
+    <string name="more_entry_sponsored_post_queue">Sponsored post requests</string>
+    <string name="spcp_back">Back</string>
+    <string name="spcp_compose_title">Propose a sponsored post</string>
+    <string name="spcp_compose_subtitle">Draft a post for a creator to publish in their own voice. Nothing goes live until the creator approves it — and it appears as a normal creator post with no forced label.</string>
+    <string name="spcp_compose_creator_label">Creator (user id)</string>
+    <string name="spcp_compose_body_label">Post text</string>
+    <string name="spcp_compose_billing_header">Billing</string>
+    <string name="spcp_compose_account_label">Ad account id</string>
+    <string name="spcp_compose_campaign_label">Campaign id</string>
+    <string name="spcp_compose_label_label">Sponsor label (optional)</string>
+    <string name="spcp_compose_disclosure_label">Disclosure wording (optional)</string>
+    <string name="spcp_compose_submit">Send to creator</string>
+    <string name="spcp_compose_footnote">You are billed per engagement (impression + click) from your funded ad account once the creator approves; the creator earns the placement share.</string>
+    <string name="spcp_compose_sent_title">Proposal sent</string>
+    <string name="spcp_compose_sent_body">The creator will see it in their approval queue. It publishes only if they approve.</string>
+    <string name="spcp_compose_done">Done</string>
+    <string name="spcp_queue_title">Sponsored post requests</string>
+    <string name="spcp_queue_from">From %1$s</string>
+    <string name="spcp_queue_advertiser_unknown">an advertiser</string>
+    <string name="spcp_queue_publish_hint">Approving publishes this as your own post — you can still be tipped on it.</string>
+    <string name="spcp_queue_approve">Approve &amp; publish</string>
+    <string name="spcp_queue_reject">Reject</string>
+    <string name="spcp_queue_empty_title">No sponsored post requests</string>
+    <string name="spcp_queue_empty_body">When a brand drafts a post for you to publish, it will appear here to approve or reject.</string>
     <!-- AND-365: READ-ONLY sponsorship inbox (inbound brand deals + client-side status filter). -->
     <string name="more_entry_sponsorships">Sponsorships</string>
     <string name="sponsorship_inbox_title">Sponsorships</string>
@@ -3180,6 +3665,8 @@
     <string name="deposit_sheet_subtitle">Deposit funds into this ad account. Your wallet or saved payment method is charged.</string>
     <string name="deposit_amount_label">Amount (USD)</string>
     <string name="deposit_amount_helper">Minimum $50.00, maximum $100,000.00.</string>
+    <string name="deposit_payment_method_label">Payment method</string>
+    <string name="deposit_payment_method_wallet">No saved card — your account wallet will be charged.</string>
     <string name="deposit_amount_range_error">Enter an amount between $50.00 and $100,000.00.</string>
     <string name="deposit_confirm">Confirm deposit</string>
     <string name="deposit_success">Deposit successful.</string>
@@ -3187,6 +3674,98 @@
 
     <!-- AND-368: READ-ONLY ad-analytics dashboard -->
     <string name="more_entry_ad_analytics">Ad analytics</string>
+    <!-- AND-369: READ-ONLY ads-campaigns list -->
+    <string name="more_entry_ads_campaigns">Ad campaigns</string>
+    <string name="more_entry_ads_targeting">Ad targeting</string>
+    <string name="more_entry_ads_scheduling">Ad scheduling</string>
+    <string name="more_entry_ads_optimization">Ad optimization</string>
+    <string name="more_entry_content_ad_controls">Content ad controls</string>
+    <string name="more_entry_boosts">Boosts</string>
+    <string name="ads_campaigns_title">Ad campaigns</string>
+
+    <!-- ADV-107/108/109 advertiser create flow -->
+    <string name="more_entry_ads_create_account">Create ad account</string>
+    <string name="more_entry_ads_create_campaign">Create ad campaign</string>
+    <string name="more_entry_ads_create_creative">Create ad creative</string>
+    <string name="ads_create_back">Back</string>
+
+    <string name="create_ad_account_title">Create ad account</string>
+    <string name="create_ad_account_subtitle">Set up an advertiser account. It is reviewed by an admin before you can add funds and run campaigns.</string>
+    <string name="create_ad_account_company_label">Company name</string>
+    <string name="create_ad_account_email_label">Billing email</string>
+    <string name="create_ad_account_submit">Create account</string>
+    <string name="create_ad_account_success_title">Account created</string>
+    <string name="create_ad_account_success_body">%1$s is now %2$s. An admin will review it before you can deposit funds.</string>
+    <string name="create_ad_account_continue">Continue to campaign</string>
+
+    <string name="create_campaign_title">Create campaign</string>
+    <string name="create_campaign_account_label">Ad account</string>
+    <string name="create_campaign_account_hint">Select an account</string>
+    <string name="create_campaign_account_loading">Loading accounts…</string>
+    <string name="create_campaign_account_none">No ad accounts yet</string>
+    <string name="create_campaign_name_label">Campaign name</string>
+    <string name="create_campaign_objective_label">Objective</string>
+    <string name="create_campaign_budget_type_label">Budget type</string>
+    <string name="create_campaign_budget_label">Budget (USD)</string>
+    <string name="create_campaign_bid_label">Bid CPM (USD)</string>
+    <string name="create_campaign_bid_cpc_label">Bid CPC (USD)</string>
+    <string name="create_campaign_bid_cpc_hint">Cost per click. $0.01–$100.</string>
+    <string name="create_campaign_bid_cpa_label">Bid CPA (USD)</string>
+    <string name="create_campaign_bid_cpa_hint">Cost per action/conversion. $0.01–$1,000.</string>
+    <string name="create_campaign_bid_hint">Cost per 1,000 impressions. $0.50–$200.</string>
+    <string name="create_campaign_self_promo_label">Promote my content (free)</string>
+    <string name="create_campaign_self_promo_hint">Free promotion that runs only on your own content and streams. No budget or bids — nobody is charged, and it never shows on anyone else content.</string>
+    <string name="create_campaign_fill_mode_label">When to show it</string>
+    <string name="create_campaign_fill_mode_fill_only">Only when no paid ad fits</string>
+    <string name="create_campaign_fill_mode_always_win">Always on my content</string>
+    <string name="create_campaign_fill_mode_fill_only_hint">Backfills your own ad slots only when no paying advertiser is eligible.</string>
+    <string name="create_campaign_fill_mode_always_win_hint">Always wins your own-content slots — may displace a paying ad (you earn less there).</string>
+    <string name="create_campaign_self_promo_success_body">Your free self-promo is live and runs only on your own content. Add a creative to finish.</string>
+    <string name="create_campaign_submit">Create campaign</string>
+    <string name="create_campaign_success_title">Campaign created (draft)</string>
+    <string name="create_campaign_self_promo_success_title">Self-promo is live (free)</string>
+    <string name="create_campaign_success_body">Submit it for review so an admin can approve it, then add a creative.</string>
+    <string name="create_campaign_review">Submit for review</string>
+    <string name="create_campaign_review_done">Submitted — status: %1$s</string>
+    <string name="create_campaign_continue">Add a creative</string>
+
+    <string name="create_creative_title">Create creative</string>
+    <string name="create_creative_account_label">Ad account</string>
+    <string name="create_creative_campaign_label">Campaign</string>
+    <string name="create_creative_campaign_hint">Select a campaign</string>
+    <string name="create_creative_campaign_none">No campaigns under this account</string>
+    <string name="create_creative_format_label">Format</string>
+    <string name="create_creative_title_label">Title (internal)</string>
+    <string name="create_creative_headline_label">Headline</string>
+    <string name="create_creative_body_label">Body text</string>
+    <string name="create_creative_cta_text_label">Call to action text</string>
+    <string name="create_creative_cta_url_label">Call to action URL</string>
+
+    <string name="create_creative_ctas_label">Click-through CTAs</string>
+    <string name="create_creative_cta_type_label">CTA type</string>
+    <string name="create_creative_cta_target_label">Target ID (product "category/item", creator or account)</string>
+    <string name="create_creative_cta_label_label">Button label</string>
+    <string name="create_creative_cta_add">Add CTA</string>
+    <string name="create_creative_cta_remove">Remove CTA</string>    <string name="create_creative_image_preview">Selected creative image</string>
+    <string name="create_creative_pick_image">Add image</string>
+    <string name="create_creative_change_image">Change image</string>
+    <string name="create_creative_submit">Create creative</string>
+    <string name="create_creative_success_title">Creative created (draft)</string>
+    <string name="create_creative_success_body">Submit it for review so an admin can approve it. Once approved it becomes eligible to serve.</string>
+    <string name="create_creative_review">Submit for review</string>
+    <string name="create_creative_review_done">Submitted — status: %1$s</string>
+    <string name="create_creative_done">Done</string>
+    <string name="ads_campaigns_back">Back</string>
+    <string name="ads_campaigns_name_unknown">Untitled campaign</string>
+    <string name="ads_campaigns_budget_label">Budget: %1$s</string>
+    <string name="ads_campaigns_spend_label">Spend: %1$s</string>
+    <string name="ads_campaigns_status_draft">Draft</string>
+    <string name="ads_campaigns_status_active">Active</string>
+    <string name="ads_campaigns_status_paused">Paused</string>
+    <string name="ads_campaigns_status_completed">Completed</string>
+    <string name="ads_campaigns_status_archived">Archived</string>
+    <string name="ads_campaigns_empty_title">No campaigns yet</string>
+    <string name="ads_campaigns_empty_body">This ad account has no campaigns to show.</string>
     <string name="ad_analytics_title">Ad analytics</string>
     <string name="ad_analytics_back">Back</string>
     <string name="ad_analytics_range_7">Last 7 days</string>
@@ -3211,9 +3790,15 @@
     <string name="ad_analytics_breakdown_clicks">%1$d clicks</string>
     <string name="ad_analytics_empty_title">No analytics yet</string>
     <string name="ad_analytics_empty_body">There is no campaign activity for this date range.</string>
+    <string name="ad_roas_header">Return on ad spend</string>
+    <string name="ad_roas_totals">All campaigns</string>
+    <string name="ad_roas_campaign_unknown">Campaign</string>
+    <string name="ad_roas_roas_value">%1$sx</string>
+    <string name="ad_roas_line">Spend %1$s • Value %2$s • %3$d conv • %4$d impr • %5$d clk • CTR %6$s • CPA %7$s</string>
 
     <!-- AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). -->
     <string name="more_entry_tickets">Support tickets</string>
+    <string name="more_entry_support">Help &amp; support</string>
     <string name="tickets_back">Back</string>
     <string name="tickets_spaces_title">Ticket spaces</string>
     <string name="tickets_spaces_empty_title">No ticket spaces yet</string>
@@ -3260,6 +3845,12 @@
     <string name="projects_offline_banner">You\'re offline. Showing saved project.</string>
     <string name="projects_updated">Updated %1$s</string>
     <string name="projects_created">Created %1$s</string>
+    <string name="projects_create_title">New project</string>
+    <string name="projects_create_name_label">Project name</string>
+    <string name="projects_create_description_label">Description (optional)</string>
+    <string name="projects_create_tags_label">Tags (comma-separated, optional)</string>
+    <string name="projects_create_submit">Create</string>
+    <string name="projects_create_cancel">Cancel</string>
     <string name="project_detail_title">Project</string>
     <string name="project_connect_drive">Connect Google Drive</string>
     <string name="project_drive_connected">Google Drive connected</string>
@@ -3452,6 +4043,74 @@
     <string name="webhooks_create_events_unavailable">Event types are unavailable right now. Try again later.</string>
     <string name="webhooks_create_submit">Create</string>
 
+    <!-- B-KYC (batch 7): identity verification (More -> Account / Security). -->
+    <string name="more_entry_kyc">Identity verification</string>
+
+    <!-- B-APIKEY (batch 7): developer API keys (More -> Account / Security). -->
+    <string name="more_entry_api_keys">API keys</string>
+    <string name="more_entry_questionnaire_builder">Questionnaire builder</string>
+    <string name="more_entry_custom_emojis">Custom emojis</string>
+    <string name="more_entry_geo_rules">Geo-blocking</string>
+    <string name="more_entry_call_rate">Call rate</string>
+    <string name="more_entry_message_privacy">Message privacy</string>
+    <string name="more_entry_vod_rentals">My rentals</string>
+    <!-- VOD rentals ("My Rentals" list; web VodRentalsPage parity) -->
+    <string name="vod_rentals_title">My Rentals</string>
+    <string name="vod_rentals_back_cd">Back</string>
+    <string name="vod_rentals_empty_title">No rentals yet</string>
+    <string name="vod_rentals_empty_body">Rent a video to watch it within a limited window or once.</string>
+    <string name="vod_rentals_tier_rental">Rental</string>
+    <string name="vod_rentals_tier_view_once">View once</string>
+    <string name="vod_rentals_tier_price">%1$s · $%2$.2f</string>
+    <string name="vod_rentals_expires_in">Expires in %1$s</string>
+    <string name="vod_rentals_ready">Ready to play</string>
+    <string name="vod_rentals_views_left">%1$d view left</string>
+    <string name="vod_rentals_expired">Expired</string>
+    <string name="vod_rentals_watched">Watched</string>
+    <string name="api_keys_back">Back</string>
+    <string name="api_keys_list_title">API keys</string>
+    <string name="api_keys_empty_title">No API keys yet</string>
+    <string name="api_keys_empty_body">Create an API key to access the platform programmatically. The secret is shown only once.</string>
+    <string name="api_keys_create_cta">Create API key</string>
+    <string name="api_keys_create_title">Create API key</string>
+    <string name="api_keys_unnamed">Unnamed key</string>
+    <string name="api_keys_revoke">Revoke</string>
+    <string name="api_keys_no_expiry">No expiry</string>
+    <string name="api_keys_created">Created %1$s</string>
+    <string name="api_keys_expires">Expires %1$s</string>
+    <string name="api_keys_created_expires">Created %1$s · expires %2$s</string>
+    <string name="api_keys_scopes_prefix">Scopes: %1$s</string>
+    <string name="api_keys_create_label_label">Label</string>
+    <string name="api_keys_create_label_placeholder">My integration</string>
+    <string name="api_keys_create_label_hint">A name to help you recognise this key.</string>
+    <string name="api_keys_create_scopes_label">Capabilities (optional)</string>
+    <string name="api_keys_create_scopes_placeholder">read, write</string>
+    <string name="api_keys_create_scopes_hint">Select the capabilities this key may use. Leave all unselected for the default scopes.</string>
+    <string name="api_keys_create_expires_label">Expires in days (optional)</string>
+    <string name="api_keys_create_expires_placeholder">90</string>
+    <string name="api_keys_create_expires_hint">Leave blank for a key with no expiry.</string>
+    <!-- Batch 8 (#17/#18): API-key detail (capabilities + IP rules) -->
+    <string name="api_keys_caps_title">Capabilities</string>
+    <string name="api_keys_caps_save">Save capabilities</string>
+    <string name="api_keys_ip_allow_title">Allowed IP ranges</string>
+    <string name="api_keys_ip_allow_hint">Only these CIDR ranges may use this key (empty = any).</string>
+    <string name="api_keys_ip_deny_title">Blocked IP ranges</string>
+    <string name="api_keys_ip_deny_hint">These CIDR ranges are always blocked.</string>
+    <string name="api_keys_ip_none">None set.</string>
+    <string name="api_keys_ip_add">Add IP range</string>
+    <string name="api_keys_ip_edit">Edit IP range</string>
+    <string name="api_keys_ip_remove">Remove IP range</string>
+    <string name="api_keys_ip_dialog_title">IP range (CIDR)</string>
+    <string name="api_keys_ip_dialog_label">CIDR</string>
+    <string name="api_keys_ip_dialog_save">Save</string>
+    <string name="api_keys_ip_rules_count">%1$d IP rule(s)</string>
+    <string name="api_keys_create_submit">Create key</string>
+    <string name="api_keys_secret_title">Copy your API key now</string>
+    <string name="api_keys_secret_warning">This is the only time the full secret is shown. Store it securely. You will not be able to see it again.</string>
+    <string name="api_keys_secret_copy">Copy</string>
+    <string name="api_keys_secret_copied">Copied to clipboard</string>
+    <string name="api_keys_secret_done">Done</string>
+
     <!-- AND-399 Analytics dashboards (read): account-wide KPI tiles + charts + breakdowns. -->
     <string name="more_entry_analytics_dashboard">Analytics</string>
     <string name="analytics_dashboard_title">Analytics</string>
@@ -3521,4 +4180,758 @@
     <string name="seo_empty_title">No SEO metadata</string>
     <string name="seo_empty_body">No SEO metadata available for this resource yet.</string>
     <string name="seo_error_validation_title">Couldn\'t load SEO metadata</string>
+    <!-- Alerts inbox (web /alerts parity) -->
+    <string name="more_entry_alerts">Alerts</string>
+    <string name="alerts_inbox_title">Alerts</string>
+    <string name="alerts_inbox_mark_all">Mark all read</string>
+    <string name="alerts_inbox_filter_unread">Show unread only</string>
+    <string name="alerts_inbox_empty_title">No alerts</string>
+    <string name="alerts_inbox_empty_body">You are all caught up. New alerts will show up here.</string>
+    <string name="alerts_inbox_error_generic">We could not load your alerts.</string>
+    <string name="alerts_inbox_session_expired_title">Session expired</string>
+    <string name="alerts_inbox_session_expired_body">Please sign in again to view your alerts.</string>
+    <string name="alerts_inbox_marked_all">All alerts marked as read</string>
+    <string name="alerts_inbox_mark_failed">Could not update. Try again.</string>
+    <string name="alerts_inbox_refresh_failed_stale">Showing saved alerts. Refresh failed.</string>
+    <string name="alerts_inbox_priority_urgent">Urgent</string>
+    <!-- Appeals (web /appeals parity) -->
+    <string name="more_entry_appeals">Appeals</string>
+    <!-- MOD-D1/D2: poster content-moderation review -->
+    <string name="more_entry_my_content_review">My content under review</string>
+    <string name="moderation_review_load_failed">Couldn\'t refresh your content review status.</string>
+    <string name="moderation_review_response_sent">Response sent. A moderator will make the final decision.</string>
+    <string name="moderation_review_action_failed">That didn\'t work. Please try again.</string>
+    <string name="moderation_review_content_deleted">Content deleted.</string>
+    <string name="appeals_title">My appeals</string>
+    <string name="appeals_new">New appeal</string>
+    <string name="appeals_error_generic">Something went wrong loading your appeals.</string>
+    <string name="appeals_session_expired_title">Session expired</string>
+    <string name="appeals_session_expired_body">Please sign in again to view your appeals.</string>
+    <string name="appeals_empty_title">No appeals yet</string>
+    <string name="appeals_empty_body">If you disagree with an enforcement action, you can file an appeal here.</string>
+    <string name="appeals_submitted_on">Submitted %1$s</string>
+    <string name="appeals_decision_label">Decision</string>
+    <string name="appeals_withdraw">Withdraw</string>
+    <string name="appeals_cancel">Cancel</string>
+    <string name="appeals_withdraw_confirm_title">Withdraw appeal?</string>
+    <string name="appeals_withdraw_confirm_body">This appeal will be withdrawn and can no longer be reviewed. This cannot be undone.</string>
+    <string name="appeals_withdraw_success">Appeal withdrawn.</string>
+    <string name="appeals_withdraw_failed">Could not withdraw the appeal. Please try again.</string>
+    <string name="appeals_submit_title">File an appeal</string>
+    <string name="appeals_submit_helper">The Enforcement ID is shown on the enforcement notice you received.</string>
+    <string name="appeals_submit_action">Submit</string>
+    <string name="appeals_submit_success">Appeal submitted.</string>
+    <string name="appeals_submit_failed">Could not submit the appeal. Please try again.</string>
+    <string name="appeals_field_enforcement_id">Enforcement ID</string>
+    <string name="appeals_field_appeal_text">Appeal text</string>
+    <string name="appeals_refresh_failed_stale">Could not refresh. Showing the last loaded appeals.</string>
+    <string name="appeals_status_submitted">Submitted</string>
+    <string name="appeals_status_under_review">Under review</string>
+    <string name="appeals_status_upheld">Upheld</string>
+    <string name="appeals_status_modified">Modified</string>
+    <string name="appeals_status_reversed">Reversed</string>
+    <string name="appeals_status_withdrawn">Withdrawn</string>
+    <string name="appeals_status_unknown">Unknown</string>
+    <!-- web-route parity batch: ideas / licenses / watch-parties / bots -->
+    <string name="more_entry_ideas">Ideas</string>
+    <string name="more_entry_agent_configs">Agent Type Configs</string>
+    <string name="more_entry_workers">Agent Workers</string>
+    <string name="more_entry_llm_keys">LLM Keys</string>
+    <string name="more_entry_fleet">Agent Fleet</string>
+    <string name="more_entry_agent_types">Agent Types</string>
+    <string name="more_entry_agent_feedback">Agent Feedback</string>
+    <string name="more_entry_agent_prs">Agent PRs</string>
+    <string name="more_entry_agent_memory">Agent Memory</string>
+    <string name="more_entry_doc_coverage">Doc Coverage</string>
+    <string name="ideas_title">Ideas</string>
+    <string name="ideas_new">Submit an idea</string>
+    <string name="ideas_untitled">Untitled idea</string>
+    <string name="ideas_submitted_on">Submitted %1$s</string>
+    <string name="ideas_rejection_reason">Reason: %1$s</string>
+    <string name="ideas_error_generic">Something went wrong. Pull down to retry.</string>
+    <string name="ideas_refresh_failed_stale">Could not refresh. Showing your last saved ideas.</string>
+    <string name="ideas_submit_success">Idea submitted. Our team will triage it shortly.</string>
+    <string name="ideas_submit_failed">Could not submit your idea. Please try again.</string>
+    <string name="ideas_empty_title">No ideas yet</string>
+    <string name="ideas_empty_body">Have a feature in mind? Share it and our team will take a look.</string>
+    <string name="ideas_session_expired_title">Session expired</string>
+    <string name="ideas_session_expired_body">Please sign in again to view your ideas.</string>
+    <string name="ideas_submit_title">Submit a product idea</string>
+    <string name="ideas_submit_helper">Describe the problem, who it helps, and the desired outcome.</string>
+    <string name="ideas_field_title">Title</string>
+    <string name="ideas_field_title_hint">A short, descriptive title</string>
+    <string name="ideas_field_description">Description</string>
+    <string name="ideas_field_description_hint">Describe the problem, who it helps, and the desired outcome.</string>
+    <string name="ideas_submit_action">Submit idea</string>
+    <string name="ideas_cancel">Cancel</string>
+    <string name="ideas_status_submitted">Submitted</string>
+    <string name="ideas_status_triaging">Triaging</string>
+    <string name="ideas_status_accepted">Accepted</string>
+    <string name="ideas_status_rejected">Rejected</string>
+    <string name="ideas_status_converted">Converted</string>
+    <string name="ideas_status_unknown">Unknown</string>
+    <string name="more_entry_licenses">Licenses</string>
+    <string name="licenses_title">Licenses</string>
+    <string name="licenses_tab_issued">Issued</string>
+    <string name="licenses_tab_requests">Requests</string>
+    <string name="licenses_tab_revenue">Revenue</string>
+    <string name="licenses_error_generic">Something went wrong loading your licenses.</string>
+    <string name="licenses_refresh_failed_stale">Could not refresh. Showing the last loaded data.</string>
+    <string name="licenses_session_expired_title">Session expired</string>
+    <string name="licenses_session_expired_body">Please sign in again to view your licenses.</string>
+    <string name="licenses_issued_empty_title">No issued licenses</string>
+    <string name="licenses_issued_empty_body">Licenses you have been granted will appear here.</string>
+    <string name="licenses_requests_empty_title">No license requests</string>
+    <string name="licenses_requests_empty_body">License requests you have sent will appear here.</string>
+    <string name="licenses_revenue_empty_title">No license revenue</string>
+    <string name="licenses_revenue_empty_body">Revenue from your licenses will appear here.</string>
+    <string name="licenses_request_terms">Fixed %1$s + %2$.0f%% revenue share</string>
+    <string name="licenses_request_denied_reason">Denied: %1$s</string>
+    <string name="licenses_revenue_total_label">Total earned</string>
+    <string name="licenses_revenue_transactions_count">%1$d transactions</string>
+    <string name="licenses_revenue_source_fallback">License</string>
+    <string name="licenses_more_actions">More licensing actions</string>
+    <string name="licenses_menu_compliance">Compliance</string>
+    <string name="licenses_menu_requests">Requests</string>
+    <string name="licenses_menu_revenue">Revenue</string>
+    <string name="licenses_action_failed">Action failed. Please try again.</string>
+    <string name="licenses_compliance_rechecked">Compliance re-checked.</string>
+    <string name="licenses_report_submitted">Report submitted.</string>
+    <string name="licenses_request_approved">Request approved.</string>
+    <string name="licenses_request_denied_done">Request denied.</string>
+    <string name="licenses_counter_sent">Counter-offer sent.</string>
+    <string name="licenses_counter_accepted">Counter-offer accepted.</string>
+    <string name="licenses_counter_rejected">Counter-offer rejected.</string>
+    <string name="licenses_request_withdrawn">Request withdrawn.</string>
+    <string name="more_entry_watch_parties">Watch parties</string>
+    <string name="watch_parties_title">Watch parties</string>
+    <string name="watch_parties_detail_title">Watch party</string>
+    <string name="watch_parties_error_generic">Something went wrong. Try again.</string>
+    <string name="watch_parties_empty_title">No watch parties yet</string>
+    <string name="watch_parties_empty_body">Create one to watch together.</string>
+    <string name="watch_parties_session_expired_title">Session expired</string>
+    <string name="watch_parties_session_expired_body">Please sign in again to continue.</string>
+    <string name="watch_parties_participants_count">%1$d/%2$d watching</string>
+    <string name="watch_parties_invite_code">Invite: %1$s</string>
+    <string name="watch_parties_status_waiting">Waiting</string>
+    <string name="watch_parties_status_playing">Playing</string>
+    <string name="watch_parties_status_paused">Paused</string>
+    <string name="watch_parties_status_ended">Ended</string>
+    <string name="watch_parties_status_unknown">Unknown</string>
+    <string name="watch_parties_create_action">Create watch party</string>
+    <string name="watch_parties_create_title">Create watch party</string>
+    <string name="watch_parties_create_video_label">Video ID</string>
+    <string name="watch_parties_create_title_label">Party title (optional)</string>
+    <string name="watch_parties_create_max_label">Max participants</string>
+    <string name="watch_parties_create_confirm">Create</string>
+    <string name="watch_parties_create_submitting">Creating</string>
+    <string name="watch_parties_create_video_required">Enter a video ID.</string>
+    <string name="watch_parties_create_failed">Could not create the party. Try again.</string>
+    <string name="watch_parties_refresh_failed_stale">Could not refresh. Showing the last known list.</string>
+    <string name="watch_parties_detail_sync_unavailable_title">Live sync not available</string>
+    <string name="watch_parties_detail_sync_unavailable_body">Real-time playback sync is not available in the app yet. You can still join, leave, and see who is here.</string>
+    <string name="watch_parties_detail_participants_label">Participants</string>
+    <string name="watch_parties_detail_invite_label">Invite code</string>
+    <string name="watch_parties_detail_created_label">Created</string>
+    <string name="watch_parties_detail_participants_header">Who is here</string>
+    <string name="watch_parties_detail_participants_empty">No active participants.</string>
+    <string name="watch_parties_detail_join_action">Join party</string>
+    <string name="watch_parties_detail_leave_action">Leave party</string>
+    <string name="watch_parties_detail_ended_note">This party has ended.</string>
+    <string name="watch_parties_role_host">Host</string>
+    <string name="watch_parties_role_cohost">Co-host</string>
+    <string name="watch_parties_role_member">Member</string>
+    <string name="watch_parties_join_success">Joined the party.</string>
+    <string name="watch_parties_join_failed">Could not join. Try again.</string>
+    <string name="watch_parties_leave_success">You left the party.</string>
+    <string name="watch_parties_leave_failed">Could not leave. Try again.</string>
+    <string name="watch_parties_invite_failed">That invite link is invalid or expired.</string>
+    <string name="more_entry_bots">Bots</string>
+    <string name="bots_title">Bots</string>
+    <string name="bots_new">New bot</string>
+    <string name="bots_message_count">%1$d messages</string>
+    <string name="bots_action_auto_reply">Auto-reply</string>
+    <string name="bots_action_templates">Templates</string>
+    <string name="bots_action_pause">Pause</string>
+    <string name="bots_action_enable">Enable</string>
+    <string name="bots_action_delete">Delete</string>
+    <string name="bots_status_active">Active</string>
+    <string name="bots_status_paused">Paused</string>
+    <string name="bots_status_disabled">Disabled</string>
+    <string name="bots_status_unknown">Unknown</string>
+    <string name="bots_empty_title">No bots yet</string>
+    <string name="bots_empty_body">Create your first bot to automate conversations.</string>
+    <string name="bots_error_generic">Something went wrong.</string>
+    <string name="bots_session_expired_title">Session expired</string>
+    <string name="bots_session_expired_body">Sign in again to continue.</string>
+    <string name="bots_create_title">Create bot</string>
+    <string name="bots_create_action">Create bot</string>
+    <string name="bots_field_name">Name</string>
+    <string name="bots_field_description">Description</string>
+    <string name="bots_field_personality">Personality</string>
+    <string name="bots_create_success">Bot created</string>
+    <string name="bots_create_failed">Failed to create bot</string>
+    <string name="bots_status_success">Bot status updated</string>
+    <string name="bots_status_failed">Failed to update status</string>
+    <string name="bots_delete_success">Bot deleted</string>
+    <string name="bots_delete_failed">Failed to delete bot</string>
+    <string name="bots_delete_confirm_title">Delete bot?</string>
+    <string name="bots_delete_confirm_body">Delete %1$s? This cannot be undone.</string>
+    <string name="bots_refresh_failed_stale">Could not refresh. Showing saved bots.</string>
+    <string name="bots_cancel">Cancel</string>
+    <string name="bots_save">Save</string>
+    <string name="bots_auto_reply_title">Auto-reply rules</string>
+    <string name="bots_auto_reply_empty_title">No auto-reply rules</string>
+    <string name="bots_auto_reply_empty_body">Add a rule to reply automatically to matching messages.</string>
+    <string name="bots_rule_new">New rule</string>
+    <string name="bots_rule_edit">Edit</string>
+    <string name="bots_rule_delete">Delete</string>
+    <string name="bots_rule_priority">Priority: %1$d</string>
+    <string name="bots_rule_disabled">Disabled</string>
+    <string name="bots_rule_create_title">New rule</string>
+    <string name="bots_rule_edit_title">Edit rule</string>
+    <string name="bots_field_trigger">Trigger pattern</string>
+    <string name="bots_field_response">Response</string>
+    <string name="bots_field_match_type">Match type</string>
+    <string name="bots_field_priority">Priority</string>
+    <string name="bots_field_enabled">Enabled</string>
+    <string name="bots_match_keyword">Keyword</string>
+    <string name="bots_match_contains">Contains</string>
+    <string name="bots_match_exact">Exact</string>
+    <string name="bots_match_regex">Regex</string>
+    <string name="bots_rule_create_success">Rule created</string>
+    <string name="bots_rule_update_success">Rule updated</string>
+    <string name="bots_rule_save_failed">Failed to save rule</string>
+    <string name="bots_rule_delete_success">Rule deleted</string>
+    <string name="bots_rule_delete_failed">Failed to delete rule</string>
+    <string name="bots_rule_delete_confirm_title">Delete rule?</string>
+    <string name="bots_rule_delete_confirm_body">This cannot be undone.</string>
+    <string name="bots_templates_title">Templates</string>
+    <string name="bots_templates_empty_title">No templates</string>
+    <string name="bots_templates_empty_body">Create a reusable message template.</string>
+    <string name="bots_template_new">New template</string>
+    <string name="bots_template_delete">Delete</string>
+    <string name="bots_template_create_title">New template</string>
+    <string name="bots_template_create_action">Create</string>
+    <string name="bots_field_template_name">Name</string>
+    <string name="bots_field_template_text">Text</string>
+    <string name="bots_field_category">Category</string>
+    <string name="bots_category_greeting">Greeting</string>
+    <string name="bots_category_support">Support</string>
+    <string name="bots_category_promotion">Promotion</string>
+    <string name="bots_category_farewell">Farewell</string>
+    <string name="bots_category_away">Away</string>
+    <string name="bots_category_custom">Custom</string>
+    <string name="bots_template_create_success">Template created</string>
+    <string name="bots_template_create_failed">Failed to create template</string>
+    <string name="bots_template_delete_success">Template deleted</string>
+    <string name="bots_template_delete_failed">Failed to delete template</string>
+    <string name="bots_template_delete_confirm_body">Delete %1$s? This cannot be undone.</string>
+    <string name="bots_template_delete_confirm_title">Delete template?</string>
+    <!-- AND-355 group sub-pages: treasury / fundraising / ads / settings -->
+    <string name="group_treasury_title">Treasury</string>
+    <string name="group_treasury_open">Treasury</string>
+    <string name="group_treasury_balance_label">Balance</string>
+    <string name="group_treasury_goal">Goal: %1$s</string>
+    <string name="group_treasury_contributed">Contributed: %1$s</string>
+    <string name="group_treasury_spent">Spent: %1$s</string>
+    <string name="group_treasury_ledger_section">Ledger</string>
+    <string name="group_treasury_ledger_empty">No ledger entries yet.</string>
+    <string name="group_treasury_contributors_section">Contributors</string>
+
+    <string name="group_fundraising_title">Fundraising</string>
+    <string name="group_fundraising_open">Fundraising</string>
+    <string name="group_fundraising_list_section">Fundraisers</string>
+    <string name="group_fundraising_empty">No fundraisers yet.</string>
+    <string name="group_fundraising_create_section">New fundraiser</string>
+    <string name="group_fundraising_title_label">Title</string>
+    <string name="group_fundraising_description_label">Description</string>
+    <string name="group_fundraising_goal_label">Goal (whole units)</string>
+    <string name="group_fundraising_create_action">Create fundraiser</string>
+    <string name="group_fundraising_raised">Raised %1$s</string>
+    <string name="group_fundraising_raised_of_goal">Raised %1$s of %2$s</string>
+    <string name="group_fundraising_donations">%1$d donations</string>
+
+    <string name="group_ads_title">Campaigns</string>
+    <string name="group_ads_open">Advertising</string>
+    <string name="group_ads_list_section">Campaigns</string>
+    <string name="group_ads_empty">No campaigns yet.</string>
+    <string name="group_ads_create_section">New campaign</string>
+    <string name="group_ads_name_label">Name</string>
+    <string name="group_ads_daily_budget_label">Daily budget (whole units)</string>
+    <string name="group_ads_lifetime_budget_label">Lifetime budget (whole units)</string>
+    <string name="group_ads_creative_label">Creative text</string>
+    <string name="group_ads_create_action">Create campaign</string>
+    <string name="group_ads_budget">Budget: %1$s/day, %2$s lifetime</string>
+    <string name="group_ads_stats">%1$d impressions, %2$d clicks, %3$s spent</string>
+
+    <string name="group_settings_open">Settings</string>
+    <string name="group_settings_read_only">Only group admins can change these settings.</string>
+    <string name="group_settings_name_label">Name</string>
+    <string name="group_settings_description_label">Description</string>
+    <string name="group_settings_topic_label">Topic</string>
+    <string name="group_settings_visibility_label">Visibility</string>
+    <string name="group_settings_visibility_public">Public</string>
+    <string name="group_settings_visibility_private">Private</string>
+    <string name="group_settings_save">Save</string>
+    <!-- PW18: Wallet transactions (ledger) history. -->
+    <string name="more_entry_wallet_transactions">Transactions</string>
+    <string name="wallet_transactions_title">Transactions</string>
+    <string name="wallet_transactions_balance_label">Wallet balance</string>
+    <string name="wallet_transactions_empty_title">No transactions yet</string>
+    <string name="wallet_transactions_empty_body">Your wallet activity &#8212; deposits, charges, payouts and credits &#8212; will show up here.</string>
+    <string name="wallet_transactions_default_reason">Transaction</string>
+    <!-- Web-parity: My Bundles (syndicate bundle subscriptions). -->
+    <string name="more_entry_my_bundles">My Bundles</string>
+    <string name="my_bundles_title">My Bundles</string>
+    <string name="my_bundles_back">Back</string>
+    <string name="my_bundles_empty_title">No active bundles</string>
+    <string name="my_bundles_empty_body">Browse syndicates to find bundles you can subscribe to.</string>
+    <string name="my_bundles_price">%1$s/%2$s</string>
+    <string name="my_bundles_period">Current period: %1$s &#8211; %2$s</string>
+    <string name="my_bundles_included_creators">Included creators</string>
+    <string name="my_bundles_cancel">Cancel</string>
+    <string name="my_bundles_cancel_title">Cancel bundle subscription</string>
+    <string name="my_bundles_cancel_body">Your access will continue until the end of your current period.</string>
+    <string name="my_bundles_cancel_body_dated">Your access will continue until the end of your current period (%1$s).</string>
+    <string name="my_bundles_cancel_confirm">Confirm cancel</string>
+    <string name="my_bundles_cancel_keep">Keep subscription</string>
+
+    <!-- Web-parity: syndicate-advertising campaign detail. -->
+    <string name="more_entry_syndicate_campaign">Syndicate Campaign</string>
+    <!-- ADV2-709/710/711 (F7) syndicate-ads management -->
+    <string name="more_entry_syndicate_ads">Syndicate Ads</string>
+    <string name="syndicate_ads_title">Syndicate Ads</string>
+    <string name="syndicate_ads_subtitle">Advertise across your members. A syndicate ad on a member splits the 70%% owner share between the member and the treasury; the platform keeps 30%%.</string>
+    <string name="syndicate_ads_split_title">Placement split</string>
+    <string name="syndicate_ads_split_summary">Member keeps %1$d%% of the 70%% owner share • treasury %2$d%%</string>
+    <string name="syndicate_ads_edit_split">Edit split ratio</string>
+    <string name="syndicate_ads_create_title">Create syndicate ad account</string>
+    <string name="syndicate_ads_company_label">Company / brand name</string>
+    <string name="syndicate_ads_email_label">Billing email</string>
+    <string name="syndicate_ads_create_submit">Create account</string>
+    <string name="syndicate_ads_created">Account created (%1$s) and selected. Fund it, then create a campaign.</string>
+    <string name="syndicate_ads_accounts_title">Ad accounts</string>
+    <string name="syndicate_ads_empty">No syndicate ad accounts yet. Create one above.</string>
+    <string name="syndicate_ads_forbidden">Only a syndicate admin can manage its ads.</string>
+    <string name="syndicate_ads_retry">Retry</string>
+    <string name="syndicate_ads_fund">Fund</string>
+    <string name="syndicate_ads_new_campaign">New campaign</string>
+    <string name="syndicate_ads_new_creative">New creative</string>
+    <string name="syndicate_ads_earnings">Earnings / ROAS</string>
+    <string name="syndicate_ads_balance">Balance %1$s • %2$s</string>
+    <string name="syndicate_ad_split_title">Ad placement split</string>
+    <string name="syndicate_ad_split_desc">When your syndicate advertises in front of a member content, the 70%% content-owner share splits between the member and the treasury. The platform 30%% is unchanged. External advertisers never trigger this split.</string>
+    <string name="syndicate_ad_split_member">Member share: %1$d%% of the 70%% owner cut</string>
+    <string name="syndicate_ad_split_treasury">Treasury: %1$d%%</string>
+    <string name="syndicate_ad_split_net">On a \$1.00 ad: member %1$s, treasury %2$s, platform \$0.30</string>
+    <string name="syndicate_ad_split_reset">Reset to default (%1$d%%)</string>
+    <string name="syndicate_ad_split_saved">Split updated</string>
+    <string name="syndicate_ad_split_save">Save split</string>
+    <string name="campaign_detail_title">Campaign</string>
+    <string name="campaign_back">Back</string>
+    <string name="campaign_stat_impressions">Impressions</string>
+    <string name="campaign_stat_clicks">Clicks</string>
+    <string name="campaign_stat_ctr">CTR</string>
+    <string name="campaign_stat_spend">Spend</string>
+    <string name="campaign_section_daily">Daily analytics</string>
+    <string name="campaign_no_analytics">No analytics data yet.</string>
+    <string name="campaign_daily_impr">%1$d impr</string>
+    <string name="campaign_daily_clicks">%1$d clicks</string>
+    <string name="campaign_section_creative">Creative</string>
+    <string name="campaign_cta">CTA: %1$s &#8594; %2$s</string>
+    <string name="campaign_section_budget">Budget</string>
+    <string name="campaign_budget_spent_of">%1$s spent of %2$s</string>
+    <string name="campaign_budget_remaining">%1$s remaining</string>
+    <string name="campaign_add_budget_label">Add budget (USD)</string>
+    <string name="campaign_add_budget">Add budget</string>
+    <string name="campaign_pause">Pause</string>
+    <string name="campaign_resume">Resume</string>
+    <string name="campaign_cancel">Cancel</string>
+
+    <!-- Web-parity: delegation-API keys (/delegation-api). -->
+    <string name="more_entry_delegation_keys">Delegation API Keys</string>
+    <string name="delegation_keys_title">Delegation API Keys</string>
+    <string name="delegation_keys_back">Back</string>
+    <string name="delegation_keys_tab_mine">My API Keys</string>
+    <string name="delegation_keys_tab_creator">Keys For My Account</string>
+    <string name="delegation_keys_empty_mine">No API keys yet.</string>
+    <string name="delegation_keys_empty_creator">No keys are scoped to your account.</string>
+    <string name="delegation_keys_status_creator">%1$s &#8226; Creator: %2$s</string>
+    <string name="delegation_keys_meta">Prefix %1$s &#8226; %2$d calls &#8226; limit %3$d/min</string>
+    <string name="delegation_keys_revoke">Revoke key</string>
+    <string name="delegation_keys_create_title">Create delegation API key</string>
+    <string name="delegation_keys_create_label_field">Label</string>
+    <string name="delegation_keys_creator">Creator</string>
+    <string name="delegation_keys_select_creator">Select a managed creator</string>
+    <string name="delegation_keys_permissions">Permissions</string>
+    <string name="delegation_keys_create_submit">Create key</string>
+    <string name="delegation_keys_create_cancel">Cancel</string>
+    <string name="delegation_keys_secret_title">Copy your new API key now</string>
+    <string name="delegation_keys_secret_warning">This secret is shown once and cannot be retrieved again. Store it securely.</string>
+    <string name="delegation_keys_secret_copy">Copy</string>
+    <string name="delegation_keys_secret_copied">Copied</string>
+    <string name="delegation_keys_secret_done">Done</string>
+    <!-- B4 web-parity: More entries for Stylist + Marketing agents -->
+    <string name="more_entry_stylist">Design (Stylist)</string>
+    <string name="more_entry_marketing">Marketing</string>
+
+    <!-- Stylist / UI-design agent -->
+    <string name="stylist_overview_title">Design Overview</string>
+    <string name="stylist_run_review">Run Review</string>
+    <string name="stylist_review_triggered">Review started</string>
+    <string name="stylist_review_trigger_failed">Could not start review</string>
+    <string name="stylist_pages_heading">Pages (worst first)</string>
+    <string name="stylist_pages_summary">%1$d pages reviewed · %2$d total issues</string>
+    <string name="stylist_gauge_design">Design</string>
+    <string name="stylist_gauge_a11y">Accessibility</string>
+    <string name="stylist_issues_count">%1$d issues</string>
+    <string name="stylist_last_reviewed">Last reviewed %1$s</string>
+    <string name="stylist_empty_title">No reviews yet</string>
+    <string name="stylist_empty_body">Run a review to see per-page design scores.</string>
+    <string name="stylist_error_generic">Something went wrong. Please try again.</string>
+    <string name="stylist_refresh_failed_stale">Showing cached data — refresh failed.</string>
+    <string name="stylist_session_expired_title">Session expired</string>
+    <string name="stylist_session_expired_body">Please sign in again to continue.</string>
+
+    <string name="stylist_rules_title">Design Rules</string>
+    <string name="stylist_rule_add">Add Rule</string>
+    <string name="stylist_rule_new">New Design Rule</string>
+    <string name="stylist_rule_delete">Delete rule</string>
+    <string name="stylist_rule_field_name">Name</string>
+    <string name="stylist_rule_field_category">Category</string>
+    <string name="stylist_rule_field_severity">Severity</string>
+    <string name="stylist_rule_field_description">Description</string>
+    <string name="stylist_rule_create">Create</string>
+    <string name="stylist_rule_created">Rule created</string>
+    <string name="stylist_rule_deleted">Rule deleted</string>
+    <string name="stylist_rule_action_failed">Rule action failed</string>
+    <string name="stylist_rules_empty_title">No design rules</string>
+    <string name="stylist_rules_empty_body">No design rules configured yet.</string>
+
+    <string name="stylist_review_title">Review</string>
+    <string name="stylist_review_screenshots">Screenshots</string>
+    <string name="stylist_review_issues">Issues (%1$d)</string>
+    <string name="stylist_review_no_issues">No issues found — this page passed all checks.</string>
+    <string name="stylist_screenshot_unavailable">Screenshot unavailable</string>
+    <string name="stylist_issue_suggestion">Suggestion: %1$s</string>
+    <string name="stylist_issue_ticket">Ticket %1$s</string>
+    <string name="stylist_issue_create_ticket">Create Ticket</string>
+    <string name="stylist_ticket_created">Ticket created</string>
+    <string name="stylist_ticket_failed">Could not create ticket</string>
+
+    <!-- Marketing content agent -->
+    <string name="marketing_title">Marketing Content</string>
+    <string name="marketing_new">New Content</string>
+    <string name="marketing_untitled">(untitled)</string>
+    <string name="marketing_edit">Edit</string>
+    <string name="marketing_approve">Approve</string>
+    <string name="marketing_publish">Publish</string>
+    <string name="marketing_archive">Archive</string>
+    <string name="marketing_delete">Delete</string>
+    <string name="marketing_save">Save</string>
+    <string name="marketing_created">Draft created</string>
+    <string name="marketing_saved">Saved</string>
+    <string name="marketing_approved">Approved</string>
+    <string name="marketing_scheduled">Scheduled</string>
+    <string name="marketing_action_done">Done</string>
+    <string name="marketing_action_failed">Action failed</string>
+    <string name="marketing_error_generic">Something went wrong. Please try again.</string>
+    <string name="marketing_refresh_failed_stale">Showing cached data — refresh failed.</string>
+    <string name="marketing_session_expired_title">Session expired</string>
+    <string name="marketing_session_expired_body">Please sign in again to continue.</string>
+    <string name="marketing_empty_title">No content yet</string>
+    <string name="marketing_empty_body">Create a draft to get started.</string>
+    <string name="marketing_create_title">Create Content Draft</string>
+    <string name="marketing_create_action">Create</string>
+    <string name="marketing_field_type">Type</string>
+    <string name="marketing_field_title">Title</string>
+    <string name="marketing_field_body">Body</string>
+    <string name="marketing_field_summary">Summary</string>
+
+    <string name="marketing_editor_title">Content Editor</string>
+    <string name="marketing_seo_meta">SEO Meta</string>
+    <string name="marketing_meta_title">Meta Title</string>
+    <string name="marketing_meta_description">Meta Description</string>
+    <string name="marketing_tags">Tags</string>
+    <string name="marketing_tags_hint">comma, separated, tags</string>
+    <string name="marketing_schedule">Schedule</string>
+    <string name="marketing_schedule_none">No schedule set</string>
+    <string name="marketing_pick_date">Pick date</string>
+    <string name="marketing_schedule_action">Schedule</string>
+    <string name="marketing_schedule_gate">Approve content before scheduling.</string>
+
+    <string name="marketing_calendar_title">Content Calendar</string>
+    <string name="marketing_prev">Prev</string>
+    <string name="marketing_next">Next</string>
+    <string name="marketing_today">Today</string>
+    <string name="marketing_calendar_empty_title">Nothing scheduled</string>
+    <string name="marketing_calendar_empty_body">No scheduled or published content this month.</string>
+
+    <string name="marketing_engagement_title">Engagement</string>
+    <string name="marketing_summary_content">Total Content</string>
+    <string name="marketing_summary_views">Total Views</string>
+    <string name="marketing_summary_clicks">Total Clicks</string>
+    <string name="marketing_summary_conversion">Conversion</string>
+    <string name="marketing_top_performing">Top Performing</string>
+    <string name="marketing_engagement_empty">No engagement data yet.</string>
+    <string name="marketing_clicks_count">%1$d clicks</string>
+
+    <!-- shared action (B4) -->
+    <string name="action_confirm">Confirm</string>
+
+
+    <!-- B4 Costs (Accountant agent) -->
+    <string name="more_entry_costs">Agent Costs</string>
+    <string name="costs_overview_title">Cost Overview</string>
+    <string name="costs_breakdown_title">Cost Breakdown</string>
+    <string name="costs_budgets_title">Budget Manager</string>
+    <string name="costs_alerts_title">Cost Alerts</string>
+    <string name="costs_breakdown">Breakdown</string>
+    <string name="costs_budgets">Budgets</string>
+    <string name="costs_alerts">Alerts</string>
+    <string name="costs_today">Today</string>
+    <string name="costs_this_week">This Week</string>
+    <string name="costs_this_month">This Month</string>
+    <string name="costs_by_agent_type_today">By Agent Type (today)</string>
+    <string name="costs_no_spend_today">No spend recorded today.</string>
+    <string name="costs_weekly_trend">Weekly Cost Trend</string>
+    <string name="costs_no_cost_data">No cost data yet.</string>
+    <string name="costs_optimizations">Optimizations</string>
+    <string name="costs_potential_savings">Potential savings: %1$s</string>
+    <string name="costs_unacked_alerts">%1$d unacknowledged cost alert(s)</string>
+    <string name="costs_view_alerts">View Alerts</string>
+    <string name="costs_date_label">Date: %1$s</string>
+    <string name="costs_tab_agent_type">By Agent Type</string>
+    <string name="costs_tab_worker">By Worker</string>
+    <string name="costs_tab_ticket">By Ticket</string>
+    <string name="costs_llm_label">LLM %1$s</string>
+    <string name="costs_compute_label">Compute %1$s</string>
+    <string name="costs_no_spend_date">No spend for this date.</string>
+    <string name="costs_no_worker_entries">No worker entries for this date.</string>
+    <string name="costs_no_ticket_data">No ticket cost data yet.</string>
+    <string name="costs_new_budget">New Budget</string>
+    <string name="costs_budgets_empty_title">No budgets yet</string>
+    <string name="costs_budgets_empty_body">Create one to start tracking spend against a cap.</string>
+    <string name="costs_delete_budget">Delete budget</string>
+    <string name="costs_budget_limit_line">Limit %1$s (alert at %2$d%%)</string>
+    <string name="costs_auto_pause">Auto-pause on exceed</string>
+    <string name="costs_create_budget">Create Budget</string>
+    <string name="costs_field_name">Name</string>
+    <string name="costs_field_scope">Scope</string>
+    <string name="costs_field_scope_ref">Scope Ref</string>
+    <string name="costs_field_period">Period</string>
+    <string name="costs_field_limit">Limit ($)</string>
+    <string name="costs_field_threshold">Alert %</string>
+    <string name="costs_save">Save</string>
+    <string name="costs_budget_created">Budget created</string>
+    <string name="costs_budget_deleted">Budget deleted</string>
+    <string name="costs_filter_unack">Unacknowledged</string>
+    <string name="costs_filter_all">All</string>
+    <string name="costs_alerts_empty_title">No alerts</string>
+    <string name="costs_alerts_empty_body">Your budgets are on track.</string>
+    <string name="costs_acknowledge">Acknowledge</string>
+    <string name="costs_acknowledged">Acknowledged</string>
+    <string name="costs_alert_acknowledged">Alert acknowledged</string>
+    <string name="costs_spent_of">Spent %1$s of %2$s</string>
+    <string name="costs_severity_critical">critical</string>
+    <string name="costs_severity_warning">warning</string>
+    <string name="costs_severity_info">info</string>
+    <string name="costs_severity_unknown">alert</string>
+    <string name="costs_action_failed">Action failed</string>
+    <string name="costs_error_generic">Something went wrong. Please try again.</string>
+    <string name="costs_session_expired_title">Session expired</string>
+    <string name="costs_session_expired_body">Please sign in again to continue.</string>
+    <string name="costs_empty_title">No cost data yet</string>
+    <string name="costs_empty_body">Once agents run, their spend will show up here.</string>
+
+    <!-- B4 Compliance / Security agent -->
+    <string name="more_entry_compliance">Compliance</string>
+    <string name="more_entry_security">Security</string>
+    <string name="compliance_title">Compliance Agent</string>
+    <string name="security_title">Security Agent</string>
+    <string name="compliance_open_critical">Open Critical</string>
+    <string name="compliance_open_high">Open High</string>
+    <string name="compliance_total_findings">Open Findings</string>
+    <string name="compliance_frameworks_failing">Frameworks Failing</string>
+    <string name="compliance_tab_findings">Findings</string>
+    <string name="compliance_tab_audits">Audits</string>
+    <string name="compliance_tab_compliance">Compliance</string>
+    <string name="compliance_tab_trends">Trends</string>
+    <string name="compliance_filter_severity">Severity</string>
+    <string name="compliance_filter_status">Status</string>
+    <string name="compliance_findings_empty">No findings match the current filters.</string>
+    <string name="compliance_finding_meta">Source: %1$s · %2$s</string>
+    <string name="compliance_remediation">Remediation: %1$s</string>
+    <string name="compliance_ticket">Ticket: %1$s</string>
+    <string name="compliance_acknowledge">Acknowledge</string>
+    <string name="compliance_false_positive">False positive</string>
+    <string name="compliance_finding_updated">Finding updated</string>
+    <string name="compliance_run_audit">Run Audit Now</string>
+    <string name="compliance_audit_triggered">Audit triggered</string>
+    <string name="compliance_audits_empty">No audits yet. Run one to scan the codebase.</string>
+    <string name="compliance_files_scanned">Files scanned: %1$d</string>
+    <string name="compliance_all_clear">All clear</string>
+    <string name="compliance_no_data">No compliance data yet.</string>
+    <string name="compliance_open_findings_n">Open findings: %1$d</string>
+    <string name="compliance_trends_summary">%1$d findings over the last %2$d days.</string>
+    <string name="compliance_no_trend_data">No trend data yet.</string>
+    <string name="compliance_action_failed">Action failed</string>
+    <string name="compliance_error_generic">Something went wrong. Please try again.</string>
+    <string name="compliance_session_expired_title">Session expired</string>
+    <string name="compliance_session_expired_body">Please sign in again to continue.</string>
+
+    <!-- B4 PM idea triage -->
+    <string name="more_entry_pm_ideas">Idea Triage</string>
+    <string name="pmideas_title">Feature Ideas</string>
+    <string name="pmideas_trigger_review">Trigger Review</string>
+    <string name="pmideas_review_triggered">Review triggered</string>
+    <string name="pmideas_tab_pending">Pending</string>
+    <string name="pmideas_tab_approved">Approved</string>
+    <string name="pmideas_tab_rejected">Rejected</string>
+    <string name="pmideas_tab_archived">Archived</string>
+    <string name="pmideas_approve">Approve</string>
+    <string name="pmideas_reject">Reject</string>
+    <string name="pmideas_archive">Archive</string>
+    <string name="pmideas_close">Close</string>
+    <string name="pmideas_approved">Idea approved — ticket created</string>
+    <string name="pmideas_rejected">Idea rejected</string>
+    <string name="pmideas_archived">Idea archived</string>
+    <string name="pmideas_reject_title">Reject Idea</string>
+    <string name="pmideas_reject_reason_label">Reason</string>
+    <string name="pmideas_user_impact">Impact: %1$s</string>
+    <string name="pmideas_mockup">Mockup: %1$s</string>
+    <string name="pmideas_rejection_reason">Rejected: %1$s</string>
+    <string name="pmideas_created_ticket">Ticket %1$s</string>
+    <string name="pmideas_empty_title">No ideas here</string>
+    <string name="pmideas_empty_body">Nothing in this bucket right now.</string>
+    <string name="pmideas_action_failed">Action failed</string>
+    <string name="pmideas_error_generic">Something went wrong. Please try again.</string>
+    <string name="pmideas_session_expired_title">Session expired</string>
+    <string name="pmideas_session_expired_body">Please sign in again to continue.</string>
+
+    <!-- ADV2-E5 (F5+F6): ad-messaging (sponsored mass-messaging + advertiser direct mass-DM). -->
+    <string name="admsg_back">Back</string>
+    <string name="admsg_compose_title">Sponsor a message</string>
+    <string name="admsg_compose_subtitle">Draft a message for a creator to send to their own audience, in their own voice. Nothing sends until the creator approves it.</string>
+    <string name="admsg_compose_creator_label">Creator (user id)</string>
+    <string name="admsg_compose_body_label">Message text</string>
+    <string name="admsg_compose_cta_label">Call-to-action link (optional)</string>
+    <string name="admsg_compose_billing_header">Billing</string>
+    <string name="admsg_compose_account_label">Ad account id</string>
+    <string name="admsg_compose_campaign_label">Campaign id</string>
+    <string name="admsg_compose_label_label">Sponsor label (optional)</string>
+    <string name="admsg_compose_submit">Send to creator</string>
+    <string name="admsg_compose_footnote">You are billed per recipient from your funded ad account once the creator approves: 2¢ on delivery, +5¢ on open, +10¢ on click. The creator earns 70%% of each charge.</string>
+    <string name="admsg_compose_sent_title">Offer sent</string>
+    <string name="admsg_compose_sent_body">The creator will see it in their approval queue. It sends only if they approve.</string>
+    <string name="admsg_compose_done">Done</string>
+    <string name="admsg_queue_title">Sponsored message requests</string>
+    <string name="admsg_queue_from">From %1$s</string>
+    <string name="admsg_queue_advertiser_unknown">an advertiser</string>
+    <string name="admsg_queue_cta_link">Link: %1$s</string>
+    <string name="admsg_queue_send_hint">Approving sends this to your audience as your own message — you earn 70%% of every delivery, open and click.</string>
+    <string name="admsg_queue_approve">Approve &amp; send</string>
+    <string name="admsg_queue_reject">Reject</string>
+    <string name="admsg_queue_empty_title">No sponsored message requests</string>
+    <string name="admsg_queue_empty_body">When a brand drafts a message for you to send, it will appear here to approve or reject.</string>
+    <plurals name="admsg_queue_sent_snackbar">
+        <item quantity="one">Sent to %1$d recipient.</item>
+        <item quantity="other">Sent to %1$d recipients.</item>
+    </plurals>
+    <string name="admsg_massdm_title">Message your audience</string>
+    <string name="admsg_massdm_subtitle">Send a direct message to people who follow or subscribe to you. Only existing relationships receive it, and anyone who opted out of promotional messages is excluded.</string>
+    <string name="admsg_massdm_body_label">Message text</string>
+    <string name="admsg_massdm_send">Send mass message</string>
+    <string name="admsg_massdm_footnote">You are billed per recipient from your funded ad account: 2¢ on delivery, +5¢ on open, +10¢ on click. Sending stops if your balance runs out.</string>
+    <string name="admsg_massdm_audience_title">Audience</string>
+    <string name="admsg_massdm_audience_explainer">Followers and subscribers who have not opted out of promotional messages.</string>
+    <string name="admsg_massdm_audience_retry">Retry</string>
+    <string name="admsg_massdm_paused_funds">Your balance ran out mid-send, so some recipients were not reached.</string>
+    <plurals name="admsg_massdm_reachable">
+        <item quantity="one">%1$d person reachable</item>
+        <item quantity="other">%1$d people reachable</item>
+    </plurals>
+    <plurals name="admsg_massdm_excluded_optout">
+        <item quantity="one">%1$d follower opted out and was excluded.</item>
+        <item quantity="other">%1$d followers opted out and were excluded.</item>
+    </plurals>
+    <plurals name="admsg_massdm_sent_title">
+        <item quantity="one">Sent to %1$d recipient</item>
+        <item quantity="other">Sent to %1$d recipients</item>
+    </plurals>
+    <string name="admsg_prefs_title">Promotional messages</string>
+    <string name="admsg_prefs_body">Creators and brands you follow or subscribe to can send you promotional (ad) messages. Turn this off to stop receiving them — you will still receive normal messages.</string>
+    <string name="admsg_prefs_switch_label">Allow promotional messages</string>
+    <string name="more_entry_ad_message_compose">Sponsor a message</string>
+    <string name="more_entry_ad_message_queue">Sponsored message requests</string>
+    <string name="more_entry_ad_mass_dm">Message your audience</string>
+    <string name="thread_ad_sponsored_label">Sponsored</string>
+    <string name="thread_ad_learn_more">Learn more</string>
+    <!-- D2: per-event PUSH preference toggles -->
+    <string name="settings_section_push_events_title">Push notifications</string>
+    <string name="settings_section_push_events_subtitle">Choose which events push to this device</string>
+    <string name="push_event_prefs_title">Push notifications</string>
+    <string name="push_event_prefs_header">Get a push notification on this device for these events. Transactional events are on by default.</string>
+    <string name="push_event_sold_title">Item sold</string>
+    <string name="push_event_sold_sub">You sold an item and need to ship it</string>
+    <string name="push_event_shipped_title">Order shipped</string>
+    <string name="push_event_shipped_sub">Your order has shipped</string>
+    <string name="push_event_ofd_title">Out for delivery</string>
+    <string name="push_event_ofd_sub">Your order is out for delivery</string>
+    <string name="push_event_delivered_title">Delivered</string>
+    <string name="push_event_delivered_sub">Your order was delivered</string>
+    <string name="push_event_post_tip_title">Tips on posts</string>
+    <string name="push_event_post_tip_sub">You received a tip on a post</string>
+    <string name="push_event_message_tip_title">Tips in messages</string>
+    <string name="push_event_message_tip_sub">You received a tip in a message</string>
+    <string name="push_event_subscription_title">New subscription</string>
+    <string name="push_event_subscription_sub">A subscription or payment succeeded</string>
+    <!-- D4: buyer order-tracking view -->
+    <string name="order_tracking_title">Track order</string>
+    <string name="order_tracking_not_shipped">This order has not shipped yet.</string>
+    <string name="order_tracking_progress_title">Progress</string>
+    <string name="order_tracking_step_shipped">Shipped</string>
+    <string name="order_tracking_step_in_transit">In transit</string>
+    <string name="order_tracking_step_out_for_delivery">Out for delivery</string>
+    <string name="order_tracking_step_delivered">Delivered</string>
+    <!-- SUB-E4-3: creator subscribers + MRR/analytics dashboard -->
+    <string name="more_entry_creator_subscribers">Subscribers &amp; MRR</string>
+    <string name="creator_subs_title">Subscribers &amp; MRR</string>
+    <string name="creator_subs_dashboard_title">This month</string>
+    <string name="creator_subs_analytics_unavailable">Analytics unavailable right now.</string>
+    <string name="creator_subs_zero_money">$0</string>
+    <string name="creator_subs_stat_active">Active subs</string>
+    <string name="creator_subs_stat_mrr">MRR</string>
+    <string name="creator_subs_stat_trialing">Trialing</string>
+    <string name="creator_subs_stat_past_due">Past due</string>
+    <string name="creator_subs_stat_new">New (30d)</string>
+    <string name="creator_subs_stat_churned">Churned (30d)</string>
+    <string name="creator_subs_stat_arpu">ARPU</string>
+    <string name="creator_subs_stat_churn_rate">Churn rate</string>
+    <string name="creator_subs_net_revenue">Net subscription revenue to date: %1$s</string>
+    <string name="creator_subs_filter_all">All</string>
+    <string name="creator_subs_filter_active">Active</string>
+    <string name="creator_subs_filter_trialing">Trialing</string>
+    <string name="creator_subs_filter_past_due">Past due</string>
+    <string name="creator_subs_filter_canceled">Canceled</string>
+    <string name="creator_subs_empty_title">No subscribers yet</string>
+    <string name="creator_subs_empty_body">When people subscribe to your plans they will appear here.</string>
+    <string name="creator_subs_tier_unknown">Subscription</string>
+    <string name="creator_subs_since">Since %1$s</string>
+    <string name="creator_subs_next_billing">Next billing %1$s</string>
+    <string name="creator_subs_no_date">—</string>
+    <string name="creator_subs_trial_badge">Trial</string>
+    <string name="creator_subs_gift_badge">Gift</string>
+    <string name="creator_subs_status_canceling">Canceling</string>
+    <string name="creator_subs_status_grace">Grace</string>
+    <string name="creator_subs_action_stop_renewal">Stop renewal</string>
+    <string name="creator_subs_action_remove">Remove</string>
+    <string name="creator_subs_load_more">Load more</string>
+    <string name="creator_subs_confirm">Confirm</string>
+    <string name="creator_subs_dismiss">Cancel</string>
+    <string name="creator_subs_confirm_stop_title">Stop auto-renewal?</string>
+    <string name="creator_subs_confirm_stop_body">%1$s keeps access until the period ends, then will not renew.</string>
+    <string name="creator_subs_confirm_remove_title">Remove subscriber?</string>
+    <string name="creator_subs_confirm_remove_body">%1$s loses access now and is refunded the unused portion.</string>
 </resources>

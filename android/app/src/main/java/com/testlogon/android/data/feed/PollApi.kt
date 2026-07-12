@@ -43,4 +43,21 @@ interface PollApi {
         @Path("post_id") postId: String,
         @Query("question_id") questionId: String,
     ): PollVoteResponseDto
+
+    /** Paginated results for a question (options sorted by count desc, write-in flags). */
+    @GET("posts/{post_id}/poll-results")
+    suspend fun pollResults(
+        @Path("post_id") postId: String,
+        @Query("question_id") questionId: String,
+        @Query("top_n") topN: Int?,
+        @Query("offset") offset: Int,
+    ): PollResultsResponseDto
+
+    /** Submit a voter write-in; returns the cast result + the fresh paginated results. */
+    @Headers("Content-Type: application/json")
+    @POST("posts/{post_id}/write-in")
+    suspend fun writeIn(
+        @Path("post_id") postId: String,
+        @Body body: PollWriteInRequestDto,
+    ): PollWriteInResponseDto
 }

@@ -1,0 +1,18 @@
+--- app/main.py.bak_polls_1783435257	2026-07-07 14:40:57.971961776 +0000
++++ app/main.py	2026-07-07 14:40:57.994031699 +0000
+@@ -208,6 +208,7 @@
+ from app.routers.orgs import router as orgs_router
+ from app.routers.user_groups import router as user_groups_router
+ from app.routers.group_feed import router as group_feed_router, public_group_feed_router
++from app.routers.polls import polls_router
+ from app.routers.fan_club import router as fan_club_router, public_router as fan_club_public_router
+ from app.routers.stories import router as stories_router
+ from app.routers.watermark import router as watermark_router, internal_router as watermark_internal_router
+@@ -973,6 +974,7 @@
+     app.include_router(collaboration_admin_disputes_router)
+     app.include_router(orgs_router)
+     app.include_router(user_groups_router)
++    app.include_router(polls_router)
+     app.include_router(group_feed_router)
+     app.include_router(public_group_feed_router)
+     app.include_router(fan_club_router)

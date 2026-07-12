@@ -33,6 +33,12 @@ class HostSelectionInterceptor @Inject constructor(
             return chain.proceed(request)
         }
 
+        // A request to the configured HOST but a DIFFERENT port is an intentional call to a co-located
+        // service (e.g. the local media server for broadcast WHIP/HLS on :8889/:8888); do not retarget it.
+        if (request.url.host == base.host && request.url.port != base.port) {
+            return chain.proceed(request)
+        }
+
         val rewritten = request.url.newBuilder()
             .scheme(base.scheme)
             .host(base.host)

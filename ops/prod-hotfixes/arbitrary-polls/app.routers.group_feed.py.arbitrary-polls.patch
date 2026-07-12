@@ -1,0 +1,38 @@
+--- app/routers/group_feed.py.bak_polls_1783435257	2026-07-07 14:40:57.976734870 +0000
++++ app/routers/group_feed.py	2026-07-07 14:40:58.010146069 +0000
+@@ -11,6 +11,7 @@
+ 
+ from app.services.sessions import require_ui_session
+ from app.models import CreateGroupPostIn
++from app.services.arbitrary_polls import PollCreateIn
+ from app.core.settings import S
+ 
+ 
+@@ -20,6 +21,10 @@
+     image_url: Optional[str] = Field(default=None, max_length=2048)
+     parent_comment_id: Optional[str] = Field(default=None, max_length=64)
+ 
++
++class CreateGroupPostWithPollIn(CreateGroupPostIn):
++    poll: Optional[PollCreateIn] = None
++
+ router = APIRouter(tags=["group-feed"])
+ public_group_feed_router = APIRouter(tags=["group-feed-public"])
+ 
+@@ -32,7 +37,7 @@
+ # ── Create group post ─────────────────────────────────────────────────────────
+ 
+ @router.post("/ui/groups/{group_id}/posts", status_code=201)
+-def create_post(group_id: str, body: CreateGroupPostIn, session=Depends(require_ui_session)):
++def create_post(group_id: str, body: CreateGroupPostWithPollIn, session=Depends(require_ui_session)):
+     _require_feed_enabled()
+     from app.services.group_feed import create_group_post
+     try:
+@@ -46,6 +51,7 @@
+             unlock_price_cents=body.unlock_price_cents,
+             image_urls=getattr(body, "image_urls", None),
+             video_id=getattr(body, "video_id", None),
++            poll=(body.poll.model_dump() if getattr(body, "poll", None) else None),
+         )
+     except PermissionError as e:
+         raise HTTPException(403, str(e))

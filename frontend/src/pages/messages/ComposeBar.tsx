@@ -173,6 +173,11 @@ export function ComposeBar({
   const [viewOnceText, setViewOnceText] = React.useState(false);
   const [expiresEnabled, setExpiresEnabled] = React.useState(false);
   const [expiresDuration, setExpiresDuration] = React.useState("3600");
+  // B-COUNTDOWN #31: attach a countdown + reveal payload to a normal message.
+  const [countdownAttachEnabled, setCountdownAttachEnabled] = React.useState(false);
+  const [countdownAttachTitle, setCountdownAttachTitle] = React.useState("");
+  const [countdownAttachInput, setCountdownAttachInput] = React.useState<string>(""); // "YYYY-MM-DDTHH:mm"
+  const [countdownAttachRevealText, setCountdownAttachRevealText] = React.useState("");
   // Gallery mode state
   const [galleryMode, setGalleryMode] = React.useState(false);
   const [lotteryMode, setLotteryMode] = React.useState(false);
@@ -376,8 +381,8 @@ export function ComposeBar({
     });
   };
 
-  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id"> => {
-    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id"> = {};
+  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id" | "countdown_target_datetime" | "countdown_title" | "countdown_reveal_text"> => {
+    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id" | "countdown_target_datetime" | "countdown_title" | "countdown_reveal_text"> = {};
     if (lockEnabled) {
       const cents = Math.round(parseFloat(lockPrice) * 100);
       if (!isNaN(cents) && cents > 0) extra.lock_price_cents = cents;
@@ -397,6 +402,15 @@ export function ComposeBar({
     if (expiresEnabled) {
       const secs = parseInt(expiresDuration, 10);
       if (!isNaN(secs) && secs >= 10) extra.expires_in_seconds = secs;
+    }
+    // B-COUNTDOWN #31: attach a countdown target + optional reveal to any message.
+    if (countdownAttachEnabled && countdownAttachInput) {
+      const targetMs = new Date(countdownAttachInput).getTime();
+      if (!isNaN(targetMs)) {
+        extra.countdown_target_datetime = Math.floor(targetMs / 1000);
+        if (countdownAttachTitle.trim()) extra.countdown_title = countdownAttachTitle.trim();
+        if (countdownAttachRevealText.trim()) extra.countdown_reveal_text = countdownAttachRevealText.trim();
+      }
     }
     return extra;
   };
@@ -691,6 +705,12 @@ export function ComposeBar({
       if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
       if (viewOnceText) setViewOnceText(false);
       if (expiresEnabled) { setExpiresEnabled(false); setExpiresDuration("3600"); }
+      if (countdownAttachEnabled) {
+        setCountdownAttachEnabled(false);
+        setCountdownAttachTitle("");
+        setCountdownAttachInput("");
+        setCountdownAttachRevealText("");
+      }
     };
 
     // For image/PDF: send image with text as caption in a single bubble
@@ -888,6 +908,42 @@ export function ComposeBar({
             <option value="86400">1 day</option>
             <option value="604800">7 days</option>
           </select>
+        </div>
+      )}
+      {countdownAttachEnabled && (
+        <div className="mb-2 rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
+          <div className="flex flex-col gap-1">
+            <label className="text-muted-foreground">Countdown title (optional)</label>
+            <input
+              type="text"
+              value={countdownAttachTitle}
+              onChange={(e) => setCountdownAttachTitle(e.target.value)}
+              placeholder="e.g. Doors open in…"
+              className="rounded border border-input bg-background px-2 py-1"
+              disabled={disabled || sending}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-muted-foreground">Counts down to</label>
+            <input
+              type="datetime-local"
+              value={countdownAttachInput}
+              onChange={(e) => setCountdownAttachInput(e.target.value)}
+              className="rounded border border-input bg-background px-2 py-1"
+              disabled={disabled || sending}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-muted-foreground">Reveal text when it ends (optional)</label>
+            <input
+              type="text"
+              value={countdownAttachRevealText}
+              onChange={(e) => setCountdownAttachRevealText(e.target.value)}
+              placeholder="Shown once the countdown completes"
+              className="rounded border border-input bg-background px-2 py-1"
+              disabled={disabled || sending}
+            />
+          </div>
         </div>
       )}
       {lockEnabled && (
@@ -1640,6 +1696,17 @@ export function ComposeBar({
                   data-testid="compose-toggle-expires"
                 >
                   <Clock className="h-4 w-4" /> Message expires
+                </Button>
+                <Button
+                  type="button"
+                  variant={countdownAttachEnabled ? "secondary" : "ghost"}
+                  className="h-9 justify-start gap-2 px-2"
+                  onClick={() => { setCountdownAttachEnabled((v) => !v); setMoreOpen(false); }}
+                  disabled={disabled || sending || encrypting}
+                  aria-label="Toggle attach countdown"
+                  data-testid="compose-toggle-countdown-attach"
+                >
+                  <Timer className="h-4 w-4" /> Attach countdown
                 </Button>
                 <div className="my-1 border-t border-border" />
                 {onSendVoiceMessage && !voiceRecording && (

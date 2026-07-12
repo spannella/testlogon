@@ -6,17 +6,23 @@ import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SplitMode
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
+import com.testlogon.android.core.model.syndicates.SyndicateMember
+import com.testlogon.android.core.model.syndicates.SyndicateListItem
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
 import com.testlogon.android.core.model.syndicates.TreasurySummary
 import com.testlogon.android.core.network.syndicates.SplitConfigOut
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingContentOut
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegistrationOut
+import com.testlogon.android.core.network.syndicates.SyndicateMemberDto
 import com.testlogon.android.core.network.syndicates.SyndicatePostOut
+import com.testlogon.android.core.network.syndicates.SyndicateCreateOut
+import com.testlogon.android.core.network.syndicates.SyndicateListItemDto
 import com.testlogon.android.core.network.syndicates.SyndicateProfileOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryLedgerEntryOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryOut
 import java.util.Locale
+import com.testlogon.android.data.poll.toDomain
 
 /**
  * AND-356 - DTO -> domain mappers for the syndicate-overview surface.
@@ -31,6 +37,21 @@ import java.util.Locale
  */
 
 private const val FALLBACK_CURRENCY = "USD"
+
+/** Batch-7 - maps a syndicate list-row DTO to the domain [SyndicateListItem] (id = syndicate_id). */
+fun SyndicateListItemDto.toDomain(): SyndicateListItem = SyndicateListItem(
+    id = syndicateId,
+    name = syndicateName.orEmpty(),
+    role = role,
+    joinedAt = joinedAt,
+)
+
+/** Batch-7 - maps a create receipt to a [SyndicateListItem] (creator is admin) for immediate nav. */
+fun SyndicateCreateOut.toListItem(): SyndicateListItem = SyndicateListItem(
+    id = syndicateId,
+    name = name.orEmpty(),
+    role = "admin",
+)
 
 /**
  * Maps the profile DTO to the domain [SyndicateOverview]. [currentUserId] is the viewer's own user id, used
@@ -47,17 +68,46 @@ fun SyndicateProfileOut.toDomain(currentUserId: String?): SyndicateOverview = Sy
 )
 
 /** Maps a feed-post DTO to the domain [SyndicateFeedItem]; created_at stays a Long epoch. */
-fun SyndicatePostOut.toDomain(): SyndicateFeedItem = SyndicateFeedItem(
-    postId = postId,
-    authorName = authorName,
-    authorAvatarUrl = authorAvatarUrl,
-    createdAt = createdAt,
-    text = text,
-    imageUrl = imageUrl,
-    reactionCount = reactionCount,
-    commentCount = commentCount,
-    tipCount = tipCount,
-)
+fun SyndicatePostOut.toDomain(): SyndicateFeedItem {
+    val images = imageUrls ?: (imageUrl?.let { listOf(it) } ?: emptyList())
+    // ADV syndicate-feed ads — a server-injected sponsored (paid) unit renders as a distinct, non-tippable
+    // Sponsored card. Requires a creative id (a sponsored row without one can't render/track -> degrade).
+    val sponsoredAd = if (isSponsored) {
+        creativeId?.takeIf { it.isNotBlank() }?.let { creative ->
+            com.testlogon.android.core.model.ads.SponsoredAd(
+                label = sponsorLabel?.takeIf { it.isNotBlank() } ?: authorName?.takeIf { it.isNotBlank() } ?: "Sponsored",
+                headline = headline?.takeIf { it.isNotBlank() },
+                body = (body ?: text)?.takeIf { it.isNotBlank() },
+                ctaText = ctaText?.takeIf { it.isNotBlank() },
+                ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
+                imageUrls = images,
+                adClickId = adClickId?.takeIf { it.isNotBlank() },
+                creativeId = creative,
+                campaignId = campaignId?.takeIf { it.isNotBlank() } ?: "",
+                accountId = accountId?.takeIf { it.isNotBlank() } ?: "",
+                surface = "syndicate_feed",
+                slotType = "sponsored_post",
+                creatorId = contentOwnerId?.takeIf { it.isNotBlank() } ?: "platform",
+                contentId = postId,
+            )
+        }
+    } else {
+        null
+    }
+    return SyndicateFeedItem(
+        postId = postId,
+        authorName = authorName,
+        authorAvatarUrl = authorAvatarUrl,
+        createdAt = createdAt,
+        text = text,
+        imageUrl = imageUrl,
+        reactionCount = reactionCount,
+        commentCount = commentCount,
+        tipCount = tipCount,
+        poll = poll?.toDomain(),
+        sponsored = sponsoredAd,
+    )
+}
 
 /** Maps the treasury DTO's summary fields to the domain [TreasurySummary] (currency upper-cased). */
 fun SyndicateTreasuryOut.toSummary(): TreasurySummary = TreasurySummary(
@@ -112,4 +162,12 @@ fun SyndicateOpenLicensingContentOut.toDomain(): OpenLicensingContent = OpenLice
 fun SyndicateOpenLicensingRegistrationOut.toDomain(): RegistrationResult = RegistrationResult(
     contentId = contentId,
     licensesCreated = licensesCreated ?: 0,
+)
+
+/** Batch-9 (#12) - maps a [SyndicateMemberDto] to the domain [SyndicateMember]. */
+fun SyndicateMemberDto.toDomain(): SyndicateMember = SyndicateMember(
+    userId = userId,
+    displayName = displayName?.takeIf { it.isNotBlank() } ?: userId,
+    role = role?.takeIf { it.isNotBlank() } ?: "member",
+    joinedAt = joinedAt ?: 0,
 )

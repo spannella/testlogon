@@ -7,6 +7,9 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
+import coil.decode.VideoFrameDecoder
+import coil.map.Mapper
+import coil.request.Options
 import com.google.firebase.FirebaseApp
 import com.testlogon.android.data.push.FcmTokenRegistrar
 import com.testlogon.android.notifications.NotificationChannelInitializer
@@ -37,6 +40,9 @@ class TestLogonApp : Application(), ImageLoaderFactory {
 
     @Inject lateinit var tokenRegistrar: FcmTokenRegistrar
 
+    @Inject
+    lateinit var callSignalingHub: com.testlogon.android.data.webrtc.CallSignalingHub
+
     /** AND-145 — presence heartbeat + SSE presence collector wiring. */
     @Inject
     lateinit var presenceBootstrap: com.testlogon.android.data.messaging.presence.PresenceLifecycleBootstrap
@@ -53,13 +59,24 @@ class TestLogonApp : Application(), ImageLoaderFactory {
      */
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
         .components {
+            // Resolve server-relative media urls (e.g. "/mock/s3/..." or "/media/...") against the API
+            // base url so Coil can fetch them; absolute (http/https) urls and content/file uris pass through.
+            add(RelativeUrlMapper(BuildConfig.API_BASE_URL))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 add(ImageDecoderDecoder.Factory())
             } else {
                 add(GifDecoder.Factory())
             }
+            // MV2 — decode a poster frame from an uploaded video-clip url (kind="video" bubble).
+            add(VideoFrameDecoder.Factory())
         }
         .build()
+
+    /** Maps a server-relative url ("/path") to an absolute one under [base]; returns null (no-op) otherwise. */
+    private class RelativeUrlMapper(private val base: String) : Mapper<String, String> {
+        override fun map(data: String, options: Options): String? =
+            if (data.startsWith("/")) base.trimEnd('/') + data else null
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -73,6 +90,7 @@ class TestLogonApp : Application(), ImageLoaderFactory {
 
         // AND-145: start the foreground-bound presence heartbeat + SSE presence collector.
         runCatching { presenceBootstrap.start() }
+        runCatching { callSignalingHub.start() }
 
         // AND-216: register the cart-abandonment tracker against the process lifecycle.
         runCatching { cartAbandonmentTracker.start() }

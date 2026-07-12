@@ -28,6 +28,13 @@ interface BroadcastRepository {
     /** List sessions, optionally filtered by lifecycle [status] (live/scheduled/stopped/...). */
     suspend fun sessions(status: String? = null, limit: Int? = null): ApiResult<BroadcastSessionPage>
 
+    /**
+     * T3 — PUBLIC live-discovery feed (GET broadcast/live): currently-live sessions across ALL creators,
+     * for any authenticated viewer. Use this to populate the LIVE bucket so a second-user viewer can find
+     * a host's broadcast (the base [sessions] list is operator-scoped and hides other users' sessions).
+     */
+    suspend fun liveSessions(limit: Int? = null): ApiResult<BroadcastSessionPage>
+
     /** Dedicated scheduled-sessions route ({ items, count }). */
     suspend fun scheduledSessions(limit: Int? = null): ApiResult<BroadcastScheduledPage>
 
@@ -92,6 +99,11 @@ class BroadcastRepositoryImpl @Inject constructor(
     override suspend fun sessions(status: String?, limit: Int?): ApiResult<BroadcastSessionPage> =
         withContext(io) {
             call { api.listSessions(status, limit) }.map { it.toDomain() }
+        }
+
+    override suspend fun liveSessions(limit: Int?): ApiResult<BroadcastSessionPage> =
+        withContext(io) {
+            call { api.listLiveSessions(limit) }.map { it.toDomain() }
         }
 
     override suspend fun scheduledSessions(limit: Int?): ApiResult<BroadcastScheduledPage> =

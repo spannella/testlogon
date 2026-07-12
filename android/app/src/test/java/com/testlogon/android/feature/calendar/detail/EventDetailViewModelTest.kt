@@ -6,6 +6,9 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.feature.calendar.CalendarZoneProvider
 import com.testlogon.android.feature.calendar.FakeCalendarRepository
+import com.testlogon.android.data.calendar.ics.Rfc5545IcsSerializer
+import android.content.Context
+import org.mockito.Mockito.mock
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -29,6 +32,9 @@ class EventDetailViewModelTest {
     private val host = object : PublicEventHostProvider {
         override fun host(): String = "app.testlogon.example.com"
     }
+    // exportIcs() is not exercised here; a mock Context satisfies the (unused) file-write seam.
+    private val icsExporter = IcsExporter(mock(Context::class.java))
+    private val icsSerializer = Rfc5545IcsSerializer()
 
     private fun vm(
         calendarId: String = "cal_55",
@@ -38,6 +44,8 @@ class EventDetailViewModelTest {
         repository = repo,
         zoneProvider = zone,
         shareHostProvider = host,
+        icsExporter = icsExporter,
+        icsSerializer = icsSerializer,
         savedStateHandle = SavedStateHandle(
             mapOf(
                 EventDetailViewModel.ARG_CALENDAR_ID to calendarId,

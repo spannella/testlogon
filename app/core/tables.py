@@ -117,6 +117,7 @@ class Tables:
     message_call_sessions: Any
     content_reports: Any
     moderation_tickets: Any
+    moderation_cases: Any
     moderation_actions: Any
     moderation_audit_log: Any
     moderation_video_queue: Any
@@ -129,6 +130,8 @@ class Tables:
     catalog_product_versions: Any
     orders: Any
     order_items: Any
+    shipment_tracking: Any
+    live_stream_products: Any
     payments: Any
     entitlements: Any
     entitlement_usage_events: Any
@@ -181,6 +184,7 @@ class Tables:
     content_ad_controls: Any
     ad_frequency_caps: Any
     ad_billing: Any
+    ad_clicks: Any
     ad_analytics_rollups: Any
     ad_fraud_events: Any
     ad_optimization_recommendations: Any
@@ -508,6 +512,7 @@ T = Tables(
     message_call_sessions=_safe_table(S.message_call_sessions_table_name),
     content_reports=_safe_table(S.content_reports_table_name),
     moderation_tickets=_safe_table(S.moderation_tickets_table_name),
+    moderation_cases=_safe_table(getattr(S, "moderation_cases_table_name", "ModerationCases")),
     moderation_actions=_safe_table(S.moderation_actions_table_name),
     moderation_audit_log=_safe_table(S.moderation_audit_log_table_name),
     moderation_video_queue=_safe_table(S.moderation_video_queue_table_name),
@@ -520,6 +525,8 @@ T = Tables(
     catalog_product_versions=_safe_table(S.catalog_product_versions_table_name),
     orders=_safe_table(S.orders_table_name),
     order_items=_safe_table(S.order_items_table_name),
+    shipment_tracking=_safe_table(S.shipment_tracking_table_name),
+    live_stream_products=_safe_table(S.live_stream_products_table_name),
     payments=_safe_table(S.payments_table_name),
     entitlements=_safe_table(S.entitlements_table_name),
     entitlement_usage_events=_safe_table(S.entitlement_usage_events_table_name),
@@ -572,6 +579,7 @@ T = Tables(
     content_ad_controls=_safe_table(S.content_ad_controls_table_name),
     ad_frequency_caps=_safe_table(S.ad_frequency_caps_table_name),
     ad_billing=_safe_table(S.ad_billing_table_name),
+    ad_clicks=_safe_table(S.ad_clicks_table_name),
     ad_analytics_rollups=_safe_table(S.ad_analytics_rollups_table_name),
     ad_fraud_events=_safe_table(S.ad_fraud_events_table_name),
     ad_optimization_recommendations=_safe_table(S.ad_optimization_recommendations_table_name),

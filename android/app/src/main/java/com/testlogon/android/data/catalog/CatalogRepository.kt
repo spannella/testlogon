@@ -53,6 +53,24 @@ interface CatalogRepository {
      */
     suspend fun getItem(categoryId: String, itemId: String): ApiResult<CatalogItem>
 
+    /** ECOM (reviews) — one page of reviews for [itemId], keyed by [cursor] (null = first page). */
+    suspend fun reviews(itemId: String, cursor: String? = null): ApiResult<CatalogReviewPage>
+
+    /**
+     * ECOM (reviews) — posts a review for [itemId]. [reviewer] is written with the caller's user_sub so
+     * delete-own can be detected client-side. Non-idempotent; never auto-retried.
+     */
+    suspend fun addReview(
+        itemId: String,
+        rating: Int,
+        title: String?,
+        body: String?,
+        reviewer: String?,
+    ): ApiResult<CatalogReview>
+
+    /** ECOM (reviews) — deletes a review by id (server delete is unconditional; gate delete-own in UI). */
+    suspend fun deleteReview(itemId: String, reviewId: String): ApiResult<Unit>
+
     companion object {
         /** Synthetic status flagging a client-side "id absent from the category list" (no HTTP 404). */
         const val STATUS_ITEM_NOT_FOUND = 404
@@ -111,6 +129,36 @@ class CatalogRepositoryImpl @Inject constructor(
             ApiResult.Failure(
                 ApiError(status = CatalogRepository.STATUS_ITEM_NOT_FOUND, message = "Item not found"),
             )
+        }
+
+    override suspend fun reviews(itemId: String, cursor: String?): ApiResult<CatalogReviewPage> =
+        withContext(io) {
+            call { api.listReviews(itemId = itemId, nextToken = cursor) }.map { it.toDomain() }
+        }
+
+    override suspend fun addReview(
+        itemId: String,
+        rating: Int,
+        title: String?,
+        body: String?,
+        reviewer: String?,
+    ): ApiResult<CatalogReview> = withContext(io) {
+        call {
+            api.addReview(
+                itemId = itemId,
+                body = CatalogReviewCreateDto(
+                    rating = rating,
+                    title = title?.takeIf { it.isNotBlank() },
+                    body = body?.takeIf { it.isNotBlank() },
+                    reviewer = reviewer,
+                ),
+            )
+        }.map { it.toDomain() }
+    }
+
+    override suspend fun deleteReview(itemId: String, reviewId: String): ApiResult<Unit> =
+        withContext(io) {
+            call { api.deleteReview(itemId = itemId, reviewId = reviewId) }.map { }
         }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {

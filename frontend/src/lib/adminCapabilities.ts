@@ -1,4 +1,5 @@
 import type { AdminProfileType, AdminScope } from "@/api/endpoints/adminRoles";
+import { useAuthStore } from "@/stores/authStore";
 
 interface JwtAdminProfile {
   type?: AdminProfileType | string;
@@ -21,12 +22,22 @@ function parseJwtClaims(token: string | null): JwtClaims | null {
 
 export function getRoleFromAccessToken(token: string | null): string | null {
   const claims = parseJwtClaims(token);
-  return typeof claims?.role === "string" ? claims.role : null;
+  if (typeof claims?.role === "string") return claims.role;
+  // Cookie login stores an empty access token, so fall back to the role
+  // fetched from /ui/me (role/is_admin) and cached in the auth store.
+  const stored = useAuthStore.getState().role;
+  return typeof stored === "string" ? stored : null;
 }
 
 export function getAdminProfileFromAccessToken(token: string | null): { type: AdminProfileType; scopes: AdminScope[] } | null {
   const claims = parseJwtClaims(token);
-  if (!claims || claims.role !== "admin") return null;
+  if (!claims || claims.role !== "admin") {
+    // No role-bearing JWT (cookie login) -> fall back to /ui/me identity.
+    if (useAuthStore.getState().role !== "admin") return null;
+    const storedProfile = useAuthStore.getState().adminProfile;
+    if (storedProfile) return { type: storedProfile.type as AdminProfileType, scopes: storedProfile.scopes as AdminScope[] };
+    return { type: "general", scopes: [] };
+  }
 
   const raw = claims.admin_profile;
   if (!raw || raw.type !== "scoped") {

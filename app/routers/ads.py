@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form, Body
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_or_root
@@ -15,6 +15,7 @@ from app.models import (
     AdFeedbackIn,
     AdServeRequestIn,
     AdTrackEventIn,
+    CtaClickIn,
     CampaignCreateIn,
     CampaignReviewIn,
     CampaignUpdateIn,
@@ -22,9 +23,11 @@ from app.models import (
     CreativeReviewIn,
     CreativeUpdateIn,
 )
-from app.services.ad_serving import serve_ad, track_ad_event, get_serving_stats
+from app.services.ad_serving import serve_ad, track_ad_event, get_serving_stats, record_cta_click
 from app.services.ad_accounts import (
     create_ad_account,
+    create_syndicate_ad_account,
+    list_syndicate_ad_accounts,
     get_ad_account,
     list_accounts_by_owner,
     list_accounts_by_status,
@@ -169,7 +172,10 @@ async def create_campaign_endpoint(
     account_id: str, body: CampaignCreateIn, ctx=Depends(require_ui_session)
 ):
     acct = _require_account_owner(account_id, ctx["user_sub"])
-    if acct.get("status") != "active":
+    # ADV2-301 (F3): a free self-promo campaign needs no funded/active ad account
+    # (the creator promotes their OWN content for free); paid campaigns still
+    # require an active account.
+    if not getattr(body, "is_self_promo", False) and acct.get("status") != "active":
         raise HTTPException(status_code=403, detail="Account is not active")
     return create_campaign(account_id, body)
 
@@ -378,6 +384,7 @@ async def serve_ad_endpoint(body: AdServeRequestIn, ctx=Depends(require_ui_sessi
         slot_type=body.slot_type,
         user_id=ctx["user_sub"],
         user_context=getattr(body, "user_context", None),
+        content_owner_id=getattr(body, "content_owner_id", "") or "",
     )
     return result
 
@@ -402,7 +409,124 @@ async def track_ad_event_endpoint(body: AdTrackEventIn, request: Request, ctx=De
         user_agent=body.user_agent or request.headers.get("user-agent", ""),
         view_time_ms=body.view_time_ms,
         geo_country=body.geo_country,
+        ad_click_id=getattr(body, "ad_click_id", "") or "",
     )
+
+
+@router.post("/cta-click")
+async def cta_click_endpoint(body: CtaClickIn, request: Request, ctx=Depends(require_ui_session)):
+    """ADV2-201/E2: a structured CTA tap. Charges CPC to the advertiser
+    (funds-guarded, idempotent per ad_click_id+cta_type) EXCEPT tip (no
+    advertiser charge; a tip credits the creator only). Records the tap for
+    last-click attribution so a resulting purchase/subscribe fires CPA via the
+    existing conversion path."""
+    ip_address = request.client.host if request.client else ""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        ip_address = fwd.split(",")[0].strip()
+    return record_cta_click(
+        ad_click_id=body.ad_click_id,
+        cta_type=body.cta_type,
+        target_id=body.target_id,
+        viewer_sub=ctx["user_sub"],
+        ip_address=ip_address,
+        user_agent=request.headers.get("user-agent", ""),
+    )
+
+
+# --- Sponsored-as-creator posts (ADV2-E4 / F4) ---------------------
+from typing import Optional as _SPCPOptional, List as _SPCPList
+from pydantic import BaseModel as _SPCPBase, Field as _SPCPField
+from app.services import sponsored_creator_posts as _spcp
+
+
+class SponsoredPostProposalIn(_SPCPBase):
+    creator_sub: str = _SPCPField(..., min_length=1, max_length=128)
+    body: str = _SPCPField("", max_length=20000)
+    body_format: str = _SPCPField("plain", max_length=16)
+    image_urls: _SPCPList[str] = _SPCPField(default_factory=list)
+    video_id: _SPCPOptional[str] = None
+    account_id: str = _SPCPField("", max_length=128)
+    campaign_id: str = _SPCPField("", max_length=128)
+    creative_id: str = _SPCPField("", max_length=128)
+    sponsor_label: str = _SPCPField("", max_length=200)
+    disclosure: str = _SPCPField("", max_length=500)
+
+
+class SponsoredPostRejectIn(_SPCPBase):
+    reason: str = _SPCPField("", max_length=500)
+
+
+def _spcp_http(exc):
+    return HTTPException(status_code=getattr(exc, "status_code", 400), detail=getattr(exc, "detail", str(exc)))
+
+
+@router.post("/sponsored-posts/proposals", status_code=201)
+async def create_sponsored_proposal_endpoint(body: SponsoredPostProposalIn, ctx=Depends(require_ui_session)):
+    """ADV2-401: an advertiser drafts a sponsored post and PROPOSES it to a
+    target creator. Does NOT publish until the creator approves."""
+    if body.account_id:
+        _require_account_owner(body.account_id, ctx["user_sub"])
+    try:
+        return _spcp.create_proposal(
+            advertiser_sub=ctx["user_sub"],
+            advertiser_account_id=body.account_id,
+            creator_sub=body.creator_sub,
+            body=body.body, body_format=body.body_format,
+            image_urls=body.image_urls, video_id=body.video_id,
+            campaign_id=body.campaign_id, creative_id=body.creative_id,
+            sponsor_account_id=body.account_id,
+            sponsor_label=body.sponsor_label, disclosure=body.disclosure,
+        )
+    except _spcp.SponsoredPostError as exc:
+        raise _spcp_http(exc)
+
+
+@router.get("/sponsored-posts/proposals/inbox")
+async def sponsored_proposals_inbox_endpoint(ctx=Depends(require_ui_session)):
+    """ADV2-403: the targeted creator's review queue (pending proposals)."""
+    return {"proposals": _spcp.list_pending_for_creator(ctx["user_sub"])}
+
+
+@router.get("/sponsored-posts/proposals/outbox")
+async def sponsored_proposals_outbox_endpoint(ctx=Depends(require_ui_session)):
+    return {"proposals": _spcp.list_for_advertiser(ctx["user_sub"])}
+
+
+@router.post("/sponsored-posts/proposals/{proposal_id}/approve")
+async def approve_sponsored_proposal_endpoint(proposal_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-402: only the TARGETED creator may approve -> publishes a post
+    authored-by-creator carrying paid_partnership (NOT is_sponsored)."""
+    try:
+        return _spcp.approve_and_publish(proposal_id=proposal_id, creator_sub=ctx["user_sub"])
+    except _spcp.SponsoredPostError as exc:
+        raise _spcp_http(exc)
+
+
+@router.post("/sponsored-posts/proposals/{proposal_id}/reject")
+async def reject_sponsored_proposal_endpoint(proposal_id: str, body: _SPCPOptional[SponsoredPostRejectIn] = None, ctx=Depends(require_ui_session)):
+    try:
+        return _spcp.reject_proposal(proposal_id=proposal_id, creator_sub=ctx["user_sub"], reason=(body.reason if body else ""))
+    except _spcp.SponsoredPostError as exc:
+        raise _spcp_http(exc)
+
+
+@router.get("/sponsored-posts/{post_id}/placement")
+async def sponsored_post_placement_endpoint(post_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-404: lazy-mint the per-viewer ad-click for a published
+    paid_partnership post and return impression/click tracking handles so the
+    client can fire /ui/ads/track (advertiser billed, creator placement share).
+    Returns {billable:false} for an organic post or a self-view."""
+    from app.routers.newsfeed import ddb_get_item, pk_post, sk_post
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    handle = _spcp.mint_post_ad_click(viewer_sub=ctx["user_sub"], post=post)
+    if not handle:
+        return {"billable": False}
+    out = {"billable": True}
+    out.update(handle)
+    return out
 
 
 @router.get("/stats/{campaign_id}")
@@ -532,6 +656,22 @@ async def internal_charge_conversion(
     )
 
 
+@admin_router.post("/charges/reverse")
+async def internal_reverse_charge(
+    body: dict,
+    user: AuthenticatedUser = Depends(require_admin_or_root),
+):
+    """ADV-502: idempotently reverse an ad charge (fraud clawback / dispute)."""
+    from app.services.ad_billing import reverse_ad_charge
+    actor = getattr(user, "sub", "") or getattr(user, "user_id", "") or ""
+    return reverse_ad_charge(
+        account_id=body["account_id"],
+        entry_id=body["entry_id"],
+        reason=body.get("reason", "admin_reversal"),
+        actor=actor,
+    )
+
+
 # ── Ad Analytics (ADS-008) ──────────────────────────────────────────
 
 _VALID_GRANULARITIES = {"hourly", "daily", "weekly", "monthly"}
@@ -548,6 +688,20 @@ async def analytics_summary_endpoint(
     from app.services.ad_analytics import get_summary
     _require_account_owner(account_id, ctx["user_sub"])
     return get_summary(account_id, campaign_id, days)
+
+
+@router.get("/roas")
+async def roas_report_endpoint(
+    account_id: str = Query(...),
+    campaign_id: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=365),
+    ctx=Depends(require_ui_session),
+):
+    """ADV-501: per-account + per-campaign ROAS (spend / impressions / clicks /
+    CTR / conversions / CPA / ROAS) sourced from the ad_billing ledger."""
+    from app.services.ad_roas import roas_report
+    _require_account_owner(account_id, ctx["user_sub"])
+    return roas_report(account_id, campaign_id, days)
 
 
 @router.get("/analytics/timeseries")
@@ -596,3 +750,375 @@ async def analytics_export_endpoint(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=ad_analytics.csv"},
     )
+
+
+# ── Ad-messaging: shared engine + F5 sponsored mass-messaging (ADV2-E5) ─────
+from typing import Optional as _AMOptional
+from pydantic import BaseModel as _AMBase, Field as _AMField
+from app.services import ad_messaging as _admsg
+
+
+class SponsoredMessageOfferIn(_AMBase):
+    creator_sub: str = _AMField(..., min_length=1, max_length=128)
+    body: str = _AMField(..., min_length=1, max_length=20000)
+    cta_url: str = _AMField("", max_length=2000)
+    image_url: str = _AMField("", max_length=2000)
+    account_id: str = _AMField("", max_length=128)
+    campaign_id: str = _AMField("", max_length=128)
+    creative_id: str = _AMField("", max_length=128)
+    sponsor_label: str = _AMField("", max_length=200)
+    segment: str = _AMField("followers", max_length=32)
+
+
+class SponsoredMessageApproveIn(_AMBase):
+    body: str = _AMField("", max_length=20000)  # optional creator wording override (D3)
+
+
+class SponsoredMessageRejectIn(_AMBase):
+    reason: str = _AMField("", max_length=500)
+
+
+class AdMessagePrefsIn(_AMBase):
+    allow_ad_messages: bool = True
+
+
+def _admsg_http(exc):
+    return HTTPException(status_code=getattr(exc, "status_code", 400),
+                         detail=getattr(exc, "detail", str(exc)))
+
+
+@router.post("/sponsored-messages/offers", status_code=201)
+async def create_sponsored_message_offer_endpoint(body: SponsoredMessageOfferIn, ctx=Depends(require_ui_session)):
+    """ADV2-501: an advertiser drafts a sponsored MESSAGE and offers it to a
+    creator. Does NOT send until the creator approves (D3)."""
+    if body.account_id:
+        _require_account_owner(body.account_id, ctx["user_sub"])
+    try:
+        return _admsg.create_offer(
+            advertiser_sub=ctx["user_sub"], advertiser_account_id=body.account_id,
+            creator_sub=body.creator_sub, body=body.body, cta_url=body.cta_url,
+            image_url=body.image_url, campaign_id=body.campaign_id, creative_id=body.creative_id,
+            sponsor_account_id=body.account_id, sponsor_label=body.sponsor_label, segment=body.segment,
+        )
+    except _admsg.AdMessagingError as exc:
+        raise _admsg_http(exc)
+
+
+@router.get("/sponsored-messages/offers/inbox")
+async def sponsored_message_inbox_endpoint(ctx=Depends(require_ui_session)):
+    """ADV2-507: the targeted creator's review queue (pending offers)."""
+    return {"offers": _admsg.list_pending_for_creator(ctx["user_sub"])}
+
+
+@router.get("/sponsored-messages/offers/outbox")
+async def sponsored_message_outbox_endpoint(ctx=Depends(require_ui_session)):
+    return {"offers": _admsg.list_for_advertiser(ctx["user_sub"])}
+
+
+@router.post("/sponsored-messages/offers/{offer_id}/approve")
+async def approve_sponsored_message_endpoint(offer_id: str, body: _AMOptional[SponsoredMessageApproveIn] = None, ctx=Depends(require_ui_session)):
+    """ADV2-501/503: ONLY the targeted creator may approve -> the message is sent
+    to the creator's audience AS the creator; advertiser billed hybrid (delivered
+    2c), creator credited the 70% placement share."""
+    try:
+        return _admsg.approve_and_send(
+            offer_id=offer_id, creator_sub=ctx["user_sub"],
+            body_override=(body.body if body else None),
+        )
+    except _admsg.AdMessagingError as exc:
+        raise _admsg_http(exc)
+
+
+@router.post("/sponsored-messages/offers/{offer_id}/reject")
+async def reject_sponsored_message_endpoint(offer_id: str, body: _AMOptional[SponsoredMessageRejectIn] = None, ctx=Depends(require_ui_session)):
+    try:
+        return _admsg.reject_offer(offer_id=offer_id, creator_sub=ctx["user_sub"], reason=(body.reason if body else ""))
+    except _admsg.AdMessagingError as exc:
+        raise _admsg_http(exc)
+
+
+@router.get("/sponsored-messages/sends/{send_id}")
+async def sponsored_message_send_endpoint(send_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-509: campaign progress -- delivered/opened/clicked + spend."""
+    send = _admsg.get_send(send_id)
+    if not send:
+        raise HTTPException(status_code=404, detail="Send not found")
+    if ctx["user_sub"] not in (str(send.get("advertiser_sub") or ""), str(send.get("creator_sub") or "")):
+        raise HTTPException(status_code=403, detail="Not authorized for this send")
+    return send
+
+
+@router.post("/messages/{ad_click_id}/open")
+async def ad_message_open_endpoint(ad_click_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-504/605: recipient opened/read the ad message -> +open surcharge
+    (once, idempotent)."""
+    try:
+        return _admsg.record_open(ad_click_id=ad_click_id, actor_sub=ctx["user_sub"])
+    except _admsg.AdMessagingError as exc:
+        raise _admsg_http(exc)
+
+
+@router.post("/messages/{ad_click_id}/click")
+async def ad_message_click_endpoint(ad_click_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-504/605: recipient tapped the CTA/link -> +click surcharge (once,
+    idempotent)."""
+    try:
+        return _admsg.record_click(ad_click_id=ad_click_id, actor_sub=ctx["user_sub"])
+    except _admsg.AdMessagingError as exc:
+        raise _admsg_http(exc)
+
+
+@router.get("/messages/ad-preferences")
+async def get_ad_message_prefs_endpoint(ctx=Depends(require_ui_session)):
+    """ADV2-511/601: per-user ad-messages opt-out state."""
+    return {"allow_ad_messages": _admsg.user_accepts_ad_messages(ctx["user_sub"])}
+
+
+@router.put("/messages/ad-preferences")
+async def set_ad_message_prefs_endpoint(body: AdMessagePrefsIn, ctx=Depends(require_ui_session)):
+    """ADV2-511/601: set the per-user ad-messages opt-out. A user with a
+    relationship receives ad DMs UNLESS they opt out here."""
+    return _admsg.set_ad_messages_optout(ctx["user_sub"], bool(body.allow_ad_messages))
+
+
+# ── Ad-messaging: F6 advertiser direct mass-DM (ADV2-E5 / ADV2-601..610) ────
+# Reuses the shared ad_messaging engine (PLATFORM-100%, no content owner) via
+# app.services.ad_dm_audience. The per-user ad opt-out endpoints + the
+# open/click surcharge endpoints are SHARED with F5 (already defined above).
+from app.services import ad_dm_audience as _addm
+
+
+class AdMassDmCreateIn(_AMBase):
+    account_id: str = _AMField(..., min_length=1, max_length=128)
+    campaign_id: str = _AMField(..., min_length=1, max_length=128)
+    body: str = _AMField(..., min_length=1, max_length=20000)
+    cta_url: str = _AMField("", max_length=2000)
+    image_url: str = _AMField("", max_length=2000)
+    creative_id: str = _AMField("", max_length=128)
+    sponsor_label: str = _AMField("", max_length=200)
+
+
+def _addm_http(exc):
+    return HTTPException(status_code=getattr(exc, "status_code", 400),
+                         detail=getattr(exc, "detail", str(exc)))
+
+
+@router.get("/mass-dm/audience/preview")
+async def ad_mass_dm_audience_preview_endpoint(ctx=Depends(require_ui_session)):
+    """ADV2-602/607: preview the advertiser's eligible mass-DM audience (existing
+    relationships minus ad opt-outs) before composing/sending."""
+    return _addm.resolve_advertiser_audience(ctx["user_sub"])
+
+
+@router.post("/mass-dm/campaigns", status_code=201)
+async def ad_mass_dm_create_endpoint(body: AdMassDmCreateIn, ctx=Depends(require_ui_session)):
+    """ADV2-603/604/605/606: advertiser composes + sends a direct mass-DM AS the
+    advertiser to ONLY eligible relationships (followers/subscribers) minus ad
+    opt-outs. Billed the hybrid stack (delivered 2c / open +5c / click +10c),
+    PLATFORM-100% (no content owner). Funds-guarded: an empty balance stops the
+    send."""
+    _require_account_owner(body.account_id, ctx["user_sub"])
+    try:
+        return _addm.send_mass_dm(
+            advertiser_sub=ctx["user_sub"], account_id=body.account_id,
+            campaign_id=body.campaign_id, body=body.body, cta_url=body.cta_url,
+            image_url=body.image_url, creative_id=body.creative_id,
+            sponsor_label=body.sponsor_label,
+        )
+    except _addm.AdDmError as exc:
+        raise _addm_http(exc)
+    except _admsg.AdMessagingError as exc:
+        raise _admsg_http(exc)
+
+
+@router.get("/mass-dm/campaigns")
+async def ad_mass_dm_list_endpoint(ctx=Depends(require_ui_session)):
+    """ADV2-608: the advertiser's F6 mass-DM sends (delivered/opened/clicked +
+    spend counters)."""
+    return {"sends": _addm.list_advertiser_sends(ctx["user_sub"])}
+
+
+@router.get("/mass-dm/campaigns/{send_id}")
+async def ad_mass_dm_detail_endpoint(send_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-608: F6 mass-DM campaign detail (advertiser-scoped)."""
+    send = _addm.get_send(send_id)
+    if not send:
+        raise HTTPException(status_code=404, detail="Send not found")
+    if str(send.get("advertiser_sub") or "") != ctx["user_sub"]:
+        raise HTTPException(status_code=403, detail="Not authorized for this send")
+    return send
+
+
+@router.post("/mass-dm/campaigns/{send_id}/cancel")
+async def ad_mass_dm_cancel_endpoint(send_id: str, ctx=Depends(require_ui_session)):
+    """ADV2-603: cancel a mass-DM send (synchronous -> a fully-sent campaign is
+    final and returns 409)."""
+    try:
+        return _addm.cancel_send(send_id=send_id, advertiser_sub=ctx["user_sub"])
+    except _addm.AdDmError as exc:
+        raise _addm_http(exc)
+
+
+# ── Syndicate-owned advertiser accounts (ADV2-701) ─────────────────────────
+# A syndicate-level advertiser: an ad account owned by a syndicate, managed by
+# its admin. Reuses the campaign/creative/funding endpoints above (owner_sub is
+# the admin). Gated by syndicates._require_admin.
+
+@router.post("/syndicates/{syndicate_id}/accounts", status_code=201)
+async def create_syndicate_ad_account_endpoint(
+    syndicate_id: str, body: AdAccountCreateIn, ctx=Depends(require_ui_session)
+):
+    from app.services.syndicates import _require_admin
+    _require_admin(syndicate_id, ctx["user_sub"])  # raises 403/404
+    try:
+        return create_syndicate_ad_account(syndicate_id, ctx["user_sub"], body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/syndicates/{syndicate_id}/accounts")
+async def list_syndicate_ad_accounts_endpoint(
+    syndicate_id: str, ctx=Depends(require_ui_session)
+):
+    from app.services.syndicates import _require_admin
+    _require_admin(syndicate_id, ctx["user_sub"])
+    return list_syndicate_ad_accounts(syndicate_id, ctx["user_sub"])
+
+
+# -- Syndicate ad-placement split config (ADV2-705) -------------------------
+# The per-syndicate member_share: when the syndicate ITSELF advertises in front
+# of a member's content, member_share_bps = the member's cut of the content-owner
+# (creator) share; the remainder goes to the syndicate treasury. Platform 30% is
+# unchanged. Admin-gated. Default 7000 bps (member keeps 70% of the 70%). This
+# never applies to an external advertiser on a member (no skim).
+
+@router.get("/syndicates/{syndicate_id}/ad-placement-config")
+async def get_syndicate_ad_placement_config_endpoint(
+    syndicate_id: str, ctx=Depends(require_ui_session)
+):
+    from app.services.syndicates import _require_admin
+    from app.services.syndicate_revenue_split import get_ad_placement_config
+    _require_admin(syndicate_id, ctx["user_sub"])
+    return get_ad_placement_config(syndicate_id)
+
+
+@router.put("/syndicates/{syndicate_id}/ad-placement-config")
+async def set_syndicate_ad_placement_config_endpoint(
+    syndicate_id: str, member_share_bps: int = Body(..., embed=True),
+    ctx=Depends(require_ui_session),
+):
+    from app.services.syndicates import _require_admin
+    from app.services.syndicate_revenue_split import set_ad_placement_member_share_bps
+    _require_admin(syndicate_id, ctx["user_sub"])
+    try:
+        return set_ad_placement_member_share_bps(
+            syndicate_id=syndicate_id, admin_sub=ctx["user_sub"],
+            member_share_bps=member_share_bps,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+# ── ADV x ECOM: product creative (B1) + shop serve (B2) + boost (B4) ─
+from pydantic import BaseModel as _AEBase, Field as _AEField
+
+
+class _ProductCreativeIn(_AEBase):
+    product_id: str = _AEField(..., min_length=1, max_length=200)
+    category_id: str = _AEField(default="", max_length=200)
+    title: str = _AEField(default="", max_length=200)
+    headline: str = _AEField(default="", max_length=200)
+    cta_text: str = _AEField(default="Shop now", max_length=40)
+
+
+class _ShopServeIn(_AEBase):
+    surface: str = _AEField(default="shop_search", pattern="^(shop_search|shop_browse)$")
+    query: str = _AEField(default="", max_length=200)
+    category_id: str = _AEField(default="", max_length=200)
+    limit: int = _AEField(default=3, ge=1, le=10)
+
+
+class _ProductBoostIn(_AEBase):
+    item_id: str = _AEField(..., min_length=1, max_length=200)
+    category_id: str = _AEField(default="", max_length=200)
+    budget_cents: int = _AEField(default=5000, ge=100, le=100_000_000)
+    bid_cpc_cents: int = _AEField(default=50, ge=1, le=10_000)
+    bid_cpm_cents: int = _AEField(default=500, ge=50, le=20_000)
+    bid_cpa_cents: int = _AEField(default=500, ge=1, le=100_000)
+    duration_days: int = _AEField(default=7, ge=1, le=365)
+    objective: str = _AEField(default="traffic", pattern="^(awareness|traffic|conversions)$")
+
+
+@router.post("/campaigns/{campaign_id}/product-creatives", status_code=201)
+async def create_product_creative_endpoint(
+    campaign_id: str, body: _ProductCreativeIn, ctx=Depends(require_ui_session)
+):
+    """B1: create a product-linked creative (references a catalog product +
+    buy_product CTA). Owner-checked via the campaign's ad account."""
+    camp = _require_campaign_owner(campaign_id, ctx["user_sub"])
+    from app.services.shop_ads import resolve_product
+    from app.services.ad_creatives import create_product_creative
+
+    prod = resolve_product(body.product_id, body.category_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Product not found")
+    imgs = prod.get("image_urls") or []
+    try:
+        price = int(prod.get("price_cents") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    return create_product_creative(
+        campaign_id,
+        camp["account_id"],
+        product_id=str(prod.get("item_id") or body.product_id),
+        product_category_id=str(prod.get("category_id", "") or body.category_id or ""),
+        title=(body.title or prod.get("name", "") or "Product"),
+        headline=body.headline or "",
+        body_text=str(prod.get("description", "") or ""),
+        image_url=(imgs[0] if imgs else ""),
+        price_cents=price,
+        cta_text=body.cta_text or "Shop now",
+        status="draft",
+    )
+
+
+@router.post("/shop/serve")
+async def shop_serve_endpoint(body: _ShopServeIn, ctx=Depends(require_ui_session)):
+    """B2: serve STANDALONE product-linked sponsored units into the shop
+    search/browse results (platform-100%, no-tip). The app fires impression on
+    render + click on tap via /ui/ads/track (funds-guarded, idempotent)."""
+    from app.services.shop_ads import serve_shop_sponsored
+
+    units = serve_shop_sponsored(
+        viewer_id=ctx["user_sub"],
+        query=body.query,
+        category_id=body.category_id,
+        limit=body.limit,
+        surface=body.surface,
+    )
+    return {"sponsored": units, "count": len(units)}
+
+
+@router.post("/boost/product", status_code=201)
+async def boost_product_endpoint(body: _ProductBoostIn, ctx=Depends(require_ui_session)):
+    """B4: seller BOOST-this-product. From a catalog LISTING, create/reuse the
+    seller ad account + a campaign + a product creative prefilled from the
+    listing. OWNER-CHECKED: a non-owner cannot boost the listing (403)."""
+    from app.services.shop_ads import boost_listing
+
+    try:
+        return boost_listing(
+            owner_sub=ctx["user_sub"],
+            item_id=body.item_id,
+            category_id=body.category_id,
+            budget_cents=body.budget_cents,
+            bid_cpc_cents=body.bid_cpc_cents,
+            bid_cpm_cents=body.bid_cpm_cents,
+            bid_cpa_cents=body.bid_cpa_cents,
+            duration_days=body.duration_days,
+            objective=body.objective,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="You do not own this listing")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

@@ -46,6 +46,7 @@ import type {
   CreateConversationDraftReq,
   UpdateConversationDraftReq,
   ReactionDetails,
+  GalleryImageItem,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -670,6 +671,33 @@ export const getScheduledMessages = async (conversationId: string) => {
 
 export const cancelScheduledMessage = (conversationId: string, messageId: string) =>
   api.del(`/messaging/conversations/${conversationId}/messages/${messageId}/schedule`);
+
+// B-SCHED2/#21/#22 + B-SCHED3/#7: edit a still-pending scheduled message — change
+// the text, reschedule (send_at OR wall-clock send_at_local+tz), and/or add/replace
+// media (image / file_path / video_id / gallery). At least one field required.
+export interface RescheduleMessageReq {
+  text?: string;
+  send_at?: number;
+  send_at_local?: string;
+  send_at_tz?: string;
+  image?: GalleryImageItem;
+  file_path?: string;
+  video_id?: string;
+  free_images?: GalleryImageItem[];
+  locked_images?: GalleryImageItem[];
+}
+
+export const editScheduledMessage = async (
+  conversationId: string,
+  messageId: string,
+  body: RescheduleMessageReq,
+) => {
+  const res = await api.patch<Message>(
+    `/messaging/conversations/${conversationId}/messages/${messageId}/schedule`,
+    body,
+  );
+  return adaptMessage(res);
+};
 
 // ─── Tips ──────────────────────────────────────────────────────
 

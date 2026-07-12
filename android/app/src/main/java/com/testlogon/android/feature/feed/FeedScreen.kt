@@ -1,5 +1,10 @@
 package com.testlogon.android.feature.feed
 
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.feature.ads.cta.AdCtaRouter
+import com.testlogon.android.feature.ads.cta.CtaDestination
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,6 +16,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.automirrored.filled.ListAlt
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -24,8 +36,16 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,10 +83,15 @@ object FeedTestTags {
 @Composable
 fun FeedRoute(
     onPostClick: (postId: String) -> Unit,
+    onComposePost: () -> Unit = {},
+    onOpenDiscover: () -> Unit = {},
+    onOpenMyPosts: () -> Unit = {},
+    onEditPost: (postId: String) -> Unit = {},
     modifier: Modifier = Modifier,
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onOpenStory: (userId: String) -> Unit = {},
+    onCtaNavigate: (CtaDestination) -> Unit = {},
     viewModel: FeedViewModel = hiltViewModel(),
     paywallViewModel: PaywallViewModel = hiltViewModel(),
     tipViewModel: TipViewModel = hiltViewModel(),
@@ -79,7 +104,10 @@ fun FeedRoute(
     val coroutineScope = rememberCoroutineScope()
     val shareLauncher = remember { ShareLauncher() }
     val savedIds by viewModel.savedIds.collectAsState()
+    val currentUserSub by viewModel.currentUserSub.collectAsState()
     val pollStates by viewModel.pollUiStates.collectAsState()
+    val authorNames by viewModel.authorNames.collectAsState()
+    val authorPhotos by viewModel.authorPhotos.collectAsState()
     val unlockStates by paywallViewModel.states.collectAsState()
     val tipState by tipViewModel.state.collectAsState()
 
@@ -136,6 +164,7 @@ fun FeedRoute(
         tipViewModel.effects.collect { effect ->
             when (effect) {
                 is TipEffect.ShowSnackbar -> snackbarHostState.showSnackbar(effect.message)
+                is TipEffect.ReactionBadge -> viewModel.applyTipReactionBadge(effect.postId, effect.badge)
             }
         }
     }
@@ -151,8 +180,27 @@ fun FeedRoute(
     // AND-199 — refresh the stories bar when the feed becomes active (web parity: poll/refresh on view).
     LaunchedEffect(storiesTrayViewModel) { storiesTrayViewModel.refresh() }
 
+    // FD10 — refresh the feed whenever it resumes (e.g. on return from the composer) so a newly
+    // published post shows up immediately without a manual pull-to-refresh.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (first) { first = false } else { items.refresh() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     FeedScreen(
         items = items,
+        onComposePost = onComposePost,
+        onOpenDiscover = onOpenDiscover,
+        onOpenMyPosts = onOpenMyPosts,
+        currentUserSub = currentUserSub,
+        onEditPost = onEditPost,
         snackbarHostState = snackbarHostState,
         savedIds = savedIds,
         pollStates = pollStates,
@@ -160,12 +208,20 @@ fun FeedRoute(
         storyTray = storyTray,
         onOpenStory = onOpenStory,
         onRefresh = { items.refresh() },
-        onPostClick = { post -> onPostClick(post.id) },
+        onPostClick = { post ->
+            // ADV2-409 (F4): opening a creator-authored paid_partnership post fires the advertiser CLICK
+            // charge (no-op for an organic post); the post itself opens normally.
+            viewModel.onPaidPartnershipClick(post)
+            onPostClick(post.id)
+        },
         onAuthorClick = onAuthorClick,
         onLinkClick = onLinkClick,
         onUnlockClick = viewModel::onUnlockClick,
         onLikeToggle = viewModel::onLikeToggle,
+        onToggleReaction = viewModel::onToggleReaction,
         onCommentClick = { post -> onPostClick(post.id) },
+        // ADV2-409 (F4): impression on first-visible for a creator-authored paid_partnership post.
+        onPaidPartnershipImpression = viewModel::onPaidPartnershipImpression,
         onHide = { post, index -> viewModel.onHide(post.id, index) },
         onNotInterested = { post, index -> viewModel.onNotInterested(post.id, index) },
         onToggleBookmark = { post -> viewModel.onToggleBookmark(post.id, post.id in savedIds) },
@@ -174,9 +230,29 @@ fun FeedRoute(
             if (!ok) coroutineScope.launch { snackbarHostState.showSnackbar(shareNoTargetLabel) }
         },
         onTip = { post -> tipViewModel.open(post.id) },
+        onTipReact = { post, emoji -> tipViewModel.openReaction(post.id, emoji) },
+        // ADV-106 — sponsored-unit tracking. Impression on first-visible; click also opens the ad's CTA url.
+        onSponsoredImpression = viewModel::onSponsoredImpression,
+        onSponsoredClick = { post ->
+            viewModel.onSponsoredClick(post)
+            post.sponsored?.ctaUrl?.let { onLinkClick(it) }
+        },
+        // ADV2-209 (F2): a structured CTA tap → CPC + CPA-stash (or tip = no charge), then route.
+        onSubscribeClick = { creatorId ->
+            if (creatorId.isNotBlank()) onCtaNavigate(CtaDestination.Subscriptions(creatorId))
+        },
+        onSponsoredCta = { post, action ->
+            viewModel.onCtaTap(post, action)
+            onCtaNavigate(AdCtaRouter.destinationFor(action, post.sponsored?.creatorId ?: ""))
+        },
         onEnsurePoll = viewModel::ensurePollState,
+        authorNames = authorNames,
+        authorPhotos = authorPhotos,
+        onEnsureAuthorName = viewModel::resolveAuthor,
         onPollOptionClick = viewModel::onPollOptionSelected,
         onPollRetry = viewModel::onPollRetry,
+        onPollWriteIn = viewModel::onPollWriteIn,
+        onPollShowMore = viewModel::onPollShowMore,
         modifier = modifier,
     )
 
@@ -187,6 +263,7 @@ fun FeedRoute(
         onCustomAmount = tipViewModel::setCustomAmount,
         onSend = tipViewModel::send,
         onDismiss = tipViewModel::dismiss,
+        onVisibility = tipViewModel::setVisibility,
     )
 }
 
@@ -195,6 +272,11 @@ fun FeedRoute(
 fun FeedScreen(
     items: LazyPagingItems<FeedPost>,
     onRefresh: () -> Unit,
+    onComposePost: () -> Unit = {},
+    onOpenDiscover: () -> Unit = {},
+    onOpenMyPosts: () -> Unit = {},
+    currentUserSub: String? = null,
+    onEditPost: (postId: String) -> Unit = {},
     onPostClick: (FeedPost) -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
@@ -208,20 +290,55 @@ fun FeedScreen(
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
     onLikeToggle: (FeedPost) -> Unit = {},
+    onToggleReaction: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onCommentClick: (FeedPost) -> Unit = {},
     onHide: (post: FeedPost, index: Int) -> Unit = { _, _ -> },
     onNotInterested: (post: FeedPost, index: Int) -> Unit = { _, _ -> },
     onToggleBookmark: (FeedPost) -> Unit = {},
     onShare: (FeedPost) -> Unit = {},
     onTip: (FeedPost) -> Unit = {},
+    onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
+    onSponsoredImpression: (FeedPost) -> Unit = {},
+    onPaidPartnershipImpression: (FeedPost) -> Unit = {},
+    onSponsoredClick: (FeedPost) -> Unit = {},
+    onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
+    // SUB-E3-2 - open the subscribe flow for a subscriber-only post lock card.
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit = {},
+    authorNames: Map<String, String> = emptyMap(),
+    authorPhotos: Map<String, String> = emptyMap(),
+    onEnsureAuthorName: (authorId: String) -> Unit = {},
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit = { _, _, _ -> },
+    onPollWriteIn: (postId: String, questionId: String, text: String) -> Unit = { _, _, _ -> },
+    onPollShowMore: (postId: String, questionId: String, offset: Int) -> Unit = { _, _, _ -> },
 ) {
     val listState = rememberLazyListState()
+    // MOD-C1 - main newsfeed post report target; the sheet is hosted once below.
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     Scaffold(
         modifier = modifier.testTag(FeedTestTags.SCREEN),
-        topBar = { TopAppBar(title = { Text("Feed") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Feed") },
+                actions = {
+                    androidx.compose.material3.IconButton(
+                        onClick = onOpenMyPosts,
+                        modifier = Modifier.testTag("feed_my_posts_action"),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ListAlt,
+                            contentDescription = "Your posts",
+                        )
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = onComposePost, modifier = Modifier.testTag("feed_compose_fab")) {
+                Icon(Icons.Filled.Edit, contentDescription = "New post")
+            }
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         val refreshState = items.loadState.refresh
@@ -232,6 +349,9 @@ fun FeedScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
             androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+                // FD1 — always-visible inline composer entry: tapping anywhere opens the full composer,
+                // so making a post is one tap from the top of the feed (not hidden behind the FAB only).
+                InlineComposerBar(onClick = onComposePost)
                 // AND-199 — stories tray above the feed (collapses to 0 height when empty).
                 com.testlogon.android.feature.stories.StoriesTray(
                     state = storyTray,
@@ -255,13 +375,18 @@ fun FeedScreen(
                         EmptyState(
                             title = "Your feed is empty",
                             body = "New posts will show up here.",
+                            actionLabel = stringResource(R.string.feed_empty_cta),
+                            onAction = onOpenDiscover,
                             modifier = Modifier.testTag(FeedTestTags.EMPTY),
                         )
 
                     else -> FeedList(
                         items = items,
                         listState = listState,
+                        onReport = { post -> reportTarget = ReportTarget.Content(post.id, "feed_post") },
                         savedIds = savedIds,
+                        currentUserSub = currentUserSub,
+                        onEditPost = onEditPost,
                         pollStates = pollStates,
                         unlockStates = unlockStates,
                         onPostClick = onPostClick,
@@ -269,18 +394,80 @@ fun FeedScreen(
                         onLinkClick = onLinkClick,
                         onUnlockClick = onUnlockClick,
                         onLikeToggle = onLikeToggle,
+                        onToggleReaction = onToggleReaction,
                         onCommentClick = onCommentClick,
                         onHide = onHide,
                         onNotInterested = onNotInterested,
                         onToggleBookmark = onToggleBookmark,
                         onShare = onShare,
                         onTip = onTip,
+                        onTipReact = onTipReact,
+                        onSponsoredImpression = onSponsoredImpression,
+                        onPaidPartnershipImpression = onPaidPartnershipImpression,
+                        onSponsoredClick = onSponsoredClick,
+                        onSponsoredCta = onSponsoredCta,
+                        onSubscribeClick = onSubscribeClick,
                         onEnsurePoll = onEnsurePoll,
+                        authorNames = authorNames,
+                        authorPhotos = authorPhotos,
+                        onEnsureAuthorName = onEnsureAuthorName,
                         onPollOptionClick = onPollOptionClick,
                         onPollRetry = onPollRetry,
+                        onPollWriteIn = onPollWriteIn,
+                        onPollShowMore = onPollShowMore,
                     )
                 }
                 }
+            }
+        }
+        // MOD-C1/C3 - one host renders the six-category report sheet + the licensing/IP -> DMCA route.
+        ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
+    }
+}
+
+/**
+ * FD1 — a prominent "What's on your mind?" entry pinned to the top of the feed. Always visible (even
+ * when the feed has content), giving a one-tap path into the full compose screen.
+ */
+@Composable
+private fun InlineComposerBar(onClick: () -> Unit) {
+    Surface(
+        tonalElevation = 1.dp,
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .clickable(onClick = onClick)
+                .testTag("feed_inline_composer"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Edit,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = "What’s on your mind?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                )
             }
         }
     }
@@ -290,7 +477,10 @@ fun FeedScreen(
 private fun FeedList(
     items: LazyPagingItems<FeedPost>,
     listState: androidx.compose.foundation.lazy.LazyListState,
+    onReport: (FeedPost) -> Unit = {},
     savedIds: Set<String>,
+    currentUserSub: String? = null,
+    onEditPost: (postId: String) -> Unit = {},
     pollStates: Map<String, PollCardState>,
     unlockStates: Map<String, UnlockState>,
     onPostClick: (FeedPost) -> Unit,
@@ -298,15 +488,27 @@ private fun FeedList(
     onLinkClick: (url: String) -> Unit,
     onUnlockClick: (postId: String) -> Unit,
     onLikeToggle: (FeedPost) -> Unit,
+    onToggleReaction: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
     onCommentClick: (FeedPost) -> Unit,
     onHide: (post: FeedPost, index: Int) -> Unit,
     onNotInterested: (post: FeedPost, index: Int) -> Unit,
     onToggleBookmark: (FeedPost) -> Unit,
     onShare: (FeedPost) -> Unit,
     onTip: (FeedPost) -> Unit,
+    onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
+    onSponsoredImpression: (FeedPost) -> Unit = {},
+    onPaidPartnershipImpression: (FeedPost) -> Unit = {},
+    onSponsoredClick: (FeedPost) -> Unit = {},
+    onSponsoredCta: (FeedPost, CtaAction) -> Unit = { _, _ -> },
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     onEnsurePoll: (FeedPost) -> Unit,
+    authorNames: Map<String, String>,
+    authorPhotos: Map<String, String>,
+    onEnsureAuthorName: (authorId: String) -> Unit,
     onPollOptionClick: (postId: String, questionId: String, optionId: String) -> Unit,
     onPollRetry: (postId: String, questionId: String, optionId: String) -> Unit,
+    onPollWriteIn: (postId: String, questionId: String, text: String) -> Unit = { _, _, _ -> },
+    onPollShowMore: (postId: String, questionId: String, offset: Int) -> Unit = { _, _, _ -> },
 ) {
     LazyColumn(
         state = listState,
@@ -317,14 +519,23 @@ private fun FeedList(
             if (item != null) {
                 // Seed per-post poll state once the post is composed (idempotent).
                 LaunchedEffect(item.id) { if (item.poll != null) onEnsurePoll(item) }
+                // ADV2-409 (F4) — fire the advertiser IMPRESSION charge the first time a creator-authored
+                // paid_partnership post is composed/visible (deduped in the VM; no-op for organic posts).
+                LaunchedEffect(item.id) { if (item.paidPartnership) onPaidPartnershipImpression(item) }
+                // Resolve the author's display name once the post is composed (idempotent + cached).
+                LaunchedEffect(item.authorId) { onEnsureAuthorName(item.authorId) }
                 PostItem(
                     post = item,
+                    authorName = authorNames[item.authorId],
+                    authorPhotoUrl = authorPhotos[item.authorId],
                     onPostClick = onPostClick,
                     onAuthorClick = onAuthorClick,
                     onMediaClick = { post, _ -> onPostClick(post) },
                     onLinkClick = onLinkClick,
                     onUnlockClick = onUnlockClick,
+                    onSubscribeClick = onSubscribeClick,
                     onLikeToggle = onLikeToggle,
+                    onToggleReaction = onToggleReaction,
                     onCommentClick = onCommentClick,
                     onHide = { post -> onHide(post, index) },
                     onNotInterested = { post -> onNotInterested(post, index) },
@@ -332,10 +543,23 @@ private fun FeedList(
                     onToggleBookmark = onToggleBookmark,
                     onShare = onShare,
                     onTip = onTip,
+                    onTipReact = onTipReact,
+                    onSponsoredImpression = onSponsoredImpression,
+                    onSponsoredClick = onSponsoredClick,
+                    onSponsoredCta = onSponsoredCta,
+                    showTip = !(currentUserSub != null && item.authorId == currentUserSub),
+                    // #3 — show the priced "Locked · $X" badge on the viewer's own locked posts.
+                    isOwnPost = currentUserSub != null && item.authorId == currentUserSub,
+                    onEdit = if (currentUserSub != null && item.authorId == currentUserSub) {
+                        { post -> onEditPost(post.id) }
+                    } else null,
+                    onReport = { post -> onReport(post) },
                     unlockState = unlockStates[item.id] ?: UnlockState.Idle,
                     pollState = pollStates[item.id],
                     onPollOptionClick = onPollOptionClick,
                     onPollRetry = onPollRetry,
+                    onPollWriteIn = onPollWriteIn,
+                    onPollShowMore = onPollShowMore,
                 )
             }
         }

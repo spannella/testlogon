@@ -399,6 +399,11 @@ class Settings:
     billing_dunning_enabled: bool = os.environ.get("BILLING_DUNNING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     billing_dunning_interval_seconds: int = int(os.environ.get("BILLING_DUNNING_INTERVAL_SECONDS", "900"))
     billing_dunning_retry_schedule_seconds: str = os.environ.get("BILLING_DUNNING_RETRY_SCHEDULE_SECONDS", "3600,86400,172800")
+    # SUB-E1: recurring subscription renewal + dunning + expiry engine.
+    subscription_renewal_enabled: bool = os.environ.get("SUBSCRIPTION_RENEWAL_ENABLED", "true").lower() == "true"
+    subscription_renewal_interval_seconds: int = int(os.environ.get("SUBSCRIPTION_RENEWAL_INTERVAL_SECONDS", "900"))
+    subscription_dunning_retry_days: str = os.environ.get("SUBSCRIPTION_DUNNING_RETRY_DAYS", "1,3,5,7")
+    subscription_grace_days: int = int(os.environ.get("SUBSCRIPTION_GRACE_DAYS", "7"))
     billing_dunning_scan_limit: int = int(os.environ.get("BILLING_DUNNING_SCAN_LIMIT", "200"))
 
     # Playback entitlement issuance and validation (VWD-018)
@@ -611,7 +616,10 @@ class Settings:
     # Broadcast ad billing (ADS-020) — guards charge_impression + creator revenue
     # split for broadcast ad events. Default off (money-moving code; keeps dev/test
     # deterministic). Enable explicitly in production after smoke testing.
-    broadcast_ads_billing_enabled: bool = os.environ.get("BROADCAST_ADS_BILLING_ENABLED", "0") not in ("0", "false", "False")
+    broadcast_ads_billing_enabled: bool = os.environ.get("BROADCAST_ADS_BILLING_ENABLED", "1") not in ("0", "false", "False")
+    # ADV2-104: mid-roll ad-break anti-abuse guardrails (config-driven).
+    broadcast_midroll_min_interval_seconds: int = int(os.environ.get("BROADCAST_MIDROLL_MIN_INTERVAL_SECONDS", "300"))
+    broadcast_midroll_max_breaks_per_session: int = int(os.environ.get("BROADCAST_MIDROLL_MAX_BREAKS", "4"))
     # Broadcast Q&A (ENGAGE-003)
     broadcast_qa_enabled: bool = os.environ.get("BROADCAST_QA_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     broadcast_qa_questions_table_name: str = os.environ.get("DDB_BROADCAST_QA_QUESTIONS", "broadcast_qa_questions")
@@ -665,6 +673,10 @@ class Settings:
     moderation_tickets_table_name: str = os.environ.get(
         "DDB_MODERATION_TICKETS",
         "ModerationTickets",
+    )
+    moderation_cases_table_name: str = os.environ.get(
+        "DDB_MODERATION_CASES",
+        "ModerationCases",
     )
     moderation_actions_table_name: str = os.environ.get(
         "DDB_MODERATION_ACTIONS",
@@ -1229,6 +1241,15 @@ class Settings:
     catalog_product_versions_table_name: str = os.environ.get("CATALOG_PRODUCT_VERSIONS_TABLE_NAME", "catalog_product_versions")
     orders_table_name: str = os.environ.get("ORDERS_TABLE_NAME", "orders")
     order_items_table_name: str = os.environ.get("ORDER_ITEMS_TABLE_NAME", "order_items")
+    shipment_tracking_table_name: str = os.environ.get("SHIPMENT_TRACKING_TABLE_NAME", "shipment_tracking")
+    live_stream_products_table_name: str = os.environ.get("DDB_LIVE_STREAM_PRODUCTS", "LiveStreamProducts")
+    shipment_webhook_secret: str = os.environ.get("SHIPMENT_WEBHOOK_SECRET", "")
+    # EasyPost integration (config-gated shipment tracking). When the key is
+    # set, real EasyPost Trackers are created on ship + tracker.updated webhooks
+    # drive status; when absent the internal/simulate driver is used (unchanged).
+    easypost_api_key: str = os.environ.get("EASYPOST_API_KEY", "")
+    easypost_webhook_secret: str = os.environ.get("EASYPOST_WEBHOOK_SECRET", "")
+    easypost_api_base: str = os.environ.get("EASYPOST_API_BASE", "https://api.easypost.com/v2")
     payments_table_name: str = os.environ.get("PAYMENTS_TABLE_NAME", "payments")
     entitlements_table_name: str = os.environ.get("ENTITLEMENTS_TABLE_NAME", "entitlements")
     entitlement_usage_events_table_name: str = os.environ.get("ENTITLEMENT_USAGE_EVENTS_TABLE_NAME", "entitlement_usage_events")
@@ -1749,6 +1770,13 @@ class Settings:
     dmca_timer_interval_seconds: int = int(
         os.environ.get("DMCA_TIMER_INTERVAL_SECONDS", "3600")
     )
+    # MODAB (MOD-A6): precise scheduled 30-day content-hold expiry sweep.
+    moderation_hold_sweep_enabled: bool = os.environ.get(
+        "MODERATION_HOLD_SWEEP_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    moderation_hold_sweep_interval_seconds: int = int(
+        os.environ.get("MODERATION_HOLD_SWEEP_INTERVAL_SECONDS", "900")
+    )
     dmca_max_claims_per_claimant_per_day: int = int(
         os.environ.get("DMCA_MAX_CLAIMS_PER_CLAIMANT_PER_DAY", "20")
     )
@@ -1863,6 +1891,8 @@ class Settings:
     # Subscription-Gated VOD (MON-005)
     vod_subscription_gating_enabled: bool = os.environ.get("VOD_SUBSCRIPTION_GATING_ENABLED", "1") not in ("0", "false", "False")
     ad_billing_table_name: str = os.environ.get("DDB_AD_BILLING", "AdBilling")
+    # ADV-002: CPA click-attribution store (last-click 7d window, TTL on expires_at)
+    ad_clicks_table_name: str = os.environ.get("DDB_AD_CLICKS", "AdClicks")
 
     # Advertiser Accounts & Campaigns (ADS-001)
 

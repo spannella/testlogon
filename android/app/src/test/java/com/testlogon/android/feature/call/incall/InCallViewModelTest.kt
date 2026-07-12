@@ -90,7 +90,7 @@ class InCallViewModelTest {
     )
 
     private fun vm(callManager: CallManager): InCallViewModel =
-        InCallViewModel(callManager, CallStatsSampler(), recordingController(), SavedStateHandle())
+        InCallViewModel(callManager, CallStatsSampler(), recordingController(), com.testlogon.android.data.webrtc.CallMediaHolder(), SavedStateHandle(), com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer)
 
     /**
      * AND-302 — a [RecordingController] backed by a no-op repo + the FLAGGED stub capturer + an in-memory

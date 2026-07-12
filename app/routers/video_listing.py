@@ -6,6 +6,7 @@ Provides browse, filter, detail, update, and soft-delete for videos.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -819,6 +820,155 @@ def delete_comment_endpoint(
 
 
 # ─── Video Detail ─────────────────────────────────────────────────────────
+
+
+class VideoTipIn(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    currency: str = "usd"
+    payment_method_id: Optional[str] = None
+
+
+class VideoTipOut(BaseModel):
+    ok: bool
+    video_id: str
+    amount_cents: int
+    currency: str
+    tip_total_cents: int
+
+
+@router.post("/{video_id}/tip", response_model=VideoTipOut)
+def tip_video_endpoint(
+    video_id: str,
+    body: VideoTipIn,
+    user=Depends(require_ui_session),
+):
+    """B-VIDSOCIAL2 (#2): tip a video's creator. Mirrors newsfeed POST /posts/{id}/tip
+    so VOD posts reach full social parity (reactions + comments + tips)."""
+    user_sub = user["user_sub"]
+    video = get_video(video_id)
+    if video.owner_user_id == user_sub:
+        raise HTTPException(status_code=400, detail="Cannot tip your own video")
+    # Non-owner may only tip a published, viewable video.
+    if video.status != "published" or video.visibility not in ("public", "unlisted"):
+        raise HTTPException(status_code=403, detail="video not available for tipping")
+
+    # TIP-011: charge + credit via the centralized charge_tip seam (replaces the
+    # mock PaymentProvider stub + direct write_tip_ledger). Charge BEFORE bumping
+    # tip_total_cents so a failed charge does not leave an orphan total.
+    from app.services.tips import charge_tip
+    charge_tip(
+        tipper_id=user_sub,
+        recipient_id=video.owner_user_id,
+        amount_cents=body.amount_cents,
+        currency=body.currency,
+        payment_method_id=body.payment_method_id,
+        content_type="video",
+        content_id=video_id,
+        meta={"video_id": video_id},
+        idempotency_key="videotip:" + uuid.uuid4().hex,
+    )
+
+    # Accumulate tip_total_cents on the video metadata row (best-effort additive).
+    new_total = body.amount_cents
+    try:
+        upd = T.video_metadata.update_item(
+            Key={"video_id": video_id},
+            UpdateExpression="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
+            ExpressionAttributeValues={":z": 0, ":amt": body.amount_cents},
+            ReturnValues="UPDATED_NEW",
+        )
+        new_total = int(upd.get("Attributes", {}).get("tip_total_cents", body.amount_cents))
+    except Exception:
+        logger.warning("failed to accumulate tip_total_cents on video %s", video_id)
+
+    # Social activity + notification hooks (best-effort).
+    try:
+        from app.services.activity_feed import record_social_interaction
+        record_social_interaction(
+            recipient_id=video.owner_user_id, actor_id=user_sub, kind="tip",
+            target_type="video", target_id=video_id,
+            extra={"amount_cents": body.amount_cents, "currency": body.currency},
+        )
+    except Exception:
+        logger.debug("social hook: tip_video", exc_info=True)
+
+    return VideoTipOut(
+        ok=True, video_id=video_id, amount_cents=body.amount_cents,
+        currency=body.currency, tip_total_cents=new_total,
+    )
+
+
+class VideoCommentTipIn(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    currency: str = "usd"
+    payment_method_id: Optional[str] = None
+
+
+class VideoCommentTipOut(BaseModel):
+    ok: bool
+    video_id: str
+    comment_id: str
+    amount_cents: int
+    currency: str
+    tip_total_cents: int
+
+
+@router.post("/{video_id}/comments/{comment_id}/tip", response_model=VideoCommentTipOut)
+def tip_video_comment_endpoint(
+    video_id: str,
+    comment_id: str,
+    body: VideoCommentTipIn,
+    user=Depends(require_ui_session),
+):
+    """TIP-303: tip a VIDEO COMMENT. Recipient = the comment's author (mirrors
+    the newsfeed comment tip). Charge BEFORE stamping tip_total_cents so a
+    failed charge leaves no orphan total; own-comment tips self-tip ->
+    charge_tip raises 400 cannot_tip_self."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_comments import get_comment, bump_comment_tip_total
+    comment = get_comment(video_id=video_id, comment_id=comment_id)
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    user_sub = user["user_sub"]
+    comment_author = comment.get("user_id")
+
+    from app.services.tips import charge_tip
+    charge_tip(
+        tipper_id=user_sub,
+        recipient_id=comment_author,
+        amount_cents=body.amount_cents,
+        currency=body.currency,
+        payment_method_id=body.payment_method_id,
+        content_type="video_comment",
+        content_id=comment_id,
+        meta={"video_id": video_id, "comment_id": comment_id},
+        idempotency_key="vidcmttip:" + uuid.uuid4().hex,
+    )
+
+    new_total = bump_comment_tip_total(
+        video_id=video_id, comment=comment, amount_cents=body.amount_cents
+    )
+
+    # Notify the comment author (best-effort).
+    try:
+        from app.services.activity_feed import record_social_interaction
+        record_social_interaction(
+            recipient_id=comment_author, actor_id=user_sub, kind="tip",
+            target_type="video_comment", target_id=comment_id,
+            extra={"amount_cents": body.amount_cents, "currency": body.currency,
+                   "video_id": video_id},
+        )
+    except Exception:
+        logger.debug("social hook: tip_video_comment", exc_info=True)
+
+    return VideoCommentTipOut(
+        ok=True, video_id=video_id, comment_id=comment_id,
+        amount_cents=body.amount_cents, currency=body.currency,
+        tip_total_cents=new_total,
+    )
 
 
 @router.get("/{video_id}", response_model=VideoDetailOut)

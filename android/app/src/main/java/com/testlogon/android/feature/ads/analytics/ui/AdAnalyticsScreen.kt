@@ -39,6 +39,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.model.ads.AdAnalyticsSummary
 import com.testlogon.android.core.model.ads.AdBreakdownEntry
+import com.testlogon.android.core.model.ads.AdCampaignRoas
+import com.testlogon.android.core.model.ads.AdRoasReport
 import com.testlogon.android.core.model.ads.AdTimeSeriesPoint
 import com.testlogon.android.core.model.ads.DateRangePreset
 import com.testlogon.android.core.model.syndicates.formatCents
@@ -58,6 +60,7 @@ object AdAnalyticsTestTags {
     const val ERROR_RETRY = "ad_analytics_error_retry"
     const val CHART_SPEND = "ad_chart_spend"
     const val CHART_TRAFFIC = "ad_chart_traffic"
+    const val ROAS_CARD = "ad_roas_card"
 
     /** Per-range chip tag (suffix is the preset name lowercased, e.g. ad_range_last_28). */
     fun rangeChip(preset: DateRangePreset): String = "ad_range_${preset.name.lowercase()}"
@@ -203,6 +206,9 @@ private fun AdAnalyticsContent(
                 StaleBanner(stale = state.isStale, refreshing = false, onRetry = onRetry)
             }
             item { KpiGrid(summary = state.summary) }
+            state.roas?.let { roas ->
+                item { RoasCard(roas = roas) }
+            }
             item { SpendChartCard(timeseries = state.timeseries) }
             item { TrafficChartCard(timeseries = state.timeseries) }
             item {
@@ -225,6 +231,72 @@ private fun AdAnalyticsContent(
                 }
             }
         }
+    }
+}
+
+/** ADV-503 - ROAS panel: account totals + per-campaign spend / conversions / value / ROAS. */
+@Composable
+private fun RoasCard(roas: AdRoasReport) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth().testTag(AdAnalyticsTestTags.ROAS_CARD)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.ad_roas_header),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            RoasStatsRow(
+                label = stringResource(R.string.ad_roas_totals),
+                row = roas.totals,
+                emphasize = true,
+            )
+            if (roas.campaigns.isNotEmpty()) {
+                HorizontalDivider()
+                roas.campaigns.forEach { c ->
+                    RoasStatsRow(
+                        label = c.campaignId ?: stringResource(R.string.ad_roas_campaign_unknown),
+                        row = c,
+                        emphasize = false,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoasStatsRow(label: String, row: AdCampaignRoas, emphasize: Boolean) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = label,
+                style = if (emphasize) MaterialTheme.typography.titleSmall
+                else MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = stringResource(R.string.ad_roas_roas_value, "%.2f".format(row.roas)),
+                style = if (emphasize) MaterialTheme.typography.titleSmall
+                else MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Text(
+            text = stringResource(
+                R.string.ad_roas_line,
+                formatCents(row.spendCents),
+                formatCents(row.conversionValueCents),
+                row.conversions,
+                row.impressions,
+                row.clicks,
+                formatPercent(row.ctrPct),
+                formatCents(row.cpaCents.toLong()),
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

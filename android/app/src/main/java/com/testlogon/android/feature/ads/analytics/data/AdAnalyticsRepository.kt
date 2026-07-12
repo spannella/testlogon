@@ -4,6 +4,7 @@ import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.JsonEncodingException
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdAnalyticsSummary
+import com.testlogon.android.core.model.ads.AdRoasReport
 import com.testlogon.android.core.model.ads.AdBreakdownEntry
 import com.testlogon.android.core.model.ads.AdTimeSeriesPoint
 import com.testlogon.android.core.model.ads.BreakdownDimension
@@ -52,6 +53,9 @@ interface AdAnalyticsRepository {
         range: DateRange,
     ): ApiResult<List<AdBreakdownEntry>>
 
+    /** ADV-503 - GET the ROAS report (per-account totals + per-campaign) over [days] days, mapped. */
+    suspend fun getRoas(accountId: String, days: Int): ApiResult<AdRoasReport>
+
     companion object {
         /** Client-side cap on breakdown rows (single bounded fetch, no paging). */
         const val BREAKDOWN_CAP = 50
@@ -96,6 +100,13 @@ class AdAnalyticsRepositoryImpl @Inject constructor(
                 if (name == null) row else row.copy(campaignName = name)
             }
         }
+    }
+
+    override suspend fun getRoas(
+        accountId: String,
+        days: Int,
+    ): ApiResult<AdRoasReport> = withContext(Dispatchers.IO) {
+        call { api.getRoas(accountId = accountId, campaignId = null, days = days).toDomain() }
     }
 
     /** Reads the campaign list and builds a campaignId -> name map; an error yields an empty map. */

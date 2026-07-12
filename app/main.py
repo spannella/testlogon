@@ -21,6 +21,7 @@ from app.routers.mfa_devices import router as mfa_devices_router
 from app.routers.api_keys import router as api_keys_router
 from app.routers.api_usage import router as api_usage_router
 from app.routers.alerts import router as alerts_router
+from app.routers.shipment_tracking import router as shipment_tracking_router  # ECOM D4
 from app.routers.account import router as account_router
 from app.routers.push import router as push_router
 from app.routers.recovery import router as recovery_router
@@ -193,6 +194,7 @@ from app.routers.account_deletion import (
 )
 from app.services.deletion_scheduler import start_deletion_scheduler_task
 from app.services.dmca_claims import start_dmca_timer_task
+from app.services.moderation_lifecycle import start_hold_sweep_task
 from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
 from app.routers.promo_codes import router as promo_codes_router
 from app.routers.marketing_campaigns import (
@@ -216,6 +218,7 @@ from app.routers.media_preferences import router as media_preferences_router
 from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
+from app.services.subscription_renewal import start_subscription_renewal_task
 from app.services.payment_provider_health import start_provider_health_check_task
 from app.services.llm_provider_keys import start_llm_usage_reset_task
 from app.services.ad_daily_reset import start_ad_daily_reset_task
@@ -645,6 +648,7 @@ def create_app() -> FastAPI:
             app.include_router(oauth_oidc_router)
     app.include_router(api_usage_router)
     app.include_router(alerts_router)
+    app.include_router(shipment_tracking_router)  # ECOM D4 shipment tracking
     app.include_router(account_router)
     app.include_router(push_router)
     app.include_router(recovery_router)
@@ -668,6 +672,15 @@ def create_app() -> FastAPI:
     app.include_router(s3_mock_router, prefix="/mock/s3")
     # Also register GET /mock/s3 (no trailing slash) for boto3 list_buckets
     app.add_api_route("/mock/s3", _s3_list_buckets, methods=["GET"], include_in_schema=False)
+    # Dev/mock GIF endpoint: serves a local demo GIF for the messaging /mock/gifs
+    # picker. Path is resolved package-relative (portable across dev/prod hosts);
+    # the asset is a gitignored dev artifact so a missing file simply 404s.
+    from fastapi.responses import FileResponse as _FileResponseGif
+    import os as _os_mockgif
+    _demo_gif_path = _os_mockgif.path.join(_os_mockgif.path.dirname(__file__), "static", "demo.gif")
+    def _mock_gif_serve(name: str):
+        return _FileResponseGif(_demo_gif_path, media_type="image/gif")
+    app.add_api_route("/mock/gifs/{name}", _mock_gif_serve, methods=["GET"], include_in_schema=False)
     app.include_router(paypal_router)
     app.include_router(billing_router)
     app.include_router(account_state_router)
@@ -753,6 +766,7 @@ def create_app() -> FastAPI:
 
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
+    app.add_event_handler("startup", start_subscription_renewal_task)  # SUB-E1
     app.add_event_handler("startup", start_provider_health_check_task)
     app.add_event_handler("startup", start_llm_usage_reset_task)
     app.add_event_handler("startup", start_ad_daily_reset_task)
@@ -765,6 +779,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", _seed_notification_templates_on_startup)
     app.add_event_handler("startup", start_deletion_scheduler_task)
     app.add_event_handler("startup", start_dmca_timer_task)
+    app.add_event_handler("startup", start_hold_sweep_task)  # MODAB MOD-A6
     app.add_event_handler("startup", start_kyc_sla_checker_task)
     app.add_event_handler("startup", kyc_monitoring_startup)  # GAP-0276
     app.add_event_handler("startup", start_kyc_liveness_expiry_task)
@@ -887,6 +902,8 @@ def create_app() -> FastAPI:
     app.include_router(per_content_revenue_router)
     app.include_router(creator_dashboard_router)
     app.include_router(creator_payouts_router)
+    from app.routers.live_commerce import router as live_commerce_router  # LIVECOM
+    app.include_router(live_commerce_router)
     app.include_router(admin_payouts_router)
     app.include_router(billing_config_router)
     app.include_router(admin_rate_limits_router)

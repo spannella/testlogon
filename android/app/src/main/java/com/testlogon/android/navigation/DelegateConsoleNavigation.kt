@@ -4,6 +4,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
 import com.testlogon.android.feature.delegates.ui.DelegateConsoleRoute
+import com.testlogon.android.feature.messaging.nav.MessagingRoutes
 
 /**
  * AND-360 - the delegate console route (the focused manage-as-creator demonstration). Reached from the
@@ -17,6 +18,14 @@ data object DelegateConsoleDest {
 /** AND-360 - registers the delegate console destination in the authenticated graph. */
 fun NavGraphBuilder.delegateConsoleDestination(navController: NavHostController) {
     composable(DelegateConsoleDest.ROUTE) {
-        DelegateConsoleRoute(onBack = { navController.popBackStack() })
+        DelegateConsoleRoute(
+            onBack = { navController.popBackStack() },
+            // FULL-PARITY: open the reused full messaging thread + composer for the managed creator's
+            // conversation. The delegate context is active (managing-creator), so DelegateRoutingInterceptor
+            // re-targets every send/read to the creator-attributed delegate endpoints.
+            onOpenThread = { conversationId ->
+                navController.navigate(MessagingRoutes.thread(conversationId)) { launchSingleTop = true }
+            },
+        )
     }
 }

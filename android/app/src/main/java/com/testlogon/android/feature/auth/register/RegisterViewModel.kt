@@ -3,6 +3,7 @@ package com.testlogon.android.feature.auth.register
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.auth.BiometricEnrollmentBuffer
 import com.testlogon.android.data.auth.EmailAvailability
 import com.testlogon.android.data.auth.RegisterRepository
 import com.testlogon.android.data.auth.RegisterStartOutcome
@@ -106,6 +107,7 @@ data class RegisterUiState(
 @HiltViewModel
 class RegisterViewModel @Inject constructor(
     private val repository: RegisterRepository,
+    private val enrollmentBuffer: BiometricEnrollmentBuffer = BiometricEnrollmentBuffer(),
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RegisterUiState())
@@ -210,6 +212,8 @@ class RegisterViewModel @Inject constructor(
             enableSmsMfa = s.enableSmsMfa,
             enableTotpMfa = s.enableTotpMfa,
         )
+        // Hold the just-entered credential so the confirm step can offer biometric enrollment.
+        enrollmentBuffer.stash(s.email.trim(), s.password)
         viewModelScope.launch {
             when (val result = repository.registerStart(req)) {
                 is ApiResult.Success -> handleOutcome(result.data)

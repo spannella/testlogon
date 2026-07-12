@@ -226,6 +226,93 @@ class ThreadRichViewModelTest {
         assertNotNull(v.state.value.countdownPicker.error)
     }
 
+    // ---- MSG: new in-app composers VM ----
+
+    @Test
+    fun sendLottery_twoOutcomes_dismissesAndCallsRepo() = runTest {
+        repo.lotteryResult = ApiResult.Success(
+            Message(id = "lot1", clientId = "lot1", conversationId = "c1", senderId = "me",
+                text = "", createdAtEpochSeconds = 1, kind = "lottery_dm"),
+        )
+        val v = vm()
+        advanceUntilIdle()
+        v.onAttachLottery()
+        assertTrue(v.state.value.lotteryComposerVisible)
+        v.onSendLottery(
+            listOf(
+                com.testlogon.android.data.messaging.LotteryOutcomeDraft("A", "win"),
+                com.testlogon.android.data.messaging.LotteryOutcomeDraft("B", "lose"),
+            ),
+        )
+        advanceUntilIdle()
+        assertFalse(v.state.value.lotteryComposerVisible)
+        assertEquals(1, repo.lotteryCalls.size)
+        assertEquals(2, repo.lotteryCalls.single().second.size)
+    }
+
+    @Test
+    fun sendLottery_singleOutcome_blocked() = runTest {
+        val v = vm()
+        advanceUntilIdle()
+        v.onAttachLottery()
+        v.onSendLottery(listOf(com.testlogon.android.data.messaging.LotteryOutcomeDraft(null, "only")))
+        advanceUntilIdle()
+        assertTrue(repo.lotteryCalls.isEmpty())
+    }
+
+    @Test
+    fun sendFindDateTime_callsRepo_andDismisses() = runTest {
+        repo.findDateTimeResult = ApiResult.Success(
+            Message(id = "f1", clientId = "f1", conversationId = "c1", senderId = "me",
+                text = "", createdAtEpochSeconds = 1, kind = "find_datetime"),
+        )
+        val v = vm()
+        advanceUntilIdle()
+        v.onAttachFindDateTime()
+        assertTrue(v.state.value.findDateTimeComposerVisible)
+        v.onSendFindDateTime(
+            com.testlogon.android.data.messaging.FindDateTimeDraft(
+                title = "Sync", fromDate = "2026-07-01", toDate = "2026-07-03",
+                startHour = 9, endHour = 17, slotDurationMinutes = 30,
+            ),
+        )
+        advanceUntilIdle()
+        assertFalse(v.state.value.findDateTimeComposerVisible)
+        assertEquals(1, repo.findDateTimeCalls.size)
+        assertEquals("Sync", repo.findDateTimeCalls.single().second.title)
+    }
+
+    @Test
+    fun sendFileShare_callsShareFile_withReadPermission() = runTest {
+        repo.shareFileResult = ApiResult.Success(
+            Message(id = "fs1", clientId = "fs1", conversationId = "c1", senderId = "me",
+                text = "", createdAtEpochSeconds = 1, kind = "file_share"),
+        )
+        val v = vm()
+        advanceUntilIdle()
+        v.onSendFileShare("/docs/report.pdf")
+        advanceUntilIdle()
+        assertFalse(v.state.value.fileShareComposer.visible)
+        assertEquals(1, repo.shareFileCalls.size)
+        assertEquals("/docs/report.pdf", repo.shareFileCalls.single().second)
+        assertEquals("read", repo.shareFileCalls.single().third)
+    }
+
+    @Test
+    fun encryptedToggle_routesSendThroughEncryptedPath() = runTest {
+        repo.encryptedResult = ApiResult.Success(
+            Message(id = "e1", clientId = "e1", conversationId = "c1", senderId = "me",
+                text = "", createdAtEpochSeconds = 1, kind = "text", isEncrypted = true),
+        )
+        val v = vm()
+        advanceUntilIdle()
+        v.setEncrypted(true)
+        v.onDraftChange("secret")
+        v.onSend()
+        advanceUntilIdle()
+        assertEquals(1, repo.encryptedCalls.size)
+    }
+
     // ---- AND-139: unlock / tip / lottery VM ----
 
     private fun lockedFixed(key: String = "m1", sender: String = "u2") = Message(

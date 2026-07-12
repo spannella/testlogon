@@ -96,3 +96,33 @@ data class UpdateCartItemQtyRequest(
 data class OkRespDto(
     @Json(name = "ok") val ok: Boolean? = null,
 )
+
+/**
+ * FIX (ecom residual #1) — request/response for the one-shot cart purchase
+ * (POST ui/shoppingcart/carts/{cart_id}/purchase, schema CartPurchaseIn / ShoppingCartPurchaseOut).
+ * This is the reliable path that actually creates the order, decrements stock and credits the seller.
+ */
+@JsonClass(generateAdapter = true)
+data class CartPurchaseInDto(
+    @Json(name = "promo_code") val promoCode: String? = null,
+    @Json(name = "promo_code_id") val promoCodeId: String? = null,
+    // ADV-405: last-click CPA attribution handle carried from an ad CTA (backend ADV-403 CartPurchaseIn).
+    @Json(name = "ad_click_id") val adClickId: String? = null,
+    // LIVECOM L3/L5: threads the live broadcast session + host so an in-stream purchase is attributed to
+    // the stream/host and the backend (purchase_cart -> settle_stream_order) fires the commission split.
+    @Json(name = "broadcast_session_id") val broadcastSessionId: String? = null,
+    @Json(name = "host_id") val hostId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CartPurchaseOutDto(
+    @Json(name = "cart_id") val cartId: String,
+    @Json(name = "order_id") val orderId: String,
+    @Json(name = "purchased_at") val purchasedAt: String,
+    @Json(name = "purchased_total_cents") val purchasedTotalCents: Long,
+    @Json(name = "currency") val currency: String? = null,
+    @Json(name = "purchase_txn_id") val purchaseTxnId: String? = null,
+    @Json(name = "original_total_cents") val originalTotalCents: Long? = null,
+    @Json(name = "discount_cents") val discountCents: Long? = null,
+    @Json(name = "promo_code_id") val promoCodeId: String? = null,
+)

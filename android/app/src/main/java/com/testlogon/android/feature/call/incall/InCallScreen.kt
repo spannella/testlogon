@@ -7,16 +7,25 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Person
@@ -26,20 +35,25 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.outlined.ChatBubble
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -54,10 +68,23 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.HasDefaultViewModelProviderFactory
+import androidx.lifecycle.DEFAULT_ARGS_KEY
+import androidx.lifecycle.viewmodel.CreationExtras
+import androidx.lifecycle.viewmodel.MutableCreationExtras
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelProvider
+import androidx.core.os.bundleOf
+import com.testlogon.android.feature.messaging.thread.ThreadRoute
+import com.testlogon.android.feature.messaging.thread.ThreadViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
 import com.testlogon.android.core.webrtc.ui.RemoteVideoView
+import com.testlogon.android.core.webrtc.ui.VideoRenderer
+import com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer
 import com.testlogon.android.feature.call.billing.FinalCostSummary
 import com.testlogon.android.feature.call.billing.RunningCostOverlay
 import com.testlogon.android.feature.call.recording.RecordingConsentDialog
@@ -79,9 +106,11 @@ import com.testlogon.android.feature.call.recording.RecordingUploadStatus
 fun InCallRoute(
     onCallEnded: () -> Unit,
     viewModel: InCallViewModel = hiltViewModel(),
+    chatViewModel: InCallChatViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val recording by viewModel.recordingState.collectAsStateWithLifecycle()
+    val chatState by chatViewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
         viewModel.callEnded.collect { onCallEnded() }
     }
@@ -96,6 +125,7 @@ fun InCallRoute(
     InCallScreen(
         state = state,
         onAction = viewModel::onAction,
+        videoRenderer = viewModel.videoRenderer,
         recording = recording,
         onRecord = {
             val granted = ContextCompat.checkSelfPermission(
@@ -108,6 +138,9 @@ fun InCallRoute(
         onRecordDecline = viewModel::onRecordDecline,
         onRecordCancel = viewModel::onRecordCancel,
         onRecordRetry = viewModel::onRecordRetry,
+        chatState = chatState,
+        onChatDraftChange = chatViewModel::onDraftChange,
+        onChatSend = chatViewModel::onSend,
     )
 }
 
@@ -115,16 +148,25 @@ fun InCallRoute(
 fun InCallScreen(
     state: InCallUiState,
     onAction: (InCallAction) -> Unit,
+    videoRenderer: VideoRenderer = PlaceholderVideoRenderer,
     recording: RecordingUiState = RecordingUiState(),
     onRecord: () -> Unit = {},
     onRecordConsent: () -> Unit = {},
     onRecordDecline: () -> Unit = {},
     onRecordCancel: () -> Unit = {},
     onRecordRetry: () -> Unit = {},
+    chatState: InCallChatUiState = InCallChatUiState(),
+    onChatDraftChange: (String) -> Unit = {},
+    onChatSend: () -> Unit = {},
 ) {
+    // FIX C — the in-call chat drawer is a local overlay toggled from the control bar; it rides the DM.
+    var chatOpen by remember { mutableStateOf(false) }
+
     // Auto-hide the controls after 4s of inactivity in video mode; in audio-only they stay visible.
-    LaunchedEffect(state.controlsVisible, state.isVideoCall) {
-        if (state.isVideoCall && state.controlsVisible) {
+    // Pause the auto-hide while the chat drawer is open so the controls (and its chat button) don't
+    // disappear underneath it.
+    LaunchedEffect(state.controlsVisible, state.isVideoCall, chatOpen) {
+        if (state.isVideoCall && state.controlsVisible && !chatOpen) {
             kotlinx.coroutines.delay(4_000)
             onAction(InCallAction.ToggleControls)
         }
@@ -146,6 +188,7 @@ fun InCallScreen(
             RemoteVideoView(
                 modifier = Modifier.fillMaxSize(),
                 hasTrack = state.hasRemoteVideo,
+                renderer = videoRenderer,
             )
         } else {
             RemotePlaceholder(state = state)
@@ -160,6 +203,7 @@ fun InCallScreen(
                     .align(state.localTileCorner.alignment)
                     .testTag("incall_local_pip"),
                 hasTrack = state.hasLocalVideo,
+                renderer = videoRenderer,
             )
         }
 
@@ -205,6 +249,7 @@ fun InCallScreen(
                 onAction = onAction,
                 recordingPhase = recording.phase,
                 onRecord = onRecord,
+                onOpenChat = { chatOpen = true },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -239,6 +284,114 @@ fun InCallScreen(
                 onAccept = onRecordConsent,
                 onDecline = onRecordDecline,
             )
+        }
+
+        // FIX C — in-call chat drawer: a lightweight bottom sheet over the call, bound to the call's DM
+        // conversation (reuses the messaging thread data + realtime). Overlaid last so it sits on top.
+        if (chatOpen) {
+            InCallChatDrawer(
+                conversationId = chatState.conversationId,
+                onClose = { chatOpen = false },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun InCallChatDrawer(
+    conversationId: String?,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxHeight(0.96f)
+            .testTag("incall_chat_drawer"),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+    ) {
+        if (conversationId.isNullOrEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().statusBarsPadding(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "Chat unavailable",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            return@Surface
+        }
+        // FIX C (rich types) — embed the REAL DM thread UI bound to the call's conversation so the
+        // in-call drawer inherits the FULL messaging composer (reactions, replies, image, locked,
+        // view-once, video, expiring, scheduled) + every DM message renderer, with zero duplication.
+        // The ThreadViewModel reads its conversation id from SavedStateHandle; the call graph has no
+        // nav args, so we seed it via DEFAULT_ARGS in CreationExtras (exactly what hiltViewModel builds
+        // the SavedStateHandle from). Media picks flow through the same picker seam as the DM thread.
+        val parentOwner = checkNotNull(LocalViewModelStoreOwner.current)
+        val hiltOwner = parentOwner as? HasDefaultViewModelProviderFactory
+        // hilt-navigation-compose 1.2 has no creationExtras overload, so seed the ThreadViewModel's
+        // SavedStateHandle by delegating to a store-owner whose defaultViewModelCreationExtras carries
+        // the conversation id under DEFAULT_ARGS_KEY (what hiltViewModel(owner, key) reads).
+        val argOwner = remember(conversationId, parentOwner) {
+            object : ViewModelStoreOwner, HasDefaultViewModelProviderFactory {
+                override val viewModelStore: ViewModelStore = parentOwner.viewModelStore
+                override val defaultViewModelProviderFactory: ViewModelProvider.Factory =
+                    hiltOwner?.defaultViewModelProviderFactory ?: ViewModelProvider.NewInstanceFactory()
+                override val defaultViewModelCreationExtras: CreationExtras =
+                    MutableCreationExtras(hiltOwner?.defaultViewModelCreationExtras ?: CreationExtras.Empty).apply {
+                        set(DEFAULT_ARGS_KEY, bundleOf(ThreadViewModel.ARG_CONVERSATION_ID to conversationId))
+                    }
+            }
+        }
+        val threadViewModel: ThreadViewModel = hiltViewModel(
+            viewModelStoreOwner = argOwner,
+            key = "incall_thread_$conversationId",
+        )
+        ThreadRoute(
+            onBack = onClose,
+            viewModel = threadViewModel,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+@Composable
+private fun ChatBubble(msg: InCallChatMessage) {
+    val bubbleColor = if (msg.isOwn) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (msg.isOwn) Arrangement.End else Arrangement.Start,
+    ) {
+        Surface(
+            color = bubbleColor,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.widthIn(max = 280.dp),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                Text(
+                    text = msg.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = when {
+                        msg.failed -> "Failed"
+                        msg.sending -> "Sending…"
+                        else -> msg.timeLabel
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -372,6 +525,7 @@ private fun ControlBar(
     onAction: (InCallAction) -> Unit,
     recordingPhase: RecordingPhase,
     onRecord: () -> Unit,
+    onOpenChat: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val micCd = stringResource(if (state.micEnabled) R.string.call_mute_cd else R.string.call_unmute_cd)
@@ -418,6 +572,13 @@ private fun ControlBar(
         RecordingControl(
             phase = recordingPhase,
             onRecord = onRecord,
+        )
+        // FIX C — open the in-call chat drawer (rides the call's DM conversation).
+        ControlButton(
+            icon = Icons.Outlined.ChatBubble,
+            contentDescription = "Open in-call chat",
+            tag = "incall_chat_open",
+            onClick = onOpenChat,
         )
         ControlButton(
             icon = Icons.Filled.CallEnd,

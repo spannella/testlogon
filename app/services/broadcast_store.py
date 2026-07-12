@@ -157,6 +157,7 @@ def session_to_item(session: BroadcastSessionModel) -> Dict[str, Any]:
         "guest_invite_enabled": session.guest_invite_enabled,
         # Viewer Clip Creation (ENGAGE-005)
         "clips_enabled": session.clips_enabled,
+        "subscriber_only": getattr(session, "subscriber_only", False),
         # Go-Private / Visibility (BCAST-011)
         "broadcast_privacy_visibility": session.broadcast_privacy_visibility,
         "broadcast_privacy_updated_at": session.broadcast_privacy_updated_at,
@@ -168,6 +169,7 @@ def session_to_item(session: BroadcastSessionModel) -> Dict[str, Any]:
         "ad_break_active": session.ad_break_active,
         "ad_break_started_at": session.ad_break_started_at,
         "total_ad_breaks": session.total_ad_breaks,
+        "last_ad_break_at": session.last_ad_break_at,
     }
     # Remove None values to avoid DynamoDB issues with GSI sort keys
     return {k: v for k, v in item.items() if v is not None}
@@ -221,6 +223,7 @@ def session_from_item(item: Dict[str, Any]) -> BroadcastSessionModel:
         guest_invite_enabled=bool(item.get("guest_invite_enabled", False)),
         # Viewer Clip Creation (ENGAGE-005)
         clips_enabled=bool(item.get("clips_enabled", True)),
+        subscriber_only=bool(item.get("subscriber_only", False)),
         # Go-Private / Visibility (BCAST-011)
         broadcast_privacy_visibility=item.get("broadcast_privacy_visibility") or "public",
         broadcast_privacy_updated_at=item.get("broadcast_privacy_updated_at"),
@@ -232,6 +235,7 @@ def session_from_item(item: Dict[str, Any]) -> BroadcastSessionModel:
         ad_break_active=bool(item.get("ad_break_active", False)),
         ad_break_started_at=int(item["ad_break_started_at"]) if item.get("ad_break_started_at") is not None else None,
         total_ad_breaks=int(item.get("total_ad_breaks", 0) or 0),
+        last_ad_break_at=int(item["last_ad_break_at"]) if item.get("last_ad_break_at") is not None else None,
     )
 
 
@@ -246,6 +250,7 @@ def create_session(
     pre_roll_enabled: bool = True,
     mid_roll_ad_break_duration_seconds: int = 30,
     mid_roll_skip_after_seconds: int = 15,
+    subscriber_only: bool = False,
 ) -> BroadcastSessionModel:
     enforce_secret_reference_only("stream_key_ref", stream_key_ref)
     ts = now_iso()
@@ -264,6 +269,7 @@ def create_session(
         pre_roll_enabled=pre_roll_enabled,
         mid_roll_ad_break_duration_seconds=mid_roll_ad_break_duration_seconds,
         mid_roll_skip_after_seconds=mid_roll_skip_after_seconds,
+        subscriber_only=subscriber_only,
     )
     T.broadcast_sessions.put_item(
         Item=session_to_item(session),

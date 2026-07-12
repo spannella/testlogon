@@ -1,0 +1,272 @@
+--- app/routers/video_listing.py.bak_b7vodlist_1782368582	2026-06-25 06:23:02.783662284 +0000
++++ app/routers/video_listing.py	2026-06-29 06:34:12.733128799 +0000
+@@ -133,6 +133,10 @@
+     source_video_ids: Optional[List[str]] = None
+     # Subtitles / Closed Captions (VOD-021)
+     subtitle_tracks: list = Field(default_factory=list)
++    # Social parity (B-VIDSOCIAL2): video-level emoji reactions + running tip total.
++    reactions_counts: dict = Field(default_factory=dict)
++    my_reactions: List[str] = Field(default_factory=list)
++    tip_total_cents: int = 0
+ 
+ 
+ class VideoUpdateIn(BaseModel):
+@@ -196,6 +200,9 @@
+     views_remaining: int = -1,
+     expires_at: int = 0,
+     download_allowed: bool = False,
++    reactions_counts: dict | None = None,
++    my_reactions: List[str] | None = None,
++    tip_total_cents: int = 0,
+ ) -> VideoDetailOut:
+     # Resolve DRM key URI if DRM is enabled for this video
+     drm_key_uri: str | None = None
+@@ -279,6 +286,9 @@
+         rental_expires_at=expires_at if expires_at > 0 else None,
+         rental_remaining_seconds=max(0, expires_at - now_ts()) if expires_at > 0 else None,
+         download_allowed=download_allowed,
++        reactions_counts=reactions_counts or {},
++        my_reactions=my_reactions or [],
++        tip_total_cents=tip_total_cents,
+     )
+ 
+ 
+@@ -818,9 +828,143 @@
+     return None
+ 
+ 
++class VideoReactionIn(BaseModel):
++    emoji: str = Field(..., min_length=1, max_length=10)
++
++    @model_validator(mode="after")
++    def _validate_emoji(self):
++        from app.services.video_gallery import ALLOWED_VIDEO_REACTION_EMOJIS
++        if self.emoji not in ALLOWED_VIDEO_REACTION_EMOJIS:
++            raise ValueError("emoji not in allowed reaction set")
++        return self
++
++
++class VideoReactionOut(BaseModel):
++    video_id: str
++    reactions_counts: dict = Field(default_factory=dict)
++    my_reactions: List[str] = Field(default_factory=list)
++
++
++@router.post("/{video_id}/reactions", response_model=VideoReactionOut)
++def add_video_reaction_endpoint(
++    video_id: str,
++    body: VideoReactionIn,
++    user=Depends(require_ui_session),
++):
++    """B-VIDSOCIAL2 (#2): add an emoji reaction to a video (post-level feed parity)."""
++    if not S.video_gallery_enabled:
++        raise HTTPException(status_code=404, detail="gallery not enabled")
++    from app.services.video_gallery import add_video_reaction
++    user_sub = user["user_sub"]
++    res = add_video_reaction(video_id=video_id, user_id=user_sub, emoji=body.emoji)
++    return VideoReactionOut(video_id=video_id, **res)
++
++
++@router.post("/{video_id}/unreact", response_model=VideoReactionOut)
++def remove_video_reaction_endpoint(
++    video_id: str,
++    body: VideoReactionIn,
++    user=Depends(require_ui_session),
++):
++    """B-VIDSOCIAL2 (#2): remove an emoji reaction from a video."""
++    if not S.video_gallery_enabled:
++        raise HTTPException(status_code=404, detail="gallery not enabled")
++    from app.services.video_gallery import remove_video_reaction
++    user_sub = user["user_sub"]
++    res = remove_video_reaction(video_id=video_id, user_id=user_sub, emoji=body.emoji)
++    return VideoReactionOut(video_id=video_id, **res)
++
++
+ # ─── Video Detail ─────────────────────────────────────────────────────────
+ 
+ 
++class VideoTipIn(BaseModel):
++    amount_cents: int = Field(..., ge=1)
++    currency: str = "usd"
++    payment_method_id: Optional[str] = None
++
++
++class VideoTipOut(BaseModel):
++    ok: bool
++    video_id: str
++    amount_cents: int
++    currency: str
++    tip_total_cents: int
++
++
++@router.post("/{video_id}/tip", response_model=VideoTipOut)
++def tip_video_endpoint(
++    video_id: str,
++    body: VideoTipIn,
++    user=Depends(require_ui_session),
++):
++    """B-VIDSOCIAL2 (#2): tip a video's creator. Mirrors newsfeed POST /posts/{id}/tip
++    so VOD posts reach full social parity (reactions + comments + tips)."""
++    user_sub = user["user_sub"]
++    video = get_video(video_id)
++    if video.owner_user_id == user_sub:
++        raise HTTPException(status_code=400, detail="Cannot tip your own video")
++    # Non-owner may only tip a published, viewable video.
++    if video.status != "published" or video.visibility not in ("public", "unlisted"):
++        raise HTTPException(status_code=403, detail="video not available for tipping")
++
++    from app.routers.newsfeed import payments as _payments
++    pi = _payments.create_payment_intent(
++        user_id=user_sub,
++        amount_cents=body.amount_cents,
++        currency=body.currency,
++        metadata={"type": "tip_video", "video_id": video_id},
++    )
++    conf = _payments.confirm_payment_intent(payment_intent_id=pi["payment_intent_id"])
++    if conf.get("status") != "succeeded":
++        raise HTTPException(status_code=402, detail="Payment failed")
++
++    # Accumulate tip_total_cents on the video metadata row (best-effort additive).
++    new_total = body.amount_cents
++    try:
++        upd = T.video_metadata.update_item(
++            Key={"video_id": video_id},
++            UpdateExpression="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
++            ExpressionAttributeValues={":z": 0, ":amt": body.amount_cents},
++            ReturnValues="UPDATED_NEW",
++        )
++        new_total = int(upd.get("Attributes", {}).get("tip_total_cents", body.amount_cents))
++    except Exception:
++        logger.warning("failed to accumulate tip_total_cents on video %s", video_id)
++
++    # Billing ledger debit/credit (best-effort), mirroring tip_post.
++    try:
++        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
++        write_tip_ledger(TipLedgerEntry(
++            tipper_user_id=user_sub,
++            recipient_user_id=video.owner_user_id,
++            amount_cents=body.amount_cents,
++            currency=body.currency,
++            content_type="video",
++            content_id=video_id,
++            payment_method_id=body.payment_method_id,
++            extra_meta={"video_id": video_id},
++        ))
++    except Exception:
++        logger.warning("tip ledger write failed for video tip %s", video_id)
++
++    # Social activity + notification hooks (best-effort).
++    try:
++        from app.services.activity_feed import record_social_interaction
++        record_social_interaction(
++            recipient_id=video.owner_user_id, actor_id=user_sub, kind="tip",
++            target_type="video", target_id=video_id,
++            extra={"amount_cents": body.amount_cents, "currency": body.currency},
++        )
++    except Exception:
++        logger.debug("social hook: tip_video", exc_info=True)
++
++    return VideoTipOut(
++        ok=True, video_id=video_id, amount_cents=body.amount_cents,
++        currency=body.currency, tip_total_cents=new_total,
++    )
++
++
+ @router.get("/{video_id}", response_model=VideoDetailOut)
+ def get_video_detail(
+     video_id: str,
+@@ -855,10 +999,25 @@
+     if access.entitled:
+         playback_token, playback_expires_at = _try_issue_playback_token(video, user_sub)
+ 
++    # B-VIDSOCIAL2: video-level emoji reactions + running tip total for feed parity.
++    _reactions_counts, _my_reactions, _tip_total = {}, [], 0
++    try:
++        _raw_meta = T.video_metadata.get_item(Key={"video_id": video_id}).get("Item") or {}
++        from app.services.video_gallery import _video_reaction_summaries
++        _reactions_counts, _my_reactions = _video_reaction_summaries(
++            _raw_meta.get("reactions") or {}, user_sub
++        )
++        _tip_total = int(_raw_meta.get("tip_total_cents") or 0)
++    except Exception:
++        logger.debug("video social-meta read failed for %s", video_id, exc_info=True)
++
+     return _video_to_detail(
+         video,
+         playback_token=playback_token,
+         playback_expires_at=playback_expires_at,
++        reactions_counts=_reactions_counts,
++        my_reactions=_my_reactions,
++        tip_total_cents=_tip_total,
+         is_entitled=access.entitled,
+         access_reason=access.reason,
+         subscription_available=access.subscription_available,
+@@ -1173,6 +1332,51 @@
+     return None
+ 
+ 
++
++# B7-VOD: dev stuck-state fast-forward. In dev mode there is no transcode/probe/
++# review worker, so videos uploaded before the B-FEEDVID /upload/complete fix
++# stay stuck in "probing"/"pending_encoding"/etc forever and the "My Videos"
++# screen shows them as perpetually "processing". When listing the caller's own
++# videos in dev mode, fast-forward any non-terminal in-pipeline video to
++# "published" (mock HLS manifest + thumbnail) so it becomes playable. No-op in
++# prod (the real pipeline owns these transitions).
++_DEV_STUCK_STATES = (
++    "probing", "pending_encoding", "encoding", "pending_review", "approved",
++)
++_DEV_FF_CHAIN = {
++    "probing": ["pending_encoding", "encoding", "pending_review", "approved", "published"],
++    "pending_encoding": ["encoding", "pending_review", "approved", "published"],
++    "encoding": ["pending_review", "approved", "published"],
++    "pending_review": ["approved", "published"],
++    "approved": ["published"],
++}
++
++
++def _dev_fast_forward_video(video: VideoMetadataModel) -> VideoMetadataModel:
++    """Advance a dev-stuck video to published; returns the refreshed model."""
++    from app.services.video_metadata_store import transition_video_status as _tvs
++    bucket = S.video_upload_bucket or "local-uploads"
++    key = video.source_s3_key or f"vod/{video.id}/source.mp4"
++    # B8 B-VIDPLAY: point at the real uploaded object (servable) instead of the
++    # never-uploaded ".m3u8"/".jpg" keys, so My Videos playback + poster work.
++    mock_manifest = f"{S.public_base_url}/mock/s3/{bucket}/{key}"
++    mock_thumb = f"{S.public_base_url}/mock/s3/{bucket}/{key}"
++    chain = _DEV_FF_CHAIN.get(video.status, [])
++    for nxt in chain:
++        try:
++            if nxt in ("pending_review", "published"):
++                _tvs(video_id=video.id, to_status=nxt, reason="dev list fast-forward",
++                     actor=video.owner_user_id, hls_manifest_url=mock_manifest,
++                     thumbnail_url=mock_thumb)
++            else:
++                _tvs(video_id=video.id, to_status=nxt, reason="dev list fast-forward",
++                     actor=video.owner_user_id)
++        except Exception:
++            logger.warning("dev fast-forward failed for %s -> %s", video.id, nxt, exc_info=True)
++            break
++    return get_video(video.id)
++
++
+ @router.get("", response_model=VideoListOut)
+ def list_own_videos(
+     limit: int = Query(default=50, ge=1, le=200),
+@@ -1191,7 +1395,15 @@
+         status_filter=status,
+         visibility_filter=visibility,
+     )
+-    items = [_video_to_list_item(v) for v in result["items"]]
++    raw_items = result["items"]
++    if S.dev_mode:
++        ffd = []
++        for v in raw_items:
++            if v.status in _DEV_STUCK_STATES:
++                v = _dev_fast_forward_video(v)
++            ffd.append(v)
++        raw_items = ffd
++    items = [_video_to_list_item(v) for v in raw_items]
+     return VideoListOut(items=items, cursor=encode_cursor(_sanitize_cursor(result.get("cursor"))))
+ 
+ 

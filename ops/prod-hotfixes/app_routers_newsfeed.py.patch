@@ -1,0 +1,444 @@
+--- app/routers/newsfeed.py.bak_social_1782303162	2026-06-24 12:12:42.561145380 +0000
++++ app/routers/newsfeed.py	2026-06-29 04:19:04.779878874 +0000
+@@ -20,7 +20,7 @@
+ from botocore.exceptions import ClientError
+ from boto3.dynamodb.types import TypeSerializer
+ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
+-from pydantic import BaseModel, Field, ValidationError, model_validator
++from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+ from starlette.responses import StreamingResponse
+ 
+ from app.core.aws import ddb
+@@ -1327,6 +1327,15 @@
+         # only and carry no body; exempt them from the text-content requirement.
+         if getattr(self, "post_kind", "text") not in (None, "text"):
+             return self
++        # HOTFIX: media posts/comments (image/video/file attached) may carry no text body.
++        if (
++            getattr(self, "image_urls", None)
++            or getattr(self, "image_url", None)
++            or getattr(self, "video_id", None)
++            or getattr(self, "video_ids", None)
++            or getattr(self, "file_paths", None)
++        ):
++            return self
+         has_legacy = bool((self.body or "").strip())
+         has_plain = bool((self.body_plain or "").strip())
+         has_markdown = bool((self.body_markdown or "").strip())
+@@ -1413,8 +1422,15 @@
+     image_variants: Optional[List[Dict[str, Any]]] = Field(default=None)
+     tags: List[str] = Field(default_factory=list)
+     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
++    # B9 B-FEEDMEDIA #2: multiple videos + mixed media (images AND videos together).
++    # Backward compatible: video_id still accepted for a single video. When both are
++    # provided they are merged (video_id first, de-duplicated).
++    video_ids: Optional[List[str]] = Field(default=None, max_length=10)
+     visibility: Literal["followers", "public"] = "followers"
+-    lock_type: Optional[Literal["fixed_price", "tip_lottery"]] = None
++    # B8 B-LOCK: accept "price"/"none" aliases so a fixed-price locked post created
++    # by the app (which sent "price") or an explicit unlock ("none") validates; the
++    # value is normalized to the canonical fixed_price/tip_lottery/None below.
++    lock_type: Optional[Literal["fixed_price", "tip_lottery", "price", "none"]] = None
+     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+     unlock_limit: Optional[int] = Field(default=None, ge=1)
+     lottery_tip_cents: Optional[int] = Field(default=None, ge=1)
+@@ -1535,6 +1551,10 @@
+     like_count: int = 0
+     comment_count: int = 0
+     video: Optional[PostVideoEmbed] = None
++    # B9 B-FEEDMEDIA #2: full ordered list of attached videos (video stays as the
++    # first element for backward compatibility).
++    videos: List[PostVideoEmbed] = Field(default_factory=list)
++    video_ids: List[str] = Field(default_factory=list)
+     # ADS-005: creator ad adjacency control
+     allow_ads_near: bool = True
+     # ENGAGE-002: Poll fields
+@@ -1754,11 +1774,22 @@
+                 raise ValueError("image_url is required for image comments")
+             # Enforce platform upload path or https origin.
+             self.image_url = _validate_comment_image_url(self.image_url)
++        # B8 B-COMMENT2: a text comment MAY also carry an image (text+image
++        # together). Validate the attached image_url like an image comment.
++        if self.kind == "text" and (self.image_url or "").strip():
++            self.image_url = _validate_comment_image_url(self.image_url)
+         return self
+ 
+ 
+ class EditCommentRequest(ContentFieldsMixin):
+     expected_version: int = Field(default=1, ge=1)
++    # B8 B-COMMENT2: a text comment's attached image is editable. Omit a field to
++    # KEEP the current value; send image_url="" (or null) to REMOVE the image;
++    # send a new image_url to REPLACE it. image_url is validated like a create.
++    image_url: Optional[str] = Field(default=None, max_length=2048)
++    image_alt_text: Optional[str] = Field(default=None, max_length=256)
++    image_width: Optional[int] = Field(default=None, ge=0, le=8192)
++    image_height: Optional[int] = Field(default=None, ge=0, le=8192)
+ 
+ 
+ class CommentResponse(BaseModel):
+@@ -1818,7 +1849,24 @@
+ 
+ class EditPostRequest(ContentFieldsMixin):
+     image_urls: Optional[List[str]] = None
+-    video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
++    # B8 #3: accept "" as an explicit CLEAR sentinel (the app sends video_id="" to remove an attached
++    # video). The strict ^v_...$ id-or-empty is enforced by the validator below; the edit handler
++    # treats a falsy video_id as "remove video".
++    video_id: Optional[str] = Field(default=None, max_length=64)
++
++    @field_validator("video_id")
++    @classmethod
++    def _validate_edit_video_id(cls, v):
++        if v is None or v == "":
++            return v
++        import re as _re
++        if not _re.match(r"^v_[a-f0-9]{32}$", v):
++            raise ValueError("video_id must match ^v_[a-f0-9]{32}$ or be empty to clear")
++        return v
++    # B-POST #5: visibility + paid-lock are editable in place.
++    visibility: Optional[Literal["followers", "public"]] = None
++    lock_type: Optional[Literal["fixed_price", "none"]] = None
++    unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+     publish_at: Optional[int] = Field(default=None, ge=0)
+     schedule_timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+     scheduled_at_local: Optional[str] = Field(default=None, min_length=1, max_length=32)
+@@ -2305,9 +2353,32 @@
+         except Exception:
+             video_embed = None
+ 
++    # B9 B-FEEDMEDIA #2: resolve the FULL ordered list of attached videos.
++    raw_video_ids = list(post.get("video_ids") or ([raw_video_id] if raw_video_id else []))
++    videos_list = []
++    if not locked_body:
++        from app.services.video_metadata_store import get_video as _feed_vid_multi
++        for _vid in raw_video_ids:
++            if not (_vid and isinstance(_vid, str)):
++                continue
++            try:
++                _vr = _feed_vid_multi(_vid)
++                videos_list.append({
++                    "video_id": _vid,
++                    "title": _vr.title,
++                    "thumbnail_url": _vr.thumbnail_url,
++                    "duration_seconds": _vr.duration_seconds,
++                    "hls_manifest_url": _vr.hls_manifest_url,
++                    "playback_token": None,
++                    "playback_expires_at": None,
++                })
++            except Exception:
++                continue
++
+     return {
+         "post_id": post_id,
+         "author_id": post.get("user_id", ""),
++        "author_display_name": _resolve_author_display_name(post.get("user_id", "")),
+         "created_at": post.get("created_at", ""),
+         "published_at": published_at,
+         "status": status,
+@@ -2325,6 +2396,8 @@
+         "image_urls": image_urls,
+         "image_variants": list(post.get("image_variants") or []),
+         "video": video_embed,
++        "videos": videos_list,
++        "video_ids": [v["video_id"] for v in videos_list],
+         "file_attachments": file_attachments,
+         "visibility": post.get("visibility", "followers"),
+         "locked": bool(post.get("locked")),
+@@ -2418,6 +2491,7 @@
+         "comment_id": it["comment_id"],
+         "post_id": it["post_id"],
+         "author_id": it.get("user_id", ""),
++        "author_display_name": _resolve_author_display_name(it.get("user_id", "")),
+         "created_at": it.get("created_at", ""),
+         "updated_at": it.get("updated_at"),
+         "deleted": bool(it.get("deleted")),
+@@ -3549,6 +3623,13 @@
+             )
+ 
+     requested_lock_type = req.lock_type
++    # B8 B-LOCK: normalize client lock_type aliases. "price" == "fixed_price";
++    # "none" (explicit unlock) is treated like an absent lock_type so a price
++    # alone still infers a fixed_price lock (matches the EDIT path semantics).
++    if requested_lock_type == "price":
++        requested_lock_type = "fixed_price"
++    elif requested_lock_type == "none":
++        requested_lock_type = None
+     unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
+     has_lottery_fields = any(
+         value is not None
+@@ -3638,20 +3719,34 @@
+ 
+     locked = lock_type is not None
+ 
+-    # --- Video validation (FEED-001) ---
+-    video_id = getattr(req, "video_id", None)
+-    if video_id:
+-        if req.image_urls:
+-            raise HTTPException(status_code=400, detail="video_id and image_urls are mutually exclusive; provide one or the other")
++    # --- Video validation (FEED-001; B9 B-FEEDMEDIA #2: multi-video + mixed media) ---
++    # Merge a legacy single video_id with the new video_ids list, preserving order
++    # and de-duplicating. Mixed media (images + videos) is now ALLOWED.
++    _raw_video_ids: List[str] = []
++    _single_vid = getattr(req, "video_id", None)
++    if _single_vid:
++        _raw_video_ids.append(_single_vid)
++    for _vid in (getattr(req, "video_ids", None) or []):
++        if _vid and _vid not in _raw_video_ids:
++            _raw_video_ids.append(_vid)
++    import re as _re_vid
++    _VID_RE = _re_vid.compile(r"^v_[a-f0-9]{32}$")
++    for _vid in _raw_video_ids:
++        if not _VID_RE.match(_vid):
++            raise HTTPException(status_code=400, detail="video_id must match ^v_[a-f0-9]{32}$")
++    if _raw_video_ids:
+         from app.services.video_metadata_store import get_video as _feed_get_video
+-        try:
+-            _vid_record = _feed_get_video(video_id)
+-        except HTTPException:
+-            raise HTTPException(status_code=400, detail="video not found")
+-        if _vid_record.owner_user_id != user_id:
+-            raise HTTPException(status_code=403, detail="video is not owned by this user")
+-        if _vid_record.status != "published":
+-            raise HTTPException(status_code=400, detail="video must be in published status to attach to a post")
++        for _vid in _raw_video_ids:
++            try:
++                _vid_record = _feed_get_video(_vid)
++            except HTTPException:
++                raise HTTPException(status_code=400, detail=f"video not found: {_vid}")
++            if _vid_record.owner_user_id != user_id:
++                raise HTTPException(status_code=403, detail="video is not owned by this user")
++            if _vid_record.status != "published":
++                raise HTTPException(status_code=400, detail="video must be in published status to attach to a post")
++    video_ids = _raw_video_ids
++    video_id = video_ids[0] if video_ids else None
+ 
+     # --- ENGAGE-002: Poll/Survey validation ---
+     req_post_type = getattr(req, "post_type", None) or "standard"
+@@ -3727,6 +3822,7 @@
+         "image_urls": req.image_urls,
+         "image_variants": list(getattr(req, "image_variants", None) or []),
+         "video_id": video_id,
++        "video_ids": video_ids,
+         "visibility": req.visibility,
+         "locked": locked,
+         "lock_type": lock_type,
+@@ -3865,6 +3961,7 @@
+         image_urls=req.image_urls,
+         tags=all_tags,
+         video=None,
++        video_ids=video_ids,
+         visibility=req.visibility,
+         locked=locked,
+         lock_type=lock_type,
+@@ -4103,6 +4200,62 @@
+             expr_vals[":unlock_limit"] = req.unlock_limit
+         else:
+             remove_parts.append("unlock_limit")
++    # B-POST #5: visibility is editable in place.
++    if "visibility" in req.model_fields_set and req.visibility is not None:
++        set_parts.append("visibility = :vis")
++        expr_vals[":vis"] = req.visibility
++    # B-POST #5: video attachment is editable (set or clear). video_id was declared
++    # on EditPostRequest but previously ignored by the handler.
++    if "video_id" in req.model_fields_set:
++        if req.video_id:
++            set_parts.append("video_id = :vid")
++            expr_vals[":vid"] = req.video_id
++        else:
++            remove_parts.append("video_id")
++    # B-POST #5: paid-lock state is editable in place (fixed_price only; the
++    # tip_lottery strategy keeps its dedicated lottery flow untouched).
++    locked_name_used = False
++    lock_in_payload = ("unlock_price_cents" in req.model_fields_set) or ("lock_type" in req.model_fields_set)
++    if lock_in_payload:
++        existing_lock_type = post.get("lock_type")
++        if existing_lock_type == "tip_lottery":
++            raise HTTPException(
++                status_code=400,
++                detail={
++                    "code": "lock_edit_unsupported_for_tip_lottery",
++                    "message": "tip_lottery locks cannot be edited via PATCH /posts/{id}",
++                },
++            )
++        requested_lock_type = req.lock_type if "lock_type" in req.model_fields_set else (
++            "fixed_price" if existing_lock_type == "fixed_price" else "none"
++        )
++        if requested_lock_type == "none":
++            set_parts.append("#locked = :locked")
++            expr_vals[":locked"] = False
++            locked_name_used = True
++            remove_parts.append("unlock_price_cents")
++            remove_parts.append("lock_type")
++        else:  # fixed_price
++            price = req.unlock_price_cents if "unlock_price_cents" in req.model_fields_set else post.get("unlock_price_cents")
++            try:
++                price = _validate_and_normalize_unlock_price(price)
++            except ValueError as exc:
++                raise HTTPException(status_code=400, detail=str(exc)) from exc
++            if price is None:
++                raise HTTPException(
++                    status_code=400,
++                    detail={
++                        "code": "fixed_price_requires_unlock_price",
++                        "message": "unlock_price_cents (> 0) is required for a fixed_price lock",
++                    },
++                )
++            set_parts.append("#locked = :locked")
++            expr_vals[":locked"] = True
++            locked_name_used = True
++            set_parts.append("unlock_price_cents = :upc")
++            expr_vals[":upc"] = price
++            set_parts.append("lock_type = :ltype")
++            expr_vals[":ltype"] = "fixed_price"
+     update_expr = f"SET {', '.join(set_parts)}"
+     if remove_parts:
+         update_expr = f"{update_expr} REMOVE {', '.join(remove_parts)}"
+@@ -4121,7 +4274,7 @@
+                     "TableName": APP_TABLE,
+                     "Key": _ddb_serialize_map({"pk": pk_post(post_id), "sk": sk_post()}),
+                     "UpdateExpression": update_expr,
+-                    "ExpressionAttributeNames": {"#body": "body", "#status": "status", "#user": "user_id"},
++                    "ExpressionAttributeNames": ({"#body": "body", "#status": "status", "#user": "user_id", "#locked": "locked"} if locked_name_used else {"#body": "body", "#status": "status", "#user": "user_id"}),
+                     "ExpressionAttributeValues": _ddb_serialize_map(expr_vals_tx),
+                     "ConditionExpression": condition_expr,
+                 }
+@@ -4174,10 +4327,13 @@
+         updated = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()}) or {}
+         record_newsfeed_schedule_operation(operation="edit", outcome="success")
+     else:
++        _expr_names = {"#body": "body"}
++        if locked_name_used:
++            _expr_names["#locked"] = "locked"
+         updated = ddb_update_item(
+             key={"pk": pk_post(post_id), "sk": sk_post()},
+             update_expr=update_expr,
+-            expr_names={"#body": "body"},
++            expr_names=_expr_names,
+             expr_vals=expr_vals,
+         )
+     return _post_to_dict(updated, viewer_id=user_id)
+@@ -4347,6 +4503,24 @@
+     return user_sub
+ 
+ 
++# Short-TTL memo so resolving an author's display name for every post in a feed
++# page doesn't issue an N+1 profile lookup (authors repeat across posts; names
++# rarely change). Falls back to the raw sub on miss.
++_author_display_name_cache: Dict[str, "tuple[float, str]"] = {}
++
++
++def _resolve_author_display_name(user_sub: str) -> str:
++    if not user_sub:
++        return ""
++    now = time.time()
++    hit = _author_display_name_cache.get(user_sub)
++    if hit and now - hit[0] < 60:
++        return hit[1]
++    name = _post_fadt_display_name(user_sub)
++    _author_display_name_cache[user_sub] = (now, name)
++    return name
++
++
+ def _post_fadt_meta_out(meta: Dict[str, Any]) -> Dict[str, Any]:
+     return {
+         "poll_id": meta.get("poll_id"),
+@@ -4760,6 +4934,11 @@
+             logger.debug("analytics hook: like_post engagement", exc_info=True)
+         # NRS-003: For-You engagement signal (no-op unless flag on).
+         _recsys_engage(user_id=user_id, post=post, post_id=post_id, action="like")
++        try:
++            from app.services.activity_feed import record_social_interaction
++            record_social_interaction(recipient_id=post.get("user_id") or "", actor_id=user_id, kind="like", target_type="post", target_id=post_id)
++        except Exception:
++            logger.debug("social hook: like_post", exc_info=True)
+     except ClientError as exc:
+         if exc.response["Error"].get("Code") != "ConditionalCheckFailedException":
+             raise HTTPException(
+@@ -4852,6 +5031,11 @@
+             payment_method_id=req.payment_method_id,
+             extra_meta={"post_id": post_id},
+         ))
++        try:
++            from app.services.activity_feed import record_social_interaction
++            record_social_interaction(recipient_id=post_author, actor_id=user_id, kind="tip", target_type="post", target_id=post_id, extra={"amount_cents": req.amount_cents, "currency": req.currency})
++        except Exception:
++            logger.debug("social hook: tip_post", exc_info=True)
+ 
+     # GAP-0026: Best-effort license revenue split for tipped post.
+     # Wrapped in try/except so a split failure never breaks the tip transaction.
+@@ -5663,7 +5847,15 @@
+     started = time.perf_counter()
+ 
+     def _chronological_fallback(source: str):
+-        chrono = view_feed(limit=limit, cursor=cursor, user_id=user_id)
++        # view_feed is a FastAPI route handler: its author_id/q/from/to/has_media
++        # params carry Query(...) defaults that are only resolved when called over
++        # HTTP. Calling it as a plain function must pass them explicitly as None,
++        # else the unresolved Query FieldInfo leaks into _normalize_author_filter_or_400
++        # and 400s ("invalid_author_id").
++        chrono = view_feed(
++            limit=limit, cursor=cursor, author_id=None, q=None,
++            from_ts=None, to_ts=None, has_media=None, user_id=user_id,
++        )
+         chrono = dict(chrono)
+         chrono["source"] = source
+         record_newsfeed_recsys_request(mode="for_you", source=source)
+@@ -6041,6 +6233,11 @@
+             notif_type="comment_on_post",
+             payload={"post_id": post_id, "comment_id": comment_id, "from_user_id": user_id, "created_at": created_at},
+         )
++        try:
++            from app.services.activity_feed import record_social_interaction
++            record_social_interaction(recipient_id=post_author, actor_id=user_id, kind="comment", target_type="post", target_id=post_id, extra={"comment_id": comment_id})
++        except Exception:
++            logger.debug("social hook: create_comment", exc_info=True)
+         # GAP-0355: also emit a social alert (alerts table + bell badge).
+         # Best-effort: never break comment creation.
+         try:
+@@ -6200,8 +6397,9 @@
+         raise HTTPException(status_code=403, detail="Not your comment")
+     if target.get("deleted"):
+         raise HTTPException(status_code=409, detail="Comment deleted")
+-    # Media comments (gif/sticker/image) cannot be edited via the text editor
+-    # (mirrors the frontend isMediaComment guard and the gif/sticker precedent).
++    # Pure media comments (gif/sticker, or an image-ONLY comment) cannot be
++    # edited via the text editor (mirrors the frontend isMediaComment guard).
++    # A text comment that also carries an image IS editable (text+image).
+     if target.get("kind", "text") in ("gif", "sticker", "image"):
+         raise HTTPException(status_code=400, detail="Media comments cannot be edited")
+ 
+@@ -6210,11 +6408,32 @@
+ 
+     content = _content_from_payload(req)
+     _emit_newsfeed_content_metric("edit_comment", surface="comment", body_format=content.get("body_format", "plain"))
++    _fields_set = getattr(req, "model_fields_set", set())
++    _set_extra = ""
++    _remove_extra = []
++    _img_vals = {}
++    # B8 B-COMMENT2: image is editable on a text comment. Omitted => keep;
++    # empty/None => remove; a value => validate + replace.
++    if "image_url" in _fields_set:
++        _img_raw = (req.image_url or "").strip()
++        if _img_raw:
++            _img_vals[":img"] = _validate_comment_image_url(_img_raw)
++            _img_vals[":imgalt"] = req.image_alt_text
++            _img_vals[":imgw"] = req.image_width
++            _img_vals[":imgh"] = req.image_height
++            _set_extra = ", image_url = :img, image_alt_text = :imgalt, image_width = :imgw, image_height = :imgh"
++        else:
++            _remove_extra = ["image_url", "image_alt_text", "image_width", "image_height"]
++    _update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u, version = :nv" + _set_extra
++    if _remove_extra:
++        _update_expr += " REMOVE " + ", ".join(_remove_extra)
++    _expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso(), ":nv": new_version, ":ev": int(req.expected_version)}
++    _expr_vals.update(_img_vals)
+     updated = ddb_update_item(
+         key=key,
+-        update_expr="SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u, version = :nv",
++        update_expr=_update_expr,
+         expr_names={"#body": "body"},
+-        expr_vals={":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso(), ":nv": new_version, ":ev": int(req.expected_version)},
++        expr_vals=_expr_vals,
+         condition_expr="version = :ev",
+     )
+ 

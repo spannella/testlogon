@@ -1,0 +1,16 @@
+diff --git a/app/services/refund_requests.py b/app/services/refund_requests.py
+index 2a978cbe..f4947b19 100644
+--- a/app/services/refund_requests.py
++++ b/app/services/refund_requests.py
+@@ -91,7 +91,10 @@ def create_refund_request(
+         raise HTTPException(400, f"Transaction is outside the refund window ({S.refund_request_window_days} days)")
+ 
+     # 3. Determine amount
+-    original_amount = int(ledger_entry.get("amount_cents", 0))
++    # ECOM fix: cart-purchase buyer ledger debits are stored with a NEGATIVE
++    # amount_cents (signed debit), so use abs() to derive the refundable amount;
++    # otherwise every shop purchase is wrongly "not eligible for refund".
++    original_amount = abs(int(ledger_entry.get("amount_cents", 0)))
+     if original_amount <= 0:
+         raise HTTPException(400, "Transaction is not eligible for refund")
+ 

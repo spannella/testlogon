@@ -9,6 +9,17 @@ import com.testlogon.android.core.model.ads.AdBillingEntry
 import com.testlogon.android.core.model.ads.AdInvoice
 import com.testlogon.android.core.model.ads.DepositResult
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.data.billing.AddBankReqDto
+import com.testlogon.android.data.billing.AddCardReqDto
+import com.testlogon.android.data.billing.BillingBalance
+import com.testlogon.android.data.billing.BillingConfig
+import com.testlogon.android.data.billing.BillingMoney
+import com.testlogon.android.data.billing.BillingRepository
+import com.testlogon.android.data.billing.BillingSettings
+import com.testlogon.android.data.billing.LedgerPage
+import com.testlogon.android.data.billing.PaymentMethod
+import com.testlogon.android.data.billing.Subscription
+import com.testlogon.android.data.billing.WalletBalance
 import com.testlogon.android.core.testing.MainDispatcherRule
 import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
 import com.testlogon.android.feature.adsbilling.ui.AdsBillingUiState
@@ -81,11 +92,33 @@ class AdsBillingViewModelTest {
         }
     }
 
+    /** ADV-306 - minimal general-billing fake backing the deposit card picker ([pms] = saved cards). */
+    private class FakeGeneralBilling(private val pms: List<PaymentMethod> = emptyList()) : BillingRepository {
+        override suspend fun getPaymentMethods(): ApiResult<List<PaymentMethod>> = ApiResult.Success(pms)
+        override suspend fun setDefaultPaymentMethod(id: String): ApiResult<List<PaymentMethod>> = ApiResult.Success(pms)
+        override suspend fun getTipDefaultPaymentMethodId(): ApiResult<String?> = ApiResult.Success(null)
+        override suspend fun setTipDefaultPaymentMethod(id: String): ApiResult<List<PaymentMethod>> = ApiResult.Success(pms)
+        override suspend fun removePaymentMethod(id: String): ApiResult<List<PaymentMethod>> = ApiResult.Success(pms)
+        override suspend fun addCard(req: AddCardReqDto): ApiResult<List<PaymentMethod>> = ApiResult.Success(pms)
+        override suspend fun addBank(req: AddBankReqDto): ApiResult<List<PaymentMethod>> = ApiResult.Success(pms)
+        override suspend fun getConfig(): ApiResult<BillingConfig> = ApiResult.Success(BillingConfig(null, "USD"))
+        override suspend fun getSettings(): ApiResult<BillingSettings> = ApiResult.Success(BillingSettings(false, "USD", null, null))
+        override suspend fun getBalance(): ApiResult<BillingBalance> = ApiResult.Success(
+            BillingBalance(BillingMoney(0, "USD"), BillingMoney(0, "USD"), BillingMoney(0, "USD"), BillingMoney(0, "USD"), null, null, null),
+        )
+        override suspend fun getSubscriptions(limit: Int): ApiResult<List<Subscription>> = ApiResult.Success(emptyList())
+        override suspend fun getLedger(limit: Int): ApiResult<LedgerPage> = ApiResult.Success(LedgerPage(emptyList()))
+        override suspend fun getPayments(limit: Int): ApiResult<LedgerPage> = ApiResult.Success(LedgerPage(emptyList()))
+        override suspend fun getWallet(): ApiResult<WalletBalance> = ApiResult.Success(WalletBalance(BillingMoney(0, "USD"), null))
+    }
+
     private fun vm(
         repo: AdsBillingRepository = FakeBillingRepo(),
+        billing: BillingRepository = FakeGeneralBilling(),
         accountId: String = ACCOUNT_ID,
     ): AdsBillingViewModel = AdsBillingViewModel(
         repository = repo,
+        billingRepository = billing,
         errorParser = ApiErrorParser(Moshi.Builder().build()),
         savedState = SavedStateHandle(mapOf(AdsBillingViewModel.ARG_ACCOUNT_ID to accountId)),
     )

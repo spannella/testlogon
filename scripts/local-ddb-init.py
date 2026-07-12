@@ -1551,6 +1551,13 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(_resolve_table_name(S.order_items_table_name, "order_items"), "order_id", "item_id"),
         TableDef(
+            _resolve_table_name(S.shipment_tracking_table_name, "shipment_tracking"),
+            "ship_group_id",
+            gsi=[
+                {"index_name": "GSI_TRACKING", "partition_key": "tracking_number_norm"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.payment_incidents_table_name, "payment_incidents"),
             "incident_id",
         ),
@@ -1777,6 +1784,16 @@ def _table_defs() -> List[TableDef]:
             "report_id",
             "message_id",
         ),
+        # Moderation Cases (MOD-A1) — one case per reported content ref; the
+        # non-destructive hide state machine. ByState GSI feeds the 30d sweep.
+        TableDef(
+            _resolve_table_name(getattr(S, "moderation_cases_table_name", "ModerationCases"), "ModerationCases"),
+            "case_id",
+            gsi=[
+                {"index_name": "ByState", "partition_key": "state", "sort_key": "hold_until"},
+            ],
+            attr_types={"hold_until": "N"},
+        ),
         TableDef(
             _resolve_table_name(S.content_reports_table_name, "ContentReports"),
             "report_id",
@@ -1905,6 +1922,15 @@ def _table_defs() -> List[TableDef]:
                 {
                     "index_name": "BySourceTicketCreatedAt",
                     "partition_key": "source_ticket_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    # MOD-1: complete offender history (all enforcement records for a
+                    # user, newest-first) for the admin offender summary / detail.
+                    # Hashes on the existing user_id (the offender) so every row is
+                    # auto-indexed with no new attribute / backfill.
+                    "index_name": "ByOffenderCreatedAt",
+                    "partition_key": "user_id",
                     "sort_key": "created_at",
                 },
             ],
@@ -2460,6 +2486,16 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByCampaign", "partition_key": "campaign_id", "sort_key": "created_at"},
                 {"index_name": "ByMonth", "partition_key": "month_key", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Ad Clicks — CPA attribution store (ADV-002). hash=ad_click_id;
+        # TTL on expires_at (last-click 7d); GSI ByViewer for purchase-time lookup.
+        TableDef(
+            _resolve_table_name(getattr(S, "ad_clicks_table_name", "AdClicks"), "AdClicks"),
+            "ad_click_id",
+            gsi=[
+                {"index_name": "ByViewer", "partition_key": "viewer_sub", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
         ),
@@ -4110,6 +4146,18 @@ def main() -> None:
         _retry_transient_ddb_call(
             client.update_time_to_live,
             TableName=_billing_table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
+        )
+    except Exception:
+        pass
+    # ADV-002: Enable TTL on ad_clicks table with attribute "expires_at"
+    # (last-click 7d CPA window; only ad_click rows write expires_at).
+    _ad_clicks_table = _resolve_table_name(getattr(S, "ad_clicks_table_name", "AdClicks"), "AdClicks")
+    try:
+        client = ddb.meta.client
+        _retry_transient_ddb_call(
+            client.update_time_to_live,
+            TableName=_ad_clicks_table,
             TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires_at"},
         )
     except Exception:

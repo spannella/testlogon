@@ -82,12 +82,19 @@ fun CatalogSearchRoute(
 ) {
     val query by viewModel.query.collectAsStateWithLifecycle()
     val items = viewModel.results.collectAsLazyPagingItems()
+    val sponsored by viewModel.sponsored.collectAsStateWithLifecycle()
     CatalogSearchScreen(
         query = query,
         items = items,
+        sponsored = sponsored,
         onQueryChange = viewModel::onQueryChange,
         onClear = viewModel::onClear,
         onItemClick = onItemClick,
+        onSponsoredImpression = viewModel::onSponsoredImpression,
+        onSponsoredClick = { product ->
+            viewModel.onSponsoredClick(product)
+            onItemClick(product.categoryId, product.productId)
+        },
         onBack = onBack,
         modifier = modifier,
     )
@@ -97,9 +104,12 @@ fun CatalogSearchRoute(
 fun CatalogSearchScreen(
     query: String,
     items: LazyPagingItems<CatalogItem>,
+    sponsored: List<com.testlogon.android.data.shopads.SponsoredProduct> = emptyList(),
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
     onItemClick: (categoryId: String, itemId: String) -> Unit,
+    onSponsoredImpression: (com.testlogon.android.data.shopads.SponsoredProduct) -> Unit = {},
+    onSponsoredClick: (com.testlogon.android.data.shopads.SponsoredProduct) -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -157,7 +167,13 @@ fun CatalogSearchScreen(
                         )
 
                     is CatalogSearchUiState.Content ->
-                        SearchResults(items = items, onItemClick = onItemClick)
+                        SearchResults(
+                            items = items,
+                            sponsored = sponsored,
+                            onItemClick = onItemClick,
+                            onSponsoredImpression = onSponsoredImpression,
+                            onSponsoredClick = onSponsoredClick,
+                        )
                 }
             }
         }
@@ -202,13 +218,22 @@ private fun SearchField(
 @Composable
 private fun SearchResults(
     items: LazyPagingItems<CatalogItem>,
+    sponsored: List<com.testlogon.android.data.shopads.SponsoredProduct>,
     onItemClick: (categoryId: String, itemId: String) -> Unit,
+    onSponsoredImpression: (com.testlogon.android.data.shopads.SponsoredProduct) -> Unit,
+    onSponsoredClick: (com.testlogon.android.data.shopads.SponsoredProduct) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag(CatalogSearchTestTags.LIST),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // ADV x ECOM (B2): STANDALONE sponsored product units atop the organic search results.
+        items(count = sponsored.size, key = { i -> "sponsored_" + sponsored[i].unitId }) { i ->
+            val product = sponsored[i]
+            androidx.compose.runtime.LaunchedEffect(product.unitId) { onSponsoredImpression(product) }
+            SponsoredProductCard(product = product, onClick = { onSponsoredClick(product) })
+        }
         items(count = items.itemCount, key = { index -> items.peek(index)?.itemId ?: index }) { index ->
             val item = items[index]
             if (item != null) {

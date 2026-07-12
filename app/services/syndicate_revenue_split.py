@@ -58,6 +58,67 @@ def _config_default() -> Dict[str, Any]:
     }
 
 
+# ADV2-705 (F7): per-syndicate AD-PLACEMENT split config. When the SYNDICATE
+# ITSELF advertises in front of a member's content, the content-owner (creator)
+# share -- the creator's normal 70% of the ad charge -- is split between the
+# member and the syndicate treasury. member_share_bps = the member's cut of that
+# content-owner share; the remainder goes to the treasury. Default 7000 bps =
+# the member keeps 70% of the 70% (~49% of the gross charge); treasury gets 30%
+# of the 70% (~21%). Platform's 30% is NEVER touched. This does NOT apply to an
+# external advertiser on a member (that stays member-70/platform-30/syndicate-0).
+# Stored at pk=SYND#{id} sk=AD_PLACEMENT_CONFIG.
+DEFAULT_AD_PLACEMENT_MEMBER_SHARE_BPS = 7000
+
+
+def get_ad_placement_member_share_bps(syndicate_id: str) -> int:
+    """Return the member's share (bps) of the content-owner split, or the default."""
+    try:
+        resp = T.syndicate_revenue_split.get_item(
+            Key={"pk": f"SYND#{syndicate_id}", "sk": "AD_PLACEMENT_CONFIG"}
+        )
+        item = resp.get("Item")
+        if item and item.get("member_share_bps") is not None:
+            return int(item["member_share_bps"])
+    except Exception:
+        logger.warning("ad_placement_config_read_failed", extra={"syndicate_id": syndicate_id})
+    return DEFAULT_AD_PLACEMENT_MEMBER_SHARE_BPS
+
+
+def get_ad_placement_config(syndicate_id: str) -> Dict[str, Any]:
+    """Return the ad-placement split config (member/treasury bps) for a syndicate."""
+    bps = get_ad_placement_member_share_bps(syndicate_id)
+    return {
+        "syndicate_id": syndicate_id,
+        "member_share_bps": bps,
+        "treasury_share_bps": TOTAL_BPS - bps,
+        "default_member_share_bps": DEFAULT_AD_PLACEMENT_MEMBER_SHARE_BPS,
+        "platform_share_note": "platform 30% of the gross charge is unchanged",
+    }
+
+
+def set_ad_placement_member_share_bps(*, syndicate_id: str, admin_sub: str,
+                                      member_share_bps: int) -> Dict[str, Any]:
+    """Admin-only: set the member's share (bps) of the content-owner split."""
+    syndicate_svc._require_admin(syndicate_id, admin_sub)
+    member_share_bps = int(member_share_bps)
+    if not (0 <= member_share_bps <= TOTAL_BPS):
+        raise HTTPException(status_code=400,
+                            detail=f"member_share_bps must be 0..{TOTAL_BPS}")
+    ts = now_ts()
+    T.syndicate_revenue_split.put_item(Item={
+        "pk": f"SYND#{syndicate_id}",
+        "sk": "AD_PLACEMENT_CONFIG",
+        "member_share_bps": member_share_bps,
+        "updated_at": ts,
+        "updated_by": admin_sub,
+    })
+    syndicate_svc._write_audit(
+        syndicate_id, admin_sub, "ad_placement_config_updated", "",
+        {"member_share_bps": member_share_bps},
+    )
+    return get_ad_placement_config(syndicate_id)
+
+
 def get_split_config(syndicate_id: str) -> Dict[str, Any]:
     """Return the current split config, or an equal-split default if unset."""
     resp = T.syndicate_revenue_split.get_item(

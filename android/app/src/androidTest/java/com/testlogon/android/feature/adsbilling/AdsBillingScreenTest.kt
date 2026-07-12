@@ -129,6 +129,14 @@ class AdsBillingScreenTest {
         rule.onNodeWithTag(AdsBillingTestTags.DEPOSIT_AMOUNT, useUnmergedTree = true)
             .performTextReplacement("50.00")
         rule.onNodeWithTag(AdsBillingTestTags.DEPOSIT_CONFIRM).performClick()
+        // DEPOSIT_SUCCESS lives inside the ModalBottomSheet; under full-suite load the assert can race
+        // the sheet enter/relayout animation, so poll until it is actually displayed before asserting.
+        rule.waitUntil(timeoutMillis = 5_000) {
+            runCatching {
+                rule.onNodeWithTag(AdsBillingTestTags.DEPOSIT_SUCCESS, useUnmergedTree = true)
+                    .assertIsDisplayed()
+            }.isSuccess
+        }
         rule.onNodeWithTag(AdsBillingTestTags.DEPOSIT_SUCCESS, useUnmergedTree = true).assertIsDisplayed()
     }
 

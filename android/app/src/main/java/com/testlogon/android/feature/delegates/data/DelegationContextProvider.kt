@@ -5,11 +5,14 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.delegates.DelegationContext
 import com.testlogon.android.core.model.delegates.ManagedCreator
 import com.testlogon.android.core.model.delegates.toDelegationContext
+import com.testlogon.android.core.network.delegates.DelegateRoutingStore
 import com.testlogon.android.data.auth.AppScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -31,6 +34,7 @@ import javax.inject.Singleton
 class DelegationContextProvider @Inject constructor(
     private val delegationRepository: DelegationRepository,
     delegationStateStore: DelegationStateStore,
+    delegateRoutingStore: DelegateRoutingStore,
     @AppScope scope: CoroutineScope,
 ) {
 
@@ -46,6 +50,17 @@ class DelegationContextProvider @Inject constructor(
                 SharingStarted.Eagerly,
                 delegationStateStore.managingCreator.value?.toDelegationContext(),
             )
+
+    init {
+        // FULL-PARITY BRIDGE: mirror the active managed-creator id into the network-layer
+        // [DelegateRoutingStore] so [DelegateRoutingInterceptor] re-targets the SHARED messaging endpoints
+        // (used by the reused full ThreadScreen/composer) onto the creator-attributed delegate routes while
+        // managing a creator. Cleared back to null on exit. Eager + application-lifetime.
+        delegateRoutingStore.activeCreatorId = delegationContext.value?.creatorId
+        delegationContext
+            .onEach { delegateRoutingStore.activeCreatorId = it?.creatorId }
+            .launchIn(scope)
+    }
 
     /** Snapshot of the current typed context (for synchronous gating in the delegate repositories). */
     fun current(): DelegationContext? = delegationContext.value

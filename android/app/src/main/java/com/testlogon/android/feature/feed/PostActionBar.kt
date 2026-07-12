@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -11,6 +12,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.AddReaction
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -50,14 +54,25 @@ import com.testlogon.android.R
 /** Stable test tags for the post action bar (AND-173 / AND-174 / AND-175). */
 object PostActionTestTags {
     const val LIKE = "post_like"
+    const val REACT = "post_react"
+    const val EMOJI_PICKER = "post_emoji_picker"
+    const val REACTION_CHIPS = "post_reaction_chips"
     const val COMMENT = "post_comment"
     const val OVERFLOW = "post_overflow"
     const val MENU_HIDE = "post_menu_hide"
     const val MENU_NOT_INTERESTED = "post_menu_not_interested"
+    const val MENU_EDIT = "post_menu_edit"
+    const val MENU_REPORT = "post_menu_report"
     const val BOOKMARK = "post_bookmark"
     const val SHARE = "post_share"
     const val TIP = "post_tip"
+    // TIP-204 - money-reaction (tip) affordances.
+    const val TIP_REACT = "tip_react_post_open"
+    const val TIP_REACT_CHIPS = "tip_react_post_chips"
 }
+
+/** TIP-204 - the money-reaction glyph used for the post tip-react affordance + chip. */
+private const val TIP_REACT_EMOJI = "💰"
 
 /**
  * AND-173 / AND-174 / AND-175 — the like + comment + overflow action row beneath a post's content.
@@ -83,21 +98,143 @@ fun PostActionBar(
     onShare: () -> Unit = {},
     showTip: Boolean = true,
     onTip: () -> Unit = {},
+    // FD12 — when non-null, the overflow menu shows an Edit item (own posts only).
+    onEdit: (() -> Unit)? = null,
+    // MOD-C1 — when non-null, the overflow shows a Report item that opens the moderation report sheet.
+    onReport: (() -> Unit)? = null,
+    // #20 — full emoji reactions (distinct from the like toggle).
+    reactions: List<com.testlogon.android.data.feed.ReactionTally> = emptyList(),
+    onToggleReaction: (String) -> Unit = {},
+    // TIP-204 - money-REACTION: tip option in the reaction picker + money-reaction chips on the post.
+    tipReactions: List<com.testlogon.android.data.feed.TipReactionBadge> = emptyList(),
+    onTipReact: (String) -> Unit = {},
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+    var reactionPickerOpen by remember { mutableStateOf(false) }
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            LikeButton(liked = liked, likeCount = likeCount, onToggle = onLikeToggle)
+            // #20 — open the curated emoji reaction picker.
+            ReactButton(onClick = { reactionPickerOpen = !reactionPickerOpen })
+            CommentButton(commentCount = commentCount, onClick = onCommentClick)
+            if (showTip) {
+                TipButton(onClick = onTip)
+            }
+            BookmarkToggle(checked = bookmarked, enabled = bookmarkEnabled, onCheckedChange = { onToggleBookmark() })
+            ShareButton(onClick = onShare)
+            Box(modifier = Modifier.weight(1f))
+            PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested, onEdit = onEdit, onReport = onReport)
+        }
+        // #20 — curated emoji picker (toggled by the React button).
+        if (reactionPickerOpen) {
+            PostEmojiPicker(
+                selected = reactions.filter { it.reactedByMe }.map { it.emoji }.toSet(),
+                onPick = {
+                    onToggleReaction(it)
+                    reactionPickerOpen = false
+                },
+                onTipReact = {
+                    onTipReact(it)
+                    reactionPickerOpen = false
+                },
+            )
+        }
+        // #20 — under-post reaction chips (emoji + count; tap to toggle).
+        if (reactions.isNotEmpty()) {
+            PostReactionChips(reactions = reactions, onToggle = onToggleReaction)
+        }
+        // TIP-204 - money-reaction (tip) chips on the post, distinct from the free emoji chips.
+        if (tipReactions.isNotEmpty()) {
+            PostTipReactionChips(tipReactions = tipReactions)
+        }
+    }
+}
+
+@Composable
+private fun ReactButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    IconButton(onClick = onClick, modifier = modifier.size(48.dp).testTag(PostActionTestTags.REACT)) {
+        Icon(
+            imageVector = Icons.Outlined.AddReaction,
+            contentDescription = "React",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** #20 — curated reaction emoji row for a post (matches the comment reaction bar). */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PostEmojiPicker(
+    selected: Set<String>,
+    onPick: (String) -> Unit,
+    onTipReact: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp).testTag(PostActionTestTags.EMOJI_PICKER),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        com.testlogon.android.data.feed.REACTION_EMOJIS.forEach { emoji ->
+            androidx.compose.material3.FilterChip(
+                selected = emoji in selected,
+                onClick = { onPick(emoji) },
+                label = { Text(emoji) },
+            )
+        }
+        // TIP-204 - money-REACTION: opens the shared TipSheet (amount + a money glyph); on confirm
+        // POSTs the post tip-react. Distinct from the free emoji reactions and the direct Tip action.
+        androidx.compose.material3.AssistChip(
+            onClick = { onTipReact(TIP_REACT_EMOJI) },
+            label = { Text(TIP_REACT_EMOJI + " " + stringResource(R.string.post_tip_react)) },
+            modifier = Modifier.testTag(PostActionTestTags.TIP_REACT),
+        )
+    }
+}
+
+/** TIP-204 - under-post MONEY-reaction chip row (tip reactions); glyph + amount, non-toggling. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PostTipReactionChips(
+    tipReactions: List<com.testlogon.android.data.feed.TipReactionBadge>,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth().padding(start = 8.dp, top = 2.dp, bottom = 4.dp).testTag(PostActionTestTags.TIP_REACT_CHIPS),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        LikeButton(liked = liked, likeCount = likeCount, onToggle = onLikeToggle)
-        CommentButton(commentCount = commentCount, onClick = onCommentClick)
-        if (showTip) {
-            TipButton(onClick = onTip)
+        tipReactions.forEach { t ->
+            val amount = String.format(java.util.Locale.US, "$%.2f", t.amountCents / 100.0)
+            val glyph = t.emoji.ifBlank { TIP_REACT_EMOJI }
+            androidx.compose.material3.AssistChip(
+                onClick = {},
+                label = { Text(glyph + " " + amount) },
+            )
         }
-        BookmarkToggle(checked = bookmarked, enabled = bookmarkEnabled, onCheckedChange = { onToggleBookmark() })
-        ShareButton(onClick = onShare)
-        Box(modifier = Modifier.weight(1f))
-        PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested)
+    }
+}
+
+/** #20 — under-post reaction chip row. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PostReactionChips(
+    reactions: List<com.testlogon.android.data.feed.ReactionTally>,
+    onToggle: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth().padding(start = 8.dp, top = 2.dp, bottom = 4.dp).testTag(PostActionTestTags.REACTION_CHIPS),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        reactions.forEach { r ->
+            androidx.compose.material3.FilterChip(
+                selected = r.reactedByMe,
+                onClick = { onToggle(r.emoji) },
+                label = { Text("${r.emoji} ${r.count}") },
+            )
+        }
     }
 }
 
@@ -223,6 +360,8 @@ private fun CommentButton(commentCount: Int, onClick: () -> Unit, modifier: Modi
 private fun PostOverflowMenu(
     onHide: () -> Unit,
     onNotInterested: () -> Unit,
+    onEdit: (() -> Unit)? = null,
+    onReport: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -238,6 +377,17 @@ private fun PostOverflowMenu(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (onEdit != null) {
+                DropdownMenuItem(
+                    text = { Text("Edit post") },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onEdit()
+                    },
+                    modifier = Modifier.testTag(PostActionTestTags.MENU_EDIT),
+                )
+            }
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.feed_action_hide)) },
                 leadingIcon = { Icon(Icons.Outlined.VisibilityOff, contentDescription = null) },
@@ -256,6 +406,18 @@ private fun PostOverflowMenu(
                 },
                 modifier = Modifier.testTag(PostActionTestTags.MENU_NOT_INTERESTED),
             )
+            // MOD-C1 - report this post (main / group / syndicate feeds share this bar via PostItem).
+            if (onReport != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.msg_action_report)) },
+                    leadingIcon = { Icon(Icons.Outlined.Flag, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onReport()
+                    },
+                    modifier = Modifier.testTag(PostActionTestTags.MENU_REPORT),
+                )
+            }
         }
     }
 }

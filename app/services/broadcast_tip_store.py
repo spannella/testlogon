@@ -130,23 +130,27 @@ def send_tip_message(
     msg_id = "cm_" + uuid4().hex
     sort_key = f"{ts_ms:016d}#{msg_id}"
 
-    # 7. Write billing ledger entries
-    ledger_entry = TipLedgerEntry(
-        tipper_user_id=user_id,
-        recipient_user_id=broadcaster_id,
+    # 7. Charge + write billing ledger via the centralized charge_tip seam.
+    #    PM ownership, amount bounds and self-tip were validated above; charge_tip
+    #    re-validates PM + self-tip and writes the same net-credit ledger. The
+    #    minted tip id is threaded through so the chat row and ledger stay linked.
+    from app.services.tips import charge_tip
+    charge_tip(
+        tipper_id=user_id,
+        recipient_id=broadcaster_id,
         amount_cents=amount_cents,
         currency=currency,
+        payment_method_id=payment_method_id,
         content_type="broadcast",
         content_id=f"{session_id}#{msg_id}",
-        payment_method_id=payment_method_id,
-        tip_payment_id=tip_payment_id,
-        extra_meta={
+        meta={
             "session_id": session_id,
             "message_id": msg_id,
             "display_name": display_name,
         },
+        idempotency_key=f"bctip:{msg_id}",
+        tip_payment_id=tip_payment_id,
     )
-    write_tip_ledger(ledger_entry)
 
     # 8. Write tip chat message to DDB
     tip_text = text.strip() if text else ""

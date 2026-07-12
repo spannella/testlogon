@@ -6,7 +6,7 @@ package com.testlogon.android.feature.calendar
  * display zone by [EventSlotter] using a caller-supplied offset, keeping all bucketing math pure.
  */
 
-enum class CalendarViewMode { MONTH, WEEK, AGENDA }
+enum class CalendarViewMode { MONTH, WEEK, DAY, AGENDA }
 
 /**
  * A flattened event ready for slotting. [startMillis]/[endMillis] are UTC epoch millis; for all-day

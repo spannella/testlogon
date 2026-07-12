@@ -1,0 +1,341 @@
+--- a/app/routers/messaging.py
++++ b/app/routers/messaging.py
+@@ -16055,6 +16055,338 @@
+     return [ChatDelegateAuditEntry(**item) for item in items]
+ 
+ 
++# ─────────────────────────────────────────────────────────────────────────────
++# DELEGATE FULL-PARITY MESSAGING (DELEGATE-FULLPARITY)
++# A delegate holding chat_respond can send EVERY message kind normal messaging
++# supports, attributed to the CREATOR (sender_id=creator), tagged as via-delegate
++# and audited. These routes REUSE the exact normal send handlers with
++# user_id=creator (no duplicated send/persist logic) + the exact normal input
++# models (so the delegate contract == the normal contract per kind).
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++def _delegate_authorize(creator_id: str, delegate_id: str, conversation_id):
++    """Authorize a delegate to act as the creator + resolve attribution.
++
++    Requires chat_respond (same gate as the text delegate path). When a
++    conversation_id is given, the CREATOR must be an active participant.
++    Returns (delegate_tag, hide_from_recipients, delegate_display_name).
++    """
++    from app.services.delegates import require_delegate_permission, get_creator_settings
++    from app.services.profile import get_profile
++    delegate_item = require_delegate_permission(
++        creator_id=creator_id,
++        delegate_id=delegate_id,
++        required_permission="chat_respond",
++    )
++    if conversation_id is not None:
++        require_participant_active(creator_id, conversation_id)
++    prof = get_profile(delegate_id) or {}
++    dname = prof.get("display_name") or delegate_id
++    tag = None
++    if delegate_item.get("show_delegate_tag"):
++        fmt = delegate_item.get("delegate_tag_format", "[via @{delegate_name}]")
++        tag = fmt.replace("{delegate_name}", dname)
++    hide = bool(get_creator_settings(creator_id).get("hide_delegate_from_recipients"))
++    return tag, hide, dname
++
++
++def _delegate_tag_input(inp, tag, hide) -> None:
++    """Bake the visible '[via @delegate]' tag into a text/caption field.
++
++    Skipped when attribution is hidden or absent, or when the field is None
++    (e.g. a media-only send/edit) so we never fabricate content. Kinds without a
++    text field keep attribution in the structured fields + audit only.
++    """
++    if not tag or hide:
++        return
++    for field in ("text", "caption"):
++        if hasattr(inp, field):
++            cur = getattr(inp, field)
++            if cur is not None:
++                setattr(inp, field, f"{cur} {tag}".strip())
++            return
++
++
++def _delegate_mid(out) -> str:
++    """Extract a message_id from a handler result (model or dict)."""
++    if hasattr(out, "message_id"):
++        return out.message_id
++    if isinstance(out, dict):
++        return out.get("message_id", "")
++    return ""
++
++
++def _delegate_stamp_and_audit(creator_id, delegate_id, conversation_id, message_id,
++                              dname, tag, action, preview="") -> None:
++    """Stamp delegate metadata onto the affected row + write a delegate audit."""
++    from app.services.delegates import _write_audit
++    if message_id:
++        try:
++            expr = "SET sent_by_delegate = :d, delegate_display_name = :n"
++            vals = {":d": delegate_id, ":n": dname}
++            if tag:
++                expr += ", delegate_tag = :t"
++                vals[":t"] = tag
++            tbl_msgs.update_item(
++                Key={"conversation_id": conversation_id, "message_id": message_id},
++                UpdateExpression=expr,
++                ExpressionAttributeValues=vals,
++            )
++        except Exception:
++            logger.warning("delegate: failed to stamp metadata on %s", message_id)
++    try:
++        _write_audit(
++            creator_id, delegate_id, "delegate", action, conversation_id,
++            {"message_id": message_id, "text_preview": (preview or "")[:100]},
++        )
++    except Exception:
++        logger.warning("delegate: failed to write audit for %s", message_id)
++
++
++@router.post(
++    "/delegate/{creator_id}/conversations/{conversation_id}/messages/text",
++    response_model=MessageOut,
++)
++def delegate_send_text_message(
++    creator_id: str,
++    conversation_id: str,
++    inp: SendTextMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """TEXT (full gating: encryption / scheduled send_at+tz / view_once /
++    locked PPV / countdown-on-message / tip) AS the creator via delegation."""
++    tag, hide, dname = _delegate_authorize(creator_id, user_id, conversation_id)
++    _delegate_tag_input(inp, tag, hide)
++    out = send_text_message(
++        conversation_id=conversation_id, inp=inp, req=req, user_id=creator_id, _kyc=None
++    )
++    _delegate_stamp_and_audit(
++        creator_id, user_id, conversation_id, _delegate_mid(out), dname, tag,
++        "chat_message_sent", inp.text or "",
++    )
++    return out
++
++
++@router.post(
++    "/delegate/{creator_id}/conversations/{conversation_id}/images/presign",
++    response_model=PresignOut,
++)
++def delegate_presign_image(
++    creator_id: str,
++    conversation_id: str,
++    inp: SendImagePresignIn,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """Presign an image upload for a delegated (as-creator) image message."""
++    _delegate_authorize(creator_id, user_id, conversation_id)
++    return presign_image_upload(conversation_id=conversation_id, inp=inp, user_id=creator_id)
++
++
++@router.post(
++    "/delegate/{creator_id}/conversations/{conversation_id}/messages/image",
++    response_model=MessageOut,
++)
++def delegate_send_image_message(
++    creator_id: str,
++    conversation_id: str,
++    inp: CreateImageMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """IMAGE (+ caption / view_once / expiring / locked PPV / scheduled /
++    encryption) AS the creator via delegation."""
++    tag, hide, dname = _delegate_authorize(creator_id, user_id, conversation_id)
++    _delegate_tag_input(inp, tag, hide)
++    out = create_image_message(
++        conversation_id=conversation_id, inp=inp, req=req, user_id=creator_id, _kyc=None
++    )
++    _delegate_stamp_and_audit(
++        creator_id, user_id, conversation_id, _delegate_mid(out), dname, tag,
++        "chat_message_sent", inp.caption or "",
++    )
++    return out
++
++
++@router.post(
++    "/delegate/{creator_id}/conversations/{conversation_id}/messages/gallery",
++    response_model=MessageOut,
++)
++def delegate_send_gallery_message(
++    creator_id: str,
++    conversation_id: str,
++    inp: CreateGalleryMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """GALLERY / multi-media album (free + locked images, PPV, scheduled) AS the creator."""
++    tag, hide, dname = _delegate_authorize(creator_id, user_id, conversation_id)
++    _delegate_tag_input(inp, tag, hide)
++    out = create_gallery_message(
++        conversation_id=conversation_id, inp=inp, req=req, user_id=creator_id
++    )
++    _delegate_stamp_and_audit(
++        creator_id, user_id, conversation_id, _delegate_mid(out), dname, tag,
++        "chat_message_sent", inp.text or "",
++    )
++    return out
++
++
++@router.post(
++    "/delegate/{creator_id}/conversations/{conversation_id}/messages/video-share",
++    response_model=MessageOut,
++)
++def delegate_send_video_message(
++    creator_id: str,
++    conversation_id: str,
++    inp: CreateVideoShareMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """VIDEO share (VOD catalog ref, scheduled) AS the creator via delegation."""
++    tag, hide, dname = _delegate_authorize(creator_id, user_id, conversation_id)
++    _delegate_tag_input(inp, tag, hide)
++    out = create_video_share_message(
++        conversation_id=conversation_id, inp=inp, req=req, user_id=creator_id
++    )
++    _delegate_stamp_and_audit(
++        creator_id, user_id, conversation_id, _delegate_mid(out), dname, tag,
++        "chat_message_sent", inp.text or "",
++    )
++    return out
++
++
++@router.post(
++    "/delegate/{creator_id}/conversations/{conversation_id}/messages/file",
++    response_model=MessageOut,
++)
++def delegate_send_file_message(
++    creator_id: str,
++    conversation_id: str,
++    inp: CreateFileMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """FILE (+ caption / view_once / listen_once / expiring / locked PPV /
++    scheduled) AS the creator via delegation."""
++    tag, hide, dname = _delegate_authorize(creator_id, user_id, conversation_id)
++    _delegate_tag_input(inp, tag, hide)
++    out = create_file_message(
++        conversation_id=conversation_id, inp=inp, req=req, user_id=creator_id
++    )
++    _delegate_stamp_and_audit(
++        creator_id, user_id, conversation_id, _delegate_mid(out), dname, tag,
++        "chat_message_sent", inp.text or "",
++    )
++    return out
++
++
++@router.post(
++    "/delegate/{creator_id}/conversations/{conversation_id}/messages/countdown",
++    response_model=MessageOut,
++    status_code=201,
++)
++def delegate_send_countdown_message(
++    creator_id: str,
++    conversation_id: str,
++    inp: SendCountdownMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """COUNTDOWN (target datetime + tz + reveal text/media) AS the creator."""
++    tag, hide, dname = _delegate_authorize(creator_id, user_id, conversation_id)
++    out = create_countdown_message(
++        conversation_id=conversation_id, inp=inp, req=req, user_id=creator_id
++    )
++    _delegate_stamp_and_audit(
++        creator_id, user_id, conversation_id, _delegate_mid(out), dname, tag,
++        "chat_message_sent", inp.title or "",
++    )
++    return out
++
++
++@router.post(
++    "/delegate/{creator_id}/messages/lottery",
++    response_model=LotteryMessageOut,
++)
++def delegate_send_lottery_message(
++    creator_id: str,
++    payload: CreateLotteryMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """LOTTERY (outcomes + per-option media + cover image/text) AS the creator.
++    conversation_id is carried in the payload (parity with the normal route)."""
++    tag, hide, dname = _delegate_authorize(creator_id, user_id, payload.conversation_id)
++    _delegate_tag_input(payload, tag, hide)
++    out = create_lottery_message(
++        payload=payload, req=req, idempotency_key=None, user_id=creator_id
++    )
++    _delegate_stamp_and_audit(
++        creator_id, user_id, payload.conversation_id, _delegate_mid(out), dname, tag,
++        "chat_message_sent", payload.text or "",
++    )
++    return out
++
++
++@router.post(
++    "/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}/reactions",
++)
++def delegate_react_to_message(
++    creator_id: str,
++    conversation_id: str,
++    message_id: str,
++    inp: ReactIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """REACT / UNREACT to any message in the creator's conversation AS the creator."""
++    _delegate_authorize(creator_id, user_id, conversation_id)
++    result = react_to_message(
++        conversation_id=conversation_id, message_id=message_id, inp=inp,
++        req=req, user_id=creator_id,
++    )
++    from app.services.delegates import _write_audit
++    action = "chat_reaction_removed" if inp.action == "remove" else "chat_reaction_added"
++    try:
++        _write_audit(
++            creator_id, user_id, "delegate", action, conversation_id,
++            {"message_id": message_id, "emoji": inp.emoji},
++        )
++    except Exception:
++        logger.warning("delegate: failed to audit reaction on %s", message_id)
++    return result
++
++
++@router.patch(
++    "/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}",
++    response_model=MessageOut,
++)
++def delegate_edit_message(
++    creator_id: str,
++    conversation_id: str,
++    message_id: str,
++    inp: EditMessageIn,
++    req: Request = None,
++    user_id: str = Depends(get_messaging_user_id),
++):
++    """EDIT one of the creator's messages (text and/or media) AS the creator."""
++    tag, hide, dname = _delegate_authorize(creator_id, user_id, conversation_id)
++    _delegate_tag_input(inp, tag, hide)
++    out = edit_message(
++        conversation_id=conversation_id, message_id=message_id, inp=inp,
++        req=req, user_id=creator_id,
++    )
++    _delegate_stamp_and_audit(
++        creator_id, user_id, conversation_id, message_id, dname, tag,
++        "chat_message_edited", inp.text or "",
++    )
++    return out
++
++
++
++
+ # ─── Messenger Voice & Translation AI (MVA-004 / MVA-007 / MVA-009) ──────────
+ 
+ from app.models import (

@@ -3,6 +3,7 @@ package com.testlogon.android.feature.auth.login
 import android.app.Activity
 import android.content.Context
 import android.net.Uri
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,6 +16,11 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.LogoutReason
 import com.testlogon.android.data.auth.AuthRepository
 import com.testlogon.android.data.auth.AuthStateStore
+import com.testlogon.android.data.auth.BiometricAuthenticator
+import com.testlogon.android.data.auth.BiometricCredentialStore
+import com.testlogon.android.data.auth.BiometricEnrollmentBuffer
+import com.testlogon.android.data.auth.BiometricOutcome
+import com.testlogon.android.data.auth.StoredCredential
 import com.testlogon.android.data.auth.LoginOutcome
 import com.testlogon.android.data.auth.MfaFactor
 import com.testlogon.android.data.auth.PasskeyAuthResult
@@ -65,6 +71,10 @@ data class LoginUiState(
     // AND-062 passkeys
     val passkeySupported: Boolean = false,
     val passkeyBusy: Boolean = false,
+    // Biometric sign-in (local, device-bound)
+    val biometricAvailable: Boolean = false,
+    val biometricEnrolled: Boolean = false,
+    val biometricBusy: Boolean = false,
 ) {
     val isSubmitting: Boolean get() = status == LoginStatus.Submitting
 
@@ -86,7 +96,9 @@ data class LoginUiState(
     override fun toString(): String =
         "LoginUiState(email=$email, password=***, passwordVisible=$passwordVisible, " +
             "status=$status, error=$error, serverUrl=$serverUrl, expiryReason=$expiryReason, " +
-            "ssoOnly=$ssoOnly, ssoBusy=$ssoBusy, passkeySupported=$passkeySupported, passkeyBusy=$passkeyBusy)"
+            "ssoOnly=$ssoOnly, ssoBusy=$ssoBusy, passkeySupported=$passkeySupported, passkeyBusy=$passkeyBusy, " +
+            "biometricAvailable=$biometricAvailable, biometricEnrolled=$biometricEnrolled, " +
+            "biometricBusy=$biometricBusy)"
 }
 
 /**
@@ -110,7 +122,12 @@ class LoginViewModel @Inject constructor(
     private val ssoStateStore: SsoStateStore = NoopSsoStateStore,
     private val ssoTabLauncher: SsoTabLauncher = SsoTabLauncher { _, _ -> false },
     private val passkeyRepository: PasskeyRepository = NoopPasskeyRepository,
+    private val biometricAuthenticator: BiometricAuthenticator = NoopBiometricAuthenticator,
+    private val credentialStore: BiometricCredentialStore = NoopBiometricCredentialStore,
+    private val enrollmentBuffer: BiometricEnrollmentBuffer = BiometricEnrollmentBuffer(),
 ) : ViewModel() {
+
+    private var lastSubmittedPassword: String? = null
 
     private val _uiState = MutableStateFlow(LoginUiState(serverUrl = serverUrlConfig.current()))
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
@@ -132,6 +149,7 @@ class LoginViewModel @Inject constructor(
         }
         // AND-063: tenant SSO discovery on mount (web parity: getSsoInfo("default")).
         probeSso()
+        refreshBiometricState()
     }
 
     // ── AND-063 SSO ──
@@ -235,6 +253,72 @@ class LoginViewModel @Inject constructor(
         }
     }
 
+    // ── Biometric sign-in (local device unlock that re-plays the stored credential) ──
+
+    private fun refreshBiometricState() {
+        _uiState.update {
+            it.copy(
+                biometricAvailable = biometricAuthenticator.canAuthenticate(),
+                biometricEnrolled = credentialStore.hasCredential(),
+            )
+        }
+    }
+
+    /** Returning-user unlock: BiometricPrompt, then re-play the stored credential into login. */
+    fun unlockWithBiometrics(activity: FragmentActivity) {
+        if (_uiState.value.biometricBusy || !credentialStore.hasCredential()) return
+        _uiState.update { it.copy(biometricBusy = true, error = null) }
+        viewModelScope.launch {
+            when (val outcome = biometricAuthenticator.authenticate(activity, "Sign in", "Use your biometric to sign in")) {
+                is BiometricOutcome.Succeeded -> {
+                    val cred = credentialStore.read()
+                    if (cred == null) {
+                        _uiState.update {
+                            it.copy(biometricBusy = false, error = "Saved sign-in is unavailable. Please use your password.")
+                        }
+                        return@launch
+                    }
+                    when (val r = authRepository.login(cred.email, cred.password)) {
+                        is ApiResult.Success -> {
+                            _uiState.update { it.copy(biometricBusy = false) }
+                            handleSuccess(r.data)
+                        }
+                        is ApiResult.Failure -> {
+                            if (r.error.status == 401) credentialStore.clear()
+                            _uiState.update {
+                                it.copy(
+                                    biometricBusy = false,
+                                    biometricEnrolled = credentialStore.hasCredential(),
+                                    error = r.error.toMessage(),
+                                )
+                            }
+                        }
+                        is ApiResult.NetworkError ->
+                            _uiState.update {
+                                it.copy(biometricBusy = false, error = "Couldn't reach the server. Check your connection and try again.")
+                            }
+                    }
+                }
+                is BiometricOutcome.Cancelled -> _uiState.update { it.copy(biometricBusy = false) }
+                is BiometricOutcome.Failed -> _uiState.update { it.copy(biometricBusy = false, error = outcome.message) }
+            }
+        }
+    }
+
+    /**
+     * Stash the just-used credential so the authenticated shell can offer biometric enrollment.
+     * The auth-state graph swap tears the login screen down the instant login succeeds, so the
+     * offer cannot live on this screen — it is hosted by [BiometricEnrollGate] post-swap.
+     */
+    private fun maybeOfferEnrollOrNavigateHome() {
+        val pwd = lastSubmittedPassword
+        val email = _uiState.value.email.trim()
+        if (pwd != null && email.isNotBlank() && !credentialStore.hasCredential()) {
+            enrollmentBuffer.stash(email, pwd)
+        }
+        _effects.tryEmit(LoginEffect.NavigateHome)
+    }
+
     private val _effects = MutableSharedFlow<LoginEffect>(
         replay = 0,
         extraBufferCapacity = 1,
@@ -261,6 +345,7 @@ class LoginViewModel @Inject constructor(
         val snapshot = _uiState.value
         if (snapshot.isSubmitting || !snapshot.submitEnabled) return
         _uiState.update { it.copy(status = LoginStatus.Submitting, error = null) }
+        lastSubmittedPassword = snapshot.password
         telemetry.log(AuthEvent.LoginAttempt(userPresent = snapshot.email.isNotBlank()))
         viewModelScope.launch {
             when (val result = authRepository.login(snapshot.email.trim(), snapshot.password)) {
@@ -309,8 +394,8 @@ class LoginViewModel @Inject constructor(
             Unit
         }
         is LoginOutcome.Authenticated -> {
-            // Keep Submitting through the nav transition so the button doesn't flash re-enabled.
-            _effects.tryEmit(LoginEffect.NavigateHome)
+            // Stash creds for the post-swap shell gate, then go straight home.
+            maybeOfferEnrollOrNavigateHome()
             Unit
         }
     }
@@ -351,4 +436,20 @@ private object NoopPasskeyRepository : PasskeyRepository {
         activity: Context,
         username: String,
     ): ApiResult<PasskeyAuthResult> = ApiResult.Failure(ApiError(0, "passkeys disabled"))
+}
+
+private object NoopBiometricAuthenticator : BiometricAuthenticator {
+    override fun canAuthenticate(): Boolean = false
+    override suspend fun authenticate(
+        activity: FragmentActivity,
+        title: String,
+        subtitle: String,
+    ): BiometricOutcome = BiometricOutcome.Cancelled
+}
+
+private object NoopBiometricCredentialStore : BiometricCredentialStore {
+    override fun hasCredential(): Boolean = false
+    override fun save(email: String, password: String) = Unit
+    override fun read(): StoredCredential? = null
+    override fun clear() = Unit
 }

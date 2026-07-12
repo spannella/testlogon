@@ -1,0 +1,13 @@
+--- app/models_broadcast.py.bak_audioroom_1783027095	2026-07-02 21:18:25.864818218 +0000
++++ app/models_broadcast.py	2026-07-02 21:18:25.879381737 +0000
+@@ -104,6 +104,10 @@
+     ad_break_started_at: Optional[int] = None
+     total_ad_breaks: int = 0
+ 
++    # Audio Room (LiveKit broadcast stage)
++    mode: str = "video"                # "video" | "audio_room"
++    stage_max_slots: int = 20          # audio_room speaker cap (clamped 2..20)
++
+ 
+ class BroadcastOutputModel(BaseModel):
+     session_id: str = Field(min_length=1)

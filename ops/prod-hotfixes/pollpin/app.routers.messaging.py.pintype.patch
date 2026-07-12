@@ -1,0 +1,11 @@
+--- a/app/routers/messaging.py
++++ b/app/routers/messaging.py
+@@ -12864,7 +12864,7 @@
+         ),
+         ExpressionAttributeValues={
+             ":pinned_by_user_id": user_id,
+-            ":pinned_at": ts,
++            ":pinned_at": f"{ts:013d}",  # GSI ByConversationActivePinnedAt RANGE key is type S; zero-pad preserves time order
+             ":is_active": True,
+             ":conversation_active": conversation_active,
+             ":latest_pin_sort": latest_pin_sort,

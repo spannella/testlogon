@@ -45,7 +45,22 @@ interface VideosRepository {
 
     /** AND-197 — the authoritative per-video access check (GET ui/videos/{video_id}/access). */
     suspend fun checkAccess(videoId: String): ApiResult<VideoAccess>
+
+    /** B-VIDSOCIAL2 — add an emoji reaction to a video; returns updated counts + my-reactions. */
+    suspend fun reactVideo(videoId: String, emoji: String): ApiResult<VideoReactionState>
+
+    /** B-VIDSOCIAL2 — remove an emoji reaction from a video; returns updated counts + my-reactions. */
+    suspend fun unreactVideo(videoId: String, emoji: String): ApiResult<VideoReactionState>
+
+    /** B-VIDSOCIAL2 — tip the video's creator; returns the new running tip total. */
+    suspend fun tipVideo(videoId: String, amountCents: Int, paymentMethodId: String?): ApiResult<VideoTipState>
 }
+
+/** B-VIDSOCIAL2 — video reaction state surfaced to the detail screen. */
+data class VideoReactionState(val reactions: Map<String, Int>, val myReactions: Set<String>)
+
+/** B-VIDSOCIAL2 — video tip receipt surfaced to the detail screen. */
+data class VideoTipState(val amountCents: Int, val tipTotalCents: Int)
 
 /** AND-190 — like state surfaced to the detail screen. */
 data class LikeState(val liked: Boolean, val likeCount: Int)
@@ -87,6 +102,27 @@ class VideosRepositoryImpl @Inject constructor(
 
     override suspend fun checkAccess(videoId: String): ApiResult<VideoAccess> = withContext(io) {
         call { api.checkAccess(videoId) }.map { it.toDomain() }
+    }
+
+    override suspend fun reactVideo(videoId: String, emoji: String): ApiResult<VideoReactionState> =
+        withContext(io) {
+            call { api.reactVideo(videoId, VideoReactionReq(emoji)) }
+                .map { VideoReactionState(it.reactionsCounts.filterValues { c -> c > 0 }, it.myReactions.toSet()) }
+        }
+
+    override suspend fun unreactVideo(videoId: String, emoji: String): ApiResult<VideoReactionState> =
+        withContext(io) {
+            call { api.unreactVideo(videoId, VideoReactionReq(emoji)) }
+                .map { VideoReactionState(it.reactionsCounts.filterValues { c -> c > 0 }, it.myReactions.toSet()) }
+        }
+
+    override suspend fun tipVideo(
+        videoId: String,
+        amountCents: Int,
+        paymentMethodId: String?,
+    ): ApiResult<VideoTipState> = withContext(io) {
+        call { api.tipVideo(videoId, VideoTipReq(amountCents = amountCents, paymentMethodId = paymentMethodId)) }
+            .map { VideoTipState(amountCents = it.amountCents, tipTotalCents = it.tipTotalCents) }
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {

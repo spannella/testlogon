@@ -16,6 +16,15 @@ import com.testlogon.android.data.messaging.StickerCollectionUi
  */
 data class ThreadUiState(
     val conversationId: String,
+    val peerUserSub: String? = null,
+    /** ID15 - the DM peer's profile photo, resolved lazily once [peerUserSub] is known. */
+    val peerPhotoUrl: String? = null,
+    /** #15 - the CURRENT user's own profile photo, for the DM overlapping-avatar pair. */
+    val myPhotoUrl: String? = null,
+    /** #15 - the CURRENT user's display name (monogram fallback for the own avatar circle). */
+    val myName: String? = null,
+    /** #15 - true for a 1:1 DM (renders the overlapping two-circle avatar in the header). */
+    val isDm: Boolean = false,
     val title: String = "",
     val messages: List<ThreadMessageUi> = emptyList(),
     val isLoadingInitial: Boolean = true,
@@ -37,6 +46,7 @@ data class ThreadUiState(
     val polls: Map<String, MeetingPollCardUiState> = emptyMap(),
     /** AND-136 — meeting-poll composer sheet (hidden until opened). */
     val pollComposerVisible: Boolean = false,
+    val textPollComposerVisible: Boolean = false,
     /** AND-137 — countdown picker sheet state (hidden until opened). */
     val countdownPicker: CountdownPickerState = CountdownPickerState(),
     /** AND-139 — per-message unlock phase (FIXED or LOTTERY), keyed by message key. */
@@ -58,6 +68,137 @@ data class ThreadUiState(
     val receipts: Map<String, com.testlogon.android.data.messaging.realtime.MessageReceipt> = emptyMap(),
     /** Viewer-roster bottom sheet state (non-null messageId = open). */
     val viewerRoster: ViewerRosterUiState = ViewerRosterUiState(),
+    /** Whether the send-options (view-once / locked / scheduled) bottom sheet is open. */
+    val messageOptionsVisible: Boolean = false,
+    // ---- MSG: new in-app composers ----
+    /** Lottery composer sheet (hidden until opened). */
+    val lotteryComposerVisible: Boolean = false,
+    /** Find-a-DateTime ("custom poll") composer sheet (hidden until opened). */
+    val findDateTimeComposerVisible: Boolean = false,
+    /** Calendar-event share composer (pick a calendar + event). */
+    val calendarEventComposer: CalendarPickerState = CalendarPickerState(),
+    /** Calendar share composer (pick a calendar + permission). */
+    val calendarShareComposer: CalendarPickerState = CalendarPickerState(),
+    /** File-manager share composer (pick a file). */
+    val fileShareComposer: FilePickerState = FilePickerState(),
+    /** MSG — receiver passphrase-unlock dialog for an encrypted message (non-null key = open). */
+    val encryptUnlock: EncryptUnlockState = EncryptUnlockState(),
+    /** MSG — view-once viewer dialog (non-null key = open, showing the consumed content). */
+    val viewOnceViewer: ViewOnceViewerState = ViewOnceViewerState(),
+    /** #8 — scheduled-messages manager (list + edit/remove of pending scheduled sends). */
+    val scheduledManager: ScheduledManagerUiState = ScheduledManagerUiState(),
+    /**
+     * TIP-405 — pay-to-message gate prompt. Non-null when the last first-message send to a gated
+     * recipient came back 402 tip_required; the user adds a tip >= min and we resend the message.
+     */
+    val tipRequiredPrompt: TipRequiredPromptState? = null,
+)
+
+/**
+ * TIP-405 — "add a tip to message" prompt state for the pay-to-message gate. Seeded from the 402
+ * `tip_required` body ([minTipCents]); [tipDollars] is the editable amount (defaults to the minimum).
+ * [pendingClientId]/[pendingText]/[pendingReplyToId] carry the original send so it can be resent WITH
+ * the tip (reusing the same optimistic outbox row).
+ */
+data class TipRequiredPromptState(
+    val minTipCents: Long,
+    val recipient: String,
+    val pendingClientId: String,
+    val pendingText: String,
+    val pendingReplyToId: String? = null,
+    val tipDollars: String,
+    val submitting: Boolean = false,
+    val error: String? = null,
+)
+
+/**
+ * #8 — state for the scheduled-messages manager bottom sheet. [visible] gates the sheet; [items]
+ * are the caller's still-pending scheduled messages (sorted by due time). [editing] is non-null
+ * while the inline edit dialog for one item is open.
+ */
+data class ScheduledManagerUiState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    /** One-shot inline error (load/edit/cancel failure), cleared after shown. */
+    val error: String? = null,
+    val items: List<com.testlogon.android.data.messaging.ScheduledMessage> = emptyList(),
+    /** Non-null while the edit dialog for a specific scheduled message is open. */
+    val editing: ScheduledEditState? = null,
+) {
+    val isEmpty: Boolean get() = !loading && items.isEmpty()
+}
+
+/** #8/#21/#22 — edit-dialog state for one scheduled message (draft text + draft due time + timezone). */
+data class ScheduledEditState(
+    val messageId: String,
+    /** Whether the body text can be edited (text-kind only). */
+    val textEditable: Boolean,
+    val draftText: String,
+    val draftDeliverAtEpochSeconds: Long,
+    /** #21 — IANA zone the draft due-time wall-clock is interpreted in (defaults to the device zone). */
+    val timeZoneId: String = java.util.TimeZone.getDefault().id,
+    /**
+     * #7 (B-SCHED3) — whether THIS scheduled message can have a photo attached. True for a text-only
+     * scheduled message (the server promotes it to an image kind) and for an existing image message
+     * (replace the photo). False for kinds that can't take a photo via this path (gallery/file/etc).
+     */
+    val canAttachImage: Boolean = false,
+    /** #7 — true while a picked photo is uploading (presign + PUT) before save. */
+    val attaching: Boolean = false,
+    /** #7 — local content:// uri of the picked photo (for the preview thumbnail), null = none staged. */
+    val draftImageLocalUri: String? = null,
+    /** #7 — the uploaded photo descriptor sent on save; non-null once the upload succeeds. */
+    val draftImage: com.testlogon.android.data.messaging.MessageImageDto? = null,
+    /** #4 (B-MSGEDIT) — staged FILE: display name (chip) + the server VFS path sent on save. */
+    val draftFileName: String? = null,
+    val draftFilePath: String? = null,
+    /** #4 (B-MSGEDIT) — staged VIDEO: library video id + a title for the chip. */
+    val draftVideoId: String? = null,
+    val draftVideoTitle: String? = null,
+    val saving: Boolean = false,
+    val error: String? = null,
+)
+
+/** MSG — passphrase-unlock dialog state for an encrypted message. */
+data class EncryptUnlockState(
+    /** The message UI key being unlocked; null = dialog closed. */
+    val messageKey: String? = null,
+    val passphrase: String = "",
+    /** Set after a wrong passphrase (GCM tag mismatch). */
+    val error: String? = null,
+)
+
+/** MSG — view-once popup state (shows the content once; closing consumes it). */
+data class ViewOnceViewerState(
+    val messageKey: String? = null,
+    val text: String = "",
+    /** MSG — view-once IMAGE: true while the gated bytes download; the local file once ready. */
+    val loading: Boolean = false,
+    val imageFile: String? = null,
+    val error: Boolean = false,
+    /** Dialog title ("View once" or "Encrypted image"). */
+    val title: String = "View once",
+    /** True for view-once (consume + hide on close); false for an encrypted-image preview. */
+    val consumeOnDismiss: Boolean = true,
+)
+
+/** MSG — calendar discovery state shared by the calendar-event + calendar-share composers. */
+data class CalendarPickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val calendars: List<com.testlogon.android.data.messaging.CalendarAccessUi> = emptyList(),
+    val selectedCalendarId: String? = null,
+    val eventsLoading: Boolean = false,
+    val events: List<com.testlogon.android.data.messaging.CalendarEventUi> = emptyList(),
+    val error: String? = null,
+)
+
+/** MSG — file-manager discovery state for the file-share composer. */
+data class FilePickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val files: List<com.testlogon.android.data.messaging.FileEntryUi> = emptyList(),
+    val error: String? = null,
 )
 
 /**
@@ -83,8 +224,33 @@ sealed interface Async<out T> {
 /** AND-141 — non-blocking draft sync indicator. */
 enum class DraftSyncState { Idle, Saving, SavedLocal, Synced, Error }
 
-/** AND-140 — the message currently being edited (composer is pre-filled with [originalText]). */
-data class EditTarget(val messageId: String, val originalText: String)
+/**
+ * AND-140 / B-MSGEDIT #5 — the message currently being edited (dialog pre-filled with [originalText]).
+ *
+ * Beyond the text, the edit dialog now supports full media control: stage a new photo / file / library
+ * video to add or replace the message's media (promoting a text message), or [removeMedia] to strip it.
+ * Only one media kind can be staged at a time; staging one clears the others.
+ */
+data class EditTarget(
+    val messageId: String,
+    val originalText: String,
+    /** True if the message already carries media (so "Remove media" is offered). */
+    val hasMedia: Boolean = false,
+    /** True while a picked photo/file is uploading (presign + PUT) before save. */
+    val attaching: Boolean = false,
+    /** Staged PHOTO: local content:// uri (preview) + uploaded descriptor (sent on save). */
+    val draftImageLocalUri: String? = null,
+    val draftImage: com.testlogon.android.data.messaging.MessageImageDto? = null,
+    /** Staged FILE: display name (chip) + the server VFS path (sent on save as file_path). */
+    val draftFileName: String? = null,
+    val draftFilePath: String? = null,
+    /** Staged VIDEO: library video id + a title for the chip (sent on save as video_id). */
+    val draftVideoId: String? = null,
+    val draftVideoTitle: String? = null,
+    /** True when the user chose to strip existing media (sent on save as remove_media). */
+    val removeMedia: Boolean = false,
+    val error: String? = null,
+)
 
 /**
  * AND-140 — one-shot intents from the message long-press action surface. Dispatched through
@@ -92,9 +258,13 @@ data class EditTarget(val messageId: String, val originalText: String)
  */
 sealed interface ThreadAction {
     data class ToggleReaction(val messageId: String, val emoji: String) : ThreadAction
+    /** TIP-203 - open the shared tip sheet in money-REACTION mode for [messageId] with [emoji]. */
+    data class TipReact(val messageId: String, val emoji: String) : ThreadAction
     data class OpenReactionDetails(val messageId: String) : ThreadAction
     data class SetPinned(val messageId: String, val pinned: Boolean) : ThreadAction
     data object OpenPinsList : ThreadAction
+    data class Reply(val messageId: String) : ThreadAction
+    data object CancelReply : ThreadAction
     data class StartEdit(val messageId: String) : ThreadAction
     data class SubmitEdit(val messageId: String, val body: String) : ThreadAction
     data object CancelEdit : ThreadAction
@@ -143,10 +313,18 @@ data class CountdownPickerState(
     val title: String = "",
     /** Chosen target as UTC epoch seconds; null until a future date/time is picked. */
     val targetEpochSeconds: Long? = null,
+    /** #32 — IANA zone the chosen target wall-clock is interpreted in (defaults to the device zone). */
+    val timeZoneId: String = java.util.TimeZone.getDefault().id,
+    /** #31 — optional text revealed when the countdown completes. */
+    val revealText: String = "",
+    /** #31 — optional image (local uri) revealed when the countdown completes. */
+    val revealImageUri: String? = null,
+    /** #31 — true while the reveal image is uploading on send. */
+    val sending: Boolean = false,
     val error: String? = null,
 ) {
     val isSendEnabled: Boolean
-        get() = title.trim().length in 1..200 && targetEpochSeconds != null
+        get() = !sending && title.trim().length in 1..200 && targetEpochSeconds != null
 }
 
 /** AND-139 — per-message unlock progress. */
@@ -167,6 +345,10 @@ data class TipSheetState(
     val note: String = "",
     val amountError: String? = null,
     val submitting: Boolean = false,
+    /** TIP-203 - when true, confirm hits the message tip-REACTION endpoint (badge) not the direct tip. */
+    val isReaction: Boolean = false,
+    /** TIP-203 - the money-reaction glyph carried into the tip-react POST (null for a direct tip). */
+    val emoji: String? = null,
 ) {
     /** Effective amount in cents from the selected preset or the parsed custom input. */
     val amountCents: Long? get() = selectedCents ?: parseDollarsToCents(customInput)
@@ -244,7 +426,12 @@ data class VideoPickerState(
     val loading: Boolean = false,
     val videos: List<ShareableVideoUi> = emptyList(),
     val errorMessage: String? = null,
+    /** B-MSGEDIT — where a pick is routed: SHARE (compose+send), EDIT or SCHEDULED_EDIT (stage only). */
+    val mode: VideoPickMode = VideoPickMode.SHARE,
 )
+
+/** B-MSGEDIT — destination for a library-video pick (the same picker serves three call sites). */
+enum class VideoPickMode { SHARE, EDIT, SCHEDULED_EDIT }
 
 data class ShareableVideoUi(
     val videoId: String,
@@ -270,6 +457,41 @@ data class ThreadMessageUi(
     val isEdited: Boolean = false,
     /** AND-164 — true when this message is under an active legal hold (suppresses destructive actions). */
     val onHold: Boolean = false,
+    /** AND-147 receipt counts (drive the own-message Sent/Delivered/Read indicator). */
+    val deliveredCount: Int = 0,
+    val seenCount: Int = 0,
+    /** Server id of the message this one replies to (null when not a reply). */
+    val replyToMessageId: String? = null,
+    /** Self-destruct expiry epoch SECONDS (null = never). */
+    val expiresAtEpochSeconds: Long? = null,
+    /** Server-confirmed expiry flag. */
+    val serverExpired: Boolean = false,
+    /** MSG — true when the message was sent encrypted (renders a lock indicator). */
+    val isEncrypted: Boolean = false,
+    /** MSG — the encryption envelope (for receiver-side passphrase decryption); null if absent. */
+    val encryption: com.testlogon.android.data.messaging.MessageEncryption? = null,
+    /** MSG — locally-decrypted plaintext after a correct passphrase (transient; never persisted). */
+    val decryptedText: String? = null,
+    /** MSG — true when this is a view-once message (hidden on the receiver until opened). */
+    val viewOnce: Boolean = false,
+    /** MSG — true once a view-once message has been consumed (permanently hidden). */
+    val consumed: Boolean = false,
+    /** R2 — pay-to-unlock price (minor units) when sent locked, else null; drives the own "Locked $X" badge. */
+    val lockPriceCents: Long? = null,
+    /** R2 — ISO-4217 currency for [lockPriceCents]. */
+    val lockCurrency: String = "USD",
+    /**
+     * #6 (B-COUNTDOWN3) — an optional countdown attached to THIS message (any kind), rendered as an
+     * overlay strip below the bubble. Ticks live and reveals its payload at the target.
+     */
+    val countdown: com.testlogon.android.data.messaging.MessageCountdown? = null,
+    /** TIP-203 - money-reaction (tip) badges on this message; distinct from [reactions]. */
+    val tipReactions: List<com.testlogon.android.data.messaging.TipReaction> = emptyList(),
+    /** ADV2-E5 (F5+F6) — a delivered sponsored ad-message: render the sponsor label + CTA, report open/click. */
+    val isAdMessage: Boolean = false,
+    val adClickId: String? = null,
+    val adCtaUrl: String? = null,
+    val sponsorLabel: String? = null,
 ) {
     val isFailed: Boolean get() = sendStatus == SendStatus.FAILED
     val isSending: Boolean get() = sendStatus == SendStatus.SENDING
@@ -277,30 +499,157 @@ data class ThreadMessageUi(
     val isRevoked: Boolean get() = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.REVOKED
     /** AND-140 — a deleted-for-me message renders a tombstone bubble. */
     val isDeleted: Boolean get() = lifecycle == com.testlogon.android.data.messaging.MessageLifecycle.DELETED
-    /** AND-140 — a tombstone (deleted or revoked) is rendered specially and offers no further actions. */
-    val isTombstone: Boolean get() = isRevoked || isDeleted
+    /**
+     * G2 — a locked (PPV) message that is now UNLOCKED: its gated payload is present (so it no longer
+     * maps to [MessageMedia.Paid]) yet it still carries the lock price. Per the backend expiry-on-locked
+     * contract the server REMOVES `expires_at` once a recipient unlocks, so an unlocked locked message
+     * must never show a running expiry nor be redacted client-side (a still-cached expiry is stale).
+     */
+    val isUnlockedLocked: Boolean
+        get() = lockPriceCents != null && media !is MessageMedia.Paid
+    /** An expiring message whose lifetime has passed: content is redacted. */
+    val isExpired: Boolean
+        get() = !isUnlockedLocked && (serverExpired ||
+            (expiresAtEpochSeconds != null && expiresAtEpochSeconds <= System.currentTimeMillis() / 1000L))
+    /** AND-140 — a tombstone (deleted/revoked) or an expired message is rendered specially. */
+    val isTombstone: Boolean get() = isRevoked || isDeleted || isExpired
     val isImage: Boolean get() = media is MessageMedia.Image
-    val isVideo: Boolean get() = media is MessageMedia.VideoShare
+    val isVideo: Boolean get() = media is MessageMedia.VideoShare || media is MessageMedia.VideoClip
     val isFile: Boolean get() = media is MessageMedia.File
     val isVoice: Boolean get() = media is MessageMedia.Voice
     val isVoicemail: Boolean get() = media is MessageMedia.Voicemail
     val isGif: Boolean get() = media is MessageMedia.Gif
     val isSticker: Boolean get() = media is MessageMedia.Sticker
     val isPoll: Boolean get() = media is MessageMedia.MeetingPoll
-    val isCountdown: Boolean get() = media is MessageMedia.Countdown
+    val isFindDateTime: Boolean get() = media is MessageMedia.FindDateTime
+    val isCountdown: Boolean get() = media is MessageMedia.Countdown || countdown != null
     val isCalendarEvent: Boolean get() = media is MessageMedia.CalendarEvent
     val isCalendarShare: Boolean get() = media is MessageMedia.CalendarShare
     val isPaid: Boolean get() = media is MessageMedia.Paid
 }
 
+/** The message currently being replied to (drives the composer reply banner). */
+data class ReplyDraft(
+    val messageId: String,
+    val preview: String,
+    val senderLabel: String,
+)
+
+/**
+ * #25/#27/#28 — one picked-but-not-yet-sent media item (a photo OR a short video), held in the
+ * composer so the user can stage a MIX of photos and videos (and several videos) in ONE message and
+ * keep adding more before sending. [localUri] is the content uri; [isVideo] selects the render +
+ * upload path.
+ */
+data class StagedMedia(
+    val localUri: String,
+    val isVideo: Boolean,
+)
+
+/** #29 — a picked-but-not-yet-sent FILE (document), staged so the user adds text/options first. */
+data class StagedFile(
+    val localUri: String,
+    val name: String,
+    val sizeBytes: Long,
+    val mime: String,
+)
+
 data class ComposerState(
     val draft: String = "",
     val charCount: Int = 0,
     val overLimit: Boolean = false,
+    val replyingTo: ReplyDraft? = null,
+    /** Optional send-time message options (view-once / locked / scheduled). */
+    val options: MessageOptions = MessageOptions(),
+    /**
+     * #25/#27/#28 — picked-but-not-yet-sent media (photos AND short videos, mixed + ordered). The text
+     * field becomes the caption. ONE image -> image message; ONE video -> inline video message; any
+     * other combination (multiple items, or a mix of photos+videos) -> ONE gallery message.
+     */
+    val stagedMedia: List<StagedMedia> = emptyList(),
+    /** #29 — a picked-but-not-yet-sent file; sent with the typed caption + options on Send. */
+    val stagedFile: StagedFile? = null,
 ) {
-    val isSendEnabled: Boolean get() = draft.isNotBlank() && !overLimit
+    /** Back-compat accessors (the staged photos / a lone staged video) over [stagedMedia]. */
+    val stagedImageUris: List<String> get() = stagedMedia.filterNot { it.isVideo }.map { it.localUri }
+    val stagedVideoUris: List<String> get() = stagedMedia.filter { it.isVideo }.map { it.localUri }
+
+    val hasStagedMedia: Boolean get() = stagedMedia.isNotEmpty() || stagedFile != null
+
+    val isSendEnabled: Boolean
+        get() = (draft.isNotBlank() || hasStagedMedia) && !overLimit &&
+            // MSG — an encrypted message needs a passphrase (used to derive the AES key).
+            !(options.encrypted && options.encryptionPassphrase.isBlank())
 
     companion object {
         const val MAX_LENGTH = 4000
+        /** Server caps a gallery at 20 free items; cap staged media to keep one message valid. */
+        const val MAX_STAGED_MEDIA = 20
     }
 }
+
+/**
+ * Send-time message options the composer can attach to the next text message. All default to off,
+ * giving a plain send. Mutually-sensible combos are allowed (e.g. a scheduled view-once message).
+ */
+data class MessageOptions(
+    /** MSG — encrypt the next text message (sends an encryption envelope, no plaintext). */
+    val encrypted: Boolean = false,
+    /** MSG — passphrase used to derive the AES key for an encrypted message (never sent to the server). */
+    val encryptionPassphrase: String = "",
+    /** Self-destruct after first view. */
+    val viewOnce: Boolean = false,
+    /** Pay-to-unlock price in integer cents; null = not locked. */
+    val lockPriceCents: Long? = null,
+    val lockDescription: String? = null,
+    /** Deliver-at epoch SECONDS in the future; null = send now. */
+    val scheduledAtEpochSeconds: Long? = null,
+    /** #21 — IANA zone the scheduled wall-clock is expressed in (defaults to the device zone). */
+    val scheduledTimeZoneId: String = java.util.TimeZone.getDefault().id,
+    /** Self-destruct lifetime in seconds after delivery; null = never expires. */
+    val expiresInSeconds: Long? = null,
+    // #6 (B-COUNTDOWN3) — an optional countdown attached to the next message (any kind). The reveal
+    // image is pre-uploaded when attached, so it ships with the send.
+    val countdownTargetEpochSeconds: Long? = null,
+    val countdownTitle: String? = null,
+    val countdownRevealText: String? = null,
+    val countdownRevealImage: com.testlogon.android.data.messaging.LotteryImageRef? = null,
+    /** TIP-106 - attach a tip (cents) to the next text message on send; null = no tip. DM-only, and
+     *  mutually exclusive with [lockPriceCents] (mirrors the backend 400). */
+    val tipAmountCents: Long? = null,
+) {
+    val isActive: Boolean
+        get() = encrypted || viewOnce || lockPriceCents != null || scheduledAtEpochSeconds != null ||
+            expiresInSeconds != null || countdownTargetEpochSeconds != null || tipAmountCents != null
+
+    /** Short summary chip text, or null when no option is set. */
+    val summary: String?
+        get() {
+            val parts = buildList {
+                if (encrypted) add("Encrypted")
+                if (viewOnce) add("View once")
+                lockPriceCents?.let { add("Locked $" + "%.2f".format(it / 100.0)) }
+                if (scheduledAtEpochSeconds != null) add("Scheduled")
+                expiresInSeconds?.let { add("Expires in " + expiryLabel(it)) }
+                if (countdownTargetEpochSeconds != null) add("Countdown")
+                tipAmountCents?.let { add("Tip $" + "%.2f".format(it / 100.0)) }
+            }
+            return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+        }
+}
+
+/** Human label for a self-destruct lifetime in seconds (e.g. "1h", "1d"). */
+fun expiryLabel(seconds: Long): String = when {
+    seconds >= 86_400 -> "${seconds / 86_400}d"
+    seconds >= 3_600 -> "${seconds / 3_600}h"
+    seconds >= 60 -> "${seconds / 60}m"
+    else -> "${seconds}s"
+}
+
+/** Draft state for the message-options bottom sheet (non-null = open). */
+data class MessageOptionsSheetState(
+    val visible: Boolean = false,
+    val viewOnce: Boolean = false,
+    val lockPriceInput: String = "",
+    val scheduledAtEpochSeconds: Long? = null,
+)

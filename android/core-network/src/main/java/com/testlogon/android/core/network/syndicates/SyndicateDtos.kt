@@ -1,6 +1,8 @@
 package com.testlogon.android.core.network.syndicates
 
 import com.squareup.moshi.Json
+import com.testlogon.android.core.network.poll.PollInputDto
+import com.testlogon.android.core.network.poll.PollSnapshotDto
 
 /**
  * AND-356 - transport DTOs for the READ-ONLY syndicate overview surface (Feed / Treasury / Revenue-split).
@@ -61,6 +63,21 @@ data class SyndicatePostOut(
     @Json(name = "reaction_count") val reactionCount: Int? = null,
     @Json(name = "comment_count") val commentCount: Int? = null,
     @Json(name = "tip_count") val tipCount: Int? = null,
+    @Json(name = "poll") val poll: PollSnapshotDto? = null,
+    // --- ADV syndicate-feed ads: a server-injected sponsored (paid) unit (sponsored_feed shape). Standalone
+    // (no content owner) -> platform-100% money-path. All defaulted so an organic post maps cleanly. ---
+    @Json(name = "is_sponsored") val isSponsored: Boolean = false,
+    @Json(name = "sponsor_label") val sponsorLabel: String? = null,
+    @Json(name = "headline") val headline: String? = null,
+    @Json(name = "body") val body: String? = null,
+    @Json(name = "cta_text") val ctaText: String? = null,
+    @Json(name = "cta_url") val ctaUrl: String? = null,
+    @Json(name = "image_urls") val imageUrls: List<String>? = null,
+    @Json(name = "creative_id") val creativeId: String? = null,
+    @Json(name = "campaign_id") val campaignId: String? = null,
+    @Json(name = "account_id") val accountId: String? = null,
+    @Json(name = "ad_click_id") val adClickId: String? = null,
+    @Json(name = "content_owner_id") val contentOwnerId: String? = null,
 )
 
 /**
@@ -129,6 +146,34 @@ data class MemberEarningsOut(
     @Json(name = "window_days") val windowDays: Int? = null,
 )
 
+// ---- Batch-7: list (GET ui/syndicates) + create (POST ui/syndicates) ----
+
+/**
+ * Batch-7 - one row of GET ui/syndicates (a BARE ARRAY, not an envelope). The list shape differs from
+ * the create/detail shape: the id key is `syndicate_id` and the name key is `syndicate_name`.
+ */
+data class SyndicateListItemDto(
+    @Json(name = "syndicate_id") val syndicateId: String,
+    @Json(name = "syndicate_name") val syndicateName: String? = null,
+    @Json(name = "role") val role: String? = null,
+    @Json(name = "joined_at") val joinedAt: Long? = null,
+)
+
+/** Batch-7 - body for POST ui/syndicates. `name` is required (2..100 server-side); description optional. */
+data class SyndicateCreateIn(
+    @Json(name = "name") val name: String,
+    @Json(name = "description") val description: String? = null,
+)
+
+/**
+ * Batch-7 - response of POST ui/syndicates (the SyndicateOut create shape). NOTE the id key here is
+ * `syndicate_id` and the name key is `name` (DIFFERENT from the list row's `syndicate_name`).
+ */
+data class SyndicateCreateOut(
+    @Json(name = "syndicate_id") val syndicateId: String,
+    @Json(name = "name") val name: String? = null,
+)
+
 // ---- AND-357: open-licensing sub-surface (extends AND-356, same DTO file) ----
 
 /**
@@ -175,4 +220,20 @@ data class SyndicateOpenLicensingRegistrationOut(
     @Json(name = "content_id") val contentId: String? = null,
     @Json(name = "syndicate_id") val syndicateId: String? = null,
     @Json(name = "licenses_created") val licensesCreated: Int? = 0,
+)
+
+/** Batch-9 (#12) - request body for POST ui/syndicates/feed/{id}. text 1..5000; image_url optional. */
+data class SyndicatePostCreateIn(
+    @Json(name = "text") val text: String,
+    @Json(name = "visibility") val visibility: String = "public",
+    @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "poll") val poll: PollInputDto? = null,
+)
+
+/** Batch-9 (#12) - one syndicate member row (GET ui/syndicates/{id}/members, a bare array). */
+data class SyndicateMemberDto(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "display_name") val displayName: String? = null,
+    @Json(name = "role") val role: String? = null,
+    @Json(name = "joined_at") val joinedAt: Long? = 0,
 )

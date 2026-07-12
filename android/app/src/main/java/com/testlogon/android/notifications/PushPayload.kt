@@ -15,6 +15,7 @@ data class PushPayload(
     val title: String,
     val body: String,
     val deepLink: String?,
+    val messageId: String? = null,
 )
 
 /**
@@ -44,6 +45,7 @@ class PushPayloadParser @Inject constructor() {
             title = title,
             body = body,
             deepLink = deepLink,
+            messageId = (data["message_id"] as? String)?.takeIf { it.isNotBlank() },
         )
     }
 

@@ -44,6 +44,42 @@ class LiveQaViewModelTest {
             setUpvoteCalls++
             return upvoteResult ?: error("set upvoteResult")
         }
+
+        // Host-console members (unused by the viewer VM tests; stubbed).
+        override suspend fun setMode(sessionId: String, enabled: Boolean): ApiResult<Boolean> =
+            ApiResult.Success(enabled)
+        override suspend fun hostQuestions(
+            sessionId: String,
+            status: String,
+        ): ApiResult<List<com.testlogon.android.data.broadcast.qna.QaHostQuestion>> =
+            ApiResult.Success(emptyList())
+        override suspend fun stats(sessionId: String): ApiResult<com.testlogon.android.data.broadcast.qna.QaStats> =
+            ApiResult.Success(
+                com.testlogon.android.data.broadcast.qna.QaStats(0, 0, 0, 0, 0, 0, 0.0, 0.0),
+            )
+        override suspend fun feature(
+            sessionId: String,
+            questionId: String,
+        ): ApiResult<com.testlogon.android.data.broadcast.qna.QaHostQuestion> =
+            error("unused")
+        override suspend fun answer(
+            sessionId: String,
+            questionId: String,
+        ): ApiResult<com.testlogon.android.data.broadcast.qna.QaHostQuestion> =
+            error("unused")
+        override suspend fun dismiss(
+            sessionId: String,
+            questionId: String,
+        ): ApiResult<com.testlogon.android.data.broadcast.qna.QaHostQuestion> =
+            error("unused")
+        override suspend fun pin(
+            sessionId: String,
+            questionId: String,
+            pinned: Boolean,
+        ): ApiResult<com.testlogon.android.data.broadcast.qna.QaHostQuestion> =
+            error("unused")
+        override suspend fun remove(sessionId: String, questionId: String): ApiResult<String> =
+            ApiResult.Success(questionId)
     }
 
     @Test

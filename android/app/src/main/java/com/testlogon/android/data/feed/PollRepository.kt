@@ -22,6 +22,17 @@ import javax.inject.Singleton
 interface PollRepository {
     suspend fun vote(postId: String, questionId: String, optionId: String): ApiResult<PollVoteResult>
     suspend fun removeVote(postId: String, questionId: String): ApiResult<PollVoteResult>
+
+    /** Submit a voter write-in on [questionId]; returns the cast result + fresh paginated results. */
+    suspend fun writeIn(postId: String, questionId: String, text: String): ApiResult<PollWriteInResponseDto>
+
+    /** Fetch one page of a question's options (sorted by count desc) for the "show more" reveal. */
+    suspend fun pollResults(
+        postId: String,
+        questionId: String,
+        offset: Int,
+        topN: Int,
+    ): ApiResult<PollResultsPage>
 }
 
 @Singleton
@@ -45,6 +56,23 @@ class PollRepositoryImpl @Inject constructor(
         questionId: String,
     ): ApiResult<PollVoteResult> = withContext(io) {
         apiCall { api.removeVote(postId, PollRemoveVoteRequestDto(questionId)).toDomain() }
+    }
+
+    override suspend fun writeIn(
+        postId: String,
+        questionId: String,
+        text: String,
+    ): ApiResult<PollWriteInResponseDto> = withContext(io) {
+        apiCall { api.writeIn(postId, PollWriteInRequestDto(questionId, text)) }
+    }
+
+    override suspend fun pollResults(
+        postId: String,
+        questionId: String,
+        offset: Int,
+        topN: Int,
+    ): ApiResult<PollResultsPage> = withContext(io) {
+        apiCall { api.pollResults(postId, questionId, topN, offset).toPage() }
     }
 
     private suspend fun <T> apiCall(block: suspend () -> T): ApiResult<T> = try {

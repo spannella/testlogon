@@ -1,0 +1,264 @@
+--- app/routers/tickets.py.bak_b8supclose_1782395154	2026-06-25 13:45:54.857591738 +0000
++++ app/routers/tickets.py	2026-06-30 15:03:09.193740577 +0000
+@@ -8,7 +8,7 @@
+ from uuid import uuid4
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query, Request
+-from pydantic import BaseModel, Field
++from pydantic import BaseModel, Field, field_validator
+ 
+ from app.auth.deps import AuthenticatedUser, get_authenticated_user
+ from app.auth.roles import Role, normalize_role
+@@ -48,11 +48,61 @@
+     error: ErrorDetail
+ 
+ 
++class TicketMediaOut(BaseModel):
++    """B-HELP-SHAPE: typed projection of one ticket-message media item.
++
++    Previously TicketMessage.media was an untyped ``list[dict]``; values read
++    back from DynamoDB are ``Decimal``, and FastAPI's json encoder serializes a
++    Decimal nested in an untyped dict as a JSON STRING (e.g. "10"), which made
++    the Android Moshi adapters (size_bytes: Long, width/height: Int) throw a
++    JsonDataException -> the whole ticket failed to parse -> the list rendered 0
++    rows and the close (200) response could not be parsed. Typing the fields
++    makes Pydantic COERCE them to real JSON numbers. Unknown extra keys are
++    ignored; all fields are optional so a partial item never 500s.
++    """
++    model_config = {"extra": "ignore"}
++    kind: str = "image"
++    url: str | None = None
++    path: str | None = None
++    name: str | None = None
++    content_type: str | None = None
++    size_bytes: int | None = None
++    width: int | None = None
++    height: int | None = None
++    thumbnail: str | None = None
++
++    @field_validator("thumbnail", "url", mode="before")
++    @classmethod
++    def _coerce_media_ref_to_url(cls, v):
++        # B-HELP-SHAPE FAIL#4 (read-path): a file_ref media item persisted its thumbnail/url as a
++        # {bucket,key,...} media-asset dict (the filemanager VFS node shape). TicketMediaOut typed these
++        # as ``str | None`` -> Pydantic 500s on the dict -> the WHOLE ticket list (and the close/detail
++        # {ticket} envelope) failed to serialize and the app rendered 0 rows. Coerce a dict ref to a
++        # string preview URL (best-effort), keep a string as-is, and drop anything else to None so a
++        # single bad item can never 500 the list. Fixes already-persisted rows with no data migration.
++        if v is None or isinstance(v, str):
++            return v
++        if isinstance(v, dict):
++            b, k = v.get("bucket"), v.get("key")
++            if b and k:
++                try:
++                    from app.services.filemanager import _media_artifact_url
++                    return _media_artifact_url(bucket=b, key=k)
++                except Exception:
++                    return None
++            return None
++        return None
++
++
+ class TicketMessage(BaseModel):
+     message_id: str
+     sender_sub: str
+     sender_role: str
+     body: str
++    image_url: str | None = None  # B9 B-HELP2 #14: optional inline image attachment
++    # B-HELP-SHAPE: typed media so DDB Decimals serialize as JSON numbers (not
++    # strings) -> the app's Long/Int media adapters parse cleanly.
++    media: list[TicketMediaOut] = []  # B10 B-HELPMEDIA: images/videos/files + file-mgr refs
+     created_at: int
+     email_alert_queued_for: list[str]
+ 
+@@ -282,9 +332,35 @@
+     removed_count: int
+ 
+ 
++class TicketMediaIn(BaseModel):
++    """B10 B-HELPMEDIA: one media/attachment item on a ticket or reply.
++
++    kind:
++      - "image"/"video": an uploaded asset referenced by url (e.g. a presigned
++        /mock/s3 URL from the messaging/image presign or the ticket attachment
++        presign flow).
++      - "file": an uploaded generic file referenced by url.
++      - "file_ref": a file-manager VFS file referenced by path (server resolves).
++    """
++    kind: Literal["image", "video", "file", "file_ref"] = "image"
++    url: str | None = Field(default=None, max_length=2048)
++    path: str | None = Field(default=None, max_length=1000)
++    name: str | None = Field(default=None, max_length=255)
++    content_type: str | None = Field(default=None, max_length=255)
++    size_bytes: int | None = Field(default=None, ge=0)
++    width: int | None = None
++    height: int | None = None
++
++
+ class CreateTicketReq(BaseModel):
+     subject: str = Field(..., min_length=3, max_length=160)
+     description: str = Field(..., min_length=1, max_length=4000)
++    # B9 B-HELP2 #14: optional image attachment on ticket creation.
++    image_url: str | None = Field(default=None, max_length=2048)
++    # B10 B-HELPMEDIA: a LIST of media/attachments (like a newsfeed post). Each
++    # item: {"kind": "image"|"video"|"file"|"file_ref", "url"?: str, "path"?: str,
++    # "name"?: str, "content_type"?: str, "size_bytes"?: int, "width"?: int, "height"?: int}.
++    media: list[TicketMediaIn] | None = Field(default=None, max_length=10)
+     # CAS-003: optional priority (default "medium")
+     priority: Literal["urgent", "high", "medium", "low"] | None = "medium"
+     # CAS-005: optional contact/account FK
+@@ -309,16 +385,80 @@
+ 
+ class TicketMessageReq(BaseModel):
+     body: str = Field(..., min_length=1, max_length=4000)
++    # B9 B-HELP2 #14: optional image attachment on a ticket reply.
++    image_url: str | None = Field(default=None, max_length=2048)
++    # B10 B-HELPMEDIA: ordered media/attachment list (see CreateTicketReq.media).
++    media: list[TicketMediaIn] | None = Field(default=None, max_length=10)
+ 
+ 
+ class TicketStatusReq(BaseModel):
+     status: Literal["open", "in_progress", "waiting_on_user", "done", "reopened"]
+ 
+ 
++class TicketCloseReq(BaseModel):
++    # B8 B-SUP2 #15: a ticket owner closes ("close" -> done) or cancels their own ticket.
++    action: Literal["close", "cancel"] = "close"
++
++
+ def _error(code: str, message: str, *, details: dict[str, Any] | None = None) -> dict[str, Any]:
+     return {"error": {"code": code, "message": message, "details": details}}
+ 
+ 
++def _resolve_ticket_media(media: "list[TicketMediaIn] | None", user_sub: str) -> list[dict[str, Any]]:
++    """B10 B-HELPMEDIA: normalize the inbound media list into plain dicts stored
++    on the ticket message. A file_ref (file-manager VFS path) is resolved to its
++    node metadata so clients can render/download it without a second round-trip.
++    Best-effort: an unresolvable file_ref is dropped rather than failing the
++    whole ticket create/reply."""
++    if not media:
++        return []
++    out: list[dict[str, Any]] = []
++    for m in media:
++        item: dict[str, Any] = {"kind": m.kind}
++        if m.kind == "file_ref":
++            if not m.path:
++                continue
++            try:
++                from app.services.filemanager import get_node, norm_path
++                _p = norm_path(m.path, is_folder=False)
++                node = get_node(user_sub, _p)
++                if (node or {}).get("type") != "file":
++                    continue
++                item.update({
++                    "path": node.get("path"),
++                    "name": node.get("name"),
++                    "content_type": node.get("content_type") or "application/octet-stream",
++                    "size_bytes": int(node["size"]) if node.get("size") is not None else None,
++                })
++                _thumb = node.get("thumbnail")
++                if _thumb:
++                    # B-HELP-SHAPE FAIL#4 (write-path): the VFS node thumbnail is a {bucket,key} dict;
++                    # store a string preview URL so TicketMediaOut (thumbnail: str|None) serializes.
++                    if isinstance(_thumb, dict):
++                        _b, _k = _thumb.get("bucket"), _thumb.get("key")
++                        if _b and _k:
++                            try:
++                                from app.services.filemanager import _media_artifact_url
++                                item["thumbnail"] = _media_artifact_url(bucket=_b, key=_k)
++                            except Exception:
++                                pass
++                    elif isinstance(_thumb, str):
++                        item["thumbnail"] = _thumb
++            except Exception:
++                continue
++        else:
++            if not m.url:
++                continue
++            item["url"] = m.url
++            if m.name: item["name"] = m.name
++            if m.content_type: item["content_type"] = m.content_type
++            if m.size_bytes is not None: item["size_bytes"] = m.size_bytes
++            if m.width is not None: item["width"] = m.width
++            if m.height is not None: item["height"] = m.height
++        out.append({k: v for k, v in item.items() if v is not None})
++    return out
++
++
+ def _raise(status_code: int, code: str, message: str, *, details: dict[str, Any] | None = None) -> None:
+     raise HTTPException(status_code=status_code, detail=_error(code, message, details=details))
+ 
+@@ -917,6 +1057,8 @@
+         priority=body.priority if S.crm_cases_enabled else None,  # CAS-003
+         contact_id=body.contact_id if S.crm_cases_enabled else None,  # CAS-005
+         account_id=body.account_id if S.crm_cases_enabled else None,  # CAS-005
++        image_url=body.image_url,  # B9 B-HELP2 #14
++        media=_resolve_ticket_media(body.media, user.sub),  # B10 B-HELPMEDIA
+     )
+     _emit_ticket_alerts("ticket_created", recipients=[user.sub], actor_sub=user.sub, request=request, ticket_id=ticket["ticket_id"], ticket_subject=ticket.get("subject", ""), case_number=ticket.get("case_number"))
+     return _wrap_ticket(ticket)
+@@ -1353,6 +1495,8 @@
+             sender_role=sender_role,
+             body=body.body.strip(),
+             email_targets=sorted(set(email_targets)),
++            image_url=body.image_url,  # B9 B-HELP2 #14
++            media=_resolve_ticket_media(body.media, user.sub),  # B10 B-HELPMEDIA
+         )
+         assert updated is not None
+     except TicketStateError as exc:
+@@ -1393,6 +1537,55 @@
+     return _wrap_ticket(updated)
+ 
+ 
++@router.post("/{ticket_id}/close", response_model=TicketEnvelope, responses=_error_responses())
++def close_own_ticket(
++    ticket_id: str,
++    body: TicketCloseReq,
++    request: Request,
++    _ctx: dict[str, str] = Depends(require_ui_session),
++    user: AuthenticatedUser = Depends(get_authenticated_user),
++):
++    """B8 B-SUP2 #15: the ticket OWNER (or an admin) closes/cancels their own
++    ticket. close -> "done"; cancel -> "cancelled". Owner-authorized (unlike the
++    admin-only POST /{ticket_id}/status)."""
++    ticket = _ticket_or_404(ticket_id)
++    if ticket.get("owner_sub") != user.sub and not _is_admin_actor(request, user):
++        _raise(403, "not_ticket_owner", "only the ticket owner or an admin may close this ticket")
++    terminal = "done" if body.action == "close" else "cancelled"
++    try:
++        updated = STORE.owner_close_ticket(ticket_id=ticket["ticket_id"], actor_sub=user.sub, terminal_status=terminal)
++    except TicketStateError as exc:
++        raise HTTPException(status_code=_ticket_state_http_status(exc), detail=_ticket_state_error(exc)) from exc
++    if updated is None:
++        _raise(404, "ticket_not_found", "ticket not found")
++    sync_incident_from_ticket(DynamoPaymentIncidentRepository(), ticket_id=ticket_id, ticket_status=terminal)
++    _emit_ticket_alerts("ticket_status_changed", recipients=[ticket["owner_sub"]], actor_sub=user.sub, request=request, ticket_id=ticket_id, ticket_subject=ticket.get("subject", ""), status=terminal)
++    return _wrap_ticket(updated)
++
++
++@router.post("/{ticket_id}/reopen", response_model=TicketEnvelope, responses=_error_responses())
++def reopen_own_ticket(
++    ticket_id: str,
++    request: Request,
++    _ctx: dict[str, str] = Depends(require_ui_session),
++    user: AuthenticatedUser = Depends(get_authenticated_user),
++):
++    """B9 B-HELP2 #17: the ticket OWNER (or an admin) reopens a closed (done) or
++    cancelled ticket back to "open" so replies are accepted again."""
++    ticket = _ticket_or_404(ticket_id)
++    if ticket.get("owner_sub") != user.sub and not _is_admin_actor(request, user):
++        _raise(403, "not_ticket_owner", "only the ticket owner or an admin may reopen this ticket")
++    try:
++        updated = STORE.reopen_ticket(ticket_id=ticket["ticket_id"], actor_sub=user.sub)
++    except TicketStateError as exc:
++        raise HTTPException(status_code=_ticket_state_http_status(exc), detail=_ticket_state_error(exc)) from exc
++    if updated is None:
++        _raise(404, "ticket_not_found", "ticket not found")
++    sync_incident_from_ticket(DynamoPaymentIncidentRepository(), ticket_id=ticket_id, ticket_status="open")
++    _emit_ticket_alerts("ticket_reopened", recipients=[ticket["owner_sub"]], actor_sub=user.sub, request=request, ticket_id=ticket_id, ticket_subject=ticket.get("subject", ""), status="open")
++    return _wrap_ticket(updated)
++
++
+ # ---------------------------------------------------------------------------
+ # CAS-003: PATCH /tickets/{ticket_id}/priority
+ # ---------------------------------------------------------------------------

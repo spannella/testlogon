@@ -1,0 +1,82 @@
+--- app/services/syndicate_feed.py.bak_polls_1783435257	2026-07-07 14:40:57.979441925 +0000
++++ app/services/syndicate_feed.py	2026-07-07 14:40:58.011178442 +0000
+@@ -63,7 +63,18 @@
+ # Post serialization
+ # ---------------------------------------------------------------------------
+ 
+-def _post_out(item: Dict[str, Any]) -> Dict[str, Any]:
++def _syndicate_poll_snapshot(item: Dict[str, Any], viewer: Optional[str] = None):
++    pid = item.get("poll_id")
++    if not pid:
++        return None
++    try:
++        from app.services import arbitrary_polls as _ap
++        return _ap.get_snapshot(pid, viewer)
++    except Exception:
++        return None
++
++
++def _post_out(item: Dict[str, Any], viewer: Optional[str] = None) -> Dict[str, Any]:
+     """Map a DDB syndicate post item to the SyndicatePostOut shape."""
+     reaction_counts = item.get("reaction_counts") or {}
+     return {
+@@ -79,6 +90,7 @@
+         "comment_count": int(item.get("comment_count", 0) or 0),
+         "reaction_counts": {k: int(v) for k, v in reaction_counts.items()},
+         "tip_total_cents": int(item.get("tip_total_cents", 0) or 0),
++        "poll": _syndicate_poll_snapshot(item, viewer),
+     }
+ 
+ 
+@@ -94,6 +106,7 @@
+     visibility: str = "public",
+     image_url: Optional[str] = None,
+     author_name: str = "",
++    poll: Optional[Dict[str, Any]] = None,
+ ) -> Dict[str, Any]:
+     """Create a post in the syndicate newsfeed (members only)."""
+     # Ensure syndicate exists (raises 404 via HTTPException if missing).
+@@ -117,6 +130,17 @@
+     post_id = f"sp_{uuid4().hex}"
+     ts = now_ts()
+ 
++    _poll_id = None
++    if poll:
++        from app.services import arbitrary_polls as _ap
++        _poll_snap = _ap.create_poll(
++            owner=author_sub, question=poll.get("question"), options=poll.get("options") or [],
++            choice_mode=poll.get("choice_mode", "single"),
++            max_selections=poll.get("max_selections"), closes_at=poll.get("closes_at"),
++            allow_vote_change=poll.get("allow_vote_change", True),
++            anonymous=poll.get("anonymous", True), surface="syndicate", ref_id=syndicate_id)
++        _poll_id = _poll_snap["poll_id"]
++
+     item: Dict[str, Any] = {
+         "pk": f"SYND#{syndicate_id}",
+         "sk": f"POST#{post_id}",
+@@ -127,6 +151,7 @@
+         "text": text,
+         "image_url": image_url or "",
+         "syndicate_id": syndicate_id,
++        "poll_id": _poll_id,
+         "visibility": visibility,
+         "created_at": ts,
+         "updated_at": ts,
+@@ -153,7 +178,7 @@
+         "syndicate_post.created",
+         extra={"syndicate_id": syndicate_id, "post_id": post_id, "author_id": author_sub, "visibility": visibility},
+     )
+-    return _post_out(item)
++    return _post_out(item, viewer=author_sub)
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -199,7 +224,7 @@
+ 
+     # Trim to requested limit.
+     visible = items[:limit]
+-    posts = [_post_out(p) for p in visible]
++    posts = [_post_out(p, viewer=viewer_sub) for p in visible]
+ 
+     next_cursor = None
+     last_key = resp.get("LastEvaluatedKey")

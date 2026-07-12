@@ -1,0 +1,140 @@
+--- a/app/routers/broadcast.py
++++ b/app/routers/broadcast.py
+@@ -1592,7 +1592,7 @@
+ 
+ 
+ class BroadcastChatSendIn(BaseModel):
+-    text: str = Field(..., min_length=1, max_length=280)
++    text: Optional[str] = Field(default=None, min_length=1, max_length=280)
+     # Phase B — Replies
+     reply_to_message_id: Optional[str] = Field(default=None, max_length=128)
+     # Phase C — Expiry (broadcaster-only)
+@@ -1600,6 +1600,14 @@
+     # Phase D — Locked messages (broadcaster-only)
+     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+     lock_description: Optional[str] = Field(default=None, max_length=200)
++    # Phase E — Media (image / video) — BCAST-016
++    image_url: Optional[str] = Field(default=None, max_length=2000)
++    video_url: Optional[str] = Field(default=None, max_length=2000)
++    thumbnail_url: Optional[str] = Field(default=None, max_length=2000)
++    # Phase F — View-once (client-cooperative one-view; consume via .../view)
++    view_once: bool = False
++    # Phase G — Scheduled delivery while live (queue-to-post at send_at)
++    send_at: Optional[int] = Field(default=None, description="Unix ts; deliver while live")
+ 
+ 
+ class BroadcastChatProductLinkOut(BaseModel):
+@@ -1651,6 +1659,17 @@
+     tip_total_cents: Optional[int] = None
+     # Lottery field (BCAST-014)
+     lottery_id: Optional[str] = None
++    # Phase E — Media (BCAST-016)
++    image_url: Optional[str] = None
++    video_url: Optional[str] = None
++    thumbnail_url: Optional[str] = None
++    media_kind: Optional[str] = None
++    # Phase F — View-once (BCAST-016)
++    view_once: bool = False
++    view_once_consumed: bool = False
++    # Phase G — Scheduled (BCAST-016)
++    send_at: Optional[int] = None
++    scheduled: bool = False
+ 
+ 
+ class BroadcastChatHistoryOut(BaseModel):
+@@ -1719,6 +1738,20 @@
+     except Exception:
+         pass
+ 
++    # Require text OR media (BCAST-016)
++    if not (body.text or body.image_url or body.video_url):
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
++            detail={"code": "EMPTY_CHAT_MESSAGE", "message": "Provide text, an image, or a video"},
++        )
++
++    # Promote any now-due scheduled chat messages before appending (BCAST-016 Phase G)
++    try:
++        from app.services.broadcast_chat_store import promote_due_scheduled_chats as _promote_sched
++        _promote_sched(session_id, session_is_live=True)
++    except Exception:
++        pass
++
+     result = _store_send_chat(
+         session_id=session_id,
+         user_id=user_id,
+@@ -1728,6 +1761,11 @@
+         expires_in_seconds=body.expires_in_seconds,
+         lock_price_cents=body.lock_price_cents,
+         lock_description=body.lock_description,
++        image_url=body.image_url,
++        video_url=body.video_url,
++        thumbnail_url=body.thumbnail_url,
++        view_once=body.view_once,
++        send_at=body.send_at,
+     )
+     return BroadcastChatMessageOut(**{k: v for k, v in result.items() if k != "sort_key"})
+ 
+@@ -1740,7 +1778,12 @@
+     ctx: dict = Depends(_ctx),
+ ):
+     """Load recent chat history for a broadcast session."""
+-    _ = get_session(session_id)  # 404 if session doesn't exist
++    _hist_session = get_session(session_id)  # 404 if session doesn't exist
++    try:
++        from app.services.broadcast_chat_store import promote_due_scheduled_chats as _promote_sched
++        _promote_sched(session_id, session_is_live=(_hist_session.status == "live"))
++    except Exception:
++        pass
+     result = _store_get_history(
+         session_id, limit=limit, before_sort_key=before,
+         viewer_user_id=ctx["user_sub"],
+@@ -1825,6 +1868,22 @@
+     return result
+ 
+ 
++@router.post("/sessions/{session_id}/chat/{message_id}/view")
++def consume_view_once_chat_route(
++    session_id: str,
++    message_id: str,
++    ctx: dict = Depends(_ctx),
++):
++    """Consume a view-once broadcast chat message (one-view server enforcement, BCAST-016)."""
++    _ = get_session(session_id)  # 404 if session doesn't exist
++    from app.services.broadcast_chat_store import consume_view_once
++    return consume_view_once(
++        session_id=session_id,
++        message_id=message_id,
++        viewer_user_id=ctx["user_sub"],
++    )
++
++
+ class BroadcastChatProductLinkIn(BaseModel):
+     item_id: str = Field(..., min_length=1, max_length=128)
+ 
+@@ -1942,15 +2001,20 @@
+                 yield ": ping\n\n"
+                 last_ping = now
+ 
+-            messages = await anyio.to_thread.run_sync(
+-                lambda: _store_fetch_after(session_id, cursor, 50)
+-            )
++            def _sweep_and_fetch(_cur=cursor):
++                try:
++                    from app.services.broadcast_chat_store import promote_due_scheduled_chats as _p
++                    _p(session_id, session_is_live=(session.status == "live"))
++                except Exception:
++                    pass
++                return _store_fetch_after(session_id, _cur, 50)
++            messages = await anyio.to_thread.run_sync(_sweep_and_fetch)
+             if messages:
+                 for msg in messages:
+                     sk = msg.get("sort_key", "")
+                     cursor = sk
+-                    # Skip LOTTERY#/LENTRY# config/entry items (BCAST-014)
+-                    if sk.startswith("LOTTERY#") or sk.startswith("LENTRY#"):
++                    # Skip LOTTERY#/LENTRY#/SCHED# config/entry/scheduled items (BCAST-014/016)
++                    if sk.startswith("LOTTERY#") or sk.startswith("LENTRY#") or sk.startswith("SCHED#"):
+                         continue
+                     if msg.get("deleted"):
+                         payload = json.dumps({"message_id": msg["message_id"]}, separators=(",", ":"))

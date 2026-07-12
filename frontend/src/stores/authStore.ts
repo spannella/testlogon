@@ -11,13 +11,22 @@ interface AuthState {
   /** Reason for the most recent logout (e.g. "session_expired") */
   logoutReason: string | null;
 
+  /** Role from /ui/me (user|admin|root); gates admin nav after cookie login */
+  role: string | null;
+  /** is_admin flag from /ui/me */
+  isAdmin: boolean;
+  /** Admin profile (scopes) when known; null falls back to general admin */
+  adminProfile: { type: "general" | "scoped"; scopes: string[] } | null;
+
   /** DELEGATE-002: creator ID being managed in delegate mode */
   managingCreatorId: string | null;
   /** DELEGATE-002: display name of the managed creator */
   managingCreatorName: string | null;
 
-  login: (userId: string, accessToken: string) => void;
+  login: (userId: string, accessToken: string, identity?: { role?: string | null; isAdmin?: boolean; adminProfile?: { type: "general" | "scoped"; scopes: string[] } | null }) => void;
   setAccessToken: (token: string) => void;
+  /** Populate role/is_admin identity from /ui/me without touching auth flags */
+  setIdentity: (identity: { role?: string | null; isAdmin?: boolean; adminProfile?: { type: "general" | "scoped"; scopes: string[] } | null }) => void;
   logout: (reason?: string) => void;
   clearLogoutReason: () => void;
   /** DELEGATE-002: enter delegate managing mode for a creator */
@@ -31,14 +40,32 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       isAuthenticated: false,
       logoutReason: null,
+      role: null,
+      isAdmin: false,
+      adminProfile: null,
       managingCreatorId: null,
       managingCreatorName: null,
 
-      login: (userId, accessToken) =>
-        set({ userId, accessToken, isAuthenticated: true, logoutReason: null }),
+      login: (userId, accessToken, identity) =>
+        set({
+          userId,
+          accessToken,
+          isAuthenticated: true,
+          logoutReason: null,
+          role: identity?.role ?? null,
+          isAdmin: identity?.isAdmin ?? false,
+          adminProfile: identity?.adminProfile ?? null,
+        }),
 
       setAccessToken: (accessToken) =>
         set({ accessToken }),
+
+      setIdentity: (identity) =>
+        set({
+          role: identity.role ?? null,
+          isAdmin: identity.isAdmin ?? false,
+          adminProfile: identity.adminProfile ?? null,
+        }),
 
       logout: (reason?: string) => {
         const prevUserId = get().userId;
@@ -47,6 +74,9 @@ export const useAuthStore = create<AuthState>()(
           accessToken: null,
           isAuthenticated: false,
           logoutReason: reason ?? null,
+          role: null,
+          isAdmin: false,
+          adminProfile: null,
           managingCreatorId: null,
           managingCreatorName: null,
         });
@@ -77,6 +107,9 @@ export const useAuthStore = create<AuthState>()(
         accessToken: state.accessToken,
         isAuthenticated: state.isAuthenticated,
         logoutReason: state.logoutReason,
+        role: state.role,
+        isAdmin: state.isAdmin,
+        adminProfile: state.adminProfile,
       }),
     },
   ),

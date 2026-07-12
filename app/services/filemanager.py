@@ -2345,10 +2345,14 @@ def register_presigned_upload(
         etag = head.get("ETag")
         resolved_content_type = content_type or ticket.get("content_type") or head.get("ContentType") or "application/octet-stream"
         metadata = head.get("Metadata") or {}
-        # Dev mode: the mock-S3 proxy PUT does not carry the presigned x-amz-meta-* fields, so the
-        # uploaded object legitimately has no metadata. The upload-ticket match above (path + s3_key +
-        # expiry) already authenticates this upload, so skip the metadata cross-check off-cloud.
-        if not S.dev_mode and (metadata.get("filemgr-ticket") != ticket_id or metadata.get("filemgr-user") != user):
+        # DEV-MODE FIX: the in-process /mock/s3 proxy (app/routers/s3_mock.py put_object) does NOT
+        # round-trip S3 user-metadata, so filemgr-ticket/filemgr-user are absent on HEAD even for a
+        # valid upload -> every file-manager upload 403s (web + mobile). The ticket lookup above
+        # (path + s3_key + expiry) already authenticates the upload; skip the metadata anti-tamper
+        # assertion against the mock. Real-S3 deployments (dev_mode=False) keep the strict check.
+        if not getattr(S, "dev_mode", False) and (
+            metadata.get("filemgr-ticket") != ticket_id or metadata.get("filemgr-user") != user
+        ):
             raise HTTPException(403, "uploaded object metadata mismatch")
     except ClientError as exc:
         raise HTTPException(500, f"s3 error: {exc}") from exc

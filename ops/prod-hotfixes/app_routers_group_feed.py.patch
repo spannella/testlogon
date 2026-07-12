@@ -1,0 +1,111 @@
+--- app/routers/group_feed.py.bak_b9_1782437278	2026-05-31 01:46:41.154460437 +0000
++++ app/routers/group_feed.py	2026-06-26 01:27:58.217091571 +0000
+@@ -6,10 +6,20 @@
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query
+ 
++from typing import Optional, List
++from pydantic import BaseModel, Field
++
+ from app.services.sessions import require_ui_session
+ from app.models import CreateGroupPostIn
+ from app.core.settings import S
+ 
++
++class CreateGroupCommentIn(BaseModel):
++    """B9 B-GRPFULL #11: group post comment (text and/or single image, optional reply)."""
++    text: Optional[str] = Field(default=None, max_length=4000)
++    image_url: Optional[str] = Field(default=None, max_length=2048)
++    parent_comment_id: Optional[str] = Field(default=None, max_length=64)
++
+ router = APIRouter(tags=["group-feed"])
+ public_group_feed_router = APIRouter(tags=["group-feed-public"])
+ 
+@@ -34,6 +44,8 @@
+             image_url=body.image_url,
+             audience=body.audience,
+             unlock_price_cents=body.unlock_price_cents,
++            image_urls=getattr(body, "image_urls", None),
++            video_id=getattr(body, "video_id", None),
+         )
+     except PermissionError as e:
+         raise HTTPException(403, str(e))
+@@ -136,3 +148,78 @@
+         if "dissolved" in msg:
+             raise HTTPException(410, msg)
+         raise HTTPException(404, msg)
++
++
++# ── Group post comments (B9 B-GRPFULL #11) ────────────────────────────────────
++
++@router.post("/ui/groups/{group_id}/posts/{post_id}/comments", status_code=201)
++def add_group_post_comment(
++    group_id: str,
++    post_id: str,
++    body: CreateGroupCommentIn,
++    session=Depends(require_ui_session),
++):
++    _require_feed_enabled()
++    from app.services.group_feed import add_group_comment
++    try:
++        return add_group_comment(
++            group_id=group_id,
++            post_id=post_id,
++            user_id=session["user_sub"],
++            text=body.text,
++            image_url=body.image_url,
++            parent_comment_id=body.parent_comment_id,
++        )
++    except PermissionError as e:
++        raise HTTPException(403, str(e))
++    except ValueError as e:
++        msg = str(e)
++        if "dissolved" in msg:
++            raise HTTPException(410, msg)
++        if "must include" in msg:
++            raise HTTPException(422, msg)
++        raise HTTPException(404, msg)
++
++
++@router.get("/ui/groups/{group_id}/posts/{post_id}/comments")
++def list_group_post_comments(
++    group_id: str,
++    post_id: str,
++    cursor: str | None = Query(default=None),
++    limit: int = Query(default=20, ge=1, le=100),
++    session=Depends(require_ui_session),
++):
++    _require_feed_enabled()
++    from app.services.group_feed import list_group_comments
++    try:
++        return list_group_comments(
++            group_id=group_id,
++            post_id=post_id,
++            viewer_id=session["user_sub"],
++            cursor=cursor,
++            limit=limit,
++        )
++    except ValueError as e:
++        raise HTTPException(404, str(e))
++
++
++@router.delete("/ui/groups/{group_id}/posts/{post_id}/comments/{comment_id}")
++def delete_group_post_comment(
++    group_id: str,
++    post_id: str,
++    comment_id: str,
++    session=Depends(require_ui_session),
++):
++    _require_feed_enabled()
++    from app.services.group_feed import delete_group_comment
++    try:
++        return delete_group_comment(
++            group_id=group_id,
++            post_id=post_id,
++            comment_id=comment_id,
++            user_id=session["user_sub"],
++        )
++    except PermissionError as e:
++        raise HTTPException(403, str(e))
++    except ValueError as e:
++        raise HTTPException(404, str(e))

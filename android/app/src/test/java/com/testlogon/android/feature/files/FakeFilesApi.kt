@@ -102,6 +102,14 @@ class FakeFilesApi(
         return MoveResultDto(ok = true, src = body.src, dst = body.dst)
     }
 
+    val copyBodies = mutableListOf<MoveRequest>()
+
+    override suspend fun copy(body: MoveRequest): MoveResultDto {
+        copyBodies += body
+        crudError?.let { throw it() }
+        return MoveResultDto(ok = true, src = body.src, dst = body.dst)
+    }
+
     override suspend fun deleteFile(path: String): OkRespDto {
         deleteFilePaths += path
         crudError?.let { throw it() }

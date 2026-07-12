@@ -75,6 +75,20 @@ sealed interface MessagingEvent {
         val viewedAtEpochSeconds: Long,
     ) : MessagingEvent
 
+    /**
+     * A WebRTC/call signaling envelope (`call.*` lifecycle or `webrtc.offer|answer|ice_candidate`),
+     * routed to the call orchestrator. [payload] carries the event-specific body (SDP / ICE / mode).
+     */
+    data class CallSignal(
+        val type: String,
+        val callId: String,
+        val conversationId: String,
+        val senderId: String?,
+        val payload: Map<String, Any?>,
+        /** Server event time (epoch seconds); drives the stale-invite drop guard. Null when unknown. */
+        val createdAtEpochSeconds: Long? = null,
+    ) : MessagingEvent
+
     /** Any other event type we observe but do not act on directly (used to refresh lists). */
     data class Other(val type: String, val conversationId: String?) : MessagingEvent
 }

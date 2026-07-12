@@ -1,0 +1,50 @@
+--- a/app/routers/broadcast.py
++++ b/app/routers/broadcast.py
+@@ -389,6 +389,25 @@
+     return BroadcastProfileListOut(items=[BroadcastProfileOut(**p.model_dump()) for p in profiles])
+ 
+ 
++@router.get("/live", response_model=BroadcastSessionListOut)
++def list_live_sessions_route(
++    limit: int = Query(default=50, ge=1, le=200),
++    ctx: dict = Depends(_ctx),
++):
++    """T3 FIX: public live-discovery feed of CURRENTLY-LIVE broadcasts.
++
++    Any authenticated viewer can call this to find sessions that are live right
++    now (across all creators), so a 2nd-user viewer can discover a host's stream
++    and then join + play it back. `GET /broadcast/sessions?status=live` remains
++    operator-scoped (own-sessions for non-operators, SEC GAP-0111); this feed is
++    the intentionally public read-only currently-live list.
++    """
++    _ = ctx
++    result = list_sessions_by_status("live", limit=limit)
++    items = [_to_session_out(s) for s in result["items"]]
++    return BroadcastSessionListOut(items=items, has_more=bool(result.get("cursor")))
++
++
+ @router.post("/sessions/{session_id}/start", response_model=BroadcastSessionOut, status_code=status.HTTP_202_ACCEPTED)
+ def start_session_route(
+     session_id: str,
+@@ -398,8 +417,19 @@
+     x_idempotency_key: Annotated[Optional[str], Header(alias="x-idempotency-key")] = None,
+     ctx: dict = Depends(_ctx),
+ ):
+-    _require_operator_role(ctx)
+-    _require_operator_and_owner(session_id, ctx)
++    # T3 FIX: allow the session OWNER (a normal mobile creator) to start their own
++    # broadcast, not just admin/root — otherwise a mobile Go-Live could never flip the
++    # session to status=live, so a viewer could never discover/watch it. Ownership is
++    # still enforced (owner-or-root); root remains the emergency super-user.
++    _session_for_start = get_session(session_id)
++    if _session_for_start is None:
++        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
++    if ctx["user_sub"] != _session_for_start.created_by and ctx.get("role") not in {"admin", "root"}:
++        raise HTTPException(
++            status_code=status.HTTP_403_FORBIDDEN,
++            detail={"code": "BROADCAST_OWNERSHIP_FORBIDDEN",
++                    "detail": "You can only start your own broadcast sessions."},
++        )
+     cid = (x_correlation_id or "").strip() or _correlation_id(request)
+     idem = (x_idempotency_key or "").strip() or request.headers.get("x-idempotency-key", "").strip()
+     try:

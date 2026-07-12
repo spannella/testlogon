@@ -1,0 +1,14 @@
+[Unit]
+Description=MediaMTX media server (TestLogon Go Live WHIP ingest + HLS playback)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/opt/mediamtx/mediamtx /opt/mediamtx/mediamtx.yml
+Restart=on-failure
+RestartSec=3
+WorkingDirectory=/opt/mediamtx
+
+[Install]
+WantedBy=multi-user.target

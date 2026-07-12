@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.ui.i18n.UiText
+import com.testlogon.android.data.ads.AdClickAttributionStore
 import com.testlogon.android.data.messaging.BillingAuthorizer
 import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.data.subscriptions.CreatorSubscription
@@ -13,6 +14,7 @@ import com.testlogon.android.data.subscriptions.SubscriptionFeatureFlags
 import com.testlogon.android.data.subscriptions.SubscriptionTier
 import com.testlogon.android.data.subscriptions.SubscriptionsRepository
 import com.testlogon.android.feature.billing.error.BillingErrorMapper
+import com.testlogon.android.feature.billing.error.Recoverability
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -37,8 +39,15 @@ data class SubscribeUiState(
     val status: Status = Status.Reviewing,
     /** Screen-ready error copy (mapped via [BillingErrorMapper]) for the Error status. */
     val errorMessage: UiText? = null,
+    /**
+     * SUB-E0 - true when the failure was a real charge decline / no-PM (HTTP 402): the screen shows
+     * an explicit "add a payment method" affordance instead of a plain retry.
+     */
+    val requiresPaymentMethod: Boolean = false,
     /** The activated subscription, present once [Status.Success]. */
     val subscription: CreatorSubscription? = null,
+    /** SUB-E2 - default free-trial length (card required up front; auto-charges at trial end). */
+    val trialDays: Int = 7,
 ) {
     enum class Status { Reviewing, Authorizing, Subscribing, Success, PaymentsUnavailable, Error }
 
@@ -67,6 +76,7 @@ sealed interface SubscribeEvent {
 class SubscribeViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: SubscriptionsRepository,
+    private val adAttribution: AdClickAttributionStore,
     private val billingAuthorizer: BillingAuthorizer,
     private val featureFlags: SubscriptionFeatureFlags,
     private val errorMapper: BillingErrorMapper,
@@ -80,6 +90,21 @@ class SubscribeViewModel @Inject constructor(
     }
     private val priceCents: Long = savedStateHandle.get<Long>(ARG_PRICE_CENTS) ?: 0L
 
+    /**
+     * SUB-E0 - a stable client idempotency key for this subscribe attempt. Generated once and reused
+     * across retries so a re-confirm after a transient failure never double-charges/double-subscribes.
+     */
+    private val clientRequestId: String = java.util.UUID.randomUUID().toString()
+
+    // SUB-E2 - non-null for a card-required free-trial confirm (backend creates a trialing sub +
+    // captures the PM WITHOUT charging; the E1 sweeper auto-charges at trial end).
+    @Volatile
+    private var trialDays: Int? = null
+
+    /** SUB-E0 - the payment method resolved by the billing seam for the current confirm. */
+    @Volatile
+    private var resolvedPaymentMethodId: String? = null
+
     private val _uiState = MutableStateFlow(
         SubscribeUiState(tier = buildTierFromArgs(savedStateHandle)),
     )
@@ -88,12 +113,46 @@ class SubscribeViewModel @Inject constructor(
     private val _events = Channel<SubscribeEvent>(Channel.BUFFERED)
     val events: Flow<SubscribeEvent> = _events.receiveAsFlow()
 
+    init {
+        // SUB-E0 - enrich the reviewed tier with the creators real, structured benefits/perks (the
+        // nav args only carry name/price/interval); a fetch failure leaves the arg-built tier as-is.
+        viewModelScope.launch {
+            when (val result = repository.getCreatorTiers(creatorId)) {
+                is ApiResult.Success -> {
+                    val plan = result.data.firstOrNull { it.planId == planId } ?: return@launch
+                    _uiState.update { st ->
+                        st.copy(
+                            tier = st.tier.copy(
+                                description = plan.description ?: st.tier.description,
+                                perks = plan.perks,
+                                benefits = plan.benefits,
+                                annualPriceCents = plan.annualPriceCents,
+                            ),
+                        )
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+
     /**
      * AND-236 — confirm the subscription. Routes the pay step through the BillingAuthorizer stub gated
      * by the checkout flag. NotConfigured / flag-off / decline -> PaymentsUnavailable, and the subscribe
      * endpoint is NEVER called. Only the Authorized path POSTs subscribe.
      */
+    /** SUB-E2 - start a card-required free trial (no charge now; auto-charges at trial end). */
+    fun startTrial() {
+        trialDays = TRIAL_DAYS
+        beginAuthorize()
+    }
+
     fun confirm() {
+        trialDays = null
+        beginAuthorize()
+    }
+
+    private fun beginAuthorize() {
         val current = _uiState.value
         if (current.isWorking) return // guard against concurrent confirms
 
@@ -104,8 +163,11 @@ class SubscribeViewModel @Inject constructor(
 
         _uiState.update { it.copy(status = SubscribeUiState.Status.Authorizing, errorMessage = null) }
         viewModelScope.launch {
-            when (billingAuthorizer.authorize(priceCents, current.tier.currency, memo = current.tier.name)) {
-                is BillingResult.Authorized -> runSubscribe()
+            when (val auth = billingAuthorizer.authorize(priceCents, current.tier.currency, memo = current.tier.name)) {
+                is BillingResult.Authorized -> {
+                    resolvedPaymentMethodId = auth.paymentMethodId
+                    runSubscribe()
+                }
                 is BillingResult.NotConfigured ->
                     _uiState.update { it.copy(status = SubscribeUiState.Status.PaymentsUnavailable) }
                 is BillingResult.Cancelled ->
@@ -122,23 +184,52 @@ class SubscribeViewModel @Inject constructor(
     /** Re-attempt after a recoverable error: back to Reviewing so the user can confirm again. */
     fun retry() {
         if (_uiState.value.isWorking) return
-        _uiState.update { it.copy(status = SubscribeUiState.Status.Reviewing, errorMessage = null) }
+        _uiState.update {
+            it.copy(
+                status = SubscribeUiState.Status.Reviewing,
+                errorMessage = null,
+                requiresPaymentMethod = false,
+            )
+        }
     }
 
     private suspend fun runSubscribe() {
         _uiState.update { it.copy(status = SubscribeUiState.Status.Subscribing) }
-        when (val result = repository.subscribe(planId, SubscribeReqDto())) {
+        // ADV-405: attach the session last-click ad_click_id so a subscribe converts the ad (ADV-402).
+        val body = SubscribeReqDto(
+            adClickId = adAttribution.peek(),
+            // SUB-E2 - when non-null this is a trial start: backend captures the PM but does NOT charge.
+            trialDays = trialDays,
+            // SUB-E0: the resolved PM (blank in dev demo -> backend resolves the subscriber default);
+            // the backend REALLY charges this + credits the creator net, or returns 402 (no phantom).
+            paymentMethodId = resolvedPaymentMethodId?.takeIf { it.isNotBlank() },
+            clientRequestId = clientRequestId,
+        )
+        when (val result = repository.subscribe(planId, body)) {
             is ApiResult.Success -> {
                 val sub = result.data
                 _uiState.update {
-                    it.copy(status = SubscribeUiState.Status.Success, subscription = sub, errorMessage = null)
+                    it.copy(
+                        status = SubscribeUiState.Status.Success,
+                        subscription = sub,
+                        errorMessage = null,
+                        requiresPaymentMethod = false,
+                    )
                 }
                 _events.send(SubscribeEvent.Activated(sub.subscriptionId, sub.planId))
             }
             else -> {
+                // SUB-E0: a real charge decline / no-PM surfaces as HTTP 402 -> show a clear
+                // "payment failed / add a card" error and write NO subscription.
                 val error = errorMapper.map(result)
+                val needsCard = error.httpStatus == HTTP_PAYMENT_REQUIRED ||
+                    error.recoverability == Recoverability.REQUIRES_NEW_METHOD
                 _uiState.update {
-                    it.copy(status = SubscribeUiState.Status.Error, errorMessage = error.message)
+                    it.copy(
+                        status = SubscribeUiState.Status.Error,
+                        errorMessage = error.message,
+                        requiresPaymentMethod = needsCard,
+                    )
                 }
                 _events.send(SubscribeEvent.ShowMessage(error.message))
             }
@@ -172,5 +263,7 @@ class SubscribeViewModel @Inject constructor(
         const val ARG_DESCRIPTION = "description"
 
         private const val DEFAULT_CURRENCY = "USD"
+        private const val TRIAL_DAYS = 7
+        private const val HTTP_PAYMENT_REQUIRED = 402
     }
 }

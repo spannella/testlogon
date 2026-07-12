@@ -57,3 +57,26 @@ fun AdBreakdownEntryDto.toDomain(): AdBreakdownEntry = AdBreakdownEntry(
     spendCents = spendCents,
     ctrPct = ctrPct,
 )
+
+/** ADV-503 - maps the ROAS report DTO to [AdRoasReport] (totals + per-campaign rows). */
+fun com.testlogon.android.core.network.ads.AdRoasReportDto.toDomain(): com.testlogon.android.core.model.ads.AdRoasReport =
+    com.testlogon.android.core.model.ads.AdRoasReport(
+        accountId = accountId,
+        days = days,
+        totals = totals.toDomain(),
+        campaigns = campaigns.map { it.toDomain() },
+    )
+
+/** ADV-503 - maps one ROAS row DTO to [AdCampaignRoas]. Every *_cents stays Long; *Pct/roas kept as-is. */
+fun com.testlogon.android.core.network.ads.AdCampaignRoasDto.toDomain(): com.testlogon.android.core.model.ads.AdCampaignRoas =
+    com.testlogon.android.core.model.ads.AdCampaignRoas(
+        campaignId = campaignId,
+        impressions = impressions,
+        clicks = clicks,
+        conversions = conversions,
+        spendCents = spendCents,
+        conversionValueCents = conversionValueCents,
+        ctrPct = ctrPct,
+        cpaCents = cpaCents,
+        roas = roas,
+    )

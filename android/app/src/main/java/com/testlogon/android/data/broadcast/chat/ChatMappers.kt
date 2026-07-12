@@ -7,9 +7,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * AND-281 — pure DTO -> domain mapping for chat. Reactions are derived from `reactions_counts`
- * (counts) + `my_reactions` (the self-highlight, since no per-emoji self flag exists on the wire).
- * `isSelf`/`isHost` are derived by the repository/VM (passed in), not on the wire.
+ * AND-281 / BCAST-016 — pure DTO -> domain mapping for chat. Reactions are derived from
+ * `reactions_counts` (counts) + `my_reactions` (the self-highlight). `isSelf`/`isHost` are derived by
+ * the repository/VM (passed in), not on the wire. The rich-type fields (reply preview, media, lock,
+ * view-once, expiry, scheduled) map straight through.
  */
 fun ChatMessageDto.toDomain(selfId: String?): ChatMessage = ChatMessage(
     id = messageId,
@@ -25,6 +26,23 @@ fun ChatMessageDto.toDomain(selfId: String?): ChatMessage = ChatMessage(
     deleted = deleted,
     reactions = buildReactions(reactionsCounts, myReactions),
     deliveryState = DeliveryState.SENT,
+    replyToMessageId = replyToMessageId,
+    replyPreviewSender = replyToPreview?.senderDisplayName,
+    replyPreviewText = replyToPreview?.text,
+    imageUrl = imageUrl,
+    videoUrl = videoUrl,
+    thumbnailUrl = thumbnailUrl,
+    mediaKind = mediaKind,
+    lockPriceCents = lockPriceCents,
+    lockDescription = lockDescription,
+    // Non-locked messages omit is_unlocked (null) -> treat as unlocked; locked+unpaid sends false.
+    isUnlocked = isUnlocked ?: true,
+    viewOnce = viewOnce,
+    viewOnceConsumed = viewOnceConsumed,
+    expiresAtEpochSeconds = expiresAt,
+    expired = expired,
+    scheduled = scheduled,
+    sendAtEpochSeconds = sendAt,
 )
 
 /** Builds the derived reaction list from the counts map + the caller's my_reactions set. */
@@ -37,10 +55,9 @@ fun buildReactions(counts: Map<String, Int>?, myReactions: List<String>?): List<
 }
 
 /**
- * AND-281 — parses a decoded SSE frame into a [ChatStreamEvent] by event name (colon-delimited, per
- * BroadcastChat.tsx). Malformed `data` or an unknown event name maps to [ChatStreamEvent.Unknown]
- * (logged-equivalent) — a single bad frame must NEVER tear down a live session. Pure / transport-free
- * so it is fully JVM-unit-tested.
+ * AND-281 — parses a decoded SSE frame into a [ChatStreamEvent] by event name (colon-delimited).
+ * Malformed `data` or an unknown event name maps to [ChatStreamEvent.Unknown] — a single bad frame must
+ * NEVER tear down a live session. Pure / transport-free so it is fully JVM-unit-tested.
  */
 @Singleton
 class ChatEventParser @Inject constructor(private val moshi: Moshi) {

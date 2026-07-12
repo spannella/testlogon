@@ -10,6 +10,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import com.testlogon.android.core.network.host.HostSelectionInterceptor
 import dagger.hilt.android.qualifiers.ApplicationContext
 import okhttp3.OkHttpClient
 import javax.inject.Inject
@@ -49,9 +50,24 @@ class MediaSourceFactoryProvider @Inject constructor(
     /** The configured API host; app-auth headers are scoped to it. null when not yet known. */
     var apiHost: String? = null
 
+    /**
+     * ADV — the media loads target EXTERNAL origins (e.g. a public HLS CDN) by ABSOLUTE URL. The shared
+     * app client carries a [HostSelectionInterceptor] that rewrites EVERY request's scheme/host/port to
+     * the API base, which corrupts those absolute media URLs (they 404 against the API host and content
+     * never streams on-device). Derive a media-scoped client that DROPS only that interceptor while
+     * preserving the cookie jar / timeouts / retry, so API-hosted media still authenticates and external
+     * HLS actually plays. Retrofit's placeholder-base rewrite is irrelevant here — media URIs are always
+     * resolved to real absolute URLs before they reach the player.
+     */
+    private val mediaClient: OkHttpClient by lazy {
+        okHttpClient.newBuilder()
+            .apply { interceptors().removeAll { it is HostSelectionInterceptor } }
+            .build()
+    }
+
     /** Wraps the OkHttp data source with [DefaultDataSource] so asset:///, file:// etc. also work. */
     private fun baseFactory(headers: Map<String, String>): DataSource.Factory {
-        val http = OkHttpDataSource.Factory(okHttpClient)
+        val http = OkHttpDataSource.Factory(mediaClient)
         if (headers.isNotEmpty()) http.setDefaultRequestProperties(headers)
         return DefaultDataSource.Factory(context, http)
     }

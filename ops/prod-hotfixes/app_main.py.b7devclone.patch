@@ -1,0 +1,15 @@
+diff --git a/app/main.py b/app/main.py
+index 970c1ac0..a5031a82 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -564,6 +564,10 @@ def create_app() -> FastAPI:
+     app.include_router(s3_mock_router, prefix="/mock/s3")
+     # Also register GET /mock/s3 (no trailing slash) for boto3 list_buckets
+     app.add_api_route("/mock/s3", _s3_list_buckets, methods=["GET"], include_in_schema=False)
++    from fastapi.responses import FileResponse as _FileResponseGif
++    def _mock_gif_serve(name: str):
++        return _FileResponseGif("/home/sean/dev/testlogon/app/static/demo.gif", media_type="image/gif")
++    app.add_api_route("/mock/gifs/{name}", _mock_gif_serve, methods=["GET"], include_in_schema=False)
+     app.include_router(paypal_router)
+     app.include_router(billing_router)
+     app.include_router(account_state_router)

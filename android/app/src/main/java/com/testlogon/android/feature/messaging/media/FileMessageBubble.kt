@@ -26,6 +26,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -71,6 +75,30 @@ fun FileMessageBubble(
     }
     val category = AttachmentFormat.iconCategory(file.mimeType, file.fileName)
     val sizeText = AttachmentFormat.fileSize(file.sizeBytes)
+
+    // #26 — a PDF that has already been downloaded renders an inline first-page PREVIEW thumbnail; tap
+    // opens a full-screen in-app PDF viewer. (Until it's downloaded we have no local File to render, so
+    // the normal file row is shown and tapping its download control fetches it.)
+    val isPdf = isPdfFile(file.mimeType, file.fileName)
+    val downloadedPath = (download as? FileDownloadUi.Downloaded)?.localPath
+    if (isPdf && downloadedPath != null) {
+        var viewerOpen by remember(downloadedPath) { mutableStateOf(false) }
+        Column(modifier = modifier.widthIn(max = 280.dp).testTag(FileBubbleTestTags.BUBBLE)) {
+            PdfThumbnail(localPath = downloadedPath, onOpen = { viewerOpen = true })
+            Spacer(Modifier.size(4.dp))
+            Text(
+                text = file.fileName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (viewerOpen) {
+            PdfViewerDialog(localPath = downloadedPath, fileName = file.fileName, onDismiss = { viewerOpen = false })
+        }
+        return
+    }
 
     Surface(
         color = bubbleColor,
@@ -210,14 +238,14 @@ fun openDownloadedFile(
 ): Boolean {
     val file = File(localPath)
     if (!file.exists()) return false
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val intent = Intent(Intent.ACTION_VIEW)
-        .setDataAndType(uri, mimeType ?: "*/*")
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     return try {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, mimeType ?: "*/*")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
         true
-    } catch (e: ActivityNotFoundException) {
+    } catch (e: Exception) {
         false
     }
 }

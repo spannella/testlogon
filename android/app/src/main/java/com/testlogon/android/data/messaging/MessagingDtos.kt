@@ -2,6 +2,7 @@ package com.testlogon.android.data.messaging
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import com.testlogon.android.core.network.poll.PollSnapshotDto
 
 /**
  * AND-120 — wire DTOs for the TestLogon messaging domain.
@@ -58,6 +59,19 @@ data class ParticipantDto(
  * MessageOut. Required: conversation_id, message_id, sender_id, created_at, kind.
  * `text` is null for non-text kinds; `preview` is a server-rendered single-line summary.
  */
+/** Create body for POST /messaging/conversations/{id}/messages/poll (arbitrary text-option poll). */
+@JsonClass(generateAdapter = true)
+data class CreatePollMessageReq(
+    @Json(name = "question") val question: String,
+    @Json(name = "options") val options: List<String>,
+    @Json(name = "choice_mode") val choiceMode: String = "single",
+    @Json(name = "max_selections") val maxSelections: Int? = null,
+    @Json(name = "closes_at") val closesAt: Long? = null,
+    @Json(name = "text") val text: String? = null,
+    /** Sender-controlled: allow voters to add their own write-in options. */
+    @Json(name = "allow_write_in") val allowWriteIn: Boolean = false,
+)
+
 @JsonClass(generateAdapter = true)
 data class MessageDto(
     @Json(name = "message_id") val messageId: String,
@@ -67,6 +81,7 @@ data class MessageDto(
     val kind: String = "text",
     val text: String? = null,
     val preview: String? = null,
+    @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
     @Json(name = "edited_at") val editedAt: Long? = null,
     @Json(name = "edited_by") val editedBy: String? = null,
     @Json(name = "read_by_count") val readByCount: Int? = null,
@@ -74,14 +89,21 @@ data class MessageDto(
     @Json(name = "read_by_user_ids") val readByUserIds: List<String>? = null,
     @Json(name = "delivered_to_count") val deliveredToCount: Int? = null,
     @Json(name = "delivered_to_user_ids") val deliveredToUserIds: List<String>? = null,
+    // Self-destruct expiry: epoch-seconds deadline + server-confirmed expired flag.
+    @Json(name = "expires_at") val expiresAt: Long? = null,
+    @Json(name = "expired") val expired: Boolean? = null,
     // AND-140 — reaction summary on the message itself: emoji -> count, plus the emojis I reacted with.
     @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
     @Json(name = "my_reactions") val myReactions: List<String>? = null,
+    // TIP-203 - money-reaction badges on this message (distinct from the free reactions_counts).
+    @Json(name = "tip_reactions") val tipReactions: List<TipReactionDto>? = null,
     // AND-140 — revoke ("unsend") markers (epoch-INTEGER seconds). edited_at above doubles as the edit marker.
     @Json(name = "revoked_at") val revokedAt: Long? = null,
     @Json(name = "revoked_by") val revokedBy: String? = null,
     /** AND-130 — present on kind="image". The display url is `url` else `bucket`/`key`-derived. */
     val image: MessageImageDto? = null,
+    /** C6 — present on kind="gallery". Sender always sees all free_images; recipient sees free + unlocked. */
+    @Json(name = "free_images") val freeImages: List<GalleryImageDto>? = null,
     /** AND-131 — present on kind="video_share". Carries the HLS manifest + short-lived token. */
     @Json(name = "video_share") val videoShare: VideoShareDto? = null,
     /** AND-132 — present on kind="file"/"audio"/"video" (generic file attachment). */
@@ -105,14 +127,19 @@ data class MessageDto(
     @Json(name = "sticker_alt_text") val stickerAltText: String? = null,
     /** AND-136 — present on kind="meeting_poll": the poll envelope (slots come from the polls GET). */
     @Json(name = "meeting_poll") val meetingPoll: MeetingPollAttachmentDto? = null,
+    /** Arbitrary text-option poll snapshot present on kind="poll" (distinct from meeting_poll). */
+    @Json(name = "poll") val poll: PollSnapshotDto? = null,
     /** AND-137 — FLAT countdown fields present on kind="countdown". target_datetime is UTC seconds. */
     @Json(name = "countdown_title") val countdownTitle: String? = null,
     @Json(name = "target_datetime") val targetDatetime: Long? = null,
     @Json(name = "associated_event_type") val associatedEventType: String? = null,
     @Json(name = "associated_event_id") val associatedEventId: String? = null,
+    /** #31 (B-COUNTDOWN) — present (with revealed=true) ONLY once the countdown target has passed. */
+    @Json(name = "countdown_reveal") val countdownReveal: CountdownRevealDto? = null,
     /** AND-138 — present on kind="calendar_event"/"calendar_share" (nested attachment objects). */
     @Json(name = "calendar_event") val calendarEvent: CalendarEventAttachmentDto? = null,
     @Json(name = "calendar_share") val calendarShare: CalendarShareAttachmentDto? = null,
+    @Json(name = "find_datetime") val findDatetime: FindDateTimeAttachmentDto? = null,
     /** AND-139 — FLAT fixed-price paid-message fields (gated content is NEVER shipped while locked). */
     @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
     @Json(name = "lock_description") val lockDescription: String? = null,
@@ -124,6 +151,41 @@ data class MessageDto(
     val lottery: LotteryAttachmentDto? = null,
     /** AND-132/133 — "none" | "view_once" | "listen_once"; gates once-media cache reuse. */
     @Json(name = "consumption_policy") val consumptionPolicy: String? = null,
+    @Json(name = "view_once") val viewOnce: Boolean? = null,
+    /** "unconsumed" | "consumed" | null — server view-once consumption state for the current user. */
+    @Json(name = "consumption_state") val consumptionState: String? = null,
+    @Json(name = "is_encrypted") val isEncrypted: Boolean? = null,
+    /** MSG — client-side encryption envelope echoed back by the server on an encrypted message. */
+    val encryption: MessageEncryptionEnvelopeDto? = null,
+    /** #8 — true while this message is a still-pending scheduled (not-yet-delivered) send. */
+    val scheduled: Boolean? = null,
+    /** #8 — epoch SECONDS the scheduled message is due to be delivered (null when not scheduled). */
+    @Json(name = "deliver_at") val deliverAt: Long? = null,
+    /** ADV2-E5 (F5+F6) — sponsored ad-message fields (present on a delivered ad DM; kind stays "text"). */
+    @Json(name = "ad_message") val adMessage: Boolean? = null,
+    @Json(name = "ad_click_id") val adClickId: String? = null,
+    @Json(name = "cta_url") val ctaUrl: String? = null,
+    @Json(name = "ad_image_url") val adImageUrl: String? = null,
+    @Json(name = "sponsor_label") val sponsorLabel: String? = null,
+    @Json(name = "content_owner_sub") val contentOwnerSub: String? = null,
+)
+
+/** #31 — countdown reveal payload (revealed once the target passes). media[] may mix images + videos. */
+@JsonClass(generateAdapter = true)
+data class CountdownRevealDto(
+    val text: String? = null,
+    val media: List<CountdownRevealMediaDto>? = null,
+    val revealed: Boolean = false,
+)
+
+/** #31 — one revealed media item (media_kind = "image"|"video"; url is directly displayable/playable). */
+@JsonClass(generateAdapter = true)
+data class CountdownRevealMediaDto(
+    val url: String? = null,
+    @Json(name = "media_kind") val mediaKind: String? = null,
+    val bucket: String? = null,
+    val key: String? = null,
+    @Json(name = "content_type") val contentType: String? = null,
 )
 
 /** MessageOut.image (MessageImage). All inner fields are optional per the free-form schema. */
@@ -186,10 +248,71 @@ data class ConversationDto(
     @Json(name = "assignment_version") val assignmentVersion: Int? = null,
 )
 
-/** POST messages body = SendTextMessageIn. Field is `text` (1..4000); NO client_id on the wire. */
+/**
+ * POST messages body = SendTextMessageIn. Field is `text` (1..4000); NO client_id on the wire.
+ * Optional message-option fields (all default null/absent for a plain send): self-destruct
+ * ([viewOnce]), pay-to-unlock ([lockPriceCents]/[lockDescription]), and schedule ([sendAt], epoch
+ * seconds) — all accepted server-side on the same endpoint.
+ */
 @JsonClass(generateAdapter = true)
 data class SendTextMessageReq(
-    val text: String,
+    // Server requires EXACTLY one of text / encryption (text absent when an encryption envelope is set).
+    val text: String? = null,
+    @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    @Json(name = "view_once") val viewOnce: Boolean? = null,
+    @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
+    @Json(name = "lock_description") val lockDescription: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
+    @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
+    val encryption: MessageEncryptionEnvelopeDto? = null,
+    // #6 (B-COUNTDOWN3) — attach a countdown to THIS (any-kind) message. target_datetime is UTC
+    // epoch seconds; the server reveals the optional payload once the target passes.
+    @Json(name = "countdown_target_datetime") val countdownTargetDatetime: Long? = null,
+    @Json(name = "countdown_title") val countdownTitle: String? = null,
+    @Json(name = "countdown_reveal_text") val countdownRevealText: String? = null,
+    @Json(name = "countdown_reveal_image") val countdownRevealImage: CountdownRevealImageReq? = null,
+    // TIP-106 - attach a tip to this message on send (money-path via charge_tip on the backend).
+    // tip_recipient_id is required only for a GROUP attached tip (backend 400 otherwise); a DM
+    // resolves the other participant server-side. Not combinable with lock_price_cents (backend 400).
+    @Json(name = "tip_amount_cents") val tipAmountCents: Long? = null,
+    @Json(name = "tip_payment_method_id") val tipPaymentMethodId: String? = null,
+    @Json(name = "tip_recipient_id") val tipRecipientId: String? = null,
+)
+
+/**
+ * #8 PATCH .../messages/{message_id}/schedule body = RescheduleMessageIn. At least one of [text] /
+ * [sendAt] must be set (both default absent so Moshi omits unset fields); [sendAt] is epoch seconds
+ * and must be >= now+5s server-side; [text] edits text-kind scheduled messages only.
+ */
+@JsonClass(generateAdapter = true)
+data class RescheduleMessageReq(
+    val text: String? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
+    // #21 — timezone-aware reschedule: send_at wins; otherwise server resolves send_at_local in send_at_tz.
+    @Json(name = "send_at_local") val sendAtLocal: String? = null,
+    @Json(name = "send_at_tz") val sendAtTz: String? = null,
+    // #22 (B-SCHED2 edit contract) — replace media on a still-pending scheduled message.
+    val image: MessageImageDto? = null,
+    @Json(name = "file_path") val filePath: String? = null,
+    @Json(name = "video_id") val videoId: String? = null,
+    @Json(name = "free_images") val freeImages: List<GalleryImageDto>? = null,
+    @Json(name = "locked_images") val lockedImages: List<GalleryImageDto>? = null,
+)
+
+/**
+ * MessageEncryptionEnvelope — client-side encryption envelope (AES-256-GCM / PBKDF2-SHA256).
+ * salt_b64 must decode to exactly 16 bytes; iv_b64 to exactly 12 bytes; ciphertext_b64 must be
+ * >16 bytes (ciphertext + GCM tag). iterations 100000..2000000.
+ */
+@JsonClass(generateAdapter = true)
+data class MessageEncryptionEnvelopeDto(
+    val version: Int = 1,
+    val alg: String = "AES-256-GCM",
+    val kdf: String = "PBKDF2-SHA256",
+    val iterations: Int = 100000,
+    @Json(name = "salt_b64") val saltB64: String,
+    @Json(name = "iv_b64") val ivB64: String,
+    @Json(name = "ciphertext_b64") val ciphertextB64: String? = null,
 )
 
 /** POST read body = app__routers__messaging__MarkReadIn (both fields optional). */

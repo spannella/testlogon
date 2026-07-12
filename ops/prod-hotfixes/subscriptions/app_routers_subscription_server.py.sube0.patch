@@ -1,0 +1,332 @@
+diff --git a/app/routers/subscription_server.py b/app/routers/subscription_server.py
+index 3fcbc2a7..05d76b69 100644
+--- a/app/routers/subscription_server.py
++++ b/app/routers/subscription_server.py
+@@ -16,6 +16,8 @@ from app.core.tables import T
+ from app.core.time import now_ts
+ from app.routers.newsfeed import put_notification
+ from app.services.billing_shared import ddb_put as billing_put
++from app.services.billing_shared import ddb_get as billing_get
++from app.services.billing_shared import ddb_query_pk as billing_query_pk
+ from app.services.billing_shared import user_pk
+ from app.services.filemanager import get_node, norm_path
+ from app.services.alerts import audit_event
+@@ -313,6 +315,18 @@ def _normalize_external_subscription(item: Dict[str, Any], provider: str) -> Dic
+     }
+ 
+ 
++class PlanBenefit(BaseModel):
++    """SUB-E0: a structured tier perk descriptor (label + optional detail).
++
++    First-class, structured benefits beyond the free-form ``metadata`` blob so
++    the app can render a real perk list. ``label`` is the short perk name,
++    ``detail`` an optional longer description.
++    """
++
++    label: str = Field(..., min_length=1, max_length=200)
++    detail: Optional[str] = Field(default=None, max_length=1000)
++
++
+ class PlanCreateIn(BaseModel):
+     name: str = Field(..., min_length=2, max_length=128)
+     description: Optional[str] = Field(default=None, max_length=1000)
+@@ -322,6 +336,8 @@ class PlanCreateIn(BaseModel):
+     annual_price_cents: Optional[conint(gt=0)] = None
+     metadata: Dict[str, Any] = Field(default_factory=dict)
+     asset_paths: List[str] = Field(default_factory=list)
++    # SUB-E0: structured tier benefits/perks (list of {label, detail}).
++    benefits: conlist(PlanBenefit, max_length=50) = Field(default_factory=list)
+ 
+ 
+ class PlanUpdateIn(BaseModel):
+@@ -334,6 +350,8 @@ class PlanUpdateIn(BaseModel):
+     status: Optional[Literal["active", "archived"]] = None
+     metadata: Optional[Dict[str, Any]] = None
+     asset_paths: Optional[conlist(str, max_length=50)] = None
++    # SUB-E0: replace the plan's structured benefits/perks (None = leave unchanged).
++    benefits: Optional[conlist(PlanBenefit, max_length=50)] = None
+ 
+ 
+ class PlanOut(BaseModel):
+@@ -349,6 +367,8 @@ class PlanOut(BaseModel):
+     # optional-metadata fields; the list/get endpoints must not 500 on them.
+     status: str = "active"
+     metadata: Dict[str, Any] = Field(default_factory=dict)
++    # SUB-E0: structured tier benefits; older/seeded plans default to [].
++    benefits: List[Dict[str, Any]] = Field(default_factory=list)
+     assets: List[Dict[str, Any]] = Field(default_factory=list)
+     created_at: int = 0
+     updated_at: int = 0
+@@ -367,6 +387,13 @@ class SubscribeIn(BaseModel):
+     # and they do NOT stack.
+     promo_code: Optional[str] = None
+     trial_days: Optional[conint(ge=1, le=365)] = None
++    # SUB-E0: the payment method to charge (explicit). When omitted the
++    # subscriber's default_payment_method_id is used. A non-trial subscribe with
++    # no resolvable PM is rejected with HTTP 402 (no phantom subscription).
++    payment_method_id: Optional[str] = None
++    # SUB-E0: client-supplied idempotency key. A retry with the same value returns
++    # the already-created subscription and never double-charges/double-subscribes.
++    client_request_id: Optional[str] = Field(default=None, max_length=128)
+ 
+ 
+ class SubscriptionOut(BaseModel):
+@@ -384,6 +411,11 @@ class SubscriptionOut(BaseModel):
+     price_cents: int
+     currency: str
+     auto_renew: bool
++    # SUB-E0: authoritative next-charge timestamp (= current_period_end at create),
++    # consumed by the E1 renewal engine instead of a derived value.
++    next_billing_date: Optional[int] = None
++    payment_method_id: Optional[str] = None
++    payment_intent_id: Optional[str] = None
+     trial_start: Optional[int] = None
+     trial_end: Optional[int] = None
+     proration_policy: Optional[str] = None
+@@ -706,6 +738,142 @@ def _mirror_creator_credit_to_billing(
+         )
+ 
+ 
++# -----------------------------
++# SUB-E0 — real subscribe charge (funds-guarded stripe-mock rail, tips pattern)
++# -----------------------------
++
++def resolve_subscription_payment_method(subscriber_id: str, explicit_pm: Optional[str]) -> str:
++    """SUB-E0: resolve + validate the subscriber's PM for a subscribe charge.
++
++    Fallback chain: explicit -> the subscriber's general
++    ``default_payment_method_id`` (T.billing ``BILLING`` row). UNLIKE the tips
++    resolver (which tolerates a blank PM in dev_mode), a subscription REQUIRES a
++    real, owned PM: a missing/unowned PM raises HTTP 402 so a no-card subscribe is
++    rejected and writes NOTHING (no phantom subscription/credit).
++    """
++    pm = explicit_pm
++    if not pm:
++        billing = billing_get(T.billing, user_pk(subscriber_id), "BILLING") or {}
++        pm = billing.get("default_payment_method_id")
++    if not pm:
++        raise HTTPException(
++            status_code=402,
++            detail={"code": "no_payment_method", "message": "No payment method on file to subscribe."},
++        )
++    items = billing_query_pk(T.billing, user_pk(subscriber_id))
++    pm_ids = {
++        it["payment_method_id"]
++        for it in items
++        if it.get("sk", "").startswith("PM#") and "payment_method_id" in it
++    }
++    if pm not in pm_ids:
++        raise HTTPException(
++            status_code=402,
++            detail={"code": "no_payment_method", "message": "Payment method not found."},
++        )
++    return pm
++
++
++def _charge_subscription_payment_intent(
++    *,
++    subscriber_id: str,
++    amount_cents: int,
++    currency: str,
++    payment_method_id: str,
++    plan_id: str,
++    subscription_id: str,
++    idempotency_key: str,
++) -> Optional[str]:
++    """SUB-E0: real stripe-mock charge for a subscribe, mirroring
++    tips._charge_tip_payment_intent (off_session=True, confirm=True, idempotency_key).
++
++    Returns the PaymentIntent id on success, or None ONLY for the dev stub path
++    (Stripe not configured). On a declined card / Stripe error / non-succeeded
++    terminal status this raises HTTPException(402) so the CALLER writes NOTHING
++    (no subscription, no invoice, no creator credit). The charge idempotency_key is
++    threaded into the PaymentIntent so a retry never double-charges the processor.
++    """
++    if not getattr(S, "stripe_secret_key", "") or not payment_method_id:
++        return None
++
++    from app.routers.billing import ensure_stripe_configured, get_or_create_customer
++    import stripe
++
++    ensure_stripe_configured()
++    customer_id = get_or_create_customer(subscriber_id)
++    try:
++        pi = stripe.PaymentIntent.create(
++            amount=int(amount_cents),
++            currency=(currency or "usd").lower(),
++            customer=customer_id,
++            payment_method=payment_method_id,
++            off_session=True,
++            confirm=True,
++            description=f"Subscription {plan_id}",
++            metadata={
++                "app_user_id": subscriber_id,
++                "purpose": "subscription",
++                "plan_id": plan_id,
++                "subscription_id": subscription_id,
++            },
++            idempotency_key=(idempotency_key or None),
++        )
++    except stripe.error.CardError as exc:
++        logger.info("subscription charge declined for subscriber=%s: %s", subscriber_id, exc)
++        raise HTTPException(402, {"code": "payment_failed", "message": str(exc)})
++    except stripe.error.StripeError as exc:
++        logger.warning("subscription charge stripe error for subscriber=%s: %s", subscriber_id, exc)
++        raise HTTPException(402, {"code": "payment_failed", "message": "Subscription charge failed at the payment processor."})
++
++    status = (pi.get("status") or "").lower()
++    charged_ok = status == "succeeded" or (
++        bool(getattr(S, "stripe_api_base", "")) and status not in ("canceled", "payment_failed")
++    )
++    if not charged_ok:
++        raise HTTPException(
++            402,
++            {"code": "payment_failed", "message": f"Subscription charge did not succeed (status={status})."},
++        )
++    return pi.get("id")
++
++
++def _sub_idem_sk(idempotency_key: str) -> str:
++    return f"SUBIDEMP#{idempotency_key}"
++
++
++def _load_subscribe_idem(subscriber_id: str, idempotency_key: str) -> Optional[str]:
++    """Return the subscription_id previously created for this idempotency key."""
++    if not idempotency_key:
++        return None
++    try:
++        row = billing_get(T.billing, user_pk(subscriber_id), _sub_idem_sk(idempotency_key))
++    except Exception:
++        logger.warning("subscribe idempotency read failed", exc_info=True)
++        return None
++    if not row:
++        return None
++    return row.get("subscription_id")
++
++
++def _store_subscribe_idem(subscriber_id: str, idempotency_key: str, subscription_id: str) -> None:
++    """Persist the idempotency marker (best-effort, conditional attribute_not_exists)."""
++    if not idempotency_key:
++        return
++    try:
++        billing_put(
++            T.billing,
++            {
++                "pk": user_pk(subscriber_id),
++                "sk": _sub_idem_sk(idempotency_key),
++                "subscription_id": subscription_id,
++                "ts": now_ts(),
++            },
++            condition_expression="attribute_not_exists(sk)",
++        )
++    except Exception:
++        logger.warning("subscribe idempotency store skipped", exc_info=True)
++
++
+ def _calendar_meta(calendar_id: str) -> Optional[Dict[str, Any]]:
+     return T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": "meta"}).get("Item")
+ 
+@@ -847,6 +1015,7 @@ async def create_plan(
+         "annual_price_cents": int(body.annual_price_cents) if body.annual_price_cents else None,
+         "status": "active",
+         "metadata": body.metadata,
++        "benefits": [b.model_dump() for b in body.benefits],
+         "assets": assets,
+         "created_at": ts,
+         "updated_at": ts,
+@@ -894,6 +1063,8 @@ async def update_plan(
+             updated[field] = value
+     if body.annual_price_cents is not None:
+         updated["annual_price_cents"] = int(body.annual_price_cents)
++    if body.benefits is not None:
++        updated["benefits"] = [b.model_dump() for b in body.benefits]
+     if body.asset_paths is not None:
+         asset_paths = normalize_asset_paths(list(body.asset_paths))
+         updated["assets"] = resolve_plan_assets(plan["creator_id"], asset_paths) if asset_paths else []
+@@ -952,6 +1123,16 @@ async def subscribe(
+     if plan["creator_id"] == subscriber_id:
+         raise HTTPException(status_code=400, detail="Creator cannot subscribe to their own plan")
+ 
++    # SUB-E0: idempotent replay — a retry with the same client_request_id returns
++    # the already-created subscription (no second charge, no second record).
++    idempotency_key = (body.client_request_id or "").strip()
++    if idempotency_key:
++        prior_sub_id = _load_subscribe_idem(subscriber_id, idempotency_key)
++        if prior_sub_id:
++            prior = ddb_get_item(pk_subscription(prior_sub_id), "META")
++            if prior:
++                return attach_subscription_profiles(normalize_subscription(prior))
++
+     ts = now_ts()
+     subscription_id = new_id("sub")
+     provider_subscription_id = new_id("stub_sub")
+@@ -1012,17 +1193,43 @@ async def subscribe(
+         trial_end = ts + int(body.trial_days) * 86400
+         period_end = trial_end
+         status = "trialing"
++
++    # SUB-E0: REAL, funds-guarded charge BEFORE writing any record. A charging
++    # (non-trial, price > 0) subscribe resolves the subscriber's PM (explicit ->
++    # default) and runs a stripe-mock PaymentIntent (the tips rail). A no-PM /
++    # declined charge raises 402 HERE, so NOTHING is written — no subscription,
++    # no invoice, no creator credit (no phantom revenue). Trials and fully
++    # discounted ($0) subscribes collect no funds now and skip the charge.
++    payment_method_id: Optional[str] = None
++    payment_intent_id: Optional[str] = None
++    charging = status != "trialing" and int(price_cents) > 0
++    if charging:
++        payment_method_id = resolve_subscription_payment_method(subscriber_id, body.payment_method_id)
++        payment_intent_id = _charge_subscription_payment_intent(
++            subscriber_id=subscriber_id,
++            amount_cents=int(price_cents),
++            currency=plan["currency"],
++            payment_method_id=payment_method_id,
++            plan_id=plan_id,
++            subscription_id=subscription_id,
++            idempotency_key=(idempotency_key or f"{subscription_id}:{ts}"),
++        )
++
+     sub = {
+         "subscription_id": subscription_id,
+         "plan_id": plan_id,
+         "creator_id": plan["creator_id"],
+         "subscriber_id": subscriber_id,
+         "interval": interval,
+-        "provider": "stub",
++        "provider": "stripe" if payment_intent_id else "stub",
+         "provider_subscription_id": provider_subscription_id,
+         "status": status,
+         "start_at": ts,
+         "current_period_end": period_end,
++        # SUB-E0: authoritative next-charge timestamp for the E1 renewal engine.
++        "next_billing_date": period_end,
++        "payment_method_id": payment_method_id,
++        "payment_intent_id": payment_intent_id,
+         "cancel_at_period_end": False,
+         "price_cents": price_cents,
+         "currency": plan["currency"],
+@@ -1053,7 +1260,11 @@ async def subscribe(
+             "invoice_id": invoice_id,
+             "subscription_id": subscription_id,
+             "subscriber_id": subscriber_id,
+-            "provider_invoice_id": new_id("stub_inv"),
++            # SUB-E0: real PaymentIntent id on a charged subscribe (not a stub id).
++            "provider": "stripe" if payment_intent_id else "stub",
++            "provider_invoice_id": payment_intent_id or new_id("stub_inv"),
++            "payment_intent_id": payment_intent_id,
++            "payment_method_id": payment_method_id,
+             "amount_cents": int(sub["price_cents"]),
+             "currency": plan["currency"],
+             "status": "paid",
+@@ -1110,6 +1321,11 @@ async def subscribe(
+             invoice_id=invoice_id,
+         )
+ 
++    # SUB-E0: persist the idempotency marker AFTER a successful charge + record
++    # write, so a retry with the same client_request_id short-circuits to the
++    # already-created subscription (no double charge / double subscribe).
++    _store_subscribe_idem(subscriber_id, idempotency_key, subscription_id)
++
+     # GAP-0342: record the promo redemption AFTER the subscription is
+     # committed (and any charge has settled above). redeem_promo_code does an
+     # atomic conditional current_uses increment — if the code was exhausted

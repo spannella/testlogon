@@ -70,6 +70,14 @@ interface BillingApi {
     @DELETE("ui/billing/payment-methods/{payment_method_id}")
     suspend fun deletePaymentMethod(@Path("payment_method_id") paymentMethodId: String): OkRespDto
 
+    /** TIP-102 - the per-user tip-default payment method (distinct from the general default). */
+    @GET("ui/billing/payment-methods/tip-default")
+    suspend fun getTipDefault(): TipDefaultDto
+
+    /** TIP-102/104 - set the tip-default PM (same body shape as set-default). Returns OkResp. */
+    @POST("ui/billing/payment-methods/tip-default")
+    suspend fun setTipDefault(@Body body: SetDefaultReqDto): OkRespDto
+
     @POST("ui/billing/checkout_session")
     suspend fun createCheckoutSession(@Body body: CheckoutSessionRequestDto): CheckoutSessionDto
 
@@ -80,6 +88,23 @@ interface BillingApi {
      */
     @POST("ui/billing/setup-intent/card")
     suspend fun createCardSetupIntent(): SetupIntentDto
+
+    /**
+     * DEV/TEST add-card (BK-C backend hotfix). Mirrors the web client's "type a fake test card"
+     * flow: posts the raw test card number/exp/cvc directly (NO Stripe.js / on-device tokenization),
+     * the backend creates the PaymentMethod against the prod stripe-mock. Returns the created method.
+     * Works in DEV_MODE; card-add also works against a real provider. Auth = ui session cookie.
+     */
+    @POST("ui/billing/payment-methods/card")
+    suspend fun addCard(@Body body: AddCardReqDto): AddPaymentMethodResultDto
+
+    /**
+     * DEV/TEST add-bank (BK-C backend hotfix). Adds a FAKE US bank checking/savings account directly
+     * from routing + account numbers (NO Stripe Financial Connections). DEV_MODE only — the backend
+     * 400s in real production (use the hosted bank flow there). Returns the created method.
+     */
+    @POST("ui/billing/payment-methods/us-bank")
+    suspend fun addBank(@Body body: AddBankReqDto): AddPaymentMethodResultDto
 
     companion object {
         const val DEFAULT_LIMIT = 50
@@ -189,6 +214,12 @@ data class SetDefaultReqDto(
     @Json(name = "payment_method_id") val paymentMethodId: String,
 )
 
+/** TIP-102 - GET tip-default response: the tip-default PM id (null when unset). */
+@JsonClass(generateAdapter = true)
+data class TipDefaultDto(
+    @Json(name = "tip_default_payment_method_id") val tipDefaultPaymentMethodId: String? = null,
+)
+
 /** OkResp (types.ts L2840). Generic mutation envelope. */
 @JsonClass(generateAdapter = true)
 data class OkRespDto(
@@ -199,4 +230,45 @@ data class OkRespDto(
 @JsonClass(generateAdapter = true)
 data class SetupIntentDto(
     @Json(name = "client_secret") val clientSecret: String,
+)
+
+/**
+ * BK-C add-card request. Plain test-card fields (e.g. 4242 4242 4242 4242). Sent ONLY in dev/test —
+ * mirrors the web client's manual card entry. No real PAN should ever be typed here.
+ */
+@JsonClass(generateAdapter = true)
+data class AddCardReqDto(
+    @Json(name = "card_number") val cardNumber: String,
+    @Json(name = "exp_month") val expMonth: Int,
+    @Json(name = "exp_year") val expYear: Int,
+    @Json(name = "cvc") val cvc: String,
+    @Json(name = "cardholder_name") val cardholderName: String? = null,
+)
+
+/**
+ * BK-C add-bank request. Routing (9 digits) + account number (4-17 digits) for a FAKE US bank account.
+ * account_holder_type: "individual"|"company"; account_type: "checking"|"savings".
+ */
+@JsonClass(generateAdapter = true)
+data class AddBankReqDto(
+    @Json(name = "routing_number") val routingNumber: String,
+    @Json(name = "account_number") val accountNumber: String,
+    @Json(name = "account_holder_type") val accountHolderType: String = "individual",
+    @Json(name = "account_type") val accountType: String = "checking",
+    @Json(name = "account_holder_name") val accountHolderName: String? = null,
+)
+
+/**
+ * BK-C add-card / add-bank response. The endpoints return the newly created method (a subset of the
+ * list DTO's fields); only `payment_method_id` is needed to confirm success — the screen re-fetches
+ * the authoritative list afterward. All other fields are optional/defensive.
+ */
+@JsonClass(generateAdapter = true)
+data class AddPaymentMethodResultDto(
+    @Json(name = "payment_method_id") val paymentMethodId: String,
+    @Json(name = "method_type") val methodType: String? = null,
+    @Json(name = "brand") val brand: String? = null,
+    @Json(name = "bank_name") val bankName: String? = null,
+    @Json(name = "last4") val last4: String? = null,
+    @Json(name = "label") val label: String? = null,
 )

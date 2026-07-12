@@ -21,9 +21,14 @@ import com.testlogon.android.feature.settings.appearance.AppearanceSettingsRoute
 import com.testlogon.android.feature.settings.hub.SettingsHubRoute
 import com.testlogon.android.feature.settings.language.LanguagePickerRoute
 import com.testlogon.android.feature.settings.media.MediaPreferencesRoute
+import com.testlogon.android.feature.settings.callrate.CallRateRoute
+import com.testlogon.android.feature.settings.msgprivacy.MessagePrivacyRoute
+import com.testlogon.android.feature.settings.emojis.CustomEmojiRoute
+import com.testlogon.android.feature.settings.geo.GeoSettingsRoute
 import com.testlogon.android.feature.settings.misc.PrivacySettingsScreen
 import com.testlogon.android.feature.settings.misc.SecuritySettingsScreen
 import com.testlogon.android.feature.settings.notifications.NotificationPreferencesRoute
+import com.testlogon.android.feature.settings.pushevents.PushEventPrefsRoute
 import com.testlogon.android.feature.shell.AuthedShellScreen
 
 /**
@@ -49,7 +54,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
                     navController.navigate(MainDest.EditProfile.route) { launchSingleTop = true }
                 },
                 onOpenRoute = { route ->
-                    navController.navigate(route) { launchSingleTop = true }
+                    // Guard: a few hub routes may not be registered as destinations yet; ignore those
+                    // (no-op) rather than crashing the app on a missing navigation target.
+                    runCatching { navController.navigate(route) { launchSingleTop = true } }
                 },
             )
         }
@@ -114,6 +121,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // with cancel/refund while active. Route reachable via navigateToBoost(postId); deeper post-detail /
         // composer-success CTA wiring is FLAGGED (see BoostNavigation) to avoid regressing those screens.
         boostDestination(navController)
+        // Web-parity boost MANAGEMENT: list (/ads/boost) + detail-by-boostId (/ads/boost/:boostId),
+        // reusing the existing boost network client + repository (no new network code).
+        boostManageDestinations(navController)
         // AND-367: ads-account billing read view (balance / lifetime-spend summary + billing-history ledger
         // + monthly invoice) + the DEPOSIT (add-funds) sheet. First MUTATING ads feature. Route reachable via
         // navigateToAdsBilling(accountId); the More-hub uses a sample account id (no ads-accounts list yet).
@@ -122,6 +132,23 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // selectable date range). Route reachable via navigateToAdAnalytics(accountId); the More-hub uses a
         // sample account id (no ads-accounts list yet).
         adAnalyticsDestination(navController)
+        // AND-369: READ-ONLY ads-campaigns list (ads-campaigns/{accountId}) - the account's campaigns
+        // (name/status/budget/spend). Route reachable via navigateToAdsCampaigns(accountId); the More-hub
+        // uses a sample account id (no ads-accounts list yet).
+        adsCampaignsDestination(navController)
+        // ADV-107/108/109: advertiser CREATE flow (create ad account -> create campaign -> create
+        // creative + asset upload -> submit-for-review). Real account/campaign pickers feed the studio
+        // editors via AdsStudioSelection (replacing the first-of-first auto-resolve).
+        adsCreateDestinations(navController)
+        // Web-parity ads STUDIO editors (targeting / scheduling / optimization). Each VM self-resolves
+        // the caller's first ad account then first campaign (no campaign-picker nav yet); routes reachable
+        // via navigateToAdTargeting / navigateToAdScheduling / navigateToAdOptimization.
+        adTargetingDestination(navController)
+        adSchedulingDestination(navController)
+        adOptimizationDestination(navController)
+        // Web-parity CONTENT AD-CONTROLS (per-content overrides + revenue share + ad-revenue
+        // transparency/breakdown). Caller-scoped; no nav arg.
+        contentAdControlsDestination(navController)
         // AND-400: READ-ONLY public SEO metadata inspector (seo/{resourceType}/{id}). Diagnostic preview
         // of the title / og / twitter / json-ld a crawler sees. Route reachable via navigateToSeo(type, id);
         // the More-hub uses a sample profile resource (no per-resource detail wiring this wave).
@@ -136,6 +163,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         vodCatalogDestination(navController)
         // AND-190: video detail + reusable player (shared by library, VOD, and discover recs).
         videoDetailDestination(navController)
+        // ADV-202: video pre-roll (AVOD) player - plays a live pre-roll ad before the gated video.
+        adSupportedPlayerDestination(navController)
         // AND-196: clips vertical pager (gallery feed) + public single-clip viewer (deep link).
         clipsFeedDestination(navController)
         publicClipDestination(navController)
@@ -143,6 +172,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         storyViewerDestination(navController)
         // AND-201: published video gallery browse grid (tiles open the shared video detail route).
         galleryDestination(navController)
+        // Newsfeed post compose (create a post).
+        composePostDestination(navController)
+        myPostsDestination(navController)
+        // VOD upload (publish a video).
+        videoUploadDestination(navController)
         // AND-332: read-only file-manager browse (path nav + breadcrumbs + search + sort + paged listing).
         filesDestination(navController)
         // AND-336: backend-mediated Google Drive import picker (authenticated-only).
@@ -166,6 +200,14 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         productDetailDestination(navController)
         // AND-207: catalog full-text search (rows open the product detail route).
         catalogSearchDestination(navController)
+        // ECOM: wishlist / favourites (SHOP hub) — saved catalog items tap through to product detail.
+        wishlistDestination(navController)
+        sellerStoreDestination(navController)
+        listingEditorDestination(navController)
+        sellerOrdersDestination(navController)
+        sellerSalesDestination(navController)
+        // D4 - buyer order shipment-tracking (reached from buyer shipment alerts).
+        orderTrackingDestination(navController)
         // AND-211/AND-212: shopping cart (line items, qty edit, remove, in-cart search).
         cartDestination(navController)
         // AND-213: checkout session / order review (reached from the cart "Proceed to checkout").
@@ -176,8 +218,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         trackingDestination(navController)
         // AND-219: purchase history list + search (rows open the AND-220 order detail).
         purchaseHistoryDestination(navController)
+        vodRentalsDestination(navController)
         // AND-224/AND-226: saved payment-methods management + add-card (FLAGGED stub card-entry seam).
         billingDestinations(navController)
+        // PW18: Wallet transactions (ledger) history (BK3 GET /ui/billing/ledger + /ui/billing/wallet).
+        walletTransactionsDestination(navController)
         // AND-227/228/229/230: redirect checkout (hosted/PayPal/CCBill via Custom Tabs, gated by the
         // BillingAuthorizer stub) + US-bank micro-deposit verification.
         paymentsDestinations(navController)
@@ -187,6 +232,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         subscribeDestination(navController)
         // AND-237: manage / cancel subscription (status/renewal + cancel-at-period-end + resume/renew).
         manageSubscriptionDestination(navController)
+        // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
+        creatorSubscribersDestination(navController)
+        // SUB-E2: gift a creator subscription to another user (gifter pays one no-renew cycle).
+        giftSubscriptionDestination(navController)
         // AND-238/239/240: fan-club channels list (tier-grouped) + channel messages + tier members.
         fanClubDestinations(navController)
         // AND-243: invoices list (paged) + invoice detail (line items/totals + email + view-PDF).
@@ -203,6 +252,48 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         billingConfigDestination(navController)
         // AND-403: read-only admin alerts/dashboards (client-aggregated job + webhook health; 403 self-gate).
         adminDashboardDestination(navController)
+        // B5 admin queues (moderation board + video review + DMCA claims).
+        moderationBoardDestinations(navController)
+        videoReviewDestination(navController)
+        dmcaAdminDestination(navController)
+        // B5 admin financial-ops queues (refunds + disputes + appeals + fraud + payment incidents).
+        refundAdminDestination(navController)
+        disputeAdminDestination(navController)
+        appealAdminDestination(navController)
+        fraudAdminDestination(navController)
+        incidentAdminDestination(navController)
+        // Web-parity KYC-admin review queues (A1..A8): case queue + document/residency/proof-of-funds/
+        // liveness-call/screening/id-scanner/business review. All admin-gated (backend 403 -> Forbidden).
+        kycCaseAdminDestination(navController)
+        kycReviewDestinations(navController)
+        // Web-parity KYC-admin DASHBOARDS + CONFIG (B2..B9): workload / metrics / analytics /
+        // monitoring / address-verification / compliance reports / templates (CRUD) / translations (CRUD).
+        kycAdminDashboardDestinations(navController)
+        // Web-parity admin ADS surfaces: creative-review queue + ad-fraud dashboard + ad-platform console
+        // (all require_admin_or_root reads/actions; ad-platform's kill-switch toggle is root-only). Each
+        // self-gates via the backend 403. Mirror /admin/ads/creatives/review, /admin/ads/fraud, /admin/ad-platform.
+        adCreativeReviewDestination(navController)
+        adFraudDestination(navController)
+        adPlatformDestination(navController)
+        // Web-parity admin 1099 MANAGER (year list + generate/correct/batch; require_admin_or_root).
+        // Distinct from the user-facing own-1099 view. Mirror /admin/tax-forms-1099.
+        adminTaxFormDestination(navController)
+        // Web-parity admin bulk-payout PROMOTE console (eligible -> preview -> EXECUTE; require_admin_or_root).
+        // EXECUTE moves real funds - gated behind a confirm dialog. Mirror the write half of /admin/bulk-payouts.
+        bulkPayoutPromoteDestination(navController)
+        // B6 web-parity: admin-ops read dashboards (financials + payment-health + risk + compute + jobs;
+        // rate-limits + audit-exports are root-gated -> render Forbidden for our admin account). Mirror /admin/*.
+        adminOpsDestinations(navController)
+        // B7 web-parity: CLOUD-INFRA management surfaces (ec2 / k8s / security-groups / hosts /
+        // monitoring / compute-billing). Owner-scoped require_ui_session; 403 -> Forbidden.
+        cloudInfraDestinations(navController)
+        // B7 web-parity: REMOTE-ACCESS surfaces (ssh-keys / recordings / bastion /
+        // connection-profiles / templates / remote-desktop). Owner-scoped require_ui_session; 403 ->
+        // Forbidden. remote-desktop live viewer is an honest open-on-desktop state (RFB is not mobile).
+        remoteAccessDestinations(navController)
+        // Web-parity ROOT/ADMIN governance: tenants + SSO + role-mgmt (root-gated -> Forbidden for
+        // admin) + subscription-tier MANAGER (admin-drivable). Each self-gates via the backend 403.
+        adminRootDestinations(navController)
         // AND-404: read-only admin email/SMS delivery dashboards (per-channel stats + recent activity; 403
         // self-gate). One generic VM; channel via nav arg.
         messagingDashboardDestinations(navController)
@@ -218,6 +309,29 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         payoutsDestinations(navController)
         // AND-264: referrals dashboard (code/link + stats + share/copy + create-code CTA).
         referralsDestination(navController)
+        // Alerts (system notifications) inbox.
+        alertsDestination(navController)
+        // MOD-D2: poster "My content under review" (moderation cases + respond/close).
+        moderationReviewDestination(navController)
+        // Account-action appeals.
+        appealsDestination(navController)
+        ideasDestination(navController)
+        licensesDestination(navController)
+        agentConfigDestinations(navController)
+        // AGENTS-BASICS web-parity: workers (list/detail/create) + LLM keys + fleet + agent-types picker.
+        agentsBasicsDestinations(navController)
+        // B4 web-parity: Stylist / UI-design agent (overview + rules + review detail).
+        stylistDestinations(navController)
+        // B4 web-parity: Marketing content agent (dashboard + editor + calendar + engagement).
+        marketingDestinations(navController)
+        // B4 web-parity: Accountant/cost agent (overview + breakdown + budgets + alerts).
+        costsDestinations(navController)
+        // B4 web-parity: Compliance/Security agent (findings + audits + compliance + trends).
+        complianceDestinations(navController)
+        // B4 web-parity: PM feature-idea triage (pending/approved/rejected/archived).
+        pmIdeasDestinations(navController)
+        watchPartiesDestinations(navController)
+        botsDestinations(navController)
         // AND-265: affiliates dashboard (client-aggregated earnings + reusable chart + links list).
         affiliatesDestination(navController)
         // AND-266: promo codes (list + create via plain CRUD; deactivate; usage/expiry/discount).
@@ -240,6 +354,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         guestAcceptDestination(navController)
         // AND-320: KYC tier status (current tier + target requirements checklist + Evaluate action).
         kycTierDestination(navController)
+        // Batch-9 (#18): guided KYC verification wizard (email -> phone -> ID -> done) replacing the
+        // confusing fragmented flow. Reached from the Tier-status "Begin verification" CTA.
+        kycWizardDestination(navController)
         // AND-321: KYC identity-document capture+upload (system camera / photo picker + inline base64 POST).
         kycDocumentCaptureDestination(navController)
         // AND-322: KYC guided ID capture+scan (validate-document + per-side upload + scan-document).
@@ -272,6 +389,16 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-356: READ-ONLY syndicate overview (Feed / Treasury / Revenue-split tabs over /ui/syndicates/*).
         // Single screen keyed by {syndicateId}; write actions + open-licensing are downstream / OUT OF SCOPE.
         syndicateDestinations(navController)
+        // ADV2-709/710/711 (F7): SYNDICATE-ADS management — a syndicate admin creates/funds a
+        // syndicate-owned ad account + campaign/creative (reusing the ads create flow via
+        // AdsStudioSelection) and edits the per-syndicate placement split (member_share_bps).
+        syndicateAdsDestinations(navController)
+        // Web-parity: My Bundles (the caller's active syndicate bundle subscriptions + per-bundle cancel)
+        // over GET /ui/syndicates/my-bundles + the subscription cancel endpoint.
+        myBundlesDestinations(navController)
+        // Web-parity: syndicate-advertising campaign DETAIL (KPI + daily analytics + creative + budget; admin
+        // pause/resume/cancel + add-budget) over /ui/syndicates/advertising/{sid}/campaigns/{cid}*.
+        campaignDetailDestinations(navController)
         // AND-358: READ-ONLY collaborations (Paging-3 list -> detail with the two parties + status + the
         // revenue split over /ui/collaborations/*). Write actions are OUT OF SCOPE.
         collaborationsDestinations(navController)
@@ -279,13 +406,35 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // filter over /ui/ads/sponsorships) + a thin deal-detail placeholder. Accept / reject / negotiate
         // live in the detail (AND-366) and are OUT OF SCOPE.
         sponsorshipDestinations(navController)
+        // ADV2-E4 (F4) / ADV2-407..409: sponsored-as-creator (paid partnership) — the advertiser COMPOSER
+        // (draft + propose a post to a creator) + the creator APPROVAL QUEUE (approve publishes a normal
+        // creator post carrying the DISTINCT paid_partnership flag / reject). Distinct from the ADS-013
+        // brand-deal sponsorship inbox above.
+        sponsoredPostDestinations(navController)
+        // ADV2-E5 (F5+F6): ad-messaging — the advertiser sponsored-message COMPOSER + the creator
+        // APPROVAL QUEUE (approve SENDS as the creator) + the advertiser direct mass-DM composer.
+        adMessagingDestinations(navController)
         // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> a space's ticket
         // list (Paging-3 over the AND-371 next_cursor) -> a ticket thread (embedded messages, mine-vs-other).
         // Composing / replying / member or status edits are AND-373 and OUT OF SCOPE.
         ticketsDestinations(navController)
+        // B-SUP (batch 7): role-branched Support. The landing resolves /ui/me.is_admin and renders the
+        // USER help experience (create + view my tickets) or the ADMIN helpdesk/moderation queue, then
+        // drills into a shared ticket thread (isAdmin nav arg gates the admin status/assign controls).
+        supportDestinations(navController)
         // AND-398: WEBHOOKS config (light). List of outbound webhook endpoints -> detail -> a LIGHT create
         // (url + event_types only). Update / delete / rotate / deliveries are FR-6 out-of-scope.
         webhooksDestinations(navController)
+        // B-APIKEY (batch 7): developer API-keys management. List (label/prefix/created+expiry/scopes) with a
+        // per-row revoke -> a create that shows the one-time secret exactly once. Backed by /ui/api_keys.
+        apiKeysDestinations(navController)
+        // Web-parity: questionnaire BUILDER (creator authoring). Drafts list -> create -> per-draft
+        // editor (sections + 9 question types + publish) over /questionnaires/drafts*.
+        questionnaireBuilderDestinations(navController)
+        // Web-parity: delegation-API keys (/delegation-api) - the DELEGATED-access keys (a tool acting on a
+        // creator's behalf), distinct from the personal developer keys above. Two tabs (My Keys / Keys For
+        // My Account) + create-shown-once over /ui/delegation-api/*.
+        delegationKeysDestinations(navController)
         // AND-374: projects (paged list -> detail with the account-scoped Google Drive provider connect flow,
         // server-mediated OAuth via a Custom Tab + a testlogon://projects/.../callback return deep link).
         projectsDestinations(navController)
@@ -356,6 +505,10 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
     composable(MainDest.SettingsNotifications.route) {
         NotificationPreferencesRoute(onBack = { navController.popBackStack() })
     }
+    // D2 - per-event PUSH preference toggles (opt-in/opt-out transactional events).
+    composable(MainDest.SettingsPushEvents.route) {
+        PushEventPrefsRoute(onBack = { navController.popBackStack() })
+    }
     // AND-088: alert preferences — email/SMS alert target management. Links to the AND-080
     // type-preferences screen rather than duplicating the alert event-type matrix.
     composable(MainDest.SettingsAlerts.route) {
@@ -368,6 +521,18 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
     }
     composable(MainDest.SettingsMedia.route) {
         MediaPreferencesRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsEmojis.route) {
+        CustomEmojiRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsGeo.route) {
+        GeoSettingsRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsCallRate.route) {
+        CallRateRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsMessagePrivacy.route) {
+        MessagePrivacyRoute(onBack = { navController.popBackStack() })
     }
     composable(MainDest.SettingsAppearance.route) {
         AppearanceSettingsRoute(onBack = { navController.popBackStack() })
@@ -401,6 +566,8 @@ internal fun NavHostController.navigateToNotificationTarget(target: Notification
             navigate(MainDest.ActiveSessions.route) { launchSingleTop = true }
         NotificationTarget.Settings ->
             navigate(MainDest.Settings.route) { launchSingleTop = true }
+        NotificationTarget.ModerationReview ->
+            navigate(ModerationReviewDest.ROUTE) { launchSingleTop = true }
         NotificationTarget.Unknown ->
             // No first-party detail route yet for this kind — land on the Notification Center so a
             // push tap is never a dead end (AND-108 §13 R1; swap to a per-entity route on merge).

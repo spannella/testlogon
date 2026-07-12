@@ -20,6 +20,7 @@ fun NavGraphBuilder.galleryDestination(navController: NavHostController) {
             onItemClick = { videoId ->
                 navController.navigate(VideoDetailDest.build(videoId)) { launchSingleTop = true }
             },
+            onUploadVideo = { navController.navigate(VideoUploadDest.ROUTE) { launchSingleTop = true } },
             onBack = { navController.popBackStack() },
         )
     }

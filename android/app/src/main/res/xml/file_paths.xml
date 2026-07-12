@@ -19,4 +19,9 @@
     <cache-path
         name="questionnaire-pdf"
         path="questionnaire-pdf/" />
+    <!-- #6 (file-manager preview): downloaded files (e.g. PDFs) handed to an external viewer via
+         ACTION_VIEW with a transient content:// read grant. Scoped to cacheDir/fs-downloads/. -->
+    <cache-path
+        name="fs-downloads"
+        path="fs-downloads/" />
 </paths>

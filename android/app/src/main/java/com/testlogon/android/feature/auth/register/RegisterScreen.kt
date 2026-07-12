@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -168,10 +169,11 @@ fun RegisterScreen(
                 label = "Password",
                 enabled = !state.isSubmitting,
                 errorText = state.passwordError?.let(::fieldErrorText),
-                helperText = "12–128 chars with upper, lower, number and symbol.",
                 imeAction = ImeAction.Next,
                 modifier = Modifier.testTag("register_password"),
             )
+
+            PasswordRequirements(password = state.password)
 
             TlPasswordField(
                 value = state.confirm,
@@ -258,6 +260,28 @@ private fun MfaToggleRow(
             enabled = enabled,
             modifier = Modifier.testTag(testTag),
         )
+    }
+}
+
+/** Live password-requirements checklist (web parity): each rule turns green as it is satisfied. */
+@Composable
+private fun PasswordRequirements(password: String) {
+    val ok = Color(0xFF2E7D32)
+    val rules = listOf(
+        "At least 12 characters" to (password.length in 12..128),
+        "A lowercase letter" to password.any { it.isLowerCase() },
+        "An uppercase letter" to password.any { it.isUpperCase() },
+        "A number" to password.any { it.isDigit() },
+        "A special character" to password.any { !it.isLetterOrDigit() && !it.isWhitespace() },
+    )
+    Column(modifier = Modifier.fillMaxWidth().testTag("register_password_rules")) {
+        rules.forEach { (label, met) ->
+            val color = if (met) ok else MaterialTheme.colorScheme.onSurfaceVariant
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 1.dp)) {
+                Text(text = if (met) "✓" else "○", color = color, style = MaterialTheme.typography.bodySmall)
+                Text(text = label, color = color, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 8.dp))
+            }
+        }
     }
 }
 

@@ -10,15 +10,16 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
- * AND-281 — dedicated Retrofit interface for the broadcast live-chat mutations + history seed.
+ * AND-281 / BCAST-016 — dedicated Retrofit interface for broadcast live-chat mutations + history seed.
  *
- * VERIFIED against reference/openapi.index.txt + src/api/endpoints/broadcast-chat.ts:
+ * VERIFIED against the LIVE prod OpenAPI (BroadcastChatSendIn / BroadcastChatMessageOut):
  *  - GET  broadcast/sessions/{id}/chat?limit=&before=   -> BroadcastChatHistoryOut
  *  - POST broadcast/sessions/{id}/chat (BroadcastChatSendIn) -> 201 BroadcastChatMessageOut
- *  - POST broadcast/sessions/{id}/chat/{messageId}/react (BroadcastChatReactIn) -> { ok, reactions_counts }
+ *  - POST broadcast/sessions/{id}/chat/{messageId}/react  (BroadcastChatReactIn)  -> { ok, reactions_counts }
+ *  - POST broadcast/sessions/{id}/chat/{messageId}/unlock (BroadcastChatUnlockIn) -> revealed message
+ *  - POST broadcast/sessions/{id}/chat/{messageId}/view   (no body) -> ok (consumes a view-once)
  *
- * The SSE stream (GET .../chat/stream) is NOT a Retrofit call — it is consumed by [SseBroadcastChatStream].
- * There is NO room-level reaction endpoint and NO client_id on the send body. This is a DEDICATED chat
+ * The SSE stream (GET .../chat/stream) is consumed by [SseBroadcastChatStream]. This is a DEDICATED chat
  * API distinct from MessagingApi (the messaging FakeApi is untouched).
  */
 interface BroadcastChatApi {
@@ -42,6 +43,21 @@ interface BroadcastChatApi {
         @Path("messageId") messageId: String,
         @Body body: ReactionDto,
     ): Response<ReactResultDto>
+
+    /** BCAST-016 — pay-to-reveal a locked/PPV chat message; returns the revealed message. */
+    @POST("broadcast/sessions/{id}/chat/{messageId}/unlock")
+    suspend fun unlock(
+        @Path("id") sessionId: String,
+        @Path("messageId") messageId: String,
+        @Body body: UnlockChatDto,
+    ): Response<ChatMessageDto>
+
+    /** BCAST-016 — consume a view-once message (records the viewer's one view; server redacts next read). */
+    @POST("broadcast/sessions/{id}/chat/{messageId}/view")
+    suspend fun consumeView(
+        @Path("id") sessionId: String,
+        @Path("messageId") messageId: String,
+    ): Response<Unit>
 }
 
 /** BroadcastChatMessageOut (== the chat:message frame data). `created_at` is epoch SECONDS. */
@@ -57,6 +73,29 @@ data class ChatMessageDto(
     @Json(name = "deleted") val deleted: Boolean = false,
     @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
     @Json(name = "my_reactions") val myReactions: List<String>? = null,
+    // ---- BCAST-016 ----
+    @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    @Json(name = "reply_to_preview") val replyToPreview: ReplyPreviewDto? = null,
+    @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "video_url") val videoUrl: String? = null,
+    @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
+    @Json(name = "media_kind") val mediaKind: String? = null,
+    @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
+    @Json(name = "lock_description") val lockDescription: String? = null,
+    @Json(name = "is_unlocked") val isUnlocked: Boolean? = null,
+    @Json(name = "view_once") val viewOnce: Boolean = false,
+    @Json(name = "view_once_consumed") val viewOnceConsumed: Boolean = false,
+    @Json(name = "expires_at") val expiresAt: Long? = null,
+    @Json(name = "expired") val expired: Boolean = false,
+    @Json(name = "scheduled") val scheduled: Boolean = false,
+    @Json(name = "send_at") val sendAt: Long? = null,
+)
+
+/** reply_to_preview object — { sender_display_name, text }. */
+@JsonClass(generateAdapter = true)
+data class ReplyPreviewDto(
+    @Json(name = "sender_display_name") val senderDisplayName: String? = null,
+    @Json(name = "text") val text: String? = null,
 )
 
 /** BroadcastChatHistoryOut — { messages, has_more, oldest_sort_key }. */
@@ -67,10 +106,22 @@ data class ChatHistoryDto(
     @Json(name = "oldest_sort_key") val oldestSortKey: String? = null,
 )
 
-/** BroadcastChatSendIn — { text } (+ optional fields not used by the viewer composer). NO client_id. */
+/**
+ * BroadcastChatSendIn — the full rich-send body. Only non-null fields are serialized meaningfully; the
+ * server treats absent fields as unset (plain text). `view_once` is a plain bool (never null on the wire).
+ */
 @JsonClass(generateAdapter = true)
 data class SendChatDto(
-    @Json(name = "text") val text: String,
+    @Json(name = "text") val text: String?,
+    @Json(name = "reply_to_message_id") val replyToMessageId: String? = null,
+    @Json(name = "image_url") val imageUrl: String? = null,
+    @Json(name = "video_url") val videoUrl: String? = null,
+    @Json(name = "thumbnail_url") val thumbnailUrl: String? = null,
+    @Json(name = "view_once") val viewOnce: Boolean = false,
+    @Json(name = "lock_price_cents") val lockPriceCents: Long? = null,
+    @Json(name = "lock_description") val lockDescription: String? = null,
+    @Json(name = "expires_in_seconds") val expiresInSeconds: Long? = null,
+    @Json(name = "send_at") val sendAt: Long? = null,
 )
 
 /** BroadcastChatReactIn — { emoji, action: add|remove }. */
@@ -78,6 +129,12 @@ data class SendChatDto(
 data class ReactionDto(
     @Json(name = "emoji") val emoji: String,
     @Json(name = "action") val action: String = "add",
+)
+
+/** BroadcastChatUnlockIn — { payment_method_id }. */
+@JsonClass(generateAdapter = true)
+data class UnlockChatDto(
+    @Json(name = "payment_method_id") val paymentMethodId: String,
 )
 
 /** React POST 200 body — { ok, reactions_counts }. */

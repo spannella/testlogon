@@ -1,0 +1,153 @@
+--- app/routers/billing.py.bak_bkc_1782229906	2026-06-23 15:51:46.964869740 +0000
++++ app/routers/billing.py	2026-06-25 03:17:02.258943014 +0000
+@@ -29,6 +29,7 @@
+ from app.core.time import now_ts
+ from app.models import (
+     AddCardReq,
++    AddBankReq,
+     AddChargeReq,
+     BillingCheckoutReq,
+     PaymentIncidentEvidenceUploadReq,
+@@ -767,6 +768,32 @@
+     return f"PM#{payment_method_id}"
+ 
+ 
++def _card_brand_from_pan(pan: str) -> str:
++    """Best-effort card-brand detection from a PAN (IIN ranges).
++
++    B-PAY FIX: the dev stripe-mock coerces every card to brand=visa/last4=4242
++    regardless of the submitted number, so a user adding e.g. a 5656... card
++    sees "Visa 4242" and two distinct cards look identical (apparent duplicate).
++    In dev mode we derive the real brand+last4 from the PAN the user typed.
++    """
++    p = (pan or "").replace(" ", "").replace("-", "")
++    if not p.isdigit():
++        return "unknown"
++    if p.startswith("4"):
++        return "visa"
++    if p[:2] in {"34", "37"}:
++        return "amex"
++    if p[:4] in {"6011"} or p[:2] == "65" or (p[:6].isdigit() and 622126 <= int(p[:6]) <= 622925):
++        return "discover"
++    if (p[:2].isdigit() and 51 <= int(p[:2]) <= 55) or (p[:4].isdigit() and 2221 <= int(p[:4]) <= 2720):
++        return "mastercard"
++    if p[:2] in {"30", "36", "38", "39"}:
++        return "diners"
++    if p[:4] == "3528" or p[:4] == "3589" or p[:2] == "35":
++        return "jcb"
++    return "unknown"
++
++
+ def list_payment_methods_ddb(user_id: str) -> List[Dict[str, Any]]:
+     items = ddb_query_pk(T.billing, user_pk(user_id))
+     return [it for it in items if it["sk"].startswith("PM#")]
+@@ -920,6 +947,16 @@
+     last4 = card.get("last4")
+     exp_month = card.get("exp_month")
+     exp_year = card.get("exp_year")
++    # B-PAY FIX: the dev stripe-mock returns brand=visa/last4=4242 for ALL PANs.
++    # Derive the real brand + last4 from the submitted card number so the saved
++    # method matches what the user typed (and distinct cards stay distinct).
++    if S.dev_mode:
++        _pan_digits = body.card_number.replace(" ", "").replace("-", "")
++        if _pan_digits.isdigit() and len(_pan_digits) >= 4:
++            last4 = _pan_digits[-4:]
++            _derived_brand = _card_brand_from_pan(_pan_digits)
++            if _derived_brand != "unknown":
++                brand = _derived_brand
+     label = f"{brand} ****{last4}" if brand and last4 else None
+ 
+     pk = user_pk(user_id)
+@@ -961,6 +998,92 @@
+         "label": label,
+     }
+ 
++
++@dual_route("POST", "/billing/payment-methods/us-bank")
++def add_bank(body: AddBankReq, req: Request = None, ctx=Depends(require_ui_session), _kyc: object = Depends(require_kyc_tier(2))) -> Dict[str, Any]:  # GAP-0268 (inert unless enforcement flag on)
++    # BK-C: DEV/TEST direct add of a FAKE US bank account from routing+account
++    # numbers. Mirrors add_card: create a us_bank_account PaymentMethod, attach
++    # it to the customer, persist to DDB, set default if first. In DEV_MODE this
++    # runs against stripe-mock; in real prod the web client would tokenize the
++    # bank via Stripe.js / Financial Connections instead. Guarded to dev_mode so
++    # a real provider is never hit with raw bank numbers.
++    if not S.dev_mode:
++        raise HTTPException(400, "Direct bank add is a dev/test path; use the hosted bank flow in production")
++    ensure_stripe_configured()
++    user_id = ctx["user_sub"]
++    customer_id = get_or_create_customer(user_id)
++
++    acct = body.account_number.replace(" ", "").replace("-", "")
++    rt = body.routing_number.replace(" ", "").replace("-", "")
++    pm_data: Dict[str, Any] = {
++        "type": "us_bank_account",
++        "us_bank_account": {
++            "routing_number": rt,
++            "account_number": acct,
++            "account_holder_type": body.account_holder_type,
++            "account_type": body.account_type,
++        },
++    }
++    if body.account_holder_name:
++        pm_data["billing_details"] = {"name": body.account_holder_name}
++
++    try:
++        pm = stripe.PaymentMethod.create(**pm_data)
++    except Exception as exc:
++        logger.warning("add_bank PaymentMethod.create failed", extra={"user_id": user_id}, exc_info=exc)
++        raise HTTPException(400, f"Bank account invalid: {exc}") from exc
++
++    pm_id = pm["id"]
++    try:
++        stripe.PaymentMethod.attach(pm_id, customer=customer_id)
++    except Exception as exc:
++        logger.warning("add_bank PaymentMethod.attach failed", extra={"user_id": user_id, "pm_id": pm_id}, exc_info=exc)
++        raise HTTPException(400, f"Failed to attach bank account: {exc}") from exc
++
++    bank = pm.get("us_bank_account", {}) or {}
++    # stripe-mock often returns empty bank metadata -> derive a usable last4 from input.
++    last4 = bank.get("last4") or (acct[-4:] if len(acct) >= 4 else acct)
++    bank_name = bank.get("bank_name")
++    label = f"{bank_name} ****{last4}" if bank_name and last4 else (f"Bank ****{last4}" if last4 else None)
++
++    pk = user_pk(user_id)
++    existing = list_payment_methods_ddb(user_id)
++    next_priority = 0 if not existing else (max(int(x.get("priority", 0)) for x in existing) + 1)
++
++    ddb_put(T.billing, {
++        "pk": pk,
++        "sk": pm_sk(pm_id),
++        "payment_method_id": pm_id,
++        "provider": "stripe",
++        "provider_method_id": pm_id,
++        "method_type": "us_bank_account",
++        "label": label,
++        "brand": bank_name,
++        "last4": last4,
++        "bank_name": bank_name,
++        "account_type": body.account_type,
++        "priority": next_priority,
++        "created_at": now_ts(),
++    })
++
++    if not current_default_pm(user_id):
++        set_default_pm(user_id, pm_id)
++        try:
++            stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": pm_id})
++        except Exception:
++            pass
++
++    bump_dunning_after_payment_method_update(user_id, "stripe")
++    audit_event("billing_add_bank", user_id, req, outcome="success", payment_method_id=pm_id)
++    return {
++        "payment_method_id": pm_id,
++        "method_type": "us_bank_account",
++        "bank_name": bank_name,
++        "last4": last4,
++        "account_type": body.account_type,
++        "label": label,
++    }
++
+ 
+ @dual_route("POST", "/billing/us-bank/verify-microdeposits")
+ def verify_microdeposits(body: VerifyMicrodepositsReq, ctx=Depends(require_ui_session)) -> Dict[str, str]:

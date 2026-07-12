@@ -62,6 +62,7 @@ class FilesUploadViewModelTest {
         override suspend fun renameFile(body: RenameRequest) = MoveResultDto(ok = true)
         override suspend fun renameFolder(body: RenameRequest) = MoveResultDto(ok = true)
         override suspend fun move(body: MoveRequest) = MoveResultDto(ok = true)
+        override suspend fun copy(body: MoveRequest) = MoveResultDto(ok = true)
         override suspend fun deleteFile(path: String) = OkRespDto(ok = true)
         override suspend fun deleteFolder(path: String) = DeleteFolderDto(ok = true)
     }

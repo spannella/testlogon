@@ -329,9 +329,9 @@ def remove_reaction(
 def list_comments(
     *,
     video_id: str,
+    viewer_id: Optional[str] = None,
     cursor: Optional[str] = None,
     limit: int = 20,
-    viewer_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List comments for a video, newest first.
 
@@ -355,7 +355,11 @@ def list_comments(
     resp = T.video_comments.query(**kwargs)
     items_raw = resp.get("Items", [])
 
-    comments = [_comment_projection(item, viewer_id=viewer_id) for item in items_raw]
+    comments = []
+    for item in items_raw:
+        if (item.get("moderation_hidden") or item.get("moderation_removed")) and item.get("user_id") != viewer_id:
+            continue
+        comments.append(_comment_projection(item, viewer_id=viewer_id))
 
     new_cursor: Optional[str] = None
     last_key = resp.get("LastEvaluatedKey")
@@ -363,6 +367,39 @@ def list_comments(
         new_cursor = last_key.get("sk", "")
 
     return {"comments": comments, "cursor": new_cursor}
+
+
+def get_comment(*, video_id: str, comment_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single comment's raw item by id (the SK embeds a timestamp so a
+    direct GetItem is impossible; page the partition like delete_comment).
+    Returns None if not found."""
+    last_key = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(f"VIDEO#{video_id}"),
+            "FilterExpression": "comment_id = :cid",
+            "ExpressionAttributeValues": {":cid": comment_id},
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.video_comments.query(**kwargs)
+        items = resp.get("Items", [])
+        if items:
+            return items[0]
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            return None
+
+
+def bump_comment_tip_total(*, video_id: str, comment: Dict[str, Any], amount_cents: int) -> int:
+    """Additively bump tip_total_cents on a video comment row; returns new total."""
+    upd = T.video_comments.update_item(
+        Key={"pk": comment["pk"], "sk": comment["sk"]},
+        UpdateExpression="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
+        ExpressionAttributeValues={":z": 0, ":amt": amount_cents},
+        ReturnValues="UPDATED_NEW",
+    )
+    return int(upd.get("Attributes", {}).get("tip_total_cents", amount_cents))
 
 
 def delete_comment(

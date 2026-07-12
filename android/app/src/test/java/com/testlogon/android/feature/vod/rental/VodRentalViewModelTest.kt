@@ -40,6 +40,7 @@ private class FakeRentalRepo : VodRentalRepository {
     override suspend fun finishPlayback(videoId: String) =
         ApiResult.Success(RentalConsumeResult(ok = true, viewsRemaining = 0, consumed = true))
     override suspend fun list() = ApiResult.Success(emptyList<RentalAccess>())
+    override suspend fun listItems() = ApiResult.Success(emptyList<com.testlogon.android.data.vod.rental.RentalListItem>())
 
     companion object {
         fun locked() = RentalAccess(false, null, "not_rented", null, 0L, -1, null, false)

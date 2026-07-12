@@ -18,6 +18,12 @@ object FeedApiModule {
     fun provideFeedApi(retrofit: Retrofit): FeedApi =
         retrofit.create(FeedApi::class.java)
 
+    /** Post-compose (create a newsfeed post) API on the shared Retrofit. */
+    @Provides
+    @Singleton
+    fun providePostComposeApi(retrofit: Retrofit): PostComposeApi =
+        retrofit.create(PostComposeApi::class.java)
+
     /** AND-173 / AND-174 / AND-175 — feed content-engagement API on the shared Retrofit. */
     @Provides
     @Singleton
@@ -29,6 +35,18 @@ object FeedApiModule {
     @Singleton
     fun providePollApi(retrofit: Retrofit): PollApi =
         retrofit.create(PollApi::class.java)
+
+    /** Arbitrary text-option poll vote and close client (ui polls routes) shared across surfaces. */
+    @Provides
+    @Singleton
+    fun provideArbitraryPollApi(retrofit: Retrofit): com.testlogon.android.data.poll.ArbitraryPollApi =
+        retrofit.create(com.testlogon.android.data.poll.ArbitraryPollApi::class.java)
+
+    /** FD1 — current-user identity (GET /ui/me) for the "Your posts" author filter. */
+    @Provides
+    @Singleton
+    fun provideCurrentUserApi(retrofit: Retrofit): CurrentUserApi =
+        retrofit.create(CurrentUserApi::class.java)
 }
 
 /** AND-097 / AND-173 / AND-174 / AND-175 — binds the feed + engagement repositories. */
@@ -56,4 +74,9 @@ abstract class FeedDataModule {
     @Binds
     @Singleton
     abstract fun bindPollRepository(impl: PollRepositoryImpl): PollRepository
+
+    /** #24 — image-upload seam used by the comments VM (delegates to the post-compose repo). */
+    @Binds
+    @Singleton
+    abstract fun bindCommentImageUploader(impl: PostComposeRepository): CommentImageUploader
 }

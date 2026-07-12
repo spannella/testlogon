@@ -20,7 +20,11 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -46,25 +50,35 @@ fun PostDetailRoute(
     modifier: Modifier = Modifier,
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
+    // SUB-E3-2 - open the subscribe flow for a subscriber-only post lock card.
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     viewModel: PostDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val authorNames by viewModel.authorNames.collectAsStateWithLifecycle()
+    val isOwnPost by viewModel.isOwnPost.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
             if (effect is PostDetailEffect.ShowError) snackbarHostState.showSnackbar(effect.message)
         }
     }
+    val shownAuthorId = (state as? PostDetailUiState.Content)?.post?.authorId
+    LaunchedEffect(shownAuthorId) { shownAuthorId?.let { viewModel.resolveAuthor(it) } }
     PostDetailScreen(
         state = state,
+        authorName = shownAuthorId?.let { authorNames[it] },
         onBack = onBack,
         onRetry = viewModel::retry,
         onRefresh = viewModel::refresh,
         snackbarHostState = snackbarHostState,
         onAuthorClick = onAuthorClick,
         onLinkClick = onLinkClick,
+        onSubscribeClick = onSubscribeClick,
         onLikeToggle = { viewModel.onLikeToggle() },
+        onToggleReaction = { emoji -> viewModel.onToggleReaction(emoji) },
         onCommentCountChanged = viewModel::onCommentCountChanged,
+        isOwnPost = isOwnPost,
         modifier = modifier,
     )
 }
@@ -77,15 +91,22 @@ fun PostDetailScreen(
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
+    authorName: String? = null,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
+    onSubscribeClick: (creatorId: String) -> Unit = {},
     onLikeToggle: () -> Unit = {},
+    onToggleReaction: (emoji: String) -> Unit = {},
     onCommentCountChanged: (delta: Int) -> Unit = {},
+    // #25 — viewer authored this post => hide tipping in the comments.
+    isOwnPost: Boolean = false,
     commentsContent: (@Composable (onCommentCountChanged: (Int) -> Unit) -> Unit)? = {
-        CommentsSection(onCommentCountChanged = it)
+        CommentsSection(onCommentCountChanged = it, isOwnPost = isOwnPost)
     },
 ) {
+    // MOD-C1 - post-level report target for this detail screen (comments self-host their own report).
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     Scaffold(
         modifier = modifier.testTag(PostDetailTestTags.SCREEN),
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -135,11 +156,19 @@ fun PostDetailScreen(
                         // Detail reuses PostItem; like/comment/overflow wired here (AND-173/174/175).
                         PostItem(
                             post = state.post,
+                            authorName = authorName,
                             onAuthorClick = onAuthorClick,
                             onLinkClick = onLinkClick,
+                            onSubscribeClick = onSubscribeClick,
                             onLikeToggle = { onLikeToggle() },
+                            onToggleReaction = { _, emoji -> onToggleReaction(emoji) },
+                            // #25 — can't tip your own post.
+                            showTip = !isOwnPost,
+                            // #3 — author sees a priced "Locked · $X" badge on their own locked post.
+                            isOwnPost = isOwnPost,
                             // Comment icon on detail is a no-op (the section is already below).
                             onCommentClick = {},
+                            onReport = { post -> reportTarget = ReportTarget.Content(post.id, "feed_post") },
                         )
                         // AND-174 — embedded comments surface. Host count updates flow back up.
                         commentsContent?.invoke(onCommentCountChanged)
@@ -147,5 +176,7 @@ fun PostDetailScreen(
                 }
             }
         }
+        // MOD-C1/C3 - report sheet host (six categories + licensing/IP -> DMCA).
+        ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
     }
 }

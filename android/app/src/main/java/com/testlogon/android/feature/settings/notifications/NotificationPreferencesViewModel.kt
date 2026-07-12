@@ -24,6 +24,7 @@ import javax.inject.Inject
 data class CategoryRow(
     val alertType: String,
     val titleRes: Int,
+    val descRes: Int,
     val pref: NotificationTypePreference,
     val savingChannels: Set<NotificationChannel> = emptySet(),
 )
@@ -44,7 +45,7 @@ sealed interface NotificationPrefsEffect {
 }
 
 /** A known alert-type catalog used for display titles; unknown server types still render by id. */
-internal data class AlertTypeMeta(val alertType: String, val titleRes: Int)
+internal data class AlertTypeMeta(val alertType: String, val titleRes: Int, val descRes: Int)
 
 @HiltViewModel
 class NotificationPreferencesViewModel @Inject constructor(
@@ -79,6 +80,7 @@ class NotificationPreferencesViewModel @Inject constructor(
             CategoryRow(
                 alertType = pref.alertType,
                 titleRes = titleResFor(pref.alertType),
+                descRes = descResFor(pref.alertType),
                 pref = pref,
             )
         }
@@ -128,17 +130,21 @@ class NotificationPreferencesViewModel @Inject constructor(
         CATALOG.firstOrNull { it.alertType == alertType }?.titleRes
             ?: com.testlogon.android.R.string.notif_prefs_category_generic
 
+    private fun descResFor(alertType: String): Int =
+        CATALOG.firstOrNull { it.alertType == alertType }?.descRes
+            ?: com.testlogon.android.R.string.notif_prefs_category_generic_desc
+
     companion object {
         private const val NETWORK_MESSAGE =
             "Couldn't reach the server. Check your connection and try again."
 
         /** Known alert types -> localized titles (titles fall back to a generic label otherwise). */
         internal val CATALOG: List<AlertTypeMeta> = listOf(
-            AlertTypeMeta("security_alerts", com.testlogon.android.R.string.notif_prefs_category_security),
-            AlertTypeMeta("account_activity", com.testlogon.android.R.string.notif_prefs_category_account),
-            AlertTypeMeta("product_updates", com.testlogon.android.R.string.notif_prefs_category_product),
-            AlertTypeMeta("billing", com.testlogon.android.R.string.notif_prefs_category_billing),
-            AlertTypeMeta("marketing", com.testlogon.android.R.string.notif_prefs_category_marketing),
+            AlertTypeMeta("security_alerts", com.testlogon.android.R.string.notif_prefs_category_security, com.testlogon.android.R.string.notif_prefs_category_security_desc),
+            AlertTypeMeta("account_activity", com.testlogon.android.R.string.notif_prefs_category_account, com.testlogon.android.R.string.notif_prefs_category_account_desc),
+            AlertTypeMeta("product_updates", com.testlogon.android.R.string.notif_prefs_category_product, com.testlogon.android.R.string.notif_prefs_category_product_desc),
+            AlertTypeMeta("billing", com.testlogon.android.R.string.notif_prefs_category_billing, com.testlogon.android.R.string.notif_prefs_category_billing_desc),
+            AlertTypeMeta("marketing", com.testlogon.android.R.string.notif_prefs_category_marketing, com.testlogon.android.R.string.notif_prefs_category_marketing_desc),
         )
     }
 }

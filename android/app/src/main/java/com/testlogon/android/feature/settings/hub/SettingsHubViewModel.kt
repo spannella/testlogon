@@ -6,8 +6,12 @@ import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PermMedia
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.EmojiEmotions
+import androidx.compose.material.icons.outlined.Paid
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Security
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -67,6 +71,14 @@ class SettingsHubViewModel @Inject constructor() : ViewModel() {
                 available = true,
             ),
             SettingsSection(
+                key = SettingsSectionKey.PUSH_EVENTS,
+                titleRes = R.string.settings_section_push_events_title,
+                subtitleRes = R.string.settings_section_push_events_subtitle,
+                icon = Icons.Outlined.NotificationsActive,
+                route = MainDest.SettingsPushEvents.route,
+                available = true,
+            ),
+            SettingsSection(
                 key = SettingsSectionKey.ALERTS,
                 titleRes = R.string.settings_section_alerts_title,
                 subtitleRes = R.string.settings_section_alerts_subtitle,
@@ -104,6 +116,30 @@ class SettingsHubViewModel @Inject constructor() : ViewModel() {
                 subtitleRes = R.string.settings_section_privacy_subtitle,
                 icon = Icons.Outlined.Lock,
                 route = MainDest.SettingsPrivacy.route,
+                available = true,
+            ),
+            SettingsSection(
+                key = SettingsSectionKey.EMOJIS,
+                titleRes = R.string.settings_section_emojis_title,
+                subtitleRes = R.string.settings_section_emojis_subtitle,
+                icon = Icons.Outlined.EmojiEmotions,
+                route = MainDest.SettingsEmojis.route,
+                available = true,
+            ),
+            SettingsSection(
+                key = SettingsSectionKey.GEO,
+                titleRes = R.string.settings_section_geo_title,
+                subtitleRes = R.string.settings_section_geo_subtitle,
+                icon = Icons.Outlined.Public,
+                route = MainDest.SettingsGeo.route,
+                available = true,
+            ),
+            SettingsSection(
+                key = SettingsSectionKey.CALL_RATE,
+                titleRes = R.string.settings_section_call_rate_title,
+                subtitleRes = R.string.settings_section_call_rate_subtitle,
+                icon = Icons.Outlined.Paid,
+                route = MainDest.SettingsCallRate.route,
                 available = true,
             ),
         )

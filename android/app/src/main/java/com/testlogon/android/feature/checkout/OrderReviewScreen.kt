@@ -72,6 +72,8 @@ fun OrderReviewRoute(
     // AND-227/228/229: provider-selection entry point. "Place order" still routes through the
     // BillingAuthorizer stub (AND-031); this callback opens the redirect checkout (hosted/PayPal/CCBill).
     onChoosePaymentMethod: (totalCents: Long, currency: String) -> Unit = { _, _ -> },
+    // FIX (ecom residual #1): fired when the reliable purchase completes; routes to order confirmation.
+    onOrderComplete: (txnId: String?, orderId: String) -> Unit = { _, _ -> },
     viewModel: CheckoutSessionViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -84,6 +86,7 @@ fun OrderReviewRoute(
             when (event) {
                 is CheckoutEvent.PaymentsUnavailable -> snackbarHostState.showSnackbar(paymentsUnavailable)
                 is CheckoutEvent.PaymentFailed -> snackbarHostState.showSnackbar(event.message)
+                is CheckoutEvent.PurchaseComplete -> onOrderComplete(event.txnId, event.orderId)
             }
         }
     }
@@ -172,28 +175,36 @@ private fun OrderReviewContent(session: CheckoutSession) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(session.lineItems, key = { it.sku }) { line ->
-            OrderReviewLine(line)
+            OrderReviewLine(line, session.currency)
             HorizontalDivider()
         }
     }
 }
 
 @Composable
-private fun OrderReviewLine(line: CheckoutLineItem) {
+private fun OrderReviewLine(line: CheckoutLineItem, currency: String) {
     Row(
-        Modifier.fillMaxWidth().testTag(OrderReviewTestTags.line(line.sku)),
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag(OrderReviewTestTags.line(line.sku)),
         horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                text = line.name,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(R.string.checkout_line_qty, line.quantity) +
+                    "  ·  " + formatPrice(line.unitPriceCents, currency) + " each",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(
-            text = line.name,
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(end = 12.dp),
-        )
-        Text(
-            text = stringResource(R.string.checkout_line_qty, line.quantity),
-            style = MaterialTheme.typography.bodyMedium,
+            text = formatPrice(line.lineTotalCents, currency),
+            style = MaterialTheme.typography.titleSmall,
         )
     }
 }

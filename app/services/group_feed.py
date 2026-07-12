@@ -218,6 +218,8 @@ def list_group_feed(
         post = post_map.get(pid)
         if not post:
             continue
+        if (post.get("moderation_removed") or post.get("moderation_removed_at")) and post.get("user_id") != viewer_id:
+            continue
         result_posts.append(_post_out(post, viewer_id=viewer_id))
 
     # Sort: pinned first
@@ -232,6 +234,15 @@ def list_group_feed(
         last = index_records[-1]
         next_cursor = encode_cursor({"pk": last["pk"], "sk": last["sk"]})
 
+    if viewer_id:
+        try:
+            from app.services.sponsored_feed import inject_sponsored
+            sorted_posts = inject_sponsored(
+                sorted_posts, viewer_id, surface="group_feed",
+                content_prefix="group_%s" % group_id,
+            )
+        except Exception:
+            pass
     return {
         "posts": sorted_posts,
         "cursor": next_cursor,

@@ -45,6 +45,16 @@ data class ProjectOut(
 )
 
 /**
+ * Batch-8 (#9) - request body for POST v1/projects. `name` is required (server-validated 1..120); `description`
+ * is optional (max 2000); `tags` defaults to empty. Mirrors the backend ProjectCreateIn.
+ */
+data class ProjectCreateIn(
+    @Json(name = "name") val name: String,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "tags") val tags: List<String> = emptyList(),
+)
+
+/**
  * Paginated envelope for GET v1/projects. The continuation field is `cursor` (CORRECTED from next_cursor); a
  * null / absent / blank cursor means there is no further page.
  */

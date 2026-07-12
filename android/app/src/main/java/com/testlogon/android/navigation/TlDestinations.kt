@@ -229,11 +229,26 @@ sealed class MainDest(val route: String) {
     /** Settings → Privacy & data export entry (handoff). (AND-082) */
     data object SettingsPrivacy : MainDest("settings/privacy")
 
+    /** Settings → Custom emojis (personal emoji upload/list/delete). Web parity: settings/emojis. */
+    data object SettingsEmojis : MainDest("settings/emojis")
+
+    /** Settings → Geo-blocking rules (detected country + dry-run check). Web parity: settings/geo. */
+    data object SettingsGeo : MainDest("settings/geo")
+
+    /** Settings → Call rate (paid-calls per-minute rate). Web parity: settings/call-rate. */
+    data object SettingsCallRate : MainDest("settings/call-rate")
+
+    /** Settings → Message privacy (TIP-B4 pay-to-message gate + tip-free allowlist). */
+    data object SettingsMessagePrivacy : MainDest("settings/message-privacy")
+
     /** Notification center — paged list of notifications (AND-085). */
     data object Notifications : MainDest("notifications")
 
     /** Alert preferences — email/SMS alert TARGET management (AND-088). */
     data object SettingsAlerts : MainDest("settings/alerts")
+
+    /** D2 - per-event PUSH toggles (transactional alerts opt-in/opt-out). */
+    data object SettingsPushEvents : MainDest("settings/push-events")
 
     /** Account activity feed — paged list of account events (AND-091). */
     data object Activity : MainDest("activity")

@@ -36,6 +36,17 @@ sealed interface TipOutcome {
     data class Failure(val message: String, val retryable: Boolean) : TipOutcome
 }
 
+/** TIP-204 - outcome of a post tip-REACTION attempt (drives the money-reaction chip + snackbar). */
+sealed interface TipReactOutcome {
+    data class Success(
+        val badge: com.testlogon.android.data.feed.TipReactionBadge,
+        val tipTotalCents: Int?,
+    ) : TipReactOutcome
+    data object PaymentsUnavailable : TipReactOutcome
+    data object Cancelled : TipReactOutcome
+    data class Failure(val message: String) : TipReactOutcome
+}
+
 /**
  * AND-178 — tip a post: a money-moving, NON-optimistic mutation.
  *
@@ -47,6 +58,12 @@ sealed interface TipOutcome {
  */
 interface TipRepository {
     suspend fun tip(postId: String, amountCents: Int): TipOutcome
+
+    /**
+     * TIP-204 - money-REACTION tip on a post (content_type post_react). Authorizes via the billing
+     * seam like [tip], then POSTs the post tip-react; success carries a badge for the money-reaction chip.
+     */
+    suspend fun tipReact(postId: String, amountCents: Int, emoji: String): TipReactOutcome
     fun config(): TipConfig
 }
 
@@ -100,6 +117,40 @@ class TipRepositoryImpl @Inject constructor(
             TipOutcome.Failure(error.message, retryable = error.status >= 500)
         } catch (e: IOException) {
             TipOutcome.Failure(MSG_OFFLINE, retryable = true)
+        }
+    }
+
+    override suspend fun tipReact(postId: String, amountCents: Int, emoji: String): TipReactOutcome = withContext(io) {
+        if (amountCents < MIN_CENTS) {
+            return@withContext TipReactOutcome.Failure(MSG_INVALID_AMOUNT)
+        }
+        val billingResult = billing.authorize(amountMinorUnits = amountCents.toLong(), currency = CURRENCY_USD)
+        val paymentMethodId: String? = when (billingResult) {
+            is BillingResult.Authorized -> billingResult.paymentMethodId
+            BillingResult.NotConfigured -> return@withContext TipReactOutcome.PaymentsUnavailable
+            BillingResult.Cancelled -> return@withContext TipReactOutcome.Cancelled
+            is BillingResult.Declined -> return@withContext TipReactOutcome.Failure(billingResult.reason)
+            is BillingResult.Failed -> return@withContext TipReactOutcome.Failure(MSG_GENERIC)
+        }
+        try {
+            val resp = api.tipReactPost(
+                postId = postId,
+                body = PostTipReactRequestDto(amountCents = amountCents, emoji = emoji, paymentMethodId = paymentMethodId),
+            )
+            TipReactOutcome.Success(
+                badge = com.testlogon.android.data.feed.TipReactionBadge(
+                    tipperId = null,
+                    emoji = resp.emoji ?: emoji,
+                    amountCents = amountCents,
+                ),
+                tipTotalCents = resp.tipTotalCents,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            TipReactOutcome.Failure(errorParser.from(e).message)
+        } catch (e: IOException) {
+            TipReactOutcome.Failure(MSG_OFFLINE)
         }
     }
 

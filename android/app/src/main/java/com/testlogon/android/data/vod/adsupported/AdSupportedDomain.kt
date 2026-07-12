@@ -1,5 +1,8 @@
 package com.testlogon.android.data.vod.adsupported
 
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.data.ads.toCtaActions
+
 /**
  * AND-194 — pure, JVM-unit-testable ad-supported domain model + scheduler.
  *
@@ -20,6 +23,11 @@ data class AdBreak(
     val creativeType: String,    // "video" | "image"
     val skipAfterMs: Long,
     val slotIndex: Int,
+    /** ADV2-207 (F2) — the per-serve ad_click_id minted by serve_ad (now surfaced on the VOD break);
+     *  stashed for CPA attribution + sent on the CTA-click CPC charge. */
+    val adClickId: String = "",
+    /** ADV2-207 (F2) — structured click-through CTA targets served with this break (AdCtaBar). */
+    val ctas: List<CtaAction> = emptyList(),
     val completed: Boolean,
 ) {
     val isPreRoll: Boolean get() = slotType == VodAdSupportedApi.SLOT_PRE_ROLL
@@ -116,6 +124,8 @@ fun VodAdBreakDto.toDomain(): AdBreak = AdBreak(
     creativeType = creativeType,
     skipAfterMs = skipAfterSeconds * 1000L,
     slotIndex = slotIndex,
+    adClickId = adClickId,
+    ctas = ctas.toCtaActions(),
     completed = completed,
 )
 

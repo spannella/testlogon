@@ -2,6 +2,7 @@ package com.testlogon.android.core.network.syndicates
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -24,6 +25,22 @@ import retrofit2.http.Query
  */
 interface SyndicateApi {
 
+    /**
+     * Batch-7 - GET the syndicates the caller belongs to. The wire is a BARE ARRAY (not an envelope) of
+     * {syndicate_id, syndicate_name, role, joined_at} rows.
+     */
+    @GET("ui/syndicates")
+    suspend fun listMySyndicates(): List<SyndicateListItemDto>
+
+    /**
+     * Batch-7 - POST a new syndicate (the creator becomes admin). Returns the SyndicateOut create shape
+     * (syndicate_id + name). 201 on success; a 422 carries field detail. The X-CSRF-Token is attached by
+     * the shared authenticated client interceptor.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/syndicates")
+    suspend fun createSyndicate(@Body body: SyndicateCreateIn): SyndicateCreateOut
+
     /** GET the syndicate overview / profile (name, member_count, admin_user_id, currency, is_member). */
     @GET("ui/syndicates/{syndicateId}")
     suspend fun getProfile(@Path("syndicateId") syndicateId: String): SyndicateProfileOut
@@ -33,12 +50,34 @@ interface SyndicateApi {
      * first page); `page` is the integer-index fallback. Returns the {posts, is_member, next_cursor}
      * envelope.
      */
-    @GET("ui/syndicates/{syndicateId}/feed")
+    // Batch-9 (#12) FIX: the real READ route is under the FEED router prefix (ui/syndicates/feed/{id}),
+    // same prefix as create; the legacy ui/syndicates/{id}/feed path is unregistered (404). cursor+limit
+    // (no page) per the prod contract.
+    @GET("ui/syndicates/feed/{syndicateId}")
     suspend fun getFeed(
         @Path("syndicateId") syndicateId: String,
         @Query("cursor") cursor: String? = null,
+        @Query("limit") limit: Int = 20,
         @Query("page") page: Int? = null,
     ): SyndicateFeedOut
+
+    /**
+     * Batch-9 (#12) - POST a new syndicate feed post (text + optional single image). 201 -> SyndicatePostOut.
+     * NOTE the create route is under the FEED router prefix (ui/syndicates/feed/{id}), distinct from the
+     * read route above (ui/syndicates/{id}/feed). The X-CSRF-Token is attached by the shared client.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/syndicates/feed/{syndicateId}")
+    suspend fun createPost(
+        @Path("syndicateId") syndicateId: String,
+        @Body body: SyndicatePostCreateIn,
+    ): SyndicatePostOut
+
+    /** Batch-9 (#12) - GET the syndicate member roster (BARE ARRAY of {user_id, display_name, role, joined_at}). */
+    @GET("ui/syndicates/{syndicateId}/members")
+    suspend fun listMembers(
+        @Path("syndicateId") syndicateId: String,
+    ): List<SyndicateMemberDto>
 
     /**
      * GET the treasury summary + the first (or cursor-anchored) ledger page. The ledger is carried inline

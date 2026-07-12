@@ -41,7 +41,7 @@ ALERT_CATEGORIES: Dict[str, set] = {
                  "calendar_event_reminder",
                  "ticket_created", "ticket_assigned", "ticket_replied",
                  "ticket_status_changed", "ticket_reopened"},
-    "commerce": {"cart.abandoned"},
+    "commerce": {"cart.abandoned", "order_shipped", "order_out_for_delivery", "order_delivered"},
 }
 
 # Reverse lookup: event -> category
@@ -71,6 +71,13 @@ def _build_action_url(alert_type: str, details: Dict[str, Any]) -> Optional[str]
         "mention":          f"/feed?post={post_id}" if post_id else (f"/messages/{conv_id}" if conv_id else None),
         "new_follower":     f"/discover?user={actor_id}" if actor_id else None,
         "subscription_started": "/subscriptions",
+        "subscription_new_subscriber": "/subscriptions/subscribers",
+        "subscription_renewed": "/subscriptions/manage",
+        "subscription_renewal_failed": "/subscriptions/manage",
+        "subscription_expiring": "/subscriptions/manage",
+        "subscription_expired": "/subscriptions/manage",
+        "subscription_canceled": "/subscriptions/manage",
+        "subscription_gifted": "/subscriptions/manage",
         "post_shared":      f"/feed?post={post_id}" if post_id else None,
         "post_tip":         f"/feed?post={post_id}" if post_id else None,
         "message_tip":      f"/messages/{conv_id}" if conv_id else None,
@@ -143,9 +150,40 @@ ALERT_EVENT_TYPES: List[str] = [
     "new_follower","post_liked","post_reaction","post_comment",
     "comment_reply","mention","subscription_started","post_shared",
     "post_tip","message_tip",
+    # Subscriptions (SUB-E1/E5): lifecycle notifications (default-on transactional)
+    "subscription_renewed","subscription_renewal_failed","subscription_expiring","subscription_expired",
+    "subscription_new_subscriber","subscription_canceled","subscription_gifted",
     "cart.abandoned",
     # Achievements (ENGAGE-001)
     "achievement_unlocked",
+    # Commerce / seller fulfillment (ECOM-SELLER G1: enables opt-in FCM push for shop_item_sold)
+    "shop_item_sold",
+    # Commerce / buyer order lifecycle (ECOM D3)
+    "order_shipped",
+    # Commerce / buyer delivery lifecycle (ECOM D4)
+    "order_out_for_delivery",
+    "order_delivered",
+]
+
+# ECOM-SELLER P2 - TRANSACTIONAL push events that are ON-BY-DEFAULT (opt-OUT, not
+# opt-in). A user receives these without manually enabling push prefs; they can
+# still disable one via ``push_opt_out_event_types``. Keep to genuinely
+# transactional order/payment events (never social/marketing noise).
+DEFAULT_PUSH_EVENT_TYPES: List[str] = [
+    "shop_item_sold",        # you sold an item -> ship it
+    "subscription_started",  # a subscription/payment succeeded
+    "post_tip",              # you received a tip
+    "message_tip",           # you received a message tip
+    "order_shipped",         # your order has shipped (buyer, D3)
+    "order_out_for_delivery",  # your order is out for delivery (buyer, D4)
+    "order_delivered",         # your order was delivered (buyer, D4)
+    "subscription_renewed",         # SUB-E1: your subscription renewed
+    "subscription_renewal_failed",  # SUB-E1: a renewal charge failed
+    "subscription_expiring",        # SUB-E1: subscription entering grace
+    "subscription_expired",         # SUB-E1: subscription access ended
+    "subscription_new_subscriber",  # SUB-E5: a new subscriber joined (creator)
+    "subscription_canceled",        # SUB-E5: a subscription was canceled
+    "subscription_gifted",          # SUB-E5: a gift subscription
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
@@ -277,6 +315,7 @@ def get_alert_prefs(user_sub: str) -> Dict[str, Any]:
             "emails": [], "sms_numbers": [],
             "email_event_types": [], "sms_event_types": [],
             "toast_event_types": [], "push_event_types": [],
+            "push_opt_out_event_types": [],
             "webhook_urls": [], "webhook_event_types": [],
         }
     return {
@@ -286,6 +325,7 @@ def get_alert_prefs(user_sub: str) -> Dict[str, Any]:
         "sms_event_types": it.get("sms_event_types", []),
         "toast_event_types": it.get("toast_event_types", []),
         "push_event_types": it.get("push_event_types", []),
+        "push_opt_out_event_types": it.get("push_opt_out_event_types", []),
         "webhook_urls": it.get("webhook_urls", []),
         "webhook_event_types": it.get("webhook_event_types", []),
     }
@@ -299,6 +339,7 @@ def set_alert_prefs(
     sms_event_types: Optional[List[str]] = None,
     toast_event_types: Optional[List[str]] = None,
     push_event_types: Optional[List[str]] = None,
+    push_opt_out_event_types: Optional[List[str]] = None,
     webhook_urls: Optional[List[str]] = None,
     webhook_event_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
@@ -309,6 +350,10 @@ def set_alert_prefs(
     sms_event_types = cur["sms_event_types"] if sms_event_types is None else sms_event_types
     toast_event_types = cur["toast_event_types"] if toast_event_types is None else toast_event_types
     push_event_types = cur["push_event_types"] if push_event_types is None else push_event_types
+    push_opt_out_event_types = (
+        cur.get("push_opt_out_event_types", [])
+        if push_opt_out_event_types is None else push_opt_out_event_types
+    )
     webhook_urls = cur["webhook_urls"] if webhook_urls is None else webhook_urls
     webhook_event_types = cur["webhook_event_types"] if webhook_event_types is None else webhook_event_types
 
@@ -337,6 +382,10 @@ def set_alert_prefs(
     sms_types = [t for t in (sms_event_types or []) if t in allowed]
     toast_types = [t for t in (toast_event_types or []) if t in allowed]
     push_types = [t for t in (push_event_types or []) if t in allowed]
+    # P2: opt-out only carries the default-on transactional events (opting out of a
+    # non-default event is a no-op - it is off already).
+    default_on = set(DEFAULT_PUSH_EVENT_TYPES)
+    push_opt_out = [t for t in (push_opt_out_event_types or []) if t in default_on]
     webhook_types = [t for t in (webhook_event_types or []) if t in allowed]
     webhook_urls_n = _normalize_webhook_urls(webhook_urls or [])
 
@@ -348,6 +397,7 @@ def set_alert_prefs(
         "sms_event_types": sms_types,
         "toast_event_types": toast_types,
         "push_event_types": push_types,
+        "push_opt_out_event_types": push_opt_out,
         "webhook_urls": webhook_urls_n,
         "webhook_event_types": webhook_types,
         "updated_at": now_ts(),

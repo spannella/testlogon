@@ -1,0 +1,58 @@
+diff --git a/app/services/shoppingcart.py b/app/services/shoppingcart.py
+index 792fed44..fa530a00 100644
+--- a/app/services/shoppingcart.py
++++ b/app/services/shoppingcart.py
+@@ -393,6 +393,8 @@ def add_catalog_item(
+         "quantity": quantity,
+         "unit_price_cents": int(item.get("price_cents", 0)),
+         "creator_user_id": item.get("creator_id"),
++        "category_id": category_id,
++        "item_id": item_id,
+     }
+     return add_item(user_sub, cart_id, payload)
+ 
+@@ -683,6 +685,44 @@ def purchase_cart(
+     except Exception:
+         pass
+ 
++    # SHOP seller earnings credit (ECOM fix): write a billing credit ledger
++    # entry per creator so shop sales surface in /ui/earnings and /ui/payouts
++    # (mirrors vod_purchase seller-credit but uses type="credit", which is what
++    # creator_earnings._query_credit_entries and creator_payouts.get_available_balance
++    # actually filter on). Best-effort; never blocks the purchase.
++    try:
++        import logging as _logging
++        from app.services.billing_shared import new_ledger_entry as _nle, user_pk as _seller_pk
++        _by_creator = {}
++        for _ci in items:
++            _cid = _ci.get("creator_user_id") or _ci.get("seller_id")
++            if not _cid or _cid == user_sub:
++                continue
++            _by_creator[_cid] = _by_creator.get(_cid, 0) + int(_ci.get("line_total_cents", 0) or 0)
++        _gross = sum(_by_creator.values())
++        for _cid, _amt in _by_creator.items():
++            _credit = int(round(_amt * (final_total / _gross))) if _gross > 0 else int(_amt)
++            if _credit <= 0:
++                continue
++            _sk, _credit_item = _nle(
++                key_name="pk",
++                key_value=_seller_pk(_cid),
++                entry_type="credit",
++                amount_cents=_credit,
++                state="settled",
++                reason="Shop sale",
++                meta={
++                    "content_type": "shop",
++                    "order_id": order_id,
++                    "cart_id": cart_id,
++                    "buyer_id": user_sub,
++                    "purchase_txn_id": txn_id,
++                },
++            )
++            T.billing.put_item(Item=_credit_item)
++    except Exception:
++        _logging.getLogger(__name__).exception("Failed to write seller credit ledger for cart %s", cart_id)
++
+     # SHOP-003: Remove TTL from purchased carts (permanent records)
+     try:
+         T.shopping_cart.update_item(

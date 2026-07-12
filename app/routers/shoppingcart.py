@@ -195,7 +195,22 @@ async def ui_purchase_cart(
         idempotency_key=idem,
         promo_code=body.promo_code,
         promo_code_id=body.promo_code_id,
+        broadcast_session_id=getattr(body, "broadcast_session_id", None),  # LIVECOM L3
+        host_id=getattr(body, "host_id", None),
     )
+    # ADV-403: attribute this purchase to the buyer's last ad click (explicit
+    # ad_click_id or last-click 7d) and charge the CPA bid. Idempotent: a retried
+    # purchase re-resolves the same (already-converted) click -> no double charge.
+    try:
+        from app.services.ad_attribution import attribute_conversion
+        attribute_conversion(
+            viewer_sub=ctx["user_sub"],
+            conversion_type="purchase",
+            conversion_value_cents=int(purchase.get("purchased_total_cents") or 0),
+            ad_click_id=getattr(body, "ad_click_id", "") or "",
+        )
+    except Exception:
+        pass
     audit_event(
         "cart_purchased",
         ctx["user_sub"],

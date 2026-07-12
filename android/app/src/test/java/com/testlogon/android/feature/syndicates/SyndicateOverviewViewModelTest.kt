@@ -70,6 +70,14 @@ class SyndicateOverviewViewModelTest {
     }
 
     @Test
+    fun load_404_isNotMember() = runTest {
+        val repo = FakeSyndicateRepo(overviewResult = FakeSyndicateRepo.failure(status = 404))
+        val vm = vm(repo)
+        runCurrent()
+        assertEquals(SyndicateOverviewUiState.NotMember, vm.uiState.value)
+    }
+
+    @Test
     fun load_nonForbiddenFailure_isError() = runTest {
         val repo = FakeSyndicateRepo(overviewResult = FakeSyndicateRepo.failure(status = 500))
         val vm = vm(repo)

@@ -43,7 +43,7 @@ class MediaMessageMapperTest {
             image = MessageImageDto(bucket = "tl-media", key = "conversations/c1/x.jpg"),
         )
         val media = dto.toDomain().media as MessageMedia.Image
-        assertEquals("https://tl-media.s3.amazonaws.com/conversations/c1/x.jpg", media.url)
+        assertEquals("/mock/s3/tl-media/conversations/c1/x.jpg", media.url)
     }
 
     @Test

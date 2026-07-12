@@ -39,6 +39,8 @@ data class PaymentMethodsUiState(
     val load: PaymentMethodsLoadState = PaymentMethodsLoadState.Loading,
     val rowInFlight: Set<String> = emptySet(),
     val isRefreshing: Boolean = false,
+    /** TIP-104 - the id of the method marked as the tip default (null = none), for the row badge. */
+    val tipDefaultId: String? = null,
 ) {
     val methods: List<PaymentMethod> get() = (load as? PaymentMethodsLoadState.Loaded)?.methods.orEmpty()
     val isEmpty: Boolean get() = load is PaymentMethodsLoadState.Loaded && methods.isEmpty()
@@ -48,6 +50,9 @@ data class PaymentMethodsUiState(
 sealed interface PaymentMethodsEvent {
     data object Removed : PaymentMethodsEvent
     data object DefaultSet : PaymentMethodsEvent
+
+    /** TIP-104 - a card was marked as the tip default. */
+    data object TipDefaultSet : PaymentMethodsEvent
 
     /** AND-232 — failure snackbar carries a mapped, localizable [BillingError] message. */
     data class Failure(val error: BillingError) : PaymentMethodsEvent {
@@ -84,6 +89,15 @@ class PaymentMethodsViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(load = repository.getPaymentMethods().toLoadState()) }
         }
+        loadTipDefault()
+    }
+
+    /** TIP-104 - the tip-default id is a separate read; a failure is non-fatal (no badge shown). */
+    private fun loadTipDefault() {
+        viewModelScope.launch {
+            val r = repository.getTipDefaultPaymentMethodId()
+            if (r is ApiResult.Success) _state.update { it.copy(tipDefaultId = r.data) }
+        }
     }
 
     fun retry() = load()
@@ -91,6 +105,7 @@ class PaymentMethodsViewModel @Inject constructor(
     fun refresh() {
         if (_state.value.isRefreshing) return
         _state.update { it.copy(isRefreshing = true) }
+        loadTipDefault()
         viewModelScope.launch {
             val result = repository.getPaymentMethods()
             _state.update {
@@ -111,9 +126,59 @@ class PaymentMethodsViewModel @Inject constructor(
     fun setDefault(id: String) =
         runMutation(id, PaymentMethodsEvent.DefaultSet) { repository.setDefaultPaymentMethod(id) }
 
-    /** AND-224 — remove [id]; row-locked, reconciled to the re-fetched list. */
-    fun remove(id: String) =
-        runMutation(id, PaymentMethodsEvent.Removed) { repository.removePaymentMethod(id) }
+    /**
+     * AND-224 / #15 — remove [id]; row-locked, reconciled to the re-fetched list. The repository
+     * DELETE + re-fetch returns one [ApiResult]: on success we adopt the authoritative list; on a
+     * failure (which masks whether the DELETE itself succeeded) we DROP the row locally instead of
+     * leaving the screen stale/erroring, so the Wallet renders the remaining methods immediately
+     * without a restart. We never flip the loaded list into a permanent Error state on a mutation.
+     */
+    fun remove(id: String) {
+        if (id in _state.value.rowInFlight) return
+        _state.update { it.copy(rowInFlight = it.rowInFlight + id) }
+        viewModelScope.launch {
+            when (val r = repository.removePaymentMethod(id)) {
+                is ApiResult.Success -> {
+                    _state.update {
+                        it.copy(load = PaymentMethodsLoadState.Loaded(r.data), rowInFlight = it.rowInFlight - id)
+                    }
+                    _events.send(PaymentMethodsEvent.Removed)
+                }
+                else -> {
+                    // Self-heal: drop the row from whatever list we are currently showing so a failed
+                    // post-delete re-fetch can never leave a stale row or a permanent error screen.
+                    _state.update {
+                        val pruned = (it.load as? PaymentMethodsLoadState.Loaded)
+                            ?.let { l -> PaymentMethodsLoadState.Loaded(l.methods.filterNot { m -> m.id == id }) }
+                            ?: it.load
+                        it.copy(load = pruned, rowInFlight = it.rowInFlight - id)
+                    }
+                    _events.send(PaymentMethodsEvent.Failure(errorMapper.map(r)))
+                }
+            }
+        }
+    }
+
+    /** TIP-104 - mark [id] as the tip default; row-locked, reconciled to the re-fetched list. */
+    fun setTipDefault(id: String) {
+        if (id in _state.value.rowInFlight) return
+        _state.update { it.copy(rowInFlight = it.rowInFlight + id) }
+        viewModelScope.launch {
+            when (val r = repository.setTipDefaultPaymentMethod(id)) {
+                is ApiResult.Success -> {
+                    _state.update {
+                        it.copy(
+                            load = PaymentMethodsLoadState.Loaded(r.data),
+                            tipDefaultId = id,
+                            rowInFlight = it.rowInFlight - id,
+                        )
+                    }
+                    _events.send(PaymentMethodsEvent.TipDefaultSet)
+                }
+                else -> failRow(id, errorMapper.map(r))
+            }
+        }
+    }
 
     private fun runMutation(
         id: String,

@@ -32,3 +32,53 @@ internal fun QaQuestionDto.toDomain(): QaQuestion = QaQuestion(
     pinned = pinned,
     createdAtEpochSeconds = createdAt,
 )
+
+/**
+ * Host-console question row. Unlike the viewer [QaQuestion] (which only needs featured/pinned), the host
+ * needs the raw moderation [status] (pending / featured / answered / dismissed) to drive the action buttons.
+ */
+data class QaHostQuestion(
+    val id: String,
+    val text: String,
+    val authorDisplayName: String,
+    val upvotes: Int,
+    val status: String,
+    val pinned: Boolean,
+    val createdAtEpochSeconds: Long,
+) {
+    val isFeatured: Boolean get() = status == QA_STATUS_FEATURED
+    val isAnswered: Boolean get() = status == "answered"
+}
+
+fun QaQuestionDto.toHostDomain(): QaHostQuestion = QaHostQuestion(
+    id = questionId,
+    text = text,
+    authorDisplayName = submitterDisplayName.ifBlank { submitterId },
+    upvotes = voteCount,
+    status = status,
+    pinned = pinned,
+    createdAtEpochSeconds = createdAt,
+)
+
+/** Q&A engagement stats (host console). */
+data class QaStats(
+    val totalQuestions: Int,
+    val answered: Int,
+    val dismissed: Int,
+    val featured: Int,
+    val pending: Int,
+    val totalUpvotes: Int,
+    val avgUpvotes: Double,
+    val answerRate: Double,
+)
+
+fun QaStatsDto.toDomain(): QaStats = QaStats(
+    totalQuestions = totalQuestions,
+    answered = answered,
+    dismissed = dismissed,
+    featured = featured,
+    pending = pending,
+    totalUpvotes = totalUpvotes,
+    avgUpvotes = avgUpvotes,
+    answerRate = answerRate,
+)

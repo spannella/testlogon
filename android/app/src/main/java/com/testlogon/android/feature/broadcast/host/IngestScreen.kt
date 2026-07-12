@@ -32,6 +32,19 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
+import com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer
+import com.testlogon.android.core.webrtc.ui.VideoRenderer
+
+/** #7a — true when both CAMERA and RECORD_AUDIO are currently granted (preview gating). */
+private fun android.content.Context.ingestAvPermissionsGranted(): Boolean {
+    val camera = androidx.core.content.ContextCompat.checkSelfPermission(
+        this, Manifest.permission.CAMERA,
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val mic = androidx.core.content.ContextCompat.checkSelfPermission(
+        this, Manifest.permission.RECORD_AUDIO,
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    return camera && mic
+}
 
 /** AND-308 — stable testTags for the host ingest (camera/mic publish) screen. */
 object IngestTestTags {
@@ -60,21 +73,43 @@ fun IngestRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { grants ->
         val cameraGranted = grants[Manifest.permission.CAMERA] ?: false
         val micGranted = grants[Manifest.permission.RECORD_AUDIO] ?: false
-        // Capture never happens (FLAGGED engine), but the flow is correct: only start once granted.
-        if (cameraGranted && micGranted) viewModel.start()
+        // #7a — once granted, open the camera PREVIEW immediately so the host sees themselves before
+        // they tap Go Live (no publish yet). Start (publish) is a separate, explicit action.
+        if (cameraGranted && micGranted) viewModel.startPreview()
+    }
+
+    // #7a — on entry, show the self-preview: if CAMERA + RECORD_AUDIO are already granted open the
+    // preview now; otherwise request them (the result callback opens the preview on grant).
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (context.ingestAvPermissionsGranted()) {
+            viewModel.startPreview()
+        } else {
+            permissionLauncher.launch(
+                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+            )
+        }
     }
 
     IngestScreen(
         state = state,
+        videoRenderer = viewModel.videoRenderer,
         onStart = {
-            permissionLauncher.launch(
-                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
-            )
+            // #7a — preview already requested permissions on entry. Re-check, then publish; if somehow
+            // still ungranted (user denied), re-request and let the preview open on grant.
+            if (context.ingestAvPermissionsGranted()) {
+                viewModel.start()
+            } else {
+                permissionLauncher.launch(
+                    arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+                )
+            }
         },
         onStop = viewModel::stop,
         onHostControls = onHostControls,
@@ -90,6 +125,7 @@ fun IngestRoute(
 @Composable
 fun IngestScreen(
     state: IngestUiState,
+    videoRenderer: VideoRenderer = PlaceholderVideoRenderer,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onBack: () -> Unit,
@@ -125,6 +161,7 @@ fun IngestScreen(
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
                     .testTag(IngestTestTags.PREVIEW),
+                renderer = videoRenderer,
             )
 
             if (state.mediaUnavailable) {

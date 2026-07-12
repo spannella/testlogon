@@ -7,7 +7,10 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.calendar.CalendarEvent
 import com.testlogon.android.data.calendar.CalendarRepository
+import com.testlogon.android.data.calendar.ics.IcsMapper
+import com.testlogon.android.data.calendar.ics.Rfc5545IcsSerializer
 import com.testlogon.android.feature.calendar.CalendarZoneProvider
+import android.net.Uri
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +34,8 @@ class EventDetailViewModel @Inject constructor(
     private val repository: CalendarRepository,
     private val zoneProvider: CalendarZoneProvider,
     private val shareHostProvider: PublicEventHostProvider,
+    private val icsExporter: IcsExporter,
+    private val icsSerializer: Rfc5545IcsSerializer,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -53,6 +58,18 @@ class EventDetailViewModel @Inject constructor(
     fun retry() {
         if (loading) return
         load()
+    }
+
+    /**
+     * SC19 #11 - generates a valid RFC 5545 .ics for the currently loaded event (client-side, from the
+     * already-fetched domain object) and writes it to a shareable FileProvider URI. Returns null when no
+     * event is loaded yet. The caller opens the URI via ACTION_VIEW (text/calendar). This avoids
+     * depending on a reachable public web host or session cookies in the browser.
+     */
+    fun exportIcs(): Uri? {
+        val event = (state.value as? EventDetailUiState.Content)?.event ?: return null
+        val ics = icsSerializer.serialize(listOf(IcsMapper.toIcsEvent(event, publicUrl = null)))
+        return runCatching { icsExporter.writeToCache(event.eventId, ics) }.getOrNull()
     }
 
     private fun load() {

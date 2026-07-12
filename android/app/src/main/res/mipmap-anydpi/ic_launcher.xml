@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ID2 — pre-API-26 fallback launcher icon (no adaptive-icon support). A single full-bleed vector:
+  brand-purple rounded field + white chat bubble + "T" monogram. Used on API 24-25; API 26+ uses the
+  adaptive icon in mipmap-anydpi-v26.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M18,0 h72 a18,18 0 0 1 18,18 v72 a18,18 0 0 1 -18,18 h-72 a18,18 0 0 1 -18,-18 v-72 a18,18 0 0 1 18,-18 z"
+        android:fillColor="#6750A4" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,30 h40 a10,10 0 0 1 10,10 v24 a10,10 0 0 1 -10,10 h-22 l-12,12 v-12 h-6 a10,10 0 0 1 -10,-10 v-24 a10,10 0 0 1 10,-10 z" />
+    <path
+        android:fillColor="#6750A4"
+        android:pathData="M44,44 h20 v6 h-7 v20 h-6 v-20 h-7 z" />
+</vector>

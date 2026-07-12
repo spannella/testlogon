@@ -23,6 +23,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.VideoCall
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -78,6 +82,7 @@ object GalleryTestTags {
 @Composable
 fun GalleryRoute(
     onItemClick: (videoId: String) -> Unit,
+    onUploadVideo: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: GalleryViewModel = hiltViewModel(),
@@ -88,6 +93,7 @@ fun GalleryRoute(
         state = state,
         items = items,
         onItemClick = onItemClick,
+        onUploadVideo = onUploadVideo,
         onBack = onBack,
         onCategorySelected = viewModel::onCategorySelected,
         onSearch = viewModel::onSearch,
@@ -100,6 +106,7 @@ fun GalleryScreen(
     state: GalleryUiState,
     items: LazyPagingItems<GalleryVideoItem>,
     onItemClick: (videoId: String) -> Unit,
+    onUploadVideo: () -> Unit = {},
     onBack: () -> Unit,
     onCategorySelected: (String?) -> Unit,
     onSearch: (String?) -> Unit = {},
@@ -108,6 +115,11 @@ fun GalleryScreen(
     Scaffold(
         modifier = modifier.testTag(GalleryTestTags.SCREEN),
         topBar = { TopAppBar(title = { Text(stringResource(R.string.gallery_title)) }) },
+        floatingActionButton = {
+            FloatingActionButton(onClick = onUploadVideo, modifier = Modifier.testTag("gallery_upload_fab")) {
+                Icon(Icons.Filled.VideoCall, contentDescription = "Upload video")
+            }
+        },
     ) { padding ->
         val refreshState = items.loadState.refresh
         val isRefreshing = refreshState is LoadState.Loading && items.itemCount > 0

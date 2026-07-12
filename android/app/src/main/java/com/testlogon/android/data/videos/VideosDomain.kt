@@ -11,13 +11,22 @@ import kotlin.math.roundToInt
  * the `?token=` append rule lives in exactly one place.
  */
 
-/** AND-189 — a tile in the library/VOD grid. `durationSec` is rounded for the mm:ss badge. */
+/**
+ * AND-189 — a tile in the library/VOD grid. `durationSec` is rounded for the mm:ss badge.
+ * `status` is the server-side pipeline state (probing/encoding/published/...) — drives the
+ * "Processing"/"Ready" badge + open-gating on the My Videos screen. Blank for the VOD catalog
+ * (which only ever returns playable titles).
+ */
 data class VideoSummary(
     val id: String,
     val title: String,
     val thumbnailUrl: String?,
     val durationSec: Int?,
-)
+    val status: String = "",
+) {
+    /** True while the asset is still being prepared server-side (no playable manifest yet). */
+    val isProcessing: Boolean get() = status.isNotBlank() && status in VideoDetail.PROCESSING_STATUSES
+}
 
 /** AND-189 — one cursor-paged page of summaries. `cursor` is null/absent on the terminal page. */
 data class VideoPage(
@@ -49,6 +58,10 @@ data class VideoDetail(
     val purchaseAvailableOrFalse: Boolean = false,
     val subscriptionAvailableOrFalse: Boolean = false,
     val subscriptionUpsellOrFalse: Boolean = false,
+    // B-VIDSOCIAL2 — video-level emoji reactions (counts + the caller's own) + running tip total.
+    val reactions: Map<String, Int> = emptyMap(),
+    val myReactions: Set<String> = emptySet(),
+    val tipTotalCents: Int = 0,
 ) {
     /** True while the asset is still being prepared server-side; no manifest yet. */
     val isProcessing: Boolean get() = status in PROCESSING_STATUSES
@@ -98,6 +111,7 @@ fun VideoListItemDto.toSummary(): VideoSummary = VideoSummary(
     title = title,
     thumbnailUrl = thumbnailUrl?.takeIf { it.isNotBlank() },
     durationSec = durationSeconds?.takeIf { it > 0 }?.roundToInt(),
+    status = status,
 )
 
 fun VideoListResponseDto.toDomain(): VideoPage = VideoPage(
@@ -136,4 +150,7 @@ fun VideoDetailDto.toDomain(): VideoDetail = VideoDetail(
     purchaseAvailableOrFalse = purchaseAvailable ?: false,
     subscriptionAvailableOrFalse = subscriptionAvailable ?: false,
     subscriptionUpsellOrFalse = subscriptionUpsell ?: false,
+    reactions = reactionsCounts.filterValues { it > 0 },
+    myReactions = myReactions.toSet(),
+    tipTotalCents = tipTotalCents,
 )

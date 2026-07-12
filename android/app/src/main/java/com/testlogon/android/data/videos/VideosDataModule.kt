@@ -29,6 +29,16 @@ object VideosApiModule {
     @Singleton
     fun provideVodApi(retrofit: Retrofit): VodApi =
         retrofit.create(VodApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideVideoCommentsApi(retrofit: Retrofit): VideoCommentsApi =
+        retrofit.create(VideoCommentsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideVideoUploadApi(retrofit: Retrofit): VideoUploadApi =
+        retrofit.create(VideoUploadApi::class.java)
 }
 
 @Module

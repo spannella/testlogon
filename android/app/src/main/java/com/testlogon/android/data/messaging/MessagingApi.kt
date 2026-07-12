@@ -100,6 +100,18 @@ interface MessagingApi {
     ): MessageDto
 
     /**
+     * C6 — create a gallery (multi-image) message referencing already-uploaded objects by
+     * bucket+key. Body = CreateGalleryMessageIn {free_images:[...], text?}; returns MessageOut
+     * (kind="gallery").
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/gallery")
+    suspend fun createGalleryMessage(
+        @Path("id") id: String,
+        @Body body: CreateGalleryMessageReq,
+    ): MessageDto
+
+    /**
      * AND-131 — share an existing library video into a conversation. Body =
      * CreateVideoShareMessageIn {video_id, text?, send_at?}; returns MessageOut (kind="video_share").
      */
@@ -174,7 +186,7 @@ interface MessagingApi {
     suspend fun downloadAttachment(
         @Path("id") id: String,
         @Path("messageId") messageId: String,
-        @Query("grant_token") grantToken: String,
+        @Query("grant_token") grantToken: String?,
     ): ResponseBody
 
     /**
@@ -287,6 +299,14 @@ interface MessagingApi {
         @Body body: CreateMeetingPollReq,
     ): MessageDto
 
+    /** Arbitrary text-option poll message (kind="poll"); returns MessageOut with a poll snapshot. */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/poll")
+    suspend fun createPollMessage(
+        @Path("id") id: String,
+        @Body body: CreatePollMessageReq,
+    ): MessageDto
+
     /** AND-136 — authoritative poll state (per-slot counts + my_vote). Idempotent GET. */
     @GET("messaging/conversations/{id}/polls/{pollId}")
     suspend fun getMeetingPoll(
@@ -356,6 +376,19 @@ interface MessagingApi {
         @Path("messageId") messageId: String,
         @Body body: SendTipReq,
     ): TipOutDto
+
+    /**
+     * TIP-203 - money-REACTION tip on a message (distinct from [tipMessage]). Routes server-side
+     * through charge_tip(content_type="message_react"); credits the message author, stores a
+     * tip-reaction badge, fans a reaction:tip realtime event. Non-idempotent POST.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/{messageId}/reactions/tip")
+    suspend fun tipReactMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: TipReactReq,
+    ): TipReactOutDto
 
     /**
      * AND-139 — single atomic lottery draw+reveal. EMPTY body (no schema). Conversation is NOT in
@@ -455,6 +488,39 @@ interface MessagingApi {
         @Path("messageId") messageId: String,
     ): MessageDto
 
+    /**
+     * #8 SCHEDULED MESSAGES — list the caller's still-pending scheduled (not-yet-delivered) messages
+     * in a conversation. Server filters to the caller's own status=="scheduled" rows, sorted by
+     * deliver_at. Returns a bare array of MessageOut (each carries deliver_at). Idempotent GET.
+     */
+    @GET("messaging/conversations/{id}/messages/scheduled")
+    suspend fun listScheduledMessages(
+        @Path("id") id: String,
+    ): List<MessageDto>
+
+    /**
+     * #8 SCHEDULED MESSAGES — reschedule / edit a still-pending scheduled message. At least one of
+     * text / send_at is required; send_at must be >= now+5s; text edits apply to text-kind only.
+     * Returns the updated MessageOut. 403 if not the sender, 400 if no longer scheduled. Non-idempotent.
+     */
+    @Headers("Content-Type: application/json")
+    @PATCH("messaging/conversations/{id}/messages/{messageId}/schedule")
+    suspend fun rescheduleMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+        @Body body: RescheduleMessageReq,
+    ): MessageDto
+
+    /**
+     * #8 SCHEDULED MESSAGES — cancel/delete a still-pending scheduled message before it delivers.
+     * Returns {ok:true, message_id}. Non-idempotent.
+     */
+    @DELETE("messaging/conversations/{id}/messages/{messageId}/schedule")
+    suspend fun cancelScheduledMessage(
+        @Path("id") id: String,
+        @Path("messageId") messageId: String,
+    ): ResponseBody
+
     /** AND-140 — hide a message FOR ME (server-backed). Returns MessageControlActionOut. Non-idempotent. */
     @POST("messaging/conversations/{id}/messages/{messageId}/hide")
     suspend fun hideMessage(
@@ -503,6 +569,60 @@ interface MessagingApi {
         @Path("messageId") messageId: String,
         @Query("limit") limit: Int = 200,
     ): List<MessageViewOut>
+
+    // ---- MSG: new composers (lottery / find-datetime / calendar-event / calendar-share + discovery) ----
+
+    /**
+     * Create a lottery DM. NOTE: conversation_id is in the BODY (not the path). Returns MessageOut.
+     * Body = CreateLotteryMessageIn {message_type, conversation_id, lottery_config}.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/messages/lottery")
+    suspend fun createLottery(
+        @Body body: CreateLotteryReq,
+    ): MessageDto
+
+    /** Create a Find-a-DateTime poll message. Returns MessageOut (HTTP 201). */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/find-datetime")
+    suspend fun createFindDateTime(
+        @Path("id") id: String,
+        @Body body: CreateFindDateTimeReq,
+    ): MessageDto
+
+    /** Share a calendar event into a conversation. Returns MessageOut (kind="calendar_event"). */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/calendar-event")
+    suspend fun createCalendarEventMessage(
+        @Path("id") id: String,
+        @Body body: CreateCalendarEventReq,
+    ): MessageDto
+
+    /** Share a calendar into a conversation. Returns MessageOut (kind="calendar_share"). */
+    @Headers("Content-Type: application/json")
+    @POST("messaging/conversations/{id}/messages/calendar-share")
+    suspend fun createCalendarShareMessage(
+        @Path("id") id: String,
+        @Body body: CreateCalendarShareReq,
+    ): MessageDto
+
+    /** Discovery: the current users calendars (bare array of CalendarAccessOut). Idempotent GET. */
+    @GET("ui/calendars")
+    suspend fun listCalendars(): List<CalendarAccessDto>
+
+    /** Discovery: events in a calendar (EventsPageOut). Idempotent GET. */
+    @GET("ui/calendars/{calendarId}/events")
+    suspend fun listCalendarEvents(
+        @Path("calendarId") calendarId: String,
+        @Query("limit") limit: Int = 50,
+    ): CalendarEventsPageDto
+
+    /** Discovery: file-manager listing for a folder (default root). Idempotent GET. */
+    @GET("v1/fs/list")
+    suspend fun listFiles(
+        @Query("path") path: String = "/",
+        @Query("limit") limit: Int = 100,
+    ): FsListRespDto
 
     // ---- AND-151 / AND-152: message search ----
 

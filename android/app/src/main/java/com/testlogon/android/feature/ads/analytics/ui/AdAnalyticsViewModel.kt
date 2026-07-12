@@ -7,11 +7,14 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdAnalyticsSummary
 import com.testlogon.android.core.model.ads.AdBreakdownEntry
+import com.testlogon.android.core.model.ads.AdRoasReport
 import com.testlogon.android.core.model.ads.AdTimeSeriesPoint
 import com.testlogon.android.core.model.ads.BreakdownDimension
 import com.testlogon.android.core.model.ads.DateRange
 import com.testlogon.android.core.model.ads.DateRangePreset
 import com.testlogon.android.feature.ads.analytics.data.AdAnalyticsRepository
+import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
+import com.testlogon.android.navigation.AdAnalyticsDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +32,12 @@ import javax.inject.Inject
  * staleness does not survive process death; that is DEFERRED). A pull-to-refresh bypasses nothing
  * persistent (there is no cache) - it simply re-reads and shows the refreshing affordance.
  *
+ * STUB ENTRY: the More-hub opens a placeholder sample account id (no ads-accounts list yet), so the load
+ * resolves [AdAnalyticsDest.SAMPLE_ACCOUNT_ID] to the caller's first real ad account via
+ * [AdsBillingRepository.listAccounts] (mirrors the AND-367 AdsBillingViewModel / AND-369 AdsCampaignsViewModel)
+ * before reading analytics; downstream this destination is reached from an ads-accounts list with a real id
+ * and the resolve is a no-op.
+ *
  * The breakdown groups by [BreakdownDimension.CREATIVE] for this wave. READ-ONLY: there are NO mutations and
  * NO polling loop.
  *
@@ -38,11 +47,13 @@ import javax.inject.Inject
 @HiltViewModel
 class AdAnalyticsViewModel @Inject constructor(
     private val repository: AdAnalyticsRepository,
+    private val accountsRepository: AdsBillingRepository,
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
-    val accountId: String =
+    var accountId: String =
         checkNotNull(savedState[ARG_ACCOUNT_ID]) { "missing $ARG_ACCOUNT_ID nav arg" }
+        private set
 
     /** Clock seam: the inclusive end-of-range day. Defaults to today; tests set a fixed date. */
     var today: LocalDate = LocalDate.now()
@@ -76,6 +87,12 @@ class AdAnalyticsViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            // The More-hub stub opens a placeholder sample id; resolve it to the caller's first real ad
+            // account so the dashboard shows real analytics instead of "Account not found" (cf. AdsBilling).
+            if (accountId == AdAnalyticsDest.SAMPLE_ACCOUNT_ID) {
+                (accountsRepository.listAccounts() as? ApiResult.Success)?.data
+                    ?.firstOrNull()?.accountId?.let { accountId = it }
+            }
             val range = DateRange.of(preset, today)
             when (val summaryResult = repository.getSummary(accountId, range)) {
                 is ApiResult.Success -> {
@@ -83,7 +100,11 @@ class AdAnalyticsViewModel @Inject constructor(
                         as? ApiResult.Success)?.data ?: emptyList()
                     val breakdown = (repository.getBreakdown(accountId, DIMENSION, range)
                         as? ApiResult.Success)?.data ?: emptyList()
-                    _uiState.value = contentOrEmpty(summaryResult.data, timeseries, breakdown, preset)
+                    // ADV-503: best-effort ROAS (spend vs attributed conversion value); a failure
+                    // simply omits the ROAS card and never fails the dashboard.
+                    val roas = (repository.getRoas(accountId, preset.days)
+                        as? ApiResult.Success)?.data
+                    _uiState.value = contentOrEmpty(summaryResult.data, timeseries, breakdown, roas, preset)
                 }
                 is ApiResult.Failure -> keepStaleOrTerminal(prior, summaryResult.error, preset)
                 is ApiResult.NetworkError -> keepStaleOrTerminal(
@@ -114,6 +135,7 @@ class AdAnalyticsViewModel @Inject constructor(
         summary: AdAnalyticsSummary,
         timeseries: List<AdTimeSeriesPoint>,
         breakdown: List<AdBreakdownEntry>,
+        roas: AdRoasReport?,
         preset: DateRangePreset,
     ): AdAnalyticsUiState {
         val noData = summary.impressions == 0L &&
@@ -129,6 +151,7 @@ class AdAnalyticsViewModel @Inject constructor(
                 timeseries = timeseries,
                 breakdown = breakdown,
                 range = preset,
+                roas = roas,
                 isStale = false,
                 isRefreshing = false,
             )

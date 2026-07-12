@@ -113,7 +113,7 @@ class CallManager @Inject constructor(
         )
         // As above (AND-297): do NOT cancel timers when this setup coroutine finishes. The heartbeat is
         // armed later by onConnected() and must survive; teardown()/endCall() own the terminal cancellation.
-        orchestrationJob = scope.launch { negotiate(active) }
+        // Media negotiation is driven by CallSignalingHub once the phase reaches Connecting.
     }
 
     private suspend fun runOutgoing(active: ActiveCall) {
@@ -141,7 +141,6 @@ class CallManager @Inject constructor(
                     )
                 }
                 armRingTimeout(active)
-                negotiate(active)
             }
             is ApiResult.Failure, is ApiResult.NetworkError ->
                 // Invite failed: no peer was created. Surface a failed phase for Retry/Close.
@@ -154,34 +153,6 @@ class CallManager @Inject constructor(
      * every step (TURN fetch still returns a STUN-only fallback list; peer/offer/signaling are inert),
      * the control plane reaches Ringing/Connecting but media is unavailable. NEVER starts a real peer.
      */
-    private suspend fun negotiate(active: ActiveCall) {
-        // AND-291: TURN/STUN config (real fetch; falls back to STUN-only). Used to configure the peer.
-        val servers = iceServers.current(active.callId)
-
-        // AND-289: init the peer + create the offer via the seam. The stub returns NotConfigured.
-        val initResult = peer.init(
-            PeerConfig(
-                iceServers = servers,
-                role = PeerRole.OFFERER,
-                enableAudio = true,
-                enableVideo = active.mode == CallMode.VIDEO,
-            ),
-        )
-        val offerResult = peer.createOffer()
-
-        if (initResult is PeerResult.NotConfigured || offerResult !is PeerResult.Ok) {
-            // FLAGGED: media engine not configured. Control plane stays alive (caller can still hang up),
-            // but media is unavailable — surface it; do NOT fail the call here.
-            _state.update { it.copy(mediaUnavailable = true) }
-            return
-        }
-
-        // The lines below only run once the real WebRTC engine is wired (the stub never reaches here).
-        val sendResult = signaling.sendOffer(SignalingMessage.Offer(offerResult.value))
-        if (sendResult is TransportResult.NotConfigured) {
-            _state.update { it.copy(mediaUnavailable = true) }
-        }
-    }
 
     /** Bounded ring timeout: a single delay (NOT a while-loop). Cancelled on any terminal/answer. */
     private fun armRingTimeout(active: ActiveCall) {
@@ -204,7 +175,11 @@ class CallManager @Inject constructor(
      * (real impl) when the peer reports CONNECTED; exposed so the staged loopback test can drive it.
      */
     fun onConnected() {
-        val active = _state.value.call ?: return
+        val active = _state.value.call ?: run {
+            android.util.Log.d("TLHUB", "onConnected: NO active call (ignored)")
+            return
+        }
+        android.util.Log.d("TLHUB", "onConnected: phase->Connected call=${active.callId}")
         ringTimeoutJob?.cancel()
         _state.update { it.copy(phase = CallPhase.Connected(clock.now())) }
         startHeartbeat(active)

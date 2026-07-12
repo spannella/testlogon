@@ -2,7 +2,9 @@ package com.testlogon.android.feature.call.incoming
 
 import com.testlogon.android.core.data.cache.Clock
 import com.testlogon.android.core.model.ApiResult
+import android.util.Log
 import com.testlogon.android.data.call.CallEvent
+import com.testlogon.android.data.webrtc.PeerRole
 import com.testlogon.android.data.call.CallRepository
 import com.testlogon.android.data.call.IdempotencyKey
 import com.testlogon.android.feature.call.domain.ActiveCall
@@ -59,6 +61,17 @@ class IncomingCallController @Inject constructor(
 
     @Synchronized
     fun onInvite(invite: CallEvent.Invite) {
+        Log.d("TLHUB", "onInvite call=${invite.callId} state=${_state.value::class.simpleName}")
+        // GHOST-CALL GUARD: never ring a STALE / already-terminal invite. The per-user /events/poll queue
+        // re-serves the newest ~100 events on every app launch, including days-old `call.invite`s whose
+        // call has long since gone terminal (missed/ended). Drop any invite whose server `created_at` is
+        // older than the ring window (with clock-skew headroom) OR whose advertised expiry has already
+        // passed. A genuine current call is only seconds old, so this never blocks a real ring.
+        if (isStaleInvite(invite)) {
+            Log.d("TLHUB", "onInvite DROPPED stale call=${invite.callId} createdAt=${invite.createdAtEpochSeconds} expiresAt=${invite.expiresAtEpochSeconds}")
+            seen.put(invite.callId, true)
+            return
+        }
         // De-dup: same call_id rings exactly once.
         if (seen.put(invite.callId, true) != null) return
 
@@ -112,6 +125,7 @@ class IncomingCallController @Inject constructor(
                                 peerUserId = invite.callerUserId,
                                 mode = invite.mode,
                                 idempotencyKey = idempotencyKeyFor(invite.callId),
+                                role = PeerRole.ANSWERER,
                             ),
                             peerName = invite.callerName,
                         )
@@ -175,6 +189,20 @@ class IncomingCallController @Inject constructor(
                 _state.value = IncomingCallState.Dismissed
             }
         }
+    }
+
+    /**
+     * True when [invite] is too old to ring — a replayed/terminal invite from the /events/poll backlog.
+     * Uses the invite's server `created_at` (primary) and the advertised `expires_at` (secondary). When
+     * neither timestamp is present we fail OPEN (ring), so a genuine invite is never suppressed.
+     */
+    private fun isStaleInvite(invite: CallEvent.Invite): Boolean {
+        val now = clock.now()
+        val createdMs = invite.createdAtEpochSeconds?.let { it * 1_000L }
+        if (createdMs != null && now - createdMs > timing.staleInviteMaxAgeMs) return true
+        val expiresMs = invite.expiresAtEpochSeconds?.let { it * 1_000L }
+        if (expiresMs != null && expiresMs < now) return true
+        return false
     }
 
     private fun computeDeadline(invite: CallEvent.Invite): Long {

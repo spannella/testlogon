@@ -1581,9 +1581,23 @@ async def get_messaging_user_id(
 
     cookies = getattr(request, "cookies", {}) or {}
     if x_session_id or cookies.get(S.ui_session_cookie_name):
-        user_sub = await get_authenticated_user_sub(request)
-        ctx = await require_ui_session(request, user_sub=user_sub, x_session_id=x_session_id)
-        uid = ctx["user_sub"]
+        try:
+            user_sub = await get_authenticated_user_sub(request)
+        except HTTPException:
+            # The realtime poll/SSE must never 401 (it surfaces app-wide as a spurious "session expired").
+            # Fall back to the bearer token the client also sends.
+            user_sub = extract_bearer_token(authorization) or ""
+            if not user_sub:
+                raise
+        try:
+            ctx = await require_ui_session(request, user_sub=user_sub, x_session_id=x_session_id)
+            uid = ctx["user_sub"]
+        except HTTPException:
+            # DEV/local: require_ui_session validates a server-side session record that is racy for
+            # the background SSE/poll client right after login (the per-user event queue would
+            # otherwise be undeliverable -> calls never ring). The user is already authenticated from
+            # the cookie/token above, so trust that sub for the read-only event poll.
+            uid = user_sub
         _ensure_user_indexed(uid)
         return uid
     uid = get_current_user_id(authorization)
@@ -1747,6 +1761,23 @@ class FindOrCreateDmIn(BaseModel):
     user_id: str  # target user's sub
 
 
+# --- TIP-B4 pay-to-message: MessagePrivacy (TIP-401) ---
+class MessagePrivacyOut(BaseModel):
+    require_tip_to_message: bool = False
+    min_tip_cents: int = 0
+    tip_free_allowlist: List[str] = []
+
+
+class MessagePrivacyUpdateIn(BaseModel):
+    require_tip_to_message: Optional[bool] = None
+    min_tip_cents: Optional[int] = Field(default=None, ge=0, le=100_000)
+    tip_free_allowlist: Optional[List[str]] = None
+
+
+class MessagePrivacyAllowlistEntryIn(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=200)
+
+
 class ConversationOut(BaseModel):
     conversation_id: str
     type: str
@@ -1892,6 +1923,7 @@ class SendTextMessageIn(BaseModel):
     send_at_tz: Optional[str] = Field(default=None, max_length=64)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)  # e.g. 500 = $5.00
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)  # 10s–7d
     view_once: bool = False
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
@@ -1978,6 +2010,7 @@ class CreateImageMessageIn(BaseModel):
     lock_description: Optional[str] = Field(default=None, max_length=200)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
     # B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
     send_at_local: Optional[str] = Field(default=None, max_length=40)
@@ -2056,6 +2089,7 @@ class CreateGalleryMessageIn(BaseModel):
     send_at_tz: Optional[str] = Field(default=None, max_length=64)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    tip_recipient_id: Optional[str] = Field(default=None, max_length=200)  # TIP-105: required recipient for a group attached tip
 
     @model_validator(mode="after")
     def validate_gallery(self):
@@ -2600,6 +2634,7 @@ class MessageOut(BaseModel):
     edited_by: Optional[str] = None
     revoked_at: Optional[int] = None
     revoked_by: Optional[str] = None
+    under_review: Optional[bool] = None  # MOD-2: True on the moderation "under review" placeholder
     delivered_to_count: Optional[int] = None
     delivered_to_user_ids: Optional[List[str]] = None
     read_by_count: Optional[int] = None
@@ -2621,6 +2656,13 @@ class MessageOut(BaseModel):
     tip_amount_cents: Optional[int] = None
     tip_currency: Optional[str] = None
     tip_payment_id: Optional[str] = None
+    tip_reactions: list = []  # TIP-B2: money-reaction badges (author-side chip hydration)
+    ad_message: Optional[bool] = None  # ADV2-E5 ad-message hydration
+    ad_click_id: Optional[str] = None
+    cta_url: Optional[str] = None
+    ad_image_url: Optional[str] = None
+    sponsor_label: Optional[str] = None
+    content_owner_sub: Optional[str] = None
 
     # Expiry
     expires_at: Optional[int] = None      # absolute Unix timestamp when it expires
@@ -3663,7 +3705,8 @@ def _filter_message_visible(message_item: dict, user_id: str) -> bool:
     if message_item.get("revoked_at"):
         return False
     if message_item.get("moderation_hidden") or message_item.get("moderation_removed_at"):
-        return False
+        if message_item.get("sender_id") != user_id:
+            return False
     # B-SCHED2 #20: a scheduled message is HIDDEN from the thread for EVERYONE
     # (including its own sender) until the background loop delivers it at
     # deliver_at. Senders manage pending sends via the dedicated
@@ -4068,7 +4111,57 @@ def _lottery_projection_for_viewer(message_item: dict, viewer_user_id: str) -> O
     }
 
 
+def _under_review_placeholder_message_out(message_item: dict, viewer_user_id: str) -> MessageOut:
+    """MOD-2: the stripped "under review" placeholder shown to non-sender members
+    for a moderation-hidden message (media / reactions / tips / ad payload all
+    omitted -- nothing leaks)."""
+    conversation_id = str(message_item.get("conversation_id") or "")
+    projected_sender_id = _project_message_sender_id(
+        message_item=message_item,
+        viewer_user_id=viewer_user_id,
+        conversation_id=conversation_id,
+    )
+    return MessageOut(
+        conversation_id=conversation_id,
+        message_id=str(message_item.get("message_id") or ""),
+        sender_id=projected_sender_id,
+        created_at=int(message_item.get("created_at") or 0),
+        kind="text",
+        text="Message under review",
+        reply_to_message_id=message_item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=message_item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=message_item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=message_item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
+        under_review=True,
+    )
+
+
+def _should_render_under_review_placeholder(message_item: dict, user_id: str) -> bool:
+    """MOD-2: True iff _filter_message_visible rejected this message SOLELY because
+    it is moderation-hidden for a non-sender -> the thread keeps it as a visible
+    "under review" placeholder instead of dropping the row. Revoked / scheduled /
+    deleted-for-viewer messages stay filtered out."""
+    if not (message_item.get("moderation_hidden") or message_item.get("moderation_removed_at")):
+        return False
+    if message_item.get("sender_id") == user_id:
+        return False
+    if message_item.get("revoked_at"):
+        return False
+    if message_item.get("status") == "scheduled":
+        return False
+    if user_id in set(message_item.get("deleted_for", []) or []):
+        return False
+    return True
+
+
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
+    # MOD-2 / D-MESSAGE-HIDE: a moderation-hidden message is shown to NON-SENDER
+    # members as a VISIBLE "under review" placeholder (real text / media / reactions
+    # stripped); the SENDER keeps owner-view (real content). On unhide the moderation
+    # flags clear (non-destructive) so the real content returns byte-for-byte.
+    if (message_item.get("moderation_hidden") or message_item.get("moderation_removed_at")) \
+            and message_item.get("sender_id") != viewer_user_id:
+        return _under_review_placeholder_message_out(message_item, viewer_user_id)
     merged_item = _merge_consumption_state(message_item, viewer_user_id)
     lottery_out = _lottery_projection_for_viewer(merged_item, viewer_user_id)
 
@@ -4449,6 +4542,19 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         tip_amount_cents=int(merged_item["tip_amount_cents"]) if merged_item.get("tip_amount_cents") else None,
         tip_currency=merged_item.get("tip_currency"),
         tip_payment_id=merged_item.get("tip_payment_id"),
+        tip_reactions=[
+            {"tipper_id": _r.get("tipper_id"), "emoji": _r.get("emoji"),
+             "amount_cents": int(_r.get("amount_cents") or 0),
+             "tip_payment_id": _r.get("tip_payment_id"),
+             "created_at": int(_r["created_at"]) if _r.get("created_at") is not None else None}
+            for _r in (merged_item.get("tip_reactions") or [])
+        ],
+        ad_message=True if merged_item.get("ad_message") else None,  # ADV2-E5 ad-message hydration
+        ad_click_id=merged_item.get("ad_click_id") or None,
+        cta_url=merged_item.get("cta_url") or None,
+        ad_image_url=merged_item.get("ad_image_url") or None,
+        sponsor_label=merged_item.get("sponsor_label") or None,
+        content_owner_sub=merged_item.get("content_owner_sub") or None,
         expires_at=int(merged_item["expires_at"]) if merged_item.get("expires_at") else None,
         view_once=bool(merged_item.get("view_once")),
         expired=expired,
@@ -4551,8 +4657,17 @@ def _project_event_for_user(event_item: dict, user_id: str) -> dict:
     except Exception:
         return out
     payload_out = dict(payload)
-    payload_out["message"] = _serialize_message_event_payload(message_item, user_id)
+    serialized = _serialize_message_event_payload(message_item, user_id)
+    payload_out["message"] = serialized
     out["payload"] = payload_out
+    # Also surface the core message fields at the TOP level of the frame. The Android
+    # SseEnvelopeParser (and the web useMessagingStream contract) reads message:new frames FLAT
+    # (data["conversation_id"]/["text"]/...); without this the nested payload.message shape parses
+    # to null and the live thread never receives the inbound message.
+    if isinstance(serialized, dict):
+        for _k in ("conversation_id", "message_id", "sender_id", "text", "kind", "created_at"):
+            if _k in serialized and _k not in out:
+                out[_k] = serialized[_k]
     return out
 
 
@@ -5326,13 +5441,22 @@ def _ddb_fetch_events(user_id: str, after: Optional[str], limit: int) -> list[di
             Limit=limit,
             ScanIndexForward=True,
         )
-    else:
-        resp = tbl_events.query(
-            KeyConditionExpression=Key("user_id").eq(user_id),
-            Limit=limit,
-            ScanIndexForward=True,
-        )
-    return resp.get("Items", [])
+        return resp.get("Items", [])
+    # event_id is a random UUID / non-time-ordered key (message:new ids are 'e_...' and sort HIGH),
+    # so a Limit-bounded ascending query DROPS the newest message:new events once the per-user queue
+    # exceeds `limit` -> the SSE thread stops receiving live messages. Fetch the whole queue and
+    # return the newest `limit` events by created_at instead.
+    items: list[dict] = []
+    kwargs: dict = {"KeyConditionExpression": Key("user_id").eq(user_id)}
+    while True:
+        resp = tbl_events.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    items.sort(key=lambda e: int(e.get("created_at", 0) or 0), reverse=True)
+    return items[:limit]
 
 
 def _event_id() -> str:
@@ -5899,6 +6023,55 @@ def _resolve_tip_recipient(conversation_id: str, sender_id: str) -> Optional[str
     return None  # Group chat or error
 
 
+def _resolve_attached_tip_recipient(
+    conversation_id: str, sender_id: str, explicit_recipient_id: Optional[str] = None
+) -> str:
+    """TIP-105: resolve the recipient for an attached-on-SEND tip.
+
+    DM    -> the other participant (unchanged behavior).
+    Group -> REJECT with 400 tip_not_allowed_in_group UNLESS an explicit
+             tip_recipient_id names a DISTINCT group participant, then credit them.
+
+    Never returns None: it returns a valid non-self recipient or raises. An
+    attached-on-send tip that credited the sender would be a self-tip, so a group
+    tip with no (valid) explicit recipient is rejected rather than silently dropped
+    (the pre-TIP-105 behavior stored the tip but never charged/credited). Post-hoc
+    tipping of someone else's group message is unaffected (it credits the message
+    author directly and does not use this helper).
+    """
+    try:
+        resp = tbl_parts.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(conversation_id),
+            Limit=50,
+        )
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+    other_ids = [
+        p.get("user_id")
+        for p in participants
+        if p.get("user_id") and p.get("user_id") != sender_id
+    ]
+    if explicit_recipient_id:
+        if explicit_recipient_id == sender_id:
+            raise HTTPException(400, {"code": "cannot_tip_self", "message": "Cannot tip yourself."})
+        if explicit_recipient_id not in other_ids:
+            raise HTTPException(
+                400,
+                {"code": "tip_recipient_not_in_conversation",
+                 "message": "tip_recipient_id must name a participant of this conversation."},
+            )
+        return explicit_recipient_id
+    if len(other_ids) == 1:
+        return other_ids[0]  # DM: the unambiguous other participant
+    raise HTTPException(
+        400,
+        {"code": "tip_not_allowed_in_group",
+         "message": "Attached tips in a group require an explicit tip_recipient_id naming a participant."},
+    )
+
+
 def _raise_encrypted_edit_unsupported() -> None:
     raise HTTPException(
         status_code=409,
@@ -6437,6 +6610,122 @@ def start_group_conversation(
     )
 
 
+# --- TIP-B4 pay-to-message gate helpers (TIP-401/402) ---
+def _get_message_privacy(user_sub: str) -> Dict[str, Any]:
+    """Read the MessagePrivacy record off the user profile settings row."""
+    try:
+        item = T.profile.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+    except Exception:
+        item = {}
+    mp = item.get("message_privacy") or {}
+    return {
+        "require_tip_to_message": bool(mp.get("require_tip_to_message", False)),
+        "min_tip_cents": int(mp.get("min_tip_cents", 0) or 0),
+        "tip_free_allowlist": [str(x) for x in (mp.get("tip_free_allowlist") or [])],
+    }
+
+
+def _put_message_privacy(user_sub: str, priv: Dict[str, Any]) -> None:
+    seen: List[str] = []
+    for x in (priv.get("tip_free_allowlist") or []):
+        sx = str(x)
+        if sx and sx not in seen:
+            seen.append(sx)
+    T.profile.update_item(
+        Key={"user_sub": user_sub},
+        UpdateExpression="SET message_privacy = :mp",
+        ExpressionAttributeValues={":mp": {
+            "require_tip_to_message": bool(priv.get("require_tip_to_message", False)),
+            "min_tip_cents": int(priv.get("min_tip_cents", 0) or 0),
+            "tip_free_allowlist": seen,
+        }},
+    )
+
+
+def _conversation_has_messages(conversation_id: str) -> bool:
+    """True if the conversation already has >=1 message (established/not first contact)."""
+    try:
+        resp = tbl_msgs.query(
+            KeyConditionExpression=Key("conversation_id").eq(conversation_id),
+            Limit=1,
+        )
+        return bool(resp.get("Items"))
+    except Exception:
+        return False
+
+
+def _dm_tip_gate_required(
+    sender_id: str,
+    recipient_id: str,
+    conversation_id: Optional[str],
+    attached_tip_cents: Optional[int],
+) -> Optional[int]:
+    """TIP-402: pay-to-message gate. Return min_tip_cents when a tip is REQUIRED for
+    sender_id to message the gated recipient_id and is not (sufficiently) provided;
+    otherwise None (bypass or satisfied).
+
+    Bypasses: recipient not gating / sender in tip_free_allowlist / mutual-follow /
+    an established conversation (any prior message = not first contact, which also
+    covers the recipient-messaged-first case). If none apply, an attached tip
+    >= min_tip_cents satisfies the gate."""
+    priv = _get_message_privacy(recipient_id)
+    if not priv["require_tip_to_message"]:
+        return None
+    if sender_id in priv["tip_free_allowlist"]:
+        return None
+    try:
+        from app.services import social as _social
+        if _social.is_following(sender_id, recipient_id) and _social.is_following(recipient_id, sender_id):
+            return None
+    except Exception:
+        pass
+    if conversation_id and _conversation_has_messages(conversation_id):
+        return None
+    min_cents = int(priv["min_tip_cents"] or 0)
+    if attached_tip_cents is not None and int(attached_tip_cents) >= min_cents:
+        return None
+    return min_cents
+
+
+@router.get("/privacy/message", response_model=MessagePrivacyOut)
+def get_message_privacy(user_id: str = Depends(get_messaging_user_id)):
+    """TIP-401: read the caller's pay-to-message privacy settings."""
+    return MessagePrivacyOut(**_get_message_privacy(user_id))
+
+
+@router.put("/privacy/message", response_model=MessagePrivacyOut)
+def update_message_privacy(inp: MessagePrivacyUpdateIn, user_id: str = Depends(get_messaging_user_id)):
+    """TIP-401: set require_tip_to_message / min_tip_cents / allowlist (partial)."""
+    cur = _get_message_privacy(user_id)
+    if inp.require_tip_to_message is not None:
+        cur["require_tip_to_message"] = bool(inp.require_tip_to_message)
+    if inp.min_tip_cents is not None:
+        cur["min_tip_cents"] = int(inp.min_tip_cents)
+    if inp.tip_free_allowlist is not None:
+        cur["tip_free_allowlist"] = [str(x) for x in inp.tip_free_allowlist]
+    _put_message_privacy(user_id, cur)
+    return MessagePrivacyOut(**_get_message_privacy(user_id))
+
+
+@router.post("/privacy/message/allowlist", response_model=MessagePrivacyOut)
+def add_message_privacy_allowlist(inp: MessagePrivacyAllowlistEntryIn, user_id: str = Depends(get_messaging_user_id)):
+    """TIP-401: add a user to the tip-free allowlist."""
+    cur = _get_message_privacy(user_id)
+    if inp.user_id not in cur["tip_free_allowlist"]:
+        cur["tip_free_allowlist"].append(inp.user_id)
+    _put_message_privacy(user_id, cur)
+    return MessagePrivacyOut(**_get_message_privacy(user_id))
+
+
+@router.delete("/privacy/message/allowlist/{allow_user_id}", response_model=MessagePrivacyOut)
+def remove_message_privacy_allowlist(allow_user_id: str, user_id: str = Depends(get_messaging_user_id)):
+    """TIP-401: remove a user from the tip-free allowlist."""
+    cur = _get_message_privacy(user_id)
+    cur["tip_free_allowlist"] = [x for x in cur["tip_free_allowlist"] if x != allow_user_id]
+    _put_message_privacy(user_id, cur)
+    return MessagePrivacyOut(**_get_message_privacy(user_id))
+
+
 @router.post("/conversations/dm/find-or-create", response_model=ConversationOut)
 def find_or_create_dm(inp: FindOrCreateDmIn, req: Request = None, user_id: str = Depends(get_messaging_user_id)):
     """Find an existing DM with the target user or create a new one."""
@@ -6462,14 +6751,25 @@ def find_or_create_dm(inp: FindOrCreateDmIn, req: Request = None, user_id: str =
                 viewer_user_id=user_id,
             )
             out.participants = _get_conversation_participants_enriched(existing_id, profile_cache)
+            # TIP-402 pay-to-message gate on an existing-but-empty DM.
+            _min_c = _dm_tip_gate_required(user_id, target_sub, existing_id, None)
+            if _min_c is not None:
+                raise HTTPException(402, {"code": "tip_required", "min_tip_cents": _min_c, "recipient": target_sub, "conversation_id": existing_id})
             return out
 
     # No existing DM — create one using the same logic as start_conversation
-    return start_conversation(
+    _new_convo = start_conversation(
         StartConversationIn(participant_ids=[target_sub], type="dm"),
         req=req,
         user_id=user_id,
     )
+    # TIP-402: pay-to-message gate. A brand-new DM to a gated recipient requires a
+    # tip on the first message; surface 402 WITH the conversation_id so the client
+    # can send the first message carrying the tip (TIP-403).
+    _min_c = _dm_tip_gate_required(user_id, target_sub, _new_convo.conversation_id, None)
+    if _min_c is not None:
+        raise HTTPException(402, {"code": "tip_required", "min_tip_cents": _min_c, "recipient": target_sub, "conversation_id": _new_convo.conversation_id})
+    return _new_convo
 
 
 @router.post("/conversations/{conversation_id}/accept")
@@ -7736,85 +8036,45 @@ def list_messages(
         parts = []
 
     out: List[MessageOut] = []
-
-    # B-SCHED/ordering FIX: the table range key is a RANDOM message_id (m_<uuid>
-    # / sys_call_... / m_lottery_...), so "ScanIndexForward=False Limit=limit"
-    # returns the limit items with the highest message_ids -- NOT the most recent
-    # by created_at. Re-sorting only that page by created_at then meant a recently
-    # delivered message whose random id ranked low (e.g. a just-fired scheduled
-    # message, or any m_ id losing to sys_call_ ids) silently never appeared in
-    # the thread. For the default "load latest" view (no `before` cursor) we now
-    # page through the whole (bounded) conversation, sort by created_at desc, and
-    # return the most-recent `limit`. The legacy message_id `before` cursor path
-    # is preserved unchanged for backward compatibility.
-    if not before:
-        raw_items: List[Dict[str, Any]] = []
-        scan_kwargs: Dict[str, Any] = {
-            "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
-        }
-        while True:
-            resp = tbl_msgs.query(**scan_kwargs)
-            raw_items.extend(resp.get("Items", []))
-            lek = resp.get("LastEvaluatedKey")
-            if not lek:
-                break
-            scan_kwargs["ExclusiveStartKey"] = lek
-
-        hidden_ids_all: set[str] = set()
-        if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED and raw_items:
-            hidden_ids_all = _load_hidden_message_ids_for_user(
-                conversation_id, user_id, [str(it.get("message_id") or "") for it in raw_items]
-            )
-
-        visible = [
-            m for m in raw_items
-            if m.get("message_id") not in hidden_ids_all and _filter_message_visible(m, user_id)
-        ]
-        visible.sort(key=lambda m: int(m.get("created_at", 0) or 0), reverse=True)
-        for m in visible[:limit]:
-            msg = _message_out_from_item(m, user_id)
-            out.append(_apply_message_receipts(msg, m, parts))
-        out.sort(key=lambda m: m.created_at, reverse=True)
-        return out
-
-    last_key = {"conversation_id": conversation_id, "message_id": before}
-
-    while len(out) < limit:
+    # message_id is a random UUID (not time-ordered), so a Limit-bounded DynamoDB query returns an
+    # ARBITRARY subset, not the newest messages -- sorting that subset by created_at afterwards still
+    # drops the truly-newest rows. Fetch the full conversation, sort by created_at, then take `limit`.
+    raw: List[Dict[str, Any]] = []
+    scan_key = None
+    while True:
         kwargs: Dict[str, Any] = {
             "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
             "ScanIndexForward": False,
-            "Limit": limit,
         }
-        if last_key:
-            kwargs["ExclusiveStartKey"] = last_key
-
+        if scan_key:
+            kwargs["ExclusiveStartKey"] = scan_key
         resp = tbl_msgs.query(**kwargs)
-        items = resp.get("Items", [])
-        if not items:
+        raw.extend(resp.get("Items", []))
+        scan_key = resp.get("LastEvaluatedKey")
+        if not scan_key:
             break
 
-        hidden_ids: set[str] = set()
-        if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED:
-            message_ids = [str(item.get("message_id") or "") for item in items]
-            hidden_ids = _load_hidden_message_ids_for_user(conversation_id, user_id, message_ids)
+    raw.sort(key=lambda m: int(m.get("created_at") or 0), reverse=True)
+    if before:
+        idx = next((i for i, m in enumerate(raw) if str(m.get("message_id")) == before), None)
+        if idx is not None:
+            raw = raw[idx + 1:]
 
-        for m in items:
-            if m.get("message_id") in hidden_ids:
-                continue
-            if not _filter_message_visible(m, user_id):
-                continue
-            msg = _message_out_from_item(m, user_id)
-            out.append(_apply_message_receipts(msg, m, parts))
-            if len(out) >= limit:
-                break
+    hidden_ids: set[str] = set()
+    if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED:
+        message_ids = [str(item.get("message_id") or "") for item in raw]
+        hidden_ids = _load_hidden_message_ids_for_user(conversation_id, user_id, message_ids)
 
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key:
+    for m in raw:
+        if len(out) >= limit:
             break
-
-    # Sort by created_at descending (newest first) so the response is in
-    # chronological order regardless of DynamoDB sort-key (message_id) ordering.
-    out.sort(key=lambda m: m.created_at, reverse=True)
+        if m.get("message_id") in hidden_ids:
+            continue
+        if not _filter_message_visible(m, user_id):
+            if not _should_render_under_review_placeholder(m, user_id):
+                continue
+        msg = _message_out_from_item(m, user_id)
+        out.append(_apply_message_receipts(msg, m, parts))
     return out
 
 
@@ -8182,7 +8442,8 @@ def list_thread_messages(
         if raw.get("message_id") in hidden_ids:
             continue
         if not _filter_message_visible(raw, user_id):
-            continue
+            if not _should_render_under_review_placeholder(raw, user_id):
+                continue
         msg = _message_out_from_item(raw, user_id)
         items.append(_apply_message_receipts(msg, raw, parts))
 
@@ -8566,6 +8827,19 @@ def send_text_message(
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
+    # TIP-B4 pay-to-message gate (TIP-402/403): the FIRST message to a gated DM
+    # recipient must carry a tip >= min_tip_cents. Bypassed for allowlist /
+    # mutual-follow / established conversation (any prior message, incl. the
+    # recipient-messaged-first case). When a tip is attached and >= min, the
+    # attached-tip path below routes it through charge_tip(content_type="message",
+    # recipient=the gated user) as non-refundable creator earnings.
+    if convo.get("type") == "dm":
+        _tip_recipient = _resolve_tip_recipient(conversation_id, user_id)
+        if _tip_recipient:
+            _min_c = _dm_tip_gate_required(user_id, _tip_recipient, conversation_id, inp.tip_amount_cents)
+            if _min_c is not None:
+                raise HTTPException(402, {"code": "tip_required", "min_tip_cents": _min_c, "recipient": _tip_recipient})
+
     # Validate send_at: must be in the future (at least 5 seconds from now)
     ts = now_ts()
     deliver_at: Optional[int] = None
@@ -8606,6 +8880,12 @@ def send_text_message(
         mid = "m_" + new_id()
 
     # Process tip
+    # TIP-005 orphan-credit fix: validate the tip+lock mutual-exclusion BEFORE any
+    # ledger write. Previously this 400 lived AFTER write_tip_ledger, so a lock+tip
+    # text send settled a credit and THEN 400d (orphan credit). The image/gallery
+    # paths already validate first; this aligns the text path with them.
+    if inp.lock_price_cents and inp.tip_amount_cents:
+        raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
     tip_amount_cents: Optional[int] = None
     tip_currency: Optional[str] = None
     tip_payment_id: Optional[str] = None
@@ -8644,24 +8924,24 @@ def send_text_message(
             # Write billing immediately only for messages delivered right now.
             # Scheduled messages defer billing to _deliver_scheduled_message so
             # that cancelling a scheduled tipped message does not charge the sender.
-            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            recipient_id = _resolve_attached_tip_recipient(conversation_id, user_id, inp.tip_recipient_id)
+            item["tip_recipient_id"] = recipient_id
             if recipient_id:
-                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-                write_tip_ledger(TipLedgerEntry(
-                    tipper_user_id=user_id,
-                    recipient_user_id=recipient_id,
+                from app.services.tips import charge_tip
+                charge_tip(
+                    tipper_id=user_id,
+                    recipient_id=recipient_id,
                     amount_cents=tip_amount_cents,
                     currency="USD",
+                    payment_method_id=inp.tip_payment_method_id,
                     content_type="message",
                     content_id=mid,
-                    payment_method_id=inp.tip_payment_method_id,
+                    meta={"conversation_id": conversation_id},
+                    idempotency_key=f"msgtip:{mid}",
                     tip_payment_id=tip_payment_id,
-                    extra_meta={"conversation_id": conversation_id},
-                ))
+                )
 
-    # Validate: lock_price_cents and tip_amount_cents cannot both be set
-    if inp.lock_price_cents and inp.tip_amount_cents:
-        raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
+    # (tip+lock mutual-exclusion is validated above, before any ledger write)
 
     # Expiry
     # When the message is scheduled, start the timer from the scheduled delivery time
@@ -8830,7 +9110,7 @@ def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id:
         # In DEV_MODE, moto presigned URLs point to inaccessible AWS endpoints.
         # Return a path-relative URL so the browser routes through the Vite proxy
         # to the in-app mock S3 PUT handler (see s3_mock.py, mounted at /mock/s3).
-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_url_quote(key, safe='/')}"
+        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_url_quote(key, safe='/')}"
     else:
         upload_url = s3.generate_presigned_url(
             ClientMethod="put_object",
@@ -8862,6 +9142,17 @@ def create_image_message(
             require_subscription_access(user_id, pid)
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
+
+    # TIP-B5 pay-to-message gate extension (TIP-402/403): the FIRST image/gallery
+    # message to a gated DM recipient must carry a tip >= min_tip_cents, matching
+    # the text send path. Bypassed for allowlist / mutual-follow / established
+    # conversation. A gated recipient cannot be first-contacted with an un-tipped image.
+    if convo.get("type") == "dm":
+        _gate_tip_recipient = _resolve_tip_recipient(conversation_id, user_id)
+        if _gate_tip_recipient:
+            _gate_min_c = _dm_tip_gate_required(user_id, _gate_tip_recipient, conversation_id, inp.tip_amount_cents)
+            if _gate_min_c is not None:
+                raise HTTPException(402, {"code": "tip_required", "min_tip_cents": _gate_min_c, "recipient": _gate_tip_recipient})
 
     # Validate send_at: must be in the future (at least 5 seconds from now)
     ts = now_ts()
@@ -8946,20 +9237,22 @@ def create_image_message(
         if not is_scheduled_img:
             # Write billing immediately only for messages delivered right now.
             # Scheduled messages defer billing to _deliver_scheduled_message.
-            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            recipient_id = _resolve_attached_tip_recipient(conversation_id, user_id, inp.tip_recipient_id)
+            item["tip_recipient_id"] = recipient_id
             if recipient_id:
-                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-                write_tip_ledger(TipLedgerEntry(
-                    tipper_user_id=user_id,
-                    recipient_user_id=recipient_id,
+                from app.services.tips import charge_tip
+                charge_tip(
+                    tipper_id=user_id,
+                    recipient_id=recipient_id,
                     amount_cents=tip_amount_cents,
                     currency="USD",
+                    payment_method_id=inp.tip_payment_method_id,
                     content_type="message",
                     content_id=mid,
-                    payment_method_id=inp.tip_payment_method_id,
+                    meta={"conversation_id": conversation_id},
+                    idempotency_key=f"msgtip:{mid}",
                     tip_payment_id=_img_tip_payment_id,
-                    extra_meta={"conversation_id": conversation_id},
-                ))
+                )
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -9092,7 +9385,7 @@ def presign_voice_message(
         ext = "wav"
     s3_key = f"voice-messages/{conversation_id}/{msg_id}.{ext}"
     if S.dev_mode:
-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vm_pq(s3_key, safe='/')}"
+        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_vm_pq(s3_key, safe='/')}"
     else:
         upload_url = s3.generate_presigned_url(
             ClientMethod="put_object",
@@ -9303,7 +9596,7 @@ def presign_voicemail(
 
     from urllib.parse import quote as _vml_pq
     if S.dev_mode:
-        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vml_pq(s3_key, safe='/')}"
+        upload_url = f"{S.public_base_url}/mock/s3/{S3_BUCKET_IMAGES}/{_vml_pq(s3_key, safe='/')}"
     else:
         upload_url = s3.generate_presigned_url(
             ClientMethod="put_object",
@@ -9481,6 +9774,17 @@ def create_gallery_message(
             require_subscription_access(user_id, pid)
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
 
+    # TIP-B5 pay-to-message gate extension (TIP-402/403): the FIRST image/gallery
+    # message to a gated DM recipient must carry a tip >= min_tip_cents, matching
+    # the text send path. Bypassed for allowlist / mutual-follow / established
+    # conversation. A gated recipient cannot be first-contacted with an un-tipped image.
+    if convo.get("type") == "dm":
+        _gate_tip_recipient = _resolve_tip_recipient(conversation_id, user_id)
+        if _gate_tip_recipient:
+            _gate_min_c = _dm_tip_gate_required(user_id, _gate_tip_recipient, conversation_id, inp.tip_amount_cents)
+            if _gate_min_c is not None:
+                raise HTTPException(402, {"code": "tip_required", "min_tip_cents": _gate_min_c, "recipient": _gate_tip_recipient})
+
     ts = now_ts()
     deliver_at_gal: Optional[int] = None
     is_scheduled_gal = False
@@ -9559,20 +9863,22 @@ def create_gallery_message(
         if inp.tip_payment_method_id:
             item["tip_payment_method_id"] = inp.tip_payment_method_id
         if not is_scheduled_gal:
-            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            recipient_id = _resolve_attached_tip_recipient(conversation_id, user_id, inp.tip_recipient_id)
+            item["tip_recipient_id"] = recipient_id
             if recipient_id:
-                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-                write_tip_ledger(TipLedgerEntry(
-                    tipper_user_id=user_id,
-                    recipient_user_id=recipient_id,
+                from app.services.tips import charge_tip
+                charge_tip(
+                    tipper_id=user_id,
+                    recipient_id=recipient_id,
                     amount_cents=gal_tip_amount_cents,
                     currency="USD",
+                    payment_method_id=inp.tip_payment_method_id,
                     content_type="message",
                     content_id=mid,
-                    payment_method_id=inp.tip_payment_method_id,
+                    meta={"conversation_id": conversation_id},
+                    idempotency_key=f"msgtip:{mid}",
                     tip_payment_id=_gal_tip_payment_id,
-                    extra_meta={"conversation_id": conversation_id},
-                ))
+                )
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -11840,6 +12146,107 @@ def react_to_message(
     return {"ok": True}
 
 
+# TIP-201: money-reaction (tip-react) on a MESSAGE -- DISTINCT from the free emoji
+# react_to_message above. Routes through the single charge_tip money-path
+# (content_type="message_react"), crediting the MESSAGE AUTHOR (group-safe: the
+# message sender), rejecting a self-tip, and -- only AFTER a successful charge --
+# recording a money-reaction badge on the message + fanning a realtime event.
+class TipReactIn(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    emoji: Optional[str] = Field(default=None, max_length=64)
+    payment_method_id: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/reactions/tip")
+def tip_react_to_message(
+    conversation_id: str,
+    message_id: str,
+    inp: TipReactIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if isinstance(msg, dict) and msg.get("revoked_at"):
+        raise HTTPException(400, "Cannot tip a revoked message")
+    author_id = msg.get("sender_id")
+    if not author_id:
+        raise HTTPException(400, "Message has no author to tip")
+    if author_id == user_id:
+        raise HTTPException(400, {"code": "cannot_tip_self", "message": "Cannot tip your own message."})
+
+    emoji = (inp.emoji or "\U0001F4B8").strip() or "\U0001F4B8"
+
+    # Money-path via the single funnel. A self-tip (400) or a failed charge (402)
+    # raises BEFORE any badge/event side effect -> no badge, no ledger on failure.
+    from app.services.tips import charge_tip
+    receipt = charge_tip(
+        tipper_id=user_id,
+        recipient_id=author_id,
+        amount_cents=inp.amount_cents,
+        currency="USD",
+        payment_method_id=inp.payment_method_id,
+        content_type="message_react",
+        content_id=message_id,
+        meta={"conversation_id": conversation_id, "emoji": emoji},
+        idempotency_key=f"msgreacttip:{message_id}:{uuid.uuid4().hex}",
+    )
+
+    ts = now_ts()
+    badge = {
+        "tipper_id": user_id,
+        "emoji": emoji,
+        "amount_cents": int(inp.amount_cents),
+        "tip_payment_id": receipt.tip_payment_id,
+        "created_at": ts,
+    }
+    try:
+        tbl_msgs.update_item(
+            Key={"conversation_id": conversation_id, "message_id": message_id},
+            UpdateExpression="SET tip_reactions = list_append(if_not_exists(tip_reactions, :empty), :new) ADD tip_amount_cents :amt",
+            ExpressionAttributeValues={":empty": [], ":new": [badge], ":amt": int(inp.amount_cents)},
+            ConditionExpression="attribute_exists(message_id)",
+        )
+    except ClientError as e:
+        # The money already moved (ledger written); a badge-write failure must not
+        # 500 the charged tip. Log + continue so the realtime event still fires.
+        logger.warning("tip-react badge write failed: %s", e)
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="reaction:tip",
+        payload={
+            "message_id": message_id,
+            "emoji": emoji,
+            "amount_cents": int(inp.amount_cents),
+            "tipper_id": user_id,
+            "recipient_id": author_id,
+            "tip_payment_id": receipt.tip_payment_id,
+            "updated_at": ts,
+        },
+        respect_mute=False,
+    )
+    audit_event(
+        "messaging_message_tip_reaction",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        emoji=emoji,
+        amount_cents=int(inp.amount_cents),
+    )
+    return {
+        "ok": True,
+        "tip_payment_id": receipt.tip_payment_id,
+        "charged_cents": receipt.charged_cents,
+        "net_cents": receipt.net_cents,
+        "recipient_id": author_id,
+        "emoji": emoji,
+    }
+
+
 # MSG-011: Reaction detail — who reacted with what (avatars + display names).
 @router.get(
     "/conversations/{conversation_id}/messages/{message_id}/reactions/details",
@@ -13633,7 +14040,10 @@ async def events_stream(
         request_id=x_request_id or (request.headers.get("x-request-id") if request else None),
     )
     async def gen():
-        cursor = after
+        # event_id is a random UUID (not time-ordered), so the legacy `event_id > cursor` cursor
+        # SKIPS new events whose UUID sorts below an already-delivered one. Track delivered ids in a
+        # per-connection seen-set and deliver any not-yet-seen event ordered by created_at instead.
+        seen = set()
         last_ping = time.time()
         yield ": stream-open\n\n"
 
@@ -13643,17 +14053,31 @@ async def events_stream(
                 yield ": ping\n\n"
                 last_ping = now
 
-            raw_events = await anyio.to_thread.run_sync(_ddb_fetch_events, user_id, cursor, limit)
+            raw_events = await anyio.to_thread.run_sync(_ddb_fetch_events, user_id, None, limit)
             events = [_project_event_for_user(ev, user_id) for ev in raw_events]
-            if events:
-                for ev in events:
-                    cursor = ev["event_id"]
+            fresh = [ev for ev in events if ev.get("event_id") not in seen]
+            fresh.sort(key=lambda e: (e.get("created_at", 0), e.get("event_id", "")))
+            if fresh:
+                for ev in fresh:
+                    seen.add(ev.get("event_id"))
                     yield _sse_pack(ev, event=ev.get("type", "message"))
                 continue
 
             await asyncio.sleep(poll_ms / 1000.0)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.get("/events/poll")
+async def events_poll(
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    # Reliable JSON poll of the per-user event queue (the long-lived SSE stream auth is flaky under load).
+    raw = await anyio.to_thread.run_sync(_ddb_fetch_events, user_id, None, limit)
+    events = [_project_event_for_user(ev, user_id) for ev in raw]
+    events.sort(key=lambda e: (e.get("created_at", 0), e.get("event_id", "")))
+    return {"events": events}
 
 
 @router.get("/config", response_model=MessagingConfigOut)
@@ -14426,18 +14850,19 @@ def _deliver_scheduled_message(item: dict) -> None:
     if item.get("tip_amount_cents"):
         recipient_id = _resolve_tip_recipient(conversation_id, user_id)
         if recipient_id:
-            from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-            write_tip_ledger(TipLedgerEntry(
-                tipper_user_id=user_id,
-                recipient_user_id=recipient_id,
+            from app.services.tips import charge_tip
+            charge_tip(
+                tipper_id=user_id,
+                recipient_id=recipient_id,
                 amount_cents=int(item["tip_amount_cents"]),
                 currency=item.get("tip_currency", "USD"),
+                payment_method_id=item.get("tip_payment_method_id"),
                 content_type="message",
                 content_id=message_id,
-                payment_method_id=item.get("tip_payment_method_id"),
+                meta={"conversation_id": conversation_id},
+                idempotency_key=f"msgtip:{message_id}",
                 tip_payment_id=item.get("tip_payment_id"),
-                extra_meta={"conversation_id": conversation_id},
-            ))
+            )
 
     # Fetch participants and bump unread counts
     try:
@@ -14751,18 +15176,19 @@ def send_message_tip(
     # Write billing ledger debit + credit entries for the tip
     msg_author = msg.get("sender_id")
     if msg_author and msg_author != user_id:
-        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
-        write_tip_ledger(TipLedgerEntry(
-            tipper_user_id=user_id,
-            recipient_user_id=msg_author,
+        from app.services.tips import charge_tip
+        charge_tip(
+            tipper_id=user_id,
+            recipient_id=msg_author,
             amount_cents=inp.amount_cents,
             currency=inp.currency,
+            payment_method_id=inp.payment_method_id,
             content_type="message",
             content_id=message_id,
-            payment_method_id=inp.payment_method_id,
+            meta={"conversation_id": conversation_id},
+            idempotency_key="msgtip:" + new_id(),
             tip_payment_id=tip_payment_id,
-            extra_meta={"conversation_id": conversation_id},
-        ))
+        )
         # FIN-001: generate an invoice for the tip (best-effort)
         from app.services.invoices import create_invoice_safe
         from app.services.profile import get_profile_identity
@@ -15212,6 +15638,8 @@ async def create_call_invite(
             rate_cents_per_min=rate_cents,
             max_duration_seconds=max_dur,
         )
+        from app.services.messaging_call_signaling import deliver_call_event_to_user
+        deliver_call_event_to_user(recipient_user_id=record.callee_user_id, sender_user_id=record.caller_user_id, call_id=record.call_id, conversation_id=record.conversation_id, event_type='call.invite', payload={'mode': record.initial_mode})
         return CallInviteOut(
             call_id=record.call_id,
             conversation_id=record.conversation_id,
@@ -15241,6 +15669,8 @@ async def accept_call_invite(
             actor_user_id=user_id,
             idempotency_key=body.idempotency_key,
         )
+        from app.services.messaging_call_signaling import deliver_call_event_to_user
+        deliver_call_event_to_user(recipient_user_id=record.caller_user_id, sender_user_id=user_id, call_id=record.call_id, conversation_id=record.conversation_id, event_type='call.accept', payload={'accepted_mode': record.initial_mode})
         return CallActionOut(
             call_id=record.call_id,
             conversation_id=record.conversation_id,

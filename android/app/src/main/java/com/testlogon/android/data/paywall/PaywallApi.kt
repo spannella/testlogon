@@ -33,6 +33,8 @@ interface PaywallApi {
 data class UnlockPostRequestDto(
     @Json(name = "post_id") val postId: String,
     @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+    // ADV-405: last-click CPA attribution handle carried from an ad CTA (backend ADV-404 UnlockPostRequest).
+    @Json(name = "ad_click_id") val adClickId: String? = null,
     @Json(name = "idempotency_key") val idempotencyKey: String? = null,
 )
 

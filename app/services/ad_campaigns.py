@@ -52,9 +52,23 @@ def create_campaign(account_id: str, data: CampaignCreateIn) -> dict:
         "status": "draft",
         "category": data.category,
         "bid_cpm_cents": data.bid_cpm_cents,
+        "bid_cpc_cents": data.bid_cpc_cents,
+        "bid_cpa_cents": data.bid_cpa_cents,
         "created_at": ts,
         "updated_at": ts,
     }
+    # ADV2-301 (F3): persist the self-promo flavor. A free own-content promo
+    # forces zero bids/budget (no funding) and auto-activates (skips
+    # pending_review) so it serves immediately; paid campaigns stay draft.
+    if getattr(data, "is_self_promo", False):
+        item["is_self_promo"] = True
+        item["self_promo_mode"] = getattr(data, "self_promo_mode", "fill_only") or "fill_only"
+        item["bid_cpm_cents"] = 0
+        item["bid_cpc_cents"] = 0
+        item["bid_cpa_cents"] = 0
+        item["status"] = "active"
+    else:
+        item["is_self_promo"] = False
     if data.start_date is not None:
         item["start_date"] = data.start_date
     if data.end_date is not None:

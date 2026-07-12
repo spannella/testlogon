@@ -360,9 +360,9 @@ def _batch_alert(
         "category = :category, "
         "ts = :ts_int, "
         "#evt = :alert_type, "
-        "ttl = :ttl"
+        "#ttl = :ttl"
     )
-    expr_names: Dict[str, str] = {"#read": "read", "#evt": "event"}
+    expr_names: Dict[str, str] = {"#read": "read", "#evt": "event", "#ttl": "ttl"}
     expr_values: Dict[str, Any] = {
         ":new_actor": [actor_entry],
         ":empty_list": [],

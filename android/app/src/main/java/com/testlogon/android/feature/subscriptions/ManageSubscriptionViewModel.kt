@@ -4,11 +4,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.ui.i18n.UiText
+import com.testlogon.android.data.messaging.BillingAuthorizer
+import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.data.subscriptions.CancelSubscriptionReqDto
+import com.testlogon.android.data.subscriptions.ChangePlanReqDto
 import com.testlogon.android.data.subscriptions.CreatorSubscription
 import com.testlogon.android.data.subscriptions.RenewalReqDto
 import com.testlogon.android.data.subscriptions.ResumeSubscriptionReqDto
 import com.testlogon.android.data.subscriptions.SubscriptionState
+import com.testlogon.android.data.subscriptions.SubscriptionTier
 import com.testlogon.android.data.subscriptions.SubscriptionsRepository
 import com.testlogon.android.feature.billing.error.BillingErrorMapper
 import com.testlogon.android.feature.billing.error.Recoverability
@@ -23,15 +27,19 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** AND-237 — in-flight mutation status for the manage screen. */
+/** AND-237 / SUB-E2 - in-flight mutation status for the manage screen. */
 sealed interface MutationStatus {
     data object Idle : MutationStatus
     data object Canceling : MutationStatus
     data object Renewing : MutationStatus
+    data object Changing : MutationStatus
     data class Failed(val message: UiText) : MutationStatus
 }
 
-/** AND-237 — manage / cancel subscription screen state. */
+/** SUB-E2 - the cancel choice presented in the cancel dialog. */
+enum class CancelChoice { AT_PERIOD_END, IMMEDIATE_REFUND }
+
+/** AND-237 / SUB-E2 - manage / cancel subscription screen state. */
 sealed interface ManageSubscriptionUiState {
     data object Loading : ManageSubscriptionUiState
 
@@ -42,6 +50,10 @@ sealed interface ManageSubscriptionUiState {
         val subscription: CreatorSubscription,
         val mutation: MutationStatus = MutationStatus.Idle,
         val confirmCancelVisible: Boolean = false,
+        /** SUB-E2 - other active tiers from the same creator, for upgrade/downgrade. */
+        val availableTiers: List<SubscriptionTier> = emptyList(),
+        /** SUB-E2 - the tier chosen for a change-plan confirm (null = no dialog). */
+        val changeTarget: SubscriptionTier? = null,
     ) : ManageSubscriptionUiState {
         /** Active and not scheduled to end -> show "Cancel subscription". */
         val canCancel: Boolean
@@ -56,32 +68,44 @@ sealed interface ManageSubscriptionUiState {
         val isReactivatable: Boolean
             get() = subscription.status == SubscriptionState.CANCELED ||
                 subscription.status == SubscriptionState.EXPIRED
+
+        /** SUB-E2 - upgrade/downgrade is offered while the sub is active/trialing and not ending. */
+        val canChangePlan: Boolean
+            get() = (subscription.status == SubscriptionState.ACTIVE ||
+                subscription.status == SubscriptionState.TRIALING) &&
+                !subscription.cancelAtPeriodEnd && availableTiers.isNotEmpty()
+
+        /** SUB-E2 - true when [changeTarget] costs more than the current plan (immediate prorated charge). */
+        val changeTargetIsUpgrade: Boolean
+            get() {
+                val t = changeTarget ?: return false
+                return t.priceCents > (subscription.priceCents ?: 0L)
+            }
     }
 
     data class Error(val message: UiText, val retryable: Boolean) : ManageSubscriptionUiState
 }
 
-/** AND-237 — one-shot effects (Channel-backed). */
+/** AND-237 - one-shot effects (Channel-backed). */
 sealed interface ManageSubscriptionEvent {
     /** A reactivation needs a fresh payment authorization -> route to the AND-236 subscribe flow. */
     data class NavigateToSubscribe(val planId: String, val creatorId: String) : ManageSubscriptionEvent
 }
 
 /**
- * AND-237 — manage / cancel subscription presentation logic.
+ * AND-237 / SUB-E2 - manage / cancel / change-plan presentation logic.
  *
- * Reuses the AND-234 [SubscriptionsRepository] (real `api/subscriptions` list + the
- * `.../{id}/cancel|renewal|resume` mutations) and [BillingErrorMapper] (AND-232) for failures. The
- * "current" subscription is the most-recent active/trialing entry, else the most-recently-ending one.
- *
- * Cancel uses cancel-at-period-end (the verified SubscriptionCancelIn default) behind a Material3
- * confirm dialog; on success the screen reflects the server-returned cancel-at-period-end / canceled
- * state. Renew clears a scheduled cancel via `renewal{auto_renew:true}`; reactivating a fully
- * canceled/expired sub uses `resume`. A billing-class mapper error on resume routes to AND-236.
+ * Loads the current subscription (most-recent active/trialing entry) plus the creator's other active
+ * plans so the subscriber can UPGRADE (immediate prorated delta charge) or DOWNGRADE (scheduled at
+ * period end). Cancel offers the locked-decision choice: at-period-end (default, keeps access, no
+ * refund) or immediate + refund of the unused prorated portion. Reuses the AND-234
+ * [SubscriptionsRepository], the [BillingAuthorizer] payment seam (for an upgrade PM), and
+ * [BillingErrorMapper].
  */
 @HiltViewModel
 class ManageSubscriptionViewModel @Inject constructor(
     private val repository: SubscriptionsRepository,
+    private val billingAuthorizer: BillingAuthorizer,
     private val errorMapper: BillingErrorMapper,
 ) : ViewModel() {
 
@@ -96,7 +120,6 @@ class ManageSubscriptionViewModel @Inject constructor(
     }
 
     fun refresh() {
-        // Preserve a transient confirm-dialog flag across an explicit refresh only when content exists.
         _uiState.update {
             when (it) {
                 is ManageSubscriptionUiState.Content -> it.copy(mutation = MutationStatus.Idle)
@@ -107,10 +130,11 @@ class ManageSubscriptionViewModel @Inject constructor(
             when (val result = repository.getMySubscriptions()) {
                 is ApiResult.Success -> {
                     val current = result.data.pickCurrent()
-                    _uiState.value = if (current == null) {
-                        ManageSubscriptionUiState.NoSubscription
+                    if (current == null) {
+                        _uiState.value = ManageSubscriptionUiState.NoSubscription
                     } else {
-                        ManageSubscriptionUiState.Content(subscription = current)
+                        _uiState.value = ManageSubscriptionUiState.Content(subscription = current)
+                        loadTiers(current)
                     }
                 }
                 else -> {
@@ -124,6 +148,24 @@ class ManageSubscriptionViewModel @Inject constructor(
         }
     }
 
+    /** SUB-E2 - fetch the creator's other active plans to power upgrade/downgrade. */
+    private fun loadTiers(sub: CreatorSubscription) {
+        viewModelScope.launch {
+            when (val result = repository.getCreatorTiers(sub.creatorId)) {
+                is ApiResult.Success -> {
+                    val others = result.data.filter { it.isActive && it.planId != sub.planId }
+                    val content = currentContent() ?: return@launch
+                    if (content.subscription.subscriptionId == sub.subscriptionId) {
+                        _uiState.value = content.copy(availableTiers = others)
+                    }
+                }
+                else -> Unit // best-effort: change-plan section stays hidden on failure
+            }
+        }
+    }
+
+    // ---- Cancel ----
+
     fun onCancelClicked() {
         val content = currentContent() ?: return
         if (content.mutation != MutationStatus.Idle) return
@@ -135,27 +177,83 @@ class ManageSubscriptionViewModel @Inject constructor(
         _uiState.value = content.copy(confirmCancelVisible = false)
     }
 
-    fun onCancelConfirmed() {
+    /** SUB-E2 - confirm cancel with the chosen mode (at-period-end vs immediate+refund). */
+    fun onCancelConfirmed(choice: CancelChoice = CancelChoice.AT_PERIOD_END) {
         val content = currentContent() ?: return
-        if (content.mutation != MutationStatus.Idle) return // concurrent-mutation guard
+        if (content.mutation != MutationStatus.Idle) return
         _uiState.value = content.copy(confirmCancelVisible = false, mutation = MutationStatus.Canceling)
         viewModelScope.launch {
-            val result = repository.cancel(
-                content.subscription.subscriptionId,
-                CancelSubscriptionReqDto(cancelAtPeriodEnd = true),
-            )
+            val body = when (choice) {
+                CancelChoice.AT_PERIOD_END -> CancelSubscriptionReqDto(cancelAtPeriodEnd = true)
+                CancelChoice.IMMEDIATE_REFUND ->
+                    CancelSubscriptionReqDto(cancelAtPeriodEnd = false, refund = true)
+            }
+            val result = repository.cancel(content.subscription.subscriptionId, body)
             applyMutationResult(result)
         }
     }
 
+    // ---- Change plan (upgrade / downgrade) ----
+
+    fun onChangePlanClicked(tier: SubscriptionTier) {
+        val content = currentContent() ?: return
+        if (content.mutation != MutationStatus.Idle) return
+        _uiState.value = content.copy(changeTarget = tier)
+    }
+
+    fun onChangePlanDismissed() {
+        val content = currentContent() ?: return
+        _uiState.value = content.copy(changeTarget = null)
+    }
+
     /**
-     * AND-237 — "Keep subscription" / "Reactivate". For a scheduled-cancel active sub, clears the
-     * cancel via renewal(auto_renew=true). For a fully canceled/expired sub, calls resume; if the
-     * mapper classifies the resume failure as a billing/payment error, routes to AND-236 instead.
+     * SUB-E2 - confirm the plan change. An UPGRADE authorizes a PM for the prorated delta (the backend
+     * charges it immediately + credits the creator NET); a DOWNGRADE takes no payment (scheduled at
+     * period end). The backend routes by price, so effective is omitted here.
      */
+    fun onChangePlanConfirmed() {
+        val content = currentContent() ?: return
+        val target = content.changeTarget ?: return
+        if (content.mutation != MutationStatus.Idle) return
+        val isUpgrade = content.changeTargetIsUpgrade
+        _uiState.value = content.copy(changeTarget = null, mutation = MutationStatus.Changing)
+        viewModelScope.launch {
+            var pm: String? = null
+            if (isUpgrade) {
+                when (val auth = billingAuthorizer.authorize(target.priceCents, target.currency, memo = target.name)) {
+                    is BillingResult.Authorized -> pm = auth.paymentMethodId
+                    is BillingResult.Cancelled -> {
+                        _uiState.value = content.copy(mutation = MutationStatus.Idle)
+                        return@launch
+                    }
+                    else -> {
+                        // No configured PM -> surface a payment error (add a card, then retry).
+                        _uiState.value = content.copy(
+                            mutation = MutationStatus.Failed(
+                                UiText.Res(com.testlogon.android.R.string.manage_sub_change_needs_payment),
+                            ),
+                        )
+                        return@launch
+                    }
+                }
+            }
+            val result = repository.changePlan(
+                content.subscription.subscriptionId,
+                ChangePlanReqDto(
+                    planId = target.planId,
+                    paymentMethodId = pm?.takeIf { it.isNotBlank() },
+                    reason = if (isUpgrade) "upgrade" else "downgrade",
+                ),
+            )
+            applyMutationResult(result, reloadTiers = true)
+        }
+    }
+
+    // ---- Keep / reactivate ----
+
     fun onRenewClicked() {
         val content = currentContent() ?: return
-        if (content.mutation != MutationStatus.Idle) return // concurrent-mutation guard
+        if (content.mutation != MutationStatus.Idle) return
         _uiState.value = content.copy(mutation = MutationStatus.Renewing)
         viewModelScope.launch {
             val sub = content.subscription
@@ -166,8 +264,6 @@ class ManageSubscriptionViewModel @Inject constructor(
             }
             if (result !is ApiResult.Success && content.isReactivatable) {
                 val error = errorMapper.map(result)
-                // Reactivation that needs a fresh payment -> route to the subscribe flow (defensive:
-                // classified by recoverability, NOT a hard-coded 402 per AND-237 §5).
                 if (error.recoverability == Recoverability.REQUIRES_NEW_METHOD ||
                     error.recoverability == Recoverability.REQUIRES_ACTION
                 ) {
@@ -182,12 +278,16 @@ class ManageSubscriptionViewModel @Inject constructor(
 
     fun onErrorRetry() = refresh()
 
-    private suspend fun applyMutationResult(result: ApiResult<CreatorSubscription>) {
+    private suspend fun applyMutationResult(
+        result: ApiResult<CreatorSubscription>,
+        reloadTiers: Boolean = false,
+    ) {
         val content = currentContent() ?: return
         when (result) {
-            is ApiResult.Success ->
-                // Single source of truth: reflect the server-returned subscription verbatim.
+            is ApiResult.Success -> {
                 _uiState.value = content.copy(subscription = result.data, mutation = MutationStatus.Idle)
+                if (reloadTiers) loadTiers(result.data)
+            }
             else -> {
                 val error = errorMapper.map(result)
                 _uiState.value = content.copy(mutation = MutationStatus.Failed(error.message))

@@ -6,6 +6,8 @@ import com.testlogon.android.core.testing.MainDispatcherRule
 import com.testlogon.android.data.subscriptions.SubscriptionState
 import com.testlogon.android.data.subscriptions.TestSubscriptionsRepository
 import com.testlogon.android.data.subscriptions.sampleSubscription
+import com.testlogon.android.data.messaging.BillingAuthorizer
+import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.feature.billing.error.BillingErrorMapper
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -28,8 +30,17 @@ class ManageSubscriptionViewModelTest {
     @get:Rule
     val mainRule = MainDispatcherRule()
 
+    private val fakeAuthorizer = object : BillingAuthorizer {
+        override suspend fun authorize(amountMinorUnits: Long, currency: String, memo: String?): BillingResult =
+            BillingResult.Authorized(paymentMethodId = "", authorizedMinorUnits = amountMinorUnits)
+    }
+
     private fun vm(repo: TestSubscriptionsRepository) =
-        ManageSubscriptionViewModel(repository = repo, errorMapper = BillingErrorMapper())
+        ManageSubscriptionViewModel(
+            repository = repo,
+            billingAuthorizer = fakeAuthorizer,
+            errorMapper = BillingErrorMapper(),
+        )
 
     @Test
     fun load_active_rendersCancelableContent() = runTest {

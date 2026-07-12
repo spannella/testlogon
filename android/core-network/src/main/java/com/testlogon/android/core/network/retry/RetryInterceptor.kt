@@ -59,7 +59,16 @@ class RetryInterceptor(
         val deadline = System.nanoTime() + ms * 1_000_000
         while (System.nanoTime() < deadline) {
             if (chain.call().isCanceled()) throw IOException("canceled during backoff")
-            Thread.sleep(minOf(POLL_MS, ms).coerceAtLeast(1L))
+            try {
+                Thread.sleep(minOf(POLL_MS, ms).coerceAtLeast(1L))
+            } catch (e: InterruptedException) {
+                // The call thread was interrupted mid-backoff (e.g. stream teardown / navigation).
+                // Restore the interrupt flag and surface as an IOException — an Interceptor must only
+                // throw IOException, otherwise the undeclared InterruptedException escapes the OkHttp
+                // call and crashes raw worker threads (e.g. the SSE stream worker).
+                Thread.currentThread().interrupt()
+                throw IOException("interrupted during backoff", e)
+            }
         }
     }
 

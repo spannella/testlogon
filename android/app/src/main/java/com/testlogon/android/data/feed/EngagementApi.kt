@@ -37,6 +37,30 @@ interface EngagementApi {
     @POST("posts/{post_id}/unlike")
     suspend fun unlike(@Path("post_id") postId: String)
 
+    // ---- Post emoji reactions (#20) — distinct from like; 2xx ack. ----
+
+    @POST("posts/{post_id}/reactions")
+    suspend fun react(@Path("post_id") postId: String, @Body body: ReactionRequest)
+
+    @POST("posts/{post_id}/unreact")
+    suspend fun unreact(@Path("post_id") postId: String, @Body body: ReactionRequest)
+
+    // ---- Comment emoji reactions (#23) — 2xx ack. ----
+
+    @POST("posts/{post_id}/comments/{comment_id}/reactions")
+    suspend fun reactComment(
+        @Path("post_id") postId: String,
+        @Path("comment_id") commentId: String,
+        @Body body: ReactionRequest,
+    )
+
+    @POST("posts/{post_id}/comments/{comment_id}/unreact")
+    suspend fun unreactComment(
+        @Path("post_id") postId: String,
+        @Path("comment_id") commentId: String,
+        @Body body: ReactionRequest,
+    )
+
     // ---- Comments (AND-174) ----
 
     @GET("posts/{post_id}/comments")
@@ -52,10 +76,25 @@ interface EngagementApi {
         @Body body: CreateCommentRequest,
     ): CommentDto
 
+    @retrofit2.http.PATCH("posts/{post_id}/comments/{comment_id}")
+    suspend fun editComment(
+        @Path("post_id") postId: String,
+        @Path("comment_id") commentId: String,
+        @Body body: EditCommentRequest,
+    ): CommentDto
+
     @DELETE("posts/{post_id}/comments/{comment_id}")
     suspend fun deleteComment(
         @Path("post_id") postId: String,
         @Path("comment_id") commentId: String,
+    )
+
+    /** Tip a comment (creator monetization). 2xx ack; amount is integer cents. */
+    @POST("posts/{post_id}/comments/{comment_id}/tip")
+    suspend fun tipComment(
+        @Path("post_id") postId: String,
+        @Path("comment_id") commentId: String,
+        @Body body: TipRequest,
     )
 
     // ---- Hide / not-interested (AND-175) ----

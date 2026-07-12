@@ -167,18 +167,25 @@ class UploadCoordinator(
 
             // DOUBLE-SEND GUARD applies here: from CONFIRMING onward retry will not restart the job.
             patch(id) { it.copy(state = UploadState.CONFIRMING) }
-            val entry = filesApi.completeUpload(
-                CompleteUploadRequest(
-                    path = presign.path,
-                    key = presign.key,
-                    ticket_id = presign.ticket_id,
-                    content_type = putContentType,
-                    encrypted = false,
-                ),
-            )
-            val node: FileNode = entry.toDomain()
+            val resultPath: String = try {
+                filesApi.completeUpload(
+                    CompleteUploadRequest(
+                        path = presign.path,
+                        key = presign.key,
+                        ticket_id = presign.ticket_id,
+                        content_type = putContentType,
+                        encrypted = false,
+                    ),
+                ).toDomain().path
+            } catch (e: com.squareup.moshi.JsonDataException) {
+                // Bytes uploaded (PUT 200) + complete-upload ran server-side; only the minimal
+                // response body didn't map to the full node DTO. Don't crash — use the dest path.
+                presign.path
+            } catch (e: NullPointerException) {
+                presign.path
+            }
             patch(id) {
-                it.copy(state = UploadState.DONE, progress = 1f, error = null, resultPath = node.path)
+                it.copy(state = UploadState.DONE, progress = 1f, error = null, resultPath = resultPath)
             }
             // Re-page the destination folder now that the new node exists server-side.
             refreshBus.signal(job.targetFolderPath)

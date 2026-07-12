@@ -32,7 +32,7 @@ import javax.inject.Singleton
         DraftEntity::class,
         ParticipantEntity::class,
     ],
-    version = 7,
+    version = 17,
     exportSchema = true,
 )
 abstract class MessagingDatabase : RoomDatabase() {
@@ -227,6 +227,107 @@ abstract class MessagingDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /** Adds the reply-to link to `messages` (additive, nullable). */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToMessageId TEXT")
+            }
+        }
+
+        /** AND-147 — persist delivery/read receipt counts so the Sent/Delivered/Read indicator survives a reload. */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN deliveredToCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN readByCount INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** Persist self-destruct expiry so expired messages render redacted after a reload. */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN expiresAtEpochSeconds INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN serverExpired INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /**
+         * MSG — persist find_datetime detail, lottery lock_state + outcome, and the client-side
+         * encryption envelope + is_encrypted flag so these media types survive the receiver's Room
+         * round-trip (they were previously dropped, rendering as plain text / empty bubbles).
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN fadtFromDate TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN fadtToDate TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN fadtStartHour INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN fadtEndHour INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN fadtSlotDurationMinutes INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN lotteryLockState TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN lotterySelectedText TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN isEncrypted INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN encVersion INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN encAlg TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN encKdf TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN encIterations INTEGER")
+                db.execSQL("ALTER TABLE messages ADD COLUMN encSaltB64 TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN encIvB64 TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN encCiphertextB64 TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN viewOnce INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN consumed INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /**
+         * C6 — persist gallery (multi-image) images so a kind="gallery" message survives the Room
+         * round-trip (previously dropped -> rendered as an empty/text bubble after the DB read).
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN galleryImagesJson TEXT")
+            }
+        }
+
+        // MV2 — persist the playable object url for uploaded video clips so a reconciled/cached
+        // video bubble keeps its in-app playback source across restarts.
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN fileUrl TEXT")
+            }
+        }
+
+        // #13 — persist the revealed lottery option media (image/video) url so an unlocked lottery
+        // bubble keeps its revealed thumbnail across a Room round-trip / app restart.
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN revealedMediaUrl TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN revealedMediaIsVideo INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        // #24 - persist the FULL revealed lottery media list (image+video) so a multi-media reveal
+        // survives a Room round-trip / app restart (revealedMediaUrl kept as the first element).
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN revealedMediaJson TEXT")
+            }
+        }
+
+        // #15 (B-LOTSENDER) — persist the SENDER's lottery sender-view (full config + per-recipient
+        // results) so the sender's own detail survives a Room round-trip / app restart.
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN lotterySenderViewJson TEXT")
+            }
+        }
+
+        // Arbitrary text-option poll: persist the poll snapshot JSON for kind="poll" messages.
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN pollJson TEXT")
+            }
+        }
+
     }
 }
 
@@ -249,6 +350,16 @@ object MessagingDatabaseModule {
             MessagingDatabase.MIGRATION_4_5,
             MessagingDatabase.MIGRATION_5_6,
             MessagingDatabase.MIGRATION_6_7,
+            MessagingDatabase.MIGRATION_7_8,
+            MessagingDatabase.MIGRATION_8_9,
+            MessagingDatabase.MIGRATION_9_10,
+            MessagingDatabase.MIGRATION_10_11,
+            MessagingDatabase.MIGRATION_11_12,
+            MessagingDatabase.MIGRATION_12_13,
+            MessagingDatabase.MIGRATION_13_14,
+            MessagingDatabase.MIGRATION_14_15,
+            MessagingDatabase.MIGRATION_15_16,
+            MessagingDatabase.MIGRATION_16_17,
         )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()

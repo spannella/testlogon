@@ -25,6 +25,10 @@ VALID_PERMISSIONS = {
     "feed_moderate",
     "broadcast_moderate",
     "broadcast_control",
+    # TIP-012: money-OUT tip guard. A delegate may tip AS the creator (which
+    # debits the creator's wallet) only when granted this opt-in permission.
+    # charge_tip._guard_delegate_can_tip enforces default-DENY.
+    "can_tip",
 }
 
 PERMISSION_PRESETS: Dict[str, Dict[str, Any]] = {

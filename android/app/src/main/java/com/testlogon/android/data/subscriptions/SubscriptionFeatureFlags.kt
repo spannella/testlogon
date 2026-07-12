@@ -18,5 +18,8 @@ interface SubscriptionFeatureFlags {
 
 @Singleton
 class DefaultSubscriptionFeatureFlags @Inject constructor() : SubscriptionFeatureFlags {
-    override val checkoutEnabled: Boolean = false
+    // SUB-E0: the subscribe money path is now REAL server-side (funds-guarded stripe-mock charge +
+    // net creator credit, or HTTP 402 with no phantom). The app resolves a PM via the BillingAuthorizer
+    // and the confirm flow surfaces the real charge/decline, so checkout is enabled.
+    override val checkoutEnabled: Boolean = true
 }

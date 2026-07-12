@@ -3,14 +3,24 @@ package com.testlogon.android.feature.groups.testing
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.LogoutReason
+import com.testlogon.android.core.model.groups.Contributor
 import com.testlogon.android.core.model.groups.Group
+import com.testlogon.android.core.model.groups.GroupCampaign
+import com.testlogon.android.core.model.groups.GroupCampaignStats
+import androidx.paging.PagingData
+import com.testlogon.android.core.model.groups.GroupFeedPost
+import com.testlogon.android.core.model.groups.GroupFundraiser
 import com.testlogon.android.core.model.groups.GroupMember
 import com.testlogon.android.core.model.groups.GroupRole
+import com.testlogon.android.core.model.groups.TreasuryBalance
+import com.testlogon.android.core.model.groups.TreasuryLedgerEntry
 import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.feature.groups.data.GroupsRepository
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * AND-355 - shared in-memory fakes for the groups ViewModel tests. Mutating calls RECORD their args BEFORE
@@ -25,18 +35,42 @@ class FakeGroupsRepo(
     var changeRoleResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var removeResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var leaveResult: ApiResult<Unit> = ApiResult.Success(Unit),
+    var treasuryBalanceResult: ApiResult<TreasuryBalance> = ApiResult.Success(EMPTY_TREASURY_BALANCE),
+    var treasuryLedgerResult: ApiResult<List<TreasuryLedgerEntry>> = ApiResult.Success(emptyList()),
+    var treasuryContributorsResult: ApiResult<List<Contributor>> = ApiResult.Success(emptyList()),
+    var fundraisersResult: ApiResult<List<GroupFundraiser>> = ApiResult.Success(emptyList()),
+    var createFundraiserResult: ApiResult<GroupFundraiser> = ApiResult.Success(EMPTY_FUNDRAISER),
+    var campaignsResult: ApiResult<List<GroupCampaign>> = ApiResult.Success(emptyList()),
+    var campaignStatsResult: ApiResult<GroupCampaignStats> = ApiResult.Success(EMPTY_CAMPAIGN_STATS),
+    var createCampaignResult: ApiResult<GroupCampaign> = ApiResult.Success(EMPTY_CAMPAIGN),
+    var updateGroupResult: ApiResult<Group> = ApiResult.Success(Group(id = "grp_1", name = "G")),
 ) : GroupsRepository {
 
+    val createGroupArgs = mutableListOf<CreateGroupArgs>()
+    var createGroupResult: ApiResult<Group> = ApiResult.Success(Group(id = "grp_new", name = "New"))
     val inviteArgs = mutableListOf<Pair<String, String>>()
     val changeRoleArgs = mutableListOf<Triple<String, String, GroupRole>>()
     val removeArgs = mutableListOf<Pair<String, String>>()
     val leaveArgs = mutableListOf<String>()
+    val createFundraiserArgs = mutableListOf<CreateFundraiserArgs>()
+    val createCampaignArgs = mutableListOf<CreateCampaignArgs>()
+    val updateGroupArgs = mutableListOf<UpdateGroupArgs>()
 
     /** When set, the roster returned by [listMembers] after the first call (used to test invite re-fetch). */
     var membersAfterInvite: ApiResult<List<GroupMember>>? = null
     private var membersCallCount = 0
 
     override suspend fun listMyGroups(): ApiResult<List<Group>> = myGroupsResult
+
+    override suspend fun createGroup(
+        name: String,
+        description: String?,
+        visibility: String?,
+        topic: String?,
+    ): ApiResult<Group> {
+        createGroupArgs += CreateGroupArgs(name, description, visibility, topic)
+        return createGroupResult
+    }
 
     override suspend fun getGroup(groupId: String): ApiResult<Group> = groupResult
 
@@ -45,6 +79,51 @@ class FakeGroupsRepo(
         val after = membersAfterInvite
         return if (after != null && membersCallCount > 1) after else membersResult
     }
+
+    var groupFeedResult: ApiResult<GroupFeedPost> =
+        ApiResult.Success(GroupFeedPost(postId = "p1", authorId = "u1", authorName = "u1"))
+    val createGroupPostArgs = mutableListOf<Pair<String, String>>()
+
+    override fun groupFeedPager(groupId: String): Flow<PagingData<GroupFeedPost>> =
+        flowOf(PagingData.empty())
+
+    override suspend fun createGroupPost(
+        groupId: String,
+        text: String,
+        imageUrls: List<String>,
+        videoId: String?,
+        unlockPriceCents: Int?,
+        poll: com.testlogon.android.core.network.poll.PollInputDto?,
+    ): ApiResult<GroupFeedPost> {
+        createGroupPostArgs += groupId to text
+        return groupFeedResult
+    }
+
+    var listCommentsResult: ApiResult<com.testlogon.android.feature.groups.data.GroupCommentsPage> =
+        ApiResult.Success(com.testlogon.android.feature.groups.data.GroupCommentsPage(emptyList(), null))
+    var addCommentResult: ApiResult<com.testlogon.android.core.model.groups.GroupComment> =
+        ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "not stubbed"))
+
+    override suspend fun listComments(
+        groupId: String,
+        postId: String,
+        cursor: String?,
+        limit: Int,
+    ): ApiResult<com.testlogon.android.feature.groups.data.GroupCommentsPage> = listCommentsResult
+
+    override suspend fun addComment(
+        groupId: String,
+        postId: String,
+        text: String?,
+        imageUrl: String?,
+        parentCommentId: String?,
+    ): ApiResult<com.testlogon.android.core.model.groups.GroupComment> = addCommentResult
+
+    override suspend fun deleteComment(
+        groupId: String,
+        postId: String,
+        commentId: String,
+    ): ApiResult<Unit> = ApiResult.Success(Unit)
 
     override suspend fun invite(groupId: String, userId: String): ApiResult<Unit> {
         inviteArgs += groupId to userId
@@ -70,9 +149,142 @@ class FakeGroupsRepo(
         return leaveResult
     }
 
+    override suspend fun getTreasuryBalance(groupId: String): ApiResult<TreasuryBalance> =
+        treasuryBalanceResult
+
+    override suspend fun getTreasuryLedger(groupId: String): ApiResult<List<TreasuryLedgerEntry>> =
+        treasuryLedgerResult
+
+    override suspend fun getTreasuryContributors(groupId: String): ApiResult<List<Contributor>> =
+        treasuryContributorsResult
+
+    override suspend fun listFundraisers(groupId: String): ApiResult<List<GroupFundraiser>> =
+        fundraisersResult
+
+    override suspend fun createFundraiser(
+        groupId: String,
+        title: String,
+        description: String?,
+        goalCents: Long?,
+    ): ApiResult<GroupFundraiser> {
+        createFundraiserArgs += CreateFundraiserArgs(groupId, title, description, goalCents)
+        return createFundraiserResult
+    }
+
+    override suspend fun listCampaigns(groupId: String): ApiResult<List<GroupCampaign>> =
+        campaignsResult
+
+    override suspend fun getCampaignStats(
+        groupId: String,
+        campaignId: String,
+    ): ApiResult<GroupCampaignStats> = campaignStatsResult
+
+    override suspend fun createCampaign(
+        groupId: String,
+        name: String,
+        dailyBudgetCents: Long,
+        lifetimeBudgetCents: Long,
+        creativeText: String?,
+    ): ApiResult<GroupCampaign> {
+        createCampaignArgs += CreateCampaignArgs(
+            groupId, name, dailyBudgetCents, lifetimeBudgetCents, creativeText,
+        )
+        return createCampaignResult
+    }
+
+    override suspend fun updateGroup(
+        groupId: String,
+        name: String?,
+        description: String?,
+        visibility: String?,
+        topic: String?,
+    ): ApiResult<Group> {
+        updateGroupArgs += UpdateGroupArgs(groupId, name, description, visibility, topic)
+        return updateGroupResult
+    }
+
+    data class CreateGroupArgs(
+        val name: String,
+        val description: String?,
+        val visibility: String?,
+        val topic: String?,
+    )
+
+    data class CreateFundraiserArgs(
+        val groupId: String,
+        val title: String,
+        val description: String?,
+        val goalCents: Long?,
+    )
+
+    data class CreateCampaignArgs(
+        val groupId: String,
+        val name: String,
+        val dailyBudgetCents: Long,
+        val lifetimeBudgetCents: Long,
+        val creativeText: String?,
+    )
+
+    data class UpdateGroupArgs(
+        val groupId: String,
+        val name: String?,
+        val description: String?,
+        val visibility: String?,
+        val topic: String?,
+    )
+
     companion object {
         fun failure(status: Int = 422, code: String? = null): ApiResult.Failure =
             ApiResult.Failure(ApiError(status = status, message = "boom", code = code))
+
+        private val EMPTY_TREASURY_BALANCE = TreasuryBalance(
+            balanceCents = 0L,
+            currency = "USD",
+            totalContributedCents = 0L,
+            totalDonatedCents = 0L,
+            totalSpentCents = 0L,
+            fundraisingGoalCents = null,
+        )
+
+        private val EMPTY_FUNDRAISER = GroupFundraiser(
+            fundraiserId = "fr_1",
+            title = "F",
+            description = null,
+            goalCents = null,
+            raisedCents = 0L,
+            donationCount = 0,
+            currency = "USD",
+            status = "active",
+            coverImageUrl = null,
+            createdAt = null,
+            endsAt = null,
+        )
+
+        private val EMPTY_CAMPAIGN = GroupCampaign(
+            campaignId = "cmp_1",
+            name = "C",
+            status = "active",
+            dailyBudgetCents = 0L,
+            lifetimeBudgetCents = 0L,
+            spentCents = 0L,
+            impressions = 0L,
+            clicks = 0L,
+            creativeText = null,
+            creativeImageUrl = null,
+            createdAt = null,
+        )
+
+        private val EMPTY_CAMPAIGN_STATS = GroupCampaignStats(
+            campaignId = "cmp_1",
+            impressions = 0L,
+            clicks = 0L,
+            ctr = 0.0,
+            spentCents = 0L,
+            remainingCents = 0L,
+            dailySpentCents = 0L,
+            dailyBudgetCents = 0L,
+            status = "active",
+        )
     }
 }
 

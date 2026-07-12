@@ -1,0 +1,11 @@
+--- app/services/group_feed.py.bak_pollwritein_1783440214
++++ app/services/group_feed.py
+@@ -105,7 +105,7 @@
+             choice_mode=poll.get("choice_mode", "single"),
+             max_selections=poll.get("max_selections"), closes_at=poll.get("closes_at"),
+             allow_vote_change=poll.get("allow_vote_change", True),
+-            anonymous=poll.get("anonymous", True), surface="group", ref_id=group_id)
++            anonymous=poll.get("anonymous", True), allow_write_in=poll.get("allow_write_in", False), surface="group", ref_id=group_id)
+         _poll_id = _poll_snap["poll_id"]
+ 
+     tbl = _get_app_table()

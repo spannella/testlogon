@@ -1,10 +1,15 @@
 package com.testlogon.android.feature.groups.data
 
 import com.testlogon.android.core.model.groups.Group
+import com.testlogon.android.core.model.groups.GroupComment
+import com.testlogon.android.core.model.groups.GroupFeedPost
 import com.testlogon.android.core.model.groups.GroupMember
 import com.testlogon.android.core.model.groups.GroupRole
+import com.testlogon.android.core.network.groups.GroupCommentDto
+import com.testlogon.android.core.network.groups.GroupFeedPostDto
 import com.testlogon.android.core.network.groups.GroupMemberDto
 import com.testlogon.android.core.network.groups.UserGroupDto
+import com.testlogon.android.data.poll.toDomain
 
 /**
  * AND-355 - DTO -> domain mappers for the social-groups surface.
@@ -24,6 +29,9 @@ fun UserGroupDto.toDomain(): Group = Group(
     myRole = GroupRole.from(myRole),
     adminUserId = adminUserId,
     coverImageUrl = coverImageUrl,
+    topic = topic,
+    visibility = visibility,
+    status = status,
 )
 
 /**
@@ -34,7 +42,76 @@ fun GroupMemberDto.toDomain(): GroupMember = GroupMember(
     userId = userId,
     role = GroupRole.from(role),
     status = status.orEmpty(),
-    displayName = displayName,
+    // Batch-8 (#10): the owner/admin row arrives with an EMPTY display_name from the backend; coerce a
+    // blank value to null so the UI falls back to the user_id instead of rendering an empty, "missing" row.
+    displayName = displayName?.takeIf { it.isNotBlank() },
     joinedAt = joinedAt,
     promotedAt = promotedAt,
+)
+
+/**
+ * Batch-8 (#11) - maps a [GroupFeedPostDto] to the domain [GroupFeedPost]. A post is "locked" when it has a
+ * positive unlock price AND the wire says the viewer has not unlocked it (text comes back null in that case).
+ */
+fun GroupFeedPostDto.toDomain(): GroupFeedPost {
+    val price = unlockPriceCents
+    val isUnlocked = unlocked ?: true
+    val images = imageUrls ?: (imageUrl?.let { listOf(it) } ?: emptyList())
+    // ADV group-feed ads — a server-injected sponsored (paid) unit renders as a distinct, non-tippable
+    // Sponsored card. Requires a creative id (a sponsored row without one can't render/track -> degrade).
+    val sponsoredAd = if (isSponsored) {
+        creativeId?.takeIf { it.isNotBlank() }?.let { creative ->
+            com.testlogon.android.core.model.ads.SponsoredAd(
+                label = sponsorLabel?.takeIf { it.isNotBlank() } ?: "Sponsored",
+                headline = headline?.takeIf { it.isNotBlank() },
+                body = (body ?: text)?.takeIf { it.isNotBlank() },
+                ctaText = ctaText?.takeIf { it.isNotBlank() },
+                ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
+                imageUrls = images,
+                adClickId = adClickId?.takeIf { it.isNotBlank() },
+                creativeId = creative,
+                campaignId = campaignId?.takeIf { it.isNotBlank() } ?: "",
+                accountId = accountId?.takeIf { it.isNotBlank() } ?: "",
+                surface = "group_feed",
+                slotType = "sponsored_post",
+                creatorId = contentOwnerId?.takeIf { it.isNotBlank() } ?: "platform",
+                contentId = postId,
+            )
+        }
+    } else {
+        null
+    }
+    return GroupFeedPost(
+        postId = postId,
+        authorId = userId,
+        authorName = userDisplayName?.takeIf { it.isNotBlank() } ?: userId,
+        authorAvatarUrl = userAvatarUrl,
+        text = text,
+        imageUrl = imageUrl,
+        imageUrls = images,
+        videoId = videoId,
+        pinned = pinned ?: false,
+        locked = price != null && price > 0 && !isUnlocked,
+        unlockPriceCents = price,
+        tipTotalCents = tipTotalCents ?: 0,
+        commentCount = commentCount ?: 0,
+        createdAt = createdAt ?: 0,
+        poll = poll?.toDomain(),
+        sponsored = sponsoredAd,
+    )
+}
+
+/**
+ * Batch-9 (#11) - maps a [GroupCommentDto] to the domain [GroupComment]. A blank display name falls back to
+ * the user id (the backend currently echoes the user_id as the display name).
+ */
+fun GroupCommentDto.toDomain(): GroupComment = GroupComment(
+    commentId = commentId,
+    postId = postId.orEmpty(),
+    authorId = userId,
+    authorName = userDisplayName?.takeIf { it.isNotBlank() } ?: userId,
+    text = text,
+    imageUrl = imageUrl,
+    parentCommentId = parentCommentId,
+    createdAt = createdAt ?: 0,
 )

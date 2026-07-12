@@ -148,3 +148,35 @@ fun VodRentalPlaybackOutDto.toDomain(): RentalPlayback = RentalPlayback(
     tokenExpiresAt = tokenExpiresAt,
     access = access.toDomain(),
 )
+
+/**
+ * "My Rentals" list row (web VodRentalsPage parity). Carries the fields the list UI needs that are NOT on
+ * [RentalAccess]: the [videoId] (row key + link), the [amountCents] paid, plus the status-derivation inputs
+ * ([tier], [active], [started], [reason], [viewsRemaining], [remainingSeconds]). Timestamps/seconds are
+ * server-authoritative; the UI only formats them.
+ */
+data class RentalListItem(
+    val videoId: String,
+    val rentalId: String,
+    val tier: String,
+    val amountCents: Int,
+    val active: Boolean,
+    val started: Boolean,
+    val reason: String,
+    val expiresAt: Long?,
+    val remainingSeconds: Long,
+    val viewsRemaining: Int,
+)
+
+fun VodRentalStatusOutDto.toListItem(): RentalListItem = RentalListItem(
+    videoId = videoId,
+    rentalId = rentalId,
+    tier = tier,
+    amountCents = amountCents,
+    active = active,
+    started = started,
+    reason = reason,
+    expiresAt = expiresAt,
+    remainingSeconds = remainingSeconds,
+    viewsRemaining = viewsRemaining,
+)

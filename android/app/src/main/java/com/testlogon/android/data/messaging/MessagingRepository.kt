@@ -25,6 +25,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -49,6 +53,12 @@ import javax.inject.Singleton
  * Failures fold into [ApiResult.Failure] / [ApiResult.NetworkError]; CancellationException is
  * re-thrown, never swallowed. Message content is never logged.
  */
+/** #25/#27 — one staged media item for a mixed gallery send (a photo or a short video). */
+data class MediaItem(
+    val localUri: String,
+    val isVideo: Boolean,
+)
+
 interface MessagingRepository {
 
     /** Observable, sorted conversation inbox backed by the Room cache. */
@@ -70,7 +80,26 @@ interface MessagingRepository {
     suspend fun enqueueOptimistic(conversationId: String, clientId: String, text: String, nowSeconds: Long)
 
     /** POST the send and reconcile the outbox row; marks FAILED on error. */
-    suspend fun sendOutbox(conversationId: String, clientId: String, text: String): ApiResult<Message>
+    suspend fun sendOutbox(
+        conversationId: String,
+        clientId: String,
+        text: String,
+        replyToMessageId: String? = null,
+        viewOnce: Boolean = false,
+        lockPriceCents: Long? = null,
+        lockDescription: String? = null,
+        sendAtEpochSeconds: Long? = null,
+        expiresInSeconds: Long? = null,
+        // #6 (B-COUNTDOWN3) — attach a countdown to this (any-kind) text message.
+        countdownTargetEpochSeconds: Long? = null,
+        countdownTitle: String? = null,
+        countdownRevealText: String? = null,
+        countdownRevealImage: LotteryImageRef? = null,
+        // TIP-106 - attach a tip to this text message on send (DM resolves recipient server-side).
+        tipAmountCents: Long? = null,
+        tipPaymentMethodId: String? = null,
+        tipRecipientId: String? = null,
+    ): ApiResult<Message>
 
     /** Apply an inbound realtime new-message event to the caches. */
     suspend fun applyInboundMessage(event: MessagingEvent.NewMessage)
@@ -107,8 +136,47 @@ interface MessagingRepository {
     /** AND-140 — pinned messages (resolves pin refs against the cache, fetching any miss). */
     suspend fun pinnedMessages(conversationId: String, cursor: String? = null): ApiResult<List<Message>>
 
-    /** AND-140 — edit a message body (PATCH field `text`); reconciles the cached row to EDITED. */
-    suspend fun editMessage(conversationId: String, messageId: String, text: String): ApiResult<Message>
+    /**
+     * AND-140 / B-MSGEDIT #5 — edit a message (PATCH .../messages/{mid}); reconciles the cached row.
+     *
+     * In addition to [text], full media control is supported: pass ONE media kind to add/replace it
+     * (promoting a text message), or [removeMedia]=true to strip all media back to text:
+     *  - [image]                          -> image message (descriptor from [uploadEditImage]).
+     *  - [freeImages]+[lockedImages]      -> gallery message (descriptors from [uploadEditImage]).
+     *  - [filePath]                       -> file message (server VFS path from [uploadEditFile]).
+     *  - [videoId]                        -> video_share message (a library video id).
+     * At least one of text/media/removeMedia must be meaningful. Encrypted messages still unsupported.
+     */
+    suspend fun editMessage(
+        conversationId: String,
+        messageId: String,
+        text: String? = null,
+        image: MessageImageDto? = null,
+        filePath: String? = null,
+        videoId: String? = null,
+        freeImages: List<GalleryImageDto>? = null,
+        lockedImages: List<GalleryImageDto>? = null,
+        removeMedia: Boolean = false,
+    ): ApiResult<Message>
+
+    /**
+     * B-MSGEDIT #5 — process + presign + PUT a picked image so it can be attached on [editMessage]
+     * (reuses the same conversation image-presign flow as the composer / scheduled-edit). Returns the
+     * uploaded image descriptor (bucket/key/size). Does NOT mutate the message itself.
+     */
+    suspend fun uploadEditImage(conversationId: String, localUri: String): ApiResult<MessageImageDto>
+
+    /**
+     * B-MSGEDIT #5 / #4 — drive a picked file through the fs upload (presign -> PUT -> complete) so it
+     * can be attached on [editMessage] / [rescheduleMessage]. Returns the server VFS path the
+     * complete-upload echoed back (the value `file_path` expects). Does NOT mutate the message itself.
+     */
+    suspend fun uploadEditFile(
+        conversationId: String,
+        localUri: String,
+        fileName: String,
+        mimeType: String,
+    ): ApiResult<String>
 
     /** AND-140 — edit history (newest-first; read-through, not persisted). */
     suspend fun editHistory(
@@ -125,6 +193,42 @@ interface MessagingRepository {
 
     /** AND-140 — revoke ("unsend") a message FOR ALL; reconciles the cached row to REVOKED. */
     suspend fun revokeMessage(conversationId: String, messageId: String): ApiResult<Message>
+
+    /**
+     * #8 — list the caller's still-pending scheduled messages in [conversationId] (sorted by due time
+     * ascending). Read-through, not cached (the manager refetches each time it opens).
+     */
+    suspend fun listScheduledMessages(conversationId: String): ApiResult<List<ScheduledMessage>>
+
+    /**
+     * #8 — reschedule / edit a still-pending scheduled message. Pass [text] and/or [sendAtEpochSeconds]
+     * (at least one); returns the updated [ScheduledMessage]. Caller maps 400/403 to a user message.
+     */
+    suspend fun rescheduleMessage(
+        conversationId: String,
+        messageId: String,
+        text: String? = null,
+        sendAtEpochSeconds: Long? = null,
+        // #7 (B-SCHED3) — attach/replace an image on a still-pending scheduled message. When the
+        // message is currently text-only the server promotes its kind to "image" so the photo is
+        // honored. Pass the descriptor returned by [uploadRescheduleImage].
+        image: MessageImageDto? = null,
+        // #4 (B-MSGEDIT) — attach/replace a FILE or a library VIDEO on a still-pending scheduled
+        // message (even an originally text-only one; the server promotes its kind on save). [filePath]
+        // is the server VFS path from [uploadEditFile]; [videoId] is a library video id.
+        filePath: String? = null,
+        videoId: String? = null,
+    ): ApiResult<ScheduledMessage>
+
+    /**
+     * #7 (B-SCHED3) — process + presign + PUT a picked image so it can be attached to a scheduled
+     * message via [rescheduleMessage]. Returns the uploaded image descriptor (bucket/key/size), or a
+     * failure if processing/upload fails. Does NOT mutate the scheduled message itself.
+     */
+    suspend fun uploadRescheduleImage(conversationId: String, localUri: String): ApiResult<MessageImageDto>
+
+    /** #8 — cancel/delete a still-pending scheduled message before it delivers. */
+    suspend fun cancelScheduledMessage(conversationId: String, messageId: String): ApiResult<Unit>
 
     /**
      * AND-140 — hide/unhide a message FOR ME (server-backed). Applies the local hide flag
@@ -160,6 +264,10 @@ interface MessagingRepository {
      * on reconnect); never surfaced as a user error. Skips own messages at the call site.
      */
     suspend fun reportView(conversationId: String, messageId: String): ApiResult<Unit>
+
+    /** Record consumption of a once-media message (grant -> consume) without downloading bytes;
+     *  used for listen-once audio whose url is already exposed for direct playback. */
+    suspend fun consumeOnceMedia(conversationId: String, messageId: String, trigger: String)
 
     /**
      * AND-147 — fetch the viewer roster for [messageId] (FR-5). Returns viewers sorted most-recent
@@ -209,6 +317,15 @@ interface MessagingRepository {
     suspend fun findOrCreateDm(peerUserId: String): ApiResult<Conversation>
 
     /**
+     * #18 — resolve the conversation's peers for the audio/video-call menu from the CONVERSATION
+     * PARTICIPANTS (not message senders), so a brand-new/empty 1:1 DM still exposes the call option.
+     * Returns the conversation [ConversationPeers.type] plus the OTHER participants' user subs (self
+     * excluded). Default no-op keeps test fakes / other implementers unaffected.
+     */
+    suspend fun conversationPeers(conversationId: String): ApiResult<ConversationPeers> =
+        ApiResult.Success(ConversationPeers(type = "dm", otherUserSubs = emptyList()))
+
+    /**
      * AND-153 — search contacts (people) by display-name token. Returns a single bounded list (the
      * endpoint has no pagination). A blank/whitespace-only query short-circuits to an empty list with
      * NO network request (a blank `q` would 422 server-side). The query is trimmed and capped at 64
@@ -236,7 +353,79 @@ interface MessagingRepository {
         conversationId: String,
         clientId: String,
         localUri: String,
+        caption: String? = null,
+        viewOnce: Boolean = false,
+        lockPriceCents: Long? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
+        encryptionPassphrase: String? = null,
     ): ApiResult<Message>
+
+    /** C6 — enqueue an optimistic gallery (multi-image) outbox row (renders the first thumbnail + a
+     * "+N" badge while uploading). */
+    suspend fun enqueueOptimisticGallery(
+        conversationId: String,
+        clientId: String,
+        firstLocalUri: String,
+        imageCount: Int,
+        nowSeconds: Long,
+    )
+
+    /**
+     * C6 — send MULTIPLE picked images as ONE gallery message: process + presign + PUT each image,
+     * collect the refs, then POST messages/gallery once. Reconciles the optimistic row or marks it
+     * FAILED. Manual retry (no server idempotency key).
+     */
+    suspend fun sendGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        localUris: List<String>,
+        caption: String? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
+    ): ApiResult<Message>
+
+    /**
+     * #25/#27 — send a MIXED set of staged media (photos AND/OR videos) as ONE gallery message. Each
+     * [MediaItem] is uploaded via the messaging media presign (images are processed/compressed; videos
+     * stream raw) and referenced in free_images with its real content_type, so the server-derived
+     * per-item media_kind lets the bubble render a mixed photo+video grid.
+     */
+    suspend fun sendMixedGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        media: List<MediaItem>,
+        caption: String? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
+    ): ApiResult<Message>
+
+    /** C7 — enqueue an optimistic short-video outbox row (renders a file/clip bubble + progress). */
+    suspend fun enqueueOptimisticVideoClip(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        nowSeconds: Long,
+    )
+
+    /**
+     * C7 — send a picked SHORT video inline: stream the raw clip through the messaging images presign
+     * (+ PUT, NO image processing/compression) and POST messages/image with kind="video". The server
+     * stores it as a file attachment, so it renders as a downloadable/playable video bubble.
+     */
+    suspend fun sendVideoClipOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        caption: String? = null,
+        viewOnce: Boolean = false,
+        lockPriceCents: Long? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
+    ): ApiResult<Message>
+
+    /** MSG (encrypted media) — GET raw bytes from a media url (encrypted-image ciphertext). */
+    suspend fun fetchEncryptedImageBytes(url: String): ByteArray?
 
     /** AND-131 — list the current user's published videos for the share picker. */
     suspend fun listShareableVideos(): ApiResult<List<ShareableVideo>>
@@ -270,6 +459,13 @@ interface MessagingRepository {
         localUri: String,
         fileName: String,
         mimeType: String,
+        // #10 — optional caption text sent alongside the file (kept with the message).
+        caption: String? = null,
+        viewOnce: Boolean = false,
+        lockPriceCents: Long? = null,
+        lockDescription: String? = null,
+        expiresInSeconds: Long? = null,
+        sendAtEpochSeconds: Long? = null,
     ): ApiResult<Message>
 
     /** AND-132 — share an existing owned file (by VFS path) into a conversation; returns the message. */
@@ -308,6 +504,8 @@ interface MessagingRepository {
         localFilePath: String,
         durationSeconds: Double,
         waveform: List<Float>,
+        consumptionPolicy: String = "none",
+        sendAtEpochSeconds: Long? = null,
     ): ApiResult<Message>
 
     // ---- AND-134: voicemail ----
@@ -378,6 +576,18 @@ interface MessagingRepository {
         draft: MeetingPollDraft,
     ): ApiResult<MeetingPoll>
 
+    /** Send an arbitrary text-option poll message (kind="poll"); inserts it into the thread. */
+    suspend fun sendArbitraryPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        multiSelect: Boolean,
+        maxSelections: Int?,
+        closesAt: Long?,
+        text: String?,
+        allowWriteIn: Boolean,
+    ): ApiResult<Unit>
+
     /** AND-136 — refresh authoritative poll state (idempotent GET) into Room. */
     suspend fun refreshMeetingPoll(conversationId: String, pollId: String): ApiResult<MeetingPoll>
 
@@ -417,6 +627,7 @@ interface MessagingRepository {
         draft: CountdownDraft,
     ): ApiResult<Message>
 
+
     // ---- AND-139: tips / paid-unlockable / lottery ----
 
     /**
@@ -445,7 +656,157 @@ interface MessagingRepository {
         note: String?,
         paymentMethodId: String?,
     ): ApiResult<TipReceipt>
+
+    /**
+     * TIP-203 - money-REACTION tip on a message (charge_tip content_type message_react). Distinct from
+     * [tipMessage]: credits the message author, stores a tip-reaction badge, fans a realtime event.
+     */
+    suspend fun tipReactMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        emoji: String?,
+        paymentMethodId: String?,
+    ): ApiResult<TipReactReceipt>
+
+    // ---- MSG: new in-app composers ----
+
+    /** Lottery DM (conversation_id in BODY). Outcomes default-split weights to sum 10000. */
+    suspend fun sendLottery(
+        conversationId: String,
+        outcomes: List<LotteryOutcomeDraft>,
+        image: LotteryImageRef? = null,
+        text: String? = null,
+    ): ApiResult<Message>
+
+    /**
+     * C10 — upload a picked image for a lottery message (reuses the conversation image presign/PUT
+     * transport; no confirm step). Returns the bucket/key/dimensions ref, or null on failure.
+     */
+    suspend fun uploadLotteryImage(
+        conversationId: String,
+        localUri: String,
+    ): LotteryImageRef?
+
+    /**
+     * Number-13 — upload a per-OPTION image/video for a lottery outcome (reuses the conversation image
+     * presign/PUT transport; the resulting key is scoped conversationId/owner/ as the B-LOT media
+     * validator requires). Returns the media_asset_id ("bucket:key") to send, or null on failure.
+     */
+    suspend fun uploadLotteryOptionMedia(
+        conversationId: String,
+        localUri: String,
+        isVideo: Boolean,
+    ): String?
+
+    /** Find-a-DateTime ("custom") poll. */
+    suspend fun createFindDateTime(
+        conversationId: String,
+        draft: FindDateTimeDraft,
+    ): ApiResult<Message>
+
+    /** Share a calendar event. */
+    suspend fun shareCalendarEvent(
+        conversationId: String,
+        calendarId: String,
+        eventId: String,
+        text: String?,
+    ): ApiResult<Message>
+
+    /** Share a calendar (read/write, optional booking link). */
+    suspend fun shareCalendar(
+        conversationId: String,
+        calendarId: String,
+        permission: String,
+        includeBookingLink: Boolean,
+        text: String?,
+    ): ApiResult<Message>
+
+    /** Send an encrypted text message (envelope populated; no plaintext on the wire). */
+    suspend fun sendEncryptedText(
+        conversationId: String,
+        clientId: String,
+        envelope: MessageEncryptionEnvelopeDto,
+        replyToMessageId: String?,
+    ): ApiResult<Message>
+
+    /** Discovery: the user's calendars. */
+    suspend fun listCalendars(): ApiResult<List<CalendarAccessUi>>
+
+    /** Discovery: events in a calendar. */
+    suspend fun listCalendarEvents(calendarId: String): ApiResult<List<CalendarEventUi>>
+
+    /** Discovery: file-manager files at [path] (default root). */
+    suspend fun listFiles(path: String = "/"): ApiResult<List<FileEntryUi>>
 }
+
+/**
+ * A single lottery outcome draft from the composer. payloadType is "text"|"image"|"video". For media
+ * outcomes mediaAssetId is the resolved S3 key ("bucket:key") of an image/video already uploaded via
+ * the conversation image-presign transport; text is the revealed text for "text" outcomes.
+ */
+data class LotteryOutcomeDraft(
+    val label: String?,
+    val text: String,
+    val weightBps: Int? = null,
+    val payloadType: String = "text",
+    val mediaAssetId: String? = null,
+    // #24 — per-option media LIST. Before upload these are local content uris (with isVideo); the
+    // ViewModel uploads each and replaces them with the resolved "bucket:key" media_asset_ids.
+    val mediaItems: List<LotteryOutcomeMediaItem> = emptyList(),
+    val mediaAssetIds: List<String>? = null,
+)
+
+/** #24 — one picked/resolved media asset on a lottery outcome. [ref] is a local content uri before
+ *  upload, or a resolved "bucket:key" after. */
+data class LotteryOutcomeMediaItem(
+    val ref: String,
+    val isVideo: Boolean,
+)
+
+/** C10 — resolved upload result for a lottery cover image (Backend B3 image object fields). */
+data class LotteryImageRef(
+    val bucket: String,
+    val key: String,
+    val contentType: String?,
+    val width: Int?,
+    val height: Int?,
+)
+
+/** A Find-a-DateTime poll creation draft. */
+data class FindDateTimeDraft(
+    val title: String,
+    val fromDate: String,
+    val toDate: String,
+    val startHour: Int,
+    val endHour: Int,
+    val slotDurationMinutes: Int,
+    val deadlineHours: Int = 48,
+    val text: String? = null,
+)
+
+/** Discovery: a calendar the user can pick to share an event from or share wholesale. */
+data class CalendarAccessUi(
+    val calendarId: String,
+    val name: String,
+    val permission: String,
+)
+
+/** Discovery: a calendar event the user can share. */
+data class CalendarEventUi(
+    val eventId: String,
+    val calendarId: String,
+    val name: String,
+    val startUtc: String?,
+)
+
+/** Discovery: a file the user can share (path is absolute, starts with /). */
+data class FileEntryUi(
+    val path: String,
+    val name: String,
+    val isFolder: Boolean,
+    val sizeBytes: Long?,
+)
 
 /** AND-137 — a countdown creation draft (validated by the ViewModel before send). */
 data class CountdownDraft(
@@ -453,6 +814,10 @@ data class CountdownDraft(
     val targetEpochSeconds: Long,
     val associatedEventType: AssociatedEventType = AssociatedEventType.CUSTOM,
     val associatedEventId: String? = null,
+    /** #31 — optional text revealed when the countdown completes. */
+    val revealText: String? = null,
+    /** #31 — optional image revealed when the countdown completes (already uploaded). */
+    val revealImage: LotteryImageRef? = null,
 )
 
 /** AND-139 — the receipt returned by a successful tip. */
@@ -460,6 +825,15 @@ data class TipReceipt(
     val tipPaymentId: String?,
     val amountCents: Long,
     val currency: String,
+)
+
+/** TIP-203 - the receipt returned by a successful message tip-REACTION. */
+data class TipReactReceipt(
+    val tipPaymentId: String?,
+    val chargedCents: Long,
+    val netCents: Long,
+    val recipientId: String?,
+    val emoji: String?,
 )
 
 /** AND-135 — a GIF the user picked from search/trending, sent verbatim. */
@@ -543,6 +917,7 @@ class MessagingRepositoryImpl @Inject constructor(
     private val meetingPollDao: MeetingPollDao,
     private val errorParser: ApiErrorParser,
     private val authStateStore: AuthStateStore,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
     private val uploader: AttachmentUploader,
     private val imageProcessor: MessageImageProcessor,
     private val uriMetadata: com.testlogon.android.data.upload.UriMetadata,
@@ -617,13 +992,54 @@ class MessagingRepositoryImpl @Inject constructor(
         conversationId: String,
         clientId: String,
         text: String,
+        replyToMessageId: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        lockDescription: String?,
+        sendAtEpochSeconds: Long?,
+        expiresInSeconds: Long?,
+        countdownTargetEpochSeconds: Long?,
+        countdownTitle: String?,
+        countdownRevealText: String?,
+        countdownRevealImage: LotteryImageRef?,
+        tipAmountCents: Long?,
+        tipPaymentMethodId: String?,
+        tipRecipientId: String?,
     ): ApiResult<Message> = withContext(io) {
-        when (val result = apiCall { api.sendMessage(conversationId, SendTextMessageReq(text)) }) {
+        val req = SendTextMessageReq(
+            text = text,
+            replyToMessageId = replyToMessageId,
+            viewOnce = viewOnce.takeIf { it },
+            lockPriceCents = lockPriceCents,
+            lockDescription = lockDescription,
+            sendAt = sendAtEpochSeconds,
+            expiresInSeconds = expiresInSeconds,
+            // #6 (B-COUNTDOWN3) — countdown attached to this message (any kind).
+            countdownTargetDatetime = countdownTargetEpochSeconds,
+            countdownTitle = countdownTitle?.takeIf { it.isNotBlank() },
+            countdownRevealText = countdownRevealText?.takeIf { it.isNotBlank() },
+            countdownRevealImage = countdownRevealImage?.let {
+                CountdownRevealImageReq(
+                    bucket = it.bucket,
+                    key = it.key,
+                    contentType = it.contentType,
+                    width = it.width,
+                    height = it.height,
+                )
+            },
+            // TIP-106 - a blank payment id is dropped so the dev backend mock-charges; a real id POSTs.
+            tipAmountCents = tipAmountCents,
+            tipPaymentMethodId = tipPaymentMethodId?.takeIf { it.isNotBlank() },
+            tipRecipientId = tipRecipientId,
+        )
+        when (val result = apiCall { api.sendMessage(conversationId, req) }) {
             is ApiResult.Success -> {
                 // Reconcile: persist the server message (stamped with our clientId for cleanup),
                 // then drop the optimistic outbox row.
                 val message = result.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -641,16 +1057,31 @@ class MessagingRepositoryImpl @Inject constructor(
     override suspend fun applyInboundMessage(event: MessagingEvent.NewMessage) = withContext(io) {
         // Ignore if we already have this message (e.g. our own send already reconciled).
         if (messageDao.findById(event.messageId) != null) return@withContext
+        // Prefer the canonical message from the list (real created_at + full media), mirroring
+        // applyMessageMutation. The realtime frame often omits created_at/url, which previously made
+        // the bubble show "0 minutes ago" and drop its media until the next manual refresh.
+        when (val r = apiCall { api.listMessages(event.conversationId, limit = PAGE_SIZE, before = null) }) {
+            is ApiResult.Success -> {
+                val fresh = r.data.firstOrNull { it.messageId == event.messageId }
+                if (fresh != null) {
+                    reconcilePreservingLocalFlags(fresh.toDomain())
+                    return@withContext
+                }
+            }
+            else -> Unit
+        }
+        // Fallback (offline / not yet in the list): insert a minimal row. Use the frame's created_at
+        // when present, else NOW (the message just arrived) — never 0, which renders a blank time.
+        val created = event.createdAtEpochSeconds.takeIf { it > 0L } ?: (System.currentTimeMillis() / 1000L)
         messageDao.upsert(
             MessageEntity(
                 messageId = event.messageId,
                 conversationId = event.conversationId,
                 senderId = event.senderId,
                 text = event.text.orEmpty(),
-                createdAtEpochSeconds = event.createdAtEpochSeconds,
+                createdAtEpochSeconds = created,
                 clientId = null,
                 kind = event.kind,
-                // Media fields (urls) arrive on the next list refresh; the SSE frame carries no url.
             ),
         )
     }
@@ -743,9 +1174,24 @@ class MessagingRepositoryImpl @Inject constructor(
     override suspend fun editMessage(
         conversationId: String,
         messageId: String,
-        text: String,
+        text: String?,
+        image: MessageImageDto?,
+        filePath: String?,
+        videoId: String?,
+        freeImages: List<GalleryImageDto>?,
+        lockedImages: List<GalleryImageDto>?,
+        removeMedia: Boolean,
     ): ApiResult<Message> = withContext(io) {
-        when (val r = apiCall { api.editMessage(conversationId, messageId, EditMessageIn(text)) }) {
+        val body = EditMessageIn(
+            text = text,
+            image = image,
+            filePath = filePath,
+            videoId = videoId,
+            freeImages = freeImages,
+            lockedImages = lockedImages,
+            removeMedia = removeMedia.takeIf { it },
+        )
+        when (val r = apiCall { api.editMessage(conversationId, messageId, body) }) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain()
                 reconcilePreservingLocalFlags(message)
@@ -754,6 +1200,56 @@ class MessagingRepositoryImpl @Inject constructor(
             is ApiResult.Failure -> r
             is ApiResult.NetworkError -> r
         }
+    }
+
+    override suspend fun uploadEditImage(
+        conversationId: String,
+        localUri: String,
+    ): ApiResult<MessageImageDto> =
+        // Identical presign+PUT flow as the scheduled-edit photo attach; reuse it verbatim.
+        uploadRescheduleImage(conversationId, localUri)
+
+    override suspend fun uploadEditFile(
+        conversationId: String,
+        localUri: String,
+        fileName: String,
+        mimeType: String,
+    ): ApiResult<String> = withContext(io) {
+        val uri = Uri.parse(localUri)
+        val info = uriMetadata.resolve(uri, fallbackMime = mimeType)
+        val resolvedName = info.displayName ?: fileName
+        // Same VFS destination the file-message outbox uses; complete-upload echoes back the path.
+        val remotePath = "messages/$conversationId/$resolvedName"
+        var ref: com.testlogon.android.data.upload.AttachmentRef? = null
+        var uploadError: ApiError? = null
+        uploader.upload(
+            UploadRequest(
+                uri = uri,
+                mimeType = info.mimeType,
+                category = "message",
+                sizeBytes = info.sizeBytes,
+                displayName = resolvedName,
+                presignPath = "v1/fs/presign-upload",
+                confirmPath = "v1/fs/complete-upload",
+                remotePath = remotePath,
+            ),
+        ).collect { progress ->
+            when (progress) {
+                is UploadProgress.Succeeded -> ref = progress.attachment
+                is UploadProgress.Failed -> uploadError = ApiError(
+                    status = progress.error.httpStatus ?: ApiError.STATUS_NETWORK,
+                    message = progress.error.message ?: "Upload failed",
+                )
+                UploadProgress.Cancelled ->
+                    uploadError = ApiError(status = ApiError.STATUS_NETWORK, message = "Cancelled")
+                else -> Unit
+            }
+        }
+        val attachment = ref
+            ?: return@withContext ApiResult.Failure(
+                uploadError ?: ApiError(status = ApiError.STATUS_NETWORK, message = "Upload failed"),
+            )
+        ApiResult.Success(attachment.remotePath ?: remotePath)
     }
 
     override suspend fun editHistory(
@@ -797,6 +1293,104 @@ class MessagingRepositoryImpl @Inject constructor(
                 ApiResult.Success(message)
             }
             is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun listScheduledMessages(
+        conversationId: String,
+    ): ApiResult<List<ScheduledMessage>> = withContext(io) {
+        when (val r = apiCall { api.listScheduledMessages(conversationId) }) {
+            is ApiResult.Success ->
+                ApiResult.Success(r.data.map { it.toScheduledDomain() }.sortedBy { it.deliverAtEpochSeconds })
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun rescheduleMessage(
+        conversationId: String,
+        messageId: String,
+        text: String?,
+        sendAtEpochSeconds: Long?,
+        image: MessageImageDto?,
+        filePath: String?,
+        videoId: String?,
+    ): ApiResult<ScheduledMessage> = withContext(io) {
+        val req = RescheduleMessageReq(
+            text = text,
+            sendAt = sendAtEpochSeconds,
+            image = image,
+            filePath = filePath,
+            videoId = videoId,
+        )
+        when (val r = apiCall { api.rescheduleMessage(conversationId, messageId, req) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.toScheduledDomain())
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun uploadRescheduleImage(
+        conversationId: String,
+        localUri: String,
+    ): ApiResult<MessageImageDto> = withContext(io) {
+        val processed = imageProcessor.process(Uri.parse(localUri))
+            ?: return@withContext ApiResult.Failure(
+                ApiError(status = ApiError.STATUS_PARSE, message = "Couldn't process this image."),
+            )
+        val fileName = processed.uri.lastPathSegment ?: "image.jpg"
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        var uploadError: ApiError? = null
+        uploader.upload(
+            UploadRequest(
+                uri = processed.uri,
+                mimeType = processed.mimeType,
+                category = "message",
+                sizeBytes = processed.byteSize,
+                displayName = fileName,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            when (progress) {
+                is UploadProgress.Succeeded -> attachment = progress.attachment
+                is UploadProgress.Failed -> uploadError = ApiError(
+                    status = progress.error.httpStatus ?: ApiError.STATUS_NETWORK,
+                    message = progress.error.message ?: "Upload failed",
+                )
+                UploadProgress.Cancelled ->
+                    uploadError = ApiError(status = ApiError.STATUS_NETWORK, message = "Cancelled")
+                else -> Unit
+            }
+        }
+        val ref = attachment
+            ?: return@withContext ApiResult.Failure(
+                uploadError ?: ApiError(status = ApiError.STATUS_NETWORK, message = "Upload failed"),
+            )
+        ApiResult.Success(
+            MessageImageDto(
+                bucket = ref.bucket,
+                key = ref.key,
+                contentType = ref.contentType,
+                width = processed.width,
+                height = processed.height,
+                filename = fileName,
+                filesize = processed.byteSize,
+            ),
+        )
+    }
+
+    override suspend fun cancelScheduledMessage(
+        conversationId: String,
+        messageId: String,
+    ): ApiResult<Unit> = withContext(io) {
+        when (val r = apiCall { api.cancelScheduledMessage(conversationId, messageId) }) {
+            // Body is {ok,message_id}; we only need the 200 (close the raw stream).
+            is ApiResult.Success -> { runCatching { r.data.close() }; ApiResult.Success(Unit) }
+            is ApiResult.Failure ->
+                // 404 == already gone (delivered or cancelled elsewhere) -> treat as success.
+                if (r.error.status == HTTP_NOT_FOUND) ApiResult.Success(Unit) else r
             is ApiResult.NetworkError -> r
         }
     }
@@ -934,6 +1528,26 @@ class MessagingRepositoryImpl @Inject constructor(
             }
         }
 
+    override suspend fun consumeOnceMedia(conversationId: String, messageId: String, trigger: String) =
+        withContext(io) {
+            runCatching {
+                val grant = api.createAttachmentGrant(conversationId, messageId)
+                api.consumeAttachment(
+                    id = conversationId,
+                    messageId = messageId,
+                    grantToken = grant.grantToken,
+                    body = ConsumeAttachmentReq(
+                        consumptionAttemptId = java.util.UUID.randomUUID().toString(),
+                        trigger = trigger,
+                    ),
+                )
+            }
+            Unit
+        }
+
+    override suspend fun fetchEncryptedImageBytes(url: String): ByteArray? =
+        withContext(io) { storageClient.getBytesBlocking(url) }
+
     override suspend fun getViewers(
         conversationId: String,
         messageId: String,
@@ -1020,6 +1634,23 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    // #18 — resolve peers from the conversation record (participants), used by the thread call menu.
+    override suspend fun conversationPeers(conversationId: String): ApiResult<ConversationPeers> =
+        withContext(io) {
+            when (val r = apiCall { api.getConversation(conversationId) }) {
+                is ApiResult.Success -> {
+                    val me = authStateStore.userSub.value
+                    val others = r.data.participants
+                        .map { it.userId }
+                        .filter { it.isNotBlank() && it != me }
+                        .distinct()
+                    ApiResult.Success(ConversationPeers(type = r.data.type, otherUserSubs = others))
+                }
+                is ApiResult.Failure -> r
+                is ApiResult.NetworkError -> r
+            }
+        }
+
     // ---- AND-153: contact search ----
 
     override suspend fun searchContacts(query: String): ApiResult<List<Contact>> = withContext(io) {
@@ -1057,6 +1688,12 @@ class MessagingRepositoryImpl @Inject constructor(
         conversationId: String,
         clientId: String,
         localUri: String,
+        caption: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+        encryptionPassphrase: String?,
     ): ApiResult<Message> = withContext(io) {
         try {
             // 1. Process (compress, EXIF-strip) the picked uri.
@@ -1064,16 +1701,32 @@ class MessagingRepositoryImpl @Inject constructor(
                 ?: return@withContext failImage(clientId, "Couldn't process this image.")
             val fileName = processed.uri.lastPathSegment ?: "image.jpg"
 
+            // MSG (encrypted image) — if a passphrase is armed, encrypt the bytes and upload the
+            // CIPHERTEXT; the message carries only the salt/iv envelope. The receiver downloads the
+            // ciphertext and decrypts with the same passphrase.
+            var uploadUri = processed.uri
+            var uploadSize = processed.byteSize
+            var encEnvelope: MessageEncryptionEnvelopeDto? = null
+            if (!encryptionPassphrase.isNullOrBlank()) {
+                val plain = appContext.contentResolver.openInputStream(processed.uri)?.use { it.readBytes() }
+                    ?: return@withContext failImage(clientId, "Couldn't read image to encrypt.")
+                val (env, cipher) = MessageCrypto.encryptBytes(plain, encryptionPassphrase)
+                val encFile = java.io.File(appContext.cacheDir, "enc_$clientId.bin").apply { writeBytes(cipher) }
+                uploadUri = Uri.fromFile(encFile)
+                uploadSize = cipher.size.toLong()
+                encEnvelope = env
+            }
+
             // 2. Presign + PUT via the AND-129 uploader (image flow has NO confirm step). The
             //    uploader returns an AttachmentRef carrying the presign bucket/key we send next.
             var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
             var uploadError: ApiError? = null
             uploader.upload(
                 UploadRequest(
-                    uri = processed.uri,
+                    uri = uploadUri,
                     mimeType = processed.mimeType,
                     category = "message",
-                    sizeBytes = processed.byteSize,
+                    sizeBytes = uploadSize,
                     displayName = fileName,
                     presignPath = "messaging/conversations/$conversationId/images/presign",
                     confirmPath = null,
@@ -1116,13 +1769,22 @@ class MessagingRepositoryImpl @Inject constructor(
                             filesize = processed.byteSize,
                             width = processed.width,
                             height = processed.height,
+                            caption = caption?.takeIf { it.isNotBlank() },
+                            consumptionPolicy = if (viewOnce) "view_once" else null,
+                            viewOnce = viewOnce,
+                            expiresInSeconds = expiresInSeconds,
+                            lockPriceCents = lockPriceCents,
+                            sendAt = sendAtEpochSeconds,
+                            encryption = encEnvelope,
                         ),
                     )
                 }
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     ApiResult.Success(message)
                 }
@@ -1137,6 +1799,352 @@ class MessagingRepositoryImpl @Inject constructor(
     private suspend fun failImage(clientId: String, message: String): ApiResult<Message> {
         markOutboxFailed(clientId)
         return ApiResult.Failure(ApiError(status = ApiError.STATUS_PARSE, message = message))
+    }
+
+    override suspend fun enqueueOptimisticGallery(
+        conversationId: String,
+        clientId: String,
+        firstLocalUri: String,
+        imageCount: Int,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = "",
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                // Optimistic gallery rows reuse the "image" kind (single thumbnail) until the server
+                // kind="gallery" message replaces the row with the full grid. `fileSizeBytes` stashes
+                // the picked-image count for an optimistic "+N" badge (no schema migration needed).
+                kind = "image",
+                imageLocalUri = firstLocalUri,
+                fileSizeBytes = imageCount.toLong(),
+                uploadPercent = 0,
+            ),
+        )
+    }
+
+    /** C6 — process + presign + PUT a single image, returning its gallery item ref (or null). */
+    private suspend fun uploadGalleryImage(
+        conversationId: String,
+        localUri: String,
+    ): GalleryImageItemReq? {
+        val processed = imageProcessor.process(Uri.parse(localUri)) ?: return null
+        val fileName = processed.uri.lastPathSegment ?: "image.jpg"
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        uploader.upload(
+            UploadRequest(
+                uri = processed.uri,
+                mimeType = processed.mimeType,
+                category = "message",
+                sizeBytes = processed.byteSize,
+                displayName = fileName,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            if (progress is UploadProgress.Succeeded) attachment = progress.attachment
+        }
+        return attachment?.let {
+            GalleryImageItemReq(
+                bucket = it.bucket,
+                key = it.key,
+                contentType = it.contentType,
+                width = processed.width,
+                height = processed.height,
+                filename = fileName,
+                filesize = processed.byteSize,
+            )
+        }
+    }
+
+    override suspend fun sendGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        localUris: List<String>,
+        caption: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            if (localUris.isEmpty()) return@withContext failImage(clientId, "No images selected.")
+            val total = localUris.size
+            // MV3 — upload all images CONCURRENTLY (each is an independent process+presign+PUT) instead
+            // of strictly sequentially, so the 2nd/Nth image no longer waits on the 1st. Order is
+            // preserved by awaitAll (results come back in the launched order); a completion counter
+            // drives coarse progress as each finishes.
+            val done = AtomicInteger(0)
+            val refs = coroutineScope {
+                localUris.map { uri ->
+                    async {
+                        val ref = uploadGalleryImage(conversationId, uri)
+                        if (ref != null) {
+                            outboxDao.updateUploadPercent(clientId, (done.incrementAndGet() * 100 / total))
+                        }
+                        ref
+                    }
+                }.awaitAll()
+            }
+            if (refs.any { it == null }) {
+                return@withContext failImage(clientId, "Couldn't upload one of the images.")
+            }
+            @Suppress("UNCHECKED_CAST")
+            val readyRefs = refs as List<GalleryImageItemReq>
+            when (
+                val created = apiCall {
+                    api.createGalleryMessage(
+                        conversationId,
+                        CreateGalleryMessageReq(
+                            freeImages = readyRefs,
+                            text = caption?.takeIf { it.isNotBlank() },
+                            expiresInSeconds = expiresInSeconds,
+                            sendAt = sendAtEpochSeconds,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
+    /**
+     * #25/#27 — presign + PUT a single SHORT video (raw bytes, NO processing) via the messaging media
+     * presign, returning a gallery item ref carrying the video content_type (the server derives
+     * media_kind="video" from it). Returns null on failure / oversize.
+     */
+    private suspend fun uploadGalleryVideo(
+        conversationId: String,
+        localUri: String,
+    ): GalleryImageItemReq? {
+        val uri = Uri.parse(localUri)
+        val info = uriMetadata.resolve(uri, fallbackMime = "video/mp4")
+        if (info.sizeBytes > 50L * 1024L * 1024L) return null
+        val resolvedName = info.displayName ?: "video.mp4"
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        uploader.upload(
+            UploadRequest(
+                uri = uri,
+                mimeType = info.mimeType,
+                category = "message",
+                sizeBytes = info.sizeBytes,
+                displayName = resolvedName,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            if (progress is UploadProgress.Succeeded) attachment = progress.attachment
+        }
+        return attachment?.let {
+            GalleryImageItemReq(
+                bucket = it.bucket,
+                key = it.key,
+                contentType = info.mimeType,
+                filename = resolvedName,
+                filesize = info.sizeBytes,
+            )
+        }
+    }
+
+    override suspend fun sendMixedGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        media: List<MediaItem>,
+        caption: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            if (media.isEmpty()) return@withContext failImage(clientId, "No media selected.")
+            val total = media.size
+            val done = AtomicInteger(0)
+            // Upload every item concurrently (each is an independent presign + PUT); awaitAll preserves
+            // order so the gallery free_images keep the staged order.
+            val refs = coroutineScope {
+                media.map { item ->
+                    async {
+                        val ref = if (item.isVideo) {
+                            uploadGalleryVideo(conversationId, item.localUri)
+                        } else {
+                            uploadGalleryImage(conversationId, item.localUri)
+                        }
+                        if (ref != null) {
+                            outboxDao.updateUploadPercent(clientId, (done.incrementAndGet() * 100 / total))
+                        }
+                        ref
+                    }
+                }.awaitAll()
+            }
+            if (refs.any { it == null }) {
+                return@withContext failImage(clientId, "Couldn't upload one of the items.")
+            }
+            @Suppress("UNCHECKED_CAST")
+            val readyRefs = refs as List<GalleryImageItemReq>
+            when (
+                val created = apiCall {
+                    api.createGalleryMessage(
+                        conversationId,
+                        CreateGalleryMessageReq(
+                            freeImages = readyRefs,
+                            text = caption?.takeIf { it.isNotBlank() },
+                            expiresInSeconds = expiresInSeconds,
+                            sendAt = sendAtEpochSeconds,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
+    override suspend fun enqueueOptimisticVideoClip(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        nowSeconds: Long,
+    ) = withContext(io) {
+        val info = uriMetadata.resolve(Uri.parse(localUri), fallbackMime = "video/mp4")
+        outboxDao.upsert(
+            OutboxMessageEntity(
+                clientId = clientId,
+                conversationId = conversationId,
+                text = "",
+                createdAtEpochSeconds = nowSeconds,
+                status = SendStatus.SENDING.name,
+                // MV2 — optimistic short-video rows render as an inline VIDEO clip bubble (poster from
+                // the local source uri), matching the reconciled server kind="video" render.
+                kind = "video",
+                attachmentLocalUri = localUri,
+                fileName = info.displayName ?: "video.mp4",
+                fileSizeBytes = info.sizeBytes,
+                fileMimeType = info.mimeType,
+                uploadPercent = 0,
+            ),
+        )
+    }
+
+    override suspend fun sendVideoClipOutbox(
+        conversationId: String,
+        clientId: String,
+        localUri: String,
+        caption: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> = withContext(io) {
+        try {
+            val uri = Uri.parse(localUri)
+            val info = uriMetadata.resolve(uri, fallbackMime = "video/mp4")
+            val resolvedName = info.displayName ?: "video.mp4"
+            // Guard: keep clips SHORT (size-bounded; the picker also requests short videos). Reject
+            // anything over 50 MB rather than uploading a huge file.
+            if (info.sizeBytes > 50L * 1024L * 1024L) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    ApiError(status = ApiError.STATUS_PARSE, message = "That video is too large (max 50 MB)."),
+                )
+            }
+
+            // Presign + PUT via the messaging IMAGES transport (no VFS entitlement gates, no confirm),
+            // streaming the raw video bytes (NO bitmap processing).
+            var ref: com.testlogon.android.data.upload.AttachmentRef? = null
+            var uploadError: ApiError? = null
+            uploader.upload(
+                UploadRequest(
+                    uri = uri,
+                    mimeType = info.mimeType,
+                    category = "message",
+                    sizeBytes = info.sizeBytes,
+                    displayName = resolvedName,
+                    presignPath = "messaging/conversations/$conversationId/images/presign",
+                    confirmPath = null,
+                ),
+            ).collect { progress ->
+                when (progress) {
+                    is UploadProgress.Uploading ->
+                        outboxDao.updateUploadPercent(clientId, (progress.fraction * 100).toInt())
+                    is UploadProgress.Succeeded -> {
+                        outboxDao.updateUploadPercent(clientId, 100)
+                        ref = progress.attachment
+                    }
+                    is UploadProgress.Failed -> uploadError = ApiError(
+                        status = progress.error.httpStatus ?: ApiError.STATUS_NETWORK,
+                        message = progress.error.message ?: "Upload failed",
+                    )
+                    UploadProgress.Cancelled ->
+                        uploadError = ApiError(status = ApiError.STATUS_NETWORK, message = "Cancelled")
+                    else -> Unit
+                }
+            }
+            val attachment = ref
+            if (attachment == null) {
+                markOutboxFailed(clientId)
+                return@withContext ApiResult.Failure(
+                    uploadError ?: ApiError(status = ApiError.STATUS_NETWORK, message = "Upload failed"),
+                )
+            }
+
+            when (
+                val created = apiCall {
+                    api.createImageMessage(
+                        conversationId,
+                        CreateImageMessageReq(
+                            bucket = attachment.bucket,
+                            key = attachment.key,
+                            contentType = info.mimeType,
+                            kind = "video",
+                            filename = resolvedName,
+                            filesize = info.sizeBytes,
+                            caption = caption?.takeIf { it.isNotBlank() },
+                            consumptionPolicy = if (viewOnce) "view_once" else null,
+                            viewOnce = viewOnce,
+                            expiresInSeconds = expiresInSeconds,
+                            lockPriceCents = lockPriceCents,
+                            sendAt = sendAtEpochSeconds,
+                        ),
+                    )
+                }
+            ) {
+                is ApiResult.Success -> {
+                    val message = created.data.toDomain(clientId = clientId)
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
+                    outboxDao.delete(clientId)
+                    ApiResult.Success(message)
+                }
+                is ApiResult.Failure -> { markOutboxFailed(clientId); created }
+                is ApiResult.NetworkError -> { markOutboxFailed(clientId); created }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
     }
 
     override suspend fun listShareableVideos(): ApiResult<List<ShareableVideo>> = withContext(io) {
@@ -1213,6 +2221,12 @@ class MessagingRepositoryImpl @Inject constructor(
         localUri: String,
         fileName: String,
         mimeType: String,
+        caption: String?,
+        viewOnce: Boolean,
+        lockPriceCents: Long?,
+        lockDescription: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
     ): ApiResult<Message> = withContext(io) {
         try {
             val uri = Uri.parse(localUri)
@@ -1267,13 +2281,25 @@ class MessagingRepositoryImpl @Inject constructor(
                 val created = apiCall {
                     api.createFileMessage(
                         conversationId,
-                        CreateFileMessageReq(path = serverPath, kind = "file"),
+                        CreateFileMessageReq(
+                            path = serverPath,
+                            kind = "file",
+                            text = caption?.takeIf { it.isNotBlank() },
+                            consumptionPolicy = if (viewOnce) "view_once" else null,
+                            viewOnce = viewOnce,
+                            expiresInSeconds = expiresInSeconds,
+                            lockPriceCents = lockPriceCents,
+                            lockDescription = lockDescription,
+                            sendAt = sendAtEpochSeconds,
+                        ),
                     )
                 }
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     ApiResult.Success(message)
                 }
@@ -1353,6 +2379,8 @@ class MessagingRepositoryImpl @Inject constructor(
         localFilePath: String,
         durationSeconds: Double,
         waveform: List<Float>,
+        consumptionPolicy: String,
+        sendAtEpochSeconds: Long?,
     ): ApiResult<Message> = withContext(io) {
         try {
             val clip = java.io.File(localFilePath)
@@ -1410,13 +2438,17 @@ class MessagingRepositoryImpl @Inject constructor(
                             sizeBytes = sizeBytes,
                             durationSeconds = durationSeconds,
                             waveformData = waveform,
+                            consumptionPolicy = consumptionPolicy,
+                            sendAt = sendAtEpochSeconds,
                         ),
                     )
                 }
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     clip.delete()
                     ApiResult.Success(message)
@@ -1530,7 +2562,9 @@ class MessagingRepositoryImpl @Inject constructor(
             ) {
                 is ApiResult.Success -> {
                     val message = created.data.toDomain(clientId = clientId)
-                    messageDao.upsert(message.toEntity(clientId = clientId))
+                    // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                     outboxDao.delete(clientId)
                     clip.delete()
                     ApiResult.Success(message)
@@ -1565,7 +2599,9 @@ class MessagingRepositoryImpl @Inject constructor(
         ) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -1592,7 +2628,9 @@ class MessagingRepositoryImpl @Inject constructor(
         ) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -1704,6 +2742,40 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun sendArbitraryPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        multiSelect: Boolean,
+        maxSelections: Int?,
+        closesAt: Long?,
+        text: String?,
+        allowWriteIn: Boolean,
+    ): ApiResult<Unit> = withContext(io) {
+        val create = apiCall {
+            api.createPollMessage(
+                conversationId,
+                CreatePollMessageReq(
+                    question = question,
+                    options = options,
+                    choiceMode = if (multiSelect) "multi" else "single",
+                    maxSelections = if (multiSelect) maxSelections else null,
+                    closesAt = closesAt,
+                    text = text?.takeIf { it.isNotBlank() },
+                    allowWriteIn = allowWriteIn,
+                ),
+            )
+        }
+        when (create) {
+            is ApiResult.Success -> {
+                messageDao.upsert(create.data.toDomain().toEntity(clientId = null))
+                ApiResult.Success(Unit)
+            }
+            is ApiResult.Failure -> ApiResult.Failure(create.error)
+            is ApiResult.NetworkError -> ApiResult.NetworkError(create.cause, create.isTimeout)
+        }
+    }
+
     override suspend fun refreshMeetingPoll(
         conversationId: String,
         pollId: String,
@@ -1789,13 +2861,25 @@ class MessagingRepositoryImpl @Inject constructor(
                         targetDatetime = draft.targetEpochSeconds,
                         associatedEventType = draft.associatedEventType.wire(),
                         associatedEventId = draft.associatedEventId,
+                        revealText = draft.revealText?.takeIf { it.isNotBlank() },
+                        revealImage = draft.revealImage?.let {
+                            CountdownRevealImageReq(
+                                bucket = it.bucket,
+                                key = it.key,
+                                contentType = it.contentType,
+                                width = it.width,
+                                height = it.height,
+                            )
+                        },
                     ),
                 )
             }
         ) {
             is ApiResult.Success -> {
                 val message = r.data.toDomain(clientId = clientId)
-                messageDao.upsert(message.toEntity(clientId = clientId))
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
                 outboxDao.delete(clientId)
                 ApiResult.Success(message)
             }
@@ -1827,8 +2911,15 @@ class MessagingRepositoryImpl @Inject constructor(
     ): ApiResult<Message> = withContext(io) {
         when (val r = apiCall { api.unlockLottery(messageId) }) {
             is ApiResult.Success -> {
-                val revealed = r.data.selectedOutcome?.textContent
-                // Reconcile the cached row to unlocked + revealed text (server-authoritative).
+                val selected = r.data.selectedOutcome
+                val payloadType = selected?.payloadType ?: "text"
+                val revealed = selected?.takeIf { payloadType == "text" }?.textContent
+                val revealedMediaList = selected
+                    ?.takeIf { payloadType == "image" || payloadType == "video" }
+                    ?.let { buildRevealedMedia(it.mediaAssetIds, it.mediaAssetId, payloadType == "video") }
+                    ?: emptyList()
+                val revealedMediaUrl = revealedMediaList.firstOrNull()?.url
+                // Reconcile the cached row to unlocked + revealed text/media (server-authoritative).
                 val existing = messageDao.findById(messageId)?.toDomain()
                 if (existing != null) {
                     val paid = (existing.media as? MessageMedia.Paid)?.monetization
@@ -1837,6 +2928,9 @@ class MessagingRepositoryImpl @Inject constructor(
                             (paid ?: MessageMonetization(UnlockType.LOTTERY, false, null, "USD", null)).copy(
                                 unlocked = true,
                                 revealedText = revealed,
+                                revealedMediaUrl = revealedMediaUrl,
+                                revealedMediaIsVideo = payloadType == "video",
+                                revealedMedia = revealedMediaList,
                             ),
                         ),
                     )
@@ -1882,6 +2976,312 @@ class MessagingRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun tipReactMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        emoji: String?,
+        paymentMethodId: String?,
+    ): ApiResult<TipReactReceipt> = withContext(io) {
+        when (
+            val r = apiCall {
+                api.tipReactMessage(
+                    conversationId,
+                    messageId,
+                    TipReactReq(
+                        amountCents = amountCents,
+                        emoji = emoji,
+                        paymentMethodId = paymentMethodId,
+                    ),
+                )
+            }
+        ) {
+            is ApiResult.Success -> ApiResult.Success(
+                TipReactReceipt(
+                    tipPaymentId = r.data.tipPaymentId,
+                    chargedCents = r.data.chargedCents,
+                    netCents = r.data.netCents,
+                    recipientId = r.data.recipientId,
+                    emoji = r.data.emoji,
+                ),
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    // ---- MSG: new in-app composers (implementations) ----
+
+    override suspend fun uploadLotteryImage(
+        conversationId: String,
+        localUri: String,
+    ): LotteryImageRef? = withContext(io) {
+        // Reuse the conversation image presign/PUT transport (no confirm step), like sendImageOutbox.
+        val processed = imageProcessor.process(Uri.parse(localUri)) ?: return@withContext null
+        val fileName = processed.uri.lastPathSegment ?: "image.jpg"
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        uploader.upload(
+            UploadRequest(
+                uri = processed.uri,
+                mimeType = processed.mimeType,
+                category = "message",
+                sizeBytes = processed.byteSize,
+                displayName = fileName,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            if (progress is UploadProgress.Succeeded) attachment = progress.attachment
+        }
+        attachment?.let {
+            LotteryImageRef(
+                bucket = it.bucket,
+                key = it.key,
+                contentType = it.contentType,
+                width = processed.width,
+                height = processed.height,
+            )
+        }
+    }
+
+    override suspend fun uploadLotteryOptionMedia(
+        conversationId: String,
+        localUri: String,
+        isVideo: Boolean,
+    ): String? = withContext(io) {
+        // Reuse the conversation image presign/PUT transport (same endpoint images + video clips use).
+        // Images are normalized through the processor; videos are uploaded as-is (no re-encode).
+        val uploadUri: Uri
+        val mime: String
+        val sizeBytes: Long
+        val name: String
+        if (isVideo) {
+            // FAIL-1 fix: a video option MUST upload with its REAL byte size. Previously sizeBytes
+            // was hardcoded to 0L, so ProgressRequestBody.contentLength() declared Content-Length: 0
+            // while writeTo() streamed the full clip -> OkHttp threw a Content-Length mismatch on the
+            // PUT -> uploadLotteryOptionMedia returned null -> the ViewModel DEMOTED the option to
+            // text ("Prize"), dropping every video. Resolve the size/mime from the content uri the
+            // same way the working video-share path (sendVideoClipOutbox) does.
+            uploadUri = Uri.parse(localUri)
+            val info = uriMetadata.resolve(uploadUri, fallbackMime = "video/mp4")
+            mime = info.mimeType
+            sizeBytes = info.sizeBytes
+            name = info.displayName ?: uploadUri.lastPathSegment ?: "clip.mp4"
+        } else {
+            val processed = imageProcessor.process(Uri.parse(localUri)) ?: return@withContext null
+            uploadUri = processed.uri
+            mime = processed.mimeType
+            sizeBytes = processed.byteSize
+            name = processed.uri.lastPathSegment ?: "image.jpg"
+        }
+        var attachment: com.testlogon.android.data.upload.AttachmentRef? = null
+        uploader.upload(
+            UploadRequest(
+                uri = uploadUri,
+                mimeType = mime,
+                category = "message",
+                sizeBytes = sizeBytes,
+                displayName = name,
+                presignPath = "messaging/conversations/$conversationId/images/presign",
+                confirmPath = null,
+            ),
+        ).collect { progress ->
+            if (progress is UploadProgress.Succeeded) attachment = progress.attachment
+        }
+        // Send media_asset_id as "bucket:key" (the B-LOT validator accepts this form and the key is
+        // already under conversationId/owner/ from the presign).
+        attachment?.let { "${it.bucket}:${it.key}" }
+    }
+
+    override suspend fun sendLottery(
+        conversationId: String,
+        outcomes: List<LotteryOutcomeDraft>,
+        image: LotteryImageRef?,
+        text: String?,
+    ): ApiResult<Message> = withContext(io) {
+        // Weights: use the sender-provided weight_bps when present (normalized to sum exactly 10000),
+        // else split evenly. Any rounding remainder is added to the first outcome so the sum is 10000.
+        val n = outcomes.size.coerceAtLeast(1)
+        val hasWeights = outcomes.any { (it.weightBps ?: 0) > 0 }
+        val rawWeights: List<Int> = if (hasWeights) {
+            outcomes.map { (it.weightBps ?: 0).coerceAtLeast(0) }
+        } else {
+            val base = 10_000 / n
+            List(n) { base }
+        }
+        val total = rawWeights.sum().coerceAtLeast(1)
+        // Scale to 10000 bps.
+        val scaled = rawWeights.map { (it.toLong() * 10_000L / total).toInt() }
+        val remainder = 10_000 - scaled.sum()
+        val finalWeights = scaled.mapIndexed { i, w -> (w + if (i == 0) remainder else 0).coerceAtLeast(1) }
+        val outcomeReqs = outcomes.mapIndexed { i, o ->
+            val isMedia = o.payloadType == "image" || o.payloadType == "video"
+            // #24 — send the FULL list of resolved media assets (mediaAssetIds) for a media outcome;
+            // media_asset_id stays as the first element for single-asset back-compat.
+            val ids = o.mediaAssetIds?.filter { it.isNotBlank() }
+                ?: listOfNotNull(o.mediaAssetId?.takeIf { it.isNotBlank() })
+            LotteryOutcomeReq(
+                displayLabel = o.label?.takeIf { it.isNotBlank() },
+                weightBps = finalWeights.getOrElse(i) { 10_000 / n },
+                payloadType = if (isMedia) o.payloadType else "text",
+                // text_content only for text outcomes; media_asset_id(s) only for image/video outcomes.
+                textContent = if (isMedia) null else o.text,
+                mediaAssetId = if (isMedia) ids.firstOrNull() else null,
+                mediaAssetIds = if (isMedia && ids.isNotEmpty()) ids else null,
+            )
+        }
+        val req = CreateLotteryReq(
+            conversationId = conversationId,
+            lotteryConfig = LotteryConfigReq(version = "v1", outcomes = outcomeReqs),
+            image = image?.let {
+                LotteryMessageImageReq(
+                    bucket = it.bucket,
+                    key = it.key,
+                    contentType = it.contentType,
+                    width = it.width,
+                    height = it.height,
+                )
+            },
+            text = text?.takeIf { it.isNotBlank() },
+        )
+        when (val r = apiCall { api.createLottery(req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun createFindDateTime(
+        conversationId: String,
+        draft: FindDateTimeDraft,
+    ): ApiResult<Message> = withContext(io) {
+        val req = CreateFindDateTimeReq(
+            title = draft.title,
+            fromDate = draft.fromDate,
+            toDate = draft.toDate,
+            startHour = draft.startHour,
+            endHour = draft.endHour,
+            slotDurationMinutes = draft.slotDurationMinutes,
+            deadlineHours = draft.deadlineHours,
+            text = draft.text?.takeIf { it.isNotBlank() },
+        )
+        when (val r = apiCall { api.createFindDateTime(conversationId, req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun shareCalendarEvent(
+        conversationId: String,
+        calendarId: String,
+        eventId: String,
+        text: String?,
+    ): ApiResult<Message> = withContext(io) {
+        val req = CreateCalendarEventReq(
+            calendarId = calendarId,
+            eventId = eventId,
+            text = text?.takeIf { it.isNotBlank() },
+        )
+        when (val r = apiCall { api.createCalendarEventMessage(conversationId, req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun shareCalendar(
+        conversationId: String,
+        calendarId: String,
+        permission: String,
+        includeBookingLink: Boolean,
+        text: String?,
+    ): ApiResult<Message> = withContext(io) {
+        val req = CreateCalendarShareReq(
+            calendarId = calendarId,
+            permission = permission,
+            includeBookingLink = includeBookingLink,
+            text = text?.takeIf { it.isNotBlank() },
+        )
+        when (val r = apiCall { api.createCalendarShareMessage(conversationId, req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain()
+                messageDao.upsert(message.toEntity(clientId = null))
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun sendEncryptedText(
+        conversationId: String,
+        clientId: String,
+        envelope: MessageEncryptionEnvelopeDto,
+        replyToMessageId: String?,
+    ): ApiResult<Message> = withContext(io) {
+        val req = SendTextMessageReq(
+            text = null,
+            replyToMessageId = replyToMessageId,
+            encryption = envelope,
+        )
+        when (val r = apiCall { api.sendMessage(conversationId, req) }) {
+            is ApiResult.Success -> {
+                val message = r.data.toDomain(clientId = clientId)
+                // #20 — scheduled sends stay out of the live thread (they live in the Scheduled manager
+                // until delivered); only the outbox row is cleared. A delivered message persists as usual.
+                if (!message.scheduled) messageDao.upsert(message.toEntity(clientId = clientId))
+                outboxDao.delete(clientId)
+                ApiResult.Success(message)
+            }
+            is ApiResult.Failure -> { markOutboxFailed(clientId); r }
+            is ApiResult.NetworkError -> { markOutboxFailed(clientId); r }
+        }
+    }
+
+    override suspend fun listCalendars(): ApiResult<List<CalendarAccessUi>> = withContext(io) {
+        when (val r = apiCall { api.listCalendars() }) {
+            is ApiResult.Success -> ApiResult.Success(
+                r.data.map { CalendarAccessUi(it.calendarId, it.name, it.permission) },
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun listCalendarEvents(calendarId: String): ApiResult<List<CalendarEventUi>> =
+        withContext(io) {
+            when (val r = apiCall { api.listCalendarEvents(calendarId) }) {
+                is ApiResult.Success -> ApiResult.Success(
+                    r.data.events.map { CalendarEventUi(it.eventId, it.calendarId.ifBlank { calendarId }, it.name, it.startUtc) },
+                )
+                is ApiResult.Failure -> r
+                is ApiResult.NetworkError -> r
+            }
+        }
+
+    override suspend fun listFiles(path: String): ApiResult<List<FileEntryUi>> = withContext(io) {
+        when (val r = apiCall { api.listFiles(path) }) {
+            is ApiResult.Success -> ApiResult.Success(
+                r.data.items.map { FileEntryUi(it.path, it.name, it.type == "folder", it.size) },
+            )
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
     /** Re-fetch the newest thread page and reconcile the cache, then return the (now revealed) row. */
     private suspend fun refreshAndReveal(conversationId: String, messageId: String): ApiResult<Message> {
         return when (val r = apiCall { api.listMessages(conversationId, limit = 30, before = null) }) {
@@ -1917,7 +3317,15 @@ class MessagingRepositoryImpl @Inject constructor(
                             priceMinorUnits = null,
                             currency = "USD",
                             teaser = null,
-                            revealedText = r.data.selectedOutcome?.takeIf { unlocked }?.textContent,
+                            revealedText = r.data.selectedOutcome?.takeIf { unlocked && (it.payloadType == "text") }?.textContent,
+                            revealedMediaUrl = r.data.selectedOutcome
+                                ?.takeIf { unlocked && (it.payloadType == "image" || it.payloadType == "video") }
+                                ?.let { deriveMediaAssetUrl(it.mediaAssetIds?.firstOrNull() ?: it.mediaAssetId) },
+                            revealedMediaIsVideo = unlocked && (r.data.selectedOutcome?.payloadType == "video"),
+                            revealedMedia = r.data.selectedOutcome
+                                ?.takeIf { unlocked && (it.payloadType == "image" || it.payloadType == "video") }
+                                ?.let { buildRevealedMedia(it.mediaAssetIds, it.mediaAssetId, it.payloadType == "video") }
+                                ?: emptyList(),
                         ),
                     ),
                 )
@@ -1971,6 +3379,11 @@ class MessagingRepositoryImpl @Inject constructor(
         ApiResult.Failure(errorParser.from(e))
     } catch (e: IOException) {
         ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+    } catch (e: com.squareup.moshi.JsonDataException) {
+        // MSG — a single malformed/unexpected field must not crash the whole call (it previously took
+        // out the entire message-list parse, dropping rich messages on the receiver). Degrade to a
+        // recoverable failure so the cached thread keeps rendering.
+        ApiResult.NetworkError(java.io.IOException(e), isTimeout = false)
     }
 
     companion object {
@@ -2054,14 +3467,16 @@ internal fun ConversationEntity.toDomain(): Conversation = Conversation(
 
 internal fun Message.toEntity(clientId: String?): MessageEntity {
     val image = media as? MessageMedia.Image
+    val gallery = media as? MessageMedia.Gallery
     val video = media as? MessageMedia.VideoShare
     val file = media as? MessageMedia.File
+    val videoClip = media as? MessageMedia.VideoClip
     val voice = media as? MessageMedia.Voice
     val voicemail = media as? MessageMedia.Voicemail
     val gif = media as? MessageMedia.Gif
     val sticker = media as? MessageMedia.Sticker
     val poll = media as? MessageMedia.MeetingPoll
-    val countdown = media as? MessageMedia.Countdown
+    val fadt = media as? MessageMedia.FindDateTime
     val calEvent = media as? MessageMedia.CalendarEvent
     val calShare = media as? MessageMedia.CalendarShare
     val paid = (media as? MessageMedia.Paid)?.monetization
@@ -2070,23 +3485,32 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         conversationId = conversationId,
         senderId = senderId,
         text = text,
+        replyToMessageId = replyToMessageId,
+        deliveredToCount = deliveredToCount,
+        readByCount = readByCount,
+        expiresAtEpochSeconds = expiresAtEpochSeconds,
+        serverExpired = expired,
         createdAtEpochSeconds = createdAtEpochSeconds,
         clientId = clientId,
         kind = kind,
         imageUrl = image?.url,
         imageWidth = image?.width,
         imageHeight = image?.height,
+        galleryImagesJson = gallery?.images?.let(::galleryToJson),
+        pollJson = (media as? MessageMedia.Poll)?.poll?.let(::arbitraryPollToJson),
         videoId = video?.videoId,
         videoTitle = video?.title,
         videoThumbnailUrl = video?.thumbnailUrl,
-        videoDurationSeconds = video?.durationSeconds,
+        videoDurationSeconds = video?.durationSeconds ?: videoClip?.durationSeconds,
         videoHlsManifestUrl = video?.hlsManifestUrl,
         videoDrmEnabled = video?.drmEnabled ?: false,
         fileName = file?.fileName,
         fileSizeBytes = file?.sizeBytes,
         fileMimeType = file?.mimeType,
         fileIsShare = file?.isShare ?: false,
-        consumptionPolicy = file?.consumptionPolicy ?: "none",
+        // MV2 — persist the video clip's playable object url (new fileUrl column).
+        fileUrl = videoClip?.playbackUrl,
+        consumptionPolicy = consumptionPolicy,
         voiceAudioUrl = voice?.audioUrl,
         // Reuse the generic duration/waveform columns for voicemail too (both are audio peaks 0..1).
         voiceDurationSeconds = voice?.durationSeconds ?: voicemail?.durationSeconds,
@@ -2103,15 +3527,19 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         stickerAltText = sticker?.altText,
         stickerId = sticker?.stickerId,
         stickerCollectionId = sticker?.collectionId,
-        pollId = poll?.pollId,
-        pollTitle = poll?.title,
-        pollCreatorId = poll?.creatorId,
-        pollStatus = poll?.status,
+        pollId = poll?.pollId ?: fadt?.pollId,
+        pollTitle = poll?.title ?: fadt?.title,
+        pollCreatorId = poll?.creatorId ?: fadt?.creatorId,
+        pollStatus = poll?.status ?: fadt?.status,
         pollConfirmedSlotId = poll?.confirmedSlotId,
-        countdownTitle = countdown?.title,
-        countdownTargetEpochSeconds = countdown?.targetEpochSeconds,
-        countdownEventType = countdown?.associatedEventType?.wire(),
-        countdownEventId = countdown?.associatedEventId,
+        // #6 (B-COUNTDOWN3) — persist from the transient countdown attribute (a countdown can now
+        // ride any message kind; it is no longer a MessageMedia.Countdown). Reveal media is not cached.
+        countdownTitle = this.countdown?.title,
+        countdownTargetEpochSeconds = this.countdown?.targetEpochSeconds,
+        countdownEventType = null,
+        // #6 (B-COUNTDOWN3) — persist the reveal payload in the unused countdownEventId string column
+        // (no schema bump) so the live thread (which observes Room) shows the reveal at target.
+        countdownEventId = countdownRevealToBlob(this.countdown?.reveal),
         calEventId = calEvent?.eventId,
         calEventCalendarId = calEvent?.calendarId,
         calEventName = calEvent?.name,
@@ -2129,10 +3557,41 @@ internal fun Message.toEntity(clientId: String?): MessageEntity {
         calShareBookingUrl = calShare?.bookingPublicUrl,
         monetizationType = paid?.type?.name,
         monetizationUnlocked = paid?.unlocked ?: false,
-        lockPriceCents = paid?.priceMinorUnits,
-        lockCurrency = paid?.currency,
+        // R2 — persist the lock price even when the message is NOT a Paid bubble (the sender's own
+        // locked image is a plain Image with the gated media present), so the own "Locked $X" badge
+        // survives the Room round-trip.
+        lockPriceCents = paid?.priceMinorUnits ?: lockPriceCents,
+        lockCurrency = paid?.currency ?: lockCurrency,
         lockTeaser = paid?.teaser,
         revealedText = paid?.revealedText,
+        // Number-13 - persist the revealed lottery option media url across a Room round-trip.
+        revealedMediaUrl = paid?.revealedMediaUrl,
+        revealedMediaIsVideo = paid?.revealedMediaIsVideo ?: false,
+        // #24 - persist the FULL revealed media list (image+video) so a multi-media reveal survives.
+        revealedMediaJson = paid?.revealedMedia?.takeIf { it.isNotEmpty() }?.let(::revealedMediaToJson),
+        // MSG — find_datetime detail (the card needs date range + hours).
+        fadtFromDate = fadt?.fromDate,
+        fadtToDate = fadt?.toDate,
+        fadtStartHour = fadt?.startHour,
+        fadtEndHour = fadt?.endHour,
+        fadtSlotDurationMinutes = fadt?.slotDurationMinutes,
+        // MSG — lottery lock_state + revealed outcome (Paid+LOTTERY already carries unlocked/revealedText;
+        // these mirror it for clarity and a kind-based round-trip).
+        lotteryLockState = paid?.takeIf { it.type == UnlockType.LOTTERY }?.let { if (it.unlocked) "unlocked" else "locked" },
+        lotterySelectedText = paid?.takeIf { it.type == UnlockType.LOTTERY }?.revealedText,
+        // #15 — persist the sender's lottery sender-view (config + per-recipient results) as JSON.
+        lotterySenderViewJson = paid?.lotterySenderView?.let(::lotterySenderViewToJson),
+        // MSG — client-side encryption flag + envelope.
+        isEncrypted = isEncrypted,
+        encVersion = encryption?.version,
+        encAlg = encryption?.alg,
+        encKdf = encryption?.kdf,
+        encIterations = encryption?.iterations,
+        encSaltB64 = encryption?.saltB64,
+        encIvB64 = encryption?.ivB64,
+        encCiphertextB64 = encryption?.ciphertextB64,
+        viewOnce = viewOnce,
+        consumed = consumed,
         // AND-140 — moderation / engagement columns.
         reactionsJson = reactionsToJson(reactions),
         isPinned = isPinned,
@@ -2173,6 +3632,257 @@ private val ReactionJsonRegex =
 internal fun waveformToJson(values: List<Float>): String =
     values.joinToString(prefix = "[", postfix = "]") { String.format(java.util.Locale.ROOT, "%.3f", it) }
 
+/**
+ * C6 — serialize gallery images as one "url|width|height" record per line (URLs never contain a
+ * newline). Kept JVM-test-safe (no org.json, which is unmocked in :app unit tests).
+ */
+private const val GALLERY_RECORD_SEP = "\n"
+
+/** Codegen-adapter persistence shape for an arbitrary poll snapshot (Room cache round-trip). */
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+data class PersistedPollDto(
+    val pollId: String,
+    val question: String,
+    val owner: String?,
+    val closed: Boolean,
+    val closesAt: Long?,
+    val totalVotes: Int,
+    val questions: List<PersistedPollQuestionDto>,
+)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+data class PersistedPollQuestionDto(
+    val id: String,
+    val text: String,
+    val multiSelect: Boolean,
+    val maxSelections: Int?,
+    val options: List<PersistedPollOptionDto>,
+    val myVoteOptionIds: List<String>,
+)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+data class PersistedPollOptionDto(
+    val id: String,
+    val text: String,
+    val count: Int,
+)
+
+private val arbitraryPollAdapter by lazy { lsvMoshi.adapter(PersistedPollDto::class.java) }
+
+internal fun arbitraryPollToJson(p: com.testlogon.android.core.model.poll.ArbitraryPoll): String =
+    arbitraryPollAdapter.toJson(
+        PersistedPollDto(
+            pollId = p.pollId,
+            question = p.question,
+            owner = p.owner,
+            closed = p.closed,
+            closesAt = p.closesAtEpochSeconds,
+            totalVotes = p.totalVotes,
+            questions = p.questions.map { q ->
+                PersistedPollQuestionDto(
+                    id = q.id,
+                    text = q.text,
+                    multiSelect = q.multiSelect,
+                    maxSelections = q.maxSelections,
+                    options = q.options.map { PersistedPollOptionDto(it.id, it.text, it.count) },
+                    myVoteOptionIds = q.myVoteOptionIds,
+                )
+            },
+        ),
+    )
+
+internal fun arbitraryPollFromJson(json: String?): com.testlogon.android.core.model.poll.ArbitraryPoll? {
+    if (json.isNullOrBlank()) return null
+    val dto = runCatching { arbitraryPollAdapter.fromJson(json) }.getOrNull() ?: return null
+    return com.testlogon.android.core.model.poll.ArbitraryPoll(
+        pollId = dto.pollId,
+        question = dto.question,
+        owner = dto.owner,
+        closed = dto.closed,
+        closesAtEpochSeconds = dto.closesAt,
+        totalVotes = dto.totalVotes,
+        questions = dto.questions.map { q ->
+            com.testlogon.android.core.model.poll.ArbitraryPollQuestion(
+                id = q.id,
+                text = q.text,
+                multiSelect = q.multiSelect,
+                maxSelections = q.maxSelections,
+                options = q.options.map {
+                    com.testlogon.android.core.model.poll.ArbitraryPollOption(it.id, it.text, it.count)
+                },
+                myVoteOptionIds = q.myVoteOptionIds,
+            )
+        },
+    )
+}
+
+internal fun galleryToJson(images: List<MessageMedia.GalleryImage>): String =
+    // #8/#12 — persist isVideo + posterUrl so a mixed gallery keeps each item's media kind across the
+    // Room cache round-trip (otherwise a cached video item reloads as an image). Format per record:
+    // url|width|height|isVideo(0/1)|posterUrl
+    images.joinToString(GALLERY_RECORD_SEP) {
+        "${it.url.orEmpty()}|${it.width ?: ""}|${it.height ?: ""}|${if (it.isVideo) "1" else "0"}|${it.posterUrl.orEmpty()}"
+    }
+
+/** #24 - serialize the revealed lottery media list as "url|isVideo" records (one per line). */
+internal fun revealedMediaToJson(items: List<RevealedMediaItem>): String =
+    items.joinToString(GALLERY_RECORD_SEP) { "${it.url}|${if (it.isVideo) "1" else "0"}" }
+
+/**
+ * #6 (B-COUNTDOWN3) — serialize a countdown reveal payload into the (otherwise-unused) countdown
+ * string column so it survives the Room cache round-trip WITHOUT a schema bump. Records (sep="\n"):
+ *   T|<base64(text)>        — present only when reveal text is set
+ *   M|<url>|<isVideo 0/1>   — one per reveal media item
+ * Returns null for an empty/absent reveal so the column stays null for non-countdown rows.
+ */
+internal fun countdownRevealToBlob(reveal: com.testlogon.android.data.messaging.CountdownReveal?): String? {
+    if (reveal == null || reveal.isEmpty) return null
+    val recs = buildList {
+        reveal.text?.takeIf { it.isNotBlank() }?.let {
+            val b64 = android.util.Base64.encodeToString(it.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+            add("T|" + b64)
+        }
+        reveal.media.forEach { add("M|" + it.url + "|" + (if (it.isVideo) "1" else "0")) }
+    }
+    return recs.takeIf { it.isNotEmpty() }?.joinToString(GALLERY_RECORD_SEP)
+}
+
+/** #6 (B-COUNTDOWN3) — parse a persisted countdown reveal blob back into [CountdownReveal] (null if empty). */
+internal fun countdownRevealFromBlob(blob: String?): com.testlogon.android.data.messaging.CountdownReveal? {
+    if (blob.isNullOrBlank()) return null
+    var text: String? = null
+    val media = mutableListOf<com.testlogon.android.data.messaging.CountdownRevealMedia>()
+    blob.split(GALLERY_RECORD_SEP).forEach { line ->
+        if (line.isBlank()) return@forEach
+        val parts = line.split("|")
+        when (parts.getOrNull(0)) {
+            "T" -> parts.getOrNull(1)?.let {
+                text = runCatching { String(android.util.Base64.decode(it, android.util.Base64.NO_WRAP), Charsets.UTF_8) }.getOrNull()
+            }
+            "M" -> parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { url ->
+                media.add(com.testlogon.android.data.messaging.CountdownRevealMedia(url = url, isVideo = parts.getOrNull(2) == "1"))
+            }
+        }
+    }
+    val r = com.testlogon.android.data.messaging.CountdownReveal(text = text, media = media)
+    return r.takeIf { !it.isEmpty }
+}
+
+/** #24 - parse the revealed lottery media records back into [RevealedMediaItem]s. */
+internal fun revealedMediaFromJson(json: String?): List<RevealedMediaItem> {
+    if (json.isNullOrBlank()) return emptyList()
+    return json.split(GALLERY_RECORD_SEP).mapNotNull { line ->
+        if (line.isBlank()) return@mapNotNull null
+        val parts = line.split("|")
+        val url = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        RevealedMediaItem(url = url, isVideo = parts.getOrNull(1) == "1")
+    }
+}
+
+// #15 — sender-view (config + per-recipient results) Room serialization. Serialized as a small JSON
+// blob via a process-wide Moshi (these mappers are top-level extensions without the injected Moshi).
+// Codegen adapters keep this JVM-unit-test-safe (no reflective KotlinJsonAdapterFactory needed).
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+internal data class LsvBlob(
+    val version: String,
+    val totalWeightBps: Int,
+    val outcomes: List<LsvOutcomeBlob>,
+    val unlocks: List<LsvUnlockBlob>,
+)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+internal data class LsvOutcomeBlob(
+    val outcomeId: String,
+    val displayLabel: String? = null,
+    val weightBps: Int = 0,
+    val payloadType: String = "text",
+    val textContent: String? = null,
+    val media: List<LsvMediaBlob> = emptyList(),
+)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+internal data class LsvMediaBlob(val url: String, val isVideo: Boolean = false)
+
+@com.squareup.moshi.JsonClass(generateAdapter = true)
+internal data class LsvUnlockBlob(
+    val recipientId: String,
+    val unlockedAt: Long? = null,
+    val selectedOutcome: LsvOutcomeBlob? = null,
+)
+
+private val lsvMoshi: com.squareup.moshi.Moshi by lazy { com.squareup.moshi.Moshi.Builder().build() }
+private val lsvAdapter by lazy { lsvMoshi.adapter(LsvBlob::class.java) }
+
+private fun LotterySenderOutcome.toBlob(): LsvOutcomeBlob = LsvOutcomeBlob(
+    outcomeId = outcomeId,
+    displayLabel = displayLabel,
+    weightBps = weightBps,
+    payloadType = payloadType,
+    textContent = textContent,
+    media = media.map { LsvMediaBlob(url = it.url, isVideo = it.isVideo) },
+)
+
+private fun LsvOutcomeBlob.toDomain(): LotterySenderOutcome = LotterySenderOutcome(
+    outcomeId = outcomeId,
+    displayLabel = displayLabel?.takeIf { it.isNotBlank() },
+    weightBps = weightBps,
+    payloadType = payloadType.takeIf { it.isNotBlank() } ?: "text",
+    textContent = textContent?.takeIf { it.isNotBlank() },
+    media = media.map { RevealedMediaItem(url = it.url, isVideo = it.isVideo) },
+)
+
+/** #15 — serialize the lottery sender-view into a JSON blob for Room. */
+internal fun lotterySenderViewToJson(v: LotterySenderView): String = lsvAdapter.toJson(
+    LsvBlob(
+        version = v.version,
+        totalWeightBps = v.totalWeightBps,
+        outcomes = v.outcomes.map { it.toBlob() },
+        unlocks = v.unlocks.map {
+            LsvUnlockBlob(
+                recipientId = it.recipientId,
+                unlockedAt = it.unlockedAtEpochSeconds,
+                selectedOutcome = it.selectedOutcome?.toBlob(),
+            )
+        },
+    ),
+)
+
+/** #15 — parse the lottery sender-view back from its Room JSON blob; null on blank/unparseable. */
+internal fun lotterySenderViewFromJson(json: String?): LotterySenderView? {
+    if (json.isNullOrBlank()) return null
+    val blob = runCatching { lsvAdapter.fromJson(json) }.getOrNull() ?: return null
+    return LotterySenderView(
+        version = blob.version.takeIf { it.isNotBlank() } ?: "v1",
+        totalWeightBps = blob.totalWeightBps,
+        outcomes = blob.outcomes.map { it.toDomain() },
+        unlocks = blob.unlocks.map {
+            LotterySenderUnlock(
+                recipientId = it.recipientId,
+                unlockedAtEpochSeconds = it.unlockedAt,
+                selectedOutcome = it.selectedOutcome?.toDomain(),
+            )
+        },
+    )
+}
+
+/** C6 — parse the gallery records back into [MessageMedia.GalleryImage]s; tolerates null/blank. */
+internal fun galleryFromJson(json: String?): List<MessageMedia.GalleryImage> {
+    if (json.isNullOrBlank()) return emptyList()
+    return json.split(GALLERY_RECORD_SEP).mapNotNull { line ->
+        if (line.isBlank()) return@mapNotNull null
+        val parts = line.split("|")
+        val url = parts.getOrNull(0)?.takeIf { it.isNotBlank() }
+        MessageMedia.GalleryImage(
+            url = url,
+            width = parts.getOrNull(1)?.toIntOrNull(),
+            height = parts.getOrNull(2)?.toIntOrNull(),
+            // #8/#12 — restore the per-item media kind + poster (3-field legacy records -> image).
+            isVideo = parts.getOrNull(3) == "1",
+            posterUrl = parts.getOrNull(4)?.takeIf { it.isNotBlank() },
+        )
+    }
+}
+
 /** Parses a JSON number[] string back into a waveform; tolerates null/blank/garbage -> empty list. */
 internal fun waveformFromJson(json: String?): List<Float> {
     if (json.isNullOrBlank()) return emptyList()
@@ -2187,6 +3897,11 @@ internal fun MessageEntity.toDomain(): Message = Message(
     conversationId = conversationId,
     senderId = senderId,
     text = text,
+    replyToMessageId = replyToMessageId,
+    deliveredToCount = deliveredToCount,
+    readByCount = readByCount,
+    expiresAtEpochSeconds = expiresAtEpochSeconds,
+    expired = serverExpired,
     createdAtEpochSeconds = createdAtEpochSeconds,
     sendStatus = SendStatus.SENT,
     kind = kind,
@@ -2195,8 +3910,30 @@ internal fun MessageEntity.toDomain(): Message = Message(
     lifecycle = runCatching { MessageLifecycle.valueOf(lifecycle) }.getOrDefault(MessageLifecycle.ACTIVE),
     editedAtEpochSeconds = editedAtEpochSeconds,
     isHiddenLocal = isHidden,
+    // RG22 — keep the encrypted flag set when an envelope is present (post-unlock the server returns
+    // the envelope; the flag must not regress to a plain/blank bubble).
+    isEncrypted = isEncrypted || encSaltB64 != null,
+    encryption = encSaltB64?.let { salt ->
+        com.testlogon.android.data.messaging.MessageEncryption(
+            version = encVersion ?: 1,
+            alg = encAlg ?: "AES-256-GCM",
+            kdf = encKdf ?: "PBKDF2-SHA256",
+            iterations = encIterations ?: 100000,
+            saltB64 = salt,
+            ivB64 = encIvB64.orEmpty(),
+            ciphertextB64 = encCiphertextB64,
+        )
+    },
+    viewOnce = viewOnce,
+    consumed = consumed,
+    consumptionPolicy = consumptionPolicy,
+    // R2 — restore the lock price/currency for the own "Locked $X" badge (set for any locked message,
+    // including the sender's own locked image which renders as a plain Image, not a Paid bubble).
+    lockPriceCents = lockPriceCents,
+    lockCurrency = lockCurrency ?: "USD",
     media = when (kind) {
         "image" -> MessageMedia.Image(url = imageUrl, width = imageWidth, height = imageHeight)
+        "gallery" -> MessageMedia.Gallery(images = galleryFromJson(galleryImagesJson))
         "video_share" -> MessageMedia.VideoShare(
             videoId = videoId.orEmpty(),
             title = videoTitle,
@@ -2211,6 +3948,7 @@ internal fun MessageEntity.toDomain(): Message = Message(
             audioUrl = voiceAudioUrl,
             durationSeconds = voiceDurationSeconds ?: 0.0,
             waveform = waveformFromJson(voiceWaveformJson),
+            consumptionPolicy = consumptionPolicy,
         )
         "voicemail" -> MessageMedia.Voicemail(
             mediaUrl = voicemailMediaUrl,
@@ -2232,6 +3970,7 @@ internal fun MessageEntity.toDomain(): Message = Message(
             stickerId = stickerId,
             collectionId = stickerCollectionId,
         )
+        "poll" -> arbitraryPollFromJson(pollJson)?.let { MessageMedia.Poll(it) } ?: MessageMedia.None
         "meeting_poll" -> MessageMedia.MeetingPoll(
             pollId = pollId.orEmpty(),
             title = pollTitle.orEmpty(),
@@ -2239,12 +3978,19 @@ internal fun MessageEntity.toDomain(): Message = Message(
             status = pollStatus ?: "open",
             confirmedSlotId = pollConfirmedSlotId,
         )
-        "countdown" -> MessageMedia.Countdown(
-            title = countdownTitle.orEmpty(),
-            targetEpochSeconds = countdownTargetEpochSeconds ?: 0L,
-            associatedEventType = countdownEventType.toAssociatedEventType(),
-            associatedEventId = countdownEventId,
+        "find_datetime" -> MessageMedia.FindDateTime(
+            pollId = pollId.orEmpty(),
+            title = pollTitle.orEmpty(),
+            creatorId = pollCreatorId.orEmpty(),
+            status = pollStatus ?: "open",
+            fromDate = fadtFromDate,
+            toDate = fadtToDate,
+            startHour = fadtStartHour,
+            endHour = fadtEndHour,
+            slotDurationMinutes = fadtSlotDurationMinutes,
         )
+        // #6 (B-COUNTDOWN3) — a persisted countdown is restored as the transient Message.countdown
+        // attribute (below), not as a media kind, so it renders via the shared overlay path.
         "calendar_event" -> MessageMedia.CalendarEvent(
             eventId = calEventId.orEmpty(),
             calendarId = calEventCalendarId.orEmpty(),
@@ -2264,7 +4010,12 @@ internal fun MessageEntity.toDomain(): Message = Message(
             permission = calSharePermission.toSharePermission(),
             bookingPublicUrl = calShareBookingUrl,
         )
-        "file", "file_share", "audio", "video" -> MessageMedia.File(
+        // MV2 — an uploaded video clip persists its playable url in fileUrl; render as a video bubble.
+        "video" -> MessageMedia.VideoClip(
+            playbackUrl = fileUrl,
+            durationSeconds = videoDurationSeconds,
+        )
+        "file", "file_share", "audio" -> MessageMedia.File(
             fileName = fileName ?: "file",
             sizeBytes = fileSizeBytes,
             mimeType = fileMimeType,
@@ -2282,11 +4033,32 @@ internal fun MessageEntity.toDomain(): Message = Message(
                     currency = lockCurrency ?: "USD",
                     teaser = lockTeaser,
                     revealedText = revealedText,
+                    revealedMediaUrl = revealedMediaUrl,
+                    revealedMediaIsVideo = revealedMediaIsVideo,
+                    // #24 - restore the full revealed media list; fall back to the singular url.
+                    revealedMedia = revealedMediaFromJson(revealedMediaJson).ifEmpty {
+                        listOfNotNull(
+                            revealedMediaUrl?.takeIf { it.isNotBlank() }
+                                ?.let { RevealedMediaItem(url = it, isVideo = revealedMediaIsVideo) },
+                        )
+                    },
+                    // #15 - restore the sender's lottery sender-view (config + per-recipient results).
+                    lotterySenderView = lotterySenderViewFromJson(lotterySenderViewJson),
                 ),
             )
         } else {
             MessageMedia.None
         }
+    },
+    // #6 (B-COUNTDOWN3) — restore a persisted countdown as the transient attribute. The reveal media
+    // is not persisted; once the row refetches from the wire the full reveal repopulates.
+    countdown = countdownTargetEpochSeconds?.let { tgt ->
+        com.testlogon.android.data.messaging.MessageCountdown(
+            targetEpochSeconds = tgt,
+            title = countdownTitle?.takeIf { it.isNotBlank() },
+            // #6 (B-COUNTDOWN3) — restore the reveal blob persisted in the countdownEventId column.
+            reveal = countdownRevealFromBlob(countdownEventId),
+        )
     },
 )
 
@@ -2312,6 +4084,12 @@ internal fun OutboxMessageEntity.toDomain(): Message = Message(
             localUri = attachmentLocalUri,
             uploadProgress = uploadPercent?.let { it / 100f },
         )
+        // MV2 — optimistic short-video row: poster from the local source uri while the clip uploads.
+        "video" -> MessageMedia.VideoClip(
+            playbackUrl = null,
+            localUri = attachmentLocalUri,
+            uploadProgress = uploadPercent?.let { it / 100f },
+        )
         "voice_message" -> MessageMedia.Voice(
             audioUrl = null,
             durationSeconds = voiceDurationSeconds ?: 0.0,
@@ -2329,12 +4107,18 @@ internal fun OutboxMessageEntity.toDomain(): Message = Message(
             localUri = attachmentLocalUri,
             uploadProgress = uploadPercent?.let { it / 100f },
         )
-        "countdown" -> MessageMedia.Countdown(
-            // Optimistic countdown: title in `text`, target epoch in voiceDurationSeconds (Double).
-            title = text,
-            targetEpochSeconds = (voiceDurationSeconds ?: 0.0).toLong(),
-            associatedEventType = AssociatedEventType.CUSTOM,
-        )
+        // #6 (B-COUNTDOWN3) — an optimistic countdown is carried by the transient attribute (below);
+        // the base text holds the message body (may be blank for a title-only countdown).
         else -> MessageMedia.None
+    },
+    // #6 — optimistic countdown attribute: title persisted in `text`, target epoch in the reused
+    // voiceDurationSeconds column. Title-only (no body) renders the headline in the overlay.
+    countdown = if (kind == "countdown") {
+        com.testlogon.android.data.messaging.MessageCountdown(
+            targetEpochSeconds = (voiceDurationSeconds ?: 0.0).toLong(),
+            title = text.takeIf { it.isNotBlank() },
+        )
+    } else {
+        null
     },
 )

@@ -1,0 +1,40 @@
+--- app/services/broadcast_store.py.bak_audioroom_1783027095	2026-07-02 21:18:25.863774710 +0000
++++ app/services/broadcast_store.py	2026-07-02 21:18:25.879576051 +0000
+@@ -168,6 +168,9 @@
+         "ad_break_active": session.ad_break_active,
+         "ad_break_started_at": session.ad_break_started_at,
+         "total_ad_breaks": session.total_ad_breaks,
++        # Audio Room (LiveKit)
++        "mode": session.mode,
++        "stage_max_slots": session.stage_max_slots,
+     }
+     # Remove None values to avoid DynamoDB issues with GSI sort keys
+     return {k: v for k, v in item.items() if v is not None}
+@@ -232,6 +235,9 @@
+         ad_break_active=bool(item.get("ad_break_active", False)),
+         ad_break_started_at=int(item["ad_break_started_at"]) if item.get("ad_break_started_at") is not None else None,
+         total_ad_breaks=int(item.get("total_ad_breaks", 0) or 0),
++        # Audio Room (LiveKit)
++        mode=item.get("mode") or "video",
++        stage_max_slots=int(item.get("stage_max_slots", 20) or 20),
+     )
+ 
+ 
+@@ -246,6 +252,8 @@
+     pre_roll_enabled: bool = True,
+     mid_roll_ad_break_duration_seconds: int = 30,
+     mid_roll_skip_after_seconds: int = 15,
++    mode: str = "video",
++    stage_max_slots: int = 20,
+ ) -> BroadcastSessionModel:
+     enforce_secret_reference_only("stream_key_ref", stream_key_ref)
+     ts = now_iso()
+@@ -264,6 +272,8 @@
+         pre_roll_enabled=pre_roll_enabled,
+         mid_roll_ad_break_duration_seconds=mid_roll_ad_break_duration_seconds,
+         mid_roll_skip_after_seconds=mid_roll_skip_after_seconds,
++        mode=(mode if mode in ("video", "audio_room") else "video"),
++        stage_max_slots=max(2, min(20, int(stage_max_slots or 20))),
+     )
+     T.broadcast_sessions.put_item(
+         Item=session_to_item(session),

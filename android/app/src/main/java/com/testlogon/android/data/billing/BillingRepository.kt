@@ -34,8 +34,26 @@ interface BillingRepository {
     /** AND-224 — set [id] as default (POST .../default), then re-fetch the sorted list. */
     suspend fun setDefaultPaymentMethod(id: String): ApiResult<List<PaymentMethod>>
 
+    /** TIP-102 - the current tip-default payment method id (null when unset). */
+    suspend fun getTipDefaultPaymentMethodId(): ApiResult<String?>
+
+    /** TIP-104 - set [id] as the tip default (POST .../tip-default), then re-fetch the sorted list. */
+    suspend fun setTipDefaultPaymentMethod(id: String): ApiResult<List<PaymentMethod>>
+
     /** AND-224 — remove [id] (DELETE), then re-fetch the sorted list. */
     suspend fun removePaymentMethod(id: String): ApiResult<List<PaymentMethod>>
+
+    /**
+     * BK-C (dev/test) — add a card by raw test-card fields (mirrors the web manual-entry flow), then
+     * re-fetch the sorted list. Returns the updated authoritative list on success.
+     */
+    suspend fun addCard(req: AddCardReqDto): ApiResult<List<PaymentMethod>>
+
+    /**
+     * BK-C (dev/test) — add a FAKE US bank account by routing + account number, then re-fetch the
+     * sorted list. Returns the updated authoritative list on success.
+     */
+    suspend fun addBank(req: AddBankReqDto): ApiResult<List<PaymentMethod>>
 
     /** AND-223 — billing config (publishable key + currency). */
     suspend fun getConfig(): ApiResult<BillingConfig>
@@ -78,9 +96,30 @@ class BillingRepositoryImpl @Inject constructor(
                 .flatMap { fetchSortedMethods() }
         }
 
+    override suspend fun getTipDefaultPaymentMethodId(): ApiResult<String?> =
+        withContext(io) { call { api.getTipDefault() }.map { it.tipDefaultPaymentMethodId } }
+
+    override suspend fun setTipDefaultPaymentMethod(id: String): ApiResult<List<PaymentMethod>> =
+        withContext(io) {
+            // OkResp carries no method object -> reconcile by re-fetching the authoritative list.
+            call { api.setTipDefault(SetDefaultReqDto(paymentMethodId = id)) }
+                .flatMap { fetchSortedMethods() }
+        }
+
     override suspend fun removePaymentMethod(id: String): ApiResult<List<PaymentMethod>> =
         withContext(io) {
             call { api.deletePaymentMethod(id) }.flatMap { fetchSortedMethods() }
+        }
+
+    override suspend fun addCard(req: AddCardReqDto): ApiResult<List<PaymentMethod>> =
+        withContext(io) {
+            // Create returns only the new method; reconcile by re-fetching the authoritative list.
+            call { api.addCard(req) }.flatMap { fetchSortedMethods() }
+        }
+
+    override suspend fun addBank(req: AddBankReqDto): ApiResult<List<PaymentMethod>> =
+        withContext(io) {
+            call { api.addBank(req) }.flatMap { fetchSortedMethods() }
         }
 
     override suspend fun getConfig(): ApiResult<BillingConfig> =

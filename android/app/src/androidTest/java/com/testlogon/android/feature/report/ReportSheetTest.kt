@@ -107,7 +107,7 @@ class ReportSheetTest {
     fun retryableError_showsRetry_preservesState_recovers() {
         render(terminalOnSubmit = ReportUiState.Phase.Error("server boom", retryable = true))
 
-        rule.onNodeWithTag(ReportFlowTestTags.topicRow(ReportReason.CRIMINAL)).performClick()
+        rule.onNodeWithTag(ReportFlowTestTags.topicRow(ReportReason.HARASSMENT)).performClick()
         rule.onNodeWithTag(ReportFlowTestTags.REASON_FIELD).performTextInput("illegal content")
         rule.onNodeWithTag(ReportFlowTestTags.SUBMIT).performClick()
 

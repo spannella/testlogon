@@ -6,6 +6,7 @@ import com.testlogon.android.core.network.BuildConfig
 import com.testlogon.android.core.network.ads.AdAccountStatusAdapter
 import com.testlogon.android.core.network.ads.AdCampaignStatusAdapter
 import com.testlogon.android.core.network.json.BigDecimalAdapter
+import com.testlogon.android.core.network.json.LenientNumberAdapters
 import com.testlogon.android.core.network.kyc.KycCaseStatusAdapter
 import com.testlogon.android.core.network.kyc.KycFileTypeAdapter
 import com.testlogon.android.core.network.signing.PacketRoleAdapter
@@ -20,6 +21,7 @@ import com.testlogon.android.core.network.auth.AuthEventSink
 import com.testlogon.android.core.network.auth.SessionAuthenticator
 import com.testlogon.android.core.network.cookie.PersistentCookieJar
 import com.testlogon.android.core.network.csrf.CsrfInterceptor
+import com.testlogon.android.core.network.delegates.DelegateRoutingInterceptor
 import com.testlogon.android.core.network.health.HealthApi
 import com.testlogon.android.core.network.host.HostSelectionInterceptor
 import com.testlogon.android.core.network.retry.RetryInterceptor
@@ -53,6 +55,10 @@ object NetworkModule {
         // AND-218: BigDecimal mapping for the purchases transaction `amount` (no built-in adapter).
         // Registered before the reflective factory so it wins for BigDecimal-typed fields.
         .add(BigDecimalAdapter)
+        // Helpdesk FAIL #3/#4 (B-HELP-SHAPE): lenient Long?/Int? for the support-ticket media
+        // numeric fields (size_bytes/width/height) so a stringified number never throws and empties
+        // the whole ticket list / breaks the close-ticket envelope. Registered before the reflective factory.
+        .add(LenientNumberAdapters)
         // AND-319: KYC enum token mapping (lenient -> UNKNOWN). Registered before the reflective
         // factory so they resolve for KycCaseStatus / KycFileType fields on the KYC DTOs.
         .add(KycCaseStatusAdapter)
@@ -106,6 +112,7 @@ object NetworkModule {
         hostSelectionInterceptor: HostSelectionInterceptor,
         csrfInterceptor: CsrfInterceptor,
         retryInterceptor: RetryInterceptor,
+        delegateRoutingInterceptor: DelegateRoutingInterceptor,
         loggingInterceptor: HttpLoggingInterceptor,
     ): OkHttpClient.Builder = OkHttpClient.Builder()
         .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -113,9 +120,11 @@ object NetworkModule {
         .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .cookieJar(cookieJar)
-        // Host selection first (so downstream sees the effective URL), then CSRF, then retry,
-        // and logging last so it observes/redacts the final headers.
+        // Host selection first (so downstream sees the effective URL), then delegate re-routing (so the
+        // rewritten messaging path is the one CSRF/retry/logging observe), then CSRF, then retry, and
+        // logging last so it observes/redacts the final headers.
         .addInterceptor(hostSelectionInterceptor)
+        .addInterceptor(delegateRoutingInterceptor)
         .addInterceptor(csrfInterceptor)
         .addInterceptor(retryInterceptor)
         .apply { if (BuildConfig.DEBUG) addInterceptor(loggingInterceptor) }
@@ -129,9 +138,11 @@ object NetworkModule {
         hostSelectionInterceptor: HostSelectionInterceptor,
         csrfInterceptor: CsrfInterceptor,
         retryInterceptor: RetryInterceptor,
+        delegateRoutingInterceptor: DelegateRoutingInterceptor,
         loggingInterceptor: HttpLoggingInterceptor,
     ): OkHttpClient = baseClientBuilder(
-        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor, loggingInterceptor,
+        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor,
+        delegateRoutingInterceptor, loggingInterceptor,
     ).build()
 
     @Provides
@@ -141,10 +152,12 @@ object NetworkModule {
         hostSelectionInterceptor: HostSelectionInterceptor,
         csrfInterceptor: CsrfInterceptor,
         retryInterceptor: RetryInterceptor,
+        delegateRoutingInterceptor: DelegateRoutingInterceptor,
         loggingInterceptor: HttpLoggingInterceptor,
         authenticator: SessionAuthenticator,
     ): OkHttpClient = baseClientBuilder(
-        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor, loggingInterceptor,
+        cookieJar, hostSelectionInterceptor, csrfInterceptor, retryInterceptor,
+        delegateRoutingInterceptor, loggingInterceptor,
     ).authenticator(authenticator).build()
 
     @Provides

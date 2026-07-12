@@ -34,12 +34,27 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.broadcast.BroadcastPreRoll
 import com.testlogon.android.feature.broadcast.chat.LiveChatPanel
 import com.testlogon.android.feature.broadcast.qna.LiveQaPanel
 import com.testlogon.android.feature.broadcast.shelf.ProductsShelfPanel
+import com.testlogon.android.feature.broadcast.viewer.shop.ShopThisStreamPanel
 import com.testlogon.android.feature.broadcast.tips.TipsGoalsPanel
 import com.testlogon.android.feature.player.VideoPlayer
+import com.testlogon.android.feature.player.VideoPlayerController
+import com.testlogon.android.feature.player.PlaybackPhase as PlayerPlaybackPhase
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.feature.ads.cta.AdCtaBar
+import com.testlogon.android.feature.ads.cta.AdCtaRouter
+import com.testlogon.android.feature.ads.cta.CtaDestination
+import com.testlogon.android.feature.vod.adsupported.AdOverlay
+import com.testlogon.android.feature.vod.adsupported.AdOverlayTestTags
+import com.testlogon.android.feature.vod.adsupported.AdSupportedUiState
+import com.testlogon.android.feature.vod.adsupported.PlaybackPhase
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.delay
@@ -55,6 +70,7 @@ import kotlinx.coroutines.delay
 fun ViewerScreen(
     onBack: () -> Unit,
     onBuyProduct: (categoryId: String, itemId: String) -> Unit = { _, _ -> },
+    onCtaNavigate: (CtaDestination) -> Unit = {},
     viewModel: ViewerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -86,6 +102,48 @@ fun ViewerScreen(
                 when (state) {
                     ViewerUiState.Loading ->
                         LoadingState(message = stringResource(R.string.viewer_loading))
+                    // ADV FEATURE 1 — mandatory pre-roll ad gates the live join.
+                    is ViewerUiState.PreRoll -> {
+                        val s = state as ViewerUiState.PreRoll
+                        BroadcastPreRollPlayer(
+                            ad = s.ad,
+                            durationMs = s.durationMs,
+                            remainingMs = s.remainingMs,
+                            skipEnabled = s.skipEnabled,
+                            skipCountdownMs = s.skipCountdownMs,
+                            controller = viewModel.controller,
+                            onAdPosition = viewModel::onPreRollPosition,
+                            onAdCompleted = viewModel::onPreRollCompleted,
+                            onSkipAd = viewModel::onPreRollSkip,
+                            ctas = s.ad.ctas,
+                            onCta = { action ->
+                                viewModel.onCtaTap(action)
+                                onCtaNavigate(AdCtaRouter.destinationFor(action, ""))
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    // ADV2-105 - mid-roll ad painted over the paused live stream during a host break.
+                    is ViewerUiState.MidRoll -> {
+                        val s = state as ViewerUiState.MidRoll
+                        BroadcastPreRollPlayer(
+                            ad = s.ad,
+                            durationMs = s.durationMs,
+                            remainingMs = s.remainingMs,
+                            skipEnabled = s.skipEnabled,
+                            skipCountdownMs = s.skipCountdownMs,
+                            controller = viewModel.controller,
+                            onAdPosition = viewModel::onMidRollPosition,
+                            onAdCompleted = viewModel::onMidRollCompleted,
+                            onSkipAd = viewModel::onMidRollSkip,
+                            ctas = s.ad.ctas,
+                            onCta = { action ->
+                                viewModel.onCtaTap(action)
+                                onCtaNavigate(AdCtaRouter.destinationFor(action, ""))
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                     is ViewerUiState.Ready ->
                         VideoPlayer(controller = viewModel.controller, modifier = Modifier.fillMaxSize())
                     is ViewerUiState.Unavailable ->
@@ -124,6 +182,12 @@ fun ViewerScreen(
             }
 
             if (ready != null) {
+                // LIVECOM L5 — "Shop this stream": the host-pinned products + an in-stream buy (attributed
+                // to the broadcast session + host, without leaving the stream).
+                ShopThisStreamPanel(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+
                 // AND-283 — the products shelf overlay (hidden by default; toggled on the chrome).
                 ProductsShelfPanel(
                     sessionId = viewModel.sessionId,
@@ -150,6 +214,110 @@ fun ViewerScreen(
                 )
             }
         }
+    }
+}
+
+/**
+ * ADV FEATURE 1 — the pre-roll ad surface shown BEFORE the live stream joins, reusing the VOD pre-roll
+ * pattern (DetailAdAwarePlayer): the image creative renders via Coil on a wall-clock countdown; a video
+ * creative plays on the SAME reused [VideoPlayerController] and completes on ENDED. The reused [AdOverlay]
+ * draws the "Ad" badge + remaining time + skip-after-N button. The live playback stays GATED (the VM does
+ * not mint the live URL) until [onAdCompleted] / [onSkipAd] fires. There is deliberately NO tip / chat /
+ * shelf during the ad — those compose only in [ViewerUiState.Ready].
+ */
+@Composable
+private fun BroadcastPreRollPlayer(
+    ad: BroadcastPreRoll,
+    durationMs: Long,
+    remainingMs: Long,
+    skipEnabled: Boolean,
+    skipCountdownMs: Long,
+    controller: VideoPlayerController,
+    onAdPosition: (Long) -> Unit,
+    onAdCompleted: () -> Unit,
+    onSkipAd: () -> Unit,
+    ctas: List<CtaAction> = emptyList(),
+    onCta: (CtaAction) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val isImage = ad.isImage
+
+    // Bind the video creative to the reused controller once; an image creative has no player media.
+    LaunchedEffect(ad.creativeId, isImage) {
+        if (!isImage && ad.videoUrl != null) {
+            controller.setMediaUri(ad.videoUrl, autoPlay = true)
+        } else {
+            controller.pause()
+        }
+    }
+
+    // Drive the countdown. Image → wall clock to durationMs; video → shared controller position + ENDED.
+    LaunchedEffect(ad.creativeId, isImage) {
+        if (isImage) {
+            val startedAt = System.currentTimeMillis()
+            while (true) {
+                val elapsed = System.currentTimeMillis() - startedAt
+                onAdPosition(elapsed)
+                if (elapsed >= durationMs) {
+                    onAdCompleted()
+                    break
+                }
+                delay(200L)
+            }
+        } else {
+            while (true) {
+                val ps = controller.state.value
+                onAdPosition(ps.positionMs)
+                if (ps.phase == PlayerPlaybackPhase.ENDED) {
+                    onAdCompleted()
+                    break
+                }
+                delay(200L)
+            }
+        }
+    }
+
+    Box(modifier = modifier) {
+        if (isImage) {
+            AsyncImage(
+                model = ad.imageUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().testTag("broadcast_preroll_image"),
+            )
+        } else {
+            VideoPlayer(
+                controller = controller,
+                modifier = Modifier.fillMaxSize().testTag("broadcast_preroll_video"),
+            )
+        }
+        AdOverlay(
+            state = AdSupportedUiState.Ready(
+                contentUrl = "",
+                phase = PlaybackPhase.AD,
+                currentBreak = null,
+                adRemainingMs = remainingMs,
+                skipEnabled = skipEnabled,
+                skipCountdownMs = skipCountdownMs,
+                playbackUnlocked = false,
+                nextRequiredBreakId = null,
+                breaksCompleted = 0,
+                breaksTotal = 1,
+                adsFree = false,
+            ),
+            onSkip = onSkipAd,
+            modifier = Modifier.fillMaxSize().testTag(AdOverlayTestTags.SKIP + "_container"),
+        )
+        // ADV2-211 (F2) - the structured click-through CTA bar over the live ad. Buy/subscribe taps
+        // fire CPC + stash the ad_click_id for CPA; tip deep-links with no advertiser charge.
+        AdCtaBar(
+            ctas = ctas,
+            onCta = onCta,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, bottom = 64.dp),
+        )
     }
 }
 

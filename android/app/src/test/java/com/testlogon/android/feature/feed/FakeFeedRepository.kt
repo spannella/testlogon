@@ -23,7 +23,7 @@ class FakeFeedRepository(
     var postCalls: Int = 0
         private set
 
-    override suspend fun getFeedPage(cursor: String?, limit: Int?): ApiResult<FeedPage> {
+    override suspend fun getFeedPage(cursor: String?, limit: Int?, authorId: String?): ApiResult<FeedPage> {
         feedCalls++
         feedResult?.let { return it }
         val page = pagesByCursor[cursor] ?: FeedPage(emptyList(), nextCursor = null)

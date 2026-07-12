@@ -191,7 +191,7 @@ const openBlobInEphemeralWindow = (blob: Blob) => {
 
 const buildS3ObjectUrl = (bucket?: string, key?: string): string | undefined => {
   if (!bucket || !key) return undefined;
-  return `https://${bucket}.s3.amazonaws.com/${encodeURIComponent(key).replace(/%2F/g, "/")}`;
+  return `/mock/s3/${bucket}/${encodeURIComponent(key).replace(/%2F/g, "/")}`;
 };
 
 function replyPreviewText(msg: Message): string {

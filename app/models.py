@@ -394,7 +394,11 @@ class AlertToastPrefsReq(BaseModel):
     toast_event_types: List[str] = Field(default_factory=list)
 
 class AlertPushPrefsReq(BaseModel):
-    push_event_types: List[str] = Field(default_factory=list)
+    # D2: push-pref toggle. push_event_types = explicit opt-IN list; push_opt_out_event_types =
+    # opt-OUT of the default-ON transactional events. Both optional so a partial update keeps the
+    # unspecified list unchanged (None -> set_alert_prefs preserves current).
+    push_event_types: Optional[List[str]] = None
+    push_opt_out_event_types: Optional[List[str]] = None
 
 class AlertWebhookPrefsReq(BaseModel):
     webhook_urls: List[str] = Field(default_factory=list)
@@ -996,6 +1000,11 @@ class ShoppingCartTotalOut(BaseModel):
 class CartPurchaseIn(BaseModel):
     promo_code: Optional[str] = None
     promo_code_id: Optional[str] = None
+    # ADV-403: optional last-click CPA attribution handle carried from an ad CTA.
+    ad_click_id: Optional[str] = None
+    # LIVECOM L3: in-stream purchase attribution (broadcast session + host).
+    broadcast_session_id: Optional[str] = None
+    host_id: Optional[str] = None
 
 
 class ShoppingCartPurchaseOut(BaseModel):
@@ -4578,12 +4587,20 @@ class AdAccountCreateIn(BaseModel):
 _BID_CPM_MIN = 50
 _BID_CPM_MAX = 20_000
 _BID_CPM_DEFAULT = 500  # $5.00 CPM default
+# ADV-301: CPC/CPA bid bounds (cents). CPC $0.01..$100 default $0.50;
+# CPA $0.01..$1000 default $5.00.
+_BID_CPC_MIN = 1
+_BID_CPC_MAX = 10_000
+_BID_CPC_DEFAULT = 50
+_BID_CPA_MIN = 1
+_BID_CPA_MAX = 100_000
+_BID_CPA_DEFAULT = 500
 
 
 class CampaignCreateIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     objective: str = Field(..., pattern=r"^(awareness|traffic|conversions)$")
-    budget_cents: int = Field(..., ge=100)  # Minimum $1
+    budget_cents: int = Field(..., ge=0)  # Minimum $1 for paid; 0 allowed for self-promo (ADV2-301)
     budget_type: str = Field(..., pattern=r"^(daily|lifetime)$")
     start_date: Optional[int] = None  # Unix timestamp
     end_date: Optional[int] = None    # Unix timestamp
@@ -4592,6 +4609,13 @@ class CampaignCreateIn(BaseModel):
     # keep working; bounded to a sane range to prevent garbage bids.
     bid_cpm_cents: int = Field(
         default=_BID_CPM_DEFAULT, ge=_BID_CPM_MIN, le=_BID_CPM_MAX
+    )
+    # ADV-301: advertiser-set CPC/CPA bids (traffic/conversion objectives + auction).
+    bid_cpc_cents: int = Field(
+        default=_BID_CPC_DEFAULT, ge=_BID_CPC_MIN, le=_BID_CPC_MAX
+    )
+    bid_cpa_cents: int = Field(
+        default=_BID_CPA_DEFAULT, ge=_BID_CPA_MIN, le=_BID_CPA_MAX
     )
     # Ad category for the campaign. Validated against the same VALID_AD_CATEGORIES
     # taxonomy that creators use for allowed_ad_categories (see CreatorAdSettingsIn)
@@ -4607,6 +4631,25 @@ class CampaignCreateIn(BaseModel):
         if v != "general" and v not in VALID_AD_CATEGORIES:
             raise ValueError(f"Unknown ad category: {v}")
         return v
+
+    # ADV2-301 (F3): free "promote my content" self-advertising toggle. A
+    # self-promo campaign costs 0 (no charge / debit / credit), needs no funding,
+    # and serves ONLY in front of the creator's own content. self_promo_mode:
+    # fill_only (serve only when no paying ad is eligible for the own slot) vs
+    # always_win (always win the own-content slot, may displace a paid ad).
+    is_self_promo: bool = False
+    self_promo_mode: str = Field(default="fill_only", pattern=r"^(fill_only|always_win)$")
+
+    @model_validator(mode="after")
+    def _validate_self_promo(self):
+        if self.is_self_promo:
+            # Free own-content promo: force all bids to 0, budget optional (no funding).
+            self.bid_cpm_cents = 0
+            self.bid_cpc_cents = 0
+            self.bid_cpa_cents = 0
+        elif self.budget_cents < 100:
+            raise ValueError("budget_cents must be >= 100 for a paid campaign")
+        return self
 
 
 class CampaignOut(BaseModel):
@@ -4628,6 +4671,12 @@ class CampaignOut(BaseModel):
     # GAP-0044: surface the auction bid so advertisers can audit their CPM.
     # Defaults to $5.00 for legacy items written before this attribute existed.
     bid_cpm_cents: int = _BID_CPM_DEFAULT
+    # ADV-301: surface CPC/CPA bids for advertiser audit.
+    bid_cpc_cents: int = _BID_CPC_DEFAULT
+    bid_cpa_cents: int = _BID_CPA_DEFAULT
+    # ADV2-301: surface the self-promo flavor.
+    is_self_promo: bool = False
+    self_promo_mode: str = "fill_only"
 
 
 # -- Delegates (DELEGATE-001) --
@@ -4937,6 +4986,16 @@ class CampaignUpdateIn(BaseModel):
     bid_cpm_cents: Optional[int] = Field(
         default=None, ge=_BID_CPM_MIN, le=_BID_CPM_MAX
     )
+    # ADV-301: bound CPC/CPA on update to match creation validation.
+    bid_cpc_cents: Optional[int] = Field(
+        default=None, ge=_BID_CPC_MIN, le=_BID_CPC_MAX
+    )
+    bid_cpa_cents: Optional[int] = Field(
+        default=None, ge=_BID_CPA_MIN, le=_BID_CPA_MAX
+    )
+    # ADV2-301: allow toggling the self-promo flavor/mode on update.
+    is_self_promo: Optional[bool] = None
+    self_promo_mode: Optional[str] = Field(default=None, pattern=r"^(fill_only|always_win)$")
 
 
 class CampaignReviewIn(BaseModel):
@@ -4946,6 +5005,31 @@ class CampaignReviewIn(BaseModel):
 
 # ── Ad Creatives (ADS-002) ──────────────────────────────────────────
 # ── Ad Creatives (ADS-002) ─────────────────────────────────────────────
+
+
+class CtaActionIn(BaseModel):
+    """ADV2-201: one structured click-through CTA target on an ad creative.
+
+    cta_type routes the in-app destination; target_id names the product /
+    creator / account; label is the button text. buy_product / view_product need
+    a product target; subscribe_other needs an account/creator target; tip and
+    subscribe (this creator) may omit target_id (resolved to the placement
+    content owner at tap time).
+    """
+    cta_type: str = Field(
+        ..., pattern="^(buy_product|view_product|tip|subscribe|subscribe_other)$"
+    )
+    target_id: str = Field(default="", max_length=200)
+    label: str = Field(..., min_length=1, max_length=40)
+
+
+class CtaClickIn(BaseModel):
+    """ADV2-201: body for POST /ui/ads/cta-click (a CTA tap)."""
+    ad_click_id: str = Field(..., min_length=1)
+    cta_type: str = Field(
+        ..., pattern="^(buy_product|view_product|tip|subscribe|subscribe_other)$"
+    )
+    target_id: str = Field(default="", max_length=200)
 
 
 class CreativeCreateIn(BaseModel):
@@ -4963,6 +5047,7 @@ class CreativeCreateIn(BaseModel):
     rotation_weight: int = Field(default=50, ge=0, le=100)
     promo_code_id: Optional[str] = None
     affiliate_link_id: Optional[str] = None
+    ctas: Optional[List[CtaActionIn]] = Field(default=None, max_length=8)
 
     @field_validator("cta_url")
     @classmethod
@@ -5002,6 +5087,7 @@ class CreativeUpdateIn(BaseModel):
     skip_after_seconds: Optional[int] = Field(default=None, ge=0, le=30)
     promo_code_id: Optional[str] = None
     affiliate_link_id: Optional[str] = None
+    ctas: Optional[List[CtaActionIn]] = Field(default=None, max_length=8)
 
     @field_validator("cta_url")
     @classmethod
@@ -5100,6 +5186,8 @@ class AdServeRequestIn(BaseModel):
                            description="Type of ad slot within the surface")
     user_context: Optional[Dict[str, Any]] = Field(default=None,
                                                     description="Additional viewer context for targeting")
+    content_owner_id: str = Field(default="",
+                                  description="Sub of the content owner for CPA attribution; empty for standalone units")
 
 
 class AdServeResponseOut(BaseModel):
@@ -5112,6 +5200,7 @@ class AdServeResponseOut(BaseModel):
     body_text: Optional[str] = None
     cta_text: Optional[str] = None
     cta_url: Optional[str] = None
+    ctas: List[Dict[str, Any]] = Field(default_factory=list)
     image_url: Optional[str] = None
     video_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
@@ -5495,6 +5584,9 @@ class AdTrackEventIn(BaseModel):
     view_time_ms: int = Field(default=0, ge=0)
     user_agent: str = ""
     geo_country: str = ""
+    # ADV-303: per-serve ad_click_id minted by serve_ad; carries the cleared
+    # auction price + content owner so track can bill the impression/click.
+    ad_click_id: str = ""
 
 
 class AdTrackEventOut(BaseModel):
@@ -11595,6 +11687,8 @@ class VodAdBreak(BaseModel):
     creative_type: str  # "video" | "image"
     skip_after_seconds: int
     slot_index: int
+    ad_click_id: str = ""
+    ctas: List[Dict[str, Any]] = Field(default_factory=list)
     completed: bool = False
 
 
@@ -12312,6 +12406,23 @@ class SyndicatePostOut(BaseModel):
     comment_count: int = 0
     reaction_counts: Dict[str, int] = Field(default_factory=dict)
     tip_total_cents: int = 0
+    # ADV syndicate-feed ads: optional sponsored-unit fields so an injected
+    # standalone sponsored unit serializes through this response model.
+    is_sponsored: bool = False
+    sponsor_label: str = ""
+    headline: Optional[str] = None
+    body: str = ""
+    cta_text: Optional[str] = None
+    cta_url: Optional[str] = None
+    ctas: List[Dict[str, Any]] = Field(default_factory=list)
+    image_urls: List[str] = Field(default_factory=list)
+    impression_url: Optional[str] = None
+    click_url: Optional[str] = None
+    creative_id: str = ""
+    campaign_id: str = ""
+    account_id: str = ""
+    ad_click_id: str = ""
+    content_owner_id: str = ""
 
 
 class SyndicateFeedOut(BaseModel):

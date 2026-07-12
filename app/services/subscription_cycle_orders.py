@@ -17,10 +17,37 @@ from app.services.payment_reconciliation import InMemoryPaymentReconciliationRep
 logger = logging.getLogger(__name__)
 
 SUBSCRIPTION_SYSTEM_PROVIDER = "subscription_system"
+ORDER_HEADER_SK = "ORDER"
 
 
 def _subscription_charge_event_id(invoice_id: str) -> str:
     return f"subscription_charge:{invoice_id}"
+
+
+def _mark_subscription_order_paid(order_id: str) -> None:
+    """Best-effort: stamp the cycle order header row `paid`.
+
+    A subscription cycle order is emitted only AFTER the cycle invoice has been
+    collected (subscribe / renewal / trial-conversion charge succeeded), so the
+    canonical order is already paid. Marking it paid lets the downstream
+    reconcile grant an ACTIVE entitlement instead of leaving it pending_payment.
+    Never allowed to break the money path -> every failure is swallowed.
+    """
+    if not order_id:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for key in ({"order_id": order_id, "sk": ORDER_HEADER_SK}, {"order_id": order_id}):
+        try:
+            T.orders.update_item(
+                Key=key,
+                UpdateExpression="SET #s = :paid, updated_at = :now",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":paid": "paid", ":now": now_iso},
+                ConditionExpression="attribute_exists(order_id)",
+            )
+            return
+        except Exception:
+            continue
 
 
 class CanonicalOrderEntitlementsRepository(InMemoryEntitlementsRepository):
@@ -31,14 +58,43 @@ class CanonicalOrderEntitlementsRepository(InMemoryEntitlementsRepository):
         self.orders_table = orders_table or T.orders
         self.order_items_table = order_items_table or T.order_items
 
+    def _load_order_row(self, order_id: str) -> Optional[Dict[str, Any]]:
+        # The canonical `orders` table uses a COMPOSITE key (order_id HASH, sk
+        # RANGE); the order header row is written under sk="ORDER" (ecom ORD-003).
+        # A plain get_item(Key={"order_id": ...}) therefore raises a schema
+        # ValidationException, which the old code swallowed -> the order looked
+        # "missing" -> BOTH the subscription cycle reconcile (missing_order) and
+        # the ecom commerce entitlement orchestrator ("order not found")
+        # dead-lettered. Read the header row correctly, with fallbacks for any
+        # legacy single-key orders table.
+        try:
+            item = self.orders_table.get_item(
+                Key={"order_id": order_id, "sk": ORDER_HEADER_SK}
+            ).get("Item")
+            if item is not None:
+                return dict(item)
+        except Exception:
+            pass
+        try:
+            item = self.orders_table.get_item(Key={"order_id": order_id}).get("Item")
+            if item is not None:
+                return dict(item)
+        except Exception:
+            pass
+        try:
+            resp = self.orders_table.query(KeyConditionExpression=Key("order_id").eq(order_id))
+            rows = [dict(it) for it in resp.get("Items", [])]
+            if rows:
+                return next((r for r in rows if str(r.get("sk") or "") == ORDER_HEADER_SK), rows[0])
+        except Exception:
+            pass
+        return None
+
     def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
         cached = super().get_order(order_id)
         if cached is not None:
             return cached
-        try:
-            item = self.orders_table.get_item(Key={"order_id": order_id}).get("Item")
-        except Exception:
-            item = None
+        item = self._load_order_row(order_id)
         if item is None:
             return None
         self.orders[order_id] = dict(item)
@@ -144,6 +200,13 @@ class TableBackedEntitlementsRepository(CanonicalOrderEntitlementsRepository):
     def put_entitlement(self, record: Any) -> None:
         super().put_entitlement(record)
         item = self._serialize_record(record)
+        # The entitlements table backs GSIs on ends_at/starts_at/status/sku (all
+        # type S). A subscription cycle entitlement legitimately has ends_at=None
+        # (open-ended, bounded by the subscription lifecycle instead). DynamoDB
+        # rejects a NULL value for an index-key attribute with "Invalid attribute
+        # value type", which previously dead-lettered every grant. Drop None
+        # attributes so the put succeeds (sparse-index semantics).
+        item = {k: v for k, v in item.items() if v is not None}
         try:
             self.entitlements_table.put_item(
                 Item=item,
@@ -400,6 +463,9 @@ def emit_subscription_cycle_order(
     )
 
     order_id = str(order.get("order_id") or "")
+    # Cycle already charged upstream -> mark the canonical order paid so the
+    # reconcile grants an ACTIVE entitlement (best-effort, never breaks money).
+    _mark_subscription_order_paid(order_id)
     reconciliation_result: Dict[str, Any] = {"status": "skipped", "reason": "disabled"}
     gateway = reconciliation_hook
     if gateway is None and enable_default_reconciliation:

@@ -125,6 +125,20 @@ class EventIntents @Inject constructor() {
      * download or opened in a calendar app — no vendor SDK and no in-app file write needed. Returns
      * false when no app can handle it so the caller can show a Snackbar instead of crashing.
      */
+    /**
+     * SC19 #11 - opens a locally generated `.ics` (a FileProvider content URI) via ACTION_VIEW with a
+     * transient read grant, so a calendar app imports the event. Returns false when no app can handle the
+     * `text/calendar` MIME so the caller can fall back to the share sheet / a Snackbar.
+     */
+    fun openIcs(context: Context, uri: android.net.Uri): Boolean {
+        val view = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "text/calendar")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        return launch(context, view)
+    }
+
     fun openUrl(context: Context, url: String): Boolean {
         val view = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

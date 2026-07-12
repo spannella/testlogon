@@ -1,5 +1,8 @@
 package com.testlogon.android.data.feed
 
+import com.testlogon.android.data.ads.CtaAction
+import com.testlogon.android.data.ads.toCtaActions
+
 /**
  * AND-097 / AND-099 / AND-101 — domain model + mapping for the newsfeed (framework-free, JVM-unit-test
  * safe). No android.* / java.time(API26) here so the mapper is minSdk24-safe and pure-unit-testable;
@@ -24,13 +27,78 @@ data class FeedPost(
     val likeCount: Int,
     val commentCount: Int,
     val likedByMe: Boolean,
+    /**
+     * #4 (B-GROUPUNIFY) — the group this post was posted to, or null for a normal (personal) post. Group
+     * posts are bridged into the unified feed/my-posts server-side; this lets the UI badge them
+     * ("Posted in a group") so group + normal posts coexist in one list.
+     */
+    val groupId: String? = null,
+    /** #20 — full emoji reaction tallies (empty when none); distinct from the like toggle. */
+    val reactions: List<ReactionTally> = emptyList(),
+    /** TIP-204 - money-reaction (tip) badges on this post; distinct from [reactions]. Overlay-supplied. */
+    val tipReactions: List<TipReactionBadge> = emptyList(),
     /** Never null at domain level; derived from the flat lock fields. */
     val paywall: Paywall,
     /** AND-179 — embedded poll, or null when the post carries no poll_data. */
     val poll: Poll? = null,
+    /**
+     * #3 (B-FEEDMEDIA) — the RAW lock state of the post, independent of whether THIS viewer can see the
+     * body. The server marks a locked post `locked:true` even for the author (who gets `unlocked:true` so
+     * they see their own content). This lets the author's own view of a locked post show a "Locked · $X"
+     * badge while still rendering the body. Non-null only when the post is monetized/locked; carries the
+     * unlock price in cents (null = locked with no fixed price, e.g. a tip-lottery).
+     */
+    val authorLock: AuthorLock? = null,
+    /**
+     * ADV-105 — non-null when this row is a server-injected SPONSORED (paid) unit (newsfeed sponsored
+     * path, ADV-104). Carries the ad label/CTA + the serving+attribution ids used to render the
+     * distinct Sponsored card and to fire impression/click tracking (ADV-106). Organic posts leave it
+     * null. A sponsored unit is never locked, so [body]/[media] populate normally.
+     */
+    val sponsored: SponsoredInfo? = null,
+    /**
+     * ADV2-409 (F4) — true when this post is a creator-authored SPONSORED-AS-CREATOR (paid partnership)
+     * post: the advertiser drafted it, the creator approved it, and it publishes in the creator's own voice.
+     * DISTINCT from [sponsored] (the standalone is_sponsored ad unit): the post renders as a NORMAL creator
+     * post (tippable/likeable/commentable, no forced label) — this flag only drives advertiser engagement
+     * BILLING (impression/click via the placement mint). [paidPartnershipDisclosure] is an OPTIONAL creator-
+     * authored disclosure line (D3: never forced), shown inline when present.
+     */
+    val paidPartnership: Boolean = false,
+    val paidPartnershipDisclosure: String? = null,
 ) {
-    val isLocked: Boolean get() = paywall is Paywall.Locked
+    val isLocked: Boolean get() = paywall !is Paywall.Unlocked
 }
+
+/**
+ * ADV-105 — the paid-unit payload for a sponsored feed row. [creativeId]/[campaignId]/[accountId]
+ * identify the ad for billing; [adClickId] is the per-serve CPA id (ADV-103). [surface]/[slotType]/
+ * [creatorId]/[contentId] round-trip back to /ui/ads/track unchanged (ADV-106).
+ */
+data class SponsoredInfo(
+    val label: String,
+    val headline: String?,
+    val ctaText: String?,
+    val ctaUrl: String?,
+    val adClickId: String?,
+    val creativeId: String,
+    val campaignId: String,
+    val accountId: String,
+    val surface: String,
+    val slotType: String,
+    val creatorId: String,
+    val contentId: String,
+    /** ADV2-207 (F2) — structured click-through CTA targets served with this unit (empty for a legacy
+     *  single-CTA creative, which still renders its [ctaText]/[ctaUrl]). Rendered by AdCtaBar +
+     *  routed by AdCtaRouter (buy_product/view_product/tip/subscribe/subscribe_other). */
+    val ctas: List<CtaAction> = emptyList(),
+)
+
+/** #3 — raw lock info used to badge a locked post on its AUTHOR's own (un-redacted) view. */
+data class AuthorLock(
+    val priceCents: Int?,
+    val lockType: LockType,
+)
 
 /** One page of feed posts + the opaque cursor for the next page (null = terminal). */
 data class FeedPage(
@@ -50,6 +118,12 @@ data class Media(
     val thumbnailUrl: String? = null,
     /** Video length in seconds; null for images / unknown. */
     val durationSeconds: Long? = null,
+    /**
+     * #2 — the ready-to-play video URL (hls_manifest_url with the short-lived playback token already
+     * appended, "?token=..."). Non-null only for a playable VIDEO item; the feed video cell builds an
+     * ExoPlayer source from this. Null for images / a video missing a manifest.
+     */
+    val playbackUrl: String? = null,
 )
 
 enum class LockType { FIXED_PRICE, TIP_LOTTERY, UNKNOWN }
@@ -57,6 +131,17 @@ enum class LockType { FIXED_PRICE, TIP_LOTTERY, UNKNOWN }
 /** Paywall state. [Unlocked] covers never-locked, already-unlocked, and purchased posts. */
 sealed interface Paywall {
     data object Unlocked : Paywall
+
+    /**
+     * SUB-E3-2 - the post is subscriber-only and THIS viewer has no active subscription to the
+     * creator, so the body/media were withheld server-side (a non-destructive lock marker).
+     * Rendered as a "Subscribe to unlock" upsell card routing to the creator tiers (distinct from
+     * the tip/price [Locked] paywall: no per-post price, the CTA opens the subscribe flow).
+     * Re-locks automatically when the subscription lapses because the server re-marks it locked
+     * (has_active_subscription is lifecycle-aware).
+     */
+    data class SubscriberLocked(val creatorId: String) : Paywall
+
     data class Locked(
         val lockType: LockType,
         /** unlock_price_cents (cents, USD assumed by the UI); null => generic CTA. */
@@ -77,7 +162,9 @@ internal fun FeedPageDto.toDomain(): FeedPage = FeedPage(
 
 internal fun PostDto.toDomain(): FeedPost {
     val paywall = toPaywall()
-    val locked = paywall is Paywall.Locked
+    // Redact for BOTH the tip/price lock and the subscriber lock (defense in depth; the server
+    // already withheld the body, but never hand protected text/media to the UI or cache).
+    val locked = paywall !is Paywall.Unlocked
     return FeedPost(
         id = postId,
         authorId = authorId,
@@ -88,9 +175,62 @@ internal fun PostDto.toDomain(): FeedPost {
         likeCount = likeCount,
         commentCount = commentCount,
         likedByMe = likedByMe,
+        groupId = groupId?.takeIf { it.isNotBlank() },
+        reactions = reactionTallies(reactionsCounts, myReactions),
+        tipReactions = tipReactions.orEmpty().map {
+            TipReactionBadge(it.tipperId, it.emoji?.ifBlank { "\uD83D\uDCB0" } ?: "\uD83D\uDCB0", it.amountCents)
+        },
         paywall = paywall,
         // Polls are content, not protected media: only surface when the post is not locked.
         poll = if (locked) null else toPoll(),
+        // #3 — surface the raw lock (price + type) whenever the post itself is locked, even if THIS
+        // viewer sees it unlocked (the author, or a paid viewer). The UI shows the badge only on the
+        // author's own post.
+        authorLock = if (this.locked) {
+            AuthorLock(
+                priceCents = unlockPriceCents,
+                lockType = when (lockType) {
+                    "fixed_price" -> LockType.FIXED_PRICE
+                    "tip_lottery" -> LockType.TIP_LOTTERY
+                    else -> if ((unlockPriceCents ?: 0) > 0) LockType.FIXED_PRICE else LockType.UNKNOWN
+                },
+            )
+        } else {
+            null
+        },
+        sponsored = toSponsored(),
+        // ADV2-409 (F4) — a creator-authored paid_partnership post renders as a NORMAL post (sponsored is
+        // deliberately null: the backend does NOT set is_sponsored on it); this flag drives ONLY the
+        // advertiser engagement billing. Never surfaced when the post is a standalone ad unit.
+        paidPartnership = paidPartnership && !isSponsored,
+        paidPartnershipDisclosure = paidPartnershipDisclosure?.takeIf { it.isNotBlank() },
+    )
+}
+
+/**
+ * ADV-105 — build [SponsoredInfo] when the wire post is a sponsored unit. Requires the creative + the
+ * campaign id (a sponsored row without them can't be rendered/tracked, so it degrades to a plain post).
+ * surface/slot_type/creator_id/content_id fall back to the newsfeed sponsored-slot constants so the
+ * track call is always well-formed even if an older server omits them.
+ */
+internal fun PostDto.toSponsored(): SponsoredInfo? {
+    if (!isSponsored) return null
+    val creative = creativeId?.takeIf { it.isNotBlank() } ?: return null
+    val campaign = campaignId?.takeIf { it.isNotBlank() } ?: return null
+    return SponsoredInfo(
+        label = sponsorLabel?.takeIf { it.isNotBlank() } ?: "Sponsored",
+        headline = headline?.takeIf { it.isNotBlank() },
+        ctaText = ctaText?.takeIf { it.isNotBlank() },
+        ctaUrl = ctaUrl?.takeIf { it.isNotBlank() },
+        adClickId = adClickId?.takeIf { it.isNotBlank() },
+        creativeId = creative,
+        campaignId = campaign,
+        accountId = accountId?.takeIf { it.isNotBlank() } ?: "",
+        surface = surface?.takeIf { it.isNotBlank() } ?: "newsfeed",
+        slotType = slotType?.takeIf { it.isNotBlank() } ?: "sponsored_post",
+        creatorId = creatorId?.takeIf { it.isNotBlank() } ?: "platform",
+        contentId = contentId?.takeIf { it.isNotBlank() } ?: postId,
+        ctas = ctas.toCtaActions(),
     )
 }
 
@@ -100,6 +240,12 @@ internal fun PostDto.toDomain(): FeedPost {
  * has a price but no/unknown lock_type is treated as FIXED_PRICE (web parity).
  */
 internal fun PostDto.toPaywall(): Paywall {
+    // SUB-E3-2 - a subscriber-only post the server withheld from this (non-subscriber) viewer.
+    // The owner + active subscribers get subscriber_locked=false and see the real body, so this
+    // fires only for a genuinely gated-out viewer. Precedence over the tip/price lock.
+    if (subscriberLocked) {
+        return Paywall.SubscriberLocked(creatorId?.takeIf { it.isNotBlank() } ?: authorId)
+    }
     val effectivelyLocked = locked && !unlocked
     if (!effectivelyLocked) return Paywall.Unlocked
     val type = when (lockType) {
@@ -117,21 +263,38 @@ internal fun PostDto.toPaywall(): Paywall {
     )
 }
 
-/** Builds [Media] from image_urls (IMAGE) + a single video (VIDEO keyed on video_id). */
+/**
+ * Builds [Media] from image_urls (IMAGE) + ALL attached videos (VIDEO keyed on video_id). #2
+ * (B-FEEDMEDIA): a post may carry MULTIPLE videos plus images (mixed media). The authoritative source is
+ * the `videos[]` array; the legacy single `video` is merged in (and de-duped by video_id) for back-compat
+ * with older posts/servers. Videos render after images, preserving the array order.
+ */
 internal fun PostDto.toMedia(): List<Media> {
     val images = imageUrls.orEmpty().mapNotNull { url ->
         url.takeIf { it.isNotBlank() }?.let { Media(id = it, type = MediaType.IMAGE, url = it) }
     }
-    val videoItem = video?.let { v ->
+    // Merge legacy single `video` first (it is `videos[0]` server-side), then the full array; de-dup.
+    val videoDtos = buildList {
+        video?.let { add(it) }
+        videos.orEmpty().forEach { add(it) }
+    }.distinctBy { it.videoId }
+    val videoItems = videoDtos.map { v ->
         Media(
             id = v.videoId,
             type = MediaType.VIDEO,
             url = v.hlsManifestUrl ?: v.thumbnailUrl,
             thumbnailUrl = v.thumbnailUrl,
             durationSeconds = v.durationSeconds,
+            // #2 — append the short-lived playback token to the manifest (web/messaging parity:
+            // "${url}?token=${token}", "&" if a query already exists). Mock-S3 ignores the query
+            // in dev (token is null), so this is the raw object url the player can fetch directly.
+            playbackUrl = v.hlsManifestUrl?.let { base ->
+                val tok = v.playbackToken?.takeIf { it.isNotBlank() }
+                if (tok == null) base else base + (if (base.contains('?')) "&" else "?") + "token=" + tok
+            },
         )
     }
-    return if (videoItem != null) images + videoItem else images
+    return images + videoItems
 }
 
 /**

@@ -46,7 +46,7 @@ def classify_entry(entry: Dict[str, Any]) -> str:
 
     # New-format entries with content_type in meta
     content_type = meta.get("content_type", "")
-    if content_type in ("message", "post", "comment"):
+    if content_type in ("message", "post", "comment", "message_react", "post_react", "video", "video_comment"):
         return "tips"
 
     # Reason-based classification
@@ -143,7 +143,10 @@ def _query_credit_entries(
     """
     pk = f"USER#{user_id}"
     key_cond = _build_key_condition(pk, from_ts, to_ts)
-    filter_expr = Attr("type").eq("credit")
+    # FIX (reversal true-up): exclude reversed credits from GROSS earnings too so a
+    # reversed tip/ad credit drops out of the dashboard total (mirrors get_available_balance;
+    # Attr("state").ne("reversed") is True on legacy rows with no state attr -> back-compat).
+    filter_expr = Attr("type").eq("credit") & Attr("state").ne("reversed")
 
     collected: List[Dict[str, Any]] = []
     query_kwargs: Dict[str, Any] = {
@@ -301,7 +304,10 @@ def get_earnings_transactions(
     """
     pk = f"USER#{user_id}"
     key_cond = _build_key_condition(pk, from_ts, to_ts)
-    filter_expr = Attr("type").eq("credit")
+    # FIX (reversal true-up): exclude reversed credits from GROSS earnings too so a
+    # reversed tip/ad credit drops out of the dashboard total (mirrors get_available_balance;
+    # Attr("state").ne("reversed") is True on legacy rows with no state attr -> back-compat).
+    filter_expr = Attr("type").eq("credit") & Attr("state").ne("reversed")
 
     query_kwargs: Dict[str, Any] = {
         "KeyConditionExpression": key_cond,

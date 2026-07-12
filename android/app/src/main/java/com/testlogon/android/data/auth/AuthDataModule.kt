@@ -46,8 +46,15 @@ object AuthDataProvidesModule {
         @AppScope scope: CoroutineScope,
         store: Provider<AuthStateStore>,
     ): AuthEventSink = AuthEventSink {
-        // The authenticator only fires this on an unrecoverable 401 -> session expired (AND-044).
-        scope.launch { store.get().clear(com.testlogon.android.core.model.LogoutReason.SESSION_EXPIRED) }
+        // The authenticator fires this on an unrecoverable 401. Only treat it as SESSION_EXPIRED if a
+        // session actually existed -- a 401 on a fresh install (or after a clean logout), e.g. from a
+        // startup FCM/presence/locale call, is NOT an expiry and must not show the login banner.
+        scope.launch {
+            val s = store.get()
+            if (s.isAuthenticated.value) {
+                s.clear(com.testlogon.android.core.model.LogoutReason.SESSION_EXPIRED)
+            }
+        }
     }
 }
 
@@ -112,4 +119,17 @@ abstract class AuthDataBindsModule {
     @Binds
     @Singleton
     abstract fun bindMfaDeviceRepository(impl: MfaDeviceRepositoryImpl): MfaDeviceRepository
+
+    // Biometric sign-in (local credential store + prompt wrapper)
+    @Binds
+    @Singleton
+    abstract fun bindBiometricCredentialStore(
+        impl: EncryptedBiometricCredentialStore,
+    ): BiometricCredentialStore
+
+    @Binds
+    @Singleton
+    abstract fun bindBiometricAuthenticator(
+        impl: AndroidBiometricAuthenticator,
+    ): BiometricAuthenticator
 }
