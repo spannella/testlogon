@@ -46,6 +46,8 @@ object ApiKeyCapabilities {
         ApiCapability("newsfeed:moderate", "Newsfeed", "Moderate"),
         ApiCapability("newsfeed:read", "Newsfeed", "Read"),
         ApiCapability("newsfeed:write", "Newsfeed", "Write"),
+        // APIK-E1-2: distinct standalone money scope (tips / paid-unlock); does NOT imply read/write.
+        ApiCapability("newsfeed:tips", "Newsfeed", "Tips (money)"),
         ApiCapability("shopping:cart:write", "Shopping", "Cart write"),
         ApiCapability("shopping:catalog:read", "Shopping", "Catalog read"),
         ApiCapability("shopping:checkout:write", "Shopping", "Checkout write"),
@@ -53,6 +55,21 @@ object ApiKeyCapabilities {
         ApiCapability("tickets:admin", "Support tickets", "Admin"),
         ApiCapability("tickets:read", "Support tickets", "Read"),
         ApiCapability("tickets:write", "Support tickets", "Write"),
+        // APIK-E0-2/E4: groups capability family. manage>=write>=read; treasury is a standalone money scope.
+        ApiCapability("groups:read", "Groups", "Read"),
+        ApiCapability("groups:write", "Groups", "Write"),
+        ApiCapability("groups:manage", "Groups", "Manage"),
+        ApiCapability("groups:treasury", "Groups", "Treasury (money)"),
+        // APIK-E4: group fundraising campaign/fundraiser CRUD (standalone money scope).
+        ApiCapability("fundraising:write", "Fundraising", "Write (money)"),
+        // APIK-E0-2/E5: video capability family. manage>=write>=read & manage>=publish; moderate>=read.
+        // publish/moderate/monetize are distinct high-priv scopes (monetize/moderate standalone).
+        ApiCapability("video:read", "Video", "Read"),
+        ApiCapability("video:write", "Video", "Write"),
+        ApiCapability("video:manage", "Video", "Manage"),
+        ApiCapability("video:publish", "Video", "Publish"),
+        ApiCapability("video:moderate", "Video", "Moderate"),
+        ApiCapability("video:monetize", "Video", "Monetize (money)"),
     )
 
     private val BY_ID: Map<String, ApiCapability> = ALL.associateBy { it.id }
@@ -72,6 +89,12 @@ object ApiKeyCapabilities {
         "messager:manage" to listOf("messager:read", "messager:write"),
         "newsfeed:moderate" to listOf("newsfeed:read", "newsfeed:write"),
         "tickets:admin" to listOf("tickets:read", "tickets:write"),
+        // APIK-E0-2: groups/video inheritance (treasury/fundraising/monetize/tips are standalone).
+        "groups:manage" to listOf("groups:write"),
+        "groups:write" to listOf("groups:read"),
+        "video:manage" to listOf("video:write", "video:publish"),
+        "video:write" to listOf("video:read"),
+        "video:moderate" to listOf("video:read"),
     )
 
     /** A short human label for a capability id (falls back to the raw id for an unknown server value). */
