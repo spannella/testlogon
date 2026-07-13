@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 
 from app.core.settings import S
 from app.models import (
@@ -21,7 +22,7 @@ from app.services.sessions import require_ui_session
 from app.services import group_treasury as treasury_svc
 from app.services import user_groups
 
-router = APIRouter(tags=["group-treasury"])
+router = APIRouter(tags=["group-treasury"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 def _check_enabled() -> None:

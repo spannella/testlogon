@@ -75,7 +75,7 @@ class Settings:
 
     # APIK-E0-3: groups rollout product (default shadow until E4 canary->GA)
     api_key_groups: bool = os.environ.get("API_KEY_GROUPS", "1") not in ("0", "false", "False")
-    api_key_groups_phase: str = os.environ.get("API_KEY_GROUPS_PHASE", "shadow")
+    api_key_groups_phase: str = os.environ.get("API_KEY_GROUPS_PHASE", "ga")
     api_key_groups_canary_percent: int = int(os.environ.get("API_KEY_GROUPS_CANARY_PERCENT", "0"))
     api_key_groups_canary_subjects: str = os.environ.get("API_KEY_GROUPS_CANARY_SUBJECTS", "")
 

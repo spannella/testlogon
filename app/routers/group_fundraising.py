@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 
 from app.auth.deps import AuthenticatedUser, require_root_session
 from app.core.settings import S
@@ -32,7 +33,7 @@ from app.services import group_fundraising as svc
 from app.services import user_groups
 from app.services.sessions import require_ui_session
 
-group_fundraising_router = APIRouter(prefix="/ui/groups/fundraising", tags=["group-fundraising"])
+group_fundraising_router = APIRouter(prefix="/ui/groups/fundraising", tags=["group-fundraising"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 public_group_fundraising_router = APIRouter(prefix="/public", tags=["group-fundraising-public"])
 # GAP-0218: production donation-confirmation surface (Stripe webhook + ROOT
 # break-glass). In dev/test donations auto-confirm; in prod the treasury is only
