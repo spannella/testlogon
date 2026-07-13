@@ -268,7 +268,14 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     """
     state = getattr(request, "state", None)
     principal = getattr(state, "api_key_principal", None) if state is not None else None
-    if isinstance(principal, dict):
+    # APIK-E0-4 (FAIL-CLOSED): only bridge an api-key principal to the owner identity when
+    # the route explicitly admitted the key via maybe_enforce_api_key_route_policy (which
+    # sets api_key_route_authorized after a scope/shadow decision). The global
+    # _api_key_principal_middleware injects the principal on ALL routers; without this gate
+    # an un-gated/session-only router would grant unscoped owner access (the prod over-scope
+    # hole). No marker -> fall through to cookie/bearer auth -> 401.
+    _route_authorized = bool(getattr(state, "api_key_route_authorized", False)) if state is not None else False
+    if isinstance(principal, dict) and _route_authorized:
         user_sub = str(principal.get("user_sub") or "").strip()
         if user_sub:
             role = Role.USER

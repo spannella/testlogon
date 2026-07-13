@@ -72,6 +72,19 @@ class Settings:
     api_key_messager_phase: str = os.environ.get("API_KEY_MESSAGER_PHASE", "ga")
     api_key_messager_canary_percent: int = int(os.environ.get("API_KEY_MESSAGER_CANARY_PERCENT", "0"))
     api_key_messager_canary_subjects: str = os.environ.get("API_KEY_MESSAGER_CANARY_SUBJECTS", "")
+
+    # APIK-E0-3: groups rollout product (default shadow until E4 canary->GA)
+    api_key_groups: bool = os.environ.get("API_KEY_GROUPS", "1") not in ("0", "false", "False")
+    api_key_groups_phase: str = os.environ.get("API_KEY_GROUPS_PHASE", "shadow")
+    api_key_groups_canary_percent: int = int(os.environ.get("API_KEY_GROUPS_CANARY_PERCENT", "0"))
+    api_key_groups_canary_subjects: str = os.environ.get("API_KEY_GROUPS_CANARY_SUBJECTS", "")
+
+    # APIK-E0-3: video rollout product (default shadow until E5 canary->GA)
+    api_key_video: bool = os.environ.get("API_KEY_VIDEO", "1") not in ("0", "false", "False")
+    api_key_video_phase: str = os.environ.get("API_KEY_VIDEO_PHASE", "shadow")
+    api_key_video_canary_percent: int = int(os.environ.get("API_KEY_VIDEO_CANARY_PERCENT", "0"))
+    api_key_video_canary_subjects: str = os.environ.get("API_KEY_VIDEO_CANARY_SUBJECTS", "")
+
     api_key_dual_credential_mode: str = os.environ.get("API_KEY_DUAL_CREDENTIAL_MODE", "prefer_api_key")
     api_key_registry_drift_warn_threshold: int = int(os.environ.get("API_KEY_REGISTRY_DRIFT_WARN_THRESHOLD", "0"))
     api_key_rollout_state_allow_subjects: bool = os.environ.get("API_KEY_ROLLOUT_STATE_ALLOW_SUBJECTS", "0") not in ("0", "false", "False")

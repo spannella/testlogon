@@ -15,21 +15,15 @@ class RouteExemption(TypedDict):
 
 # Initial rollout scope registry across filemanager, newsfeed, tickets, shopping, messager.
 API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
-    # File Manager
-    "GET:/v1/files": {"product": "filemanager", "required_scopes": ["filemanager:read"], "entitlement_required": True},
-    "POST:/v1/files/upload": {"product": "filemanager", "required_scopes": ["filemanager:write"], "entitlement_required": True},
-    "GET:/v1/files/download": {"product": "filemanager", "required_scopes": ["filemanager:read"], "entitlement_required": True},
-    "POST:/v1/files/share": {"product": "filemanager", "required_scopes": ["filemanager:share"], "entitlement_required": True},
-    # File Manager (actual router paths)
+    # File Manager (actual router paths) -- APIK-E0-5: phantom /v1/files* rows deleted
+    # (real prefix is /v1/fs; those route_ids never existed -> permanent stale drift).
     "GET:/v1/fs/list": {"product": "filemanager", "required_scopes": ["filemanager:read"], "entitlement_required": True},
     "POST:/v1/fs/folder": {"product": "filemanager", "required_scopes": ["filemanager:write"], "entitlement_required": True},
     "POST:/v1/fs/upload": {"product": "filemanager", "required_scopes": ["filemanager:write"], "entitlement_required": True},
     "GET:/v1/fs/download": {"product": "filemanager", "required_scopes": ["filemanager:read"], "entitlement_required": True},
     "POST:/v1/fs/share": {"product": "filemanager", "required_scopes": ["filemanager:share"], "entitlement_required": True},
-    # Newsfeed
-    "GET:/v1/newsfeed": {"product": "newsfeed", "required_scopes": ["newsfeed:read"], "entitlement_required": False},
-    "POST:/v1/newsfeed/posts": {"product": "newsfeed", "required_scopes": ["newsfeed:write"], "entitlement_required": False},
-    "DELETE:/v1/newsfeed/posts/{post_id}": {"product": "newsfeed", "required_scopes": ["newsfeed:moderate"], "entitlement_required": False},
+    # Newsfeed -- APIK-E0-5: phantom /v1/newsfeed* rows deleted (real routes are /feed, /posts;
+    # they are re-pointed at real route_ids in EPIC E1). Registry intentionally empty here.
     # Tickets
     "GET:/tickets": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
     "POST:/tickets": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},

@@ -457,6 +457,42 @@ def _playback_entitlement_middleware():
         return await call_next(request)
     return _middleware
 
+
+# --- APIK-E0-1: API-key principal injection (folds prod hotfix; decoupled from scope) ---
+# When api-key headers (X-API-Key / Authorization: ApiKey) are present, validate the key and
+# set request.state.api_key_principal so the shared identity deps resolve the OWNER for ALL
+# routers -- matching prod. SECURITY (APIK-E0-4): the identity bridge only HONORS this
+# principal when maybe_enforce_api_key_route_policy has set api_key_route_authorized, so
+# un-gated/session-only routers fail CLOSED (no unscoped-owner over-scope).
+def _api_key_principal_middleware():
+    async def _middleware(request: Request, call_next):
+        try:
+            from app.services.api_key_policy_enforcement import _has_api_key_headers, _has_bearer_header
+            from app.services.api_key_auth_dependency import require_api_key_principal
+            from app.core.settings import S as _S
+            state = getattr(request, "state", None)
+            already = getattr(state, "api_key_principal", None) if state is not None else None
+            if not isinstance(already, dict) and _has_api_key_headers(request):
+                mode = str(getattr(_S, "api_key_dual_credential_mode", "prefer_api_key") or "prefer_api_key").strip().lower()
+                proceed = True
+                if _has_bearer_header(request):
+                    if mode == "prefer_session":
+                        proceed = False
+                    elif mode == "reject":
+                        return JSONResponse(status_code=400, content={"detail": {"code": "api_key_dual_credential_conflict", "reason": "dual_credential_conflict", "message": "Both API key and Bearer credentials were provided"}})
+                if proceed:
+                    try:
+                        await require_api_key_principal(request)
+                    except Exception:
+                        # present-but-invalid key (revoked/expired/CIDR/bad): do NOT
+                        # authenticate -- leave principal unset so route auth 401/403s.
+                        pass
+        except Exception:
+            logger.debug("api_key_principal_middleware fell through", exc_info=True)
+        return await call_next(request)
+    return _middleware
+
+
 # --- GAP-0323: crawler-detection meta-tag middleware ---------------------
 # Social bots (Facebook, Twitter/X, Discord, Slack, LinkedIn, ...) do not
 # execute JS, so client-side react-helmet-async produces no OG/meta tags for
@@ -626,6 +662,7 @@ def create_app() -> FastAPI:
     app.middleware("http")(_api_consumer_rate_limit_middleware())   # PLT-001: between IP RL and metering
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())
+    app.middleware("http")(_api_key_principal_middleware())  # APIK-E0-1: set api_key_principal for ALL routers (bridge gated by APIK-E0-4)
     if METRICS_ENABLED:
         app.middleware("http")(metrics_middleware)
         set_app_info(app.title, app.version)

@@ -178,10 +178,15 @@ async def maybe_enforce_api_key_route_policy(request: Request) -> None:
                     outcome="error",
                     reason="internal_error",
                 )
+            # APIK-E0-4: shadow proceeds as owner; mark route api-key-authorized so the
+            # identity bridge honors the principal. Un-gated routers never reach here.
+            request.state.api_key_route_authorized = True
             return
 
         decision = requires_scope_for_request_from_registry(request, key_item, entitlement_gate=_entitlement_gate)
         request.state.api_key_scope_decision = decision
+        # APIK-E0-4: scope check passed -> authorize the identity bridge for this route.
+        request.state.api_key_route_authorized = True
         record_api_key_policy_decision(
             mode=str(rollout.get("phase") or "enforce"),
             product=str(rollout.get("product") or ""),

@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from app.core.settings import S
 
-ROLLOUT_PRODUCTS = ("filemanager", "newsfeed", "tickets", "shopping", "messager")
+ROLLOUT_PRODUCTS = ("filemanager", "newsfeed", "tickets", "shopping", "messager", "groups", "video")  # APIK-E0-3
 ROLLOUT_PHASES = {"off", "disabled", "shadow", "observe", "canary", "enforce", "ga", "general_availability"}
 DUAL_CREDENTIAL_MODES = {"prefer_api_key", "prefer_session", "reject"}
 
