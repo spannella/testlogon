@@ -10,6 +10,7 @@ import uuid
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from pydantic import BaseModel, Field, model_validator
 
 from decimal import Decimal
@@ -39,7 +40,7 @@ from app.models_video import UpdateVideoIn, VideoVisibility
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/ui/videos", tags=["video-listing"])
+router = APIRouter(prefix="/ui/videos", tags=["video-listing"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 # ─── Response Models ─────────────────────────────────────────────────────────

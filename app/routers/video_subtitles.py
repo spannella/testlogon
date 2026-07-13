@@ -8,6 +8,7 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from pydantic import BaseModel, Field
 
 from app.core.settings import S
@@ -15,7 +16,7 @@ from app.services.sessions import require_ui_session
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/ui/videos", tags=["video-subtitles"])
+router = APIRouter(prefix="/ui/videos", tags=["video-subtitles"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 # ─── Response Models ─────────────────────────────────────────────────────────

@@ -2,13 +2,14 @@
 from __future__ import annotations
 from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from pydantic import BaseModel, Field
 from app.services.sessions import require_ui_session
 from app.core.settings import S
 from app.services.vod_file_bridge import link_video_to_filemanager, import_file_to_vod, unlink_video_from_filemanager
 from app.services.video_metadata_store import get_video
 
-router = APIRouter(prefix="/ui/vod-bridge", tags=["vod-bridge"])
+router = APIRouter(prefix="/ui/vod-bridge", tags=["vod-bridge"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 def _require_bridge_enabled():

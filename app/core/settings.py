@@ -81,7 +81,7 @@ class Settings:
 
     # APIK-E0-3: video rollout product (default shadow until E5 canary->GA)
     api_key_video: bool = os.environ.get("API_KEY_VIDEO", "1") not in ("0", "false", "False")
-    api_key_video_phase: str = os.environ.get("API_KEY_VIDEO_PHASE", "shadow")
+    api_key_video_phase: str = os.environ.get("API_KEY_VIDEO_PHASE", "ga")
     api_key_video_canary_percent: int = int(os.environ.get("API_KEY_VIDEO_CANARY_PERCENT", "0"))
     api_key_video_canary_subjects: str = os.environ.get("API_KEY_VIDEO_CANARY_SUBJECTS", "")
 

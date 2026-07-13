@@ -327,6 +327,47 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "POST:/ui/groups/{group_id}/requests/{user_id}/review": {"product": "groups", "required_scopes": ["groups:write"], "entitlement_required": True},
     "POST:/ui/groups/{group_id}/treasury/contribute": {"product": "groups", "required_scopes": ["groups:treasury"], "entitlement_required": True},
     "POST:/ui/groups/{group_id}/treasury/spend": {"product": "groups", "required_scopes": ["groups:treasury"], "entitlement_required": True},
+    # Video -- APIK-E5 (#118): video-publishing parity. product=video.
+    # reads->video:read; ingest(presign/complete)/transcode/edit/clip/combine/subtitle
+    # mutations->video:write; gallery publish/unpublish->video:publish.
+    # MONEY (SECURITY): pricing + ad-config->video:monetize (standalone high-priv;
+    # manage inherits write+publish but NOT monetize/moderate). MODERATION (SECURITY):
+    # admin by-status->video:moderate (admin-owner create-gated via require_admin_or_root).
+    # tip/comment-tip/purchase/access/playback-complete/purchases-list/view/like/comments/
+    # GET-ad-config/ad-impression/ad-stats/download are intentionally UNREGISTERED ->
+    # fail-closed (403 unmapped) to every key. DRM router not wired (public serve intact).
+    "DELETE:/ui/videos/{video_id}": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "DELETE:/ui/videos/{video_id}/subtitles/{track_id}": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "DELETE:/ui/vod-bridge/{video_id}/link": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "GET:/ui/transcode-jobs": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/transcode-jobs/{job_id}": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/admin/by-status/{status}": {"product": "video", "required_scopes": ["video:moderate"], "entitlement_required": True},
+    "GET:/ui/videos/by-creator/{creator_id}": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/creator/{creator_id}": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/gallery": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/gallery/categories": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/gallery/search": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/public": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/{video_id}": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/{video_id}/subtitles": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/videos/{video_id}/transcode/status": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "GET:/ui/vod-bridge/status/{video_id}": {"product": "video", "required_scopes": ["video:read"], "entitlement_required": True},
+    "PATCH:/ui/videos/{video_id}": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "PATCH:/ui/videos/{video_id}/ad-config": {"product": "video", "required_scopes": ["video:monetize"], "entitlement_required": True},
+    "PATCH:/ui/videos/{video_id}/pricing": {"product": "video", "required_scopes": ["video:monetize"], "entitlement_required": True},
+    "PATCH:/ui/videos/{video_id}/subtitles/{track_id}": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/transcode-jobs": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/videos/combine": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/videos/upload/complete": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/videos/upload/presign": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/videos/{video_id}/clip": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/videos/{video_id}/gallery/publish": {"product": "video", "required_scopes": ["video:publish"], "entitlement_required": True},
+    "POST:/ui/videos/{video_id}/gallery/unpublish": {"product": "video", "required_scopes": ["video:publish"], "entitlement_required": True},
+    "POST:/ui/videos/{video_id}/subtitles": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/videos/{video_id}/transcode": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/videos/{video_id}/upload/complete": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
+    "POST:/ui/vod-bridge/import": {"product": "video", "required_scopes": ["video:write"], "entitlement_required": True},
 }
 
 

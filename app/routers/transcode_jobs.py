@@ -9,6 +9,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from pydantic import BaseModel, Field
 
 from app.services.sessions import require_ui_session
@@ -23,7 +24,7 @@ from app.services.video_metadata_store import get_video, transition_video_status
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/ui/transcode-jobs", tags=["transcode"])
+router = APIRouter(prefix="/ui/transcode-jobs", tags=["transcode"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 # ─── Request / Response models ───────────────────────────────────────────────
@@ -150,7 +151,7 @@ async def list_transcode_jobs(
 # ─── Video-scoped convenience endpoints ──────────────────────────────────────
 
 
-video_router = APIRouter(prefix="/ui/videos", tags=["transcode"])
+video_router = APIRouter(prefix="/ui/videos", tags=["transcode"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 @video_router.post("/{video_id}/transcode", status_code=201)
