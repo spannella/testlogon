@@ -33,6 +33,12 @@ from app.services.moderation_audit_log import write_moderation_audit_event
 
 logger = logging.getLogger(__name__)
 
+# MODX-4: after the 30-day hold elapses with NO response, the case escalates to
+# a safe reviewable state (awaiting_final) with this SLA — it is NEVER silently
+# hard-deleted + struck. Past this SLA the awaiting_final sweep escalates it to a
+# senior mod (still hidden, surfaced with age) rather than auto-deleting.
+AWAITING_FINAL_SLA_SECONDS = 14 * 86400  # 14 days for a human final call
+
 _CONTENT_LABEL = {
     "feed_post": "post",
     "feed_comment": "comment",
@@ -225,6 +231,10 @@ def admin_dismiss(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], a
     content_id = str(case.get("content_id") or "")
     md = _resolve_meta(case, metadata)
     owner = case.get("owner_user_id") or mhide.resolve_owner(content_type=content_type, content_id=content_id, metadata=md)
+    # MODX-8: dismissing un-hides the content — forbidden for preserved illegal
+    # content (that would re-expose CSAM). Illegal cases can only be senior-deleted.
+    from app.services import moderation_illegal_lane as _illegal
+    _illegal.assert_reinstate_allowed(case)
     # MODX-2 (A10): act-AFTER-guard. Move the case to `dismissed` FIRST; only
     # un-hide + notify when THIS call actually dismissed it. A lost race to a
     # concurrent `confirm` (which put the case under HOLD) is `changed=False` ->
@@ -245,6 +255,9 @@ def admin_dismiss(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], a
         }
     # Restore visibility (pure flag clear; no-op if never hidden).
     mhide.unhide_content(content_type=content_type, content_id=content_id, metadata=md, case_id=case_id, state=mc.STATE_VISIBLE)
+    # MODX-5: the report(s) did NOT hold up -> penalise the distinct reporters
+    # (trust down, false-rate up). Serial false-reporters lose the trusted path.
+    _adjust_reporter_reputation(updated or case, upheld=False, now_ts=ts)
     _notify(
         owner,
         event="moderation_content_restored",
@@ -255,6 +268,15 @@ def admin_dismiss(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], a
         extra={"content_type": content_type},
     )
     return {"state": mc.STATE_DISMISSED, "owner_user_id": owner, "case": updated, "changed": True}
+
+
+def _adjust_reporter_reputation(case: Dict[str, Any], *, upheld: bool, now_ts: Optional[int] = None) -> None:
+    """MODX-5: feed a case resolution back onto its distinct reporters."""
+    try:
+        from app.services import moderation_reporter_reputation as _rep
+        _rep.apply_outcome(case or {}, upheld=upheld, now_ts=now_ts)
+    except Exception:
+        logger.exception("moderation_lifecycle._adjust_reporter_reputation failed")
 
 
 def admin_confirm_hold(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], admin_user_id: str, now_ts: Optional[int] = None) -> Dict[str, Any]:
@@ -289,6 +311,9 @@ def admin_confirm_hold(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any
         state=mc.STATE_HOLD,
         extra={"content_type": content_type, "hold_until": hold_until, "respond_deadline": hold_until},
     )
+    # MODX-5: a confirmed violation means the report(s) were RIGHT -> reward the
+    # distinct reporters' trust.
+    _adjust_reporter_reputation(updated or case, upheld=True, now_ts=ts)
     return {"state": mc.STATE_HOLD, "owner_user_id": owner, "hold_until": hold_until, "case": updated}
 
 
@@ -299,8 +324,12 @@ def admin_final_reinstate(*, case: Dict[str, Any], metadata: Optional[Dict[str, 
     content_type = str(case.get("content_type") or "")
     content_id = str(case.get("content_id") or "")
     md = _resolve_meta(case, metadata)
+    # MODX-8: illegal/CSAM content can NEVER be reinstated (evidence preserved).
+    from app.services import moderation_illegal_lane as _illegal
+    _illegal.assert_reinstate_allowed(case)
     owner = mhide.unhide_content(content_type=content_type, content_id=content_id, metadata=md, case_id=case_id, state=mc.STATE_VISIBLE) or case.get("owner_user_id")
     updated = mc.transition(case_id, mc.STATE_REINSTATED, extra={"hidden": False, "reinstated_at": ts, "reinstated_by": admin_user_id}, now_ts=ts)
+    _adjust_reporter_reputation(updated or case, upheld=False, now_ts=ts)
     _notify(
         owner,
         event="moderation_content_reinstated",
@@ -315,7 +344,7 @@ def admin_final_reinstate(*, case: Dict[str, Any], metadata: Optional[Dict[str, 
 
 def admin_final_delete(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], admin_user_id: str, source_ticket_id: str = "", note: str = "", now_ts: Optional[int] = None) -> Dict[str, Any]:
     """Final call: delete -> hard delete the content + record the violation."""
-    return _finalize_delete(
+    res = _finalize_delete(
         case=case,
         metadata=metadata,
         admin_user_id=admin_user_id,
@@ -324,6 +353,10 @@ def admin_final_delete(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any
         record_violation_flag=True,
         now_ts=now_ts,
     )
+    # MODX-5: an admin-confirmed delete means the report(s) were upheld.
+    if res.get("changed"):
+        _adjust_reporter_reputation(case, upheld=True, now_ts=now_ts)
+    return res
 
 
 # ── Poster response (MOD-A5) ─────────────────────────────────────────────────
@@ -376,12 +409,20 @@ def poster_respond(*, case_id: str, owner_user_id: str, statement: str, now_ts: 
 
 
 def poster_close(*, case_id: str, owner_user_id: str, now_ts: Optional[int] = None) -> Dict[str, Any]:
-    """Owner withdraws/closes -> content immediately hard-deleted (+ violation)."""
+    """Owner withdraws/removes their OWN held content -> immediate hard delete.
+
+    MODX-4 (C10): this is a POSTER-INITIATED removal, NOT an admin-confirmed
+    violation, so it records **NO violation strike** — tidying your own held
+    content must never silently accrue a ban-eligible strike. Illegal/CSAM
+    content is exempt: it is preserved evidence and cannot be self-deleted.
+    """
     case = mc.get_case(case_id)
     if not case:
         raise ValueError("case_not_found")
     if str(case.get("owner_user_id") or "") != str(owner_user_id):
         raise PermissionError("not_owner")
+    from app.services import moderation_illegal_lane as _illegal
+    _illegal.assert_delete_allowed(case)
     state = str(case.get("state") or "")
     if state == mc.STATE_DELETED:
         return {"state": state, "already": True}
@@ -393,18 +434,133 @@ def poster_close(*, case_id: str, owner_user_id: str, now_ts: Optional[int] = No
         admin_user_id="system",
         reason="poster_closed",
         source_ticket_id=str(case.get("ticket_id") or ""),
-        record_violation_flag=True,
+        record_violation_flag=False,  # MODX-4: no strike for poster-initiated removal
         now_ts=now_ts,
     )
 
 
+def poster_dispute(*, case_id: str, owner_user_id: str, statement: str, now_ts: Optional[int] = None) -> Dict[str, Any]:
+    """MODX-4 (C9): under_review recourse. An auto-hidden poster can CONTEST the
+    hide before an admin ever acts. Records the dispute statement, flags the case
+    + re-surfaces the linked ticket for a human, and notifies the board. Content
+    stays hidden (no state skip) but the poster now has agency + a paper trail."""
+    ts = int(now_ts or time.time())
+    case = mc.get_case(case_id)
+    if not case:
+        raise ValueError("case_not_found")
+    if str(case.get("owner_user_id") or "") != str(owner_user_id):
+        raise PermissionError("not_owner")
+    state = str(case.get("state") or "")
+    if state != mc.STATE_UNDER_REVIEW:
+        # Past under_review the poster already has the hold respond/close affordances.
+        raise ValueError(f"invalid_state:{state}")
+    try:
+        T.moderation_cases.update_item(
+            Key={"case_id": case_id},
+            UpdateExpression=(
+                "SET poster_dispute = :d, disputed_at = :ts, needs_human_review = :t, "
+                "human_review_reason = :r"
+            ),
+            ConditionExpression="#s = :ur",
+            ExpressionAttributeNames={"#s": "state"},
+            ExpressionAttributeValues={
+                ":d": str(statement or "")[:2000], ":ts": ts, ":t": True,
+                ":r": "poster_disputed_auto_hide", ":ur": mc.STATE_UNDER_REVIEW,
+            },
+        )
+    except Exception as exc:  # ConditionalCheckFailed => state moved under us
+        if "ConditionalCheckFailed" in str(exc) or "ConditionalCheckFailed" in type(exc).__name__:
+            cur = str((mc.get_case(case_id) or {}).get("state") or "")
+            raise ValueError(f"invalid_state:{cur}")
+        logger.exception("poster_dispute update failed for %s", case_id)
+        raise ValueError("dispute_failed")
+    ticket_id = str(case.get("ticket_id") or "")
+    if ticket_id:
+        try:
+            T.moderation_tickets.update_item(
+                Key={"ticket_id": ticket_id},
+                UpdateExpression="SET #s = :open, poster_disputed = :t, updated_at = :ts",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":open": "open", ":t": True, ":ts": str(ts)},
+            )
+        except Exception:
+            logger.exception("poster_dispute ticket resurface failed for %s", ticket_id)
+    try:
+        write_moderation_audit_event(
+            action="content_auto_hide_disputed",
+            actor_user_id=str(owner_user_id),
+            ticket_id=ticket_id,
+            content_type=str(case.get("content_type") or ""),
+            content_id=str(case.get("content_id") or ""),
+            target_user_id=str(owner_user_id),
+            metadata={"case_id": case_id, "dispute_len": len(str(statement or ""))},
+        )
+    except Exception:
+        logger.exception("poster_dispute audit failed")
+    return {"state": mc.STATE_UNDER_REVIEW, "disputed": True, "case": mc.get_case(case_id)}
+
+
 # ── 30-day expiry sweep (MOD-A6) ─────────────────────────────────────────────
 
-def sweep_expired_holds(*, now_ts: Optional[int] = None, limit: int = 200) -> Dict[str, Any]:
-    """Delete every case in HOLD whose hold_until has elapsed with no response.
+def _escalate_expired_hold(item: Dict[str, Any], *, now_ts: int) -> bool:
+    """MODX-4: a HOLD that elapsed with NO response is NOT silently deleted+struck.
 
-    A hold that got a response is in AWAITING_FINAL (a different GSI partition) and
-    is therefore NEVER swept — the admin must make the final call.
+    It escalates to ``awaiting_final`` — a safe, reviewable state — with an SLA,
+    flagged ``expired_no_response`` (so no strike is ever recorded for pure
+    inaction), and the poster + board are notified. Returns True on escalation.
+    """
+    case_id = str(item.get("case_id") or "")
+    content_type = str(item.get("content_type") or "")
+    sla_deadline = now_ts + AWAITING_FINAL_SLA_SECONDS
+    changed, updated = mc.transition_result(
+        case_id,
+        mc.STATE_AWAITING_FINAL,
+        expected_from=[mc.STATE_HOLD],
+        extra={
+            "hidden": True,
+            "expired_no_response": True,
+            "awaiting_final_since": now_ts,
+            "sla_deadline": sla_deadline,
+        },
+        now_ts=now_ts,
+    )
+    if not changed:
+        return False
+    owner = item.get("owner_user_id")
+    _notify(
+        owner,
+        event="moderation_hold_escalated",
+        title="Your content is under final review",
+        message=(
+            f"The response window for your {_label(content_type)} closed. It stays hidden and has "
+            "been escalated to a moderator for a final decision. No violation was recorded for the "
+            "missed window — you can still respond."
+        ),
+        case_id=case_id,
+        state=mc.STATE_AWAITING_FINAL,
+        extra={"content_type": content_type, "sla_deadline": sla_deadline, "expired_no_response": True},
+    )
+    ticket_id = str(item.get("ticket_id") or "")
+    if ticket_id:
+        try:
+            T.moderation_tickets.update_item(
+                Key={"ticket_id": ticket_id},
+                UpdateExpression="SET #s = :open, moderation_case_state = :st, sla_deadline = :sla, updated_at = :ts",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":open": "open", ":st": mc.STATE_AWAITING_FINAL, ":sla": sla_deadline, ":ts": str(now_ts)},
+            )
+        except Exception:
+            logger.exception("_escalate_expired_hold: ticket resurface failed for %s", ticket_id)
+    return True
+
+
+def sweep_expired_holds(*, now_ts: Optional[int] = None, limit: int = 200) -> Dict[str, Any]:
+    """MODX-4 humane expiry: every HOLD whose hold_until elapsed with NO response
+    ESCALATES to ``awaiting_final`` (safe, reviewable, SLA'd) — it is NOT hard
+    -deleted and NO strike is recorded for pure inaction.
+
+    A hold that got a response is already in AWAITING_FINAL (a different GSI
+    partition) and is handled by ``sweep_awaiting_final_sla``.
     """
     ts = int(now_ts or time.time())
     processed: List[str] = []
@@ -425,24 +581,87 @@ def sweep_expired_holds(*, now_ts: Optional[int] = None, limit: int = 200) -> Di
                 break
             case_id = str(item.get("case_id") or "")
             try:
-                _finalize_delete(
-                    case=item,
-                    metadata=None,
-                    admin_user_id="system",
-                    reason="hold_expired_no_response",
-                    source_ticket_id=str(item.get("ticket_id") or ""),
-                    record_violation_flag=True,
-                    now_ts=ts,
-                )
-                processed.append(case_id)
+                if _escalate_expired_hold(item, now_ts=ts):
+                    processed.append(case_id)
             except Exception:
-                logger.exception("sweep_expired_holds: failed to finalize %s", case_id)
+                logger.exception("sweep_expired_holds: failed to escalate %s", case_id)
         start_key = resp.get("LastEvaluatedKey")
         if not start_key or scanned > limit:
             break
     if processed:
-        logger.info("moderation hold sweep: deleted %d expired case(s)", len(processed))
-    return {"deleted": len(processed), "case_ids": processed}
+        logger.info("moderation hold sweep: escalated %d expired case(s) to awaiting_final", len(processed))
+    # ``deleted`` retained at 0 for back-compat; ``escalated`` is the real signal.
+    return {"deleted": 0, "escalated": len(processed), "case_ids": processed}
+
+
+def sweep_awaiting_final_sla(*, now_ts: Optional[int] = None, limit: int = 200) -> Dict[str, Any]:
+    """MODX-4 (A6): a case in AWAITING_FINAL past its SLA cannot sit hidden
+    indefinitely. Escalate it to a SENIOR moderator (flag + notify + surface age)
+    — it stays hidden and is NEVER auto-deleted or auto-reinstated; a human makes
+    the call. Idempotent: only fires once per case (``senior_escalated`` marker).
+    """
+    ts = int(now_ts or time.time())
+    escalated: List[str] = []
+    start_key = None
+    scanned = 0
+    while True:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByState",
+            "KeyConditionExpression": Key("state").eq(mc.STATE_AWAITING_FINAL),
+            "Limit": 25,
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = T.moderation_cases.query(**kwargs)
+        for item in resp.get("Items", []):
+            scanned += 1
+            if scanned > limit:
+                break
+            case_id = str(item.get("case_id") or "")
+            sla = item.get("sla_deadline")
+            try:
+                if sla is None or int(sla) > ts:
+                    continue
+                if bool(item.get("senior_escalated")):
+                    continue
+                T.moderation_cases.update_item(
+                    Key={"case_id": case_id},
+                    UpdateExpression="SET senior_escalated = :t, senior_escalated_at = :ts, moderation_queue = if_not_exists(moderation_queue, :sq)",
+                    ConditionExpression="attribute_not_exists(senior_escalated) OR senior_escalated = :f",
+                    ExpressionAttributeValues={":t": True, ":ts": ts, ":f": False, ":sq": "senior"},
+                )
+                ticket_id = str(item.get("ticket_id") or "")
+                if ticket_id:
+                    try:
+                        T.moderation_tickets.update_item(
+                            Key={"ticket_id": ticket_id},
+                            UpdateExpression="SET #s = :open, priority = :p, senior_escalated = :t, updated_at = :ts",
+                            ExpressionAttributeNames={"#s": "status"},
+                            ExpressionAttributeValues={":open": "open", ":p": "high", ":t": True, ":ts": str(ts)},
+                        )
+                    except Exception:
+                        logger.exception("sweep_awaiting_final_sla: ticket flag failed for %s", ticket_id)
+                try:
+                    write_moderation_audit_event(
+                        action="awaiting_final_sla_escalated_senior",
+                        actor_user_id="system",
+                        ticket_id=ticket_id,
+                        content_type=str(item.get("content_type") or ""),
+                        content_id=str(item.get("content_id") or ""),
+                        target_user_id=str(item.get("owner_user_id") or ""),
+                        metadata={"case_id": case_id, "sla_deadline": int(sla)},
+                    )
+                except Exception:
+                    logger.exception("sweep_awaiting_final_sla audit failed for %s", case_id)
+                escalated.append(case_id)
+            except Exception:
+                logger.exception("sweep_awaiting_final_sla: failed to escalate %s", case_id)
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key or scanned > limit:
+            break
+    if escalated:
+        logger.info("moderation awaiting_final SLA sweep: escalated %d case(s) to senior", len(escalated))
+    return {"escalated": len(escalated), "case_ids": escalated}
 
 
 async def _hold_sweep_loop() -> None:
@@ -459,6 +678,10 @@ async def _hold_sweep_loop() -> None:
             sweep_expired_holds()
         except Exception:
             logger.exception("hold_sweep: unhandled error during sweep")
+        try:
+            sweep_awaiting_final_sla()
+        except Exception:
+            logger.exception("hold_sweep: unhandled error during awaiting_final SLA sweep")
         await asyncio.sleep(interval)
 
 

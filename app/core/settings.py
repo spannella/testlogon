@@ -714,7 +714,7 @@ class Settings:
     dmca_claims_table_name: str = os.environ.get("DDB_DMCA_CLAIMS", "DmcaClaims")
     moderation_dual_approval_permanent_ban_enabled: bool = os.environ.get(
         "MODERATION_DUAL_APPROVAL_PERMANENT_BAN_ENABLED",
-        "false",
+        "true",  # MODX-7: real dual-approval ON by default
     ).lower() in ("1", "true", "yes", "on")
     moderation_kpi_lookback_hours: int = int(os.environ.get("MODERATION_KPI_LOOKBACK_HOURS", "24"))
     moderation_kpi_surge_window_minutes: int = int(os.environ.get("MODERATION_KPI_SURGE_WINDOW_MINUTES", "15"))

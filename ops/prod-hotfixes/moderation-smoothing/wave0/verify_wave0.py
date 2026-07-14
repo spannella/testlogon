@@ -73,7 +73,15 @@ def ticket(tid):
     return T.moderation_tickets.get_item(Key={"ticket_id": tid}).get("Item") or {}
 
 
+def _trust(uid):
+    T.account_state.put_item(Item={"user_sub": uid, "trusted_reporter": True, "updated_at": TS})
+    if uid not in _state_users:
+        _state_users.append(uid)
+    return uid
+
+
 def report(reporter, pid, topics):
+    _trust(reporter)
     inp = M.CreateModerationReportIn(content_type="feed_post", content_id=pid, topics=topics,
                                      reason_text="This content violates the rules and should be reviewed.")
     out = M._create_report(inp, {"user_sub": reporter, "ip": "10.0.0.5"}, request=None)
@@ -143,11 +151,11 @@ oB, pB = f"ownB_{TS}", f"pB_{TS}"
 seed_post(pB, oB, f"ORIG_B_{TS}")
 tB1 = upsert_open_ticket_for_report(content_type="feed_post", content_id=pB, topics=["sexual"], now_ts=TS)["ticket_id"]
 _tickets.append(tB1)
-MC.on_report_filed(content_type="feed_post", content_id=pB, topics=["sexual"], reporter_user_id=f"repB_{TS}", metadata={}, ticket_id=tB1)
+MC.on_report_filed(content_type="feed_post", content_id=pB, topics=["sexual"], reporter_user_id=_trust(f"repB_{TS}"), metadata={}, ticket_id=tB1)
 LIFE.admin_confirm_hold(case=get_case(pB), metadata={}, admin_user_id=f"admin_{TS}")
 LIFE.poster_close(case_id=MC.case_id_for("feed_post", pB), owner_user_id=oB)
 check("B poster_close hard-deletes content", meta(pB) == {})
-check("B poster_close records exactly ONE violation", len(enforcement_rows(oB)) == 1, str(len(enforcement_rows(oB))))
+check("B poster_close records NO strike (MODX-4 poster-initiated removal)", len(enforcement_rows(oB)) == 0, str(len(enforcement_rows(oB))))
 check("B poster_close CLOSES the linked ticket (no orphan)", ticket(tB1).get("status") == "closed" and ticket(tB1).get("resolution") == "content_removed", str(ticket(tB1).get("status")))
 
 # re-post the same id and re-report a DELETED-case item -> fresh lifecycle, no 500
@@ -165,7 +173,7 @@ except Exception as e:  # noqa: BLE001
     b_no500 = False
     print("  B admin-action raised:", repr(e))
 check("B admin action on re-report ticket does NOT 500", b_no500 and get_case(pB).get("state") == "deleted")
-check("B second lifecycle strike recorded (2 total, no double per lifecycle)", len(enforcement_rows(oB)) == 2, str(len(enforcement_rows(oB))))
+check("B admin final-delete strike is the ONLY strike (1 total; poster_close carried none)", len(enforcement_rows(oB)) == 1, str(len(enforcement_rows(oB))))
 
 # ============================================================================
 # SCENARIO S — MODX-1: 30-day sweep closes the linked ticket (no orphan)
@@ -174,7 +182,7 @@ oS, pS = f"ownS_{TS}", f"pS_{TS}"
 seed_post(pS, oS, f"ORIG_S_{TS}")
 tS = upsert_open_ticket_for_report(content_type="feed_post", content_id=pS, topics=["sexual"], now_ts=TS)["ticket_id"]
 _tickets.append(tS)
-MC.on_report_filed(content_type="feed_post", content_id=pS, topics=["sexual"], reporter_user_id=f"repS_{TS}", metadata={}, ticket_id=tS)
+MC.on_report_filed(content_type="feed_post", content_id=pS, topics=["sexual"], reporter_user_id=_trust(f"repS_{TS}"), metadata={}, ticket_id=tS)
 LIFE.admin_confirm_hold(case=get_case(pS), metadata={}, admin_user_id=f"admin_{TS}")
 # force the hold to have elapsed so the sweep picks it up
 csS = get_case(pS)
@@ -182,9 +190,9 @@ T.moderation_cases.update_item(Key={"case_id": csS["case_id"]},
                                UpdateExpression="SET hold_until = :h",
                                ExpressionAttributeValues={":h": TS - 10})
 swept = LIFE.sweep_expired_holds(now_ts=TS)
-check("S sweep deleted the expired hold", MC.case_id_for("feed_post", pS) in swept.get("case_ids", []), str(swept))
-check("S swept content row gone", meta(pS) == {})
-check("S sweep CLOSES the linked ticket (no orphan)", ticket(tS).get("status") == "closed" and ticket(tS).get("resolution") == "content_removed", str(ticket(tS).get("status")))
+check("S sweep ESCALATED the expired hold (MODX-4 humane)", MC.case_id_for("feed_post", pS) in swept.get("case_ids", []), str(swept))
+check("S escalated content PRESERVED (not deleted)", meta(pS) != {})
+check("S escalated case -> awaiting_final (live, not orphaned); ticket open", get_case(pS).get("state") == "awaiting_final" and ticket(tS).get("status") == "open", str((get_case(pS).get("state"), ticket(tS).get("status"))))
 
 # ============================================================================
 # SCENARIO C — MODX-2: act-after-guard (illegal-state delete + no double-strike)
@@ -192,7 +200,7 @@ check("S sweep CLOSES the linked ticket (no orphan)", ticket(tS).get("status") =
 # C1 illegal-state: final-delete on an UNDER_REVIEW (non-hold) case must NOT delete/strike
 oC, pC = f"ownC_{TS}", f"pC_{TS}"
 seed_post(pC, oC, f"ORIG_C_{TS}")
-MC.on_report_filed(content_type="feed_post", content_id=pC, topics=["sexual"], reporter_user_id=f"repC_{TS}", metadata={}, ticket_id=None)
+MC.on_report_filed(content_type="feed_post", content_id=pC, topics=["sexual"], reporter_user_id=_trust(f"repC_{TS}"), metadata={}, ticket_id=None)
 c1_guard = False
 try:
     LIFE.admin_final_delete(case=get_case(pC), metadata={}, admin_user_id=f"admin_{TS}", source_ticket_id="", note="illegal")
@@ -206,7 +214,7 @@ check("C illegal-state: case unchanged (under_review)", get_case(pC).get("state"
 # C2 double delete: two finalizers on the SAME hold case -> exactly ONE violation
 oC2, pC2 = f"ownC2_{TS}", f"pC2_{TS}"
 seed_post(pC2, oC2, f"ORIG_C2_{TS}")
-MC.on_report_filed(content_type="feed_post", content_id=pC2, topics=["sexual"], reporter_user_id=f"repC2_{TS}", metadata={}, ticket_id=None)
+MC.on_report_filed(content_type="feed_post", content_id=pC2, topics=["sexual"], reporter_user_id=_trust(f"repC2_{TS}"), metadata={}, ticket_id=None)
 LIFE.admin_confirm_hold(case=get_case(pC2), metadata={}, admin_user_id=f"admin_{TS}")
 caseC2 = get_case(pC2)
 r_del1 = LIFE.admin_final_delete(case=caseC2, metadata={}, admin_user_id=f"admin_{TS}", source_ticket_id="", note="del1")

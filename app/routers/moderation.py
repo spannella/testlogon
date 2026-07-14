@@ -28,7 +28,7 @@ RATE_LIMIT_USER_WINDOW_SECONDS = int(os.environ.get("MODERATION_REPORT_RATE_LIMI
 RATE_LIMIT_USER_MAX = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_USER_MAX", "8"))
 RATE_LIMIT_IP_WINDOW_SECONDS = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_IP_WINDOW_SECONDS", "60"))
 RATE_LIMIT_IP_MAX = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_IP_MAX", "20"))
-ALLOWED_TOPICS = {"sexual", "extortion", "criminal", "spam", "racist", "harassment", "hate", "violence_threats", "other", "licensing_ip"}
+ALLOWED_TOPICS = {"sexual", "extortion", "criminal", "spam", "racist", "harassment", "hate", "violence_threats", "other", "licensing_ip", "illegal", "csam"}
 
 logger = logging.getLogger(__name__)
 
@@ -529,6 +529,27 @@ def _hold_respond(case_id: str, ctx: Dict[str, str], inp: HoldRespondIn) -> Hold
     return HoldActionOut(ok=True, case_id=case_id, state=str(res.get("state") or ""))
 
 
+def _hold_dispute(case_id: str, ctx: Dict[str, str], inp: HoldRespondIn) -> HoldActionOut:
+    """MODX-4 (C9): give AUTO-HIDDEN under_review content a recourse BEFORE an
+    admin ever touches it. The poster can contest the hide; the case is flagged
+    for a human and the linked ticket surfaces on the board (content stays hidden
+    pending review — no state skip)."""
+    uid = str(ctx.get("user_sub") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    from app.services import moderation_lifecycle as _life
+    try:
+        res = _life.poster_dispute(case_id=case_id, owner_user_id=uid, statement=inp.statement)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="not the content owner")
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "case_not_found":
+            raise HTTPException(status_code=404, detail="case not found") from exc
+        raise HTTPException(status_code=409, detail=msg) from exc
+    return HoldActionOut(ok=True, case_id=case_id, state=str(res.get("state") or ""))
+
+
 def _hold_close(case_id: str, ctx: Dict[str, str]) -> HoldActionOut:
     uid = str(ctx.get("user_sub") or "").strip()
     if not uid:
@@ -554,6 +575,16 @@ def hold_respond(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_sessio
 @compat_router.post("/holds/{case_id}/respond", response_model=HoldActionOut)
 def hold_respond_compat(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_session)):
     return _hold_respond(case_id, ctx, inp)
+
+
+@router.post("/holds/{case_id}/dispute", response_model=HoldActionOut)
+def hold_dispute(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_session)):
+    return _hold_dispute(case_id, ctx, inp)
+
+
+@compat_router.post("/holds/{case_id}/dispute", response_model=HoldActionOut)
+def hold_dispute_compat(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_session)):
+    return _hold_dispute(case_id, ctx, inp)
 
 
 @router.post("/holds/{case_id}/close", response_model=HoldActionOut)

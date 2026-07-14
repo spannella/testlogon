@@ -115,10 +115,16 @@ def _value_err(case_id, owner_uid):
         return False
 
 
+# MODX-3: seed one shared TRUSTED reporter so the lifecycle scenarios still get a
+# legitimate single-report auto-hide precondition under the new distinct/trust policy.
+_AHT = f"ahtrust_{TS}"
+T.account_state.put_item(Item={"user_sub": _AHT, "trusted_reporter": True, "updated_at": TS})
+
+
 def autohide(pid, owner, body, cat="sexual"):
     seed_post(pid, owner, body)
     MC.on_report_filed(content_type="feed_post", content_id=pid, topics=[cat],
-                       reporter_user_id=f"rep_{pid}", metadata={}, ticket_id=None)
+                       reporter_user_id=_AHT, metadata={}, ticket_id=None)
     return get_case(pid)
 
 
@@ -130,9 +136,9 @@ print("=== CONSOLIDATED MODERATION VERIFY ts=%d cases_table=%s ===" % (TS, getat
 # R1 SEVERE (sexual) -> auto-hide on 1st report, non-destructive, owner-aware, notify
 o1, p1 = f"ownR1_{TS}", f"pR1_{TS}"
 seed_post(p1, o1, "ORIGINAL_SEVERE_%d" % TS)
-report(f"repR1_{TS}", p1, ["sexual"])
+report(_AHT, p1, ["sexual"])  # MODX-3: trusted single severe still auto-hides
 c1, m1 = get_case(p1), meta(p1)
-check("R1 SEVERE case under_review (auto-hide 1st report)", c1 and c1.get("state") == "under_review", str(c1 and c1.get("state")))
+check("R1 SEVERE case under_review (auto-hide: trusted 1st report)", c1 and c1.get("state") == "under_review", str(c1 and c1.get("state")))
 check("R1 meta moderation_hidden set", bool(m1.get("moderation_hidden")))
 check("R1 case_id linked on meta", m1.get("moderation_case_id") == MC.case_id_for("feed_post", p1))
 check("R1 NON-DESTRUCTIVE body intact", m1.get("body") == "ORIGINAL_SEVERE_%d" % TS, repr(m1.get("body")))
@@ -155,6 +161,8 @@ check("R2 non-owner can still see it", _get_post_status(p2, f"stranger_{TS}") ==
 # R3 LOWER (spam) x3 distinct reporters -> hidden exactly at the 3rd
 o3, p3 = f"ownR3_{TS}", f"pR3_{TS}"
 seed_post(p3, o3, "ORIGINAL_SPAM3")
+for _r in (f"repR3a_{TS}", f"repR3b_{TS}", f"repR3c_{TS}"):
+    T.account_state.put_item(Item={"user_sub": _r, "established": True, "updated_at": TS})
 report(f"repR3a_{TS}", p3, ["spam"]); a1 = get_case(p3)
 report(f"repR3b_{TS}", p3, ["spam"]); a2 = get_case(p3)
 report(f"repR3c_{TS}", p3, ["spam"]); c3 = get_case(p3)
@@ -179,7 +187,7 @@ check("R4 body intact", meta(p4).get("body") == "ORIGINAL_TRUSTED")
 # R5 legacy category back-compat (racist -> hate severe -> hidden)
 o5, p5 = f"ownR5_{TS}", f"pR5_{TS}"
 seed_post(p5, o5, "ORIGINAL_LEGACY")
-report(f"repR5_{TS}", p5, ["racist"])
+report(_AHT, p5, ["racist"])  # MODX-3: trusted
 c5 = get_case(p5)
 check("R5 legacy 'racist' -> 'hate' severe auto-hide", c5 and c5.get("state") == "under_review", str(c5 and c5.get("state")))
 check("R5 categories normalized to hate", c5 and "hate" in set(c5.get("categories") or []), str(c5 and c5.get("categories")))
@@ -264,7 +272,7 @@ cC = get_case(pC)
 check("C state=deleted after close", resC["state"] == "deleted" and cC.get("state") == "deleted", resC["state"])
 check("C content ACTUALLY deleted (row gone)", meta(pC) == {})
 check("C non-owner get_post -> 404", _get_post_status(pC, f"stranger_{TS}") == 404)
-check("C violation recorded on owner", len(enforcement_rows(oC, "content_violation")) >= 1)
+check("C poster_close records NO strike (MODX-4 poster-initiated removal)", len(enforcement_rows(oC, "content_violation")) == 0, str(len(enforcement_rows(oC, "content_violation"))))
 
 # ============================================================================
 # SCENARIO D — confirm -> 30d elapse -> SWEEP deletes; awaiting_final NOT swept
@@ -281,10 +289,11 @@ for pid in (pD, pD2):
     T.moderation_cases.update_item(Key={"case_id": MC.case_id_for("feed_post", pid)},
                                    UpdateExpression="SET hold_until = :h", ExpressionAttributeValues={":h": past})
 swept = LIFE.sweep_expired_holds(now_ts=TS)
-check("D sweep deleted the un-answered hold", MC.case_id_for("feed_post", pD) in swept["case_ids"], str(swept))
-check("D swept content row gone", meta(pD) == {})
-check("D swept violation recorded", len(enforcement_rows(oD, "content_violation")) >= 1)
-check("D awaiting_final (responded) NOT swept", MC.case_id_for("feed_post", pD2) not in swept["case_ids"] and get_case(pD2).get("state") == "awaiting_final")
+check("D sweep ESCALATED the un-answered hold (MODX-4 humane, not deleted)", MC.case_id_for("feed_post", pD) in swept["case_ids"], str(swept))
+check("D escalated case -> awaiting_final", get_case(pD).get("state") == "awaiting_final", str(get_case(pD).get("state")))
+check("D escalated content PRESERVED (not deleted)", meta(pD) != {})
+check("D NO strike for pure no-response (MODX-4)", len(enforcement_rows(oD, "content_violation")) == 0, str(len(enforcement_rows(oD, "content_violation"))))
+check("D already-responded case remains awaiting_final", get_case(pD2).get("state") == "awaiting_final")
 check("D awaiting_final content still present", meta(pD2) != {})
 
 # ============================================================================

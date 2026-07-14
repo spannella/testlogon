@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_scope
-from app.auth.roles import AdminScope, admin_profile_has_scope, normalize_admin_profile
+from app.auth.roles import AdminScope, Role, admin_profile_has_scope, normalize_admin_profile, normalize_role
 from app.core.aws import ddb
 from app.core.settings import S
 from app.core.tables import T
@@ -59,14 +59,62 @@ def _require_senior_moderation_for_permanent_ban(*, admin: AuthenticatedUser) ->
 
 
 
+def _admin_user_has_senior_scope(user_sub: str) -> bool:
+    """MODX-7: is ``user_sub`` a real admin that actually holds the SENIOR
+    moderation scope (or ROOT)? Looks the user up in the users table — a
+    caller-supplied string that is not a real senior admin is rejected."""
+    if not user_sub:
+        return False
+    try:
+        item = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
+    except ClientError:
+        item = None
+    if not item:
+        return False
+    try:
+        role = normalize_role(item.get("role"))
+    except Exception:
+        role = None
+    if role == Role.ROOT:
+        return True
+    if role != Role.ADMIN:
+        return False
+    profile = normalize_admin_profile(item.get("admin_profile"))
+    return admin_profile_has_scope(profile, AdminScope.CONTENT_MODERATION_SENIOR)
+
+
 def _require_dual_approval_for_permanent_ban(*, admin: AuthenticatedUser, second_approver_admin_user_id: str | None) -> None:
-    if not bool(getattr(S, "moderation_dual_approval_permanent_ban_enabled", False)):
+    """MODX-7: real, non-self-attested dual approval. The second approver must be
+    supplied, be DISTINCT from the acting admin, EXIST, and actually hold the
+    CONTENT_MODERATION_SENIOR scope (or be ROOT). A fabricated/non-senior/absent
+    approver id is rejected. The approval is recorded as an auditable action."""
+    if not bool(getattr(S, "moderation_dual_approval_permanent_ban_enabled", True)):
         return
     approver = str(second_approver_admin_user_id or "").strip()
     if not approver:
-        raise HTTPException(status_code=403, detail="second approver is required for permanent ban")
+        raise HTTPException(status_code=403, detail={"code": "dual_approval_required", "message": "second approver is required for permanent ban"})
     if approver == admin.sub:
-        raise HTTPException(status_code=403, detail="second approver must be different from acting admin")
+        raise HTTPException(status_code=403, detail={"code": "dual_approval_self", "message": "second approver must be different from acting admin"})
+    if not _admin_user_has_senior_scope(approver):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "dual_approval_invalid_approver",
+                "message": "second approver must be an existing admin holding the senior moderation scope",
+                "required_scope": AdminScope.CONTENT_MODERATION_SENIOR.value,
+            },
+        )
+    # Record the second signature as an auditable, attributable action.
+    try:
+        write_moderation_audit_event(
+            action="permanent_ban_dual_approval_recorded",
+            actor_user_id=admin.sub,
+            ticket_id="",
+            target_user_id="",
+            metadata={"second_approver_admin_user_id": approver},
+        )
+    except Exception:
+        pass
 
 def _encode_cursor(cursor: Dict[str, Any] | None) -> str | None:
     if not cursor:
@@ -151,6 +199,11 @@ class ModerationTicketDetailOut(BaseModel):
     case_state: str = ""
     hold_until: int | None = None
     owner_user_id: str | None = None
+    distinct_reporter_count: int = 0
+    needs_human_review: bool = False
+    human_review_reason: str | None = None
+    illegal_lane: bool = False
+    sla_deadline: int | None = None
 
 
 class ModerationDecisionIn(BaseModel):
@@ -710,6 +763,12 @@ def get_moderation_ticket_detail(
     _hold_until_raw = _case.get("hold_until") if _case.get("hold_until") is not None else ticket_item.get("hold_until")
     _hold_until = _parse_int(_hold_until_raw, 0) or None
     _owner = str(_case.get("owner_user_id") or offender_user_id or "") or None
+    # MODX-3: distinct reporters (not raw events) + the human-review / illegal flags.
+    _rids = _case.get("reporter_ids")
+    if isinstance(_rids, (set, frozenset, list, tuple)):
+        _distinct = len({str(r) for r in _rids if r})
+    else:
+        _distinct = _parse_int(_case.get("distinct_reporter_count"), 0)
 
     return ModerationTicketDetailOut(
         ticket=_to_ticket_out(ticket_item),
@@ -717,6 +776,11 @@ def get_moderation_ticket_detail(
         case_state=_case_state,
         hold_until=_hold_until,
         owner_user_id=_owner,
+        distinct_reporter_count=_distinct,
+        needs_human_review=bool(_case.get("needs_human_review")),
+        human_review_reason=(str(_case.get("human_review_reason")) if _case.get("human_review_reason") else None),
+        illegal_lane=bool(_case.get("illegal_lane")),
+        sla_deadline=(_parse_int(_case.get("sla_deadline"), 0) or None),
         linked_reports=[
             LinkedReportOut(
                 report_id=str(r.get("report_id") or ""),
@@ -1198,8 +1262,19 @@ def final_call_moderation_case(
 ) -> _CaseActionOut:
     ensure_admin_actions_enabled(admin)
     from app.services import moderation_lifecycle as _life
+    from app.services import moderation_reporter_reputation as _rep
+    from app.services import moderation_case as _mc
     ticket, case, meta = _modab_case_and_meta(ticket_id)
     note = str(inp.note or "").strip()
+
+    # MODX-5 (A13): an admin may not adjudicate a case where they are the owner or
+    # the sole reporter (conflict of interest).
+    if _rep.is_conflicted_admin(case, admin.sub):
+        raise HTTPException(status_code=403, detail={"code": "moderation_conflict_of_interest", "message": "cannot make the final call on your own content or a case where you are the sole reporter"})
+
+    # MODX-8: any final-call action on a locked illegal/CSAM case is SENIOR-only.
+    if _mc.is_illegal_category(case.get("categories") or []) or bool(case.get("illegal_lane")):
+        _require_senior_moderation_for_permanent_ban(admin=admin)
 
     if inp.action == "reinstate":
         res = _modab_guard(_life.admin_final_reinstate, case=case, metadata=meta, admin_user_id=admin.sub)
