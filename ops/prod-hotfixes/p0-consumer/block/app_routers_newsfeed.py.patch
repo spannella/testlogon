@@ -1,0 +1,15 @@
+--- app/routers/newsfeed.py	2026-07-11 22:08:58.041291136 -0400
++++ app/routers/newsfeed.py	2026-07-14 12:42:35.513592919 -0400
+@@ -6227,6 +6227,12 @@
+     if post_author and post_author != user_id and not can_view_post(user_id, post):
+         raise HTTPException(status_code=403, detail="Not authorized to comment on this post")
+ 
++    # BLOCK-P0: a blocked user (either direction) cannot comment on the author's post
++    if post_author and post_author != user_id:
++        from app.services.blocking import is_any_block
++        if is_any_block(user_id, post_author):
++            raise HTTPException(status_code=403, detail={"code": "blocked", "message": "Blocked"})
++
+     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
+         raise HTTPException(status_code=402, detail="Post is locked; unlock required to comment")
+ 
