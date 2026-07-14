@@ -43,6 +43,8 @@ ALERT_CATEGORIES: Dict[str, set] = {
                  "ticket_created", "ticket_assigned", "ticket_replied",
                  "ticket_status_changed", "ticket_reopened"},
     "commerce": {"cart.abandoned", "order_shipped", "order_out_for_delivery", "order_delivered"},
+    # MODX-15: moderation / DMCA lifecycle notifications get their own category + push.
+    "moderation": {"moderation_content_deleted", "moderation_content_removed", "moderation_content_hidden", "moderation_content_reinstated", "moderation_content_restored", "moderation_violation_confirmed", "moderation_hold_escalated", "moderation_report_received", "moderation_report_resolved", "moderation_poster_responded", "moderation_warning", "moderation_ban", "moderation_sla_breach", "moderation_extortion_criminal_surge", "dmca_claim_filed", "dmca_content_restored", "dmca_counter_notice_received", "dmca_repeat_infringer_ban"},
 }
 
 # Reverse lookup: event -> category
@@ -97,6 +99,16 @@ def _build_action_url(alert_type: str, details: Dict[str, Any]) -> Optional[str]
         "ticket_assigned":  f"/tickets/{ticket_id}" if ticket_id else "/tickets",
         "ticket_replied":   f"/tickets/{ticket_id}" if ticket_id else "/tickets",
         "ticket_status_changed": f"/tickets/{ticket_id}" if ticket_id else "/tickets",
+        # MODX-15/C6: enforcement outcomes deep-link to the appeal channel, not the (empty)
+        # open-cases list; poster review events land on the content-review screen.
+        "moderation_ban": "/appeals",
+        "moderation_content_deleted": "/appeals",
+        "moderation_content_removed": "/appeals",
+        "moderation_violation_confirmed": "/moderation/review",
+        "moderation_hold_escalated": "/moderation/review",
+        "moderation_content_hidden": "/moderation/review",
+        "moderation_content_reinstated": "/moderation/review",
+        "moderation_content_restored": "/moderation/review",
     }
     return url_map.get(alert_type)
 
@@ -170,6 +182,8 @@ ALERT_EVENT_TYPES: List[str] = [
     # Commerce / buyer delivery lifecycle (ECOM D4)
     "order_out_for_delivery",
     "order_delivered",
+    # MODX-15: moderation / DMCA lifecycle events (push default-on transactional).
+    "moderation_content_deleted","moderation_content_removed","moderation_content_hidden","moderation_content_reinstated","moderation_content_restored","moderation_violation_confirmed","moderation_hold_escalated","moderation_report_received","moderation_report_resolved","moderation_poster_responded","moderation_warning","moderation_ban","moderation_sla_breach","moderation_extortion_criminal_surge","dmca_claim_filed","dmca_content_restored","dmca_counter_notice_received","dmca_repeat_infringer_ban",
 ]
 
 # ECOM-SELLER P2 - TRANSACTIONAL push events that are ON-BY-DEFAULT (opt-OUT, not
@@ -195,6 +209,8 @@ DEFAULT_PUSH_EVENT_TYPES: List[str] = [
     "subscription_new_subscriber",  # SUB-E5: a new subscriber joined (creator)
     "subscription_canceled",        # SUB-E5: a subscription was canceled
     "subscription_gifted",          # SUB-E5: a gift subscription
+    # MODX-15: moderation/DMCA events are consequential + time-sensitive -> default-on push.
+    "moderation_content_deleted","moderation_content_removed","moderation_content_hidden","moderation_content_reinstated","moderation_content_restored","moderation_violation_confirmed","moderation_hold_escalated","moderation_report_received","moderation_report_resolved","moderation_poster_responded","moderation_warning","moderation_ban","moderation_sla_breach","moderation_extortion_criminal_surge","dmca_claim_filed","dmca_content_restored","dmca_counter_notice_received","dmca_repeat_infringer_ban",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.

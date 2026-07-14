@@ -21,6 +21,9 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +51,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.data.appeals.EnforcementOption
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
@@ -79,9 +83,15 @@ fun AppealsRoute(
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
     modifier: Modifier = Modifier,
+    prefillEnforcementId: String? = null,
     viewModel: AppealsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // MODX-13: a ban/removal alert deep-link opens the submit form with the enforcement preselected.
+    LaunchedEffect(prefillEnforcementId) {
+        if (!prefillEnforcementId.isNullOrBlank()) viewModel.onPrefillEnforcement(prefillEnforcementId)
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
@@ -106,6 +116,7 @@ fun AppealsRoute(
         onOpenSubmit = viewModel::onOpenSubmit,
         onDismissSubmit = viewModel::onDismissSubmit,
         onEnforcementIdChange = viewModel::onEnforcementIdChange,
+        onSelectEnforcement = viewModel::onSelectEnforcement,
         onAppealTextChange = viewModel::onAppealTextChange,
         onSubmit = viewModel::onSubmit,
         onWithdraw = viewModel::onWithdraw,
@@ -123,6 +134,7 @@ fun AppealsScreen(
     onOpenSubmit: () -> Unit,
     onDismissSubmit: () -> Unit,
     onEnforcementIdChange: (String) -> Unit,
+    onSelectEnforcement: (String) -> Unit,
     onAppealTextChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onWithdraw: (String) -> Unit,
@@ -237,6 +249,7 @@ fun AppealsScreen(
             form = state.submit,
             onDismiss = onDismissSubmit,
             onEnforcementIdChange = onEnforcementIdChange,
+            onSelectEnforcement = onSelectEnforcement,
             onAppealTextChange = onAppealTextChange,
             onSubmit = onSubmit,
         )
@@ -373,10 +386,12 @@ private fun StatusChip(status: AppealStatus) {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun SubmitAppealDialog(
     form: SubmitFormState,
     onDismiss: () -> Unit,
     onEnforcementIdChange: (String) -> Unit,
+    onSelectEnforcement: (String) -> Unit,
     onAppealTextChange: (String) -> Unit,
     onSubmit: () -> Unit,
 ) {
@@ -397,14 +412,31 @@ private fun SubmitAppealDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OutlinedTextField(
-                    value = form.enforcementId,
-                    onValueChange = onEnforcementIdChange,
-                    label = { Text(stringResource(R.string.appeals_field_enforcement_id)) },
-                    singleLine = true,
-                    enabled = !form.isSubmitting,
-                    modifier = Modifier.fillMaxWidth().testTag(AppealsTestTags.FORM_ENFORCEMENT_ID),
-                )
+                // MODX-13: pick the enforcement to appeal from your own history — never hand-type
+                // an opaque id. Falls back to a text field only if the picker loaded empty.
+                if (form.options.isNotEmpty()) {
+                    EnforcementPicker(
+                        options = form.options,
+                        selectedId = form.enforcementId,
+                        enabled = !form.isSubmitting,
+                        onSelect = onSelectEnforcement,
+                    )
+                } else if (form.optionsLoading) {
+                    Text(
+                        text = stringResource(R.string.appeals_options_loading),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = form.enforcementId,
+                        onValueChange = onEnforcementIdChange,
+                        label = { Text(stringResource(R.string.appeals_field_enforcement_id)) },
+                        singleLine = true,
+                        enabled = !form.isSubmitting,
+                        modifier = Modifier.fillMaxWidth().testTag(AppealsTestTags.FORM_ENFORCEMENT_ID),
+                    )
+                }
                 OutlinedTextField(
                     value = form.appealText,
                     onValueChange = onAppealTextChange,
@@ -428,6 +460,55 @@ private fun SubmitAppealDialog(
                         Text(stringResource(R.string.appeals_submit_action))
                     }
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EnforcementPicker(
+    options: List<EnforcementOption>,
+    selectedId: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val selected = options.firstOrNull { it.enforcementId == selectedId }
+    val display = selected?.label() ?: stringResource(R.string.appeals_field_enforcement_id)
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = it },
+    ) {
+        OutlinedTextField(
+            value = display,
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            label = { Text(stringResource(R.string.appeals_field_enforcement)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor()
+                .testTag(AppealsTestTags.FORM_ENFORCEMENT_ID),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { opt ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(opt.label(), style = MaterialTheme.typography.bodyMedium)
+                            if (opt.hasAppeal) {
+                                Text(
+                                    stringResource(R.string.appeals_option_already_appealed),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                    onClick = { onSelect(opt.enforcementId); expanded = false },
+                )
             }
         }
     }

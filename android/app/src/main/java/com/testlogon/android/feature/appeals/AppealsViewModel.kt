@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.R
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.appeals.AppealsPage
+import com.testlogon.android.data.appeals.EnforcementOption
 import com.testlogon.android.data.appeals.AppealsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -35,6 +36,7 @@ class AppealsViewModel @Inject constructor(
     val uiState: StateFlow<AppealsUiState> = _uiState.asStateFlow()
 
     private val _effects = Channel<AppealsEffect>(Channel.BUFFERED)
+    @Volatile private var pendingPrefillId: String = ""
     val effects: Flow<AppealsEffect> = _effects.receiveAsFlow()
 
     init {
@@ -48,11 +50,44 @@ class AppealsViewModel @Inject constructor(
     // ---- Submit form ----
 
     fun onOpenSubmit() {
-        _uiState.update { it.copy(submit = SubmitFormState(isOpen = true)) }
+        _uiState.update {
+            it.copy(submit = SubmitFormState(isOpen = true, enforcementId = pendingPrefillId, optionsLoading = true))
+        }
+        loadEnforcementOptions()
+    }
+
+    /** MODX-13: a ban/removal alert deep-link may pre-select the enforcement to appeal. */
+    fun onPrefillEnforcement(enforcementId: String?) {
+        val id = enforcementId?.trim().orEmpty()
+        if (id.isBlank()) return
+        pendingPrefillId = id
+        onOpenSubmit()
+    }
+
+    fun onSelectEnforcement(enforcementId: String) {
+        _uiState.update { it.copy(submit = it.submit.copy(enforcementId = enforcementId)) }
+    }
+
+    private fun loadEnforcementOptions() {
+        viewModelScope.launch {
+            when (val result = repository.loadEnforcementOptions()) {
+                is ApiResult.Success -> {
+                    val opts = result.data
+                    _uiState.update {
+                        val selected = it.submit.enforcementId.ifBlank {
+                            opts.firstOrNull { o -> !o.hasAppeal }?.enforcementId ?: opts.firstOrNull()?.enforcementId ?: ""
+                        }
+                        it.copy(submit = it.submit.copy(options = opts, optionsLoading = false, optionsLoaded = true, enforcementId = selected))
+                    }
+                }
+                else -> _uiState.update { it.copy(submit = it.submit.copy(optionsLoading = false, optionsLoaded = true)) }
+            }
+        }
     }
 
     fun onDismissSubmit() {
         if (_uiState.value.submit.isSubmitting) return
+        pendingPrefillId = ""
         _uiState.update { it.copy(submit = SubmitFormState(isOpen = false)) }
     }
 
@@ -71,6 +106,7 @@ class AppealsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.submitAppeal(form.enforcementId, form.appealText)) {
                 is ApiResult.Success -> {
+                    pendingPrefillId = ""
                     _uiState.update { it.copy(submit = SubmitFormState(isOpen = false)) }
                     _effects.send(AppealsEffect.ShowMessage(R.string.appeals_submit_success))
                     load(fromUser = true)

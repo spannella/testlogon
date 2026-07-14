@@ -77,6 +77,7 @@ fun AlertsRoute(
     modifier: Modifier = Modifier,
     // MOD-D1: tapping a moderation alert opens the "My content under review" screen.
     onOpenModeration: () -> Unit = {},
+    onOpenAppeals: () -> Unit = {},
     // ECOM-SELLER (G1): tapping a shop_item_sold alert opens that seller sale (ship group).
     onOpenSale: (String) -> Unit = {},
     // D4: tapping a buyer shipment alert opens the buyer order-tracking view (by ship-group id).
@@ -112,6 +113,7 @@ fun AlertsRoute(
         onToggleUnreadOnly = viewModel::onToggleUnreadOnly,
         onAlertClick = viewModel::onAlertClick,
         onOpenModeration = onOpenModeration,
+        onOpenAppeals = onOpenAppeals,
         onOpenSale = onOpenSale,
         onOpenTracking = onOpenTracking,
         onOpenSubscription = onOpenSubscription,  // SUB-E5 route(A2)
@@ -128,14 +130,26 @@ fun AlertsRoute(
 private val MODERATION_ALERT_EVENTS: Set<String> = setOf(
     "moderation_content_hidden",
     "moderation_violation_confirmed",
+    "moderation_hold_escalated",
     "moderation_content_reinstated",
-    "moderation_content_deleted",
     "moderation_content_restored",
     "dmca_claim_filed",
 )
 
+// MODX-15 (C6): enforcement OUTCOMES (ban / removal) whose actionable next step is an appeal,
+// NOT the (now-terminal, empty) content-review list.
+private val MODERATION_ENFORCEMENT_EVENTS: Set<String> = setOf(
+    "moderation_ban",
+    "moderation_content_deleted",
+    "moderation_content_removed",
+    "dmca_repeat_infringer_ban",
+)
+
 internal fun isModerationAlert(event: String?): Boolean =
     event != null && event.trim().lowercase() in MODERATION_ALERT_EVENTS
+
+internal fun isModerationEnforcementAlert(event: String?): Boolean =
+    event != null && event.trim().lowercase() in MODERATION_ENFORCEMENT_EVENTS
 
 /**
  * ECOM-SELLER (G1) — the seller "you sold it" alert event (backend write_alert event=shop_item_sold).
@@ -235,6 +249,7 @@ fun AlertsScreen(
     onToggleUnreadOnly: () -> Unit,
     onAlertClick: (String) -> Unit,
     onOpenModeration: () -> Unit = {},
+    onOpenAppeals: () -> Unit = {},
     onOpenSale: (String) -> Unit = {},
     onOpenTracking: (String) -> Unit = {},
     onOpenSubscription: (String, String) -> Unit = { _, _ -> },  // SUB-E5 route(A3): (event, actionUrl)
@@ -340,8 +355,10 @@ fun AlertsScreen(
                                     alert = alert,
                                     onClick = {
                                         onAlertClick(alert.id)
-                                        // MOD-D1: moderation alerts deep-link to My content under review.
-                                        if (isModerationAlert(alert.event)) onOpenModeration()
+                                        // MODX-15 (C6): a ban/removal outcome opens Appeals (a real next
+                                        // step); other moderation alerts open My content under review.
+                                        if (isModerationEnforcementAlert(alert.event)) onOpenAppeals()
+                                        else if (isModerationAlert(alert.event)) onOpenModeration()
                                         // ECOM-SELLER (G1): a sold-item alert opens the seller sale.
                                         if (isShopSoldAlert(alert.event)) {
                                             saleIdFromActionUrl(alert.actionUrl)?.let(onOpenSale)

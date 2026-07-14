@@ -27,6 +27,10 @@ interface AppealsApi {
         @Query("cursor") cursor: String? = null,
     ): AppealListDto
 
+    /** MODX-13: the user own enforcement records, to populate a SELECTABLE picker (no hand-typed id). */
+    @GET("v1/appeals/enforcement-options")
+    suspend fun getEnforcementOptions(): EnforcementOptionsDto
+
     /** Files a new appeal against an enforcement action. */
     @POST("v1/appeals")
     suspend fun submitAppeal(@Body body: AppealCreateReqDto): AppealCreateRespDto
@@ -79,4 +83,21 @@ data class AppealWithdrawRespDto(
     val ok: Boolean = false,
     @Json(name = "appeal_id") val appealId: String? = null,
     val status: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class EnforcementOptionsDto(
+    val items: List<EnforcementOptionDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class EnforcementOptionDto(
+    @Json(name = "enforcement_id") val enforcementId: String,
+    @Json(name = "enforcement_type") val enforcementType: String = "",
+    val status: String = "",
+    @Json(name = "source_ticket_id") val sourceTicketId: String? = null,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "duration_days") val durationDays: Int = 0,
+    val note: String = "",
+    @Json(name = "has_appeal") val hasAppeal: Boolean = false,
 )

@@ -2,6 +2,7 @@ package com.testlogon.android.feature.adminmod
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.adminmod.ModerationAdminRepository
 import com.testlogon.android.data.adminmod.ModerationCaseActionDto
@@ -193,9 +194,11 @@ class ModerationDetailViewModel @Inject constructor(
             when (val r = block()) {
                 is ApiResult.Success -> reloadAfterAction("Applied: ${r.data.state.replace('_', ' ')}.")
                 is ApiResult.Failure -> when (r.error.status) {
-                    // An action-level 403 (e.g. permanent-ban gating) must NOT nuke the whole
-                    // screen to Forbidden - surface it as a message and keep the detail.
-                    403 -> setActionMessage(forbiddenMessage)
+                    // MODX-16: an action-level 403 (scope / dual-approval gating) must NOT nuke the
+                    // whole screen to Forbidden - surface an ACTIONABLE message and keep the detail.
+                    403 -> setActionMessage(actionableForbidden(r.error, forbiddenMessage))
+                    // MODX-16: a stale-state 409 means the case moved under the moderator.
+                    409 -> setActionMessage(STALE_STATE_MESSAGE)
                     401 -> reduceActionError(AdminOpsErrorType.AUTH)
                     else -> reduceActionError(AdminOpsErrorType.SERVER)
                 }
@@ -248,6 +251,19 @@ class ModerationDetailViewModel @Inject constructor(
         _state.value = cur.copy(actionInFlight = false, transientError = type)
     }
 
+    // MODX-16: turn a backend error code / required_scope into distinct, actionable guidance.
+    private fun actionableForbidden(error: ApiError, fallback: String): String = when (error.code) {
+        "role_required_scope" ->
+            "This action needs the Senior Moderation role. Ask a senior moderator (or root) to action it."
+        "dual_approval_required" ->
+            "A permanent ban needs a second approver. Add a second senior approver, then retry."
+        "dual_approval_self" ->
+            "The second approver must be a different admin from you."
+        "dual_approval_invalid_approver" ->
+            "The second approver must be an existing admin who holds the Senior Moderation scope."
+        else -> error.message.ifBlank { fallback }
+    }
+
     fun clearActionMessage() {
         val cur = _state.value
         if (cur is ModerationDetailUiState.Content) {
@@ -255,3 +271,6 @@ class ModerationDetailViewModel @Inject constructor(
         }
     }
 }
+
+private const val STALE_STATE_MESSAGE =
+    "This case changed since you opened it (its state moved on). Refresh the board and try again."

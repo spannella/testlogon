@@ -204,6 +204,9 @@ class ModerationTicketDetailOut(BaseModel):
     human_review_reason: str | None = None
     illegal_lane: bool = False
     sla_deadline: int | None = None
+    # MODX-14 (C3): surface the poster hold-response so the admin final call is not made blind.
+    poster_response: str | None = None
+    responded_at: int | None = None
 
 
 class ModerationDecisionIn(BaseModel):
@@ -781,6 +784,8 @@ def get_moderation_ticket_detail(
         human_review_reason=(str(_case.get("human_review_reason")) if _case.get("human_review_reason") else None),
         illegal_lane=bool(_case.get("illegal_lane")),
         sla_deadline=(_parse_int(_case.get("sla_deadline"), 0) or None),
+        poster_response=(str(_case.get("poster_response")) if _case.get("poster_response") else None),
+        responded_at=(_parse_int(_case.get("responded_at"), 0) or None),
         linked_reports=[
             LinkedReportOut(
                 report_id=str(r.get("report_id") or ""),

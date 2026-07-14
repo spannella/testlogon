@@ -25,6 +25,8 @@ interface AppealsRepository {
 
     suspend fun loadAppeals(): ApiResult<AppealsPage>
 
+    suspend fun loadEnforcementOptions(): ApiResult<List<EnforcementOption>>
+
     suspend fun submitAppeal(enforcementId: String, appealText: String): ApiResult<Unit>
 
     suspend fun withdrawAppeal(appealId: String): ApiResult<Unit>
@@ -48,6 +50,10 @@ class AppealsRepositoryImpl @Inject constructor(
     override suspend fun loadAppeals(): ApiResult<AppealsPage> = withContext(io) {
         call { api.listMyAppeals(limit = PAGE_SIZE).toDomain() }
             .also { if (it is ApiResult.Success) snapshot = it.data }
+    }
+
+    override suspend fun loadEnforcementOptions(): ApiResult<List<EnforcementOption>> = withContext(io) {
+        call { api.getEnforcementOptions().toDomain() }
     }
 
     override suspend fun submitAppeal(

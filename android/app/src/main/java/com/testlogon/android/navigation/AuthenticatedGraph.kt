@@ -581,6 +581,12 @@ internal fun NavHostController.navigateToNotificationTarget(target: Notification
             navigate(MainDest.Settings.route) { launchSingleTop = true }
         NotificationTarget.ModerationReview ->
             navigate(ModerationReviewDest.ROUTE) { launchSingleTop = true }
+        is NotificationTarget.Appeals ->
+            // MODX-15 (C6): a ban / removal alert opens the appeal channel, pre-filled when known.
+            navigate(
+                target.enforcementId?.takeIf { it.isNotBlank() }?.let(AppealsDest::build)
+                    ?: AppealsDest.ROUTE,
+            ) { launchSingleTop = true }
         NotificationTarget.Unknown ->
             // No first-party detail route yet for this kind — land on the Notification Center so a
             // push tap is never a dead end (AND-108 §13 R1; swap to a per-entity route on merge).

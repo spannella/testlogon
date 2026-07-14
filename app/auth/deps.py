@@ -5,6 +5,7 @@ import hashlib
 import hmac as _hmac
 import json
 import time
+import contextvars
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -144,11 +145,38 @@ def _request_tenant_id(request: Request) -> str:
     return str(getattr(state, "tenant_id", None) or "default")
 
 
+# MODX-13: appeals must be reachable BY the very users an enforcement concerns
+# (banned/suspended). This context flag lets an explicit appeals dependency
+# (``require_appellant``) authenticate a banned principal WITHOUT the global
+# ban gate 403ing them out of their own due-process channel. It is set only for
+# the narrow appeals surface and always reset in a finally, so no other route
+# can ever admit a banned user.
+_allow_banned_appellant: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "allow_banned_appellant", default=False
+)
+
+
 def _enforce_not_banned(*, user_sub: str, role: Role) -> None:
     if role in {Role.ROOT, Role.ADMIN}:
         return
+    if _allow_banned_appellant.get():
+        # MODX-13: appellant lane -- do not 403 a banned user out of appeals.
+        return
     if is_user_currently_banned(user_sub):
         raise HTTPException(status_code=403, detail="account is banned")
+
+
+async def require_appellant(request: Request) -> "AuthenticatedUser":
+    """MODX-13: authenticate the caller for the APPEALS surface only, exempting
+    them from the ban gate so a banned/suspended user can reach + submit an appeal
+    (and read their own enforcement history to fill the form). Identity resolution
+    is otherwise identical to ``get_authenticated_user``; the exemption is scoped to
+    this call via a context flag that is always reset."""
+    token = _allow_banned_appellant.set(True)
+    try:
+        return await get_authenticated_user(request)
+    finally:
+        _allow_banned_appellant.reset(token)
 
 
 def extract_bearer_token(auth_header: Optional[str]) -> str:

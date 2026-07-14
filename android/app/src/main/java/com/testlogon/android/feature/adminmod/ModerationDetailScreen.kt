@@ -21,6 +21,7 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
@@ -70,6 +71,7 @@ object ModerationDetailTestTags {
     const val BAN_PICKER = "mod_detail_ban_picker"
     const val BAN_CONFIRM = "mod_detail_ban_confirm"
     const val FORBIDDEN = "mod_detail_forbidden"
+    const val POSTER_RESPONSE = "mod_detail_poster_response"
 }
 
 @Composable
@@ -276,6 +278,32 @@ private fun DetailBody(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        // ---- Poster response (MODX-14/C3): un-blind the final call ----
+        d.posterResponse?.takeIf { it.isNotBlank() }?.let { resp ->
+            Divider()
+            Text("Poster response", style = MaterialTheme.typography.titleSmall)
+            Card(
+                modifier = Modifier.fillMaxWidth().testTag(ModerationDetailTestTags.POSTER_RESPONSE),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "The poster submitted this defense during the review window — weigh it before the final call.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    Text(resp, style = MaterialTheme.typography.bodyMedium)
+                    d.respondedAt?.takeIf { it > 0L }?.let {
+                        Text(
+                            relativeSeconds(it),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

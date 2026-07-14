@@ -15,6 +15,7 @@ from app.core.aws import ddb
 from app.core.tables import T
 from app.core.normalize import client_ip_from_request
 from app.services.alerts import audit_event, write_alert
+from app.services.push import send_push_for_alert
 from app.services.content_reports_store import create_content_report
 from app.services.moderation_audit_log import write_moderation_audit_event
 from app.services.moderation_tickets_store import upsert_open_ticket_for_report
@@ -422,13 +423,17 @@ def _create_report(inp: CreateModerationReportIn, ctx: Dict[str, str], request: 
             content_id=inp.content_id,
             metadata={"idempotency_window_seconds": IDEMPOTENCY_WINDOW_SECONDS},
         )
-        write_alert(
+        _wr = write_alert(
             reporter_user_id,
             event="moderation_report_received",
             outcome="success",
             title="Report received",
-            details={"report_id": report_id, "ticket_id": ticket_id, "status": "deduplicated"},
+            details={"report_id": report_id, "ticket_id": ticket_id, "status": "deduplicated", "alert_type": "moderation_report_received"},
         )
+        try:
+            send_push_for_alert(reporter_user_id, "moderation_report_received", "Report received", "We already have your report and it is being reviewed.", (_wr or {}).get("alert_id", ""))
+        except Exception:
+            logger.exception("report_received push failed")
         return CreateModerationReportOut(
             ok=True,
             report_id=report_id,
@@ -500,13 +505,18 @@ def _create_report(inp: CreateModerationReportIn, ctx: Dict[str, str], request: 
         )
     except Exception:
         logger.exception("moderation_case.on_report_filed failed (report still recorded)")
-    write_alert(
+    _wr = write_alert(
         reporter_user_id,
         event="moderation_report_received",
         outcome="success",
         title="Report received",
-        details={"report_id": report_id, "ticket_id": ticket_id, "status": "submitted"},
+        details={"report_id": report_id, "ticket_id": ticket_id, "status": "submitted", "alert_type": "moderation_report_received"},
     )
+    # MODX-15 (C7/C8): confirm receipt with a real push + set the what-happens-next expectation.
+    try:
+        send_push_for_alert(reporter_user_id, "moderation_report_received", "Report received", "Thanks for reporting. Our team will review it and you will be told the outcome.", (_wr or {}).get("alert_id", ""))
+    except Exception:
+        logger.exception("report_received push failed")
 
     return CreateModerationReportOut(
         ok=True,
@@ -751,6 +761,85 @@ def _list_my_cases(ctx: Dict[str, str]) -> "MyModerationCasesOut":
         raise HTTPException(status_code=503, detail="unavailable")
     out.sort(key=lambda c: c.updated_at, reverse=True)
     return MyModerationCasesOut(cases=out)
+
+
+# -- MODX-15 (C7): reporter feedback -- the reports THIS user filed + their outcome --
+class MyFiledReportOut(BaseModel):
+    report_id: str = ""
+    content_type: str = ""
+    content_id: str = ""
+    topics: List[str] = []
+    ticket_id: str = ""
+    created_at: int = 0
+    outcome: str = "pending"
+    outcome_state: str = ""
+
+
+class MyFiledReportsOut(BaseModel):
+    reports: List[MyFiledReportOut]
+
+
+_REPORT_OUTCOME = {
+    "deleted": "action_taken",
+    "hold": "action_taken",
+    "awaiting_final": "action_taken",
+    "dismissed": "no_violation",
+    "reinstated": "no_violation",
+    "visible": "pending",
+    "under_review": "pending",
+}
+
+
+def _list_my_filed_reports(ctx: Dict[str, str]) -> "MyFiledReportsOut":
+    uid = str(ctx.get("user_sub") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    out: List[MyFiledReportOut] = []
+    try:
+        resp = T.content_reports.query(
+            IndexName="ByReporterCreatedAt",
+            KeyConditionExpression=Key("reporter_user_id").eq(uid),
+            ScanIndexForward=False,
+            Limit=50,
+        )
+    except ClientError:
+        logger.exception("moderation._list_my_filed_reports query failed for %s", uid)
+        raise HTTPException(status_code=503, detail="unavailable")
+    from app.services import moderation_case as _mc
+    for it in resp.get("Items", []) or []:
+        if it.get("entity_type") != "content_report":
+            continue
+        ctype = str(it.get("content_type") or "")
+        cid = str(it.get("content_id") or "")
+        state = ""
+        try:
+            _case = _mc.get_case_for_content(ctype, cid) or {}
+            state = str(_case.get("state") or "")
+        except Exception:
+            state = ""
+        topics_raw = it.get("topics") or []
+        topics = [str(t) for t in topics_raw] if isinstance(topics_raw, (list, tuple)) else []
+        out.append(MyFiledReportOut(
+            report_id=str(it.get("report_id") or ""),
+            content_type=ctype,
+            content_id=cid,
+            topics=topics,
+            ticket_id=str(it.get("linked_ticket_id") or ""),
+            created_at=_mod_coerce_int(it.get("created_at")) or 0,
+            outcome=_REPORT_OUTCOME.get(state, "pending"),
+            outcome_state=state,
+        ))
+    return MyFiledReportsOut(reports=out)
+
+
+@router.get("/reports/mine", response_model=MyFiledReportsOut)
+def list_my_filed_reports(ctx=Depends(require_ui_session)):
+    return _list_my_filed_reports(ctx)
+
+
+@compat_router.get("/reports/mine", response_model=MyFiledReportsOut)
+def list_my_filed_reports_compat(ctx=Depends(require_ui_session)):
+    return _list_my_filed_reports(ctx)
 
 
 @router.get("/cases/mine", response_model=MyModerationCasesOut)

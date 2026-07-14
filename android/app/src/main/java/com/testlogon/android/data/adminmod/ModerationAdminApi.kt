@@ -159,6 +159,9 @@ data class ModerationTicketDetailDto(
     @Json(name = "hold_until") val holdUntil: Long? = null,
     @Json(name = "owner_user_id") val ownerUserId: String? = null,
     @Json(name = "prior_enforcement_history") val priorEnforcement: List<ModerationEnforcementHistoryDto> = emptyList(),
+    // MODX-14 (C3): the poster hold-response so the final call is not made blind.
+    @Json(name = "poster_response") val posterResponse: String? = null,
+    @Json(name = "responded_at") val respondedAt: Long? = null,
 )
 
 /** MOD-E1: response of dismiss/confirm/final-call (admin_moderation.py _CaseActionOut). */

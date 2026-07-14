@@ -202,6 +202,42 @@ def _modify_enforcement(
 # Core operations
 # ---------------------------------------------------------------------------
 
+def list_enforcement_options(user_id: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """MODX-13: the appellant-facing enforcement picker source. Returns the user own
+    enforcement records (most-recent first), each flagged with whether an appeal already
+    exists, so the app can render a SELECTABLE dropdown instead of a hand-typed id that
+    the user has no way of knowing."""
+    rows = _list_user_enforcements(user_id, limit=max(1, min(limit, 100)))
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        if str(r.get("entity_type") or "user_enforcement") != "user_enforcement":
+            continue
+        eid = str(r.get("enforcement_id") or "")
+        if not eid:
+            continue
+        has_appeal = False
+        try:
+            resp = T.appeals.query(
+                IndexName="ByEnforcementId",
+                KeyConditionExpression=Key("enforcement_id").eq(eid),
+                Limit=1,
+            )
+            has_appeal = bool(resp.get("Items"))
+        except Exception:
+            has_appeal = False
+        out.append({
+            "enforcement_id": eid,
+            "enforcement_type": str(r.get("enforcement_type") or ""),
+            "status": str(r.get("status") or ""),
+            "source_ticket_id": str(r.get("source_ticket_id") or "") or None,
+            "created_at": _coerce_int(r.get("created_at"), 0),
+            "duration_days": _coerce_int(r.get("duration_days"), 0),
+            "note": str(r.get("note") or "")[:280],
+            "has_appeal": has_appeal,
+        })
+    return out
+
+
 def file_appeal(user_id: str, enforcement_id: str, appeal_text: str) -> Dict[str, Any]:
     """File a new appeal against an enforcement action.
 

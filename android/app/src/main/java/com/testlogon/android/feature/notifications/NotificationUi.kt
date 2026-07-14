@@ -44,6 +44,10 @@ sealed interface NotificationTarget {
 
     /** MOD-D1 — a poster moderation alert lands on the "My content under review" screen. */
     data object ModerationReview : NotificationTarget
+
+    /** MODX-15 (C6): a ban / content-removal alert lands on Appeals (optionally pre-filled). */
+    data class Appeals(val enforcementId: String? = null) : NotificationTarget
+
     data object Unknown : NotificationTarget
 }
 
@@ -55,12 +59,25 @@ sealed interface NotificationTarget {
  */
 object NotificationTargetResolver {
 
+    // MODX-15: moderation events whose right next step is the appeal channel.
+    private val MODERATION_ENFORCEMENT_ALERTS = setOf(
+        "moderation_ban", "moderation_content_deleted", "moderation_content_removed",
+    )
+
     fun resolve(type: NotificationType, data: Map<String, Any?>): NotificationTarget = when (type) {
         NotificationType.FOLLOW, NotificationType.MENTION ->
             stringValue(data, "u_identifier")?.let(NotificationTarget::Profile) ?: NotificationTarget.Unknown
         NotificationType.SYSTEM -> NotificationTarget.Settings
         // MOD-D1 — moderation alerts deep-link to the poster's content-review screen.
-        NotificationType.MODERATION -> NotificationTarget.ModerationReview
+        NotificationType.MODERATION -> {
+            val alertType = stringValue(data, "alert_type") ?: stringValue(data, "event")
+            val enforcementId = stringValue(data, "enforcement_id")
+            if (alertType in MODERATION_ENFORCEMENT_ALERTS || enforcementId != null) {
+                NotificationTarget.Appeals(enforcementId)
+            } else {
+                NotificationTarget.ModerationReview
+            }
+        }
         // like / comment / tip / message have no first-party destination yet -> fail safe.
         else -> NotificationTarget.Unknown
     }

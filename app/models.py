@@ -2553,6 +2553,23 @@ class AppealOut(BaseModel):
     modified_duration_days: Optional[int] = None
 
 
+class EnforcementOptionOut(BaseModel):
+    """MODX-13: one selectable enforcement in the appeal picker (the user never types
+    an opaque enforcement id by hand)."""
+    enforcement_id: str
+    enforcement_type: str = ""
+    status: str = ""
+    source_ticket_id: Optional[str] = None
+    created_at: int = 0
+    duration_days: int = 0
+    note: str = ""
+    has_appeal: bool = False
+
+
+class EnforcementOptionsOut(BaseModel):
+    items: List[EnforcementOptionOut] = Field(default_factory=list)
+
+
 class AppealCreateOut(BaseModel):
     ok: bool
     appeal_id: str

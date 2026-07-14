@@ -29,6 +29,7 @@ from app.services import moderation_case as mc
 from app.services import moderation_delete as mdel
 from app.services import moderation_hide as mhide
 from app.services.alerts import write_alert
+from app.services.push import send_push_for_alert
 from app.services.moderation_audit_log import write_moderation_audit_event
 
 logger = logging.getLogger(__name__)
@@ -63,19 +64,43 @@ def _categories_csv(case: Dict[str, Any]) -> str:
         return ""
 
 
-def _notify(owner_user_id: Optional[str], *, event: str, title: str, message: str, case_id: str, state: str, extra: Optional[Dict[str, Any]] = None) -> None:
+def _notify(owner_user_id: Optional[str], *, event: str, title: str, message: str, case_id: str, state: str, outcome: str = "warning", extra: Optional[Dict[str, Any]] = None) -> None:
     if not owner_user_id:
         return
-    details = {"case_id": case_id, "state": state, "message": message}
+    details = {"case_id": case_id, "state": state, "message": message, "alert_type": event}
     if extra:
         details.update({k: v for k, v in extra.items() if v is not None})
     try:
+        wr = write_alert(owner_user_id, event=event, outcome=outcome, title=title, details=details)
+        # MODX-15 (C8): moderation events are time-sensitive + consequential -> deliver a real
+        # PUSH, not Alerts-only. The alert row (with its auto-derived deep-link) already
+        # persisted above; send_push_for_alert reads that action_url off the row. Best-effort.
         try:
-            write_alert(owner_user_id, event=event, outcome="warning", title=title, details=details, push_event_types=[event])
-        except TypeError:
-            write_alert(owner_user_id, event=event, outcome="warning", title=title, details=details)
+            alert_id = (wr or {}).get("alert_id", "") if isinstance(wr, dict) else ""
+            send_push_for_alert(owner_user_id, event, title, message, alert_id)
+        except Exception:
+            logger.exception("moderation_lifecycle._notify push failed for %s", owner_user_id)
     except Exception:
         logger.exception("moderation_lifecycle._notify failed for %s", owner_user_id)
+
+
+def _notify_reporters(case: Dict[str, Any], *, event: str, title: str, message: str, state: str, exclude: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None:
+    """MODX-15 (C7): close the reporter feedback loop. When a case reaches a terminal
+    outcome, tell the people who reported it what happened (action taken / dismissed) so
+    reporting is not fire-and-forget. Fan out to the DISTINCT reporter set (never the owner),
+    best-effort + de-duplicated."""
+    case_id = str(case.get("case_id") or "")
+    rids = case.get("reporter_ids")
+    if not isinstance(rids, (set, frozenset, list, tuple)):
+        return
+    owner = str(case.get("owner_user_id") or "")
+    seen = set()
+    for rid in rids:
+        rid = str(rid or "").strip()
+        if not rid or rid in seen or rid == owner or rid == exclude:
+            continue
+        seen.add(rid)
+        _notify(rid, event=event, title=title, message=message, case_id=case_id, state=state, outcome="info", extra=extra)
 
 
 def record_violation(*, owner_user_id: Optional[str], case_id: str, content_type: str, categories_csv: str, source_ticket_id: str, admin_user_id: str, note: str, now_ts: Optional[int] = None) -> Optional[str]:
@@ -181,6 +206,16 @@ def _finalize_delete(
         state=mc.STATE_DELETED,
         extra={"content_type": content_type, "reason": reason, "enforcement_id": enforcement_id},
     )
+    # MODX-15 (C7): tell the reporters their report led to action.
+    _notify_reporters(
+        case,
+        event="moderation_report_resolved",
+        title="Action taken on content you reported",
+        message=f"Thanks for reporting. The {_label(content_type)} you reported was reviewed and removed.",
+        state=mc.STATE_DELETED,
+        exclude=resolved_owner,
+        extra={"outcome": "content_removed"},
+    )
     # MODX-1: close the linked admin ticket on the NON-admin finalize paths
     # (sweep / poster_close) so no OPEN ticket survives a terminal case. The admin
     # routes also close their own ticket; this update is idempotent + best-effort.
@@ -267,6 +302,16 @@ def admin_dismiss(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], a
         state=mc.STATE_DISMISSED,
         extra={"content_type": content_type},
     )
+    # MODX-15 (C7): close the loop for reporters even on a no-violation outcome.
+    _notify_reporters(
+        updated or case,
+        event="moderation_report_resolved",
+        title="Report reviewed",
+        message=f"Thanks for reporting. The {_label(content_type)} you reported was reviewed; no violation was found.",
+        state=mc.STATE_DISMISSED,
+        exclude=owner,
+        extra={"outcome": "no_violation"},
+    )
     return {"state": mc.STATE_DISMISSED, "owner_user_id": owner, "case": updated, "changed": True}
 
 
@@ -339,6 +384,16 @@ def admin_final_reinstate(*, case: Dict[str, Any], metadata: Optional[Dict[str, 
         state=mc.STATE_REINSTATED,
         extra={"content_type": content_type},
     )
+    # MODX-15 (C7): reporters learn the final call went the other way.
+    _notify_reporters(
+        updated or case,
+        event="moderation_report_resolved",
+        title="Report reviewed",
+        message=f"Thanks for reporting. After a final review the {_label(content_type)} was restored; no violation was found.",
+        state=mc.STATE_REINSTATED,
+        exclude=owner,
+        extra={"outcome": "reinstated"},
+    )
     return {"state": mc.STATE_REINSTATED, "owner_user_id": owner, "case": updated}
 
 
@@ -405,7 +460,37 @@ def poster_respond(*, case_id: str, owner_user_id: str, statement: str, now_ts: 
             )
         except Exception:
             logger.exception("poster_respond ticket reopen failed for %s", ticket_id)
+    # MODX-14 (C4): a poster response must not sit unseen until someone happens to browse
+    # the board. Proactively notify the assigned moderator (if any) that awaiting_final now
+    # carries a fresh defense to weigh. Un-assigned tickets already re-surface on the board
+    # (status=open) as the board-badge path. Best-effort.
+    _notify_assigned_moderator_poster_responded(ticket_id=ticket_id, case=case, case_id=case_id)
     return {"state": mc.STATE_AWAITING_FINAL, "case": updated}
+
+
+def _notify_assigned_moderator_poster_responded(*, ticket_id: str, case: Dict[str, Any], case_id: str) -> None:
+    """MODX-14 (C4): ping the ticket assignee that the poster has responded so the final
+    call is made promptly. Best-effort; never breaks the poster_respond write."""
+    if not ticket_id:
+        return
+    try:
+        tk = T.moderation_tickets.get_item(Key={"ticket_id": ticket_id}).get("Item") or {}
+    except Exception:
+        tk = {}
+    assignee = str(tk.get("assigned_admin_user_id") or "").strip()
+    if not assignee:
+        return
+    ctype = str(case.get("content_type") or "")
+    _notify(
+        assignee,
+        event="moderation_poster_responded",
+        title="Poster responded -- final call needed",
+        message=f"The poster of a held {_label(ctype)} submitted a response. It is awaiting your final decision.",
+        case_id=case_id,
+        state=mc.STATE_AWAITING_FINAL,
+        outcome="info",
+        extra={"ticket_id": ticket_id, "content_type": ctype},
+    )
 
 
 def poster_close(*, case_id: str, owner_user_id: str, now_ts: Optional[int] = None) -> Dict[str, Any]:
