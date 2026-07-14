@@ -104,6 +104,7 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "POST:/posts/find-datetime/{poll_id}/close": {"product": "newsfeed", "required_scopes": ["newsfeed:write"], "entitlement_required": True},
     "POST:/posts/{post_id}/close-poll": {"product": "newsfeed", "required_scopes": ["newsfeed:write"], "entitlement_required": True},
     "POST:/posts/{post_id}/vote": {"product": "newsfeed", "required_scopes": ["newsfeed:write"], "entitlement_required": True},
+    "POST:/posts/{post_id}/write-in": {"product": "newsfeed", "required_scopes": ["newsfeed:write"], "entitlement_required": True},  # R1 (prod-forward): poll write-in option
     "DELETE:/posts/{post_id}/vote": {"product": "newsfeed", "required_scopes": ["newsfeed:write"], "entitlement_required": True},
     "POST:/posts/{post_id}/like": {"product": "newsfeed", "required_scopes": ["newsfeed:write"], "entitlement_required": True},
     "POST:/posts/{post_id}/unlike": {"product": "newsfeed", "required_scopes": ["newsfeed:write"], "entitlement_required": True},
@@ -159,6 +160,22 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "GET:/tickets/{ticket_id}/attachments": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
     "GET:/tickets/{ticket_id}/attachments/{attachment_id}/download": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
     "DELETE:/tickets/{ticket_id}/attachments/{attachment_id}": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    # R1 (residual #118): tickets collaboration surface -> parity. reads(watchers/
+    # links/by-account/by-contact)->tickets:read; collab+state mutations(watchers/links
+    # add-remove, contact-account, priority, close, reopen)->tickets:write. NOTE: close/
+    # reopen are PROD-FORWARD (absent on dev clone -> appear as dev-only stale until dev catches up).
+    "DELETE:/tickets/{ticket_id}/links/{related_ticket_id}": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "DELETE:/tickets/{ticket_id}/watchers/{watcher_sub}": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "GET:/tickets/by-account/{account_id}": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
+    "GET:/tickets/by-contact/{contact_id}": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
+    "GET:/tickets/{ticket_id}/links": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
+    "GET:/tickets/{ticket_id}/watchers": {"product": "tickets", "required_scopes": ["tickets:read"], "entitlement_required": True},
+    "PATCH:/tickets/{ticket_id}/contact-account": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "PATCH:/tickets/{ticket_id}/priority": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/close": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/links": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/reopen": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
+    "POST:/tickets/{ticket_id}/watchers": {"product": "tickets", "required_scopes": ["tickets:write"], "entitlement_required": True},
     # Shopping
     "GET:/ui/catalog/categories": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
     "GET:/ui/catalog/categories/{category_id}/items": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
@@ -175,6 +192,25 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "GET:/ui/purchase-history/transactions": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
     "GET:/ui/purchase-history/transactions/{txn_id}": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
     "GET:/ui/purchase-history/transactions/search": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
+    # R1 (residual #118): catalog taxonomy/detail reads -> shopping:catalog:read
+    # (public catalog, entitlement not required, matches sibling catalog reads).
+    "GET:/ui/catalog/categories/{category_id}/breadcrumb": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/categories/{category_id}/tree": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/feature-categories": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/associations": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/bundle-components": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/effective-price": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/expand": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/features": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/price-components": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/product-features": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/product-type": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "GET:/ui/catalog/items/{item_id}/variants": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    # R1: cart-scoped read -> shopping:cart:write (matches sibling GET cart items);
+    # order/shipment/tracking reads -> shopping:orders:read.
+    "GET:/ui/shoppingcart/carts/{cart_id}/abandonment-status": {"product": "shopping", "required_scopes": ["shopping:cart:write"], "entitlement_required": False},
+    "GET:/ui/shoppingcart/orders/{order_id}": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
+    "GET:/ui/purchase-history/transactions/{txn_id}/tracking": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
     # Messager -- APIK-E2 (#118): full messaging parity. messager:manage>=write>=read.
     # read=reads/realtime/search/receipts-view; write=bootstrap+rich-sends(incl image presign)+
     # reactions+read-receipts+calls+pins/forward+privacy; manage=participant/lifecycle admin+
@@ -217,6 +253,7 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "POST:/messaging/conversations/{conversation_id}/images/presign": {"product": "messager", "required_scopes": ["messager:write"], "entitlement_required": True},
     "POST:/messaging/conversations/{conversation_id}/leave": {"product": "messager", "required_scopes": ["messager:write"], "entitlement_required": True},
     "POST:/messaging/conversations/{conversation_id}/messages": {"product": "messager", "required_scopes": ["messager:write"], "entitlement_required": True},
+    "POST:/messaging/conversations/{conversation_id}/messages/poll": {"product": "messager", "required_scopes": ["messager:write"], "entitlement_required": True},  # R1 (prod-forward): in-conversation poll send
     "POST:/messaging/conversations/{conversation_id}/messages/calendar-event": {"product": "messager", "required_scopes": ["messager:write"], "entitlement_required": True},
     "POST:/messaging/conversations/{conversation_id}/messages/calendar-share": {"product": "messager", "required_scopes": ["messager:write"], "entitlement_required": True},
     "POST:/messaging/conversations/{conversation_id}/messages/countdown": {"product": "messager", "required_scopes": ["messager:write"], "entitlement_required": True},
@@ -551,6 +588,103 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     # Admin config endpoints (session-auth, not in API-key rollout scope)
     "GET:/ui/admin/career-portal/config": {"reason": "session-auth admin career portal endpoint, not in API-key rollout scope"},
     "PUT:/ui/admin/career-portal/config": {"reason": "session-auth admin career portal endpoint, not in API-key rollout scope"},
+    # ============================================================================
+    # R1 (residual #118) INTENTIONAL API-KEY DENY-LIST (documented fail-closed).
+    # Routes intentionally NOT exposed to ak_ API keys: exempt==unmapped==403 to
+    # every key. Kept in this COVERED table so they do NOT inflate the registry-
+    # drift `unregistered_live` signal and so the startup policy-coverage check
+    # stays clean. `critical` is driven by stale rows only (see classify_registry_drift).
+    # --- catalog admin mutations (session/admin-only; no catalog-write scope) ---
+    "DELETE:/ui/catalog/feature-categories/{fc_id}": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "DELETE:/ui/catalog/feature-categories/{fc_id}/values/{fv_id}": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "DELETE:/ui/catalog/items/{item_id}/associations/{to_item_id}": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "DELETE:/ui/catalog/items/{item_id}/bundle-components/{component_item_id}": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "DELETE:/ui/catalog/items/{item_id}/feature-categories/{fc_id}": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "DELETE:/ui/catalog/items/{item_id}/product-features/{feature_category_id}": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "DELETE:/ui/catalog/items/{item_id}/variants/{variant_id}": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "PATCH:/ui/catalog/categories/{category_id}/move": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "PATCH:/ui/catalog/items/reorder": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "PATCH:/ui/catalog/items/{item_id}/stock": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/categories/{category_id}/children": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/feature-categories": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/feature-categories/{fc_id}/values": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/bulk-delete": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/bulk-update": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/associations": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/bundle-components": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/feature-categories": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/mark-virtual": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/price-components": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/product-features": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/product-features/{feature_category_id}/values": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/product-type": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/items/{item_id}/variants": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "POST:/ui/catalog/products/{product_id}/sale": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    "PUT:/ui/catalog/items/{item_id}/price-components": {"reason": "DENY: catalog admin mutation, session/admin-only; no api-key catalog-write scope by design (R1)"},
+    # --- shopping-cart abandonment admin ops (session/admin-only) ---
+    "GET:/ui/shoppingcart/admin/cart-abandonment/stats": {"reason": "DENY: cart-abandonment admin op, session/admin-only (R1)"},
+    "POST:/ui/shoppingcart/admin/cart-abandonment/scan": {"reason": "DENY: cart-abandonment admin op, session/admin-only (R1)"},
+    # --- messaging delegate (creator-impersonation) surface (session/admin-only) ---
+    "DELETE:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "DELETE:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}/hide": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "DELETE:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}/pin": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "GET:/messaging/delegate/{creator_id}/events/poll": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "PATCH:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/images/presign": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/calendar-event": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/calendar-share": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/countdown": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/file": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/find-datetime": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/gallery": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/gif": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/image": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/poll": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/sticker": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/text": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/video-share": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}/hide": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}/pin": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/messages/{message_id}/reactions": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/read": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/typing": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/voice-message": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/voice-message/presign": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/voicemail": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/conversations/{conversation_id}/voicemail/presign": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/messages/find-datetime/{poll_id}/availability": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/messages/find-datetime/{poll_id}/close": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/messages/lottery": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/polls/{poll_id}/close": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/polls/{poll_id}/vote": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    "POST:/messaging/delegate/{creator_id}/polls/{poll_id}/write-in": {"reason": "DENY: delegate creator-impersonation surface, session/admin-only (APIK-E2 delegate intentional block, R1)"},
+    # --- video social/monetization/moderation surface (fail-closed to keys) ---
+    "GET:/ui/videos/purchases/list": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "GET:/ui/videos/{video_id}/access": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "GET:/ui/videos/{video_id}/ad-config": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "GET:/ui/videos/{video_id}/ad-stats": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "GET:/ui/videos/{video_id}/comments": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "GET:/ui/videos/{video_id}/download": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "GET:/ui/videos/{video_id}/like": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "DELETE:/ui/videos/{video_id}/comments/{comment_id}": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "PATCH:/ui/videos/{video_id}/comments/{comment_id}": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/ad-impression": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/comments": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/comments/{comment_id}/reactions": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/comments/{comment_id}/tip": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/comments/{comment_id}/unreact": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/like": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/playback-complete": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/purchase": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/reactions": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/tip": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/unreact": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    "POST:/ui/videos/{video_id}/view": {"reason": "DENY: video social/monetization/moderation surface, intentionally fail-closed to API keys (APIK-E5, R1)"},
+    # --- groups money confirm-donation + social comments (fail-closed to keys) ---
+    "POST:/ui/groups/fundraising/{group_id}/fundraisers/{fundraiser_id}/donations/{donation_id}/confirm": {"reason": "DENY: fundraiser donation-confirm is require_root_session only, fail-closed to API keys (APIK-E4, R1)"},
+    "DELETE:/ui/groups/{group_id}/posts/{post_id}/comments/{comment_id}": {"reason": "DENY: group-post social comments, fail-closed to API keys (APIK-E4, R1)"},
+    "GET:/ui/groups/{group_id}/posts/{post_id}/comments": {"reason": "DENY: group-post social comments, fail-closed to API keys (APIK-E4, R1)"},
+    "POST:/ui/groups/{group_id}/posts/{post_id}/comments": {"reason": "DENY: group-post social comments, fail-closed to API keys (APIK-E4, R1)"},
 }
 
 API_KEY_INITIAL_ROLLOUT_PATH_PREFIXES = (
@@ -640,8 +774,14 @@ def classify_registry_drift(*, stale_route_count: int, unregistered_live_route_c
     stale = max(0, int(stale_route_count))
     unregistered = max(0, int(unregistered_live_route_count))
     threshold = max(0, int(warn_threshold))
-    if unregistered > 0:
-        return "critical"
+    # R1 Part B (#118 residual): `critical` reflects the REAL registry-rot problem
+    # = stale rows (registry entries -> DEAD routes) beyond tolerance. Intentionally
+    # fail-closed routes live on the documented deny-list section of
+    # API_KEY_ROUTE_EXEMPTIONS and are excluded from `unregistered_live_route_count`
+    # upstream, so a non-zero accidental-unregistered count is an actionable
+    # "warning" (triage the gap) rather than a false "critical".
     if stale > threshold:
+        return "critical"
+    if unregistered > 0:
         return "warning"
     return "ok"

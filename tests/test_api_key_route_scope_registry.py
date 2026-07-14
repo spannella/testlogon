@@ -93,6 +93,6 @@ def test_unregistered_live_route_ids_tracks_rollout_surface_routes_without_regis
 
 
 def test_classify_registry_drift_uses_critical_warning_ok_levels() -> None:
-    assert registry.classify_registry_drift(stale_route_count=0, unregistered_live_route_count=1, warn_threshold=0) == "critical"
-    assert registry.classify_registry_drift(stale_route_count=3, unregistered_live_route_count=0, warn_threshold=2) == "warning"
+    assert registry.classify_registry_drift(stale_route_count=0, unregistered_live_route_count=1, warn_threshold=0) == "warning"  # R1: accidental unregistered -> warning, not critical
+    assert registry.classify_registry_drift(stale_route_count=3, unregistered_live_route_count=0, warn_threshold=2) == "critical"  # R1: stale beyond threshold -> critical
     assert registry.classify_registry_drift(stale_route_count=2, unregistered_live_route_count=0, warn_threshold=2) == "ok"
