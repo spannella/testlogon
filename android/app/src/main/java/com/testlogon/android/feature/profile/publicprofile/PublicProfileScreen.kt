@@ -25,6 +25,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +42,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.testlogon.android.R
+import com.testlogon.android.core.ui.blocking.BlockConfirmDialog
+import com.testlogon.android.feature.blocking.BlockInteractionViewModel
 import com.testlogon.android.core.model.profile.PublicProfile
 import com.testlogon.android.core.ui.scaffold.TlScaffold
 import com.testlogon.android.core.ui.state.EmptyState
@@ -297,6 +300,37 @@ private fun PublicContent(
                     target = tgt,
                     onDismiss = { reportTarget = null },
                     onCompleted = { reportTarget = null },
+                )
+            }
+
+            // P0-BLOCK: block / unblock this user, on the same surface as report. Uses the shared
+            // BlockInteractionViewModel (hydrated with the viewed user) + shared confirm dialog.
+            val blockVm: BlockInteractionViewModel = hiltViewModel()
+            val blockState by blockVm.uiState.collectAsStateWithLifecycle()
+            LaunchedEffect(profile.userId) { blockVm.hydrate(profile.userId, profile.identifier) }
+            OutlinedButton(
+                onClick = {
+                    if (blockState.blockedByMe) blockVm.onUnblock() else blockVm.onBlockRequested()
+                },
+                enabled = !blockState.inFlight,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .testTag("public_block_user"),
+            ) {
+                Text(
+                    if (blockState.blockedByMe) stringResource(R.string.unblock_action)
+                    else stringResource(R.string.block_action, profile.identifier),
+                )
+            }
+            if (blockState.confirmVisible) {
+                BlockConfirmDialog(
+                    title = stringResource(R.string.block_confirm_title, profile.identifier),
+                    body = stringResource(R.string.block_confirm_body),
+                    confirmLabel = stringResource(R.string.block_confirm_cta),
+                    dismissLabel = stringResource(R.string.block_confirm_cancel),
+                    onConfirm = blockVm::onBlockConfirmed,
+                    onDismiss = blockVm::onBlockDismissed,
                 )
             }
         } else {

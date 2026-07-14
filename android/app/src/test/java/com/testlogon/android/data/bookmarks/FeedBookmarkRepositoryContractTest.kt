@@ -110,7 +110,7 @@ class FeedBookmarkRepositoryContractTest {
 
     @Test
     fun hydrate_seedsSavedIdsFromStatus() = runTest {
-        backend.enqueue(Fixtures.okBody("""{"statuses":{"post_1":true,"post_2":false}}"""))
+        backend.enqueue(Fixtures.okBody("""{"statuses":{"post:post_1":true,"post:post_2":false}}"""))
         val r = repo().hydrate(listOf("post_1", "post_2"))
         assertTrue(r is ApiResult.Success)
         assertTrue(dao.isBookmarked("post", "post_1").first())
@@ -118,6 +118,6 @@ class FeedBookmarkRepositoryContractTest {
 
         val req = backend.takeRequest()
         assertEquals("/ui/bookmarks/status", req.requestUrl?.encodedPath)
-        assertEquals("post_1,post_2", req.requestUrl?.queryParameter("ids"))
+        assertEquals("post:post_1,post:post_2", req.requestUrl?.queryParameter("ids"))
     }
 }

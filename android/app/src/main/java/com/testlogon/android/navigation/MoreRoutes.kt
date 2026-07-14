@@ -454,6 +454,9 @@ object MoreRoutes {
     // B-APIKEY (batch 7): developer API-keys management (list / create-shown-once / revoke).
     const val API_KEYS = ApiKeysListDest.ROUTE
 
+    // P0-BLOCK: Settings/Privacy — the blocked-users management screen (list + unblock).
+    const val BLOCKED_USERS = BlockedUsersDest.ROUTE
+
     // Web-parity: questionnaire BUILDER (creator authoring: drafts list -> create -> sections +
     // questions of 9 types -> publish). Distinct from the respondent renderer.
     const val QUESTIONNAIRE_BUILDER = QuestionnaireBuilderListDest.ROUTE
@@ -649,6 +652,7 @@ object MoreRoutes {
             PRIVACY_EXPORT,
             KYC,
             API_KEYS,
+            BLOCKED_USERS,
             QUESTIONNAIRE_BUILDER,
             DELEGATION_KEYS,
             CUSTOM_EMOJIS,

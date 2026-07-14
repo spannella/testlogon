@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,11 +55,14 @@ enum class ClipAction { LIKE, COMMENT, SHARE, BOOKMARK, AUTHOR, MUTE }
  * AND-196 — overlay chrome over a clip page: author handle (tap -> public profile), caption/title,
  * an action rail (like/comment/share/bookmark) that delegates to the feed-interaction flows, and a
  * mute toggle local to the viewer. Touch pass-through is NOT needed — the player surface sits below.
+ *
+ * P0-consumer/bookmarks: [bookmarked] fills the bookmark icon when the clip's source video is saved.
  */
 @Composable
 fun ClipOverlay(
     clip: Clip,
     muted: Boolean,
+    bookmarked: Boolean,
     onAction: (ClipAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -131,8 +135,12 @@ fun ClipOverlay(
                     onClick = { onAction(ClipAction.SHARE) },
                 )
                 RailButton(
-                    icon = Icons.Filled.Bookmark,
-                    label = stringResource(R.string.clip_action_bookmark),
+                    icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                    label = if (bookmarked) {
+                        stringResource(R.string.clip_action_bookmark_remove)
+                    } else {
+                        stringResource(R.string.clip_action_bookmark)
+                    },
                     tag = ClipOverlayTestTags.BOOKMARK,
                     onClick = { onAction(ClipAction.BOOKMARK) },
                 )

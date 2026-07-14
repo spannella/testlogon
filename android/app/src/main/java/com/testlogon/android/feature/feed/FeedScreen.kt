@@ -56,6 +56,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.testlogon.android.core.ui.blocking.BlockConfirmDialog
+import com.testlogon.android.feature.blocking.BlockInteractionViewModel
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
@@ -231,6 +234,10 @@ fun FeedRoute(
         },
         onTip = { post -> tipViewModel.open(post.id) },
         onTipReact = { post, emoji -> tipViewModel.openReaction(post.id, emoji) },
+        // SOCIAL-002 — repost / quote-repost / undo-repost.
+        onRepost = viewModel::onRepost,
+        onQuoteRepost = viewModel::onQuoteRepost,
+        onUndoRepost = viewModel::onUndoRepost,
         // ADV-106 — sponsored-unit tracking. Impression on first-visible; click also opens the ad's CTA url.
         onSponsoredImpression = viewModel::onSponsoredImpression,
         onSponsoredClick = { post ->
@@ -298,6 +305,10 @@ fun FeedScreen(
     onShare: (FeedPost) -> Unit = {},
     onTip: (FeedPost) -> Unit = {},
     onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
+    // SOCIAL-002 — repost affordances.
+    onRepost: (FeedPost) -> Unit = {},
+    onQuoteRepost: (post: FeedPost, quote: String) -> Unit = { _, _ -> },
+    onUndoRepost: (FeedPost) -> Unit = {},
     onSponsoredImpression: (FeedPost) -> Unit = {},
     onPaidPartnershipImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
@@ -316,6 +327,11 @@ fun FeedScreen(
     val listState = rememberLazyListState()
     // MOD-C1 - main newsfeed post report target; the sheet is hosted once below.
     var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
+    // P0-BLOCK — block-author interaction for the feed overflow. One VM hydrated on demand with the
+    // chosen author; the confirm dialog is hosted once below. On success the repository blocked-id
+    // set updates and suppresses that author.
+    val blockVm: BlockInteractionViewModel = hiltViewModel()
+    val blockState by blockVm.uiState.collectAsStateWithLifecycle()
     Scaffold(
         modifier = modifier.testTag(FeedTestTags.SCREEN),
         topBar = {
@@ -384,6 +400,10 @@ fun FeedScreen(
                         items = items,
                         listState = listState,
                         onReport = { post -> reportTarget = ReportTarget.Content(post.id, "feed_post") },
+                        onBlockAuthor = { authorId, authorName ->
+                            blockVm.hydrate(authorId, authorName ?: authorId)
+                            blockVm.onBlockRequested()
+                        },
                         savedIds = savedIds,
                         currentUserSub = currentUserSub,
                         onEditPost = onEditPost,
@@ -402,6 +422,9 @@ fun FeedScreen(
                         onShare = onShare,
                         onTip = onTip,
                         onTipReact = onTipReact,
+                        onRepost = onRepost,
+                        onQuoteRepost = onQuoteRepost,
+                        onUndoRepost = onUndoRepost,
                         onSponsoredImpression = onSponsoredImpression,
                         onPaidPartnershipImpression = onPaidPartnershipImpression,
                         onSponsoredClick = onSponsoredClick,
@@ -422,6 +445,16 @@ fun FeedScreen(
         }
         // MOD-C1/C3 - one host renders the six-category report sheet + the licensing/IP -> DMCA route.
         ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
+        if (blockState.confirmVisible) {
+            BlockConfirmDialog(
+                title = stringResource(R.string.block_confirm_title, blockState.targetHandle),
+                body = stringResource(R.string.block_confirm_body),
+                confirmLabel = stringResource(R.string.block_confirm_cta),
+                dismissLabel = stringResource(R.string.block_confirm_cancel),
+                onConfirm = blockVm::onBlockConfirmed,
+                onDismiss = blockVm::onBlockDismissed,
+            )
+        }
     }
 }
 
@@ -478,6 +511,7 @@ private fun FeedList(
     items: LazyPagingItems<FeedPost>,
     listState: androidx.compose.foundation.lazy.LazyListState,
     onReport: (FeedPost) -> Unit = {},
+    onBlockAuthor: (authorId: String, authorName: String?) -> Unit = { _, _ -> },
     savedIds: Set<String>,
     currentUserSub: String? = null,
     onEditPost: (postId: String) -> Unit = {},
@@ -496,6 +530,9 @@ private fun FeedList(
     onShare: (FeedPost) -> Unit,
     onTip: (FeedPost) -> Unit,
     onTipReact: (post: FeedPost, emoji: String) -> Unit = { _, _ -> },
+    onRepost: (FeedPost) -> Unit = {},
+    onQuoteRepost: (post: FeedPost, quote: String) -> Unit = { _, _ -> },
+    onUndoRepost: (FeedPost) -> Unit = {},
     onSponsoredImpression: (FeedPost) -> Unit = {},
     onPaidPartnershipImpression: (FeedPost) -> Unit = {},
     onSponsoredClick: (FeedPost) -> Unit = {},
@@ -544,6 +581,9 @@ private fun FeedList(
                     onShare = onShare,
                     onTip = onTip,
                     onTipReact = onTipReact,
+                    onRepost = onRepost,
+                    onQuoteRepost = onQuoteRepost,
+                    onUndoRepost = onUndoRepost,
                     onSponsoredImpression = onSponsoredImpression,
                     onSponsoredClick = onSponsoredClick,
                     onSponsoredCta = onSponsoredCta,
@@ -554,6 +594,7 @@ private fun FeedList(
                         { post -> onEditPost(post.id) }
                     } else null,
                     onReport = { post -> onReport(post) },
+                    onBlockAuthor = { authorId, authorName -> onBlockAuthor(authorId, authorName) },
                     unlockState = unlockStates[item.id] ?: UnlockState.Idle,
                     pollState = pollStates[item.id],
                     onPollOptionClick = onPollOptionClick,

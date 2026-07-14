@@ -85,7 +85,17 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-092: saved / bookmarks (paged + unsave). Row-open is delegated to E14/E24 detail
         // screens that are not yet wired, so it is a safe no-op for now.
         composable(MainDest.Saved.route) {
-            SavedRoute(onBack = { navController.popBackStack() })
+            SavedRoute(
+                onBack = { navController.popBackStack() },
+                // P0-consumer/bookmarks: tapping a saved item deep-links to the post/video detail.
+                onOpen = { contentType, contentId ->
+                    val route = when (contentType) {
+                        "video" -> VideoDetailDest.build(contentId)
+                        else -> PostDetailDest.build(contentId)
+                    }
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+            )
         }
         // AND-093: achievements (earned/locked + progress); links to the leaderboard.
         composable(MainDest.Achievements.route) {
@@ -428,6 +438,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // B-APIKEY (batch 7): developer API-keys management. List (label/prefix/created+expiry/scopes) with a
         // per-row revoke -> a create that shows the one-time secret exactly once. Backed by /ui/api_keys.
         apiKeysDestinations(navController)
+        // P0-BLOCK: Blocked Users management (Settings / Privacy) — list + confirm-gated unblock
+        // over /ui/social/blocked + /ui/social/unblock.
+        blockedUsersDestinations(navController)
         // Web-parity: questionnaire BUILDER (creator authoring). Drafts list -> create -> per-draft
         // editor (sections + 9 question types + publish) over /questionnaires/drafts*.
         questionnaireBuilderDestinations(navController)

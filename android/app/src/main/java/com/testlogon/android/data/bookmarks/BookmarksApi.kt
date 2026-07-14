@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Headers
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -16,11 +17,13 @@ import retrofit2.http.Query
  * All methods are suspend; non-2xx surfaces as retrofit2.HttpException.
  *
  * Verified against reference/src/api/endpoints/bookmarks.ts and OpenAPI:
- *  - list   -> GET    ui/bookmarks                              (params limit,cursor,content_type,collection_id)
- *  - delete -> DELETE ui/bookmarks/{content_type}/{content_id} (200 { ok: true })
- *  - create -> POST   ui/bookmarks                             (201 body; used only for Undo)
+ *  - list        -> GET    ui/bookmarks                              (params limit,cursor,content_type,collection_id)
+ *  - delete      -> DELETE ui/bookmarks/{content_type}/{content_id} (200 { ok: true })
+ *  - create      -> POST   ui/bookmarks                             (201 body)
+ *  - move        -> PATCH  ui/bookmarks/{content_type}/{content_id} (200 body; { collection_id })
+ *  - collections -> GET/POST/PATCH/DELETE ui/bookmark-collections[/{id}]
  *
- * DELETE/POST parse a tiny [OkDto] rather than Unit so the JSON body is consumed.
+ * DELETE/POST/PATCH parse a small DTO rather than Unit so the JSON body is consumed.
  */
 interface BookmarksApi {
 
@@ -45,10 +48,38 @@ interface BookmarksApi {
     @POST("ui/bookmarks")
     suspend fun createBookmark(@Body body: CreateBookmarkDto): OkDto
 
+    /** Move an existing bookmark to a different collection. Owner-scoped; 404 if not owned. */
+    @Headers("Content-Type: application/json")
+    @PATCH("ui/bookmarks/{content_type}/{content_id}")
+    suspend fun moveBookmark(
+        @Path("content_type") contentType: String,
+        @Path("content_id") contentId: String,
+        @Body body: MoveBookmarkBody,
+    ): OkDto
+
     /**
-     * AND-176 — batch presence check used to seed the feed's per-post saved icon cheaply.
-     * `ids` is a comma-joined list of content ids. Idempotent GET.
+     * AND-176 — batch presence check used to seed the feed / clips per-item saved icon cheaply.
+     * `ids` is a comma-joined list of composite "type:id" keys (max 25). Idempotent GET.
      */
     @GET("ui/bookmarks/status")
     suspend fun bookmarkStatus(@Query("ids") ids: String): BookmarkStatusDto
+
+    // ── Collections (P0-consumer/bookmarks) ──────────────────────────────────
+
+    @GET("ui/bookmark-collections")
+    suspend fun listCollections(): CollectionListDto
+
+    @Headers("Content-Type: application/json")
+    @POST("ui/bookmark-collections")
+    suspend fun createCollection(@Body body: CollectionNameBody): CollectionDto
+
+    @Headers("Content-Type: application/json")
+    @PATCH("ui/bookmark-collections/{collection_id}")
+    suspend fun renameCollection(
+        @Path("collection_id") collectionId: String,
+        @Body body: CollectionNameBody,
+    ): OkDto
+
+    @DELETE("ui/bookmark-collections/{collection_id}")
+    suspend fun deleteCollection(@Path("collection_id") collectionId: String): OkDto
 }

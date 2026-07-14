@@ -44,6 +44,7 @@ sealed interface PostDetailUiState {
 class PostDetailViewModel @Inject constructor(
     private val repository: FeedRepository,
     private val engagement: PostEngagementRepository,
+    private val reposts: com.testlogon.android.data.feed.RepostRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     private val currentUser: com.testlogon.android.data.feed.CurrentUserRepository,
     savedStateHandle: SavedStateHandle,
@@ -79,6 +80,7 @@ class PostDetailViewModel @Inject constructor(
 
     private var loading = false
     private var likeJob: Job? = null
+    private var repostJob: Job? = null
 
     init {
         load(force = false)
@@ -136,6 +138,57 @@ class PostDetailViewModel @Inject constructor(
                 throw e
             }
         }
+    }
+
+    /** SOCIAL-002 — repost this post (optional [quote] commentary). Optimistic; rollback on failure. */
+    fun onRepost(quote: String? = null) {
+        val post = (_uiState.value as? PostDetailUiState.Content)?.post ?: return
+        if (post.repostedByMe) return
+        val before = RepostState(post.repostedByMe, post.repostCount)
+        updatePost(post.copy(repostedByMe = true, repostCount = post.repostCount + 1))
+        repostJob?.cancel()
+        repostJob = viewModelScope.launch {
+            try {
+                when (val r = reposts.repost(post.id, quote?.trim()?.takeIf { it.isNotBlank() })) {
+                    is ApiResult.Success -> r.data?.let { count -> reconcileRepost(true, count) }
+                    is ApiResult.Failure -> rollbackRepost(before, r.error.message)
+                    is ApiResult.NetworkError -> rollbackRepost(before, OFFLINE_REPOST)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            }
+        }
+    }
+
+    /** SOCIAL-002 — undo the viewer's repost of this post. */
+    fun onUndoRepost() {
+        val post = (_uiState.value as? PostDetailUiState.Content)?.post ?: return
+        if (!post.repostedByMe) return
+        val before = RepostState(post.repostedByMe, post.repostCount)
+        updatePost(post.copy(repostedByMe = false, repostCount = (post.repostCount - 1).coerceAtLeast(0)))
+        repostJob?.cancel()
+        repostJob = viewModelScope.launch {
+            try {
+                when (val r = reposts.undo(post.id)) {
+                    is ApiResult.Success -> r.data?.let { count -> reconcileRepost(false, count) }
+                    is ApiResult.Failure -> rollbackRepost(before, r.error.message)
+                    is ApiResult.NetworkError -> rollbackRepost(before, OFFLINE_REPOST)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            }
+        }
+    }
+
+    private fun reconcileRepost(reposted: Boolean, count: Int) {
+        val current = _uiState.value as? PostDetailUiState.Content ?: return
+        updatePost(current.post.copy(repostedByMe = reposted, repostCount = count))
+    }
+
+    private fun rollbackRepost(before: RepostState, message: String) {
+        val current = _uiState.value as? PostDetailUiState.Content ?: return
+        updatePost(current.post.copy(repostedByMe = before.reposted, repostCount = before.repostCount))
+        _effects.trySend(PostDetailEffect.ShowError(message))
     }
 
     /** AND-174 — optimistically reflect a comment count change from the embedded comments section. */
@@ -198,6 +251,7 @@ class PostDetailViewModel @Inject constructor(
     private companion object {
         const val OFFLINE_FALLBACK = "Couldn't reach the server. Try again."
         const val OFFLINE_LIKE = "Couldn't update like. Try again."
+        const val OFFLINE_REPOST = "Couldn't repost. Try again."
         val ID_PATTERN = Regex("^[A-Za-z0-9_\\-]{1,64}$")
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.AddReaction
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -20,11 +21,15 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Paid
+import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.ThumbDownOffAlt
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
@@ -58,6 +63,13 @@ object PostActionTestTags {
     const val EMOJI_PICKER = "post_emoji_picker"
     const val REACTION_CHIPS = "post_reaction_chips"
     const val COMMENT = "post_comment"
+    // SOCIAL-002 — repost affordance + its menu items.
+    const val REPOST = "post_repost"
+    const val MENU_REPOST = "post_menu_repost"
+    const val MENU_QUOTE_REPOST = "post_menu_quote_repost"
+    const val MENU_UNDO_REPOST = "post_menu_undo_repost"
+    const val QUOTE_REPOST_FIELD = "post_quote_repost_field"
+    const val QUOTE_REPOST_SUBMIT = "post_quote_repost_submit"
     const val OVERFLOW = "post_overflow"
     const val MENU_HIDE = "post_menu_hide"
     const val MENU_NOT_INTERESTED = "post_menu_not_interested"
@@ -91,6 +103,14 @@ fun PostActionBar(
     onHide: () -> Unit,
     onNotInterested: () -> Unit,
     modifier: Modifier = Modifier,
+    // SOCIAL-002 — public reposting: toggle + count, with a Repost / Quote repost / Undo menu.
+    // [repostEnabled] is false for the viewer's own post and locked posts (backend rejects both).
+    reposted: Boolean = false,
+    repostCount: Int = 0,
+    repostEnabled: Boolean = true,
+    onRepost: () -> Unit = {},
+    onQuoteRepost: (quote: String) -> Unit = {},
+    onUndoRepost: () -> Unit = {},
     // AND-176 / AND-178 — share, bookmark, tip affordances.
     bookmarked: Boolean = false,
     bookmarkEnabled: Boolean = true,
@@ -102,6 +122,8 @@ fun PostActionBar(
     onEdit: (() -> Unit)? = null,
     // MOD-C1 — when non-null, the overflow shows a Report item that opens the moderation report sheet.
     onReport: (() -> Unit)? = null,
+    // P0-BLOCK — when non-null, the overflow shows a Block-author item (blocks the post author).
+    onBlockAuthor: (() -> Unit)? = null,
     // #20 — full emoji reactions (distinct from the like toggle).
     reactions: List<com.testlogon.android.data.feed.ReactionTally> = emptyList(),
     onToggleReaction: (String) -> Unit = {},
@@ -110,6 +132,8 @@ fun PostActionBar(
     onTipReact: (String) -> Unit = {},
 ) {
     var reactionPickerOpen by remember { mutableStateOf(false) }
+    // SOCIAL-002 — the quote-repost composer dialog (opened from the repost menu's "Quote repost").
+    var quoteDialogOpen by remember { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -120,13 +144,22 @@ fun PostActionBar(
             // #20 — open the curated emoji reaction picker.
             ReactButton(onClick = { reactionPickerOpen = !reactionPickerOpen })
             CommentButton(commentCount = commentCount, onClick = onCommentClick)
+            // SOCIAL-002 — repost between Comment and Tip/Share (mirrors the web RepostButton position).
+            RepostButton(
+                reposted = reposted,
+                repostCount = repostCount,
+                enabled = repostEnabled,
+                onRepost = onRepost,
+                onQuoteRepost = { quoteDialogOpen = true },
+                onUndoRepost = onUndoRepost,
+            )
             if (showTip) {
                 TipButton(onClick = onTip)
             }
             BookmarkToggle(checked = bookmarked, enabled = bookmarkEnabled, onCheckedChange = { onToggleBookmark() })
             ShareButton(onClick = onShare)
             Box(modifier = Modifier.weight(1f))
-            PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested, onEdit = onEdit, onReport = onReport)
+            PostOverflowMenu(onHide = onHide, onNotInterested = onNotInterested, onEdit = onEdit, onReport = onReport, onBlockAuthor = onBlockAuthor)
         }
         // #20 — curated emoji picker (toggled by the React button).
         if (reactionPickerOpen) {
@@ -151,7 +184,136 @@ fun PostActionBar(
             PostTipReactionChips(tipReactions = tipReactions)
         }
     }
+    // SOCIAL-002 — quote-repost composer (≤500 chars). Confirm reposts with the trimmed commentary.
+    if (quoteDialogOpen) {
+        QuoteRepostDialog(
+            onSubmit = { quote ->
+                quoteDialogOpen = false
+                onQuoteRepost(quote)
+            },
+            onDismiss = { quoteDialogOpen = false },
+        )
+    }
 }
+
+/**
+ * SOCIAL-002 — the repost affordance: a Repeat icon + count that opens a small menu. When the viewer has
+ * NOT reposted, the menu offers Repost / Quote repost; when they HAVE, it offers Undo repost (mirrors the
+ * web RepostButton popover). Disabled (with the count still shown) for the viewer's own post + locked
+ * posts, which the backend rejects.
+ */
+@Composable
+private fun RepostButton(
+    reposted: Boolean,
+    repostCount: Int,
+    enabled: Boolean,
+    onRepost: () -> Unit,
+    onQuoteRepost: () -> Unit,
+    onUndoRepost: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val tint = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+        reposted -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Box(modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                onClick = { menuOpen = true },
+                enabled = enabled,
+                modifier = Modifier.size(48.dp).testTag(PostActionTestTags.REPOST),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Repeat,
+                    contentDescription = stringResource(R.string.feed_repost),
+                    tint = tint,
+                )
+            }
+            if (repostCount > 0) {
+                Text(
+                    text = compactCount(repostCount),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = tint,
+                )
+            }
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            if (reposted) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.feed_undo_repost)) },
+                    leadingIcon = { Icon(Icons.Outlined.Repeat, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onUndoRepost()
+                    },
+                    modifier = Modifier.testTag(PostActionTestTags.MENU_UNDO_REPOST),
+                )
+            } else {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.feed_repost)) },
+                    leadingIcon = { Icon(Icons.Outlined.Repeat, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onRepost()
+                    },
+                    modifier = Modifier.testTag(PostActionTestTags.MENU_REPOST),
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.feed_quote_repost)) },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onQuoteRepost()
+                    },
+                    modifier = Modifier.testTag(PostActionTestTags.MENU_QUOTE_REPOST),
+                )
+            }
+        }
+    }
+}
+
+/** SOCIAL-002 — inline quote-repost composer: a ≤500-char commentary field with a live counter. */
+@Composable
+private fun QuoteRepostDialog(
+    onSubmit: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.feed_quote_repost)) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { if (it.length <= QUOTE_MAX_LEN) text = it },
+                    placeholder = { Text(stringResource(R.string.feed_quote_repost_hint)) },
+                    modifier = Modifier.fillMaxWidth().testTag(PostActionTestTags.QUOTE_REPOST_FIELD),
+                )
+                Text(
+                    text = "${text.length}/$QUOTE_MAX_LEN",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSubmit(text.trim()) },
+                modifier = Modifier.testTag(PostActionTestTags.QUOTE_REPOST_SUBMIT),
+            ) { Text(stringResource(R.string.feed_repost)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.feed_repost_cancel)) }
+        },
+    )
+}
+
+/** SOCIAL-002 — server-enforced quote length cap (RepostRequest.quote max_length=500). */
+private const val QUOTE_MAX_LEN = 500
 
 @Composable
 private fun ReactButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -362,6 +524,7 @@ private fun PostOverflowMenu(
     onNotInterested: () -> Unit,
     onEdit: (() -> Unit)? = null,
     onReport: (() -> Unit)? = null,
+    onBlockAuthor: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -416,6 +579,18 @@ private fun PostOverflowMenu(
                         onReport()
                     },
                     modifier = Modifier.testTag(PostActionTestTags.MENU_REPORT),
+                )
+            }
+            // P0-BLOCK — block the post author (either-direction block hides content + stops contact).
+            if (onBlockAuthor != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.block_author_action)) },
+                    leadingIcon = { Icon(Icons.Outlined.Block, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onBlockAuthor()
+                    },
+                    modifier = Modifier.testTag("post_block_author"),
                 )
             }
         }

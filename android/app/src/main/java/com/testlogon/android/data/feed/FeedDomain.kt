@@ -27,6 +27,17 @@ data class FeedPost(
     val likeCount: Int,
     val commentCount: Int,
     val likedByMe: Boolean,
+    /** SOCIAL-002 — number of times this post has been reposted. */
+    val repostCount: Int = 0,
+    /** SOCIAL-002 — true when THIS viewer has already reposted this post (drives the toggle + Undo). */
+    val repostedByMe: Boolean = false,
+    /**
+     * SOCIAL-002 — non-null when this feed row was sourced from a repost FEEDREF: who reposted it (for
+     * the "↻ {name} reposted" attribution header). Null for an organically-authored feed row.
+     */
+    val repostedBy: RepostAttribution? = null,
+    /** SOCIAL-002 — the reposter's optional ≤500-char quote / commentary, rendered above the reposted card. */
+    val repostQuote: String? = null,
     /**
      * #4 (B-GROUPUNIFY) — the group this post was posted to, or null for a normal (personal) post. Group
      * posts are bridged into the unified feed/my-posts server-side; this lets the UI badge them
@@ -92,6 +103,12 @@ data class SponsoredInfo(
      *  single-CTA creative, which still renders its [ctaText]/[ctaUrl]). Rendered by AdCtaBar +
      *  routed by AdCtaRouter (buy_product/view_product/tip/subscribe/subscribe_other). */
     val ctas: List<CtaAction> = emptyList(),
+)
+
+/** SOCIAL-002 — the reposter identity for a reposted feed row's attribution header. */
+data class RepostAttribution(
+    val userId: String,
+    val displayName: String?,
 )
 
 /** #3 — raw lock info used to badge a locked post on its AUTHOR's own (un-redacted) view. */
@@ -175,6 +192,15 @@ internal fun PostDto.toDomain(): FeedPost {
         likeCount = likeCount,
         commentCount = commentCount,
         likedByMe = likedByMe,
+        // SOCIAL-002 — repost tally + per-viewer state + (when this row is a repost) the reposter
+        // attribution and quote. The quote is the reposter's commentary, not protected post content, so
+        // it survives the lock redaction above.
+        repostCount = repostCount,
+        repostedByMe = repostedByMe,
+        repostedBy = repostedBy?.takeIf { it.userId.isNotBlank() }?.let {
+            RepostAttribution(userId = it.userId, displayName = it.displayName?.takeIf { n -> n.isNotBlank() })
+        },
+        repostQuote = repostQuote?.takeIf { it.isNotBlank() },
         groupId = groupId?.takeIf { it.isNotBlank() },
         reactions = reactionTallies(reactionsCounts, myReactions),
         tipReactions = tipReactions.orEmpty().map {

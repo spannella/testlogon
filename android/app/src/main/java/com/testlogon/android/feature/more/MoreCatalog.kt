@@ -68,6 +68,7 @@ import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Theaters
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Receipt
 import androidx.compose.material.icons.outlined.Security
@@ -1541,6 +1542,15 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_geo_rules,
             icon = Icons.Outlined.Public,
             route = MoreRoutes.GEO_RULES,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.APP,
+        ),
+        // P0-BLOCK: Settings/Privacy — blocked-users management (list + unblock). Near geo-blocking.
+        MoreEntry(
+            id = "blocked_users",
+            labelRes = R.string.more_entry_blocked_users,
+            icon = Icons.Outlined.Block,
+            route = MoreRoutes.BLOCKED_USERS,
             hub = MoreHub.ACCOUNT,
             section = MoreSection.APP,
         ),

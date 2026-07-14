@@ -1235,6 +1235,15 @@
     <string name="feed_bookmark_retry">Retry</string>
     <string name="feed_share_no_target">No app available to share with.</string>
 
+    <!-- Feed: reposting (SOCIAL-002) -->
+    <string name="feed_repost">Repost</string>
+    <string name="feed_quote_repost">Quote repost</string>
+    <string name="feed_undo_repost">Undo repost</string>
+    <string name="feed_reposted_by">%1$s reposted</string>
+    <string name="feed_quote_repost_hint">Add a comment…</string>
+    <string name="feed_repost_cancel">Cancel</string>
+    <string name="feed_repost_failed">Couldn\'t repost. Try again.</string>
+
     <!-- Feed: paywall unlock (AND-177) -->
     <string name="paywall_unlocking">Unlocking…</string>
     <string name="paywall_sold_out">No longer available</string>
@@ -1388,6 +1397,7 @@
     <string name="clip_action_comment">Comment</string>
     <string name="clip_action_share">Share</string>
     <string name="clip_action_bookmark">Bookmark</string>
+    <string name="clip_action_bookmark_remove">Remove bookmark</string>
     <string name="clip_action_mute">Mute</string>
     <string name="clip_action_unmute">Unmute</string>
 
@@ -3984,6 +3994,13 @@
     <string name="cannot_contact_banner">You can\'t message this user.</string>
     <string name="block_update_failed">Couldn\'t update — tap to retry.</string>
 
+    <!-- P0-BLOCK: blocked-users management screen -->
+    <string name="blocked_users_title">Blocked users</string>
+    <string name="blocked_users_empty_title">No blocked users</string>
+    <string name="blocked_users_empty_body">People you block cannot message you, follow you, or see your content. Blocked users appear here.</string>
+    <string name="unblock_confirm_title">Unblock @%1$s?</string>
+    <string name="unblock_confirm_body">They will be able to message you, follow you, and see your content again.</string>
+
     <!-- AND-384: DMCA copyright-takedown submit form -->
     <string name="more_entry_dmca">File a DMCA notice</string>
     <string name="dmca_title">File a DMCA notice</string>
@@ -4165,6 +4182,8 @@
     <string name="more_entry_questionnaire_builder">Questionnaire builder</string>
     <string name="more_entry_custom_emojis">Custom emojis</string>
     <string name="more_entry_geo_rules">Geo-blocking</string>
+    <string name="more_entry_blocked_users">Blocked users</string>
+    <string name="block_author_action">Block author</string>
     <string name="more_entry_call_rate">Call rate</string>
     <string name="more_entry_message_privacy">Message privacy</string>
     <string name="more_entry_vod_rentals">My rentals</string>

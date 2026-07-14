@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -52,6 +53,9 @@ object PostItemTestTags {
     const val HEADER = "post_header"
     const val BODY = "post_body"
     const val LOCKED_BADGE = "post_locked_badge"
+    // SOCIAL-002 — the "↻ {name} reposted" attribution header + the reposter's quote.
+    const val REPOST_ATTRIBUTION = "post_repost_attribution"
+    const val REPOST_QUOTE = "post_repost_quote"
     // MOD-5 — the compact report overflow shown in the header on read-only surfaces (no action bar),
     // e.g. the tag / discovery post list, so another user's post can still be reported there.
     const val REPORT_OVERFLOW = "post_header_report_overflow"
@@ -99,6 +103,10 @@ fun PostItem(
     onCommentClick: (FeedPost) -> Unit = {},
     onHide: (FeedPost) -> Unit = {},
     onNotInterested: (FeedPost) -> Unit = {},
+    // SOCIAL-002 — repost / quote-repost / undo-repost of this post.
+    onRepost: (FeedPost) -> Unit = {},
+    onQuoteRepost: (post: FeedPost, quote: String) -> Unit = { _, _ -> },
+    onUndoRepost: (FeedPost) -> Unit = {},
     // AND-176 / AND-178 — share, bookmark, tip.
     isBookmarked: Boolean = false,
     onToggleBookmark: (FeedPost) -> Unit = {},
@@ -114,6 +122,8 @@ fun PostItem(
     onEdit: ((FeedPost) -> Unit)? = null,
     // MOD-C1 — when non-null, a Report item appears in the post overflow (opens the report sheet).
     onReport: ((FeedPost) -> Unit)? = null,
+    // P0-BLOCK — when non-null, a Block-author item appears in the post overflow.
+    onBlockAuthor: ((authorId: String, authorName: String?) -> Unit)? = null,
     // AND-177 — unlock flow state driving the paywall CTA.
     unlockState: UnlockState = UnlockState.Idle,
     // AND-179 — poll state + vote callbacks; null => render the post's embedded poll read-only.
@@ -154,6 +164,11 @@ fun PostItem(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // SOCIAL-002 — reposted-into-feed attribution: "↻ {name} reposted" + the reposter's quote,
+            // above the original post card (mirrors the web FeedTimeline repost header + blockquote).
+            post.repostedBy?.let { attribution ->
+                RepostAttributionHeader(attribution = attribution, quote = post.repostQuote)
+            }
             PostAuthorHeader(
                 authorId = post.authorId,
                 authorName = authorName,
@@ -238,6 +253,14 @@ fun PostItem(
                     onCommentClick = { onCommentClick(post) },
                     onHide = { onHide(post) },
                     onNotInterested = { onNotInterested(post) },
+                    // SOCIAL-002 — repost state + actions. Disabled for own/locked posts (backend rejects
+                    // self-repost with 400 and locked with 403); the count still renders.
+                    reposted = post.repostedByMe,
+                    repostCount = post.repostCount,
+                    repostEnabled = !isOwnPost && !post.isLocked,
+                    onRepost = { onRepost(post) },
+                    onQuoteRepost = { quote -> onQuoteRepost(post, quote) },
+                    onUndoRepost = { onUndoRepost(post) },
                     bookmarked = isBookmarked,
                     onToggleBookmark = { onToggleBookmark(post) },
                     onShare = { onShare(post) },
@@ -245,6 +268,7 @@ fun PostItem(
                     showTip = showTip,
                     onEdit = onEdit?.let { edit -> { edit(post) } },
                     onReport = onReport?.let { report -> { report(post) } },
+                    onBlockAuthor = onBlockAuthor?.let { cb -> { cb(post.authorId, authorName) } },
                     reactions = post.reactions,
                     onToggleReaction = { emoji -> onToggleReaction(post, emoji) },
                     tipReactions = post.tipReactions,
@@ -373,6 +397,49 @@ private fun PostHeaderReportOverflow(onReport: () -> Unit) {
                     onReport()
                 },
                 modifier = Modifier.testTag(PostItemTestTags.REPORT_MENU_ITEM),
+            )
+        }
+    }
+}
+
+/**
+ * SOCIAL-002 — the repost attribution header shown above a reposted feed row: a small "↻ {name}
+ * reposted" line and, when the reposter added commentary, their quote. The original post's own author
+ * header + body render immediately below (unchanged).
+ */
+@Composable
+private fun RepostAttributionHeader(
+    attribution: com.testlogon.android.data.feed.RepostAttribution,
+    quote: String?,
+    modifier: Modifier = Modifier,
+) {
+    val name = attribution.displayName?.takeIf { it.isNotBlank() } ?: attribution.userId
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().testTag(PostItemTestTags.REPOST_ATTRIBUTION),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Repeat,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = stringResource(R.string.feed_reposted_by, name),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        quote?.takeIf { it.isNotBlank() }?.let { q ->
+            Text(
+                text = q,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.fillMaxWidth().testTag(PostItemTestTags.REPOST_QUOTE),
             )
         }
     }

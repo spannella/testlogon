@@ -124,6 +124,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.material.icons.filled.Block
+import com.testlogon.android.feature.blocking.BlockInteractionViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -1077,6 +1079,24 @@ fun ThreadScreen(
     androidx.activity.compose.BackHandler(enabled = imeVisible && !searchActive) {
         dismissKeyboard()
     }
+    // P0-BLOCK: block / unblock the DM peer. Hoisted here so the overflow menu item and the
+    // composer gate share one state. Only meaningful for a 1:1 DM with a resolved peer.
+    val blockVm: BlockInteractionViewModel = hiltViewModel()
+    val blockState by blockVm.uiState.collectAsStateWithLifecycle()
+    val blockPeerId = state.peerUserSub?.takeIf { state.isDm }
+    LaunchedEffect(blockPeerId) {
+        if (blockPeerId != null) blockVm.hydrate(blockPeerId, state.title)
+    }
+    if (blockState.confirmVisible) {
+        com.testlogon.android.core.ui.blocking.BlockConfirmDialog(
+            title = stringResource(R.string.block_confirm_title, state.title.ifBlank { blockPeerId.orEmpty() }),
+            body = stringResource(R.string.block_confirm_body),
+            confirmLabel = stringResource(R.string.block_confirm_cta),
+            dismissLabel = stringResource(R.string.block_confirm_cancel),
+            onConfirm = blockVm::onBlockConfirmed,
+            onDismiss = blockVm::onBlockDismissed,
+        )
+    }
     Scaffold(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
@@ -1173,6 +1193,23 @@ fun ThreadScreen(
                                 modifier = Modifier.testTag("thread_call_video"),
                             )
                         }
+                        // P0-BLOCK: block / unblock the DM peer (1:1 only, resolved peer).
+                        blockPeerId?.let { peer ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (blockState.blockedByMe) stringResource(R.string.unblock_action)
+                                        else stringResource(R.string.block_action, state.title.ifBlank { peer }),
+                                    )
+                                },
+                                leadingIcon = { Icon(Icons.Filled.Block, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    if (blockState.blockedByMe) blockVm.onUnblock() else blockVm.onBlockRequested()
+                                },
+                                modifier = Modifier.testTag("thread_block_user"),
+                            )
+                        }
                         // AND-158/159 — group details (participants / settings).
                         androidx.compose.material3.DropdownMenuItem(
                             text = { Text(stringResource(R.string.group_details_cd)) },
@@ -1230,6 +1267,15 @@ fun ThreadScreen(
                     modifier = Modifier.navigationBarsPadding().imePadding(),
                 )
                 else -> Column {
+                    // P0-BLOCK: when contact is blocked (either direction) the composer is replaced
+                    // by a banner so there is no dead-end 403 on send.
+                    if (blockState.contactBlocked) {
+                        com.testlogon.android.core.ui.blocking.CannotContactBanner(
+                            message = stringResource(R.string.cannot_contact_banner),
+                            modifier = Modifier.navigationBarsPadding().imePadding(),
+                        )
+                        return@Column
+                    }
                     // AND-146 — typing indicator sits directly above the composer.
                     com.testlogon.android.feature.messaging.typing.TypingIndicator(users = typingUsers)
                     MessageComposer(

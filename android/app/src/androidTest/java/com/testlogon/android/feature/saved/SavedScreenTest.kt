@@ -65,6 +65,13 @@ class SavedScreenTest {
                     snackbarHostState = remember { SnackbarHostState() },
                     onUnsave = onUnsave,
                     onOpen = { _, _ -> },
+                    onSelectCollection = {},
+                    onCreateCollection = {},
+                    onRenameCollection = { _, _ -> },
+                    onDeleteCollection = {},
+                    onRequestMove = {},
+                    onDismissMove = {},
+                    onMoveTo = {},
                     onRefresh = {},
                     onBack = {},
                 )

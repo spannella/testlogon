@@ -51,6 +51,10 @@ object ClipsScreenTestTags {
  * playback controller (and telemetry) track the active clip. Each page renders the clip poster +
  * [ClipOverlay] chrome; per the verified contract a clip carries NO stream URL, so the feed renders
  * thumbnails (web parity) and full HLS autoplay is gated on a resolvable per-clip source (§16 A1).
+ *
+ * P0-consumer/bookmarks: the BOOKMARK rail action toggles the clip's source video via the shared
+ * bookmarks repository; [ClipsViewModel.savedVideoIds] drives the filled icon and loaded ids are seeded
+ * from /ui/bookmarks/status.
  */
 @Composable
 fun ClipsRoute(
@@ -61,17 +65,26 @@ fun ClipsRoute(
     viewModel: ClipsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    val savedVideoIds by viewModel.savedVideoIds.collectAsStateWithLifecycle()
     val clips = viewModel.clips.collectAsLazyPagingItems()
+
+    // Seed saved-state for the currently loaded clips (best-effort, batched server-side to 25).
+    val loadedVideoIds = clips.itemSnapshotList.items.map { it.videoId }
+    LaunchedEffect(loadedVideoIds) {
+        if (loadedVideoIds.isNotEmpty()) viewModel.onClipsVisible(loadedVideoIds)
+    }
 
     ClipsScreen(
         clips = clips,
         muted = ui.muted,
         activePage = ui.activePage,
+        savedVideoIds = savedVideoIds,
         onSettledPage = viewModel::setActivePage,
         onAction = { clip, action ->
             when (action) {
                 ClipAction.MUTE -> viewModel.toggleMute()
                 ClipAction.AUTHOR -> onOpenProfile(clip.profileId.ifBlank { clip.creatorUserId })
+                ClipAction.BOOKMARK -> viewModel.toggleBookmark(clip.videoId)
                 else -> onClipAction(clip, action)
             }
         },
@@ -86,6 +99,7 @@ fun ClipsScreen(
     clips: LazyPagingItems<Clip>,
     muted: Boolean,
     activePage: Int,
+    savedVideoIds: Set<String>,
     onSettledPage: (Int) -> Unit,
     onAction: (Clip, ClipAction) -> Unit,
     onBack: () -> Unit,
@@ -125,6 +139,7 @@ fun ClipsScreen(
                     clips = clips,
                     muted = muted,
                     activePage = activePage,
+                    savedVideoIds = savedVideoIds,
                     onSettledPage = onSettledPage,
                     onAction = onAction,
                 )
@@ -138,6 +153,7 @@ private fun ClipsPager(
     clips: LazyPagingItems<Clip>,
     muted: Boolean,
     activePage: Int,
+    savedVideoIds: Set<String>,
     onSettledPage: (Int) -> Unit,
     onAction: (Clip, ClipAction) -> Unit,
 ) {
@@ -157,6 +173,7 @@ private fun ClipsPager(
             ClipPage(
                 clip = clip,
                 muted = muted,
+                bookmarked = clip.videoId.isNotBlank() && clip.videoId in savedVideoIds,
                 onAction = onAction,
             )
         }
@@ -168,6 +185,7 @@ private fun ClipsPager(
 private fun ClipPage(
     clip: Clip,
     muted: Boolean,
+    bookmarked: Boolean,
     onAction: (Clip, ClipAction) -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -180,6 +198,7 @@ private fun ClipPage(
         ClipOverlay(
             clip = clip,
             muted = muted,
+            bookmarked = bookmarked,
             onAction = { action -> onAction(clip, action) },
         )
     }
