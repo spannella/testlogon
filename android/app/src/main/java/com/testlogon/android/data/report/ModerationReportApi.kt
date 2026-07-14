@@ -54,6 +54,10 @@ data class ModerationReportRequestDto(
     @Json(name = "conversation_id") val conversationId: String? = null,
     @Json(name = "message_id") val messageId: String? = null,
     @Json(name = "profile_user_id") val profileUserId: String? = null,
+    @Json(name = "syndicate_id") val syndicateId: String? = null,
+    @Json(name = "category_id") val categoryId: String? = null,
+    @Json(name = "item_id") val itemId: String? = null,
+    @Json(name = "session_id") val sessionId: String? = null,
 )
 
 /**

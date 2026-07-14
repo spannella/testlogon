@@ -93,6 +93,14 @@ def ensure_reporting_surface_enabled(content_type: str) -> None:
         raise HTTPException(status_code=403, detail="message reporting is disabled")
     if ctype == "profile_photo" and not bool(flags.get("report_profile_enabled", True)):
         raise HTTPException(status_code=403, detail="profile reporting is disabled")
+    if ctype in ("user", "account") and not bool(flags.get("report_account_enabled", True)):
+        raise HTTPException(status_code=403, detail="account reporting is disabled")
+    if ctype in ("catalog_item", "catalog_review") and not bool(flags.get("report_commerce_enabled", True)):
+        raise HTTPException(status_code=403, detail="commerce reporting is disabled")
+    if ctype == "broadcast_message" and not bool(flags.get("report_livechat_enabled", True)):
+        raise HTTPException(status_code=403, detail="live chat reporting is disabled")
+    if ctype in ("story", "clip") and not bool(flags.get("report_ephemeral_enabled", True)):
+        raise HTTPException(status_code=403, detail="ephemeral reporting is disabled")
 
 
 def ensure_permanent_ban_scope_rollout(admin: AuthenticatedUser) -> None:

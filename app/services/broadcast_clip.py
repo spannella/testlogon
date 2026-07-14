@@ -173,7 +173,7 @@ def get_clip(clip_id: str) -> Dict[str, Any]:
     """Get clip details."""
     resp = T.broadcast_clips.get_item(Key={"clip_id": clip_id})
     item = resp.get("Item")
-    if not item or item.get("status") == "deleted":
+    if not item or item.get("status") == "deleted" or item.get("moderation_hidden") is True:
         raise HTTPException(404, "Clip not found")
     return _clip_out(item)
 
@@ -186,7 +186,7 @@ def get_public_clip(clip_id: str) -> Dict[str, Any]:
     """
     resp = T.broadcast_clips.get_item(Key={"clip_id": clip_id})
     item = resp.get("Item")
-    if not item or item.get("status") == "deleted":
+    if not item or item.get("status") == "deleted" or item.get("moderation_hidden") is True:
         raise HTTPException(404, "Clip not found")
 
     out = _clip_out(item)
@@ -217,7 +217,7 @@ def list_clips_for_session(session_id: str, limit: int = 50) -> List[Dict[str, A
         IndexName="BySession",
         KeyConditionExpression=Key("GSI1PK").eq(f"SESSION#{session_id}"),
         ScanIndexForward=False,
-        FilterExpression=Attr("status").ne("deleted"),
+        FilterExpression=Attr("status").ne("deleted") & Attr("moderation_hidden").ne(True),
         Limit=limit,
     )
     return [_clip_out(item) for item in resp.get("Items", [])]
@@ -229,7 +229,7 @@ def list_my_clips(user_sub: str, limit: int = 50) -> List[Dict[str, Any]]:
         IndexName="ByCreator",
         KeyConditionExpression=Key("GSI2PK").eq(f"CREATOR#{user_sub}"),
         ScanIndexForward=False,
-        FilterExpression=Attr("status").ne("deleted"),
+        FilterExpression=Attr("status").ne("deleted") & Attr("moderation_hidden").ne(True),
         Limit=limit,
     )
     return [_clip_out(item) for item in resp.get("Items", [])]

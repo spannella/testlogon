@@ -36,7 +36,7 @@ router = APIRouter(prefix="/v1/moderation", tags=["moderation"])
 
 
 class CreateModerationReportIn(BaseModel):
-    content_type: Literal["feed_post", "feed_comment", "feed_media", "message", "message_media", "video", "video_comment", "syndicate_post", "profile_photo"]
+    content_type: Literal["feed_post", "feed_comment", "feed_media", "message", "message_media", "video", "video_comment", "syndicate_post", "profile_photo", "user", "account", "catalog_item", "catalog_review", "broadcast_message", "story", "clip"]
     content_id: str = Field(min_length=1, max_length=256)
     topics: List[str] = Field(min_length=1, max_length=5)
     reason_text: str = Field(min_length=5, max_length=2000)
@@ -46,6 +46,13 @@ class CreateModerationReportIn(BaseModel):
     video_id: Optional[str] = Field(default=None, max_length=256)
     media_index: Optional[int] = Field(default=None, ge=0)
     syndicate_id: Optional[str] = Field(default=None, max_length=256)
+    category_id: Optional[str] = Field(default=None, max_length=256)
+    item_id: Optional[str] = Field(default=None, max_length=256)
+    review_id: Optional[str] = Field(default=None, max_length=256)
+    session_id: Optional[str] = Field(default=None, max_length=256)
+    story_id: Optional[str] = Field(default=None, max_length=256)
+    clip_id: Optional[str] = Field(default=None, max_length=256)
+    profile_user_id: Optional[str] = Field(default=None, max_length=256)
 
     @field_validator("topics")
     @classmethod
@@ -118,8 +125,21 @@ def _message_exists(conversation_id: str, message_id: str) -> bool:
 
 
 def _profile_photo_exists(user_id: str) -> bool:
-    item = T.profile.get_item(Key={"user_id": user_id}).get("Item") or {}
-    return bool(item.get("profile_photo_url"))
+    # MODX-10: T.profile is keyed by user_sub and stores the photo NESTED under
+    # `profile`; the prior top-level/user_id read always missed -> photo reports 404'd.
+    item = T.profile.get_item(Key={"user_sub": user_id}).get("Item") or {}
+    profile = item.get("profile") or {}
+    return bool(profile.get("profile_photo_url"))
+
+
+def _user_exists(user_id: str) -> bool:
+    # MODX-11: an account is reportable even with NO profile photo.
+    try:
+        if T.users.get_item(Key={"user_sub": user_id}).get("Item"):
+            return True
+    except Exception:
+        pass
+    return bool(T.profile.get_item(Key={"user_sub": user_id}).get("Item"))
 
 
 def _validate_content_exists(inp: CreateModerationReportIn) -> None:
@@ -191,6 +211,48 @@ def _validate_content_exists(inp: CreateModerationReportIn) -> None:
         except Exception:
             _sp = None
         if not _sp:
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type in ("user", "account"):
+        if not _user_exists(inp.content_id):
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "catalog_item":
+        if not inp.category_id:
+            raise HTTPException(status_code=400, detail="category_id is required for catalog_item")
+        _ci = T.catalog.get_item(Key={"PK": f"CAT#{inp.category_id}", "SK": f"ITEM#{inp.content_id}"}).get("Item")
+        if not _ci:
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "catalog_review":
+        if not inp.item_id:
+            raise HTTPException(status_code=400, detail="item_id is required for catalog_review")
+        _cr = T.catalog.get_item(Key={"PK": f"ITEM#{inp.item_id}", "SK": f"REVIEW#{inp.content_id}"}).get("Item")
+        if not _cr:
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "broadcast_message":
+        if not inp.session_id:
+            raise HTTPException(status_code=400, detail="session_id is required for broadcast_message")
+        from app.services.broadcast_chat_store import _find_sort_key
+        if not _find_sort_key(inp.session_id, inp.content_id):
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "story":
+        from app.services.stories import get_story
+        if not get_story(inp.content_id):
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "clip":
+        from app.services.broadcast_clip import get_clip
+        _cl = get_clip(inp.content_id)
+        if not _cl or not _cl.get("clip_id"):
             raise HTTPException(status_code=404, detail="content not found")
         return
 
@@ -426,6 +488,13 @@ def _create_report(inp: CreateModerationReportIn, ctx: Dict[str, str], request: 
                 "media_index": inp.media_index,
                 "video_id": getattr(inp, "video_id", None),
                 "syndicate_id": getattr(inp, "syndicate_id", None),
+                "category_id": getattr(inp, "category_id", None),
+                "item_id": getattr(inp, "item_id", None),
+                "review_id": getattr(inp, "review_id", None),
+                "session_id": getattr(inp, "session_id", None),
+                "story_id": getattr(inp, "story_id", None),
+                "clip_id": getattr(inp, "clip_id", None),
+                "profile_user_id": getattr(inp, "profile_user_id", None),
             },
             now_ts=now_ts,
         )

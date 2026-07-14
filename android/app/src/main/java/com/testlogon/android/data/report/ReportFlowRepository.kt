@@ -68,6 +68,7 @@ class ReportFlowRepositoryImpl @Inject constructor(
         when (target) {
             is ReportTarget.Message -> submitMessage(target, topics, reasonText)
             is ReportTarget.User -> submitModeration(target, topics, reasonText)
+            is ReportTarget.Account -> submitModeration(target, topics, reasonText)
             is ReportTarget.Content -> submitModeration(target, topics, reasonText)
         }
     }
@@ -118,9 +119,19 @@ class ReportFlowRepositoryImpl @Inject constructor(
         )
         return when (target) {
             is ReportTarget.User -> base.copy(profileUserId = target.id)
-            is ReportTarget.Content -> when (target.contentType) {
-                "feed_comment" -> base.copy(commentId = target.id)
-                else -> base.copy(postId = target.id)
+            is ReportTarget.Account -> base.copy(profileUserId = target.id)
+            is ReportTarget.Content -> {
+                val withIds = base.copy(
+                    syndicateId = target.syndicateId,
+                    categoryId = target.categoryId,
+                    itemId = target.itemId,
+                    sessionId = target.sessionId,
+                )
+                when (target.contentType) {
+                    "feed_comment" -> withIds.copy(commentId = target.id)
+                    "catalog_item", "catalog_review", "broadcast_message", "story", "clip" -> withIds
+                    else -> withIds.copy(postId = target.id)
+                }
             }
             is ReportTarget.Message -> base // unreachable (routed to the message endpoint)
         }

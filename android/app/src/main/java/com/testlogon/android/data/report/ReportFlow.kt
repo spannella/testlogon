@@ -29,7 +29,17 @@ sealed interface ReportTarget {
 
     data class User(override val id: String, val displayName: String? = null) : ReportTarget
 
-    data class Content(override val id: String, val contentType: String) : ReportTarget
+    /** MODX-11 - account-level report (content_type=user), keyed on the user; no profile photo required. */
+    data class Account(override val id: String, val displayName: String? = null) : ReportTarget
+
+    data class Content(
+        override val id: String,
+        val contentType: String,
+        val syndicateId: String? = null,
+        val categoryId: String? = null,
+        val itemId: String? = null,
+        val sessionId: String? = null,
+    ) : ReportTarget
 
     data class Message(override val id: String, val conversationId: String) : ReportTarget
 }
@@ -38,6 +48,7 @@ sealed interface ReportTarget {
 val ReportTarget.kind: ReportKind
     get() = when (this) {
         is ReportTarget.User -> ReportKind.USER
+        is ReportTarget.Account -> ReportKind.USER
         is ReportTarget.Content -> ReportKind.CONTENT
         is ReportTarget.Message -> ReportKind.MESSAGE
     }
@@ -70,6 +81,7 @@ object ReportTopics {
 /** AND-383 - wire `content_type` for a USER/CONTENT moderation report. MESSAGE does not use this path. */
 internal fun ReportTarget.moderationContentType(): String = when (this) {
     is ReportTarget.User -> "profile_photo"
+    is ReportTarget.Account -> "user"
     is ReportTarget.Content -> contentType
     is ReportTarget.Message ->
         error("Message targets are not reported via the moderation endpoint")

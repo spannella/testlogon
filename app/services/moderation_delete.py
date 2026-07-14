@@ -147,6 +147,74 @@ def _delete_syndicate_post(syndicate_id: str, post_id: str) -> Optional[str]:
     return owner
 
 
+def _delete_user_account(user_sub: str) -> Optional[str]:
+    # MODX-11: account-level moderation NEVER hard-deletes the account (ban is the
+    # account remedy). Terminal-delete is a safe no-op that just returns the owner.
+    return user_sub or None
+
+
+def _delete_catalog_item(category_id: str, item_id: str) -> Optional[str]:
+    if not category_id or not item_id:
+        return None
+    key = {"PK": f"CAT#{category_id}", "SK": f"ITEM#{item_id}"}
+    item = T.catalog.get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    owner = item.get("creator_id")
+    T.catalog.delete_item(Key=key)
+    return owner
+
+
+def _delete_catalog_review(item_id: str, review_id: str) -> Optional[str]:
+    if not item_id or not review_id:
+        return None
+    key = {"PK": f"ITEM#{item_id}", "SK": f"REVIEW#{review_id}"}
+    item = T.catalog.get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    owner = item.get("reviewer")
+    T.catalog.delete_item(Key=key)
+    return owner
+
+
+def _delete_broadcast_message(session_id: str, message_id: str) -> Optional[str]:
+    if not session_id or not message_id:
+        return None
+    from app.services.broadcast_chat_store import _find_sort_key
+    sk = _find_sort_key(session_id, message_id)
+    if not sk:
+        return None
+    key = {"session_id": session_id, "sort_key": sk}
+    item = T.broadcast_chat_messages.get_item(Key=key).get("Item") or {}
+    owner = item.get("sender_id")
+    T.broadcast_chat_messages.delete_item(Key=key)
+    return owner
+
+
+def _delete_story(story_id: str) -> Optional[str]:
+    if not story_id:
+        return None
+    key = {"pk": f"STORY#{story_id}", "sk": "META"}
+    item = ddb.Table(APP_TABLE).get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    owner = item.get("author_id")
+    ddb.Table(APP_TABLE).delete_item(Key=key)
+    return owner
+
+
+def _delete_clip(clip_id: str) -> Optional[str]:
+    if not clip_id:
+        return None
+    key = {"clip_id": clip_id}
+    item = T.broadcast_clips.get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    owner = item.get("creator_user_id")
+    T.broadcast_clips.delete_item(Key=key)
+    return owner
+
+
 def delete_content(*, content_type: str, content_id: str, metadata: Optional[Dict[str, Any]] = None, case_id: Optional[str] = None) -> Optional[str]:
     """Hard-delete content for a terminal moderation case. Returns owner id."""
     md = metadata or {}
@@ -166,6 +234,18 @@ def delete_content(*, content_type: str, content_id: str, metadata: Optional[Dic
             return _delete_video_comment(str(md.get("video_id") or ""), content_id)
         if content_type == "syndicate_post":
             return _delete_syndicate_post(str(md.get("syndicate_id") or ""), str(md.get("post_id") or content_id))
+        if content_type in ("user", "account"):
+            return _delete_user_account(content_id)
+        if content_type == "catalog_item":
+            return _delete_catalog_item(str(md.get("category_id") or ""), str(md.get("item_id") or content_id))
+        if content_type == "catalog_review":
+            return _delete_catalog_review(str(md.get("item_id") or ""), str(md.get("review_id") or content_id))
+        if content_type == "broadcast_message":
+            return _delete_broadcast_message(str(md.get("session_id") or ""), content_id)
+        if content_type == "story":
+            return _delete_story(str(md.get("story_id") or content_id))
+        if content_type == "clip":
+            return _delete_clip(str(md.get("clip_id") or content_id))
         if content_type == "profile_photo":
             return _delete_profile_photo(content_id)
     except Exception:

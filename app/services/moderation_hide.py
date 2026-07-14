@@ -205,6 +205,132 @@ def _hide_syndicate_post(*, syndicate_id: str, post_id: str, case_id: str, state
     return item.get("author_id")
 
 
+# ── MODX-10/11/12: real hide primitives for the previously-silent surfaces ────
+def _hide_profile_photo(*, user_sub: str, case_id: str, state: str, hidden: bool) -> Optional[str]:
+    """MODX-10 (B2): profile-photo hide used to be a literal no-op. Real, NON-
+    DESTRUCTIVE hide: stash + null the photo url so non-owners stop seeing it, and
+    restore it byte-for-byte on unhide. Photo-scoped flags are kept SEPARATE from
+    the account-level moderation flags so a photo hold never hides the profile."""
+    if not user_sub:
+        return None
+    item = T.profile.get_item(Key={"user_sub": user_sub}).get("Item")
+    if not item:
+        return None
+    profile = dict(item.get("profile") or {})
+    if hidden:
+        if profile.get("profile_photo_url") is not None:
+            profile["moderation_saved_photo_url"] = profile.get("profile_photo_url")
+        profile["profile_photo_url"] = None
+    else:
+        if profile.get("moderation_saved_photo_url") is not None:
+            profile["profile_photo_url"] = profile.get("moderation_saved_photo_url")
+        profile.pop("moderation_saved_photo_url", None)
+    new_item = dict(item)
+    new_item["profile"] = profile
+    new_item["moderation_photo_hidden"] = bool(hidden)
+    new_item["moderation_photo_case_id"] = case_id
+    new_item["moderation_photo_state"] = state
+    new_item["moderation_photo_hidden_at"] = _now_iso()
+    T.profile.put_item(Item=new_item)
+    return user_sub
+
+
+def _hide_user_account(*, user_sub: str, case_id: str, state: str, hidden: bool) -> Optional[str]:
+    """MODX-11 (B3): account-level enforcement. Non-destructive account-hidden flag
+    over the intact profile row; the public profile read honors it (404 for non-
+    owners) and reinstate clears it. NEVER deletes the account (ban is the remedy)."""
+    if not user_sub:
+        return None
+    item = T.profile.get_item(Key={"user_sub": user_sub}).get("Item") or {"user_sub": user_sub}
+    new_item = dict(item)
+    new_item["user_sub"] = user_sub
+    new_item.update({
+        "moderation_hidden": bool(hidden),
+        "moderation_removed": bool(hidden),
+        "moderation_case_id": case_id,
+        "moderation_state": state,
+        "moderation_hidden_at": _now_iso(),
+    })
+    T.profile.put_item(Item=new_item)
+    return user_sub
+
+
+def _hide_catalog_item(*, category_id: str, item_id: str, case_id: str, state: str, hidden: bool) -> Optional[str]:
+    """MODX-12 (B4): non-destructive hide over a catalog item row (T.catalog)."""
+    if not category_id or not item_id:
+        return None
+    key = {"PK": f"CAT#{category_id}", "SK": f"ITEM#{item_id}"}
+    item = T.catalog.get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    T.catalog.update_item(Key=key, UpdateExpression=_SET_EXPR, ExpressionAttributeValues=_flag_values(case_id, state, hidden))
+    return item.get("creator_id")
+
+
+def _hide_catalog_review(*, item_id: str, review_id: str, case_id: str, state: str, hidden: bool) -> Optional[str]:
+    """MODX-12 (B4): non-destructive hide over a product-review row (T.catalog)."""
+    if not item_id or not review_id:
+        return None
+    key = {"PK": f"ITEM#{item_id}", "SK": f"REVIEW#{review_id}"}
+    item = T.catalog.get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    T.catalog.update_item(Key=key, UpdateExpression=_SET_EXPR, ExpressionAttributeValues=_flag_values(case_id, state, hidden))
+    return item.get("reviewer")
+
+
+def _bcast_msg_sort_key(session_id: str, message_id: str) -> Optional[str]:
+    try:
+        resp = T.broadcast_chat_messages.query(
+            IndexName="MessageIdIndex",
+            KeyConditionExpression=Key("message_id").eq(message_id),
+        )
+    except Exception:
+        return None
+    for it in resp.get("Items", []):
+        if it.get("session_id") == session_id:
+            return it.get("sort_key")
+    return None
+
+
+def _hide_broadcast_message(*, session_id: str, message_id: str, case_id: str, state: str, hidden: bool) -> Optional[str]:
+    """MODX-12 (B5): viewer-reported live-chat message -> the real state machine
+    (non-destructive hide over T.broadcast_chat_messages), not just the parallel mute."""
+    if not session_id or not message_id:
+        return None
+    sk = _bcast_msg_sort_key(session_id, message_id)
+    if not sk:
+        return None
+    key = {"session_id": session_id, "sort_key": sk}
+    item = T.broadcast_chat_messages.get_item(Key=key).get("Item") or {}
+    T.broadcast_chat_messages.update_item(Key=key, UpdateExpression=_SET_EXPR, ExpressionAttributeValues=_flag_values(case_id, state, hidden))
+    return item.get("sender_id")
+
+
+def _hide_story(*, story_id: str, case_id: str, state: str, hidden: bool) -> Optional[str]:
+    """MODX-12 (B6): non-destructive hide over an ephemeral story row (APP_TABLE)."""
+    if not story_id:
+        return None
+    key = {"pk": f"STORY#{story_id}", "sk": "META"}
+    item = ddb.Table(APP_TABLE).get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    ddb.Table(APP_TABLE).update_item(Key=key, UpdateExpression=_SET_EXPR, ExpressionAttributeValues=_flag_values(case_id, state, hidden))
+    return item.get("author_id")
+
+
+def _hide_clip(*, clip_id: str, case_id: str, state: str, hidden: bool) -> Optional[str]:
+    """MODX-12 (B6): non-destructive hide over a broadcast clip row (T.broadcast_clips)."""
+    if not clip_id:
+        return None
+    key = {"clip_id": clip_id}
+    item = T.broadcast_clips.get_item(Key=key).get("Item") or {}
+    if not item:
+        return None
+    T.broadcast_clips.update_item(Key=key, UpdateExpression=_SET_EXPR, ExpressionAttributeValues=_flag_values(case_id, state, hidden))
+    return item.get("creator_user_id")
+
+
 def _apply(*, content_type: str, content_id: str, metadata: Dict[str, Any], case_id: str, state: str, hidden: bool) -> Optional[str]:
     md = metadata or {}
     if content_type == "feed_post":
@@ -223,8 +349,19 @@ def _apply(*, content_type: str, content_id: str, metadata: Dict[str, Any], case
     if content_type == "syndicate_post":
         return _hide_syndicate_post(syndicate_id=str(md.get("syndicate_id") or ""), post_id=str(md.get("post_id") or content_id), case_id=case_id, state=state, hidden=hidden)
     if content_type == "profile_photo":
-        # Profile photos already have a dedicated non-destructive revert path; no flag write here.
-        return content_id
+        return _hide_profile_photo(user_sub=str(md.get("profile_user_id") or content_id), case_id=case_id, state=state, hidden=hidden)
+    if content_type in ("user", "account"):
+        return _hide_user_account(user_sub=str(md.get("profile_user_id") or content_id), case_id=case_id, state=state, hidden=hidden)
+    if content_type == "catalog_item":
+        return _hide_catalog_item(category_id=str(md.get("category_id") or ""), item_id=str(md.get("item_id") or content_id), case_id=case_id, state=state, hidden=hidden)
+    if content_type == "catalog_review":
+        return _hide_catalog_review(item_id=str(md.get("item_id") or ""), review_id=str(md.get("review_id") or content_id), case_id=case_id, state=state, hidden=hidden)
+    if content_type == "broadcast_message":
+        return _hide_broadcast_message(session_id=str(md.get("session_id") or ""), message_id=content_id, case_id=case_id, state=state, hidden=hidden)
+    if content_type == "story":
+        return _hide_story(story_id=str(md.get("story_id") or content_id), case_id=case_id, state=state, hidden=hidden)
+    if content_type == "clip":
+        return _hide_clip(clip_id=str(md.get("clip_id") or content_id), case_id=case_id, state=state, hidden=hidden)
     logger.warning("moderation_hide: unsupported content_type %s", content_type)
     return None
 
@@ -276,6 +413,39 @@ def resolve_owner(*, content_type: str, content_id: str, metadata: Optional[Dict
                 return None
             _it = T.syndicate_posts.get_item(Key={"pk": f"SYND#{_sid}", "sk": f"POST#{_pid}"}).get("Item") or {}
             return _it.get("author_id")
+        if content_type in ("profile_photo", "user", "account"):
+            return str(md.get("profile_user_id") or content_id) or None
+        if content_type == "catalog_item":
+            _cid = str(md.get("category_id") or "")
+            _iid = str(md.get("item_id") or content_id)
+            if not _cid:
+                return None
+            _it = T.catalog.get_item(Key={"PK": f"CAT#{_cid}", "SK": f"ITEM#{_iid}"}).get("Item") or {}
+            return _it.get("creator_id")
+        if content_type == "catalog_review":
+            _iid = str(md.get("item_id") or "")
+            _rid = str(md.get("review_id") or content_id)
+            if not _iid:
+                return None
+            _it = T.catalog.get_item(Key={"PK": f"ITEM#{_iid}", "SK": f"REVIEW#{_rid}"}).get("Item") or {}
+            return _it.get("reviewer")
+        if content_type == "broadcast_message":
+            _bsid = str(md.get("session_id") or "")
+            if not _bsid:
+                return None
+            _bsk = _bcast_msg_sort_key(_bsid, content_id)
+            if not _bsk:
+                return None
+            _it = T.broadcast_chat_messages.get_item(Key={"session_id": _bsid, "sort_key": _bsk}).get("Item") or {}
+            return _it.get("sender_id")
+        if content_type == "story":
+            _stid = str(md.get("story_id") or content_id)
+            _it = ddb.Table(APP_TABLE).get_item(Key={"pk": f"STORY#{_stid}", "sk": "META"}).get("Item") or {}
+            return _it.get("author_id")
+        if content_type == "clip":
+            _clid = str(md.get("clip_id") or content_id)
+            _it = T.broadcast_clips.get_item(Key={"clip_id": _clid}).get("Item") or {}
+            return _it.get("creator_user_id")
     except Exception:
         logger.exception("moderation_hide.resolve_owner failed")
     return None
