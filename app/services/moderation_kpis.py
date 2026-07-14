@@ -86,7 +86,21 @@ def compute_moderation_kpis(*, now_ts: int | None = None, lookback_hours: int | 
         if _to_int(row.get("resolved_at"), 0) > 0 and _to_int(row.get("created_at"), 0) > 0
     ]
 
-    open_tickets = [row for row in tickets if str(row.get("status") or "") == "open"]
+    # MODX-18 (D3): a confirmed 30-day hold (and awaiting_final) keeps the ticket
+    # status="open" so the poster hold clock keeps ticking, but it is PARKED work,
+    # not un-triaged backlog. Excluding those case-states from the open/backlog/
+    # oldest-age KPI sets stops parked holds paging on-call and drowning real SLA
+    # breaches; they are surfaced separately as on_hold_count.
+    _PARKED_CASE_STATES = {"hold", "awaiting_final"}
+    raw_open_tickets = [row for row in tickets if str(row.get("status") or "") == "open"]
+    on_hold_tickets = [
+        row for row in raw_open_tickets
+        if str(row.get("moderation_case_state") or "").lower() in _PARKED_CASE_STATES
+    ]
+    open_tickets = [
+        row for row in raw_open_tickets
+        if str(row.get("moderation_case_state") or "").lower() not in _PARKED_CASE_STATES
+    ]
     critical_open = [row for row in open_tickets if str(row.get("priority") or "").lower() == "critical"]
     oldest_open_age_minutes = 0
     if open_tickets:
@@ -120,6 +134,7 @@ def compute_moderation_kpis(*, now_ts: int | None = None, lookback_hours: int | 
         "open_ticket_count": len(open_tickets),
         "critical_backlog": len(critical_open),
         "oldest_open_age_minutes": oldest_open_age_minutes,
+        "on_hold_count": len(on_hold_tickets),
         "extortion_criminal_reports_window_count": len(surge_reports),
     }
 

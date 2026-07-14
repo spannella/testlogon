@@ -28,16 +28,41 @@ sealed interface ModerationBoardUiState {
     data class Content(
         val tickets: List<ModerationTicketDto>,
         val statusFilter: String?,
+        val topicFilter: String? = null,
+        val nextCursor: String? = null,
+        val isLoadingMore: Boolean = false,
         val isRefreshing: Boolean = false,
+        // MODX-22: multi-select + bulk triage.
+        val selectionMode: Boolean = false,
+        val selectedIds: Set<String> = emptySet(),
+        val bulkInFlight: Boolean = false,
+        val bulkMessage: String? = null,
         val transientError: AdminOpsErrorType? = null,
-    ) : ModerationBoardUiState
-    data class Empty(val statusFilter: String?) : ModerationBoardUiState
+    ) : ModerationBoardUiState {
+        val canPaginate: Boolean get() = !nextCursor.isNullOrBlank()
+    }
+    data class Empty(val statusFilter: String?, val topicFilter: String? = null) : ModerationBoardUiState
     data object Forbidden : ModerationBoardUiState
     data class Error(val type: AdminOpsErrorType) : ModerationBoardUiState
 }
 
-/** B5 - the queue statuses the board filters on (mirrors the web board tabs). null = all. */
-val MODERATION_STATUS_FILTERS: List<String?> = listOf(null, "open", "in_review", "resolved")
+/**
+ * MODX-21 (D10): the REAL queue statuses. The old `in_review`/`resolved` chips never
+ * matched a real backend status (they returned a misleading empty). null = all.
+ */
+val MODERATION_STATUS_FILTERS: List<String?> = listOf(null, "open", "closed")
+
+/** MODX-18/MODX-21 (D5): the live category taxonomy the ticket filter accepts. null = all. */
+val MODERATION_TOPIC_FILTERS: List<String?> =
+    listOf(null, "sexual", "violence_threats", "hate", "harassment", "spam", "other", "illegal")
+
+/** MODX-22: the bulk triage actions offered from the selection bar. */
+enum class ModerationBulkAction(val wire: String, val label: String) {
+    DISMISS("dismiss", "Dismiss"),
+    CONFIRM("confirm", "Confirm hold"),
+    REINSTATE("reinstate", "Reinstate"),
+    DELETE("delete", "Delete"),
+}
 
 @HiltViewModel
 class ModerationBoardViewModel @Inject constructor(
@@ -47,17 +72,23 @@ class ModerationBoardViewModel @Inject constructor(
     private val _state = MutableStateFlow<ModerationBoardUiState>(ModerationBoardUiState.Loading)
     val state: StateFlow<ModerationBoardUiState> = _state.asStateFlow()
 
-    private var currentFilter: String? = null
+    private var currentStatus: String? = null
+    private var currentTopic: String? = null
 
     init {
-        load(null)
+        load()
     }
 
-    fun retry() = load(currentFilter)
+    fun retry() = load()
 
     fun setFilter(status: String?) {
-        currentFilter = status
-        load(status)
+        currentStatus = status
+        load()
+    }
+
+    fun setTopicFilter(topic: String?) {
+        currentTopic = topic
+        load()
     }
 
     fun refresh() {
@@ -65,30 +96,93 @@ class ModerationBoardViewModel @Inject constructor(
         if (cur is ModerationBoardUiState.Content) {
             _state.value = cur.copy(isRefreshing = true, transientError = null)
         }
-        fetch(currentFilter, isRefresh = true)
+        fetch(cursor = null, isRefresh = true)
     }
 
-    private fun load(status: String?) {
-        currentFilter = status
+    private fun load() {
         _state.value = ModerationBoardUiState.Loading
-        fetch(status, isRefresh = false)
+        fetch(cursor = null, isRefresh = false)
     }
 
-    private fun fetch(status: String?, isRefresh: Boolean) {
+    /** MODX-21: infinite scroll — append the next page keyed by the API cursor. */
+    fun loadMore() {
+        val cur = _state.value as? ModerationBoardUiState.Content ?: return
+        if (cur.isLoadingMore || !cur.canPaginate) return
+        _state.value = cur.copy(isLoadingMore = true)
+        fetch(cursor = cur.nextCursor, isRefresh = false, append = true)
+    }
+
+    private fun fetch(cursor: String?, isRefresh: Boolean, append: Boolean = false) {
         viewModelScope.launch {
-            when (val r = repo.list(status)) {
+            when (val r = repo.listPage(currentStatus, currentTopic, cursor)) {
                 is ApiResult.Success -> {
-                    val items = r.data.items
-                    _state.value = if (items.isEmpty()) {
-                        ModerationBoardUiState.Empty(status)
+                    val prior = _state.value as? ModerationBoardUiState.Content
+                    val incoming = r.data.items
+                    val merged = if (append && prior != null) prior.tickets + incoming else incoming
+                    _state.value = if (merged.isEmpty()) {
+                        ModerationBoardUiState.Empty(currentStatus, currentTopic)
                     } else {
-                        ModerationBoardUiState.Content(tickets = items, statusFilter = status)
+                        ModerationBoardUiState.Content(
+                            tickets = merged,
+                            statusFilter = currentStatus,
+                            topicFilter = currentTopic,
+                            nextCursor = r.data.nextCursor,
+                            selectionMode = prior?.selectionMode ?: false,
+                            selectedIds = (prior?.selectedIds ?: emptySet()).filter { id -> merged.any { it.ticketId == id } }.toSet(),
+                        )
                     }
                 }
-                is ApiResult.Failure -> reduceFailure(isRefresh, r.error.status)
-                is ApiResult.NetworkError -> reduceError(isRefresh, AdminOpsErrorType.NETWORK)
+                is ApiResult.Failure -> reduceFailure(isRefresh || append, r.error.status)
+                is ApiResult.NetworkError -> reduceError(isRefresh || append, AdminOpsErrorType.NETWORK)
             }
         }
+    }
+
+    // ---- MODX-22: selection + bulk ----
+    fun toggleSelectionMode() {
+        val cur = _state.value as? ModerationBoardUiState.Content ?: return
+        _state.value = cur.copy(selectionMode = !cur.selectionMode, selectedIds = emptySet(), bulkMessage = null)
+    }
+
+    fun toggleSelected(ticketId: String) {
+        val cur = _state.value as? ModerationBoardUiState.Content ?: return
+        val next = if (ticketId in cur.selectedIds) cur.selectedIds - ticketId else cur.selectedIds + ticketId
+        _state.value = cur.copy(selectedIds = next)
+    }
+
+    fun runBulk(action: ModerationBulkAction) {
+        val cur = _state.value as? ModerationBoardUiState.Content ?: return
+        if (cur.bulkInFlight || cur.selectedIds.isEmpty()) return
+        val ids = cur.selectedIds.toList()
+        _state.value = cur.copy(bulkInFlight = true, bulkMessage = null)
+        viewModelScope.launch {
+            when (val r = repo.bulk(ids, action.wire, null)) {
+                is ApiResult.Success -> {
+                    val res = r.data
+                    val msg = "${action.label}: ${res.succeeded} done, ${res.failed} failed."
+                    val prior = _state.value as? ModerationBoardUiState.Content ?: return@launch
+                    _state.value = prior.copy(
+                        bulkInFlight = false,
+                        selectionMode = false,
+                        selectedIds = emptySet(),
+                        bulkMessage = msg,
+                    )
+                    load()
+                }
+                is ApiResult.Failure -> setBulkError(if (r.error.status == 403) "Not authorised for that bulk action." else "Bulk action failed. Try again.")
+                is ApiResult.NetworkError -> setBulkError("You appear to be offline. Check your connection.")
+            }
+        }
+    }
+
+    private fun setBulkError(msg: String) {
+        val cur = _state.value as? ModerationBoardUiState.Content ?: return
+        _state.value = cur.copy(bulkInFlight = false, bulkMessage = msg)
+    }
+
+    fun clearBulkMessage() {
+        val cur = _state.value as? ModerationBoardUiState.Content ?: return
+        _state.value = cur.copy(bulkMessage = null)
     }
 
     private fun reduceFailure(isRefresh: Boolean, status: Int) = when (status) {
@@ -100,7 +194,7 @@ class ModerationBoardViewModel @Inject constructor(
     private fun reduceError(isRefresh: Boolean, type: AdminOpsErrorType) {
         val prior = _state.value as? ModerationBoardUiState.Content
         _state.value = if (isRefresh && prior != null) {
-            prior.copy(isRefreshing = false, transientError = type)
+            prior.copy(isRefreshing = false, isLoadingMore = false, transientError = type)
         } else {
             ModerationBoardUiState.Error(type)
         }

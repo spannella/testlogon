@@ -77,6 +77,27 @@ interface ModerationAdminApi {
         @Path("id") ticketId: String,
         @Body body: ModerationFinalCallReq,
     ): ModerationCaseActionDto
+
+    // MODX-22: bulk triage over many tickets (per-item results).
+    @POST("v1/admin/moderation/tickets/bulk")
+    suspend fun bulk(@Body body: ModerationBulkReq): ModerationBulkResultDto
+
+    // MODX-19: ban management roster + lift.
+    @GET("v1/admin/moderation/bans")
+    suspend fun listBans(
+        @Query("user") user: String? = null,
+        @Query("include_inactive") includeInactive: Boolean? = null,
+    ): ModerationBanRosterDto
+
+    @POST("v1/admin/moderation/bans/{userId}/lift")
+    suspend fun liftBan(
+        @Path("userId") userId: String,
+        @Body body: ModerationBanLiftReq,
+    ): ModerationBanLiftDto
+
+    // MODX-20: decision audit trail for one ticket.
+    @GET("v1/admin/moderation/tickets/{id}/audit")
+    suspend fun ticketAudit(@Path("id") ticketId: String): ModerationAuditTrailDto
 }
 
 // ---- DTOs (verified 1:1 against api/endpoints/moderation.ts) ----
@@ -200,12 +221,105 @@ data class ModerationResolveReq(
     @Json(name = "note") val note: String? = null,
 )
 
+// ---- MODX-22: bulk actions ----
+@JsonClass(generateAdapter = true)
+data class ModerationBulkReq(
+    @Json(name = "ticket_ids") val ticketIds: List<String>,
+    @Json(name = "action") val action: String,
+    @Json(name = "note") val note: String? = null,
+    @Json(name = "steal") val steal: Boolean = false,
+)
+
+@JsonClass(generateAdapter = true)
+data class ModerationBulkItemDto(
+    @Json(name = "ticket_id") val ticketId: String = "",
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "state") val state: String? = null,
+    @Json(name = "error_code") val errorCode: String? = null,
+    @Json(name = "error") val error: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ModerationBulkResultDto(
+    @Json(name = "action") val action: String = "",
+    @Json(name = "total") val total: Int = 0,
+    @Json(name = "succeeded") val succeeded: Int = 0,
+    @Json(name = "failed") val failed: Int = 0,
+    @Json(name = "results") val results: List<ModerationBulkItemDto> = emptyList(),
+)
+
+// ---- MODX-19: ban management ----
+@JsonClass(generateAdapter = true)
+data class ModerationBanEntryDto(
+    @Json(name = "user_id") val userId: String = "",
+    @Json(name = "enforcement_id") val enforcementId: String = "",
+    @Json(name = "source_ticket_id") val sourceTicketId: String = "",
+    @Json(name = "created_at") val createdAt: Long = 0L,
+    @Json(name = "created_by_admin_user_id") val createdBy: String? = null,
+    @Json(name = "duration_days") val durationDays: Int = 0,
+    @Json(name = "ban_until") val banUntil: Long = 0L,
+    @Json(name = "permanent") val permanent: Boolean = false,
+    @Json(name = "note") val note: String = "",
+    @Json(name = "account_status") val accountStatus: String = "",
+    @Json(name = "active") val active: Boolean = true,
+)
+
+@JsonClass(generateAdapter = true)
+data class ModerationBanRosterDto(
+    @Json(name = "items") val items: List<ModerationBanEntryDto> = emptyList(),
+    @Json(name = "next_cursor") val nextCursor: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ModerationBanLiftReq(
+    @Json(name = "note") val note: String? = null,
+    @Json(name = "enforcement_id") val enforcementId: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ModerationBanLiftDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "user_id") val userId: String = "",
+    @Json(name = "account_status") val accountStatus: String = "",
+    @Json(name = "lifted_enforcement_ids") val liftedEnforcementIds: List<String> = emptyList(),
+)
+
+// ---- MODX-20: audit trail ----
+@JsonClass(generateAdapter = true)
+data class ModerationAuditEventDto(
+    @Json(name = "audit_id") val auditId: String = "",
+    @Json(name = "action") val action: String = "",
+    @Json(name = "actor_user_id") val actorUserId: String = "",
+    @Json(name = "ticket_id") val ticketId: String = "",
+    @Json(name = "target_user_id") val targetUserId: String = "",
+    @Json(name = "created_at") val createdAt: Long = 0L,
+)
+
+@JsonClass(generateAdapter = true)
+data class ModerationAuditTrailDto(
+    @Json(name = "items") val items: List<ModerationAuditEventDto> = emptyList(),
+)
+
 /**
  * B5 - read + action data layer over [ModerationAdminApi]. Read-then-act queue; no cache (operational,
  * auth-scoped). A backend 403 surfaces as Failure(status=403) which the ViewModel maps to Forbidden.
  */
 interface ModerationAdminRepository {
     suspend fun list(status: String?): ApiResult<ModerationTicketListDto>
+
+    // MODX-21: real status + live-category filter + cursor pagination (infinite scroll).
+    suspend fun listPage(
+        status: String?,
+        topic: String?,
+        cursor: String?,
+    ): ApiResult<ModerationTicketListDto>
+
+    // MODX-22 / MODX-19 / MODX-20 admin-at-scale actions.
+    suspend fun bulk(ticketIds: List<String>, action: String, note: String?): ApiResult<ModerationBulkResultDto>
+    suspend fun listBans(includeInactive: Boolean = false): ApiResult<ModerationBanRosterDto>
+    suspend fun liftBan(userId: String, note: String?): ApiResult<ModerationBanLiftDto>
+    suspend fun ticketAudit(ticketId: String): ApiResult<ModerationAuditTrailDto>
+
     suspend fun detail(ticketId: String): ApiResult<ModerationTicketDetailDto>
     suspend fun claim(ticketId: String): ApiResult<ModerationTicketDto>
     suspend fun decide(ticketId: String, decision: String, note: String?): ApiResult<ModerationTicketDto>
@@ -238,6 +352,31 @@ class DefaultModerationAdminRepository @Inject constructor(
 
     override suspend fun list(status: String?): ApiResult<ModerationTicketListDto> =
         withContext(io) { call { api.listTickets(status = status, limit = 50) } }
+
+    override suspend fun listPage(
+        status: String?,
+        topic: String?,
+        cursor: String?,
+    ): ApiResult<ModerationTicketListDto> = withContext(io) {
+        call { api.listTickets(status = status, topic = topic, limit = 50, cursor = cursor) }
+    }
+
+    override suspend fun bulk(
+        ticketIds: List<String>,
+        action: String,
+        note: String?,
+    ): ApiResult<ModerationBulkResultDto> = withContext(io) {
+        call { api.bulk(ModerationBulkReq(ticketIds = ticketIds, action = action, note = blankToNull(note))) }
+    }
+
+    override suspend fun listBans(includeInactive: Boolean): ApiResult<ModerationBanRosterDto> =
+        withContext(io) { call { api.listBans(includeInactive = includeInactive) } }
+
+    override suspend fun liftBan(userId: String, note: String?): ApiResult<ModerationBanLiftDto> =
+        withContext(io) { call { api.liftBan(userId, ModerationBanLiftReq(note = blankToNull(note))) } }
+
+    override suspend fun ticketAudit(ticketId: String): ApiResult<ModerationAuditTrailDto> =
+        withContext(io) { call { api.ticketAudit(ticketId) } }
 
     override suspend fun detail(ticketId: String): ApiResult<ModerationTicketDetailDto> =
         withContext(io) { call { api.ticketDetail(ticketId) } }

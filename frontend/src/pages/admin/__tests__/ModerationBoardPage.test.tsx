@@ -7,16 +7,30 @@ import ModerationBoardPage from "../ModerationBoardPage";
 
 const listModerationTickets = vi.fn();
 const getModerationTicketDetail = vi.fn();
-const resolveModerationTicket = vi.fn();
 const claimModerationTicket = vi.fn();
+const dismissModerationCase = vi.fn();
+const confirmModerationCase = vi.fn();
+const finalCallModerationCase = vi.fn();
+const bulkModerationAction = vi.fn();
+const getModerationKpis = vi.fn();
+const listModerationBans = vi.fn();
+const liftModerationBan = vi.fn();
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
 
+// MODX-17: the board now drives the STATE MACHINE (dismiss / confirm / final-call), not the
+// divergent legacy resolve path — the mocks + assertions exercise that surface.
 vi.mock("@/api/endpoints/moderation", () => ({
   listModerationTickets: (...args: unknown[]) => listModerationTickets(...args),
   getModerationTicketDetail: (...args: unknown[]) => getModerationTicketDetail(...args),
-  resolveModerationTicket: (...args: unknown[]) => resolveModerationTicket(...args),
   claimModerationTicket: (...args: unknown[]) => claimModerationTicket(...args),
+  dismissModerationCase: (...args: unknown[]) => dismissModerationCase(...args),
+  confirmModerationCase: (...args: unknown[]) => confirmModerationCase(...args),
+  finalCallModerationCase: (...args: unknown[]) => finalCallModerationCase(...args),
+  bulkModerationAction: (...args: unknown[]) => bulkModerationAction(...args),
+  getModerationKpis: (...args: unknown[]) => getModerationKpis(...args),
+  listModerationBans: (...args: unknown[]) => listModerationBans(...args),
+  liftModerationBan: (...args: unknown[]) => liftModerationBan(...args),
 }));
 
 vi.mock("@/stores/authStore", () => ({
@@ -42,11 +56,11 @@ const ticket = {
   status: "open",
   priority: "high",
   queue: "newsfeed",
-  assigned_admin_user_id: "UNASSIGNED",
-  report_count: 1,
-  aggregated_topics: ["criminal"],
-  latest_report_at: 1700000010,
-  updated_at: 1700000010,
+  assigned_admin_user_id: null,
+  report_count: 3,
+  aggregated_topics: ["violence_threats"],
+  latest_report_at: 1700000000,
+  updated_at: 1700000000,
   created_at: 1700000000,
 };
 
@@ -57,7 +71,7 @@ const detail = {
     {
       report_id: "rpt_1",
       reporter_user_id: "u_reporter",
-      topics: ["criminal"],
+      topics: ["violence_threats"],
       reason_text: "Threat",
       created_at: 1700000010,
       metadata: {},
@@ -68,8 +82,31 @@ const detail = {
     total_tickets: 2,
     open_tickets: 1,
     total_reports: 3,
+    total_enforcements: 2,
   },
-  prior_enforcement_history: [],
+  prior_enforcement_history: [
+    {
+      user_id: "u_offender",
+      enforcement_id: "enf_1",
+      enforcement_type: "warn",
+      status: "recorded",
+      source_ticket_id: "modtk_0",
+      created_at: 1699990000,
+      created_by_admin_user_id: "admin_9",
+      duration_days: 0,
+      note: "prior warning",
+    },
+  ],
+  case_state: "under_review",
+  hold_until: null,
+  owner_user_id: "u_offender",
+  distinct_reporter_count: 3,
+  needs_human_review: false,
+  human_review_reason: null,
+  illegal_lane: false,
+  sla_deadline: null,
+  poster_response: null,
+  responded_at: null,
 };
 
 function renderPage() {
@@ -81,59 +118,48 @@ function renderPage() {
   );
 }
 
-describe("ModerationBoardPage decision panel", () => {
+describe("ModerationBoardPage state machine", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listModerationTickets.mockResolvedValue({ items: [ticket], next_cursor: null });
     getModerationTicketDetail.mockResolvedValue(detail);
-    resolveModerationTicket.mockResolvedValue({ ...ticket, status: "closed" });
     claimModerationTicket.mockResolvedValue({ ...ticket, assigned_admin_user_id: "admin_1" });
+    dismissModerationCase.mockResolvedValue({ ok: true, ticket_id: "modtk_1", case_id: "case_1", state: "dismissed", hidden: false });
+    confirmModerationCase.mockResolvedValue({ ok: true, ticket_id: "modtk_1", case_id: "case_1", state: "hold", hidden: true });
+    finalCallModerationCase.mockResolvedValue({ ok: true, ticket_id: "modtk_1", case_id: "case_1", state: "reinstated", hidden: false });
+    bulkModerationAction.mockResolvedValue({ action: "dismiss", total: 1, succeeded: 1, failed: 0, results: [] });
+    getModerationKpis.mockResolvedValue({
+      generated_at: 1700000000, lookback_hours: 24, surge_window_minutes: 30, ticket_volume: 5,
+      resolution_count: 2, resolution_latency_avg_seconds: 100, resolution_latency_p95_seconds: 300,
+      warning_count: 1, ban_count: 0, warning_rate: 0.5, ban_rate: 0, open_ticket_count: 4,
+      critical_backlog: 1, oldest_open_age_minutes: 12, on_hold_count: 2, extortion_criminal_reports_window_count: 0,
+    });
+    listModerationBans.mockResolvedValue({ items: [], next_cursor: null });
   });
 
-  it("applies no_violation with enforced none action", async () => {
+  it("renders the KPI strip with a hold-excluding backlog", async () => {
     renderPage();
-
-    expect(await screen.findByText("Decision panel")).toBeInTheDocument();
-
-    const selects = screen.getAllByRole("combobox");
-    const [resolutionSelect, enforcementSelect] = selects.slice(-2) as HTMLSelectElement[];
-
-    await userEvent.selectOptions(resolutionSelect, "no_violation");
-    expect(enforcementSelect).toBeDisabled();
-
-    await userEvent.click(screen.getByRole("button", { name: "Apply decision" }));
-
-    await waitFor(() => {
-      expect(resolveModerationTicket).toHaveBeenCalledWith("modtk_1", {
-        resolution: "no_violation",
-        enforcement_action: "none",
-        note: undefined,
-      });
-    });
-    expect(toastSuccess).toHaveBeenCalledWith("Decision recorded");
+    expect(await screen.findByText("Open backlog")).toBeInTheDocument();
+    expect(screen.getByText("On hold")).toBeInTheDocument();
   });
 
-  it("submits content_removed + warn decision with trimmed note", async () => {
+  it("confirms a violation via the state machine (30-day hold)", async () => {
     renderPage();
+    const confirmBtn = await screen.findByRole("button", { name: /Confirm violation/i });
+    await userEvent.click(confirmBtn);
+    await waitFor(() => expect(confirmModerationCase).toHaveBeenCalledWith("modtk_1"));
+    expect(toastSuccess).toHaveBeenCalled();
+  });
 
-    expect(await screen.findByText("Decision panel")).toBeInTheDocument();
+  it("dismisses a case (restores content)", async () => {
+    renderPage();
+    const dismissBtn = await screen.findByRole("button", { name: /Dismiss \(restore\)/i });
+    await userEvent.click(dismissBtn);
+    await waitFor(() => expect(dismissModerationCase).toHaveBeenCalledWith("modtk_1"));
+  });
 
-    const selects = screen.getAllByRole("combobox");
-    const [resolutionSelect, enforcementSelect] = selects.slice(-2) as HTMLSelectElement[];
-
-    await userEvent.selectOptions(resolutionSelect, "content_removed");
-    await userEvent.selectOptions(enforcementSelect, "warn");
-
-    const note = screen.getByPlaceholderText("Decision note (optional)");
-    await userEvent.type(note, "  enforce warning please  ");
-    await userEvent.click(screen.getByRole("button", { name: "Apply decision" }));
-
-    await waitFor(() => {
-      expect(resolveModerationTicket).toHaveBeenCalledWith("modtk_1", {
-        resolution: "content_removed",
-        enforcement_action: "warn",
-        note: "enforce warning please",
-      });
-    });
+  it("renders prior enforcement rows from the real projected fields", async () => {
+    renderPage();
+    expect(await screen.findByText(/prior warning/i)).toBeInTheDocument();
   });
 });

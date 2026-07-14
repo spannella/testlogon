@@ -101,6 +101,11 @@ def ensure_reporting_surface_enabled(content_type: str) -> None:
         raise HTTPException(status_code=403, detail="live chat reporting is disabled")
     if ctype in ("story", "clip") and not bool(flags.get("report_ephemeral_enabled", True)):
         raise HTTPException(status_code=403, detail="ephemeral reporting is disabled")
+    # MODX-18 (D15): the remaining content classes get their own incident kill-switch.
+    if ctype in ("video", "video_comment") and not bool(flags.get("report_video_enabled", True)):
+        raise HTTPException(status_code=403, detail="video reporting is disabled")
+    if ctype == "syndicate_post" and not bool(flags.get("report_syndicate_enabled", True)):
+        raise HTTPException(status_code=403, detail="syndicate reporting is disabled")
 
 
 def ensure_permanent_ban_scope_rollout(admin: AuthenticatedUser) -> None:
