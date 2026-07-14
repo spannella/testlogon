@@ -129,13 +129,31 @@ def _finalize_delete(
     md = _resolve_meta(case, metadata)
     owner = case.get("owner_user_id") or mhide.resolve_owner(content_type=content_type, content_id=content_id, metadata=md)
 
-    resolved_owner = mdel.delete_content(content_type=content_type, content_id=content_id, metadata=md, case_id=case_id) or owner
-    updated = mc.transition(
+    # MODX-2: act-AFTER-guard. Run the guarded state transition FIRST. Only when
+    # THIS call actually moved the case into `deleted` do we destroy content,
+    # record the strike, notify, and close the linked ticket:
+    #   - an illegal-state delete (visible/under_review/dismissed/reinstated)
+    #     raises ValueError from transition_result BEFORE any content is touched
+    #     -> content intact, clean 4xx at the router;
+    #   - a lost race / already-deleted case is `changed=False` -> a clean no-op
+    #     (no double delete, exactly one violation strike across concurrent
+    #     finalizers, since only the conditional-write winner proceeds).
+    changed, updated = mc.transition_result(
         case_id,
         mc.STATE_DELETED,
         extra={"hidden": True, "deleted_at": ts, "delete_reason": str(reason or "")[:64]},
         now_ts=ts,
     )
+    if not changed:
+        return {
+            "state": str((updated or {}).get("state") or mc.STATE_DELETED),
+            "owner_user_id": owner,
+            "enforcement_id": None,
+            "case": updated,
+            "changed": False,
+        }
+
+    resolved_owner = mdel.delete_content(content_type=content_type, content_id=content_id, metadata=md, case_id=case_id) or owner
     enforcement_id = None
     if record_violation_flag:
         enforcement_id = record_violation(
@@ -157,7 +175,44 @@ def _finalize_delete(
         state=mc.STATE_DELETED,
         extra={"content_type": content_type, "reason": reason, "enforcement_id": enforcement_id},
     )
-    return {"state": mc.STATE_DELETED, "owner_user_id": resolved_owner, "enforcement_id": enforcement_id, "case": updated}
+    # MODX-1: close the linked admin ticket on the NON-admin finalize paths
+    # (sweep / poster_close) so no OPEN ticket survives a terminal case. The admin
+    # routes also close their own ticket; this update is idempotent + best-effort.
+    _close_linked_ticket(
+        case=case,
+        source_ticket_id=source_ticket_id,
+        admin_user_id=admin_user_id,
+        now_ts=ts,
+    )
+    return {"state": mc.STATE_DELETED, "owner_user_id": resolved_owner, "enforcement_id": enforcement_id, "case": updated, "changed": True}
+
+
+def _close_linked_ticket(*, case: Dict[str, Any], source_ticket_id: str, admin_user_id: str, now_ts: int) -> None:
+    """MODX-1: mark the linked moderation ticket closed/`content_removed` when a
+    case terminally deletes via a NON-admin path (30-day sweep or poster_close),
+    mirroring the admin close. Best-effort + idempotent (safe to re-close)."""
+    ticket_id = str(source_ticket_id or case.get("ticket_id") or "")
+    if not ticket_id:
+        return
+    now = str(int(now_ts or time.time()))
+    try:
+        T.moderation_tickets.update_item(
+            Key={"ticket_id": ticket_id},
+            UpdateExpression=(
+                "SET #s = :closed, #ua = :ua, #cs = :cs, #r = :r, #ra = :ra, #rb = :rb"
+            ),
+            ConditionExpression="attribute_exists(ticket_id)",
+            ExpressionAttributeNames={
+                "#s": "status", "#ua": "updated_at", "#cs": "moderation_case_state",
+                "#r": "resolution", "#ra": "resolved_at", "#rb": "resolved_by_admin_user_id",
+            },
+            ExpressionAttributeValues={
+                ":closed": "closed", ":ua": now, ":cs": mc.STATE_DELETED,
+                ":r": "content_removed", ":ra": now, ":rb": str(admin_user_id or "system"),
+            },
+        )
+    except Exception:
+        logger.exception("moderation_lifecycle._close_linked_ticket failed for %s", ticket_id)
 
 
 # ── Admin triage (MOD-A4) ────────────────────────────────────────────────────
@@ -170,9 +225,26 @@ def admin_dismiss(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], a
     content_id = str(case.get("content_id") or "")
     md = _resolve_meta(case, metadata)
     owner = case.get("owner_user_id") or mhide.resolve_owner(content_type=content_type, content_id=content_id, metadata=md)
+    # MODX-2 (A10): act-AFTER-guard. Move the case to `dismissed` FIRST; only
+    # un-hide + notify when THIS call actually dismissed it. A lost race to a
+    # concurrent `confirm` (which put the case under HOLD) is `changed=False` ->
+    # we do NOT un-hide, so confirmed-violation content can never pop back into
+    # public view while the case says HOLD.
+    changed, updated = mc.transition_result(
+        case_id,
+        mc.STATE_DISMISSED,
+        extra={"hidden": False, "dismissed_at": ts, "dismissed_by": admin_user_id},
+        now_ts=ts,
+    )
+    if not changed:
+        return {
+            "state": str((updated or {}).get("state") or ""),
+            "owner_user_id": owner,
+            "case": updated,
+            "changed": False,
+        }
     # Restore visibility (pure flag clear; no-op if never hidden).
     mhide.unhide_content(content_type=content_type, content_id=content_id, metadata=md, case_id=case_id, state=mc.STATE_VISIBLE)
-    updated = mc.transition(case_id, mc.STATE_DISMISSED, extra={"hidden": False, "dismissed_at": ts, "dismissed_by": admin_user_id}, now_ts=ts)
     _notify(
         owner,
         event="moderation_content_restored",
@@ -182,7 +254,7 @@ def admin_dismiss(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], a
         state=mc.STATE_DISMISSED,
         extra={"content_type": content_type},
     )
-    return {"state": mc.STATE_DISMISSED, "owner_user_id": owner, "case": updated}
+    return {"state": mc.STATE_DISMISSED, "owner_user_id": owner, "case": updated, "changed": True}
 
 
 def admin_confirm_hold(*, case: Dict[str, Any], metadata: Optional[Dict[str, Any]], admin_user_id: str, now_ts: Optional[int] = None) -> Dict[str, Any]:

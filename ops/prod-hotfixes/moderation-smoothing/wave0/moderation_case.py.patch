@@ -1,0 +1,171 @@
+diff --git a/app/services/moderation_case.py b/app/services/moderation_case.py
+index 3a477843..9fe55b0d 100644
+--- a/app/services/moderation_case.py
++++ b/app/services/moderation_case.py
+@@ -213,24 +213,33 @@ def aggregate_report(
+     return get_case(cid) or dict(base_item)
+ 
+ 
+-def transition(
++def transition_result(
+     case_id: str,
+     to_state: str,
+     *,
+     expected_from: Optional[Iterable[str]] = None,
+     extra: Optional[Dict[str, Any]] = None,
+     now_ts: Optional[int] = None,
+-) -> Dict[str, Any]:
+-    """Idempotent, guarded state transition.
++) -> Tuple[bool, Dict[str, Any]]:
++    """Idempotent, guarded state transition returning ``(changed, case)``.
+ 
+-    Rejects illegal transitions (a case cannot skip states). A no-op when the
+-    case is already in ``to_state``.
++    ``changed`` is True ONLY when THIS call actually moved the case into
++    ``to_state`` (i.e. it won the DB conditional write). A no-op (already in
++    ``to_state``) and a lost race (a concurrent writer transitioned first) BOTH
++    return ``changed=False``.
++
++    This is the act-AFTER-guard primitive (MODX-2): a caller that performs an
++    irreversible side-effect (hard delete, violation strike, un-hide) must do so
++    ONLY when ``changed`` is True, so concurrent finalizers/dismissers can never
++    double-act, and an illegal-state delete raises BEFORE any content is touched.
++
++    Rejects illegal transitions (a case cannot skip states).
+     """
+     ts = int(now_ts or time.time())
+     case = get_case(case_id)
+     frm = str((case or {}).get("state") or STATE_VISIBLE)
+     if to_state == frm:
+-        return case or {}
++        return False, case or {}
+     allowed = ALLOWED_TRANSITIONS.get(frm, set())
+     if to_state not in allowed:
+         raise ValueError(f"illegal moderation_case transition {frm} -> {to_state}")
+@@ -255,9 +264,93 @@ def transition(
+         )
+     except ClientError as exc:
+         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+-            return get_case(case_id) or {}
++            # Lost the race: another writer already moved the case -> NOT our change.
++            return False, get_case(case_id) or {}
+         raise
+-    return get_case(case_id) or {}
++    return True, get_case(case_id) or {}
++
++
++def transition(
++    case_id: str,
++    to_state: str,
++    *,
++    expected_from: Optional[Iterable[str]] = None,
++    extra: Optional[Dict[str, Any]] = None,
++    now_ts: Optional[int] = None,
++) -> Dict[str, Any]:
++    """Back-compat wrapper over ``transition_result`` returning just the case dict.
++
++    Prefer ``transition_result`` when the caller must know whether it actually
++    moved the case (act-AFTER-guard). Rejects illegal transitions; no-op when the
++    case is already in ``to_state``.
++    """
++    _changed, case = transition_result(
++        case_id, to_state, expected_from=expected_from, extra=extra, now_ts=now_ts
++    )
++    return case
++
++
++def reopen_terminal_case(
++    case_id: str,
++    *,
++    categories: Iterable[str],
++    ticket_id: Optional[str] = None,
++    now_ts: Optional[int] = None,
++) -> Optional[Dict[str, Any]]:
++    """MODX-1: open a FRESH lifecycle on previously-actioned (terminal) content.
++
++    A ``case_id`` is a deterministic hash of ``(content_type, content_id)``, so a
++    re-report of ``dismissed``/``reinstated``/``deleted`` content reuses the same
++    (frozen) case. This atomically resets that terminal case back to ``visible``:
++    clears ``hidden``, drops the hold/terminal markers, resets ``report_count`` to
++    1 and ``categories`` to THIS report's, bumps ``reopen_count``, and re-points
++    ``ticket_id`` at the newly-minted open ticket.
++
++    Conditional on the case still being terminal, so concurrent re-reports reopen
++    EXACTLY ONCE (the loser is a no-op -> returns None). Returns the reopened case
++    on success, else None (not terminal / lost race).
++    """
++    ts = int(now_ts or time.time())
++    cats = set(normalize_categories(categories) or ["other"])
++    names = {
++        "#s": "state", "#ua": "updated_at", "#h": "hidden",
++        "#rc": "report_count", "#cats": "categories",
++        "#ra": "reopened_at", "#rn": "reopen_count",
++    }
++    values: Dict[str, Any] = {
++        ":vis": STATE_VISIBLE, ":ts": ts, ":false": False,
++        ":one": 1, ":zero": 0, ":cats": cats,
++        ":dismissed": STATE_DISMISSED, ":reinstated": STATE_REINSTATED, ":deleted": STATE_DELETED,
++    }
++    set_parts = [
++        "#s = :vis", "#ua = :ts", "#h = :false",
++        "#rc = :one", "#cats = :cats", "#ra = :ts",
++        "#rn = if_not_exists(#rn, :zero) + :one",
++    ]
++    if ticket_id:
++        names["#tk"] = "ticket_id"
++        values[":tk"] = ticket_id
++        set_parts.append("#tk = :tk")
++    remove_parts = [
++        "hold_until", "deleted_at", "delete_reason", "reinstated_at",
++        "reinstated_by", "dismissed_at", "dismissed_by", "confirmed_at",
++        "confirmed_by", "poster_response", "responded_at", "hidden_at", "hide_reason",
++    ]
++    upd = "SET " + ", ".join(set_parts) + " REMOVE " + ", ".join(remove_parts)
++    try:
++        T.moderation_cases.update_item(
++            Key={"case_id": case_id},
++            UpdateExpression=upd,
++            ConditionExpression="#s = :dismissed OR #s = :reinstated OR #s = :deleted",
++            ExpressionAttributeNames=names,
++            ExpressionAttributeValues=values,
++        )
++    except ClientError as exc:
++        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
++            return None
++        logger.exception("moderation_case.reopen_terminal_case failed for %s", case_id)
++        return None
++    return get_case(case_id)
+ 
+ 
+ def mark_under_review(case_id: str, *, hide_reason: str, now_ts: Optional[int] = None) -> Dict[str, Any]:
+@@ -370,8 +463,28 @@ def on_report_filed(
+         "owner_user_id": owner,
+     }
+ 
+-    # Already hidden or terminal -> nothing new to hide (idempotent aggregation only).
+-    if bool(case.get("hidden")) or state in TERMINAL_STATES or state != STATE_VISIBLE:
++    # MODX-1: a re-report of previously-actioned (terminal) content must open a
++    # FRESH actionable case instead of hitting the frozen terminal state. Reopen
++    # to `visible`, then fall through and re-evaluate the guarded auto-hide below
++    # (so a severe re-report re-hides, and admin actions on the re-report ticket
++    # act on a live, non-terminal case -> no 500).
++    if state in TERMINAL_STATES:
++        reopened = reopen_terminal_case(
++            case_id, categories=normalize_categories(topics), ticket_id=ticket_id, now_ts=ts
++        )
++        case = reopened or get_case(case_id) or case
++        state = str(case.get("state") or STATE_VISIBLE)
++        report_count = int(case.get("report_count") or 1)
++        cats = list(case.get("categories") or normalize_categories(topics))
++        result.update({
++            "state": state,
++            "report_count": report_count,
++            "categories": sorted({normalize_category(c) for c in cats}),
++            "reopened": True,
++        })
++
++    # Already hidden or (still) non-visible -> nothing new to hide (idempotent).
++    if bool(case.get("hidden")) or state != STATE_VISIBLE:
+         return result
+ 
+     trusted = is_trusted_reporter(reporter_user_id)
