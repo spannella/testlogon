@@ -146,6 +146,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // (name/status/budget/spend). Route reachable via navigateToAdsCampaigns(accountId); the More-hub
         // uses a sample account id (no ads-accounts list yet).
         adsCampaignsDestination(navController)
+        // ADV3-4 (B2/B4): advertiser-accounts LIST (ads-accounts) - the discovery surface that removes the
+        // firstOrNull() single-account ceiling (routes billing/campaigns/analytics with a REAL accountId) +
+        // the campaign-management DETAIL (ads-campaign/{accountId}/{campaignId}) reached from a row tap
+        // (pause/resume/edit-budget/edit-bid/archive via the existing PATCH + an Add-funds CTA).
+        adsAccountsDestination(navController)
+        adCampaignDetailDestination(navController)
         // ADV-107/108/109: advertiser CREATE flow (create ad account -> create campaign -> create
         // creative + asset upload -> submit-for-review). Real account/campaign pickers feed the studio
         // editors via AdsStudioSelection (replacing the first-of-first auto-resolve).

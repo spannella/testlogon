@@ -49,6 +49,8 @@
     <string name="more_title">More</string>
     <string name="more_empty">Nothing here yet</string>
     <string name="more_section_account">Account</string>
+    <string name="more_section_advertising">Advertising</string>
+    <string name="more_entry_advertise">Advertise (create &amp; manage ads)</string>
     <string name="more_section_security">Security</string>
     <string name="more_section_app">App</string>
     <string name="more_section_support">Support</string>
@@ -3792,6 +3794,7 @@
     <string name="deposit_amount_range_error">Enter an amount between $50.00 and $100,000.00.</string>
     <string name="deposit_confirm">Confirm deposit</string>
     <string name="deposit_success">Deposit successful.</string>
+    <string name="deposit_done">Done</string>
     <string name="deposit_success_with_balance">Deposit successful. New balance: %1$s</string>
 
     <!-- AND-368: READ-ONLY ad-analytics dashboard -->
@@ -3850,6 +3853,12 @@
     <string name="create_campaign_review">Submit for review</string>
     <string name="create_campaign_review_done">Submitted — status: %1$s</string>
     <string name="create_campaign_continue">Add a creative</string>
+    <string name="create_campaign_start_date_label">Start date (optional)</string>
+    <string name="create_campaign_end_date_label">End date (optional)</string>
+    <string name="create_campaign_pick_date">Pick</string>
+    <string name="create_campaign_date_ok">Set</string>
+    <string name="create_campaign_date_clear">Clear</string>
+    <string name="create_campaign_add_funds">Add funds to this account</string>
 
     <string name="create_creative_title">Create creative</string>
     <string name="create_creative_account_label">Ad account</string>

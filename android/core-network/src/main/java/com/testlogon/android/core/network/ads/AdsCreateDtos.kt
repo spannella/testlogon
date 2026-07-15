@@ -116,3 +116,29 @@ data class AdSubmitAckDto(
     @Json(name = "ok") val ok: Boolean? = null,
     @Json(name = "status") val status: String? = null,
 )
+
+
+/**
+ * ADV3-4 (B2) - campaign PATCH request body (management: pause/resume/edit/archive). Mirrors backend
+ * CampaignUpdateIn: every field is OPTIONAL (null => omitted so the server leaves it unchanged). [status]
+ * drives lifecycle transitions (active<->paused, ->archived); budget/bid edits carry their new *_cents.
+ * Moshi omits null fields by default here (no @JsonClass codegen), so a pause sends ONLY {"status":"paused"}.
+ */
+data class AdCampaignUpdateIn(
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "objective") val objective: String? = null,
+    @Json(name = "budget_cents") val budgetCents: Long? = null,
+    @Json(name = "budget_type") val budgetType: String? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "bid_cpm_cents") val bidCpmCents: Int? = null,
+    @Json(name = "bid_cpc_cents") val bidCpcCents: Int? = null,
+    @Json(name = "bid_cpa_cents") val bidCpaCents: Int? = null,
+)
+
+/**
+ * ADV3-4 (B2) - campaign PATCH acknowledgement. The backend update endpoint returns {"ok": true} (NOT the
+ * updated campaign), so every field is optional; the caller re-reads the campaign via getCampaign.
+ */
+data class AdCampaignPatchAckDto(
+    @Json(name = "ok") val ok: Boolean? = null,
+)

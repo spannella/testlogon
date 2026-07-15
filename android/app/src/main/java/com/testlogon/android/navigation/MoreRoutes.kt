@@ -282,6 +282,11 @@ object MoreRoutes {
     // AND-367: ads-account billing read view (balance/lifetime-spend + ledger + monthly invoice) + the
     // DEPOSIT add-funds sheet. No ads-accounts list yet, so the hub opens a known sample account id (plain
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
+    // ADV3-4 (B4) / ADV3-5 (B5): the "Advertise" hub landing = the advertiser-accounts LIST. Removes the
+    // single-account ceiling (routes billing/campaigns/analytics with a real accountId) + launches the
+    // create wizard. Plain route constant (no nav arg).
+    const val ADS_ACCOUNTS = AdsAccountsDest.ROUTE
+
     const val ADS_BILLING = AdsBillingDest.STUB_ROUTE
 
     // AND-368: READ-ONLY ad-analytics dashboard (KPI summary + time-series charts + breakdown over a
@@ -577,6 +582,7 @@ object MoreRoutes {
             AD_MESSAGE_COMPOSE,
             AD_MESSAGE_QUEUE,
             AD_MASS_DM,
+            ADS_ACCOUNTS,
             ADS_BILLING,
             AD_ANALYTICS,
             ADS_CAMPAIGNS,

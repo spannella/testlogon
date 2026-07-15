@@ -62,6 +62,9 @@ enum class MoreHub(
 }
 
 enum class MoreSection(@StringRes val titleRes: Int) {
+    // ADV3-5 (B5): the advertiser lifecycle grouped under one discoverable sub-section instead of being
+    // scattered flat among the ACCOUNT rows.
+    ADVERTISING(R.string.more_section_advertising),
     ACCOUNT(R.string.more_section_account),
     SECURITY(R.string.more_section_security),
     APP(R.string.more_section_app),

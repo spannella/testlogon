@@ -171,12 +171,16 @@ async def get_account_endpoint(account_id: str, ctx=Depends(require_ui_session))
 async def create_campaign_endpoint(
     account_id: str, body: CampaignCreateIn, ctx=Depends(require_ui_session)
 ):
-    acct = _require_account_owner(account_id, ctx["user_sub"])
-    # ADV2-301 (F3): a free self-promo campaign needs no funded/active ad account
-    # (the creator promotes their OWN content for free); paid campaigns still
-    # require an active account.
-    if not getattr(body, "is_self_promo", False) and acct.get("status") != "active":
-        raise HTTPException(status_code=403, detail="Account is not active")
+    _require_account_owner(account_id, ctx["user_sub"])
+    # ADV3-3 (B1): a brand-new advertiser account is created ``pending_review``.
+    # Campaigns are created in ``draft`` and cannot SERVE until they are admin-
+    # approved to ``active`` (the launch gate now lives on the submit endpoint,
+    # which requires an active account). Allowing DRAFT creation under a pending
+    # account unblocks the guided create wizard, which previously forward-chained
+    # every net-new advertiser straight into a guaranteed 403 here. A draft
+    # campaign is inert (never selected by serve_ad, which reads only ``active``),
+    # so no money can move before the account is approved and the campaign is
+    # launched. Self-promo campaigns are unchanged (free, own-content only).
     return create_campaign(account_id, body)
 
 
@@ -215,7 +219,16 @@ async def update_campaign_endpoint(
 async def submit_for_review_endpoint(
     account_id: str, campaign_id: str, ctx=Depends(require_ui_session)
 ):
-    _require_account_owner(account_id, ctx["user_sub"])
+    acct = _require_account_owner(account_id, ctx["user_sub"])
+    # ADV3-3 (B1): the launch gate. A draft campaign may be created under a
+    # pending account (see create_campaign_endpoint), but it can only be SUBMITTED
+    # for review - the path to going ``active`` and serving - once the owning ad
+    # account is approved. Preserves "nothing serves under a non-active account".
+    if acct.get("status") != "active":
+        raise HTTPException(
+            status_code=403,
+            detail="Account is not active. An admin must approve this ad account before its campaigns can be submitted for review.",
+        )
     try:
         return submit_campaign_for_review(account_id, campaign_id)
     except Exception:

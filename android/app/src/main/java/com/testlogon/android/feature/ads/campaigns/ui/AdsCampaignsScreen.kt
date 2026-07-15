@@ -57,6 +57,7 @@ object AdsCampaignsTestTags {
 @Composable
 fun AdsCampaignsRoute(
     onBack: () -> Unit,
+    onOpenCampaign: (accountId: String, campaignId: String) -> Unit,
     viewModel: AdsCampaignsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -65,6 +66,9 @@ fun AdsCampaignsRoute(
         onBack = onBack,
         onRefresh = viewModel::refresh,
         onRetry = viewModel::onRetry,
+        // ADV3-4 (B2): a row tap opens the campaign-management detail. The row's own account id is
+        // preferred (a self-healed stub id resolves to a real account) and falls back to the VM's.
+        onCampaignClick = { c -> onOpenCampaign(c.accountId ?: viewModel.accountId, c.campaignId) },
     )
 }
 
@@ -75,6 +79,7 @@ fun AdsCampaignsScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
+    onCampaignClick: (AdCampaign) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -114,6 +119,7 @@ fun AdsCampaignsScreen(
                     state = state,
                     onRefresh = onRefresh,
                     onRetry = onRetry,
+                    onCampaignClick = onCampaignClick,
                 )
             }
         }
@@ -125,6 +131,7 @@ private fun AdsCampaignsContent(
     state: AdsCampaignsUiState.Content,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
+    onCampaignClick: (AdCampaign) -> Unit,
 ) {
     PullToRefreshBox(
         isRefreshing = state.isRefreshing,
@@ -142,15 +149,16 @@ private fun AdsCampaignsContent(
                 StaleBanner(stale = state.isStale, refreshing = false, onRetry = onRetry)
             }
             items(state.campaigns, key = { it.campaignId }) { campaign ->
-                CampaignRow(campaign = campaign)
+                CampaignRow(campaign = campaign, onClick = { onCampaignClick(campaign) })
             }
         }
     }
 }
 
 @Composable
-private fun CampaignRow(campaign: AdCampaign) {
+private fun CampaignRow(campaign: AdCampaign, onClick: () -> Unit = {}) {
     Card(
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .testTag(AdsCampaignsTestTags.row(campaign.campaignId)),

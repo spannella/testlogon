@@ -1311,6 +1311,16 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // ADV3-5 (B5): the single discoverable "Advertise" hub entry - launches the advertiser-accounts
+        // list (create + manage ads), replacing the scattered flat rows as the primary entry point.
+        MoreEntry(
+            id = "advertise",
+            labelRes = R.string.more_entry_advertise,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.ADS_ACCOUNTS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ADVERTISING,
+        ),
         // AND-367: ads-account billing (balance/lifetime-spend + ledger + invoice) + DEPOSIT add-funds.
         MoreEntry(
             id = "ads_billing",
@@ -1318,7 +1328,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.AccountBalanceWallet,
             route = MoreRoutes.ADS_BILLING,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // AND-368: READ-ONLY ad-analytics dashboard (KPI summary + time-series charts + breakdown).
         MoreEntry(
@@ -1327,7 +1337,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Insights,
             route = MoreRoutes.AD_ANALYTICS,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // AND-369: READ-ONLY ads-campaigns list (per-account campaigns: name/status/budget/spend).
         MoreEntry(
@@ -1336,7 +1346,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Campaign,
             route = MoreRoutes.ADS_CAMPAIGNS,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // ADV-107: create an advertiser ACCOUNT (company + billing email) -> pending admin review.
         MoreEntry(
@@ -1345,7 +1355,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.AddBusiness,
             route = MoreRoutes.ADS_CREATE_ACCOUNT,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // ADV-108: create a CAMPAIGN (objective/budget/bid) under a chosen account + submit for review.
         MoreEntry(
@@ -1354,7 +1364,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Campaign,
             route = MoreRoutes.ADS_CREATE_CAMPAIGN,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // ADV-109: create a CREATIVE (copy + CTA) + image upload under a chosen campaign + submit for review.
         MoreEntry(
@@ -1363,7 +1373,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Image,
             route = MoreRoutes.ADS_CREATE_CREATIVE,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // Web-parity: ad TARGETING editor (audience / dayparting-hours / geo / device, live estimate).
         MoreEntry(
@@ -1372,7 +1382,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Tune,
             route = MoreRoutes.ADS_TARGETING,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // Web-parity: ad SCHEDULING (dayparting grid + flights + pacing/eligibility).
         MoreEntry(
@@ -1381,7 +1391,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Schedule,
             route = MoreRoutes.ADS_SCHEDULING,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // Web-parity: ad OPTIMIZATION (recommendations apply/dismiss + auto-optimize + bid/budget).
         MoreEntry(
@@ -1390,7 +1400,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.TrendingUp,
             route = MoreRoutes.ADS_OPTIMIZATION,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // Web-parity: CONTENT AD-CONTROLS (per-content ad overrides + revenue share + ad-revenue breakdown).
         MoreEntry(
@@ -1399,7 +1409,7 @@ class MoreCatalog @Inject constructor() {
             icon = Icons.Outlined.Settings,
             route = MoreRoutes.CONTENT_AD_CONTROLS,
             hub = MoreHub.GROWTH,
-            section = MoreSection.ACCOUNT,
+            section = MoreSection.ADVERTISING,
         ),
         // Web-parity: boost MANAGEMENT (your boosts list -> per-boost detail with cancel/refund).
         MoreEntry(
