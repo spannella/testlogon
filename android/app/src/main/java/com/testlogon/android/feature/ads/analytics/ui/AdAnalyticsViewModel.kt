@@ -64,6 +64,9 @@ class AdAnalyticsViewModel @Inject constructor(
     /** The currently-selected preset (kept across state transitions). */
     private var currentRange: DateRangePreset = DateRangePreset.LAST_28
 
+    /** ADV3-9 (D6): the currently-selected breakdown dimension (kept across loads). */
+    private var currentDimension: BreakdownDimension = BreakdownDimension.CREATIVE
+
     init {
         load(currentRange)
     }
@@ -98,7 +101,7 @@ class AdAnalyticsViewModel @Inject constructor(
                 is ApiResult.Success -> {
                     val timeseries = (repository.getTimeseries(accountId, range)
                         as? ApiResult.Success)?.data ?: emptyList()
-                    val breakdown = (repository.getBreakdown(accountId, DIMENSION, range)
+                    val breakdown = (repository.getBreakdown(accountId, currentDimension, range)
                         as? ApiResult.Success)?.data ?: emptyList()
                     // ADV-503: best-effort ROAS (spend vs attributed conversion value); a failure
                     // simply omits the ROAS card and never fails the dashboard.
@@ -120,6 +123,24 @@ class AdAnalyticsViewModel @Inject constructor(
     fun onRangeChanged(preset: DateRangePreset) {
         if (preset == currentRange) return
         load(preset)
+    }
+
+    /**
+     * ADV3-9 (D6): re-reads ONLY the breakdown for a newly-picked dimension (the KPI
+     * summary / charts / ROAS are unaffected), updating the visible Content in place.
+     */
+    fun onDimensionChanged(dimension: BreakdownDimension) {
+        if (dimension == currentDimension) return
+        currentDimension = dimension
+        val prior = _uiState.value as? AdAnalyticsUiState.Content ?: return
+        _uiState.value = prior.copy(dimension = dimension)
+        viewModelScope.launch {
+            val range = DateRange.of(currentRange, today)
+            val breakdown = (repository.getBreakdown(accountId, dimension, range)
+                as? ApiResult.Success)?.data ?: emptyList()
+            val cur = _uiState.value as? AdAnalyticsUiState.Content ?: return@launch
+            _uiState.value = cur.copy(breakdown = breakdown, dimension = dimension)
+        }
     }
 
     /** Pull-to-refresh / retry: re-reads the current range, keeping content visible while in flight. */
@@ -151,6 +172,7 @@ class AdAnalyticsViewModel @Inject constructor(
                 timeseries = timeseries,
                 breakdown = breakdown,
                 range = preset,
+                dimension = currentDimension,
                 roas = roas,
                 isStale = false,
                 isRefreshing = false,

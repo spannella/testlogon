@@ -174,8 +174,15 @@ data class AdAnalyticsSummaryDto(
     @Json(name = "clicks") val clicks: Long,
     @Json(name = "spend_cents") val spendCents: Long,
     @Json(name = "ctr_pct") val ctrPct: Double,
+    // ADV3-8: cpc_cents (spend/clicks) is the true CPC that was previously
+    // mislabeled cpa_cents on the wire; cpa_cents is now the true cost-per-conversion.
+    @Json(name = "cpc_cents") val cpcCents: Long? = null,
     @Json(name = "cpa_cents") val cpaCents: Long? = null,
     @Json(name = "effective_cpm_cents") val effectiveCpmCents: Long? = null,
+    @Json(name = "conversions") val conversions: Long? = null,
+    @Json(name = "conversion_revenue_cents") val conversionRevenueCents: Long? = null,
+    @Json(name = "roas") val roas: Double? = null,
+    @Json(name = "unique_users") val uniqueUsers: Long? = null,
     @Json(name = "completes") val completes: Long? = null,
     @Json(name = "skips") val skips: Long? = null,
     @Json(name = "completion_rate_pct") val completionRatePct: Double? = null,
@@ -183,6 +190,7 @@ data class AdAnalyticsSummaryDto(
     @Json(name = "clicks_change_pct") val clicksChangePct: Double? = null,
     @Json(name = "spend_change_pct") val spendChangePct: Double? = null,
     @Json(name = "ctr_change_pct") val ctrChangePct: Double? = null,
+    @Json(name = "cpc_change_pct") val cpcChangePct: Double? = null,
     @Json(name = "cpa_change_pct") val cpaChangePct: Double? = null,
     @Json(name = "effective_cpm_change_pct") val effectiveCpmChangePct: Double? = null,
     @Json(name = "completion_rate_change_pct") val completionRateChangePct: Double? = null,

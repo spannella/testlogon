@@ -6325,8 +6325,15 @@ export interface AdAnalyticsSummary {
   clicks: number;
   ctr_pct: number;
   spend_cents: number;
+  // ADV3-8: cpc_cents (spend/clicks) is the true CPC previously mislabeled cpa_cents;
+  // cpa_cents is now the true cost-per-conversion.
+  cpc_cents: number;
   cpa_cents: number;
   effective_cpm_cents: number;
+  conversions: number;
+  conversion_revenue_cents: number;
+  roas: number;
+  unique_users: number;
   completes: number;
   skips: number;
   completion_rate_pct: number;
@@ -6334,7 +6341,31 @@ export interface AdAnalyticsSummary {
   impressions_change_pct: number;
   clicks_change_pct: number;
   spend_change_pct: number;
+  ctr_change_pct: number;
+  cpc_change_pct: number;
+  effective_cpm_change_pct: number;
   days: number;
+}
+
+export interface AdCampaignRoas {
+  campaign_id?: string | null;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  spend_cents: number;
+  conversion_value_cents: number;
+  ctr_pct: number;
+  cpa_cents: number;
+  roas: number;
+}
+
+export interface AdRoasReport {
+  account_id?: string | null;
+  campaign_id?: string | null;
+  days: number;
+  computed_at: number;
+  totals: AdCampaignRoas;
+  campaigns: AdCampaignRoas[];
 }
 
 export interface AdTimeSeriesPoint {

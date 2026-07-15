@@ -5,6 +5,7 @@ import com.testlogon.android.core.model.ads.AdAnalyticsSummary
 import com.testlogon.android.core.model.ads.AdBreakdownEntry
 import com.testlogon.android.core.model.ads.AdRoasReport
 import com.testlogon.android.core.model.ads.AdTimeSeriesPoint
+import com.testlogon.android.core.model.ads.BreakdownDimension
 import com.testlogon.android.core.model.ads.DateRangePreset
 
 /**
@@ -28,6 +29,7 @@ sealed interface AdAnalyticsUiState {
         val timeseries: List<AdTimeSeriesPoint>,
         val breakdown: List<AdBreakdownEntry>,
         val range: DateRangePreset,
+        val dimension: BreakdownDimension = BreakdownDimension.CREATIVE,
         val roas: AdRoasReport? = null,
         val isStale: Boolean = false,
         val isRefreshing: Boolean = false,

@@ -3906,7 +3906,11 @@
     <string name="ad_analytics_kpi_clicks">Clicks</string>
     <string name="ad_analytics_kpi_spend">Spend</string>
     <string name="ad_analytics_kpi_ctr">CTR</string>
+    <string name="ad_analytics_kpi_cpc">CPC</string>
     <string name="ad_analytics_kpi_cpa">CPA</string>
+    <string name="ad_analytics_dimension_creative">By creative</string>
+    <string name="ad_analytics_dimension_surface">By placement</string>
+    <string name="ad_analytics_dimension_targeting">By geo</string>
     <string name="ad_analytics_kpi_ecpm">eCPM</string>
     <string name="ad_analytics_kpi_completion_rate">Completion rate</string>
     <string name="ad_analytics_chart_spend_title">Spend over time</string>

@@ -42,6 +42,7 @@ import com.testlogon.android.core.model.ads.AdBreakdownEntry
 import com.testlogon.android.core.model.ads.AdCampaignRoas
 import com.testlogon.android.core.model.ads.AdRoasReport
 import com.testlogon.android.core.model.ads.AdTimeSeriesPoint
+import com.testlogon.android.core.model.ads.BreakdownDimension
 import com.testlogon.android.core.model.ads.DateRangePreset
 import com.testlogon.android.core.model.syndicates.formatCents
 import com.testlogon.android.core.ui.state.EmptyState
@@ -70,6 +71,9 @@ object AdAnalyticsTestTags {
 
     /** Per-breakdown-row tag (suffix is the row index). */
     fun breakdownRow(index: Int): String = "ad_breakdown_row_$index"
+
+    /** Per-dimension chip tag (suffix is the dimension name lowercased). */
+    fun dimensionChip(dim: BreakdownDimension): String = "ad_dim_${dim.name.lowercase()}"
 }
 
 /** AND-368 - the user-facing label for a [DateRangePreset]. */
@@ -94,6 +98,7 @@ fun AdAnalyticsRoute(
         state = state,
         onBack = onBack,
         onRangeChanged = viewModel::onRangeChanged,
+        onDimensionChanged = viewModel::onDimensionChanged,
         onRefresh = viewModel::refresh,
         onRetry = viewModel::onRetry,
     )
@@ -105,6 +110,7 @@ fun AdAnalyticsScreen(
     state: AdAnalyticsUiState,
     onBack: () -> Unit,
     onRangeChanged: (DateRangePreset) -> Unit,
+    onDimensionChanged: (BreakdownDimension) -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
@@ -146,6 +152,7 @@ fun AdAnalyticsScreen(
                 )
                 is AdAnalyticsUiState.Content -> AdAnalyticsContent(
                     state = state,
+                    onDimensionChanged = onDimensionChanged,
                     onRefresh = onRefresh,
                     onRetry = onRetry,
                 )
@@ -189,6 +196,7 @@ private fun RangeSelector(
 @Composable
 private fun AdAnalyticsContent(
     state: AdAnalyticsUiState.Content,
+    onDimensionChanged: (BreakdownDimension) -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -215,6 +223,12 @@ private fun AdAnalyticsContent(
                 Text(
                     text = stringResource(R.string.ad_analytics_breakdown_header),
                     style = MaterialTheme.typography.titleMedium,
+                )
+            }
+            item {
+                DimensionSelector(
+                    selected = state.dimension,
+                    onDimensionChanged = onDimensionChanged,
                 )
             }
             if (state.breakdown.isEmpty()) {
@@ -300,6 +314,31 @@ private fun RoasStatsRow(label: String, row: AdCampaignRoas, emphasize: Boolean)
     }
 }
 
+/** ADV3-9 (D6) - the user-facing label for a breakdown [BreakdownDimension]. */
+private fun BreakdownDimension.labelRes(): Int = when (this) {
+    BreakdownDimension.CREATIVE -> R.string.ad_analytics_dimension_creative
+    BreakdownDimension.SURFACE -> R.string.ad_analytics_dimension_surface
+    BreakdownDimension.TARGETING -> R.string.ad_analytics_dimension_targeting
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DimensionSelector(
+    selected: BreakdownDimension,
+    onDimensionChanged: (BreakdownDimension) -> Unit,
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        BreakdownDimension.entries.forEach { dim ->
+            FilterChip(
+                selected = dim == selected,
+                onClick = { onDimensionChanged(dim) },
+                label = { Text(stringResource(dim.labelRes())) },
+                modifier = Modifier.testTag(AdAnalyticsTestTags.dimensionChip(dim)),
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun KpiGrid(summary: AdAnalyticsSummary) {
@@ -332,13 +371,25 @@ private fun KpiGrid(summary: AdAnalyticsSummary) {
             value = formatPercent(summary.ctrPct),
             changePct = summary.ctrChangePct,
         )
-        summary.cpaCents?.let {
+        // ADV3-8: true CPC (spend/clicks) - previously mislabeled CPA.
+        summary.cpcCents?.let {
             KpiTile(
-                name = "cpa",
-                label = stringResource(R.string.ad_analytics_kpi_cpa),
+                name = "cpc",
+                label = stringResource(R.string.ad_analytics_kpi_cpc),
                 value = formatCents(it),
-                changePct = summary.cpaChangePct,
+                changePct = summary.cpcChangePct,
             )
+        }
+        // True CPA (spend/conversion) - only meaningful once conversions exist.
+        if ((summary.conversions ?: 0L) > 0L) {
+            summary.cpaCents?.let {
+                KpiTile(
+                    name = "cpa",
+                    label = stringResource(R.string.ad_analytics_kpi_cpa),
+                    value = formatCents(it),
+                    changePct = summary.cpaChangePct,
+                )
+            }
         }
         summary.effectiveCpmCents?.let {
             KpiTile(
@@ -348,7 +399,9 @@ private fun KpiGrid(summary: AdAnalyticsSummary) {
                 changePct = summary.effectiveCpmChangePct,
             )
         }
-        summary.completionRatePct?.let {
+        // Completion rate is only real when complete/skip events exist; a
+        // hardcoded 0.00% tile is suppressed rather than shown (D5).
+        if (((summary.completes ?: 0L) + (summary.skips ?: 0L)) > 0L) summary.completionRatePct?.let {
             KpiTile(
                 name = "completion_rate",
                 label = stringResource(R.string.ad_analytics_kpi_completion_rate),
