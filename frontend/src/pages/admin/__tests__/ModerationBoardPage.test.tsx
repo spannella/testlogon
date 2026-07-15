@@ -15,6 +15,8 @@ const bulkModerationAction = vi.fn();
 const getModerationKpis = vi.fn();
 const listModerationBans = vi.fn();
 const liftModerationBan = vi.fn();
+const getTicketAuditTrail = vi.fn();
+const unclaimModerationTicket = vi.fn();
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
 
@@ -31,6 +33,8 @@ vi.mock("@/api/endpoints/moderation", () => ({
   getModerationKpis: (...args: unknown[]) => getModerationKpis(...args),
   listModerationBans: (...args: unknown[]) => listModerationBans(...args),
   liftModerationBan: (...args: unknown[]) => liftModerationBan(...args),
+  getTicketAuditTrail: (...args: unknown[]) => getTicketAuditTrail(...args),
+  unclaimModerationTicket: (...args: unknown[]) => unclaimModerationTicket(...args),
 }));
 
 vi.mock("@/stores/authStore", () => ({
@@ -135,6 +139,22 @@ describe("ModerationBoardPage state machine", () => {
       critical_backlog: 1, oldest_open_age_minutes: 12, on_hold_count: 2, extortion_criminal_reports_window_count: 0,
     });
     listModerationBans.mockResolvedValue({ items: [], next_cursor: null });
+    getTicketAuditTrail.mockResolvedValue({
+      items: [
+        {
+          audit_id: "aud_1",
+          action: "case_confirmed",
+          actor_user_id: "admin_9",
+          ticket_id: "modtk_1",
+          content_type: "feed_post",
+          content_id: "post_1",
+          target_user_id: "u_offender",
+          created_at: 1700000020,
+          metadata: {},
+        },
+      ],
+    });
+    unclaimModerationTicket.mockResolvedValue({ ...ticket, assigned_admin_user_id: null });
   });
 
   it("renders the KPI strip with a hold-excluding backlog", async () => {
@@ -161,5 +181,34 @@ describe("ModerationBoardPage state machine", () => {
   it("renders prior enforcement rows from the real projected fields", async () => {
     renderPage();
     expect(await screen.findByText(/prior warning/i)).toBeInTheDocument();
+  });
+
+  it("surfaces the needs-human-review lane signal from the detail DTO", async () => {
+    getModerationTicketDetail.mockResolvedValue({
+      ...detail,
+      needs_human_review: true,
+      human_review_reason: "velocity_burst",
+    });
+    renderPage();
+    expect(await screen.findByText(/needs human review/i)).toBeInTheDocument();
+  });
+
+  it("lazy-loads the MODX-20 audit trail when opened", async () => {
+    renderPage();
+    const showBtn = await screen.findByRole("button", { name: /^Show$/i });
+    await userEvent.click(showBtn);
+    await waitFor(() => expect(getTicketAuditTrail).toHaveBeenCalledWith("modtk_1"));
+    expect(await screen.findByText(/case_confirmed/i)).toBeInTheDocument();
+  });
+
+  it("releases a claim via the MODX-20 unclaim endpoint", async () => {
+    getModerationTicketDetail.mockResolvedValue({
+      ...detail,
+      ticket: { ...ticket, assigned_admin_user_id: "admin_2" },
+    });
+    renderPage();
+    const releaseBtn = await screen.findByRole("button", { name: /Release claim/i });
+    await userEvent.click(releaseBtn);
+    await waitFor(() => expect(unclaimModerationTicket).toHaveBeenCalledWith("modtk_1", undefined));
   });
 });

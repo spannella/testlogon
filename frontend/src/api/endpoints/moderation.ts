@@ -1,7 +1,29 @@
 import { api } from "@/api/client";
 
+// W4/MODX-18: full backend content-type taxonomy. The prior 6-value union silently
+// excluded the video/video_comment/syndicate_post/catalog/broadcast/story/clip/account
+// surfaces the backend `CreateModerationReportIn` now accepts, so a report against any of
+// those surfaces was untypeable at the call site.
+export type ModerationReportContentType =
+  | "feed_post"
+  | "feed_comment"
+  | "feed_media"
+  | "message"
+  | "message_media"
+  | "video"
+  | "video_comment"
+  | "syndicate_post"
+  | "profile_photo"
+  | "user"
+  | "account"
+  | "catalog_item"
+  | "catalog_review"
+  | "broadcast_message"
+  | "story"
+  | "clip";
+
 export interface CreateModerationReportReq {
-  content_type: "feed_post" | "feed_comment" | "feed_media" | "message" | "message_media" | "profile_photo";
+  content_type: ModerationReportContentType;
   content_id: string;
   topics: string[];
   reason_text: string;
@@ -11,6 +33,17 @@ export interface CreateModerationReportReq {
   conversation_id?: string;
   message_id?: string;
   profile_user_id?: string;
+  // Content-type-specific correlation ids the backend validates per surface
+  // (syndicate_post→syndicate_id, catalog_item→category_id/item_id,
+  // catalog_review→review_id, broadcast_message→session_id, video→video_id, story→story_id, clip→clip_id).
+  video_id?: string;
+  syndicate_id?: string;
+  category_id?: string;
+  item_id?: string;
+  review_id?: string;
+  session_id?: string;
+  story_id?: string;
+  clip_id?: string;
 }
 
 export interface ModerationTicket {

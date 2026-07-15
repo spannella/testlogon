@@ -18,9 +18,12 @@ import {
   finalCallModerationCase,
   getModerationKpis,
   getModerationTicketDetail,
+  getTicketAuditTrail,
   listModerationBans,
   liftModerationBan,
   listModerationTickets,
+  unclaimModerationTicket,
+  type ModerationAuditEvent,
   type ModerationTicket,
   type ModerationTopic,
 } from "@/api/endpoints/moderation";
@@ -69,6 +72,8 @@ export default function ModerationBoardPage() {
   const [secondApprover, setSecondApprover] = useState<string>("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBans, setShowBans] = useState<boolean>(false);
+  const [showAudit, setShowAudit] = useState<boolean>(false);
+  const [reassignTo, setReassignTo] = useState<string>("");
 
   const activeQueue = QUEUE_TABS.find((t) => t.key === queueKey)?.queue;
 
@@ -98,16 +103,32 @@ export default function ModerationBoardPage() {
 
   const bansQuery = useQuery({ queryKey: ["moderation-bans"], queryFn: () => listModerationBans(false), enabled: canAccess && showBans });
 
+  // MODX-20 (D6): who/when/why decision timeline for the selected ticket (lazy: only when opened).
+  const auditQuery = useQuery({
+    queryKey: ["moderation-audit", selectedId],
+    queryFn: () => getTicketAuditTrail(selectedId!),
+    enabled: canAccess && !!selectedId && showAudit,
+  });
+
   const refetchAll = () => {
     void listQuery.refetch();
     void detailQuery.refetch();
     void kpiQuery.refetch();
+    if (showAudit) void auditQuery.refetch();
   };
 
   const claimMutation = useMutation({
     mutationFn: (ticketId: string) => claimModerationTicket(ticketId),
     onSuccess: () => { toast.success("Ticket claimed"); refetchAll(); },
     onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Unable to claim ticket"),
+  });
+
+  // MODX-20 (D8): release an abandoned/self-held claim (or hand it to another moderator)
+  // so it never wedges the assignee filter.
+  const unclaimMutation = useMutation({
+    mutationFn: (ticketId: string) => unclaimModerationTicket(ticketId, reassignTo.trim() || undefined),
+    onSuccess: () => { toast.success(reassignTo.trim() ? "Ticket reassigned" : "Claim released"); setReassignTo(""); refetchAll(); },
+    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Unable to release claim"),
   });
 
   // MODX-17 (D1): the STATE-MACHINE actions (dismiss / confirm-30d-hold / final-call).
@@ -207,17 +228,21 @@ export default function ModerationBoardPage() {
       <PageHeader title="Moderation Board" description="Drive the 30-day-hold state machine, filter queues, and manage bans." />
 
       {/* MODX-18 (D12): KPI header strip (backlog now excludes parked holds). */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
-        {kpiCards.map((k) => (
-          <Card key={k.label}>
-            <CardContent className="p-3">
-              <div className="text-xs text-muted-foreground">{k.label}</div>
-              <div className="text-xl font-semibold">{k.value}</div>
-              {k.hint && <div className="text-[10px] text-muted-foreground">{k.hint}</div>}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {kpiQuery.isLoading && <div className="text-sm text-muted-foreground">Loading KPIs…</div>}
+      {kpiQuery.isError && <div className="text-sm text-destructive">Failed to load KPIs.</div>}
+      {kpiCards.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+          {kpiCards.map((k) => (
+            <Card key={k.label}>
+              <CardContent className="p-3">
+                <div className="text-xs text-muted-foreground">{k.label}</div>
+                <div className="text-xl font-semibold">{k.value}</div>
+                {k.hint && <div className="text-[10px] text-muted-foreground">{k.hint}</div>}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2">
         {QUEUE_TABS.map((t) => (
@@ -238,7 +263,8 @@ export default function ModerationBoardPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             {bansQuery.isLoading && <div className="text-sm text-muted-foreground">Loading bans…</div>}
-            {!bansQuery.isLoading && banList.length === 0 && <div className="text-sm text-muted-foreground">No active bans.</div>}
+            {bansQuery.isError && <div className="text-sm text-destructive">Failed to load bans.</div>}
+            {!bansQuery.isLoading && !bansQuery.isError && banList.length === 0 && <div className="text-sm text-muted-foreground">No active bans.</div>}
             {banList.map((b) => (
               <div key={`${b.user_id}-${b.enforcement_id}`} className="flex items-center justify-between rounded-md border p-2 text-sm">
                 <div>
@@ -352,9 +378,17 @@ export default function ModerationBoardPage() {
                   <Badge variant="secondary">{detail.ticket.priority}</Badge>
                   <Badge variant={detail.illegal_lane ? "destructive" : "outline"}>state: {detail.case_state || "—"}</Badge>
                   {detail.illegal_lane && <Badge variant="destructive">illegal / CSAM lane</Badge>}
+                  {/* MODX-17 (D1): human-review lane signal so a case that auto-hid on velocity is
+                      not silently confirmed without an admin looking. */}
+                  {detail.needs_human_review && (
+                    <Badge variant="destructive" title={detail.human_review_reason || undefined}>
+                      needs human review{detail.human_review_reason ? `: ${detail.human_review_reason}` : ""}
+                    </Badge>
+                  )}
                   <span>Queue: {detail.ticket.queue}</span>
                   <span>Assigned: {detail.ticket.assigned_admin_user_id || "unassigned"}</span>
                   <span>Distinct reporters: {detail.distinct_reporter_count}</span>
+                  {detail.sla_deadline ? <span>SLA: {fmt(detail.sla_deadline)}</span> : null}
                   {canFinalCall && <span>Hold: {holdCountdown(detail.hold_until)}</span>}
                 </div>
 
@@ -416,10 +450,43 @@ export default function ModerationBoardPage() {
                   </div>
                 </div>
 
+                {/* MODX-20 (D6): decision audit trail (who/when/why) — lazy-loaded on open. */}
+                <div className="rounded-md border p-3 text-xs">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="text-sm font-medium">Audit trail</div>
+                    <Button size="sm" variant="ghost" onClick={() => setShowAudit((v) => !v)}>
+                      {showAudit ? "Hide" : "Show"}
+                    </Button>
+                  </div>
+                  {showAudit && (
+                    <div className="max-h-[160px] space-y-1 overflow-auto">
+                      {auditQuery.isLoading && <div className="text-muted-foreground">Loading audit trail…</div>}
+                      {auditQuery.isError && <div className="text-destructive">Failed to load audit trail.</div>}
+                      {!auditQuery.isLoading && !auditQuery.isError && (auditQuery.data?.items?.length ?? 0) === 0 && (
+                        <div className="text-muted-foreground">No audit events for this ticket.</div>
+                      )}
+                      {auditQuery.data?.items?.map((a: ModerationAuditEvent) => (
+                        <div key={a.audit_id} className="rounded bg-muted/40 p-2">
+                          <div>
+                            <span className="font-medium">{a.action}</span> • {a.actor_user_id || "system"}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {fmt(a.created_at)}
+                            {a.target_user_id ? ` • target ${a.target_user_id}` : ""}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* MODX-17 (D1): the state-machine action panel. */}
                 <div className="space-y-2 rounded-md border p-3">
                   <div className="text-sm font-medium">Case actions</div>
                   <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Decision note (optional)" />
+                  {detail.ticket.assigned_admin_user_id && (
+                    <Input value={reassignTo} onChange={(e) => setReassignTo(e.target.value)} placeholder="Reassign to admin_user_sub (blank = release)" />
+                  )}
 
                   <div className="flex flex-wrap gap-2">
                     <Button
@@ -429,6 +496,16 @@ export default function ModerationBoardPage() {
                     >
                       {detail.ticket.assigned_admin_user_id === currentUserSub ? "Claimed by you" : "Claim ticket"}
                     </Button>
+                    {/* MODX-20 (D8): release / reassign an existing claim. */}
+                    {detail.ticket.assigned_admin_user_id && (
+                      <Button
+                        variant="outline"
+                        onClick={() => selectedId && unclaimMutation.mutate(selectedId)}
+                        disabled={!selectedId || unclaimMutation.isPending}
+                      >
+                        {reassignTo.trim() ? "Reassign" : "Release claim"}
+                      </Button>
+                    )}
                     <Button onClick={() => selectedId && dismissMutation.mutate(selectedId)} disabled={!selectedId || !canDismissConfirm || dismissMutation.isPending}>
                       Dismiss (restore)
                     </Button>
