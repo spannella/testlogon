@@ -23,7 +23,7 @@ from app.services.filemanager import get_node, norm_path
 from app.services.alerts import audit_event
 from app.services.profile import get_profile_identity
 from app.services.purchase_history import record_billing_transaction
-from app.services.subscription_access import get_subscription_settings, set_subscription_settings
+from app.services.subscription_access import get_subscription_settings, set_subscription_settings, is_platform_admin
 from app.services.subscription_cycle_orders import emit_subscription_cycle_order
 from app.auth.policy import require_admin_or_root
 
@@ -1925,14 +1925,31 @@ async def refund_subscription(
     user_id = require_user(x_user_id)
     if user_id not in (sub["subscriber_id"], sub["creator_id"], sub.get("gifter_id")):
         raise HTTPException(status_code=403, detail="Not authorized to refund this subscription")
+    # SUBX-02: only the creator / gifter / platform-admin may issue a FULL (>=1.0)
+    # refund; a subscriber may only self-refund the unused prorated remainder.
+    privileged = (user_id in (sub["creator_id"], sub.get("gifter_id"))) or is_platform_admin(user_id)
     now = now_ts()
     if body.fraction is not None:
         frac = max(0.0, min(1.0, float(body.fraction)))
     else:
         frac = _proration_fraction(now, int(sub.get("start_at") or now), int(sub.get("current_period_end") or now))
+    if frac >= 1.0 and not privileged:
+        raise HTTPException(status_code=403, detail="Only the creator or an admin can issue a full refund")
     if frac <= 0:
         raise HTTPException(status_code=400, detail="Nothing to refund for the current period")
     receipt = _reverse_subscription_charge(sub, now=now, refund_fraction=frac, reason=(body.reason or "refund"), actor=user_id)
+    # SUBX-02: a refunded cycle no longer grants access -> REVOKE now (mirror the
+    # immediate-cancel path) so has_active_subscription flips False + content re-locks;
+    # no refund-and-keep-access. Idempotent (an idempotent replay reverses nothing).
+    if not receipt.get("idempotent_replay"):
+        sub["status"] = "canceled"
+        sub["canceled_at"] = now
+        sub["current_period_end"] = now
+        sub["auto_renew"] = False
+        sub["cancel_at_period_end"] = False
+        sub["updated_at"] = now
+        save_subscription(sub)
+        record_billing_subscription(sub)
     audit_event(
         "subscription_refunded",
         sub["subscriber_id"],
@@ -2301,73 +2318,26 @@ async def convert_trial(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
 
+    # SUBX-01: route the MANUAL trial conversion through the SAME funds-guarded rail
+    # the sweeper uses (subscription_renewal._attempt_renewal, trial_conversion=True)
+    # so it REALLY charges the card captured up front. A missing / declined PM -> 402
+    # and NO creator credit / NO period advance (was: a phantom stub_inv invoice plus a
+    # real creator credit with ZERO dollars collected).
+    from app.services.subscription_renewal import _attempt_renewal
+
     ts = now_ts()
-    sub["status"] = "active"
-    sub["trial_converted_at"] = ts
-    sub["current_period_end"] = ts + interval_seconds(sub["interval"])
-    sub["updated_at"] = ts
-    save_subscription(sub)
-    record_billing_subscription(sub)
-
-    invoice_id = new_id("inv")
-    invoice = {
-        "invoice_id": invoice_id,
-        "subscription_id": subscription_id,
-        "subscriber_id": sub["subscriber_id"],
-        "provider_invoice_id": new_id("stub_inv"),
-        "amount_cents": int(sub["price_cents"]),
-        "currency": sub["currency"],
-        "status": "paid",
-        "period_start": ts,
-        "period_end": sub["current_period_end"],
-        "created_at": ts,
+    _subx_summary: Dict[str, Any] = {
+        "renewed": [], "dunning": [], "expired": [], "canceled": [],
+        "idempotent_skips": [], "grandfather_skips": [], "trial_converted": [],
+        "plan_changed": [], "expiring_soon": [],
     }
-    recurring = emit_subscription_cycle_order_and_reconcile(subscription=sub, plan=plan, invoice=invoice)
-    invoice["recurring_order_id"] = recurring["order_id"]
-    save_invoice(invoice)
-    record_billing_payment(invoice, subscription_id)
-    record_billing_transaction(
-        user_sub=sub["subscriber_id"],
-        amount_cents=int(invoice["amount_cents"]),
-        currency=invoice["currency"],
-        description=f"Subscription {sub['plan_id']}",
-        status="COMPLETED",
-        external_ref=invoice_id,
-        metadata={"subscription_id": subscription_id, "creator_id": sub["creator_id"]},
-    )
-
-    fee_cents = int(invoice["amount_cents"] * FEE_BPS / 10000)
-    charge_entry = {
-        "entry_id": new_id("led"),
-        "subscription_id": subscription_id,
-        "subscriber_id": sub["subscriber_id"],
-        "entry_type": "charge",
-        "amount_cents": invoice["amount_cents"],
-        "currency": invoice["currency"],
-        "created_at": ts,
-        "metadata": {"invoice_id": invoice_id},
-    }
-    fee_entry = {
-        "entry_id": new_id("led"),
-        "subscription_id": subscription_id,
-        "subscriber_id": sub["subscriber_id"],
-        "entry_type": "fee",
-        "amount_cents": fee_cents,
-        "currency": invoice["currency"],
-        "created_at": ts,
-        "metadata": {"invoice_id": invoice_id},
-    }
-    save_ledger_entry(sub["creator_id"], charge_entry)
-    save_ledger_entry(sub["creator_id"], fee_entry)
-    _mirror_creator_credit_to_billing(
-        sub["creator_id"],
-        int(invoice["amount_cents"]) - fee_cents,
-        currency=invoice["currency"],
-        created_at=ts,
-        subscription_id=subscription_id,
-        subscriber_id=sub["subscriber_id"],
-        invoice_id=invoice_id,
-    )
+    _attempt_renewal(sub, ts, _subx_summary, trial_conversion=True)
+    if (sub.get("status") or "").lower() != "active":
+        # decline / no payment method -> dunning (past_due); nothing was credited
+        raise HTTPException(
+            status_code=402,
+            detail={"code": "payment_failed", "message": "Trial conversion charge did not succeed. Update your payment method and try again."},
+        )
 
     audit_event(
         "subscription_trial_converted",
@@ -2818,9 +2788,22 @@ async def list_earnings(
 
 
 @router.post("/api/billing/webhooks/{provider}")
-async def billing_webhook(provider: str, body: WebhookIn):
+async def billing_webhook(
+    provider: str,
+    body: WebhookIn,
+    x_webhook_secret: Optional[str] = Header(default=None, alias="X-Subscription-Webhook-Secret"),
+):
     if provider not in ("stub", "paypal", "ccbill"):
         raise HTTPException(status_code=400, detail="Unsupported provider")
+    # SUBX-03: authenticate the billing webhook with a shared secret (seam mirrors
+    # admin_payouts.payout_provider_webhook). When SUBSCRIPTION_WEBHOOK_SECRET is set,
+    # an unsigned / forged caller is rejected 401 and mutates NOTHING -- closing the
+    # free un-expire / extend / dunning-bypass hole.
+    _wh_secret = os.environ.get("SUBSCRIPTION_WEBHOOK_SECRET", "") or getattr(S, "subscription_webhook_secret", "") or ""
+    if _wh_secret:
+        import hmac as _hmac
+        if not _hmac.compare_digest(str(x_webhook_secret or ""), str(_wh_secret)):
+            raise HTTPException(status_code=401, detail="invalid_webhook_secret")
     event_id = new_id("wh")
     ddb_put_item({
         "pk": f"WEBHOOK#{provider}",
@@ -2898,12 +2881,10 @@ async def billing_webhook(provider: str, body: WebhookIn):
             }
             save_ledger_entry(sub["creator_id"], entry)
     elif event_type == "invoice.paid":
-        sub["status"] = "active"
-        sub["current_period_end"] = ts + interval_seconds(sub.get("interval", "month"))
-        sub["auto_renew"] = True
-        if sub.get("discount_remaining_months"):
-            sub["discount_remaining_months"] = max(0, int(sub["discount_remaining_months"]) - 1)
-
+        # SUBX-03: BOOKKEEPING-ONLY. A signed invoice.paid must NOT extend the period /
+        # un-expire / re-enable auto-renew off a webhook alone; only a real captured charge
+        # (the funds-guarded renewal sweeper) advances the lifecycle. Record the invoice
+        # for audit but leave status / current_period_end / auto_renew intact.
         amount_cents = body.metadata.get("amount_cents") or body.metadata.get("amount") or sub.get("price_cents")
         try:
             amount_cents = int(amount_cents)

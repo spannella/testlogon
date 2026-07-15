@@ -78,17 +78,39 @@ def test_subscribe_path_uses_shared_emit_and_reconcile(monkeypatch) -> None:
     assert calls[0]["invoice"]["invoice_id"] == "inv-id"
 
 
-def test_trial_convert_path_uses_shared_emit_and_reconcile(monkeypatch) -> None:
+def test_trial_convert_with_pm_charges_and_reconciles(monkeypatch) -> None:
+    # SUBX-01: the MANUAL trial convert now runs the funds-guarded renewal rail. With
+    # a PM on file + a captured charge it activates + reconciles (credits the creator).
     calls: list[dict] = []
     sub = _base_subscription()
     sub["status"] = "trialing"
+    sub["payment_method_id"] = "pm-1"
     _patch_common(monkeypatch, calls=calls, sub=sub)
+    monkeypatch.setattr(router, "_charge_subscription_payment_intent", lambda **k: "pi-test")
+    monkeypatch.setattr(router, "_mirror_creator_credit_to_billing", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.subscription_renewal._claim_renewal_cycle", lambda *a, **k: True)
 
     out = asyncio.run(router.convert_trial("sub-1", None, x_user_id="user-1"))
 
     assert out["status"] == "active"
     assert len(calls) == 1
-    assert calls[0]["invoice"]["invoice_id"] == "inv-id"
+
+
+def test_trial_convert_without_pm_declines_and_credits_nothing(monkeypatch) -> None:
+    # SUBX-01: a trial convert with NO payment method must DECLINE (402) via the rail
+    # and mint NO invoice / NO creator credit (was: a phantom stub_inv + real credit).
+    from fastapi import HTTPException
+    calls: list[dict] = []
+    sub = _base_subscription()
+    sub["status"] = "trialing"
+    _patch_common(monkeypatch, calls=calls, sub=sub)
+
+    try:
+        asyncio.run(router.convert_trial("sub-1", None, x_user_id="user-1"))
+        raise AssertionError("expected HTTPException 402")
+    except HTTPException as exc:
+        assert exc.status_code == 402
+    assert calls == []
 
 
 def test_change_plan_proration_path_uses_shared_emit_and_reconcile(monkeypatch) -> None:
