@@ -69,6 +69,9 @@ const ThemeCustomizationPage = lazy(() => import("@/pages/settings/ThemeCustomiz
 const PurchasesPage = lazy(() => import("@/pages/purchases/PurchasesPage"));
 const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/SubscriptionsPage"));
 const TierManager = lazy(() => import("@/pages/subscriptions/TierManager"));
+const MySubscriptionsPage = lazy(() =>
+  import("@/pages/subscriptions/MySubscriptions").then((m) => ({ default: m.MySubscriptions })));
+const CreatorSubscribersPage = lazy(() => import("@/pages/subscriptions/CreatorSubscribers"));
 const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManagementPage"));
 const ModerationBoardPage = lazy(() => import("@/pages/admin/ModerationBoardPage"));
 const PaymentIncidentQueuePage = lazy(() => import("@/pages/admin/PaymentIncidentQueuePage"));
@@ -780,6 +783,8 @@ export default function App() {
           <Route path="purchases/:txnId" element={<PurchasesPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="subscriptions/manage" element={<TierManager />} />
+          <Route path="subscriptions/mine" element={<MySubscriptionsPage />} />
+          <Route path="subscriptions/subscribers" element={<CreatorSubscribersPage />} />
           <Route path="creator-dashboard" element={<CreatorDashboard />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="analytics/content-revenue" element={<ContentRevenuePage />} />

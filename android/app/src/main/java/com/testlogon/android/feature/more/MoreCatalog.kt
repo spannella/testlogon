@@ -1179,6 +1179,15 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // SUBX-40: mobile tier authoring — create/price/benefit/level/archive/reorder tiers.
+        MoreEntry(
+            id = "creator_tiers",
+            labelRes = R.string.more_entry_creator_tiers,
+            icon = Icons.Outlined.Loyalty,
+            route = MoreRoutes.CREATOR_TIERS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         MoreEntry(
             id = "manage_subscription",
             labelRes = R.string.more_entry_manage_subscription,

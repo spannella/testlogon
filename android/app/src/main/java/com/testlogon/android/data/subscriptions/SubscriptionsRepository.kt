@@ -33,6 +33,28 @@ interface SubscriptionsRepository {
     /** Public — a creator's offered plans ("tiers"). */
     suspend fun getCreatorTiers(creatorId: String): ApiResult<List<SubscriptionTier>>
 
+    /** SUBX-40 — the signed-in creator's OWN tiers (X-User-Id = creator id; owner-scoped authoring). */
+    suspend fun getMyTiers(): ApiResult<List<SubscriptionTier>>
+
+    /** SUBX-40 — create a new tier for the signed-in creator. */
+    suspend fun createTier(body: PlanWriteReqDto): ApiResult<SubscriptionTier>
+
+    /** SUBX-40 — patch an existing tier (owner-gated server-side). */
+    suspend fun updateTier(planId: String, body: PlanWriteReqDto): ApiResult<SubscriptionTier>
+
+    /** SUBX-40 — archive a tier (keeps existing subscribers). */
+    suspend fun archiveTier(planId: String): ApiResult<SubscriptionTier>
+
+    /** SUBX-43 (C10) — set the creator's tier presentation order; returns the re-sorted list. */
+    suspend fun reorderTiers(planIds: List<String>): ApiResult<List<SubscriptionTier>>
+
+    /** SUBX-43 (C6) — creator issues a refund for a subscriber (revokes access; shared rail). */
+    suspend fun refundSubscriber(
+        subscriptionId: String,
+        fraction: Double? = null,
+        reason: String? = null,
+    ): ApiResult<SubscriptionRefundResult>
+
     /** The viewer's own subscriptions (X-User-Id). */
     suspend fun getMySubscriptions(): ApiResult<List<CreatorSubscription>>
 
@@ -87,6 +109,7 @@ interface SubscriptionsRepository {
     /** SUB-E4-1 - the current creator own subscriber list (owner-scoped; X-User-Id = creator id). */
     suspend fun getMySubscribers(
         status: String? = null,
+        planId: String? = null,
         limit: Int? = null,
         cursor: String? = null,
     ): ApiResult<CreatorSubscriberPage>
@@ -114,6 +137,41 @@ class SubscriptionsRepositoryImpl @Inject constructor(
         withContext(io) {
             call { api.plans(creatorId) }.map { dtos -> dtos.map { it.toDomain() } }
         }
+
+    override suspend fun getMyTiers(): ApiResult<List<SubscriptionTier>> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.plans(userId) }.map { dtos -> dtos.map { it.toDomain() } }
+    }
+
+    override suspend fun createTier(body: PlanWriteReqDto): ApiResult<SubscriptionTier> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.createPlan(userId, userId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun updateTier(planId: String, body: PlanWriteReqDto): ApiResult<SubscriptionTier> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.updatePlan(userId, planId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun archiveTier(planId: String): ApiResult<SubscriptionTier> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.archivePlan(userId, planId) }.map { it.toDomain() }
+    }
+
+    override suspend fun reorderTiers(planIds: List<String>): ApiResult<List<SubscriptionTier>> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.reorderPlans(userId, userId, PlanReorderReqDto(planIds)) }.map { dtos -> dtos.map { it.toDomain() } }
+    }
+
+    override suspend fun refundSubscriber(
+        subscriptionId: String,
+        fraction: Double?,
+        reason: String?,
+    ): ApiResult<SubscriptionRefundResult> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.refundSubscription(userId, subscriptionId, SubscriptionRefundReqDto(fraction, reason)) }
+            .map { it.toDomain() }
+    }
 
     override suspend fun getMySubscriptions(): ApiResult<List<CreatorSubscription>> = withContext(io) {
         val userId = currentUserId() ?: return@withContext unauthenticated()
@@ -185,11 +243,12 @@ class SubscriptionsRepositoryImpl @Inject constructor(
 
     override suspend fun getMySubscribers(
         status: String?,
+        planId: String?,
         limit: Int?,
         cursor: String?,
     ): ApiResult<CreatorSubscriberPage> = withContext(io) {
         val userId = currentUserId() ?: return@withContext unauthenticated()
-        call { api.creatorSubscribers(userId, userId, status, limit, cursor) }.map { it.toDomain() }
+        call { api.creatorSubscribers(userId, userId, status, planId, limit, cursor) }.map { it.toDomain() }
     }
 
     override suspend fun getMyAnalytics(periodDays: Int?): ApiResult<SubscriptionAnalytics> = withContext(io) {

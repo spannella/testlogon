@@ -256,6 +256,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         manageSubscriptionDestination(navController)
         // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
         creatorSubscribersDestination(navController)
+        // SUBX-40: creator tier authoring (create/price/benefits/level/archive/reorder; Growth hub).
+        creatorTierManagerDestination(navController)
         // SUB-E2: gift a creator subscription to another user (gifter pays one no-renew cycle).
         giftSubscriptionDestination(navController)
         // SUBX-20: the subscriber's "My subscriptions" list (all subs -> correct-target Manage).

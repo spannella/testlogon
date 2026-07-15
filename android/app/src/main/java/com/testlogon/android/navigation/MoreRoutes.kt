@@ -226,6 +226,9 @@ object MoreRoutes {
     // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
     const val CREATOR_SUBSCRIBERS = CreatorSubscribersDest.ROUTE
 
+    // SUBX-40: creator tier authoring (create/price/benefits/level/archive/reorder; Growth hub).
+    const val CREATOR_TIERS = CreatorTierManagerDest.ROUTE
+
     // AND-238: "My fan clubs" — self-browse the viewer's fan-club channels (SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
     const val FAN_CLUB = "fanclub/channels/${FanClubChannelsDest.SELF}"
@@ -570,6 +573,7 @@ object MoreRoutes {
             BILLING_CONFIG,
             SUBSCRIPTION_TIERS,
             CREATOR_SUBSCRIBERS,
+            CREATOR_TIERS,
             MANAGE_SUBSCRIPTION,
             MY_SUBSCRIPTIONS,
             FAN_CLUB,

@@ -71,6 +71,10 @@ data class SubscriptionTier(
     val interval: BillingInterval,
     val annualPriceCents: Long?,
     val status: String,
+    /** SUBX-30 - explicit tier level (>=1); null on older/seeded plans (derived server-side). */
+    val level: Int? = null,
+    /** SUBX-43 (C10) - creator presentation order; null sorts after ordered plans. */
+    val displayOrder: Int? = null,
     /** Feature/perk labels, mapped from `assets[].name` (legacy free-form perk bullets). */
     val perks: List<String>,
     /** SUB-E0 - structured benefits ({label, detail}); empty for older/seeded plans. */
@@ -123,6 +127,8 @@ internal fun SubscriptionPlanDto.toDomain(): SubscriptionTier = SubscriptionTier
     interval = BillingInterval.fromWire(interval),
     annualPriceCents = annualPriceCents,
     status = status,
+    level = level,
+    displayOrder = displayOrder,
     perks = assets.orEmpty().mapNotNull { it.name?.takeIf(String::isNotBlank) },
     benefits = benefits.orEmpty().mapNotNull { b ->
         b.label.takeIf(String::isNotBlank)?.let { TierBenefit(label = it, detail = b.detail?.takeIf(String::isNotBlank)) }
@@ -207,14 +213,44 @@ data class SubscriptionAnalytics(
     val totalSubscribers: Int,
     val mrrCents: Long,
     val arpuCents: Long,
+    /** SUBX-43 (C9) - recoverable book (past_due monthly-equiv), distinct from MRR. */
+    val pastDueMrrCents: Long = 0,
     val periodDays: Int,
     val newSubs30d: Int,
     val churned30d: Int,
+    /** SUBX-43 (C7) - cohort churn denominator (active-at-window-start). */
+    val activeAtWindowStart: Int = 0,
     val churnRate: Double,
     val grossRevenueToDateCents: Long,
     val feeToDateCents: Long,
     val refundedToDateCents: Long,
     val netRevenueToDateCents: Long,
+    /** SUBX-43 (C8) - per-tier breakdown (reconciles to the creator-wide aggregates). */
+    val byTier: List<TierRevenue> = emptyList(),
+)
+
+/** SUBX-43 (C8) - per-tier (plan) revenue/subscriber slice of the analytics. */
+data class TierRevenue(
+    val planId: String?,
+    val planName: String?,
+    val level: Int?,
+    val activeSubscribers: Int,
+    val trialing: Int,
+    val pastDue: Int,
+    val totalSubscribers: Int,
+    val mrrCents: Long,
+    val grossRevenueToDateCents: Long,
+    val refundedToDateCents: Long,
+    val netRevenueToDateCents: Long,
+)
+
+/** SUBX-43 (C6) - the outcome of a creator refund (refund revokes access on the shared rail). */
+data class SubscriptionRefundResult(
+    val subscriptionId: String,
+    val status: String?,
+    val refundedCents: Long,
+    val clawbackCents: Long,
+    val idempotentReplay: Boolean,
 )
 
 internal fun CreatorSubscriberDto.toDomain(): CreatorSubscriberRow = CreatorSubscriberRow(
@@ -257,12 +293,37 @@ internal fun SubscriptionAnalyticsDto.toDomain(): SubscriptionAnalytics = Subscr
     totalSubscribers = totalSubscribers,
     mrrCents = mrrCents,
     arpuCents = arpuCents,
+    pastDueMrrCents = pastDueMrrCents,
     periodDays = periodDays,
     newSubs30d = newSubs30d,
     churned30d = churned30d,
+    activeAtWindowStart = activeAtWindowStart,
     churnRate = churnRate,
     grossRevenueToDateCents = grossRevenueToDateCents,
     feeToDateCents = feeToDateCents,
     refundedToDateCents = refundedToDateCents,
     netRevenueToDateCents = netRevenueToDateCents,
+    byTier = byTier.orEmpty().map { it.toDomain() },
+)
+
+internal fun SubscriptionTierBreakdownDto.toDomain(): TierRevenue = TierRevenue(
+    planId = planId,
+    planName = planName?.takeIf { it.isNotBlank() },
+    level = level,
+    activeSubscribers = activeSubscribers,
+    trialing = trialing,
+    pastDue = pastDue,
+    totalSubscribers = totalSubscribers,
+    mrrCents = mrrCents,
+    grossRevenueToDateCents = grossRevenueToDateCents,
+    refundedToDateCents = refundedToDateCents,
+    netRevenueToDateCents = netRevenueToDateCents,
+)
+
+internal fun SubscriptionRefundReceiptDto.toDomain(): SubscriptionRefundResult = SubscriptionRefundResult(
+    subscriptionId = subscriptionId,
+    status = status,
+    refundedCents = refundedCents ?: 0,
+    clawbackCents = clawbackCents ?: 0,
+    idempotentReplay = idempotentReplay,
 )

@@ -6,6 +6,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.Headers
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -41,6 +42,43 @@ interface SubscriptionsApi {
     suspend fun plans(
         @Path("creatorId") creatorId: String,
         @Query("include_profile") includeProfile: Boolean? = null,
+    ): List<SubscriptionPlanDto>
+
+    // ---- SUBX-40: mobile tier authoring (create / patch / archive / reorder) ----
+
+    /** SUBX-40 — create a new tier (plan) for the creator. Owner-gated. Returns the created plan. */
+    @Headers("Content-Type: application/json")
+    @POST("api/creators/{creatorId}/plans")
+    suspend fun createPlan(
+        @Header("X-User-Id") userId: String,
+        @Path("creatorId") creatorId: String,
+        @Body body: PlanWriteReqDto,
+    ): SubscriptionPlanDto
+
+    /** SUBX-40 — patch an existing tier (all fields optional; null = leave unchanged). Owner-gated. */
+    @Headers("Content-Type: application/json")
+    @PATCH("api/plans/{planId}")
+    suspend fun updatePlan(
+        @Header("X-User-Id") userId: String,
+        @Path("planId") planId: String,
+        @Body body: PlanWriteReqDto,
+    ): SubscriptionPlanDto
+
+    /** SUBX-40 — archive a tier (status -> archived; keeps existing subscribers). Owner-gated. */
+    @Headers("Content-Type: application/json")
+    @POST("api/plans/{planId}/archive")
+    suspend fun archivePlan(
+        @Header("X-User-Id") userId: String,
+        @Path("planId") planId: String,
+    ): SubscriptionPlanDto
+
+    /** SUBX-43 (C10) — set the creator's tier presentation order. Returns the re-sorted plan list. */
+    @Headers("Content-Type: application/json")
+    @POST("api/creators/{creatorId}/plans/reorder")
+    suspend fun reorderPlans(
+        @Header("X-User-Id") userId: String,
+        @Path("creatorId") creatorId: String,
+        @Body body: PlanReorderReqDto,
     ): List<SubscriptionPlanDto>
 
     /** The viewer's own subscriptions. Requires X-User-Id. Idempotent GET. Bare array. */
@@ -142,6 +180,7 @@ interface SubscriptionsApi {
         @Header("X-User-Id") userId: String,
         @Path("creatorId") creatorId: String,
         @Query("status") status: String? = null,
+        @Query("plan_id") planId: String? = null,
         @Query("limit") limit: Int? = null,
         @Query("cursor") cursor: String? = null,
     ): CreatorSubscriberListDto
@@ -173,6 +212,19 @@ interface SubscriptionsApi {
         @Path("subscriptionId") subscriptionId: String,
         @Body body: CreatorSubscriberActionReqDto,
     ): SubscriptionOutDto
+
+    /**
+     * SUBX-43 (C6) - creator issues a refund for a subscriber (default = remaining prorated cycle;
+     * fraction=1.0 fully refunds). Per the money rule this REVOKES access (the shared reversal rail).
+     * Returns the refund receipt {subscription_id, status, refunded_cents, clawback_cents, ...}.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("api/subscriptions/{subscriptionId}/refund")
+    suspend fun refundSubscription(
+        @Header("X-User-Id") userId: String,
+        @Path("subscriptionId") subscriptionId: String,
+        @Body body: SubscriptionRefundReqDto,
+    ): SubscriptionRefundReceiptDto
 }
 
 // ---- Response DTOs (AND-234) ----
@@ -193,6 +245,9 @@ data class SubscriptionPlanDto(
     @Json(name = "currency") val currency: String,
     @Json(name = "interval") val interval: String,
     @Json(name = "annual_price_cents") val annualPriceCents: Long? = null,
+    // SUBX-30: ordered tier level (>=1). SUBX-43 (C10): presentation order. Both nullable on old plans.
+    @Json(name = "level") val level: Int? = null,
+    @Json(name = "display_order") val displayOrder: Int? = null,
     @Json(name = "status") val status: String,
     // SUB-E0: structured tier benefits/perks ({label, detail}) beyond the free-form assets.
     @Json(name = "benefits") val benefits: List<PlanBenefitDto>? = null,
@@ -341,6 +396,50 @@ data class RetryPaymentReqDto(
     @Json(name = "reason") val reason: String? = null,
 )
 
+/**
+ * SUBX-40 — create/patch a tier request. Shared by create (name+price required server-side) and
+ * patch (every field optional; null = leave unchanged). Verified against backend PlanCreateIn /
+ * PlanUpdateIn (subscription_server.py): price is integer cents, benefits are {label, detail},
+ * `level` is the explicit tier level and `display_order` the presentation order.
+ */
+@JsonClass(generateAdapter = true)
+data class PlanWriteReqDto(
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "price_cents") val priceCents: Long? = null,
+    @Json(name = "currency") val currency: String? = null,
+    @Json(name = "interval") val interval: String? = null,
+    @Json(name = "annual_price_cents") val annualPriceCents: Long? = null,
+    @Json(name = "level") val level: Int? = null,
+    @Json(name = "display_order") val displayOrder: Int? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "benefits") val benefits: List<PlanBenefitDto>? = null,
+)
+
+/** SUBX-43 (C10) — reorder tiers request: ordered creator plan ids -> display_order. */
+@JsonClass(generateAdapter = true)
+data class PlanReorderReqDto(
+    @Json(name = "plan_ids") val planIds: List<String>,
+)
+
+/** SUBX-43 (C6) — creator refund request (fraction default = remaining prorated; 1.0 = full). */
+@JsonClass(generateAdapter = true)
+data class SubscriptionRefundReqDto(
+    @Json(name = "fraction") val fraction: Double? = null,
+    @Json(name = "reason") val reason: String? = null,
+)
+
+/** SUBX-43 (C6) — refund receipt. Verified against subscription_server.refund_subscription. */
+@JsonClass(generateAdapter = true)
+data class SubscriptionRefundReceiptDto(
+    @Json(name = "subscription_id") val subscriptionId: String,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "refunded_cents") val refundedCents: Long? = null,
+    @Json(name = "clawback_cents") val clawbackCents: Long? = null,
+    @Json(name = "idempotent_replay") val idempotentReplay: Boolean = false,
+    @Json(name = "reason") val reason: String? = null,
+)
+
 // ---- SUB-E4-3 DTOs (creator subscriber management + analytics) ----
 
 /** SUB-E4-1 - one row of the creator subscriber list (CREATOR#SUB# index). */
@@ -389,12 +488,34 @@ data class SubscriptionAnalyticsDto(
     @Json(name = "total_subscribers") val totalSubscribers: Int = 0,
     @Json(name = "mrr_cents") val mrrCents: Long = 0,
     @Json(name = "arpu_cents") val arpuCents: Long = 0,
+    // SUBX-43 (C9): recoverable book (past_due monthly-equiv), reported distinctly from MRR.
+    @Json(name = "past_due_mrr_cents") val pastDueMrrCents: Long = 0,
     @Json(name = "period_days") val periodDays: Int = 30,
     @Json(name = "new_subs_30d") val newSubs30d: Int = 0,
     @Json(name = "churned_30d") val churned30d: Int = 0,
+    // SUBX-43 (C7): cohort churn denominator (active-at-window-start).
+    @Json(name = "active_at_window_start") val activeAtWindowStart: Int = 0,
     @Json(name = "churn_rate") val churnRate: Double = 0.0,
     @Json(name = "gross_revenue_to_date_cents") val grossRevenueToDateCents: Long = 0,
     @Json(name = "fee_to_date_cents") val feeToDateCents: Long = 0,
+    @Json(name = "refunded_to_date_cents") val refundedToDateCents: Long = 0,
+    @Json(name = "net_revenue_to_date_cents") val netRevenueToDateCents: Long = 0,
+    // SUBX-43 (C8): per-tier breakdown (sums reconcile to the creator-wide aggregates).
+    @Json(name = "by_tier") val byTier: List<SubscriptionTierBreakdownDto>? = null,
+)
+
+/** SUBX-43 (C8) — per-tier (plan) slice of the analytics response. */
+@JsonClass(generateAdapter = true)
+data class SubscriptionTierBreakdownDto(
+    @Json(name = "plan_id") val planId: String? = null,
+    @Json(name = "plan_name") val planName: String? = null,
+    @Json(name = "level") val level: Int? = null,
+    @Json(name = "active_subscribers") val activeSubscribers: Int = 0,
+    @Json(name = "trialing") val trialing: Int = 0,
+    @Json(name = "past_due") val pastDue: Int = 0,
+    @Json(name = "total_subscribers") val totalSubscribers: Int = 0,
+    @Json(name = "mrr_cents") val mrrCents: Long = 0,
+    @Json(name = "gross_revenue_to_date_cents") val grossRevenueToDateCents: Long = 0,
     @Json(name = "refunded_to_date_cents") val refundedToDateCents: Long = 0,
     @Json(name = "net_revenue_to_date_cents") val netRevenueToDateCents: Long = 0,
 )

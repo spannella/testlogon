@@ -1,0 +1,500 @@
+diff --git a/app/routers/subscription_server.py b/app/routers/subscription_server.py
+index 6583b8c8..b104445e 100644
+--- a/app/routers/subscription_server.py
++++ b/app/routers/subscription_server.py
+@@ -342,6 +342,9 @@ class PlanCreateIn(BaseModel):
+     # SUBX-30: optional explicit ordered tier level (>=1; higher = more premium).
+     # When omitted the level is DERIVED by price rank (subscription_access.get_plan_level).
+     level: Optional[conint(ge=1, le=100)] = None
++    # SUBX-43 (C10): optional presentation order (ascending; lower = shown first).
++    # When omitted the plan sorts after ordered plans by created_at desc.
++    display_order: Optional[conint(ge=0, le=100000)] = None
+ 
+ 
+ class PlanUpdateIn(BaseModel):
+@@ -358,6 +361,13 @@ class PlanUpdateIn(BaseModel):
+     benefits: Optional[conlist(PlanBenefit, max_length=50)] = None
+     # SUBX-30: set/replace the plan's explicit tier level (None = leave unchanged).
+     level: Optional[conint(ge=1, le=100)] = None
++    # SUBX-43 (C10): set the plan's presentation order (None = leave unchanged).
++    display_order: Optional[conint(ge=0, le=100000)] = None
++
++
++class PlanReorderIn(BaseModel):
++    # SUBX-43 (C10): ordered list of the creator's plan ids; index -> display_order.
++    plan_ids: conlist(str, min_length=1, max_length=100)
+ 
+ 
+ class PlanOut(BaseModel):
+@@ -371,6 +381,8 @@ class PlanOut(BaseModel):
+     annual_price_cents: Optional[int] = None
+     # SUBX-30: ordered tier level (>=1); absent on older/seeded plans -> None (derived).
+     level: Optional[int] = None
++    # SUBX-43 (C10): presentation order; absent -> None (sorts after ordered plans).
++    display_order: Optional[int] = None
+     # Tolerant defaults: stored plans (esp. older/seeded ones) may omit these
+     # optional-metadata fields; the list/get endpoints must not 500 on them.
+     status: str = "active"
+@@ -517,6 +529,9 @@ class EarningsOut(BaseModel):
+     currency: str
+     gross_cents: int
+     fee_cents: int
++    # SUBX-42 (C5): subscription refund clawbacks (T.billing reversals) subtracted so
++    # net == the withdrawable balance after a cancel/dispute refund.
++    refunded_cents: int = 0
+     net_cents: int
+ 
+ 
+@@ -607,6 +622,55 @@ def save_plan(plan: Dict[str, Any]) -> None:
+         ddb_put_item(item)
+ 
+ 
++def _plan_sort_key(plan: Dict[str, Any]):
++    """SUBX-43 (C10): sort a creator's plans by explicit ``display_order`` ascending
++    (creator-arranged good/better/best), then newest-first for un-ordered plans. A
++    plan with no display_order sorts after every explicitly-ordered plan."""
++    order = plan.get("display_order")
++    has_order = order is not None
++    return (
++        0 if has_order else 1,
++        int(order) if has_order else 0,
++        -int(plan.get("created_at") or 0),
++    )
++
++
++def _creator_subscription_reversals(creator_id: str) -> List[Dict[str, Any]]:
++    """SUBX-42 (C4/C5): the creator's subscription REFUND clawbacks booked to
++    ``T.billing`` by ``_reverse_subscription_charge`` (``type='reversal'``,
++    ``meta.content_type='subscription'``).
++
++    These NET clawbacks are why ``/earnings`` + analytics ``net`` must be reduced to
++    reconcile with the withdrawable balance: a refund flips the original mirror-credit
++    to ``state='reversed'`` (dropping it from ``get_available_balance``) and books a
++    ``reversal`` entry here, but the sub LEDGER only ever holds ``charge``/``fee`` —
++    so a report that reads the sub ledger alone OVERSTATES net after any refund.
++
++    Returns ``[{subscription_id, amount_cents (net clawback), ts, currency}]``.
++    """
++    out: List[Dict[str, Any]] = []
++    try:
++        rows = billing_query_pk(T.billing, user_pk(creator_id))
++    except Exception:
++        logger.warning("subscription reversal read failed creator=%s", creator_id, exc_info=True)
++        return out
++    for it in rows:
++        if not str(it.get("sk", "")).startswith("LEDGER#"):
++            continue
++        if it.get("type") != "reversal":
++            continue
++        meta = it.get("meta") or {}
++        if meta.get("content_type") != "subscription":
++            continue
++        out.append({
++            "subscription_id": meta.get("subscription_id") or it.get("subscription_id"),
++            "amount_cents": int(it.get("amount_cents") or 0),
++            "ts": int(it.get("ts") or it.get("created_at") or 0),
++            "currency": it.get("currency") or "usd",
++        })
++    return out
++
++
+ # -----------------------------
+ # Subscription helpers
+ # -----------------------------
+@@ -1360,6 +1424,8 @@ async def create_plan(
+         "annual_price_cents": int(body.annual_price_cents) if body.annual_price_cents else None,
+         # SUBX-30: explicit ordered tier level (None -> derived by price rank at read time).
+         "level": int(body.level) if body.level else None,
++        # SUBX-43 (C10): presentation order (None -> sorts after ordered plans).
++        "display_order": int(body.display_order) if body.display_order is not None else None,
+         "status": "active",
+         "metadata": body.metadata,
+         "benefits": [b.model_dump() for b in body.benefits],
+@@ -1384,7 +1450,7 @@ async def create_plan(
+ async def list_plans(creator_id: str, include_profile: bool = Query(default=False)):
+     items = ddb_query(pk_creator(creator_id))
+     plans = [it for it in items if it.get("sk", "").startswith("PLAN#")]
+-    plans.sort(key=lambda x: x.get("created_at", 0), reverse=True)
++    plans.sort(key=_plan_sort_key)
+     if include_profile:
+         return [attach_creator_profile(p) for p in plans]
+     return plans
+@@ -1412,6 +1478,8 @@ async def update_plan(
+         updated["annual_price_cents"] = int(body.annual_price_cents)
+     if body.level is not None:
+         updated["level"] = int(body.level)  # SUBX-30
++    if body.display_order is not None:
++        updated["display_order"] = int(body.display_order)  # SUBX-43 (C10)
+     if body.benefits is not None:
+         updated["benefits"] = [b.model_dump() for b in body.benefits]
+     if body.asset_paths is not None:
+@@ -1453,6 +1521,50 @@ async def archive_plan(
+     return attach_creator_profile(plan)
+ 
+ 
++@router.post("/api/creators/{creator_id}/plans/reorder", response_model=List[PlanOut])
++async def reorder_plans(
++    creator_id: str,
++    body: PlanReorderIn,
++    request: Request,
++    x_user_id: Optional[str] = Header(default=None),
++):
++    """SUBX-43 (C10): set the creator's tier presentation order. The request lists
++    the creator's plan ids in the desired order; each plan's ``display_order`` is
++    rewritten to its index. Plan ids not owned by the creator are ignored; the
++    response is the re-sorted plan list. Owner-gated (creator only)."""
++    require_user(x_user_id, creator_id)
++    items = ddb_query(pk_creator(creator_id))
++    plans_by_id = {
++        it["plan_id"]: it
++        for it in items
++        if it.get("sk", "").startswith("PLAN#") and it.get("plan_id")
++    }
++    ts = now_ts()
++    order = 0
++    seen: set = set()
++    for pid in body.plan_ids:
++        plan = plans_by_id.get(pid)
++        if not plan or pid in seen:
++            continue
++        seen.add(pid)
++        # save_plan reads META for the canonical copy (creator index may lack fields)
++        meta = ddb_get_item(pk_plan(pid), "META") or plan
++        meta["display_order"] = order
++        meta["updated_at"] = ts
++        save_plan(meta)
++        order += 1
++    audit_event(
++        "subscription_plans_reordered",
++        creator_id,
++        request,
++        outcome="success",
++        plan_ids=list(body.plan_ids),
++    )
++    refreshed = [it for it in ddb_query(pk_creator(creator_id)) if it.get("sk", "").startswith("PLAN#")]
++    refreshed.sort(key=_plan_sort_key)
++    return [attach_creator_profile(p) for p in refreshed]
++
++
+ @router.post("/api/plans/{plan_id}/subscribe", response_model=SubscriptionOut)
+ async def subscribe(
+     plan_id: str,
+@@ -3043,6 +3155,18 @@ async def list_earnings(
+             gross += int(entry.get("amount_cents", 0))
+         if entry.get("entry_type") == "fee":
+             fee += int(entry.get("amount_cents", 0))
++    # SUBX-42 (C5): subtract subscription refund clawbacks (booked to T.billing, not
++    # the sub ledger) so the earnings report matches the actual withdrawable balance.
++    refunded = 0
++    for rev in _creator_subscription_reversals(creator_id):
++        ts = rev.get("ts", 0)
++        if period_start and ts < period_start:
++            continue
++        if period_end and ts > period_end:
++            continue
++        if rev.get("currency"):
++            currency = rev["currency"]
++        refunded += int(rev.get("amount_cents") or 0)
+     return {
+         "creator_id": creator_id,
+         "period_start": period_start,
+@@ -3050,7 +3174,8 @@ async def list_earnings(
+         "currency": currency,
+         "gross_cents": gross,
+         "fee_cents": fee,
+-        "net_cents": gross - fee,
++        "refunded_cents": refunded,
++        "net_cents": gross - fee - refunded,
+     }
+ 
+ 
+@@ -3326,6 +3451,23 @@ class SubE4SubscriberListOut(BaseModel):
+     subscribers: List[SubE4SubscriberOut]
+ 
+ 
++class SubE4TierBreakdownOut(BaseModel):
++    """SUBX-43 (C8): per-tier (plan) slice of the creator's book. Revenue is
++    attributed to a subscription's CURRENT plan; sums reconcile to the creator-wide
++    aggregate (a sub with no plan_id is bucketed under plan_id=None)."""
++    plan_id: Optional[str] = None
++    plan_name: Optional[str] = None
++    level: Optional[int] = None
++    active_subscribers: int = 0
++    trialing: int = 0
++    past_due: int = 0
++    total_subscribers: int = 0
++    mrr_cents: int = 0
++    gross_revenue_to_date_cents: int = 0
++    refunded_to_date_cents: int = 0
++    net_revenue_to_date_cents: int = 0
++
++
+ class SubE4AnalyticsOut(BaseModel):
+     creator_id: str
+     currency: str
+@@ -3336,33 +3478,43 @@ class SubE4AnalyticsOut(BaseModel):
+     past_due: int
+     canceled_total: int
+     total_subscribers: int
+-    # recurring revenue (monthly-equivalent gross of ACTIVE, non-trial subs)
++    # recurring revenue. SUBX-42 (C4): MRR = monthly-equiv LIST price of ACTIVE,
++    # non-trial, AUTO-RENEWING, non-gift subs (excludes gifts + cancel-at-period-end
++    # + past_due). past_due surfaced separately as the recoverable book.
+     mrr_cents: int
+     arpu_cents: int
+-    # growth/churn over the trailing 30d window
++    # SUBX-43 (C9): past_due monthly-equiv (recoverable MRR), reported distinctly.
++    past_due_mrr_cents: int = 0
++    # growth/churn over the trailing window
+     period_days: int
+     new_subs_30d: int
+     churned_30d: int
++    # SUBX-43 (C7): cohort churn — churned_in_window / active_at_window_start.
++    active_at_window_start: int = 0
+     churn_rate: float
+-    # lifetime subscription revenue from the creator ledger
++    # lifetime subscription revenue from the creator ledger + T.billing reversals
+     gross_revenue_to_date_cents: int
+     fee_to_date_cents: int
+     refunded_to_date_cents: int
+     net_revenue_to_date_cents: int
++    # SUBX-43 (C8): per-tier breakdown (sorted by presentation order then level).
++    by_tier: List[SubE4TierBreakdownOut] = Field(default_factory=list)
+ 
+ 
+ @router.get("/api/creators/{creator_id}/subscribers", response_model=SubE4SubscriberListOut)
+ async def list_creator_subscribers(
+     creator_id: str,
+     status: Optional[str] = Query(default=None, description="active|trialing|past_due|canceled"),
++    plan_id: Optional[str] = Query(default=None, description="SUBX-43: filter to one tier"),
+     limit: int = Query(default=50, ge=1, le=200),
+     cursor: Optional[str] = Query(default=None),
+     x_user_id: Optional[str] = Header(default=None),
+ ):
+     """SUB-E4-1: owner-scoped creator subscriber list off the CREATOR#SUB# index.
+     Per-sub subscriber id+name, plan/tier name, status, since (start_at),
+-    period-end/next-billing, is_gift, is_trial. Optional status filter + paginated
+-    (opaque cursor). A creator sees only their own subscribers; admin may see any."""
++    period-end/next-billing, is_gift, is_trial. Optional status filter + SUBX-43
++    per-tier (plan_id) filter + paginated (opaque cursor). A creator sees only their
++    own subscribers; admin may see any."""
+     _sube4_require_creator_or_admin(x_user_id, creator_id)
+     now = now_ts()
+     subs, plan_names = _sube4_creator_sub_rows(creator_id)
+@@ -3374,6 +3526,11 @@ async def list_creator_subscribers(
+             allowed = {status_key}
+         subs = [s for s in subs if (s.get("status") or "").lower() in allowed]
+ 
++    # SUBX-43 (C6): per-tier filter for the creator subscriber list.
++    plan_filter = (plan_id or "").strip()
++    if plan_filter:
++        subs = [s for s in subs if (s.get("plan_id") or "") == plan_filter]
++
+     # newest-subscribed first; stable tiebreak on subscription_id
+     subs.sort(key=lambda s: (int(s.get("start_at") or s.get("created_at") or 0), s.get("subscription_id", "")), reverse=True)
+ 
+@@ -3422,22 +3579,64 @@ async def get_creator_subscription_analytics(
+     period_days: int = Query(default=30, ge=1, le=365),
+     x_user_id: Optional[str] = Header(default=None),
+ ):
+-    """SUB-E4-2: MRR/analytics computed from the creator's real subscription
+-    records + ledger. active/trialing/past_due counts; MRR = sum of the
+-    monthly-equivalent GROSS price of ACTIVE non-trial subs (year -> price/12);
+-    ARPU = MRR/active; new (start_at in window) + churned (canceled/expired in
+-    window) + churn rate; lifetime subscription revenue from the ledger. Owner-scoped."""
++    """SUB-E4-2 (+ SUBX-42/43): MRR/analytics computed from the creator's real
++    subscription records + ledger + T.billing reversals.
++
++    SUBX-42 corrections vs the E4 baseline:
++      * MRR (C4) = monthly-equiv LIST price of ACTIVE, non-trial, AUTO-RENEWING,
++        non-gift subs — gifts (auto_renew=False) and cancel-at-period-end subs no
++        longer inflate it; ``list_price_cents`` (falls back to ``price_cents``) is
++        used so a discounted sub is counted at list, not the promo price (C3).
++      * refunded_to_date (C4/C5) folds the T.billing subscription reversals the sub
++        ledger never recorded, so net reconciles to the withdrawable balance.
++    SUBX-43 additions:
++      * past_due_mrr (C9) surfaced distinctly as the recoverable book.
++      * cohort churn (C7): churned_in_window / active_at_window_start.
++      * per-tier breakdown (C8): counts/MRR/revenue per plan, reconciling to totals.
++    Owner-scoped."""
+     _sube4_require_creator_or_admin(x_user_id, creator_id)
+     now = now_ts()
+     cutoff = now - period_days * 86400
+ 
+     items = ddb_query(pk_creator(creator_id))
+     active = trialing = past_due = canceled_total = total = 0
+-    mrr = 0
++    mrr = past_due_mrr = 0
+     new_subs = 0
+     churned = 0
++    active_at_start = 0
+     currency = "usd"
+-    gross = fee = refunded = 0
++    gross = fee = 0
++
++    plan_meta: Dict[str, Dict[str, Any]] = {}
++    sub_plan: Dict[str, Optional[str]] = {}
++    tiers: Dict[Optional[str], Dict[str, Any]] = {}
++
++    def _tier(pid: Optional[str]) -> Dict[str, Any]:
++        if pid not in tiers:
++            meta = plan_meta.get(pid or "", {})
++            tiers[pid] = {
++                "plan_id": pid,
++                "plan_name": meta.get("name"),
++                "level": meta.get("level"),
++                "display_order": meta.get("display_order"),
++                "created_at": meta.get("created_at") or 0,
++                "active": 0, "trialing": 0, "past_due": 0, "total": 0,
++                "mrr": 0, "gross": 0, "fee": 0, "refunded": 0,
++            }
++        return tiers[pid]
++
++    def _list_price(s: Dict[str, Any]) -> int:
++        return int(s.get("list_price_cents") or s.get("price_cents") or 0)
++
++    # First pass: index plans (for per-tier name/level/order) so tier buckets resolve.
++    for it in items:
++        if it.get("sk", "").startswith("PLAN#") and it.get("plan_id"):
++            plan_meta[it["plan_id"]] = {
++                "name": it.get("name") or it["plan_id"],
++                "level": it.get("level"),
++                "display_order": it.get("display_order"),
++                "created_at": it.get("created_at") or 0,
++            }
+ 
+     for it in items:
+         sk = it.get("sk", "")
+@@ -3447,38 +3646,99 @@ async def get_creator_subscription_analytics(
+             st = (s.get("status") or "").lower()
+             if s.get("currency"):
+                 currency = s.get("currency")
++            pid = s.get("plan_id")
++            sub_plan[s.get("subscription_id")] = pid
++            tb = _tier(pid)
++            tb["total"] += 1
++            is_gift = bool(s.get("is_gift", False))
++            renewing = bool(s.get("auto_renew", True)) and not bool(s.get("cancel_at_period_end", False))
++            monthly = _sube4_monthly_equiv_cents(_list_price(s), s.get("interval") or "month")
+             if st == "active":
+                 active += 1
+-                if not _sube4_is_trial(s, now):
+-                    mrr += _sube4_monthly_equiv_cents(int(s.get("price_cents") or 0), s.get("interval") or "month")
++                tb["active"] += 1
++                # SUBX-42 (C4): only recurring, non-gift, non-trial subs are MRR.
++                if not _sube4_is_trial(s, now) and renewing and not is_gift:
++                    mrr += monthly
++                    tb["mrr"] += monthly
+             elif st == "trialing":
+                 trialing += 1
++                tb["trialing"] += 1
+             elif st == "past_due":
+                 past_due += 1
++                tb["past_due"] += 1
++                if not is_gift:
++                    past_due_mrr += monthly  # SUBX-43 (C9): recoverable book
+             elif st in _SUBE4_CANCELED_STATUSES:
+                 canceled_total += 1
+                 churn_ts = int(s.get("updated_at") or s.get("canceled_at") or 0)
+                 if churn_ts >= cutoff and st in ("canceled", "cancelled", "expired"):
+                     churned += 1
+-            if int(s.get("start_at") or s.get("created_at") or 0) >= cutoff:
++            # SUBX-43 (C7): cohort denominator — subs that existed at window start
++            # (started before cutoff and were NOT already canceled before cutoff).
++            start_at = int(s.get("start_at") or s.get("created_at") or 0)
++            if start_at >= cutoff:
+                 new_subs += 1
+-        elif sk.startswith("LEDGER#"):
+-            etype = it.get("entry_type")
+-            amt = int(it.get("amount_cents") or 0)
+-            if it.get("currency"):
+-                currency = it.get("currency")
+-            if etype == "charge":
+-                gross += amt
+-            elif etype == "fee":
+-                fee += amt
+-            elif etype == "refund":
+-                refunded += amt
++            elif start_at < cutoff:
++                churn_ts = int(s.get("updated_at") or s.get("canceled_at") or 0)
++                canceled_before_window = st in _SUBE4_CANCELED_STATUSES and churn_ts < cutoff
++                if not canceled_before_window:
++                    active_at_start += 1
++    # SUBX-43 (C8): the CREATOR# partition returns LEDGER# rows BEFORE SUB# rows
++    # (sk ordering), so per-tier revenue must be attributed in a SECOND pass, after
++    # the sub->plan map is fully built (else all revenue falls into the None bucket).
++    for it in items:
++        if not it.get("sk", "").startswith("LEDGER#"):
++            continue
++        etype = it.get("entry_type")
++        amt = int(it.get("amount_cents") or 0)
++        if it.get("currency"):
++            currency = it.get("currency")
++        led_sub = it.get("subscription_id")
++        tier_key = sub_plan.get(led_sub) if led_sub in sub_plan else None
++        if etype == "charge":
++            gross += amt
++            _tier(tier_key)["gross"] += amt
++        elif etype == "fee":
++            fee += amt
++            _tier(tier_key)["fee"] += amt
++
++    # SUBX-42 (C4/C5): fold T.billing subscription reversals into refunded/net.
++    refunded = 0
++    for rev in _creator_subscription_reversals(creator_id):
++        amt = int(rev.get("amount_cents") or 0)
++        refunded += amt
++        rev_sub = rev.get("subscription_id")
++        _tier(sub_plan.get(rev_sub) if rev_sub in sub_plan else None)["refunded"] += amt
+ 
+     arpu = int(round(mrr / active)) if active else 0
+-    churn_denom = active + churned
+-    churn_rate = round(churned / churn_denom, 4) if churn_denom else 0.0
++    # SUBX-43 (C7): cohort churn share = churned_in_window / active_at_window_start.
++    churn_rate = round(churned / active_at_start, 4) if active_at_start else 0.0
+     net = gross - fee - refunded
+ 
++    by_tier = []
++    for tb in sorted(
++        tiers.values(),
++        key=lambda t: (
++            0 if t.get("display_order") is not None else 1,
++            int(t.get("display_order")) if t.get("display_order") is not None else 0,
++            int(t.get("level")) if t.get("level") is not None else 0,
++            -int(t.get("created_at") or 0),
++        ),
++    ):
++        by_tier.append(SubE4TierBreakdownOut(
++            plan_id=tb["plan_id"],
++            plan_name=tb["plan_name"],
++            level=tb["level"],
++            active_subscribers=tb["active"],
++            trialing=tb["trialing"],
++            past_due=tb["past_due"],
++            total_subscribers=tb["total"],
++            mrr_cents=tb["mrr"],
++            gross_revenue_to_date_cents=tb["gross"],
++            refunded_to_date_cents=tb["refunded"],
++            net_revenue_to_date_cents=tb["gross"] - tb["fee"] - tb["refunded"],
++        ))
++
+     return SubE4AnalyticsOut(
+         creator_id=creator_id,
+         currency=currency,
+@@ -3490,13 +3750,16 @@ async def get_creator_subscription_analytics(
+         total_subscribers=total,
+         mrr_cents=mrr,
+         arpu_cents=arpu,
++        past_due_mrr_cents=past_due_mrr,
+         period_days=period_days,
+         new_subs_30d=new_subs,
+         churned_30d=churned,
++        active_at_window_start=active_at_start,
+         churn_rate=churn_rate,
+         gross_revenue_to_date_cents=gross,
+         fee_to_date_cents=fee,
+         refunded_to_date_cents=refunded,
+         net_revenue_to_date_cents=net,
++        by_tier=by_tier,
+     )
+ # === END SUB-E4 ===

@@ -71,6 +71,7 @@ object CreatorSubscribersTestTags {
     const val CONFIRM_DIALOG = "creator_subs_confirm_dialog"
     fun row(id: String) = "creator_subs_row_$id"
     fun stopRenewal(id: String) = "creator_subs_stop_$id"
+    fun refund(id: String) = "creator_subs_refund_$id"
     fun remove(id: String) = "creator_subs_remove_$id"
     fun filter(name: String) = "creator_subs_filter_$name"
 }
@@ -125,37 +126,33 @@ fun CreatorSubscribersRoute(
                 state = s,
                 padding = padding,
                 onFilterSelected = viewModel::onFilterSelected,
+                onTierFilterSelected = viewModel::onTierFilterSelected,
                 onLoadMore = viewModel::onLoadMore,
                 onStopRenewal = viewModel::onStopRenewalClicked,
                 onRemove = viewModel::onRemoveClicked,
+                onRefund = viewModel::onRefundClicked,
             )
         }
     }
 
     val pending = (state as? CreatorSubscribersUiState.Content)?.pendingAction
     if (pending != null) {
-        val isRemove = pending.kind == SubscriberActionKind.REMOVE
         val name = pending.row.displayName
+        val titleRes = when (pending.kind) {
+            SubscriberActionKind.REMOVE -> R.string.creator_subs_confirm_remove_title
+            SubscriberActionKind.REFUND -> R.string.creator_subs_confirm_refund_title
+            SubscriberActionKind.STOP_RENEWAL -> R.string.creator_subs_confirm_stop_title
+        }
+        val bodyRes = when (pending.kind) {
+            SubscriberActionKind.REMOVE -> R.string.creator_subs_confirm_remove_body
+            SubscriberActionKind.REFUND -> R.string.creator_subs_confirm_refund_body
+            SubscriberActionKind.STOP_RENEWAL -> R.string.creator_subs_confirm_stop_body
+        }
         AlertDialog(
             onDismissRequest = viewModel::onActionDismissed,
             modifier = Modifier.testTag(CreatorSubscribersTestTags.CONFIRM_DIALOG),
-            title = {
-                Text(
-                    stringResource(
-                        if (isRemove) R.string.creator_subs_confirm_remove_title
-                        else R.string.creator_subs_confirm_stop_title,
-                    ),
-                )
-            },
-            text = {
-                Text(
-                    stringResource(
-                        if (isRemove) R.string.creator_subs_confirm_remove_body
-                        else R.string.creator_subs_confirm_stop_body,
-                        name,
-                    ),
-                )
-            },
+            title = { Text(stringResource(titleRes)) },
+            text = { Text(stringResource(bodyRes, name)) },
             confirmButton = {
                 TextButton(onClick = viewModel::onActionConfirmed) {
                     Text(stringResource(R.string.creator_subs_confirm))
@@ -175,10 +172,13 @@ private fun CreatorSubscribersContent(
     state: CreatorSubscribersUiState.Content,
     padding: PaddingValues,
     onFilterSelected: (SubscriberFilter) -> Unit,
+    onTierFilterSelected: (String?) -> Unit,
     onLoadMore: () -> Unit,
     onStopRenewal: (CreatorSubscriberRow) -> Unit,
     onRemove: (CreatorSubscriberRow) -> Unit,
+    onRefund: (CreatorSubscriberRow) -> Unit,
 ) {
+    val tiers = state.analytics?.byTier.orEmpty()
     LazyColumn(
         modifier = Modifier.padding(padding).fillMaxSize().testTag(CreatorSubscribersTestTags.LIST),
         contentPadding = PaddingValues(16.dp),
@@ -186,6 +186,14 @@ private fun CreatorSubscribersContent(
     ) {
         item(key = "dashboard") {
             AnalyticsDashboard(state.analytics)
+        }
+        if (tiers.isNotEmpty()) {
+            item(key = "by_tier") {
+                TierBreakdownSection(tiers = tiers, currency = state.analytics?.currency?.uppercase() ?: "USD")
+            }
+            item(key = "tier_filters") {
+                TierFilterRow(tiers = tiers, selected = state.planFilter, onTierFilterSelected = onTierFilterSelected)
+            }
         }
         item(key = "filters") {
             FilterChipRow(selected = state.filter, onFilterSelected = onFilterSelected)
@@ -213,6 +221,7 @@ private fun CreatorSubscribersContent(
                     disabled = state.actioningId != null && state.actioningId != row.subscriptionId,
                     onStopRenewal = { onStopRenewal(row) },
                     onRemove = { onRemove(row) },
+                    onRefund = { onRefund(row) },
                 )
             }
             if (state.nextCursor != null) {
@@ -272,7 +281,14 @@ private fun AnalyticsDashboard(analytics: SubscriptionAnalytics?) {
                 stringResource(R.string.creator_subs_stat_churn_rate),
                 "${(analytics.churnRate * 100).toInt()}%",
             )
+            if (analytics.pastDueMrrCents > 0) {
+                StatTile(
+                    stringResource(R.string.creator_subs_stat_past_due_mrr),
+                    formatTierPrice(analytics.pastDueMrrCents, currency, free),
+                )
+            }
         }
+        // SUBX-43 (C9): explicit window labels (lifetime revenue vs 30-day churn window).
         Text(
             stringResource(
                 R.string.creator_subs_net_revenue,
@@ -281,6 +297,101 @@ private fun AnalyticsDashboard(analytics: SubscriptionAnalytics?) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (analytics.refundedToDateCents > 0) {
+            Text(
+                stringResource(
+                    R.string.creator_subs_refunded_to_date,
+                    formatTierPrice(analytics.refundedToDateCents, currency, free),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            stringResource(R.string.creator_subs_window_note, analytics.periodDays),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** SUBX-43 (C8) — per-tier revenue/subscriber breakdown, reconciling to the creator-wide totals. */
+@Composable
+private fun TierBreakdownSection(
+    tiers: List<com.testlogon.android.data.subscriptions.TierRevenue>,
+    currency: String,
+) {
+    val free = stringResource(R.string.creator_subs_zero_money)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(R.string.creator_subs_by_tier_title),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        tiers.forEach { tier ->
+            Card(
+                modifier = Modifier.fillMaxWidth().testTag("creator_subs_tier_${tier.planId ?: "none"}"),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        tier.planName ?: stringResource(R.string.creator_subs_tier_unknown),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        stringResource(R.string.creator_subs_tier_active, tier.activeSubscribers) +
+                            "  •  " +
+                            stringResource(
+                                R.string.creator_subs_tier_mrr,
+                                formatTierPrice(tier.mrrCents, currency, free),
+                            ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        stringResource(
+                            R.string.creator_subs_tier_net,
+                            formatTierPrice(tier.netRevenueToDateCents, currency, free),
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** SUBX-43 (C6) — per-tier filter chips (All + one per tier) for the subscriber list. */
+@Composable
+private fun TierFilterRow(
+    tiers: List<com.testlogon.android.data.subscriptions.TierRevenue>,
+    selected: String?,
+    onTierFilterSelected: (String?) -> Unit,
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = selected == null,
+            onClick = { onTierFilterSelected(null) },
+            label = { Text(stringResource(R.string.creator_subs_tier_filter_all)) },
+        )
+        tiers.filter { it.planId != null }.forEach { tier ->
+            FilterChip(
+                selected = selected == tier.planId,
+                onClick = { onTierFilterSelected(tier.planId) },
+                label = {
+                    Text(
+                        tier.planName ?: stringResource(R.string.creator_subs_tier_unknown),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                modifier = Modifier.testTag("creator_subs_tier_filter_${tier.planId}"),
+            )
+        }
     }
 }
 
@@ -329,6 +440,7 @@ private fun SubscriberRowCard(
     disabled: Boolean,
     onStopRenewal: () -> Unit,
     onRemove: () -> Unit,
+    onRefund: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth().testTag(CreatorSubscribersTestTags.row(row.subscriptionId))) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -363,7 +475,7 @@ private fun SubscriberRowCard(
                 stringResource(R.string.creator_subs_next_billing, next),
                 style = MaterialTheme.typography.bodySmall,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (busy) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 } else {
@@ -372,6 +484,11 @@ private fun SubscriberRowCard(
                         enabled = !disabled,
                         modifier = Modifier.testTag(CreatorSubscribersTestTags.stopRenewal(row.subscriptionId)),
                     ) { Text(stringResource(R.string.creator_subs_action_stop_renewal)) }
+                    OutlinedButton(
+                        onClick = onRefund,
+                        enabled = !disabled,
+                        modifier = Modifier.testTag(CreatorSubscribersTestTags.refund(row.subscriptionId)),
+                    ) { Text(stringResource(R.string.creator_subs_action_refund)) }
                     OutlinedButton(
                         onClick = onRemove,
                         enabled = !disabled,
