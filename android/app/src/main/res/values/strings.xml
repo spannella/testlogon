@@ -1140,7 +1140,6 @@
 
     <!-- AND-163 — report message -->
     <string name="msg_action_report">Report</string>
-    <string name="report_title">Report message</string>
     <string name="report_statement_hint">Tell us what\'s wrong</string>
     <string name="report_counter">%1$d / %2$d</string>
     <string name="report_submit">Submit report</string>
@@ -1163,7 +1162,6 @@
     <string name="report_flow_reason_label">Reason (required, 5–2000 characters)</string>
     <string name="report_flow_retry">Retry</string>
     <string name="report_flow_done">Done</string>
-    <string name="report_confirm_title">Report submitted</string>
     <string name="report_already_reported">You\'ve already reported this</string>
     <string name="report_flow_topic_checked">%1$s, selected</string>
     <string name="report_flow_topic_unchecked">%1$s, not selected</string>

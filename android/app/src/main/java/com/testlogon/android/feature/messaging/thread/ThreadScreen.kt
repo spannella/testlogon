@@ -135,7 +135,9 @@ import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.messaging.MessageMedia
+import com.testlogon.android.data.report.ReportTarget
 import com.testlogon.android.feature.messaging.media.FileMessageBubble
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import com.testlogon.android.feature.messaging.media.FullScreenImageViewer
 import com.testlogon.android.feature.messaging.media.InlineVideoPlayer
 import com.testlogon.android.feature.messaging.media.VideoClipBubble
@@ -193,12 +195,13 @@ fun ThreadRoute(
     modifier: Modifier = Modifier,
     onOpenGroupDetails: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel(),
-    reportViewModel: com.testlogon.android.feature.messaging.report.ReportViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    // AND-163 — report sheet state (owned by the separate ReportViewModel/ReportSheet).
-    val reportState by reportViewModel.uiState.collectAsStateWithLifecycle()
-    val reportConfirmation = stringResource(R.string.report_confirmation)
+    // MODX-7 — the unified report sheet target (opened from the Report message action; null = closed).
+    // A MESSAGE target routes to the message endpoint (reason_code = first selected topic) inside the
+    // shared ReportFlowRepository; the reporter feedback (in-sheet "report received") is now identical
+    // to every other surface, so the old per-thread confirmation Snackbar is gone.
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     // AND-146 — remote typers in this conversation.
     val typingUsers by viewModel.typingUsers.collectAsStateWithLifecycle()
     // AND-151 — in-conversation search state.
@@ -436,9 +439,12 @@ fun ThreadRoute(
         onTipConfirm = viewModel::onTipConfirm,
         onTipDismiss = viewModel::onTipDismiss,
         onAction = { action ->
-            // AND-163 — intercept Report to open the dedicated report sheet; everything else to the VM.
+            // MODX-7 — intercept Report to open the unified report sheet; everything else to the VM.
             if (action is ThreadAction.Report) {
-                reportViewModel.open(state.conversationId, action.messageId)
+                reportTarget = ReportTarget.Message(
+                    id = action.messageId,
+                    conversationId = state.conversationId,
+                )
             } else {
                 viewModel.onAction(action)
             }
@@ -487,22 +493,13 @@ fun ThreadRoute(
         )
     }
 
-    // AND-163 — report sheet + one-shot confirmation snackbar.
-    com.testlogon.android.feature.messaging.report.ReportSheet(
-        state = reportState,
-        onReason = reportViewModel::onReasonSelected,
-        onStatement = reportViewModel::onStatementChanged,
-        onSubmit = reportViewModel::submit,
-        onDismiss = reportViewModel::dismiss,
+    // MODX-7 — the ONE unified report sheet (multi-select topics + statement + in-sheet "report received"
+    // feedback + retry). A MESSAGE target is routed to the message endpoint by ReportFlowRepository; no
+    // licensing/DMCA entry is offered for messages (Content-only). Null target renders nothing.
+    ContentReportSheetHost(
+        target = reportTarget,
+        onDismiss = { reportTarget = null },
     )
-    LaunchedEffect(Unit) {
-        reportViewModel.events.collect { event ->
-            when (event) {
-                com.testlogon.android.feature.messaging.report.ReportEvent.Submitted ->
-                    snackbarHostState.showSnackbar(reportConfirmation)
-            }
-        }
-    }
 
     // Send-options sheet: view-once / locked / scheduled for the next message.
     if (state.messageOptionsVisible) {

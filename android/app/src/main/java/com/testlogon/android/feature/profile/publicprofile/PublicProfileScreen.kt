@@ -53,7 +53,7 @@ import com.testlogon.android.core.ui.state.StaleBanner
 import com.testlogon.android.data.report.ReportTarget
 import com.testlogon.android.feature.profile.ProfileTestTags
 import com.testlogon.android.feature.profile.components.ProfileHeader
-import com.testlogon.android.feature.report.ReportSheet
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import kotlinx.coroutines.launch
 
 /**
@@ -295,13 +295,13 @@ private fun PublicContent(
             ) {
                 Text(stringResource(R.string.msg_action_report))
             }
-            reportTarget?.let { tgt ->
-                ReportSheet(
-                    target = tgt,
-                    onDismiss = { reportTarget = null },
-                    onCompleted = { reportTarget = null },
-                )
-            }
+            // MODX-7 — route through the SAME host every other surface uses (consistent wiring +
+            // report_* tags). USER targets get no licensing/DMCA entry (a profile is not a copyright
+            // claim surface); the host enforces that.
+            ContentReportSheetHost(
+                target = reportTarget,
+                onDismiss = { reportTarget = null },
+            )
 
             // P0-BLOCK: block / unblock this user, on the same surface as report. Uses the shared
             // BlockInteractionViewModel (hydrated with the viewed user) + shared confirm dialog.

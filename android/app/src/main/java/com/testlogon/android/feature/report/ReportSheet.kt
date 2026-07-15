@@ -36,23 +36,28 @@ import com.testlogon.android.data.messaging.report.ReportReason
 import com.testlogon.android.data.report.ReportOutcome
 import com.testlogon.android.data.report.ReportTarget
 
-/** AND-383 - test tags for the cross-cutting report sheet (used by the Compose UI tests). */
-object ReportFlowTestTags {
-    const val SHEET = "report_flow_sheet"
-    const val REASON_FIELD = "report_flow_reason_field"
-    const val COUNTER = "report_flow_counter"
-    const val SUBMIT = "report_flow_submit"
-    const val CANCEL = "report_flow_cancel"
-    const val LICENSING = "report_flow_licensing"
-    const val PROGRESS = "report_flow_progress"
-    const val SUCCESS = "report_flow_success"
-    const val ERROR = "report_flow_error"
-    const val RETRY = "report_flow_retry"
-    const val DONE = "report_flow_done"
-    fun topicRow(topic: ReportReason) = "report_flow_topic_${topic.code}"
+/**
+ * MODX-7 - the ONE canonical set of report test tags. Every report surface (messaging + feed post /
+ * comment / group comment / video / video-comment / profile / syndicate / catalog / broadcast) drives
+ * the single [ReportSheet] and therefore exposes these SAME `report_*` tags. (Supersedes the old split
+ * between the messaging `report_*` tags and the content `report_flow_*` tags - moderation-UI finding #7.)
+ */
+object ReportTestTags {
+    const val SHEET = "report_sheet"
+    const val STATEMENT_FIELD = "report_statement_field"
+    const val COUNTER = "report_counter"
+    const val SUBMIT = "report_submit"
+    const val CANCEL = "report_cancel"
+    const val LICENSING = "report_licensing"
+    const val PROGRESS = "report_progress"
+    const val SUCCESS = "report_success"
+    const val ERROR = "report_error"
+    const val RETRY = "report_retry"
+    const val DONE = "report_done"
+    fun topicRow(topic: ReportReason) = "report_topic_${topic.code}"
 }
 
-/** AND-383 - localized label for a report topic (reuses the AND-163 reason strings). */
+/** MODX-7 - localized label for a report topic (reuses the AND-163 reason strings). */
 @Composable
 fun topicLabel(topic: ReportReason): String = when (topic) {
     ReportReason.SPAM -> stringResource(R.string.report_reason_spam)
@@ -64,10 +69,11 @@ fun topicLabel(topic: ReportReason): String = when (topic) {
 }
 
 /**
- * AND-383 - the public entry point: the reusable report flow as a Material 3 [ModalBottomSheet],
- * parameterized by [target]. Call sites hold a `var reportTarget by remember` and render this when
- * non-null. [onCompleted] hands back a [ReportOutcome]; [onDismiss] closes the sheet. The composable is
- * stateless aside from the injected [viewModel].
+ * MODX-7 - the SINGLE canonical report component: the reusable report flow as a Material 3
+ * [ModalBottomSheet], parameterized by [target] (USER / Account / CONTENT / MESSAGE). Call sites hold a
+ * `var reportTarget by remember` and render this (usually via [ContentReportSheetHost]) when non-null.
+ * [onCompleted] hands back a [ReportOutcome]; [onDismiss] closes the sheet. Stateless aside from the
+ * injected [viewModel]. This is the ONLY report sheet in the app - the old messaging radio sheet is gone.
  */
 @Composable
 fun ReportSheet(
@@ -88,7 +94,7 @@ fun ReportSheet(
             onCompleted(ReportOutcome.CANCELLED)
             onDismiss()
         },
-        modifier = modifier.testTag(ReportFlowTestTags.SHEET),
+        modifier = modifier.testTag(ReportTestTags.SHEET),
     ) {
         ReportSheetContent(
             state = state,
@@ -109,7 +115,7 @@ fun ReportSheet(
     }
 }
 
-/** AND-383 - stateless content; renders one of three visual states off [ReportUiState.Phase]. */
+/** MODX-7 - stateless content; renders one of three visual states off [ReportUiState.Phase]. */
 @Composable
 fun ReportSheetContent(
     state: ReportUiState,
@@ -169,7 +175,7 @@ private fun EditingState(
                         onValueChange = { onTopicToggled(topic, it) },
                     )
                     .semantics { contentDescription = desc }
-                    .testTag(ReportFlowTestTags.topicRow(topic)),
+                    .testTag(ReportTestTags.topicRow(topic)),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Checkbox(checked = checked, onCheckedChange = null)
@@ -184,14 +190,14 @@ private fun EditingState(
         enabled = !submitting,
         label = { Text(stringResource(R.string.report_flow_reason_label)) },
         placeholder = { Text(stringResource(R.string.report_statement_hint)) },
-        modifier = Modifier.fillMaxWidth().testTag(ReportFlowTestTags.REASON_FIELD),
+        modifier = Modifier.fillMaxWidth().testTag(ReportTestTags.STATEMENT_FIELD),
     )
 
     val counter = stringResource(R.string.report_counter, state.reasonLength, state.reasonMax)
     Text(
         text = counter,
         modifier = Modifier
-            .testTag(ReportFlowTestTags.COUNTER)
+            .testTag(ReportTestTags.COUNTER)
             .semantics { contentDescription = counter },
     )
 
@@ -200,7 +206,7 @@ private fun EditingState(
         Text(
             text = err.message,
             modifier = Modifier
-                .testTag(ReportFlowTestTags.ERROR)
+                .testTag(ReportTestTags.ERROR)
                 .semantics { liveRegion = LiveRegionMode.Polite },
         )
     }
@@ -208,19 +214,19 @@ private fun EditingState(
     if (submitting) {
         CircularProgressIndicator(
             Modifier.padding(8.dp)
-                .testTag(ReportFlowTestTags.PROGRESS)
+                .testTag(ReportTestTags.PROGRESS)
                 .semantics { liveRegion = LiveRegionMode.Polite },
         )
     } else if (errorPhase?.retryable == true) {
         Button(
             onClick = onRetry,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportFlowTestTags.RETRY),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportTestTags.RETRY),
         ) { Text(stringResource(R.string.report_flow_retry)) }
     } else {
         Button(
             onClick = onSubmit,
             enabled = state.canSubmit,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportFlowTestTags.SUBMIT),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportTestTags.SUBMIT),
         ) { Text(stringResource(R.string.report_submit)) }
     }
 
@@ -230,14 +236,14 @@ private fun EditingState(
         TextButton(
             onClick = onLicensing,
             enabled = !submitting,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportFlowTestTags.LICENSING),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportTestTags.LICENSING),
         ) { Text(stringResource(R.string.report_flow_licensing)) }
     }
 
     TextButton(
         onClick = onCancel,
         enabled = !submitting,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportFlowTestTags.CANCEL),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportTestTags.CANCEL),
     ) { Text(stringResource(R.string.action_cancel)) }
 }
 
@@ -245,18 +251,20 @@ private fun EditingState(
 private fun SuccessState(alreadyReported: Boolean, onDone: () -> Unit) {
     Column(
         Modifier.fillMaxWidth()
-            .testTag(ReportFlowTestTags.SUCCESS)
+            .testTag(ReportTestTags.SUCCESS)
             .semantics { liveRegion = LiveRegionMode.Polite },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // MODX-15 - the reporter gets explicit "report received" feedback in-sheet, identical across every
+        // surface (messaging + content). The dedup case shows the benign already-reported confirmation.
         Text(
             stringResource(
-                if (alreadyReported) R.string.report_already_reported else R.string.report_confirm_title,
+                if (alreadyReported) R.string.report_already_reported else R.string.report_confirmation,
             ),
         )
         Button(
             onClick = onDone,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportFlowTestTags.DONE),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(ReportTestTags.DONE),
         ) { Text(stringResource(R.string.report_flow_done)) }
     }
 }
