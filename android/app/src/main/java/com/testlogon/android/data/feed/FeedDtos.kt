@@ -84,6 +84,11 @@ data class PostDto(
     // reused from the sponsored block) carries the author id for the Subscribe CTA.
     @Json(name = "subscriber_only") val subscriberOnly: Boolean = false,
     @Json(name = "subscriber_locked") val subscriberLocked: Boolean = false,
+    // SUBX-31: the minimum tier LEVEL this subscriber-only post requires (0 = any
+    // active sub - the pre-tier binary default) + the display NAME of that tier so
+    // the lock card can name the required tier and upsell to it.
+    @Json(name = "required_tier_level") val requiredTierLevel: Int = 0,
+    @Json(name = "required_tier_name") val requiredTierName: String? = null,
     // --- ADV-105 sponsored (paid) unit fields (injected by newsfeed sponsored path; ADV-104) ---
     // A server-injected sponsored post carries is_sponsored=true plus the creative + serving metadata.
     // All defaulted so an organic post (no sponsored keys) maps cleanly.

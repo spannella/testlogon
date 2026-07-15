@@ -54,10 +54,23 @@ fun SubscriberLockCard(
     onSubscribeClick: () -> Unit,
     modifier: Modifier = Modifier,
     style: PaywallStyle = PaywallStyle.Feed,
+    // SUBX-31: when the post requires a specific tier LEVEL, name that tier and
+    // upsell to it (rather than a generic "subscribe"). 0/null = binary any-sub.
+    requiredTierName: String? = null,
+    requiredTierLevel: Int = 0,
 ) {
-    val label = "Subscribers only"
-    val sub = "Subscribe to $creatorName to unlock this content."
-    val cd = "Locked post. Subscribers only. Subscribe to $creatorName to unlock."
+    val tier = requiredTierName?.takeIf { it.isNotBlank() }
+    val label = if (tier != null) "$tier tier required" else "Subscribers only"
+    val sub = if (tier != null) {
+        "This post is for $creatorName's $tier tier. Subscribe at that tier to unlock it."
+    } else {
+        "Subscribe to $creatorName to unlock this content."
+    }
+    val cd = if (tier != null) {
+        "Locked post. Requires the $tier tier. Subscribe to $creatorName at the $tier tier to unlock."
+    } else {
+        "Locked post. Subscribers only. Subscribe to $creatorName to unlock."
+    }
     val padding = if (style == PaywallStyle.Detail) 24.dp else 16.dp
 
     Column(
@@ -95,7 +108,7 @@ fun SubscriberLockCard(
             textAlign = TextAlign.Center,
         )
         TlButton(
-            text = "Subscribe to unlock",
+            text = if (tier != null) "Subscribe to $tier" else "Subscribe to unlock",
             onClick = onSubscribeClick,
             modifier = Modifier.testTag(SubscriberLockTestTags.CTA),
         )
@@ -128,7 +141,7 @@ private fun LockedTeaser() {
             tint = scheme.onSurfaceVariant.copy(alpha = 0.85f),
             modifier = Modifier.size(44.dp),
         )
-        Pill(text = "Subscribers only", modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
+        Pill(text = "Subscribers only", modifier = Modifier.align(Alignment.TopStart).padding(8.dp))  // teaser overlay (tier named on the card below)
     }
 }
 

@@ -157,7 +157,12 @@ sealed interface Paywall {
      * Re-locks automatically when the subscription lapses because the server re-marks it locked
      * (has_active_subscription is lifecycle-aware).
      */
-    data class SubscriberLocked(val creatorId: String) : Paywall
+    data class SubscriberLocked(
+        val creatorId: String,
+        // SUBX-31: the tier the viewer must buy to unlock (0/null = any active sub).
+        val requiredTierLevel: Int = 0,
+        val requiredTierName: String? = null,
+    ) : Paywall
 
     data class Locked(
         val lockType: LockType,
@@ -270,7 +275,11 @@ internal fun PostDto.toPaywall(): Paywall {
     // The owner + active subscribers get subscriber_locked=false and see the real body, so this
     // fires only for a genuinely gated-out viewer. Precedence over the tip/price lock.
     if (subscriberLocked) {
-        return Paywall.SubscriberLocked(creatorId?.takeIf { it.isNotBlank() } ?: authorId)
+        return Paywall.SubscriberLocked(
+            creatorId = creatorId?.takeIf { it.isNotBlank() } ?: authorId,
+            requiredTierLevel = requiredTierLevel,
+            requiredTierName = requiredTierName?.takeIf { it.isNotBlank() },
+        )
     }
     val effectivelyLocked = locked && !unlocked
     if (!effectivelyLocked) return Paywall.Unlocked

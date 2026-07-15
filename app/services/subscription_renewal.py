@@ -367,6 +367,15 @@ def _apply_pending_change(sub: Dict[str, Any], now: int) -> bool:
     if pending.get("price_cents") is not None:
         sub["price_cents"] = int(pending["price_cents"])
     sub["plan_change_applied_at"] = now
+    # SUBX-30/33: a DOWNGRADE (or period-end change) applies now -> re-resolve the
+    # tier level so the subscriber drops to the new tier exactly at period end.
+    try:
+        from app.services.subscription_access import get_plan_level as _gpl
+        _lvl = _gpl(str(sub.get("creator_id") or ""), str(sub["plan_id"]))
+        if _lvl:
+            sub["tier_level"] = _lvl
+    except Exception:
+        pass
     # a plan change resets any old-plan discount
     sub.pop("discount", None)
     sub.pop("discount_remaining_months", None)

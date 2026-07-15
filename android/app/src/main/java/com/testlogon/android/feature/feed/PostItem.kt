@@ -217,6 +217,8 @@ fun PostItem(
                     creatorName = authorName?.takeIf { it.isNotBlank() } ?: paywall.creatorId,
                     onSubscribeClick = { onSubscribeClick(paywall.creatorId) },
                     style = PaywallStyle.Feed,
+                    requiredTierName = paywall.requiredTierName,
+                    requiredTierLevel = paywall.requiredTierLevel,
                 )
                 Paywall.Unlocked -> {
                     val body = post.body

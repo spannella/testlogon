@@ -1434,6 +1434,9 @@ class CreatePostRequest(ContentFieldsMixin):
     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     visibility: Literal["followers", "public"] = "followers"
     subscriber_only: bool = False  # SUB-E3: per-post subscriber-only gate
+    # SUBX-31: minimum tier level required to unlock this subscriber-only post
+    # (0/None = any active subscriber unlocks - the pre-tier binary default).
+    required_tier_level: Optional[int] = Field(default=None, ge=1, le=100)
     # B8 B-LOCK: accept "price"/"none" aliases so a fixed-price locked post created
     # by the app (which sent "price") or an explicit unlock ("none") validates; the
     # value is normalized to the canonical fixed_price/tip_lottery/None below.
@@ -2304,7 +2307,8 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     if (not locked_body) and viewer_id and _sub_author and _sub_author != viewer_id and bool(post.get("subscriber_only")):
         try:
             from app.services.subscription_access import content_locked_for_viewer as _clfv
-            _sub_locked = _clfv(viewer_id, _sub_author, subscriber_only=True)
+            _req_level = int(post.get("required_tier_level") or 0)
+            _sub_locked = _clfv(viewer_id, _sub_author, subscriber_only=True, required_level=_req_level)
         except Exception:
             _sub_locked = False
     if _sub_locked:
@@ -2391,6 +2395,10 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "visibility": post.get("visibility", "followers"),
         "subscriber_only": bool(post.get("subscriber_only")),
         "subscriber_locked": _sub_locked,
+        # SUBX-31: the tier the locked-out viewer must buy (level + display name)
+        # so the app SubscriberLockCard can name the required tier + upsell to it.
+        "required_tier_level": int(post.get("required_tier_level") or 0),
+        "required_tier_name": (_subx_tier_label(_sub_author, int(post.get("required_tier_level") or 0)) if _sub_locked else None),
         "creator_id": _sub_author,
         "locked": bool(post.get("locked")),
         "lock_expired": lock_expired,
@@ -2812,6 +2820,15 @@ def has_unlocked(user_id: str, post_id: str) -> bool:
     return bool(it and it.get("unlocked") is True)
 
 
+def _subx_tier_label(creator_id, required_level) -> Optional[str]:
+    """SUBX-31: best-effort display name of the required tier for the lock card."""
+    try:
+        from app.services.subscription_access import tier_label_for_level
+        return tier_label_for_level(str(creator_id or ""), int(required_level or 0))
+    except Exception:
+        return None
+
+
 def _subscriber_locked_post(post: Dict[str, Any], viewer_id) -> bool:
     """SUB-E3: True when a per-post subscriber-only item must be locked for the
     viewer (owner/admin/active-subscriber bypass via content_locked_for_viewer)."""
@@ -2819,7 +2836,10 @@ def _subscriber_locked_post(post: Dict[str, Any], viewer_id) -> bool:
     if not author or author == viewer_id or not bool(post.get("subscriber_only")):
         return False
     try:
-        return content_locked_for_viewer(viewer_id, author, subscriber_only=True)
+        return content_locked_for_viewer(
+            viewer_id, author, subscriber_only=True,
+            required_level=int(post.get("required_tier_level") or 0),
+        )
     except Exception:
         return False
 
@@ -3841,6 +3861,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "video_id": video_id,
         "visibility": req.visibility,
         "subscriber_only": bool(getattr(req, "subscriber_only", False)),
+        "required_tier_level": int(getattr(req, "required_tier_level", 0) or 0),  # SUBX-31
         "locked": locked,
         "lock_type": lock_type,
         "unlock_price_cents": unlock_price_cents,

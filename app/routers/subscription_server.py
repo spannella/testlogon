@@ -23,7 +23,7 @@ from app.services.filemanager import get_node, norm_path
 from app.services.alerts import audit_event
 from app.services.profile import get_profile_identity
 from app.services.purchase_history import record_billing_transaction
-from app.services.subscription_access import get_subscription_settings, set_subscription_settings, is_platform_admin
+from app.services.subscription_access import get_subscription_settings, set_subscription_settings, is_platform_admin, get_plan_level
 from app.services.subscription_cycle_orders import emit_subscription_cycle_order
 from app.auth.policy import require_admin_or_root
 
@@ -339,6 +339,9 @@ class PlanCreateIn(BaseModel):
     asset_paths: List[str] = Field(default_factory=list)
     # SUB-E0: structured tier benefits/perks (list of {label, detail}).
     benefits: conlist(PlanBenefit, max_length=50) = Field(default_factory=list)
+    # SUBX-30: optional explicit ordered tier level (>=1; higher = more premium).
+    # When omitted the level is DERIVED by price rank (subscription_access.get_plan_level).
+    level: Optional[conint(ge=1, le=100)] = None
 
 
 class PlanUpdateIn(BaseModel):
@@ -353,6 +356,8 @@ class PlanUpdateIn(BaseModel):
     asset_paths: Optional[conlist(str, max_length=50)] = None
     # SUB-E0: replace the plan's structured benefits/perks (None = leave unchanged).
     benefits: Optional[conlist(PlanBenefit, max_length=50)] = None
+    # SUBX-30: set/replace the plan's explicit tier level (None = leave unchanged).
+    level: Optional[conint(ge=1, le=100)] = None
 
 
 class PlanOut(BaseModel):
@@ -364,6 +369,8 @@ class PlanOut(BaseModel):
     currency: str = "USD"
     interval: str = "month"
     annual_price_cents: Optional[int] = None
+    # SUBX-30: ordered tier level (>=1); absent on older/seeded plans -> None (derived).
+    level: Optional[int] = None
     # Tolerant defaults: stored plans (esp. older/seeded ones) may omit these
     # optional-metadata fields; the list/get endpoints must not 500 on them.
     status: str = "active"
@@ -1351,6 +1358,8 @@ async def create_plan(
         "currency": body.currency.lower(),
         "interval": body.interval,
         "annual_price_cents": int(body.annual_price_cents) if body.annual_price_cents else None,
+        # SUBX-30: explicit ordered tier level (None -> derived by price rank at read time).
+        "level": int(body.level) if body.level else None,
         "status": "active",
         "metadata": body.metadata,
         "benefits": [b.model_dump() for b in body.benefits],
@@ -1401,6 +1410,8 @@ async def update_plan(
             updated[field] = value
     if body.annual_price_cents is not None:
         updated["annual_price_cents"] = int(body.annual_price_cents)
+    if body.level is not None:
+        updated["level"] = int(body.level)  # SUBX-30
     if body.benefits is not None:
         updated["benefits"] = [b.model_dump() for b in body.benefits]
     if body.asset_paths is not None:
@@ -1575,6 +1586,9 @@ async def subscribe(
         "plan_id": plan_id,
         "creator_id": plan["creator_id"],
         "subscriber_id": subscriber_id,
+        # SUBX-30: persist the resolved tier level so the tier gate is stable against
+        # later re-ranking, and legacy/other readers get a level without a lookup.
+        "tier_level": get_plan_level(plan["creator_id"], plan_id),
         "interval": interval,
         "provider": "stripe" if payment_intent_id else "stub",
         "provider_subscription_id": provider_subscription_id,
@@ -1879,6 +1893,8 @@ async def gift_subscription(
         "plan_id": plan_id,
         "creator_id": plan["creator_id"],
         "subscriber_id": recipient_id,
+        # SUBX-30: gifted sub records its tier level too (unlocks that tier's content).
+        "tier_level": get_plan_level(plan["creator_id"], plan_id),
         "interval": interval,
         "provider": "stripe" if payment_intent_id else "stub",
         "provider_subscription_id": provider_subscription_id,
@@ -2697,6 +2713,11 @@ async def change_subscription_plan(
     sub["plan_id"] = body.plan_id
     sub["interval"] = interval
     sub["price_cents"] = int(new_price)
+    # SUBX-30/33: an UPGRADE unlocks the higher tier IMMEDIATELY -> re-resolve and
+    # persist the new tier level now. (A scheduled DOWNGRADE keeps the current
+    # higher tier_level until _apply_pending_change re-resolves it at period end,
+    # so paid-for access is never lost early.)
+    sub["tier_level"] = get_plan_level(sub["creator_id"], body.plan_id)
     sub["proration_policy"] = body.proration_policy
     if interval_changed:
         sub["current_period_start"] = ts

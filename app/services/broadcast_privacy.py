@@ -245,7 +245,8 @@ def check_viewer_access(
             _raw = {}
         if bool(_raw.get("subscriber_only")):
             from app.services.subscription_access import content_locked_for_viewer
-            if content_locked_for_viewer(viewer_id, creator_id, subscriber_only=True):
+            _req_level = int(_raw.get("required_tier_level") or 0)  # SUBX-31
+            if content_locked_for_viewer(viewer_id, creator_id, subscriber_only=True, required_level=_req_level):
                 raise HTTPException(
                     status_code=403,
                     detail={
