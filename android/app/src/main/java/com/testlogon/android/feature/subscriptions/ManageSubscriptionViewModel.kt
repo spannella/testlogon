@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.subscriptions
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
@@ -11,6 +12,7 @@ import com.testlogon.android.data.subscriptions.ChangePlanReqDto
 import com.testlogon.android.data.subscriptions.CreatorSubscription
 import com.testlogon.android.data.subscriptions.RenewalReqDto
 import com.testlogon.android.data.subscriptions.ResumeSubscriptionReqDto
+import com.testlogon.android.data.subscriptions.RetryPaymentReqDto
 import com.testlogon.android.data.subscriptions.SubscriptionState
 import com.testlogon.android.data.subscriptions.SubscriptionTier
 import com.testlogon.android.data.subscriptions.SubscriptionsRepository
@@ -33,6 +35,9 @@ sealed interface MutationStatus {
     data object Canceling : MutationStatus
     data object Renewing : MutationStatus
     data object Changing : MutationStatus
+
+    /** SUBX-22 - retrying a PAST_DUE renewal charge (dunning recovery). */
+    data object RetryingPayment : MutationStatus
     data class Failed(val message: UiText) : MutationStatus
 }
 
@@ -54,6 +59,10 @@ sealed interface ManageSubscriptionUiState {
         val availableTiers: List<SubscriptionTier> = emptyList(),
         /** SUB-E2 - the tier chosen for a change-plan confirm (null = no dialog). */
         val changeTarget: SubscriptionTier? = null,
+        /** SUBX-21 - the sub's human tier name (joined from the plan) instead of the raw plan id. */
+        val planName: String? = null,
+        /** SUBX-21 - the creator's display name (from the nav arg), for "Tier - Creator" headline. */
+        val creatorName: String? = null,
     ) : ManageSubscriptionUiState {
         /** Active and not scheduled to end -> show "Cancel subscription". */
         val canCancel: Boolean
@@ -69,6 +78,10 @@ sealed interface ManageSubscriptionUiState {
             get() = subscription.status == SubscriptionState.CANCELED ||
                 subscription.status == SubscriptionState.EXPIRED
 
+        /** SUBX-22 - PAST_DUE (dunning) -> expose update-card + retry-payment recovery actions. */
+        val isPastDue: Boolean
+            get() = subscription.status == SubscriptionState.PAST_DUE
+
         /** SUB-E2 - upgrade/downgrade is offered while the sub is active/trialing and not ending. */
         val canChangePlan: Boolean
             get() = (subscription.status == SubscriptionState.ACTIVE ||
@@ -79,7 +92,10 @@ sealed interface ManageSubscriptionUiState {
         val changeTargetIsUpgrade: Boolean
             get() {
                 val t = changeTarget ?: return false
-                return t.priceCents > (subscription.priceCents ?: 0L)
+                // SUBX-24: classify by MONTHLY-EQUIVALENT price so a $50/yr vs an $8/mo plan is not
+                // mislabelled an "upgrade" by raw price (matches the backend M5 fix).
+                return monthlyEquivCents(t.priceCents, t.interval) >
+                    monthlyEquivCents(subscription.priceCents ?: 0L, subscription.interval)
             }
     }
 
@@ -90,6 +106,9 @@ sealed interface ManageSubscriptionUiState {
 sealed interface ManageSubscriptionEvent {
     /** A reactivation needs a fresh payment authorization -> route to the AND-236 subscribe flow. */
     data class NavigateToSubscribe(val planId: String, val creatorId: String) : ManageSubscriptionEvent
+
+    /** SUBX-22 - route to add/select a payment method (card-less user / PAST_DUE card update). */
+    data object NavigateToAddCard : ManageSubscriptionEvent
 }
 
 /**
@@ -104,10 +123,20 @@ sealed interface ManageSubscriptionEvent {
  */
 @HiltViewModel
 class ManageSubscriptionViewModel @Inject constructor(
+    savedStateHandle: SavedStateHandle,
     private val repository: SubscriptionsRepository,
     private val billingAuthorizer: BillingAuthorizer,
     private val errorMapper: BillingErrorMapper,
 ) : ViewModel() {
+
+    // SUBX-21 - the SPECIFIC sub to manage (from My-subscriptions / a creator's tier page). Absent for
+    // the legacy arg-less More-hub entry, which falls back to the viewer's most-recent active sub.
+    private val targetSubscriptionId: String? =
+        savedStateHandle.get<String>(ARG_SUBSCRIPTION_ID)?.takeIf { it.isNotBlank() }
+    private val targetCreatorId: String? =
+        savedStateHandle.get<String>(ARG_CREATOR_ID)?.takeIf { it.isNotBlank() }
+    private val targetCreatorName: String? =
+        savedStateHandle.get<String>(ARG_CREATOR_NAME)?.takeIf { it.isNotBlank() }
 
     private val _uiState = MutableStateFlow<ManageSubscriptionUiState>(ManageSubscriptionUiState.Loading)
     val uiState: StateFlow<ManageSubscriptionUiState> = _uiState.asStateFlow()
@@ -133,7 +162,10 @@ class ManageSubscriptionViewModel @Inject constructor(
                     if (current == null) {
                         _uiState.value = ManageSubscriptionUiState.NoSubscription
                     } else {
-                        _uiState.value = ManageSubscriptionUiState.Content(subscription = current)
+                        _uiState.value = ManageSubscriptionUiState.Content(
+                            subscription = current,
+                            creatorName = targetCreatorName,
+                        )
                         loadTiers(current)
                     }
                 }
@@ -154,9 +186,11 @@ class ManageSubscriptionViewModel @Inject constructor(
             when (val result = repository.getCreatorTiers(sub.creatorId)) {
                 is ApiResult.Success -> {
                     val others = result.data.filter { it.isActive && it.planId != sub.planId }
+                    // SUBX-21 - join the sub to its plan for a human tier name (was: raw plan id).
+                    val planName = result.data.firstOrNull { it.planId == sub.planId }?.name
                     val content = currentContent() ?: return@launch
                     if (content.subscription.subscriptionId == sub.subscriptionId) {
-                        _uiState.value = content.copy(availableTiers = others)
+                        _uiState.value = content.copy(availableTiers = others, planName = planName)
                     }
                 }
                 else -> Unit // best-effort: change-plan section stays hidden on failure
@@ -264,7 +298,11 @@ class ManageSubscriptionViewModel @Inject constructor(
             }
             if (result !is ApiResult.Success && content.isReactivatable) {
                 val error = errorMapper.map(result)
-                if (error.recoverability == Recoverability.REQUIRES_NEW_METHOD ||
+                // SUBX-23 - honest reactivate: a lapsed sub (backend 409) or a card/action-required
+                // failure can't be resumed for free -> route to the paid subscribe flow instead of
+                // ever showing a false "active" (never active-but-locked).
+                if (error.httpStatus == HTTP_CONFLICT ||
+                    error.recoverability == Recoverability.REQUIRES_NEW_METHOD ||
                     error.recoverability == Recoverability.REQUIRES_ACTION
                 ) {
                     _uiState.value = content.copy(mutation = MutationStatus.Idle)
@@ -272,6 +310,30 @@ class ManageSubscriptionViewModel @Inject constructor(
                     return@launch
                 }
             }
+            applyMutationResult(result)
+        }
+    }
+
+    // ---- SUBX-22: PAST_DUE dunning recovery ----
+
+    /** SUBX-22 - route to add/select a card; the user returns and taps Retry payment. */
+    fun onUpdateCardClicked() {
+        val content = currentContent() ?: return
+        if (content.mutation != MutationStatus.Idle) return
+        viewModelScope.launch { _events.send(ManageSubscriptionEvent.NavigateToAddCard) }
+    }
+
+    /**
+     * SUBX-22 - retry the failed renewal charge on a PAST_DUE sub via the backend recovery endpoint
+     * (same funds-guarded rail as the sweeper). A real collected charge clears past_due -> active; a
+     * decline (402) surfaces an error prompting a card update.
+     */
+    fun onRetryPaymentClicked() {
+        val content = currentContent() ?: return
+        if (content.mutation != MutationStatus.Idle) return
+        _uiState.value = content.copy(mutation = MutationStatus.RetryingPayment)
+        viewModelScope.launch {
+            val result = repository.retryPayment(content.subscription.subscriptionId, RetryPaymentReqDto())
             applyMutationResult(result)
         }
     }
@@ -300,16 +362,25 @@ class ManageSubscriptionViewModel @Inject constructor(
 
     private fun List<CreatorSubscription>.pickCurrent(): CreatorSubscription? {
         if (isEmpty()) return null
-        val activeLike = filter {
+        // SUBX-21 - resolve the SPECIFIC sub the caller asked for (by id, then by creator) so a
+        // multi-creator subscriber lands on the RIGHT sub, not the global most-recent one.
+        targetSubscriptionId?.let { id -> firstOrNull { it.subscriptionId == id }?.let { return it } }
+        val scoped = targetCreatorId?.let { cid -> filter { it.creatorId == cid } } ?: this
+        val fromScope = scoped.ifEmpty { this }
+        val activeLike = fromScope.filter {
             it.status == SubscriptionState.ACTIVE ||
                 it.status == SubscriptionState.TRIALING ||
                 it.status == SubscriptionState.PAST_DUE
         }
-        val pool = activeLike.ifEmpty { this }
+        val pool = activeLike.ifEmpty { fromScope }
         return pool.maxByOrNull { it.currentPeriodEndEpochSeconds ?: it.startAtEpochSeconds ?: 0L }
     }
 
     companion object {
         const val ROUTE = "subscriptions/manage"
+        const val ARG_SUBSCRIPTION_ID = "subscriptionId"
+        const val ARG_CREATOR_ID = "creatorId"
+        const val ARG_CREATOR_NAME = "creatorName"
+        private const val HTTP_CONFLICT = 409
     }
 }

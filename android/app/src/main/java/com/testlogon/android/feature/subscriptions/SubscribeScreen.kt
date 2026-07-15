@@ -60,6 +60,8 @@ object SubscribeTestTags {
     const val BENEFITS = "subscribe_benefits"
     const val DONE = "subscribe_done"
     const val START_TRIAL = "subscribe_start_trial"
+    const val SUCCESS_DONE = "subscribe_success_done"
+    const val ADD_CARD_BUTTON = "subscribe_add_card_button"
 }
 
 /**
@@ -72,6 +74,8 @@ fun SubscribeRoute(
     onSubscribed: (subscriptionId: String, planId: String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onAddPaymentMethod: () -> Unit = {},
+    onDone: () -> Unit = onBack,
     viewModel: SubscribeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -94,6 +98,8 @@ fun SubscribeRoute(
         onConfirm = viewModel::confirm,
         onStartTrial = viewModel::startTrial,
         onRetry = viewModel::retry,
+        onAddPaymentMethod = onAddPaymentMethod,
+        onDone = onDone,
         onBack = onBack,
         modifier = modifier,
     )
@@ -106,6 +112,8 @@ fun SubscribeScreen(
     onConfirm: () -> Unit,
     onStartTrial: () -> Unit,
     onRetry: () -> Unit,
+    onAddPaymentMethod: () -> Unit,
+    onDone: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -134,13 +142,14 @@ fun SubscribeScreen(
                 .verticalScroll(rememberScrollState()),
         ) {
             when (state.status) {
-                SubscribeUiState.Status.Success -> SuccessContent()
+                SubscribeUiState.Status.Success -> SuccessContent(onDone = onDone)
                 SubscribeUiState.Status.PaymentsUnavailable -> UnavailableContent(onBack = onBack)
                 else -> ReviewContent(
                     state = state,
                     onConfirm = onConfirm,
                     onStartTrial = onStartTrial,
                     onRetry = onRetry,
+                    onAddPaymentMethod = onAddPaymentMethod,
                 )
             }
         }
@@ -153,6 +162,7 @@ private fun ReviewContent(
     onConfirm: () -> Unit,
     onStartTrial: () -> Unit,
     onRetry: () -> Unit,
+    onAddPaymentMethod: () -> Unit,
 ) {
     val freeLabel = stringResource(R.string.subs_tiers_free)
     val price = formatTierPrice(state.tier.priceCents, state.tier.currency, freeLabel)
@@ -220,6 +230,14 @@ private fun ReviewContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.testTag(SubscribeTestTags.ADD_CARD_HINT),
                 )
+                // SUBX-22 - a real route to add a card (was: hint text only, dead-end).
+                Button(
+                    onClick = onAddPaymentMethod,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(SubscribeTestTags.ADD_CARD_BUTTON),
+                ) { Text(stringResource(R.string.subscribe_add_card_action)) }
             }
             OutlinedButton(
                 onClick = onRetry,
@@ -303,7 +321,9 @@ private fun BenefitRow(benefit: TierBenefit) {
 }
 
 @Composable
-private fun SuccessContent() {
+private fun SuccessContent(onDone: () -> Unit) {
+    // SUBX-24 - the success screen now DWELLS (no instant auto-pop) with an explicit CTA so the
+    // subscriber sees confirmation and can jump to their unlocked content.
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -318,6 +338,13 @@ private fun SuccessContent() {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Button(
+            onClick = onDone,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .testTag(SubscribeTestTags.SUCCESS_DONE),
+        ) { Text(stringResource(R.string.subscribe_view_content)) }
     }
 }
 

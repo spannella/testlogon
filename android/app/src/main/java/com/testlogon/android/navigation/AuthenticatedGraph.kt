@@ -124,6 +124,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
                     launchSingleTop = true
                 }
             },
+            // SUBX-24: organic Subscribe entry on a creator profile -> that creator's tier browse.
+            onSubscribe = { creatorId, displayName ->
+                navController.navigate(SubscriptionTiersDest.build(creatorId, displayName)) {
+                    launchSingleTop = true
+                }
+            },
         )
         // AND-100: read-only post detail (in-app nav + deep link).
         postDetailDestination(navController)
@@ -252,6 +258,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         creatorSubscribersDestination(navController)
         // SUB-E2: gift a creator subscription to another user (gifter pays one no-renew cycle).
         giftSubscriptionDestination(navController)
+        // SUBX-20: the subscriber's "My subscriptions" list (all subs -> correct-target Manage).
+        mySubscriptionsDestination(navController)
         // AND-238/239/240: fan-club channels list (tier-grouped) + channel messages + tier members.
         fanClubDestinations(navController)
         // AND-243: invoices list (paged) + invoice detail (line items/totals + email + view-PDF).

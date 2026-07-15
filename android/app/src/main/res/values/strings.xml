@@ -1561,7 +1561,7 @@
     <!-- AND-224: Payment methods management -->
     <string name="more_entry_payment_methods">Payment methods</string>
     <!-- AND-235: subscription tiers browse -->
-    <string name="more_entry_subscription_tiers">Subscription tiers</string>
+    <string name="more_entry_subscription_tiers">Your subscription tiers</string>
     <!-- AND-237: manage / cancel subscription -->
     <string name="more_entry_manage_subscription">Manage subscription</string>
     <string name="payment_methods_title">Payment methods</string>
@@ -5083,4 +5083,19 @@
     <string name="creator_subs_confirm_stop_body">%1$s keeps access until the period ends, then will not renew.</string>
     <string name="creator_subs_confirm_remove_title">Remove subscriber?</string>
     <string name="creator_subs_confirm_remove_body">%1$s loses access now and is refunded the unused portion.</string>
+    <!-- SUBX-20..24 subscriber self-service -->
+    <string name="more_entry_my_subscriptions">My subscriptions</string>
+    <string name="my_subs_title">My subscriptions</string>
+    <string name="my_subs_empty_title">No subscriptions yet</string>
+    <string name="my_subs_empty_body">Subscriptions you start will appear here.</string>
+    <string name="my_subs_renews_on">Renews on %1$s</string>
+    <string name="my_subs_ends_on">Ends on %1$s</string>
+    <string name="my_subs_past_due_banner">Payment failed — update your card to keep access.</string>
+    <string name="manage_sub_by_creator">by %1$s</string>
+    <string name="manage_sub_past_due_banner">Your last payment failed. Update your card and retry to keep your subscription.</string>
+    <string name="manage_sub_update_card_action">Update payment method</string>
+    <string name="manage_sub_retry_payment_action">Retry payment</string>
+    <string name="subscribe_view_content">View content</string>
+    <string name="subscribe_add_card_action">Add a payment method</string>
+    <string name="profile_public_subscribe">Subscribe</string>
 </resources>

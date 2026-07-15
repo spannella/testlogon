@@ -220,6 +220,9 @@ object MoreRoutes {
     // AND-237: manage / cancel the viewer's current subscription (arg-less route).
     const val MANAGE_SUBSCRIPTION = ManageSubscriptionDest.ROUTE
 
+    // SUBX-20: the subscriber's "My subscriptions" list (all subs -> correct-target manage).
+    const val MY_SUBSCRIPTIONS = MySubscriptionsDest.ROUTE
+
     // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
     const val CREATOR_SUBSCRIBERS = CreatorSubscribersDest.ROUTE
 
@@ -568,6 +571,7 @@ object MoreRoutes {
             SUBSCRIPTION_TIERS,
             CREATOR_SUBSCRIBERS,
             MANAGE_SUBSCRIPTION,
+            MY_SUBSCRIPTIONS,
             FAN_CLUB,
             ORGS_MEMBERS,
             GROUPS,

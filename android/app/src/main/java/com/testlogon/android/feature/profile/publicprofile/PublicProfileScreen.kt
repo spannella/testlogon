@@ -70,6 +70,8 @@ fun PublicProfileRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    // SUBX-24: organic Subscribe entry -> the creator's subscription tier browse.
+    onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     // Defaulted no-op so the authenticated graph (where the CTA is hidden) need not supply it.
     onSignIn: () -> Unit = {},
     shareIntents: ProfileShareIntents = remember { ProfileShareIntents() },
@@ -93,6 +95,7 @@ fun PublicProfileRoute(
         onRetry = viewModel::onRetry,
         onBack = onBack,
         onOpenFanClub = onOpenFanClub,
+        onSubscribe = onSubscribe,
         onSignIn = onSignIn,
         onShare = { displayName ->
             val url = viewModel.shareUrl ?: return@PublicProfileScreen
@@ -126,6 +129,7 @@ fun PublicProfileScreen(
     shareUrl: String? = null,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onSignIn: () -> Unit = {},
     onShare: (displayName: String) -> Unit = {},
     onCopyLink: () -> Unit = {},
@@ -190,6 +194,7 @@ fun PublicProfileScreen(
                     isAuthenticated = isAuthenticated,
                     onRetry = onRetry,
                     onOpenFanClub = onOpenFanClub,
+                    onSubscribe = onSubscribe,
                     onSignIn = onSignIn,
                 )
 
@@ -230,6 +235,7 @@ private fun PublicContent(
     isAuthenticated: Boolean,
     onRetry: () -> Unit,
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onSignIn: () -> Unit = {},
 ) {
     Column(
@@ -273,6 +279,17 @@ private fun PublicContent(
         // AND-390: auth-only affordances (fan-club, report) are HIDDEN (not disabled) when signed out;
         // the unauthenticated viewer instead gets a non-blocking Sign-in CTA (FR-7/FR-8).
         if (isAuthenticated) {
+            // SUBX-24: organic Subscribe entry -> the creator's subscription tiers.
+            Button(
+                onClick = { onSubscribe(profile.userId, profile.displayName) },
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .testTag(ProfileTestTags.PUBLIC_SUBSCRIBE),
+            ) {
+                Text(stringResource(R.string.profile_public_subscribe))
+            }
+
             // AND-238: entry point into this creator's fan-club channels.
             OutlinedButton(
                 onClick = { onOpenFanClub(profile.userId, profile.displayName) },

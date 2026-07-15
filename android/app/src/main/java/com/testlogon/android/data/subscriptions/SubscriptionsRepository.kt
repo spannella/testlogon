@@ -78,6 +78,12 @@ interface SubscriptionsRepository {
         body: ResumeSubscriptionReqDto = ResumeSubscriptionReqDto(),
     ): ApiResult<CreatorSubscription>
 
+    /** SUBX-22 — retry a PAST_DUE sub's failed charge (optional PM swap); clears past_due on success. */
+    suspend fun retryPayment(
+        subscriptionId: String,
+        body: RetryPaymentReqDto = RetryPaymentReqDto(),
+    ): ApiResult<CreatorSubscription>
+
     /** SUB-E4-1 - the current creator own subscriber list (owner-scoped; X-User-Id = creator id). */
     suspend fun getMySubscribers(
         status: String? = null,
@@ -167,6 +173,14 @@ class SubscriptionsRepositoryImpl @Inject constructor(
     ): ApiResult<CreatorSubscription> = withContext(io) {
         val userId = currentUserId() ?: return@withContext unauthenticated()
         call { api.resume(userId, subscriptionId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun retryPayment(
+        subscriptionId: String,
+        body: RetryPaymentReqDto,
+    ): ApiResult<CreatorSubscription> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.retryPayment(userId, subscriptionId, body) }.map { it.toDomain() }
     }
 
     override suspend fun getMySubscribers(

@@ -121,6 +121,19 @@ interface SubscriptionsApi {
         @Body body: ResumeSubscriptionReqDto,
     ): SubscriptionOutDto
 
+    /**
+     * SUBX-22 — retry a PAST_DUE (dunning) subscription's failed renewal charge. Optionally swaps the
+     * PM first (the subscriber just added a card). On a real collected charge past_due clears to
+     * active; a decline / missing PM returns HTTP 402. Returns the updated SubscriptionOut.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("api/subscriptions/{subscriptionId}/retry-payment")
+    suspend fun retryPayment(
+        @Header("X-User-Id") userId: String,
+        @Path("subscriptionId") subscriptionId: String,
+        @Body body: RetryPaymentReqDto,
+    ): SubscriptionOutDto
+
     // ---- SUB-E4-3: creator subscriber management + MRR/analytics ----
 
     /** SUB-E4-1 - owner-scoped creator subscriber list (CREATOR#SUB# index). Requires X-User-Id. */
@@ -318,6 +331,13 @@ data class RenewalReqDto(
 /** AND-237 — resume request. Verified: SubscriptionResumeIn (subscriptions.ts resumeSubscription — reason only). */
 @JsonClass(generateAdapter = true)
 data class ResumeSubscriptionReqDto(
+    @Json(name = "reason") val reason: String? = null,
+)
+
+/** SUBX-22 — retry-payment request. Optional PM swap for PAST_DUE dunning recovery. */
+@JsonClass(generateAdapter = true)
+data class RetryPaymentReqDto(
+    @Json(name = "payment_method_id") val paymentMethodId: String? = null,
     @Json(name = "reason") val reason: String? = null,
 )
 

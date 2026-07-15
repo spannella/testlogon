@@ -72,7 +72,7 @@ object SubscriptionTiersTestTags {
 @Composable
 fun SubscriptionTiersRoute(
     onNavigateToCheckout: (SubscriptionsEvent.NavigateToCheckout) -> Unit,
-    onNavigateToManage: () -> Unit,
+    onNavigateToManage: (SubscriptionsEvent.NavigateToManage) -> Unit,
     onNavigateToGift: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -86,7 +86,7 @@ fun SubscriptionTiersRoute(
         viewModel.events.collect { event ->
             when (event) {
                 is SubscriptionsEvent.NavigateToCheckout -> onNavigateToCheckout(event)
-                is SubscriptionsEvent.NavigateToManage -> onNavigateToManage()
+                is SubscriptionsEvent.NavigateToManage -> onNavigateToManage(event)
                 is SubscriptionsEvent.PaymentsUnavailable -> snackbarHostState.showSnackbar(comingSoon)
                 is SubscriptionsEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
             }

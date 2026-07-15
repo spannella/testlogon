@@ -73,6 +73,9 @@ object ManageSubscriptionTestTags {
     const val CHANGE_SECTION = "manage_sub_change_section"
     const val CHANGE_DIALOG = "manage_sub_change_dialog"
     const val CHANGE_CONFIRM = "manage_sub_change_confirm"
+    const val PAST_DUE_BANNER = "manage_sub_past_due_banner"
+    const val UPDATE_CARD = "manage_sub_update_card"
+    const val RETRY_PAYMENT = "manage_sub_retry_payment"
     fun changeTier(id: String) = "manage_sub_change_$id"
 }
 
@@ -84,6 +87,7 @@ object ManageSubscriptionTestTags {
 @Composable
 fun ManageSubscriptionRoute(
     onNavigateToSubscribe: (planId: String, creatorId: String) -> Unit,
+    onAddPaymentMethod: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ManageSubscriptionViewModel = hiltViewModel(),
@@ -96,6 +100,7 @@ fun ManageSubscriptionRoute(
             when (event) {
                 is ManageSubscriptionEvent.NavigateToSubscribe ->
                     onNavigateToSubscribe(event.planId, event.creatorId)
+                is ManageSubscriptionEvent.NavigateToAddCard -> onAddPaymentMethod()
             }
         }
     }
@@ -110,6 +115,8 @@ fun ManageSubscriptionRoute(
         onChangePlanDismissed = viewModel::onChangePlanDismissed,
         onChangePlanConfirmed = viewModel::onChangePlanConfirmed,
         onRenewClicked = viewModel::onRenewClicked,
+        onUpdateCard = viewModel::onUpdateCardClicked,
+        onRetryPayment = viewModel::onRetryPaymentClicked,
         onErrorRetry = viewModel::onErrorRetry,
         onBack = onBack,
         modifier = modifier,
@@ -127,6 +134,8 @@ fun ManageSubscriptionScreen(
     onChangePlanDismissed: () -> Unit,
     onChangePlanConfirmed: () -> Unit,
     onRenewClicked: () -> Unit,
+    onUpdateCard: () -> Unit,
+    onRetryPayment: () -> Unit,
     onErrorRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -176,6 +185,8 @@ fun ManageSubscriptionScreen(
                         onChangePlanDismissed = onChangePlanDismissed,
                         onChangePlanConfirmed = onChangePlanConfirmed,
                         onRenewClicked = onRenewClicked,
+                        onUpdateCard = onUpdateCard,
+                        onRetryPayment = onRetryPayment,
                     )
             }
         }
@@ -192,6 +203,8 @@ private fun ContentBody(
     onChangePlanDismissed: () -> Unit,
     onChangePlanConfirmed: () -> Unit,
     onRenewClicked: () -> Unit,
+    onUpdateCard: () -> Unit,
+    onRetryPayment: () -> Unit,
 ) {
     val sub = state.subscription
     val freeLabel = stringResource(R.string.subs_tiers_free)
@@ -229,7 +242,14 @@ private fun ContentBody(
                     },
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(sub.planId, style = MaterialTheme.typography.titleLarge)
+                Text(state.planName ?: sub.planId, style = MaterialTheme.typography.titleLarge)
+                state.creatorName?.let {
+                    Text(
+                        stringResource(R.string.manage_sub_by_creator, it),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text("$priceText$intervalLabel", style = MaterialTheme.typography.titleMedium)
                 Text(
                     stringResource(R.string.manage_sub_status_label, statusLabel),
@@ -262,6 +282,24 @@ private fun ContentBody(
             }
         }
 
+        // SUBX-22 - PAST_DUE (dunning) recovery banner: the exact window the "update your card"
+        // notification deep-links to now offers real actions (below).
+        if (state.isPastDue) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(ManageSubscriptionTestTags.PAST_DUE_BANNER),
+            ) {
+                Text(
+                    stringResource(R.string.manage_sub_past_due_banner),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
+        }
+
         // SUB-E2 - upgrade/downgrade: pick another tier from the same creator.
         if (state.canChangePlan) {
             ChangePlanSection(state = state, onChangePlanClicked = onChangePlanClicked)
@@ -279,7 +317,8 @@ private fun ContentBody(
 
         val working = state.mutation is MutationStatus.Canceling ||
             state.mutation is MutationStatus.Renewing ||
-            state.mutation is MutationStatus.Changing
+            state.mutation is MutationStatus.Changing ||
+            state.mutation is MutationStatus.RetryingPayment
         if (working) {
             Box(
                 Modifier
@@ -296,6 +335,8 @@ private fun ContentBody(
                 state = state,
                 onCancelClicked = onCancelClicked,
                 onRenewClicked = onRenewClicked,
+                onUpdateCard = onUpdateCard,
+                onRetryPayment = onRetryPayment,
             )
         }
     }
@@ -338,7 +379,8 @@ private fun ChangePlanSection(
             style = MaterialTheme.typography.titleMedium,
         )
         state.availableTiers.forEach { tier ->
-            val isUpgrade = tier.priceCents > currentPrice
+            val isUpgrade = monthlyEquivCents(tier.priceCents, tier.interval) >
+                monthlyEquivCents(currentPrice, state.subscription.interval)
             val price = formatTierPrice(tier.priceCents, tier.currency, freeLabel)
             val interval = intervalSuffix(
                 interval = tier.interval,
@@ -378,8 +420,28 @@ private fun PrimaryAction(
     state: ManageSubscriptionUiState.Content,
     onCancelClicked: () -> Unit,
     onRenewClicked: () -> Unit,
+    onUpdateCard: () -> Unit,
+    onRetryPayment: () -> Unit,
 ) {
     when {
+        state.isPastDue ->
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onUpdateCard,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(ManageSubscriptionTestTags.UPDATE_CARD),
+                ) { Text(stringResource(R.string.manage_sub_update_card_action)) }
+                OutlinedButton(
+                    onClick = onRetryPayment,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(ManageSubscriptionTestTags.RETRY_PAYMENT),
+                ) { Text(stringResource(R.string.manage_sub_retry_payment_action)) }
+            }
+
         state.canCancel ->
             Button(
                 onClick = onCancelClicked,

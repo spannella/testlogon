@@ -10,6 +10,9 @@ import com.testlogon.android.feature.subscriptions.GiftSubscriptionRoute
 import com.testlogon.android.feature.subscriptions.GiftSubscriptionViewModel
 import com.testlogon.android.feature.subscriptions.ManageSubscriptionRoute
 import com.testlogon.android.feature.subscriptions.ManageSubscriptionViewModel
+import com.testlogon.android.feature.subscriptions.MySubscriptionsRoute
+import com.testlogon.android.feature.subscriptions.MySubscriptionsViewModel
+import com.testlogon.android.feature.subscriptions.SubscriptionsEvent
 import com.testlogon.android.feature.subscriptions.SubscribeRoute
 import com.testlogon.android.feature.subscriptions.SubscribeViewModel
 import com.testlogon.android.feature.subscriptions.SubscriptionTiersRoute
@@ -70,9 +73,15 @@ fun NavGraphBuilder.subscriptionTiersDestination(navController: NavHostControlle
                     ),
                 ) { launchSingleTop = true }
             },
-            // AND-237: the current-plan "Manage" action opens the manage / cancel screen.
-            onNavigateToManage = {
-                navController.navigate(ManageSubscriptionDest.ROUTE) { launchSingleTop = true }
+            // AND-237 / SUBX-21: the current-plan "Manage" action opens the manage screen for the
+            // viewer's sub WITH THIS creator (id + creator), never the global most-recent sub.
+            onNavigateToManage = { ev: SubscriptionsEvent.NavigateToManage ->
+                navController.navigate(
+                    ManageSubscriptionDest.build(
+                        subscriptionId = ev.subscriptionId,
+                        creatorId = ev.creatorId,
+                    ),
+                ) { launchSingleTop = true }
             },
             // SUB-E2: gift a subscription of THIS creator to another user.
             onNavigateToGift = {
@@ -148,21 +157,60 @@ fun NavGraphBuilder.subscribeDestination(navController: NavHostController) {
         ),
     ) {
         SubscribeRoute(
-            // On activation, pop back to the originating browse screen so it reflects entitlement.
-            onSubscribed = { _, _ -> navController.popBackStack() },
+            // SUBX-24 - do NOT auto-pop on activation; the success screen dwells with an explicit
+            // "View content / Done" CTA (onDone) that pops. Activation still refreshes entitlement.
+            onSubscribed = { _, _ -> },
+            onAddPaymentMethod = {
+                navController.navigate(AddCardDest.ROUTE) { launchSingleTop = true }
+            },
+            onDone = { navController.popBackStack() },
             onBack = { navController.popBackStack() },
         )
     }
 }
 
-/** AND-237 — manage / cancel subscription route (arg-less; the VM resolves the current sub). */
+/**
+ * AND-237 / SUBX-21 — manage / cancel subscription route. Optional query args target a SPECIFIC sub
+ * (subscriptionId + creator) so a multi-creator subscriber manages the RIGHT one; the arg-less base
+ * (More-hub entry) falls back to the viewer's most-recent active sub.
+ */
 data object ManageSubscriptionDest {
+    const val ARG_SUBSCRIPTION_ID = ManageSubscriptionViewModel.ARG_SUBSCRIPTION_ID
+    const val ARG_CREATOR_ID = ManageSubscriptionViewModel.ARG_CREATOR_ID
+    const val ARG_CREATOR_NAME = ManageSubscriptionViewModel.ARG_CREATOR_NAME
+
     const val ROUTE = ManageSubscriptionViewModel.ROUTE
+    const val ROUTE_WITH_ARGS =
+        "$ROUTE?$ARG_SUBSCRIPTION_ID={$ARG_SUBSCRIPTION_ID}" +
+            "&$ARG_CREATOR_ID={$ARG_CREATOR_ID}" +
+            "&$ARG_CREATOR_NAME={$ARG_CREATOR_NAME}"
+
+    fun build(subscriptionId: String? = null, creatorId: String? = null, creatorName: String? = null): String {
+        val q = buildList {
+            if (!subscriptionId.isNullOrBlank()) add("$ARG_SUBSCRIPTION_ID=${Uri.encode(subscriptionId)}")
+            if (!creatorId.isNullOrBlank()) add("$ARG_CREATOR_ID=${Uri.encode(creatorId)}")
+            if (!creatorName.isNullOrBlank()) add("$ARG_CREATOR_NAME=${Uri.encode(creatorName)}")
+        }
+        return if (q.isEmpty()) ROUTE else "$ROUTE?${q.joinToString("&")}"
+    }
 }
 
-/** AND-237 — registers the manage / cancel subscription destination. */
+/** AND-237 / SUBX-21/22 — registers the manage / cancel subscription destination (optional sub args). */
 fun NavGraphBuilder.manageSubscriptionDestination(navController: NavHostController) {
-    composable(ManageSubscriptionDest.ROUTE) {
+    composable(
+        route = ManageSubscriptionDest.ROUTE_WITH_ARGS,
+        arguments = listOf(
+            navArgument(ManageSubscriptionDest.ARG_SUBSCRIPTION_ID) {
+                type = NavType.StringType; nullable = true; defaultValue = null
+            },
+            navArgument(ManageSubscriptionDest.ARG_CREATOR_ID) {
+                type = NavType.StringType; nullable = true; defaultValue = null
+            },
+            navArgument(ManageSubscriptionDest.ARG_CREATOR_NAME) {
+                type = NavType.StringType; nullable = true; defaultValue = null
+            },
+        ),
+    ) {
         ManageSubscriptionRoute(
             onNavigateToSubscribe = { planId, creatorId ->
                 navController.navigate(
@@ -175,6 +223,29 @@ fun NavGraphBuilder.manageSubscriptionDestination(navController: NavHostControll
                         interval = "MONTH",
                         description = null,
                     ),
+                ) { launchSingleTop = true }
+            },
+            // SUBX-22 - card-less / PAST_DUE card update routes to the existing add-card screen.
+            onAddPaymentMethod = {
+                navController.navigate(AddCardDest.ROUTE) { launchSingleTop = true }
+            },
+            onBack = { navController.popBackStack() },
+        )
+    }
+}
+
+/** SUBX-20 — the subscriber's "My subscriptions" list destination. */
+data object MySubscriptionsDest {
+    const val ROUTE = MySubscriptionsViewModel.ROUTE
+}
+
+/** SUBX-20 — registers the My-subscriptions list; each row opens the RIGHT-target manage screen. */
+fun NavGraphBuilder.mySubscriptionsDestination(navController: NavHostController) {
+    composable(MySubscriptionsDest.ROUTE) {
+        MySubscriptionsRoute(
+            onOpenManage = { subscriptionId, creatorId ->
+                navController.navigate(
+                    ManageSubscriptionDest.build(subscriptionId = subscriptionId, creatorId = creatorId),
                 ) { launchSingleTop = true }
             },
             onBack = { navController.popBackStack() },

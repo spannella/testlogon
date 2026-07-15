@@ -1187,6 +1187,15 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.SHOP,
             section = MoreSection.ACCOUNT,
         ),
+        // SUBX-20: the subscriber's "My subscriptions" list (all active/past subs).
+        MoreEntry(
+            id = "my_subscriptions",
+            labelRes = R.string.more_entry_my_subscriptions,
+            icon = Icons.Outlined.CardMembership,
+            route = MoreRoutes.MY_SUBSCRIPTIONS,
+            hub = MoreHub.SHOP,
+            section = MoreSection.ACCOUNT,
+        ),
         MoreEntry(
             id = "fan_club",
             labelRes = R.string.more_entry_fan_club,
