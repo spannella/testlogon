@@ -205,8 +205,33 @@ private fun CreativeRow(cr: PendingCreativeDto, onClick: () -> Unit) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
+            PolicyBadge(cr)
         }
     }
+}
+
+/** ADV3-11 (E1): risk badge from the automated ad-policy pass. */
+@Composable
+private fun PolicyBadge(cr: PendingCreativeDto) {
+    val score = cr.policyScore ?: 0
+    val decision = cr.policyDecision.orEmpty()
+    if (score <= 0 && decision.isBlank()) return
+    val (label, color) = when {
+        decision == "reject" || score >= 80 ->
+            "Policy risk HIGH ($score)" to MaterialTheme.colorScheme.error
+        decision == "review" || score >= 20 ->
+            "Policy risk ELEVATED ($score)" to MaterialTheme.colorScheme.tertiary
+        else -> "Policy: clean" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val flags = cr.policyFlags.takeIf { it.isNotEmpty() }?.joinToString(", ")
+    Text(
+        text = if (flags != null) "$label · $flags" else label,
+        style = MaterialTheme.typography.labelSmall,
+        color = color,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.testTag("creative_policy_badge_${cr.creativeId}"),
+    )
 }
 
 @Composable
@@ -237,6 +262,16 @@ private fun ReviewDialog(
                 }
                 if (creative.rotationWeight != null) {
                     DetailLine("Weight", creative.rotationWeight.toString())
+                }
+                if ((creative.policyScore ?: 0) > 0 || !creative.policyDecision.isNullOrBlank()) {
+                    DetailLine("Policy", "${creative.policyDecision.orEmpty().ifBlank { "n/a" }} · score ${creative.policyScore ?: 0}")
+                    if (creative.policyReasons.isNotEmpty()) {
+                        Text(
+                            text = creative.policyReasons.joinToString("\n") { "• $it" },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
                 OutlinedTextField(
                     value = notes,

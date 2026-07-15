@@ -1941,6 +1941,43 @@ class Settings:
     ad_fraud_score_threshold: int = int(os.environ.get("AD_FRAUD_SCORE_THRESHOLD", "70"))
     ad_fraud_auto_suspend_rate_bps: int = int(os.environ.get("AD_FRAUD_AUTO_SUSPEND_RATE_BPS", "2000"))
 
+    # ── Ad policy / limits / abuse (ADV3-10..12 / EPIC E5) ───────────────────
+    # Automated content-policy pass on submit-for-review + the three
+    # review-bypass surfaces (seller-boost, sponsored-as-creator, ad-messaging).
+    ad_policy_screening_enabled: bool = os.environ.get(
+        "AD_POLICY_SCREENING_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    # Platform-standard disclosure/label forced onto any advertiser-supplied
+    # paid content that ships an empty label (E3/E7 -- disclosure is not optional).
+    ad_default_disclosure_label: str = os.environ.get(
+        "AD_DEFAULT_DISCLOSURE_LABEL", "Paid partnership"
+    )
+    # Account-level daily spend velocity cap (cents). An ESTABLISHED account
+    # (has settled >=1 real deposit) may spend up to the established cap/day; a
+    # NEW / auto-provisioned (boost) account is throttled to the new-account cap
+    # until first settlement. An account may carry a per-account override
+    # (`daily_spend_cap_cents`). Caps default high so normal delivery is
+    # unaffected; a compromised/burst account is blunted before reactive suspend.
+    ad_account_daily_spend_cap_cents: int = int(
+        os.environ.get("AD_ACCOUNT_DAILY_SPEND_CAP_CENTS", "500000")  # $5,000/day
+    )
+    ad_new_account_daily_spend_cap_cents: int = int(
+        os.environ.get("AD_NEW_ACCOUNT_DAILY_SPEND_CAP_CENTS", "20000")  # $200/day
+    )
+    # Minimal-KYC gate: once an account's lifetime spend would cross this, a
+    # charge is blocked until the account is KYC-cleared (`kyc_cleared`/`kyc_status
+    # == verified`, or a per-account `kyc_required_spend_cents` override). 0
+    # disables the gate.
+    ad_account_kyc_required_spend_cents: int = int(
+        os.environ.get("AD_ACCOUNT_KYC_REQUIRED_SPEND_CENTS", "100000")  # $1,000 lifetime
+    )
+    # Global per-recipient sponsored-message frequency cap (messages/user/day
+    # across ALL creators+advertisers) so a user cannot be blanketed by many
+    # senders each under their own audience cap (E7).
+    ad_msg_recipient_daily_cap: int = int(
+        os.environ.get("AD_MSG_RECIPIENT_DAILY_CAP", "5")
+    )
+
     # Ad Scheduling & Dayparting (ADS-016)
     # Schedule (dayparting + flights) is stored on the existing campaign
     # record; no separate table is required.
