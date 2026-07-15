@@ -98,6 +98,10 @@ interface ModerationAdminApi {
     // MODX-20: decision audit trail for one ticket.
     @GET("v1/admin/moderation/tickets/{id}/audit")
     suspend fun ticketAudit(@Path("id") ticketId: String): ModerationAuditTrailDto
+
+    // Queue-health KPIs for the board strip (parity with web ModerationBoardPage's getModerationKpis).
+    @GET("v1/admin/moderation/kpis")
+    suspend fun kpis(): ModerationKpisDto
 }
 
 // ---- DTOs (verified 1:1 against api/endpoints/moderation.ts) ----
@@ -284,6 +288,16 @@ data class ModerationBanLiftDto(
     @Json(name = "lifted_enforcement_ids") val liftedEnforcementIds: List<String> = emptyList(),
 )
 
+// ---- Queue-health KPIs (board strip; parity with web ModerationKpis) ----
+// Only the four fields the strip renders are modelled; Moshi ignores the rest of the payload.
+@JsonClass(generateAdapter = true)
+data class ModerationKpisDto(
+    @Json(name = "open_ticket_count") val openTicketCount: Int = 0,
+    @Json(name = "on_hold_count") val onHoldCount: Int = 0,
+    @Json(name = "critical_backlog") val criticalBacklog: Int = 0,
+    @Json(name = "oldest_open_age_minutes") val oldestOpenAgeMinutes: Int = 0,
+)
+
 // ---- MODX-20: audit trail ----
 @JsonClass(generateAdapter = true)
 data class ModerationAuditEventDto(
@@ -319,6 +333,7 @@ interface ModerationAdminRepository {
     suspend fun listBans(includeInactive: Boolean = false): ApiResult<ModerationBanRosterDto>
     suspend fun liftBan(userId: String, note: String?): ApiResult<ModerationBanLiftDto>
     suspend fun ticketAudit(ticketId: String): ApiResult<ModerationAuditTrailDto>
+    suspend fun kpis(): ApiResult<ModerationKpisDto>
 
     suspend fun detail(ticketId: String): ApiResult<ModerationTicketDetailDto>
     suspend fun claim(ticketId: String): ApiResult<ModerationTicketDto>
@@ -377,6 +392,9 @@ class DefaultModerationAdminRepository @Inject constructor(
 
     override suspend fun ticketAudit(ticketId: String): ApiResult<ModerationAuditTrailDto> =
         withContext(io) { call { api.ticketAudit(ticketId) } }
+
+    override suspend fun kpis(): ApiResult<ModerationKpisDto> =
+        withContext(io) { call { api.kpis() } }
 
     override suspend fun detail(ticketId: String): ApiResult<ModerationTicketDetailDto> =
         withContext(io) { call { api.ticketDetail(ticketId) } }

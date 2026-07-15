@@ -44,10 +44,14 @@ class MoreViewModel @Inject constructor(
 
     private fun resolveAdmin() {
         viewModelScope.launch {
+            // Apply the resolved role in BOTH directions: reveal the Admin hub for a confirmed admin,
+            // and hide it again for a confirmed non-admin (so a prior admin session's flag never leaks
+            // to the next signed-in member). On a failed check we keep the prior (member-safe) value;
+            // the backend 403 stays authoritative regardless.
             val result = currentUser.isAdmin()
-            if (result is ApiResult.Success && result.data) {
-                adminVisibility.isAdmin = true
-                source.value += 1 // re-project so operator-only entries surface
+            if (result is ApiResult.Success) {
+                adminVisibility.isAdmin = result.data
+                source.value += 1 // re-project so operator-only entries surface/hide
             }
         }
     }

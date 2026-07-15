@@ -35,6 +35,17 @@ object AuthDataProvidesModule {
         SessionCookieCleaner { cookieJar.clear() }
 
     /**
+     * Binds the identity-cache seam to [CurrentUserRepository] so login/logout drop its cached
+     * `/ui/me` (incl. `is_admin`). Fixes the More-hub discoverability bug where an in-session account
+     * switch left the Admin hub hidden until a process restart.
+     */
+    @Provides
+    @Singleton
+    fun provideIdentityCacheInvalidator(
+        currentUser: com.testlogon.android.data.feed.CurrentUserRepository,
+    ): IdentityCacheInvalidator = IdentityCacheInvalidator { currentUser.invalidate() }
+
+    /**
      * Bridges the core-network 401-give-up event into a durable auth-state clear (AND-029/032).
      * The cookie jar is already cleared by the authenticator; this flips the persisted flag so the
      * nav gate routes back to login. [AuthStateStore] is taken lazily ([Provider]) to avoid a DI

@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -222,6 +223,7 @@ fun BanManagementScreen(
 
 @Composable
 private fun BanRow(ban: ModerationBanEntryDto, liftInFlight: Boolean, onLift: () -> Unit) {
+    var confirmLift by remember { androidx.compose.runtime.mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth().testTag(BanManagementTestTags.ban(ban.userId))) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
@@ -235,6 +237,14 @@ private fun BanRow(ban: ModerationBanEntryDto, liftInFlight: Boolean, onLift: ()
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
+            if (!ban.permanent && ban.banUntil > 0L) {
+                val now = System.currentTimeMillis() / 1000L
+                Text(
+                    text = if (ban.banUntil <= now) "Expired" else "Expires ${relativeSeconds(ban.banUntil)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (ban.note.isNotBlank()) {
                 Text(
                     text = ban.note,
@@ -246,7 +256,7 @@ private fun BanRow(ban: ModerationBanEntryDto, liftInFlight: Boolean, onLift: ()
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                 OutlinedButton(
-                    onClick = onLift,
+                    onClick = { confirmLift = true },
                     enabled = !liftInFlight,
                     modifier = Modifier.testTag(BanManagementTestTags.lift(ban.userId)),
                 ) {
@@ -254,5 +264,22 @@ private fun BanRow(ban: ModerationBanEntryDto, liftInFlight: Boolean, onLift: ()
                 }
             }
         }
+    }
+
+    if (confirmLift) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmLift = false },
+            title = { Text("Lift this ban?") },
+            text = { Text("The account will be able to sign in and post again immediately.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    confirmLift = false
+                    onLift()
+                }) { Text("Lift ban") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmLift = false }) { Text("Cancel") }
+            },
+        )
     }
 }

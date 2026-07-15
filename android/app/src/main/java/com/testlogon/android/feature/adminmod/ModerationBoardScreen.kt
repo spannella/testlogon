@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -35,12 +36,15 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.adminmod.ModerationKpisDto
 import com.testlogon.android.data.adminmod.ModerationTicketDto
 
 object ModerationBoardTestTags {
@@ -91,6 +96,7 @@ fun ModerationBoardRoute(
         onToggleSelected = viewModel::toggleSelected,
         onRunBulk = viewModel::runBulk,
         onClearBulkMessage = viewModel::clearBulkMessage,
+        onDismissTransientError = viewModel::dismissTransientError,
     )
 }
 
@@ -109,6 +115,7 @@ fun ModerationBoardScreen(
     onToggleSelected: (String) -> Unit,
     onRunBulk: (ModerationBulkAction) -> Unit,
     onClearBulkMessage: () -> Unit,
+    onDismissTransientError: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val content = state as? ModerationBoardUiState.Content
@@ -127,6 +134,13 @@ fun ModerationBoardScreen(
         content?.bulkMessage?.let {
             snackbarHostState.showSnackbar(it)
             onClearBulkMessage()
+        }
+    }
+    // A failed pull-to-refresh sets transientError; surface it (it was previously swallowed silently).
+    LaunchedEffect(content?.transientError) {
+        content?.transientError?.let {
+            snackbarHostState.showSnackbar(adminOpsErrorMessage(it))
+            onDismissTransientError()
         }
     }
 
@@ -161,11 +175,16 @@ fun ModerationBoardScreen(
         },
         bottomBar = {
             if (content?.selectionMode == true && content.selectedIds.isNotEmpty()) {
-                BulkActionBar(inFlight = content.bulkInFlight, onRunBulk = onRunBulk)
+                BulkActionBar(
+                    inFlight = content.bulkInFlight,
+                    selectedCount = content.selectedIds.size,
+                    onRunBulk = onRunBulk,
+                )
             }
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            content?.kpis?.let { KpiStrip(it) }
             FilterRow(active = activeStatus, onSetFilter = onSetFilter)
             TopicFilterRow(active = activeTopic, onSetTopicFilter = onSetTopicFilter)
             val isRefreshing = content?.isRefreshing == true
@@ -246,7 +265,13 @@ private fun TicketList(
 }
 
 @Composable
-private fun BulkActionBar(inFlight: Boolean, onRunBulk: (ModerationBulkAction) -> Unit) {
+private fun BulkActionBar(
+    inFlight: Boolean,
+    selectedCount: Int,
+    onRunBulk: (ModerationBulkAction) -> Unit,
+) {
+    // Destructive bulk actions (Delete / Confirm hold) route through a confirmation first.
+    var pendingConfirm by remember { mutableStateOf<ModerationBulkAction?>(null) }
     Surface(tonalElevation = 3.dp, modifier = Modifier.testTag(ModerationBoardTestTags.BULK_BAR)) {
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp),
@@ -258,13 +283,104 @@ private fun BulkActionBar(inFlight: Boolean, onRunBulk: (ModerationBulkAction) -
             }
             ModerationBulkAction.entries.forEach { action ->
                 AssistChip(
-                    onClick = { if (!inFlight) onRunBulk(action) },
+                    onClick = {
+                        if (!inFlight) {
+                            if (action.destructive) pendingConfirm = action else onRunBulk(action)
+                        }
+                    },
                     label = { Text(action.label) },
                     modifier = Modifier.testTag(ModerationBoardTestTags.bulk(action.wire)),
                 )
             }
         }
     }
+
+    pendingConfirm?.let { action ->
+        val verb = action.label.lowercase()
+        val plural = if (selectedCount == 1) "case" else "cases"
+        AlertDialog(
+            onDismissRequest = { pendingConfirm = null },
+            modifier = Modifier.testTag("mod_bulk_confirm"),
+            title = { Text("${action.label}?") },
+            text = {
+                Text(
+                    if (action == ModerationBulkAction.DELETE) {
+                        "This will hard-delete the content on $selectedCount selected $plural. This cannot be undone."
+                    } else {
+                        "This will $verb on $selectedCount selected $plural."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val a = action
+                        pendingConfirm = null
+                        onRunBulk(a)
+                    },
+                    modifier = Modifier.testTag("mod_bulk_confirm_yes"),
+                ) { Text(action.label) }
+            },
+            dismissButton = { TextButton(onClick = { pendingConfirm = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Queue-health KPI strip (parity with the web board): Open backlog / On hold / Critical / Oldest open. */
+@Composable
+private fun KpiStrip(kpis: ModerationKpisDto) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag("mod_board_kpis"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        KpiCard("Open backlog", kpis.openTicketCount.toString())
+        KpiCard("On hold", kpis.onHoldCount.toString())
+        KpiCard(
+            "Critical",
+            kpis.criticalBacklog.toString(),
+            emphasise = kpis.criticalBacklog > 0,
+        )
+        KpiCard("Oldest open", oldestOpenLabel(kpis.oldestOpenAgeMinutes))
+    }
+}
+
+@Composable
+private fun KpiCard(label: String, value: String, emphasise: Boolean = false) {
+    Card(
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = if (emphasise) MaterialTheme.colorScheme.errorContainer
+            else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (emphasise) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (emphasise) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun oldestOpenLabel(minutes: Int): String = when {
+    minutes <= 0 -> "-"
+    minutes < 60 -> "${minutes}m"
+    minutes < 1440 -> "${minutes / 60}h"
+    else -> "${minutes / 1440}d"
 }
 
 @Composable
@@ -328,25 +444,36 @@ private fun TicketRow(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(
-                    text = ticket.contentType.ifBlank { "content" }.replace('_', ' '),
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = ticket.contentType.ifBlank { "content" }.replace('_', ' '),
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (isIllegalTopics(ticket.aggregatedTopics)) IllegalBadge()
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = ticket.status.ifBlank { "-" }.replace('_', ' '),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                    val highPriority = ticket.priority.equals("high", ignoreCase = true) ||
+                        ticket.priority.equals("critical", ignoreCase = true)
                     Text(
                         text = "Priority ${ticket.priority.ifBlank { "-" }}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (highPriority) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = if (highPriority) androidx.compose.ui.text.font.FontWeight.Bold else null,
                     )
                     Text(
-                        text = "${ticket.reportCount} reports",
+                        text = reportCountLabel(ticket.reportCount),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -369,6 +496,30 @@ private fun TicketRow(
                 }
             }
         }
+    }
+}
+
+/** The highest-priority moderation signal — the taxonomy keys the backend treats as illegal. */
+internal fun isIllegalTopics(topics: List<String>): Boolean =
+    topics.any { it.equals("illegal", ignoreCase = true) || it.equals("csam", ignoreCase = true) }
+
+/** Pluralised report count ("1 report" / "2 reports") — was always the plural form. */
+internal fun reportCountLabel(count: Int): String = if (count == 1) "1 report" else "$count reports"
+
+/** Prominent error-coloured badge flagging illegal content in a mixed queue (parity with web). */
+@Composable
+internal fun IllegalBadge() {
+    Surface(
+        color = MaterialTheme.colorScheme.error,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+        modifier = Modifier.testTag("mod_illegal_badge"),
+    ) {
+        Text(
+            text = "Illegal",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onError,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }
 

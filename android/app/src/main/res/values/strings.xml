@@ -4359,6 +4359,7 @@
     <string name="appeals_field_enforcement">Enforcement to appeal</string>
     <string name="appeals_options_loading">Loading your enforcement history…</string>
     <string name="appeals_option_already_appealed">Already appealed</string>
+    <string name="appeals_no_enforcements">You have no enforcement actions on your account to appeal. If you receive a warning, removal, or ban, it will show up here.</string>
 
     <string name="appeals_field_appeal_text">Appeal text</string>
     <string name="appeals_refresh_failed_stale">Could not refresh. Showing the last loaded appeals.</string>

@@ -155,17 +155,16 @@ fun AppealsScreen(
                         )
                     }
                 },
-                actions = {
-                    val newCd = stringResource(R.string.appeals_new)
-                    IconButton(onClick = onOpenSubmit, modifier = Modifier.testTag(AppealsTestTags.NEW)) {
-                        Icon(Icons.Outlined.Add, contentDescription = newCd)
-                    }
-                },
             )
         },
         floatingActionButton = {
-            if (state.phase == AppealsUiState.Phase.Content || state.phase == AppealsUiState.Phase.Empty) {
-                FloatingActionButton(onClick = onOpenSubmit) {
+            // One "new appeal" affordance per phase: the FAB on the populated list, and the empty-state's
+            // own action button when there are no appeals yet. (The old toolbar "+" was a third, redundant CTA.)
+            if (state.phase == AppealsUiState.Phase.Content) {
+                FloatingActionButton(
+                    onClick = onOpenSubmit,
+                    modifier = Modifier.testTag(AppealsTestTags.NEW),
+                ) {
                     Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.appeals_new))
                 }
             }
@@ -407,28 +406,42 @@ private fun SubmitAppealDialog(
                     text = stringResource(R.string.appeals_submit_title),
                     style = MaterialTheme.typography.titleLarge,
                 )
-                Text(
-                    text = stringResource(R.string.appeals_submit_helper),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                // MODX-13: pick the enforcement to appeal from your own history — never hand-type
-                // an opaque id. Falls back to a text field only if the picker loaded empty.
-                if (form.options.isNotEmpty()) {
-                    EnforcementPicker(
+                // The "pick from your history" helper only makes sense when there IS a history to pick.
+                val hasNothingToAppeal = form.options.isEmpty() && form.optionsLoaded &&
+                    !form.optionsLoading && form.enforcementId.isBlank()
+                if (!hasNothingToAppeal) {
+                    Text(
+                        text = stringResource(R.string.appeals_submit_helper),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // MODX-13: pick the enforcement to appeal from your own history — never hand-type an
+                // opaque id.
+                when {
+                    form.options.isNotEmpty() -> EnforcementPicker(
                         options = form.options,
                         selectedId = form.enforcementId,
                         enabled = !form.isSubmitting,
                         onSelect = onSelectEnforcement,
                     )
-                } else if (form.optionsLoading) {
-                    Text(
+                    // Still resolving history.
+                    form.optionsLoading || !form.optionsLoaded -> Text(
                         text = stringResource(R.string.appeals_options_loading),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                } else {
-                    OutlinedTextField(
+                    // Loaded, history empty, and nothing was deep-linked in: there is genuinely nothing to
+                    // appeal — show an empty state instead of asking the user to invent an internal id.
+                    form.enforcementId.isBlank() -> Text(
+                        text = stringResource(R.string.appeals_no_enforcements),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("appeals_form_no_enforcements"),
+                    )
+                    // A ban/removal alert deep-linked a specific enforcement id even though the list came
+                    // back empty — keep an (editable) field so that appeal can still be filed.
+                    else -> OutlinedTextField(
                         value = form.enforcementId,
                         onValueChange = onEnforcementIdChange,
                         label = { Text(stringResource(R.string.appeals_field_enforcement_id)) },

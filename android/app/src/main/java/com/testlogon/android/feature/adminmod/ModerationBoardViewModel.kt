@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.adminmod.ModerationAdminRepository
 import com.testlogon.android.data.adminmod.ModerationCaseActionDto
+import com.testlogon.android.data.adminmod.ModerationKpisDto
 import com.testlogon.android.data.adminmod.ModerationTicketDetailDto
 import com.testlogon.android.data.adminmod.ModerationTicketDto
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -38,6 +39,8 @@ sealed interface ModerationBoardUiState {
         val bulkInFlight: Boolean = false,
         val bulkMessage: String? = null,
         val transientError: AdminOpsErrorType? = null,
+        // Queue-health KPI strip (parity with web). Best-effort: null until the KPI call resolves.
+        val kpis: ModerationKpisDto? = null,
     ) : ModerationBoardUiState {
         val canPaginate: Boolean get() = !nextCursor.isNullOrBlank()
     }
@@ -56,12 +59,15 @@ val MODERATION_STATUS_FILTERS: List<String?> = listOf(null, "open", "closed")
 val MODERATION_TOPIC_FILTERS: List<String?> =
     listOf(null, "sexual", "violence_threats", "hate", "harassment", "spam", "other", "illegal")
 
-/** MODX-22: the bulk triage actions offered from the selection bar. */
-enum class ModerationBulkAction(val wire: String, val label: String) {
+/**
+ * MODX-22: the bulk triage actions offered from the selection bar. [destructive] actions (mass hard-delete
+ * or committing many cases to a 30-day hold) require an explicit confirmation before firing.
+ */
+enum class ModerationBulkAction(val wire: String, val label: String, val destructive: Boolean = false) {
     DISMISS("dismiss", "Dismiss"),
-    CONFIRM("confirm", "Confirm hold"),
+    CONFIRM("confirm", "Confirm hold", destructive = true),
     REINSTATE("reinstate", "Reinstate"),
-    DELETE("delete", "Delete"),
+    DELETE("delete", "Delete", destructive = true),
 }
 
 @HiltViewModel
@@ -129,11 +135,24 @@ class ModerationBoardViewModel @Inject constructor(
                             nextCursor = r.data.nextCursor,
                             selectionMode = prior?.selectionMode ?: false,
                             selectedIds = (prior?.selectedIds ?: emptySet()).filter { id -> merged.any { it.ticketId == id } }.toSet(),
+                            kpis = prior?.kpis,
                         )
                     }
+                    if (!append) loadKpis()
                 }
                 is ApiResult.Failure -> reduceFailure(isRefresh || append, r.error.status)
                 is ApiResult.NetworkError -> reduceError(isRefresh || append, AdminOpsErrorType.NETWORK)
+            }
+        }
+    }
+
+    /** Best-effort queue-health KPIs for the board strip. A failure just leaves the strip hidden. */
+    private fun loadKpis() {
+        viewModelScope.launch {
+            val r = repo.kpis()
+            if (r is ApiResult.Success) {
+                val cur = _state.value as? ModerationBoardUiState.Content ?: return@launch
+                _state.value = cur.copy(kpis = r.data)
             }
         }
     }

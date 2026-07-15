@@ -119,7 +119,11 @@ fun ModerationDetailScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("Case") },
+                title = {
+                    val type = content?.detail?.ticket?.contentType
+                        ?.takeIf { it.isNotBlank() }?.replace('_', ' ')
+                    Text(if (type != null) "Case · $type" else "Case")
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -187,10 +191,18 @@ private fun DetailBody(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            t.contentType.ifBlank { "content" }.replace('_', ' '),
-            style = MaterialTheme.typography.titleMedium,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Text(
+                t.contentType.ifBlank { "content" }.replace('_', ' '),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (isIllegalTopics(t.aggregatedTopics)) IllegalBadge()
+        }
 
         // ---- Case state + hold countdown ----
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -386,14 +398,16 @@ private fun BanDurationDialog(
     onDismissRequest: () -> Unit,
     onConfirm: (ban: Boolean, banDays: Int?) -> Unit,
 ) {
-    // second == null -> no ban; 0 -> permanent; >0 -> fixed days; -1 -> custom sentinel
+    // second == null -> no ban; >0 -> fixed days; -1 -> custom sentinel.
+    // NOTE: "Permanent ban" (0) is intentionally omitted here — it requires a second senior-moderator
+    // approver (dual approval) that this screen has no field for, so it always 403'd. Permanent bans
+    // must be actioned on the web console; a fixed-duration or custom ban covers the on-device path.
     val presets = listOf(
         "Delete only (no ban)" to null,
         "Ban 24 hours" to 1,
         "Ban 3 days" to 3,
         "Ban 7 days" to 7,
         "Ban 30 days" to 30,
-        "Permanent ban" to 0,
         "Custom (days)" to -1,
     )
     var selected by remember { mutableStateOf(1) } // default: 24h
@@ -433,13 +447,11 @@ private fun BanDurationDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                if (presets[selected].second == 0) {
-                    Text(
-                        "Permanent bans require a senior moderator and dual approval.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                Text(
+                    "Need a permanent ban? It requires dual approval — action it from the web console.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
         confirmButton = {
