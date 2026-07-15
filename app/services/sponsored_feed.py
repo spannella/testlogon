@@ -32,10 +32,11 @@ def build_sponsored_unit(
     content_id: str,
     position: int,
     hidden_ids: Optional[Set[str]] = None,
+    exclude_campaign_ids: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Serve one STANDALONE sponsored unit for ``surface`` (platform-100%)."""
     try:
-        from app.services.ad_serving import serve_ad
+        from app.services.ad_serving import commit_ad_click, serve_ad
 
         ad = serve_ad(
             surface=surface,
@@ -44,6 +45,8 @@ def build_sponsored_unit(
             content_id=content_id,
             slot_type="sponsored_post",
             user_id=viewer_id,
+            exclude_campaign_ids=exclude_campaign_ids,
+            defer_ad_click=True,
         )
         if not ad.get("filled") or ad.get("is_house_ad"):
             return None
@@ -51,6 +54,9 @@ def build_sponsored_unit(
         creative_id = ad.get("creative_id", "")
         if hidden_ids and creative_id in hidden_ids:
             return None
+
+        # ADV3-7 (C4): commit the deferred AdClicks row only for a kept unit.
+        commit_ad_click(ad)
 
         ts = int(time.time())
         return {
@@ -115,6 +121,7 @@ def inject_sponsored(
 
     result: List[Dict[str, Any]] = []
     count = 0
+    won_campaign_ids: Set[str] = set()  # ADV3-7 (C4): per-page advertiser diversity
     for i, post in enumerate(items):
         result.append(post)
         if (i + 1) % interval == 0 and count < max_sponsored:
@@ -126,10 +133,14 @@ def inject_sponsored(
                 content_id=f"{content_prefix}_slot_{i}",
                 position=i,
                 hidden_ids=hidden,
+                exclude_campaign_ids=won_campaign_ids,
             )
             if unit:
                 result.append(unit)
                 count += 1
+                _cid = unit.get("campaign_id")
+                if _cid:
+                    won_campaign_ids.add(str(_cid))
     return result
 
 
@@ -184,6 +195,7 @@ def inject_sponsored_syndicate(
 
     result: List[Dict[str, Any]] = []
     count = 0
+    won_campaign_ids: Set[str] = set()  # ADV3-7 (C4): per-page advertiser diversity
     for i, post in enumerate(items):
         result.append(post)
         if (i + 1) % interval == 0 and count < max_sponsored:
@@ -193,8 +205,12 @@ def inject_sponsored_syndicate(
                 content_id=f"synd_{syndicate_id}_slot_{i}",
                 position=i,
                 hidden_ids=hidden,
+                exclude_campaign_ids=won_campaign_ids,
             )
             if unit:
                 result.append(_to_syndicate_shape(unit, syndicate_id=syndicate_id))
                 count += 1
+                _cid = unit.get("campaign_id")
+                if _cid:
+                    won_campaign_ids.add(str(_cid))
     return result

@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_FREQ_CAPS = {"1h": 3, "24h": 10, "7d": 30}
 WINDOW_SECONDS = {"1h": 3600, "24h": 86400, "7d": 604800}
 
+# ADV3-7 (C7): reserved pseudo-creator ids that back STANDALONE ad units
+# (newsfeed / shop / sponsored-feed serve with creator_id="platform"). These
+# can never be configured to suppress fill -- see the guard in serve_ad.
+RESERVED_AD_CREATOR_IDS = frozenset({"platform"})
+
 # ── House ad (platform self-promotion) ──────────────────────────────
 
 HOUSE_AD: Dict[str, Any] = {
@@ -69,6 +74,9 @@ def serve_ad(
     user_context: Optional[Dict[str, Any]] = None,
     content_owner_id: str = "",
     require_product: bool = False,
+    exclude_campaign_ids: Optional[Any] = None,
+    exclude_account_ids: Optional[Any] = None,
+    defer_ad_click: bool = False,
 ) -> Dict[str, Any]:
     """Select and return the best ad for the given context."""
     from app.services.ad_campaigns import list_campaigns_by_status
@@ -90,10 +98,22 @@ def serve_ad(
     if is_kill_switch_active():
         return _empty_response("platform_kill_switch_active")
 
-    # 1. Check creator allows ads
-    creator_settings = get_creator_ad_settings(creator_id)
-    if not creator_settings.get("allow_ads", True):
-        return _empty_response("creator_ads_disabled")
+    # 1. Check creator allows ads. ADV3-7 (C7): the reserved "platform"
+    #    pseudo-creator backs every STANDALONE unit; a stray admin write to its
+    #    ad settings must never darken all standalone fill at once, so the
+    #    reserved id is force-permissive and cannot be configured to suppress.
+    if creator_id in RESERVED_AD_CREATOR_IDS:
+        creator_settings = {"allow_ads": True}
+    else:
+        creator_settings = get_creator_ad_settings(creator_id)
+        if not creator_settings.get("allow_ads", True):
+            return _empty_response("creator_ads_disabled")
+
+    # ADV3-7 (C4): normalize per-fetch exclusion sets so a multi-slot caller
+    # can thread already-won campaign/account ids and avoid a single-advertiser
+    # monopoly across a page.
+    _excl_camp = {str(x) for x in (exclude_campaign_ids or ())}
+    _excl_acct = {str(x) for x in (exclude_account_ids or ())}
 
     # 2. Load active campaigns
     active_campaigns = list_campaigns_by_status("active")
@@ -111,6 +131,10 @@ def serve_ad(
     self_promo_fill: List[Dict[str, Any]] = []
     for campaign in active_campaigns:
         account_id = campaign["account_id"]
+
+        # ADV3-7 (C4): per-fetch exclusion (multi-slot diversity).
+        if str(campaign.get("campaign_id")) in _excl_camp or str(account_id) in _excl_acct:
+            continue
 
         # Resolve the ad-account owner once (used by both self-ad-exclusion and
         # the self-promo own-content eligibility test).
@@ -214,6 +238,12 @@ def serve_ad(
         if not _has_budget(campaign):
             continue
 
+        # ADV3-7 (C5): budget PACING. A daily-budget campaign that is ahead of
+        # its expected spend-to-now is probabilistically skipped so delivery
+        # spreads across the day instead of front-loading each morning.
+        if not _passes_pacing(campaign):
+            continue
+
         # Dayparting / flight check (ADS-016): skip campaigns outside their
         # active dayparts, and skip when flights are configured but none is
         # active right now (gap between flights).
@@ -308,35 +338,40 @@ def serve_ad(
     # purchase/subscribe can resolve the last click. effective_price_cents is the
     # winning bid as a placeholder until the B3 auction sets a cleared price.
     ad_click_id = uuid.uuid4().hex
-    try:
-        _now = now_ts()
-        T.ad_clicks.put_item(Item={
-            "ad_click_id": ad_click_id,
-            "viewer_sub": user_id,
-            "campaign_id": winner["campaign"]["campaign_id"],
-            "account_id": winner["campaign"]["account_id"],
-            "creative_id": creative["creative_id"],
-            "product_id": creative.get("product_id", "") or "",
-            "content_owner_sub": content_owner_id or "",
-            "is_syndicate_ad": bool(winner.get("is_syndicate_ad")),
-            "syndicate_id": str(winner.get("syndicate_id") or ""),
-            "surface": surface,
-            "slot_type": slot_type,
-            "content_id": content_id,
-            "status": "served",
-            "self_promo": is_self_win,
-            "effective_price_cents": cleared_cpm,
-            "effective_cpm_cents": cleared_cpm,
-            "bid_cpc_cents": win_cpc,
-            "bid_cpa_cents": win_cpa,
-            "gross_bid_cpm_cents": win_cpm,
-            "created_at": _now,
-            "expires_at": _now + 604800,
-        })
-    except Exception:
-        logger.warning(
-            "ad_click_mint_failed campaign=%s", winner["campaign"].get("campaign_id")
-        )
+    _now = now_ts()
+    _click_item = {
+        "ad_click_id": ad_click_id,
+        "viewer_sub": user_id,
+        "campaign_id": winner["campaign"]["campaign_id"],
+        "account_id": winner["campaign"]["account_id"],
+        "creative_id": creative["creative_id"],
+        "product_id": creative.get("product_id", "") or "",
+        "content_owner_sub": content_owner_id or "",
+        "is_syndicate_ad": bool(winner.get("is_syndicate_ad")),
+        "syndicate_id": str(winner.get("syndicate_id") or ""),
+        "surface": surface,
+        "slot_type": slot_type,
+        "content_id": content_id,
+        "status": "served",
+        "self_promo": is_self_win,
+        "effective_price_cents": cleared_cpm,
+        "effective_cpm_cents": cleared_cpm,
+        "bid_cpc_cents": win_cpc,
+        "bid_cpa_cents": win_cpa,
+        "gross_bid_cpm_cents": win_cpm,
+        "created_at": _now,
+        "expires_at": _now + 604800,
+    }
+    # ADV3-7 (C4): defer the write for multi-slot callers so an orphan served
+    # row is never minted for a candidate that gets discarded. Single-serve
+    # callers persist immediately, unchanged.
+    if not defer_ad_click:
+        try:
+            T.ad_clicks.put_item(Item=_click_item)
+        except Exception:
+            logger.warning(
+                "ad_click_mint_failed campaign=%s", winner["campaign"].get("campaign_id")
+            )
 
     # 6. Build tracking URLs
     tracking_base = "/ui/ads/track"
@@ -349,7 +384,7 @@ def serve_ad(
         f"&ad_click_id={ad_click_id}"
     )
 
-    return {
+    _serve_response = {
         "filled": True,
         "creative_id": creative["creative_id"],
         "format": creative.get("format", "native_post"),
@@ -380,6 +415,11 @@ def serve_ad(
         "promo_code_id": creative.get("promo_code_id"),
         "affiliate_link_id": creative.get("affiliate_link_id"),
     }
+    # ADV3-7 (C4): stash the deferred AdClicks row so a multi-slot caller can
+    # commit it only for a unit it actually keeps (see commit_ad_click).
+    if defer_ad_click:
+        _serve_response["_pending_ad_click"] = _click_item
+    return _serve_response
 
 
 # --- ADV2-201/E2: structured CTA click-through targets ----------------------
@@ -747,6 +787,58 @@ def get_serving_stats(campaign_id: str) -> Dict[str, Any]:
 
 
 # ── Internal helpers ────────────────────────────────────────────────
+
+
+def commit_ad_click(ad: Optional[Dict[str, Any]]) -> None:
+    """ADV3-7 (C4): persist a DEFERRED AdClicks row.
+
+    serve_ad(defer_ad_click=True) does NOT write the AdClicks row, so a
+    multi-slot caller that discards a candidate (duplicate creative, hidden
+    ad, no-product spin) never leaves an orphan served row. The caller
+    commits the row only for a unit it actually returns."""
+    item = (ad or {}).get("_pending_ad_click")
+    if not item:
+        return
+    try:
+        T.ad_clicks.put_item(Item=item)
+    except Exception:
+        logger.warning("ad_click_commit_failed campaign=%s", item.get("campaign_id"))
+
+
+# ── Internal helpers ────────────────────────────
+
+
+def _passes_pacing(campaign: dict, now: Optional[datetime] = None) -> bool:
+    """ADV3-7 (C5): probabilistic pacing for DAILY-budget campaigns.
+
+    Non-daily campaigns (and pacing disabled) always pass. For a daily budget
+    we compare the fraction of the UTC day elapsed against the fraction of the
+    daily budget already spent. At/under pace (plus a small slack) -> serve;
+    ahead of pace -> serve with probability expected/actual, so an early burst
+    is throttled back toward an even spread instead of going dark by 9am.
+    Fails open on any error (never silently drops all fill)."""
+    try:
+        if not bool(getattr(S, "ad_pacing_enabled", True)):
+            return True
+        if str(campaign.get("budget_type", "")) != "daily":
+            return True
+        daily_budget = int(campaign.get("daily_budget_cents", campaign.get("budget_cents", 0)) or 0)
+        if daily_budget <= 0:
+            return True
+        spent_today = int(campaign.get("spent_today_cents", 0) or 0)
+        n = now or datetime.now(timezone.utc)
+        secs = n.hour * 3600 + n.minute * 60 + n.second
+        min_frac = float(getattr(S, "ad_pacing_min_fraction", 0.02) or 0.0)
+        elapsed_frac = max(secs / 86400.0, min_frac)
+        spent_frac = spent_today / daily_budget
+        slack = float(getattr(S, "ad_pacing_slack", 0.15) or 0.0)
+        target = elapsed_frac * (1.0 + slack)
+        if spent_frac <= target:
+            return True
+        serve_prob = target / spent_frac if spent_frac > 0 else 1.0
+        return random.random() < max(0.0, min(1.0, serve_prob))
+    except Exception:
+        return True
 
 
 def _has_budget(campaign: dict) -> bool:

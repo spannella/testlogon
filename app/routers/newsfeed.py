@@ -104,6 +104,9 @@ def _inject_sponsored_posts(
 
     result: List[Dict[str, Any]] = []
     sponsored_count = 0
+    # ADV3-7 (C4): thread already-won campaign ids so each slot draws a
+    # DISTINCT advertiser instead of the top bidder monopolizing the page.
+    won_campaign_ids: Set[str] = set()
 
     for i, post in enumerate(posts):
         result.append(post)
@@ -116,10 +119,15 @@ def _inject_sponsored_posts(
                     extra={"viewer_id": viewer_id, "reason": "allow_ads_near_false"},
                 )
                 continue
-            sponsored = _fetch_sponsored_post(viewer_id, i, hidden_ids)
+            sponsored = _fetch_sponsored_post(
+                viewer_id, i, hidden_ids, exclude_campaign_ids=won_campaign_ids
+            )
             if sponsored:
                 result.append(sponsored)
                 sponsored_count += 1
+                _cid = sponsored.get("campaign_id")
+                if _cid:
+                    won_campaign_ids.add(str(_cid))
 
     return result
 
@@ -128,10 +136,11 @@ def _fetch_sponsored_post(
     viewer_id: str,
     position: int,
     hidden_ids: Set[str],
+    exclude_campaign_ids: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Fetch a sponsored post from the ad serving engine."""
     try:
-        from app.services.ad_serving import serve_ad
+        from app.services.ad_serving import commit_ad_click, serve_ad
         ad = serve_ad(
             surface="newsfeed",
             content_type="post",
@@ -139,6 +148,8 @@ def _fetch_sponsored_post(
             content_id=f"feed_slot_{position}",
             slot_type="sponsored_post",
             user_id=viewer_id,
+            exclude_campaign_ids=exclude_campaign_ids,
+            defer_ad_click=True,
         )
         if not ad.get("filled") or ad.get("is_house_ad"):
             return None
@@ -150,6 +161,10 @@ def _fetch_sponsored_post(
                 extra={"viewer_id": viewer_id, "reason": "hidden", "creative_id": creative_id},
             )
             return None
+
+        # ADV3-7 (C4): commit the deferred AdClicks row only now that this
+        # unit is being kept (a no-fill / hidden spin leaves no orphan row).
+        commit_ad_click(ad)
 
         ts = int(time.time())
         sponsored = {
@@ -5367,6 +5382,11 @@ def list_interesting_posts(
 
     Powers the "more like this" feed-ranking boost: callers prioritise these
     posts (and same-author posts) in ranking.
+
+    ADV3-7 (C6): this endpoint returns a bare post_id LIST (a ranking-signal
+    lookup), not a rendered feed of post objects, so it carries no sponsored
+    slots by design -- it is intentionally unmonetized. Sponsored injection
+    lives on the rendered surfaces (GET /feed and GET /feed/for-you).
     """
     post_ids = _post_interesting_svc.list_interesting_post_ids(user_id, limit=limit)
     return {"post_ids": post_ids, "count": len(post_ids)}
@@ -5966,6 +5986,12 @@ def view_for_you_feed(
     items = _hydrate_feed_posts_for_viewer(user_id, post_ids)
     if not items:
         return _chronological_fallback("chronological_fallback")
+
+    # ADV3-7 (C6): the ranked For-You branch previously returned WITHOUT ad
+    # injection (only chronological GET /feed monetized). Inject sponsored
+    # posts here too so the ranked surface carries paid inventory; the
+    # injector honours each post's allow_ads_near flag.
+    items = _inject_sponsored_posts(items, user_id)
 
     record_newsfeed_recsys_request(mode="for_you", source="for_you")
     record_newsfeed_recsys_latency(source="for_you", elapsed_seconds=time.perf_counter() - started)

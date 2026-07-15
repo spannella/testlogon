@@ -99,10 +99,11 @@ def serve_shop_sponsored(
     surface = surface if surface in SHOP_SURFACES else "shop_search"
     limit = max(1, min(int(limit or 1), 10))
 
-    from app.services.ad_serving import serve_ad
+    from app.services.ad_serving import commit_ad_click, serve_ad
 
     units: List[Dict[str, Any]] = []
     seen: set = set()
+    won_campaigns: set = set()
     ctx = {}
     if query:
         ctx["query"] = query
@@ -124,6 +125,8 @@ def serve_shop_sponsored(
                 user_context=ctx or None,
                 content_owner_id="",       # STANDALONE -> platform 100% (no creator)
                 require_product=True,       # shop serves ONLY product ads
+                exclude_campaign_ids=won_campaigns,  # ADV3-7 (C4): distinct advertisers
+                defer_ad_click=True,        # ADV3-7 (C4): mint only on keep
             )
         except Exception:
             logger.debug("shop_ads.serve_error surface=%s", surface, exc_info=True)
@@ -137,6 +140,13 @@ def serve_shop_sponsored(
         if creative_id in seen:
             continue
         seen.add(creative_id)
+        # ADV3-7 (C4): commit the deferred AdClicks row only for a KEPT unit
+        # (no-product / duplicate spins above leave no orphan) and exclude this
+        # campaign from later spins so the page shows distinct advertisers.
+        commit_ad_click(ad)
+        _won = ad.get("campaign_id", "")
+        if _won:
+            won_campaigns.add(str(_won))
 
         card = {
             "unit_id": f"sponsored_{surface}_{creative_id}",
