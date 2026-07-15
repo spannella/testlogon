@@ -107,7 +107,16 @@ try:
     rec("SUBX02: subscriber full-refund blocked -> 403", code3 == 403, f"code={code3}")
     rec("SUBX02: sub still active after blocked full-refund", (m3.get("status") or "").lower() == "active" and b3 == b1, f"status={m3.get('status')} bal={b3}")
 
-    # SUBX-02: subscriber prorated refund -> access REVOKED + credit clawed back
+    # SUBX-02: subscriber prorated refund -> access REVOKED + credit clawed back.
+    # SUBX-10 INTERACTION: a JUST-converted sub starts a fresh cycle (unused remainder
+    # ~= 100% -> frac~1.0), which the corrected cycle-accurate proration classifies as
+    # a FULL refund (subscriber-blocked). To exercise the PARTIAL subscriber refund we
+    # seed the sub to mid-cycle (frac~0.5) so the default /refund is genuinely partial;
+    # the clawback is then PROPORTIONAL (was: near-full under the old lifetime denom).
+    _mc = get_meta(sid)
+    _mc["current_period_start"] = now - 15 * 86400
+    _mc["current_period_end"] = now + 15 * 86400
+    ss.save_subscription(_mc)
     code4, resp4 = http("POST", f"/api/subscriptions/{sid}/refund", headers={"X-User-Id": su}, body={})
     m4 = get_meta(sid)
     b4 = total_earned(cre)
@@ -115,7 +124,8 @@ try:
     rec("SUBX02: access REVOKED (status canceled)", (m4.get("status") or "").lower() == "canceled" and int(m4.get("current_period_end") or 0) <= int(time.time()) + 5, f"status={m4.get('status')} cpe={m4.get('current_period_end')}")
     rec("SUBX02: has_active_subscription -> False", sa.has_active_subscription(su, cre) is False, "")
     rec("SUBX02: content re-locks", sa.content_locked_for_viewer(su, cre, subscriber_only=True) is True, "")
-    rec("SUBX02: credit clawed back, NOT inflating", (b4 < b1) and (b4 <= b0 + 2), f"pre={b0} post-convert={b1} post-refund={b4}")
+    # proportional clawback (~half the NET credit) and NOT inflating (b4 strictly < b1)
+    rec("SUBX02: credit clawed back proportionally, NOT inflating", (b4 < b1) and (abs((b1 - b4) - int(NET * 0.5)) <= 60), f"pre={b0} post-convert={b1} post-refund={b4} clawback={b1 - b4}")
 
     # ================= SUBX-03: webhook auth + no free-extend =================
     exp_cpe = now - 86400

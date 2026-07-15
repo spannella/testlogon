@@ -1,0 +1,494 @@
+--- /tmp/dev_subserver.bak	2026-07-15 16:41:11.265001261 -0400
++++ app/routers/subscription_server.py	2026-07-15 16:41:57.396304259 -0400
+@@ -631,6 +631,30 @@
+     return count
+ 
+ 
++def _find_active_sub_for_creator(subscriber_id: str, creator_id: str) -> Optional[Dict[str, Any]]:
++    """SUBX-15: return the subscriber's existing NON-terminal subscription to this
++    creator (active / trialing / past_due / canceling), if any. Used to reject a
++    double-subscribe (which would double-charge) and to return the existing sub
++    instead. Terminal subs (canceled/expired) are ignored so a lapsed subscriber
++    can subscribe again."""
++    try:
++        items = ddb_query(pk_subscriber(subscriber_id))
++    except Exception:
++        return None
++    live = {"active", "trialing", "past_due", "canceling"}
++    for it in items:
++        if not it.get("sk", "").startswith("SUB#"):
++            continue
++        if it.get("creator_id") != creator_id:
++            continue
++        if (it.get("status") or "").lower() not in live:
++            continue
++        meta = ddb_get_item(pk_subscription(it["subscription_id"]), "META")
++        if meta:
++            return normalize_subscription(meta)
++    return None
++
++
+ def build_invoice_item(invoice: Dict[str, Any]) -> Dict[str, Any]:
+     item = invoice.copy()
+     item.update({"pk": pk_subscription(invoice["subscription_id"]), "sk": f"INV#{invoice['invoice_id']}", "entity": "invoice"})
+@@ -836,7 +860,10 @@
+     creator_id = sub["creator_id"]
+     payer = payer_id or sub.get("gifter_id") or sub["subscriber_id"]
+     currency = sub.get("currency", "usd")
+-    period_gross = int(sub.get("price_cents") or 0)
++    # SUBX-14: refund what was ACTUALLY collected this cycle (latest paid invoice),
++    # not the list ``price_cents`` — a discounted subscriber must not be over-refunded
++    # now that ``price_cents`` stores the undiscounted list price.
++    period_gross = _current_cycle_charge_cents(subscription_id, sub)
+     period_end = int(sub.get("current_period_end") or now)
+     marker_key = f"{subscription_id}#{period_end}"
+ 
+@@ -1216,6 +1243,69 @@
+     return min(1.0, max(0.0, remaining / total))
+ 
+ 
++def _current_period_start(sub: Dict[str, Any]) -> int:
++    """SUBX-10: the start of the CURRENT billing cycle (NOT the whole-lifetime
++    ``start_at``). Prefer the persisted ``current_period_start`` (written at
++    subscribe/gift and advanced each renewal); fall back to deriving it as
++    ``current_period_end - interval`` so proration on a renewed sub is computed
++    against the current cycle, not the entire subscription lifetime."""
++    cps = sub.get("current_period_start")
++    if cps:
++        return int(cps)
++    cpe = int(sub.get("current_period_end") or now_ts())
++    return cpe - interval_seconds(sub.get("interval", "month"))
++
++
++def _current_cycle_charge_cents(subscription_id: str, sub: Dict[str, Any]) -> int:
++    """SUBX-10/14: the GROSS amount actually collected for the current cycle, used
++    to size a prorated refund. Reads the latest PAID invoice (the real charge) so a
++    DISCOUNTED subscriber is refunded what they paid, not the (higher) list price.
++    Falls back to the sub's stored price when no paid invoice is found."""
++    try:
++        items = ddb_query(pk_subscription(subscription_id))
++        paid = [it for it in items if it.get("sk", "").startswith("INV#") and (it.get("status") or "").lower() == "paid"]
++        paid.sort(key=lambda x: x.get("created_at", 0), reverse=True)
++        if paid:
++            return int(paid[0].get("amount_cents") or 0)
++    except Exception:
++        logger.warning("current-cycle charge lookup failed sub=%s", subscription_id, exc_info=True)
++    return int(sub.get("price_cents") or 0)
++
++
++def _apply_immediate_cancel(
++    sub: Dict[str, Any],
++    *,
++    now: int,
++    actor: Optional[str],
++    reason: str,
++    do_refund: bool = True,
++) -> Optional[Dict[str, Any]]:
++    """SUBX-15: the ONE shared immediate-cancel path used by every cancel surface
++    (subscriber cancel, renewal-off immediate, creator remove). Refunds the unused
++    prorated remainder of the CURRENT cycle (SUBX-10 denominator) + claws back the
++    creator credit via the real reversal rail, THEN revokes access (status canceled,
++    period ends now). Refund is computed BEFORE the period is collapsed so the
++    reversal marker/fraction see the real period. Returns the refund receipt (or
++    None when nothing was refundable)."""
++    receipt = None
++    if do_refund:
++        frac = _proration_fraction(
++            now, _current_period_start(sub), int(sub.get("current_period_end") or now)
++        )
++        if frac > 0:
++            receipt = _reverse_subscription_charge(
++                sub, now=now, refund_fraction=frac, reason=reason, actor=actor,
++            )
++    sub["status"] = "canceled"
++    sub["canceled_at"] = now
++    sub["current_period_end"] = now
++    sub["auto_renew"] = False
++    sub["cancel_at_period_end"] = False
++    sub["renewal_policy"] = "manual"
++    sub["updated_at"] = now
++    return receipt
++
++
+ def calculate_proration(
+     *,
+     current_price: int,
+@@ -1372,6 +1462,13 @@
+             if prior:
+                 return attach_subscription_profiles(normalize_subscription(prior))
+ 
++    # SUBX-15: DOUBLE-SUBSCRIBE GUARD. A subscriber can hold at most ONE live
++    # subscription per creator. If one already exists (active/trialing/past_due/
++    # canceling) return it instead of creating a second record + second charge.
++    existing_live = _find_active_sub_for_creator(subscriber_id, plan["creator_id"])
++    if existing_live:
++        return attach_subscription_profiles(existing_live)
++
+     ts = now_ts()
+     subscription_id = new_id("sub")
+     provider_subscription_id = new_id("stub_sub")
+@@ -1387,6 +1484,11 @@
+     # current_uses increment is the real double-use guard.
+     promo_validation = None
+     promo_trial_days = 0
++    # SUBX-14: keep the LIST (undiscounted) price separate from the amount actually
++    # collected for the INITIAL cycle. ``price_cents`` on the sub is the recurring LIST
++    # price (MRR + renewals read it); ``charge_price`` is what we charge NOW. A creator
++    # discount only re-applies on renewals while ``discount_remaining_months`` > 0.
++    charge_price = base_price
+     if body.promo_code:
+         from app.services import promo_codes as _promo_codes
+ 
+@@ -1402,7 +1504,7 @@
+                 status_code=400,
+                 detail=promo_validation.get("message") or "Invalid or expired promo code",
+             )
+-        price_cents = int(promo_validation["final_price_cents"])
++        charge_price = int(promo_validation["final_price_cents"])
+         promo_trial_days = int(promo_validation.get("free_trial_days") or 0)
+     elif body.discount_code:
+         discount = _get_discount(plan["creator_id"], body.discount_code)
+@@ -1414,9 +1516,8 @@
+             "duration": discount.get("duration"),
+             "duration_months": discount.get("duration_months"),
+         }
+-        price_cents = _apply_discount(base_price, discount)
+-    else:
+-        price_cents = base_price
++        charge_price = _apply_discount(base_price, discount)
++    price_cents = base_price
+     trial_end = None
+     trial_start = None
+     status = "active"
+@@ -1441,12 +1542,12 @@
+     # discounted ($0) subscribes collect no funds now and skip the charge.
+     payment_method_id: Optional[str] = None
+     payment_intent_id: Optional[str] = None
+-    charging = status != "trialing" and int(price_cents) > 0
++    charging = status != "trialing" and int(charge_price) > 0
+     if charging:
+         payment_method_id = resolve_subscription_payment_method(subscriber_id, body.payment_method_id)
+         payment_intent_id = _charge_subscription_payment_intent(
+             subscriber_id=subscriber_id,
+-            amount_cents=int(price_cents),
++            amount_cents=int(charge_price),
+             currency=plan["currency"],
+             payment_method_id=payment_method_id,
+             plan_id=plan_id,
+@@ -1470,6 +1571,9 @@
+         "provider_subscription_id": provider_subscription_id,
+         "status": status,
+         "start_at": ts,
++        # SUBX-10: current-cycle start (advanced each renewal) so proration/refund
++        # math uses THIS cycle, not the whole-lifetime start_at.
++        "current_period_start": ts,
+         "current_period_end": period_end,
+         # SUB-E0: authoritative next-charge timestamp for the E1 renewal engine.
+         "next_billing_date": period_end,
+@@ -1488,10 +1592,13 @@
+     }
+     if applied_discount:
+         sub["discount"] = applied_discount
++        # SUBX-14: the INITIAL cycle is already discounted (charge_price). A "once"
++        # code therefore has NO remaining renewal discount (0, was 1 -> double-apply).
++        # A "repeating N-months" code discounts N cycles TOTAL, so N-1 renewals remain.
+         if applied_discount.get("duration") == "repeating":
+-            sub["discount_remaining_months"] = int(applied_discount.get("duration_months") or 0)
++            sub["discount_remaining_months"] = max(0, int(applied_discount.get("duration_months") or 0) - 1)
+         elif applied_discount.get("duration") == "once":
+-            sub["discount_remaining_months"] = 1
++            sub["discount_remaining_months"] = 0
+     creator_settings = get_subscription_settings(plan["creator_id"])
+     if creator_settings.get("disable_auto_renew"):
+         sub["auto_renew"] = False
+@@ -1510,7 +1617,10 @@
+             "provider_invoice_id": payment_intent_id or new_id("stub_inv"),
+             "payment_intent_id": payment_intent_id,
+             "payment_method_id": payment_method_id,
+-            "amount_cents": int(sub["price_cents"]),
++            # SUBX-14: the invoice records what was COLLECTED (discounted initial),
++            # not the list price now stored on the sub.
++            "amount_cents": int(charge_price),
++            "list_price_cents": int(base_price),
+             "currency": plan["currency"],
+             "status": "paid",
+             "period_start": ts,
+@@ -1727,6 +1837,12 @@
+             if prior:
+                 return attach_subscription_profiles(normalize_subscription(prior))
+ 
++    # SUBX-15: don't gift on top of an existing live subscription (would double-charge
++    # the gifter for access the recipient already has). Return the recipient's sub.
++    existing_recipient = _find_active_sub_for_creator(recipient_id, plan["creator_id"])
++    if existing_recipient:
++        return attach_subscription_profiles(existing_recipient)
++
+     ts = now_ts()
+     subscription_id = new_id("sub")
+     provider_subscription_id = new_id("stub_sub")
+@@ -1759,6 +1875,7 @@
+         "provider_subscription_id": provider_subscription_id,
+         "status": "active",
+         "start_at": ts,
++        "current_period_start": ts,
+         "current_period_end": period_end,
+         "next_billing_date": period_end,
+         # the recipient has NO PM on this sub -> nothing to charge even if a renewal
+@@ -1932,7 +2049,8 @@
+     if body.fraction is not None:
+         frac = max(0.0, min(1.0, float(body.fraction)))
+     else:
+-        frac = _proration_fraction(now, int(sub.get("start_at") or now), int(sub.get("current_period_end") or now))
++        # SUBX-10: prorate against the CURRENT cycle, not the whole-lifetime start_at.
++        frac = _proration_fraction(now, _current_period_start(sub), int(sub.get("current_period_end") or now))
+     if frac >= 1.0 and not privileged:
+         raise HTTPException(status_code=403, detail="Only the creator or an admin can issue a full refund")
+     if frac <= 0:
+@@ -2119,17 +2237,11 @@
+         # default (locked decision) + claw back the creator credit (state=reversed,
+         # not inflating), idempotent -- unless refund=False was explicitly passed. A
+         # fully-elapsed period yields fraction 0 -> no refund (also makes a repeat
+-        # immediate-cancel a no-op).
++        # immediate-cancel a no-op). SUBX-15: shared immediate-cancel path.
+         do_refund = body.refund if body.refund is not None else True
+-        if do_refund:
+-            frac = _proration_fraction(now, int(sub.get("start_at") or now), int(sub.get("current_period_end") or now))
+-            if frac > 0:
+-                refund_receipt = _reverse_subscription_charge(
+-                    sub, now=now, refund_fraction=frac, reason="immediate_cancel", actor=user_id,
+-                )
+-        sub["status"] = "canceled"
+-        sub["canceled_at"] = now
+-        sub["current_period_end"] = now
++        refund_receipt = _apply_immediate_cancel(
++            sub, now=now, actor=user_id, reason="immediate_cancel", do_refund=do_refund,
++        )
+     sub["updated_at"] = now
+     save_subscription(sub)
+     record_billing_subscription(sub)
+@@ -2218,11 +2330,34 @@
+     user_id = require_user(x_user_id)
+     if user_id not in (sub["subscriber_id"], sub["creator_id"]):
+         raise HTTPException(status_code=403, detail="Not authorized to resume this subscription")
++    # SUBX-15: resume must never yield an active-but-LOCKED sub. Resume only restores
++    # a cancel-at-period-end sub that still has PAID time left (current_period_end in
++    # the future). A LAPSED sub (period already elapsed, or immediately-canceled with
++    # a refund) cannot be resumed for free — the caller must re-subscribe (real
++    # charge, fresh period). We surface that as 409 rather than flipping it to a
++    # false-active state.
++    now = now_ts()
++    period_end = int(sub.get("current_period_end") or 0)
++    if not period_end or period_end <= now:
++        raise HTTPException(
++            status_code=409,
++            detail={
++                "code": "subscription_lapsed",
++                "message": "This subscription has lapsed; subscribe again to reactivate.",
++                "plan_id": sub.get("plan_id"),
++                "creator_id": sub.get("creator_id"),
++            },
++        )
+     sub["cancel_at_period_end"] = False
+     sub["auto_renew"] = True
+     sub["status"] = "active"
+     sub["renewal_policy"] = "auto"
+-    sub["updated_at"] = now_ts()
++    # SUBX-15: clear any dunning residue so a resumed sub renews cleanly.
++    for _k in ("dunning_state", "dunning_attempts", "dunning_next_retry_at", "grace_until",
++               "dunning_last_at", "dunning_last_reason", "first_decline_at"):
++        sub.pop(_k, None)
++    sub["next_billing_date"] = period_end
++    sub["updated_at"] = now
+     save_subscription(sub)
+     record_billing_subscription(sub)
+     put_notification(
+@@ -2269,23 +2404,39 @@
+     user_id = require_user(x_user_id)
+     if user_id not in (sub["subscriber_id"], sub["creator_id"]):
+         raise HTTPException(status_code=403, detail="Not authorized to update renewal settings")
++    now = now_ts()
++    refund_receipt = None
+     sub["auto_renew"] = body.auto_renew
+     if body.renewal_policy:
+         sub["renewal_policy"] = body.renewal_policy
+     if not body.auto_renew:
+         if body.effective == "immediate":
+-            sub["status"] = "canceled"
+-            sub["cancel_at_period_end"] = False
+-            sub["current_period_end"] = now_ts()
++            # SUBX-15: an IMMEDIATE renewal-off is a full immediate cancel and must
++            # refund + revoke IDENTICALLY to /cancel (previously it revoked with NO
++            # refund). Routes through the shared immediate-cancel path.
++            refund_receipt = _apply_immediate_cancel(
++                sub, now=now, actor=user_id, reason="immediate_cancel", do_refund=True,
++            )
+         else:
+             sub["status"] = "canceling"
+             sub["cancel_at_period_end"] = True
+     else:
+         sub["status"] = "active"
+         sub["cancel_at_period_end"] = False
+-    sub["updated_at"] = now_ts()
++    sub["updated_at"] = now
+     save_subscription(sub)
+     record_billing_subscription(sub)
++    if refund_receipt:
++        audit_event(
++            "subscription_refunded",
++            sub["subscriber_id"],
++            request,
++            outcome="success",
++            subscription_id=subscription_id,
++            creator_id=sub["creator_id"],
++            refunded_cents=refund_receipt.get("refunded_cents"),
++            clawback_cents=refund_receipt.get("clawback_cents"),
++        )
+     audit_event(
+         "subscription_renewal_updated",
+         sub["subscriber_id"],
+@@ -2383,7 +2534,14 @@
+     # period end (no immediate money). An explicit effective="period_end" also
+     # schedules.
+     old_price = int(sub["price_cents"])
+-    is_upgrade = int(new_price) > old_price
++    old_interval = sub.get("interval", "month")
++    interval_changed = old_interval != interval
++    # SUBX-11: classify up/down on a COMMON monthly-equivalent basis so a month->year
++    # switch (annual price >> monthly price, but same or cheaper per month) is not
++    # mis-classified as an "upgrade" and mis-charged the raw annual-vs-monthly delta.
++    old_monthly = _sube4_monthly_equiv_cents(old_price, old_interval)
++    new_monthly = _sube4_monthly_equiv_cents(int(new_price), interval)
++    is_upgrade = new_monthly > old_monthly
+     schedule_at_period_end = (not is_upgrade) or (body.effective == "period_end")
+ 
+     if schedule_at_period_end:
+@@ -2417,15 +2575,29 @@
+         return attach_subscription_profiles(sub)
+ 
+     # ---- UPGRADE: immediate, prorated DELTA charge via the E0 rail ----
+-    # delta = (new_price - old_price) * remaining_fraction (>=0 for an upgrade with
+-    # time left; a fully-elapsed period yields 0 -> switch plan with no charge).
+-    proration_amount = calculate_proration(
+-        current_price=old_price,
+-        new_price=int(new_price),
+-        now=ts,
+-        period_start=int(sub.get("start_at") or ts),
+-        period_end=int(sub.get("current_period_end") or ts),
+-    )
++    # SUBX-10: prorate against the CURRENT cycle (current_period_start..end), NOT the
++    # whole-lifetime start_at, so a sub that has renewed N times is charged the delta
++    # for the time left in THIS cycle only.
++    cur_start = _current_period_start(sub)
++    cur_end = int(sub.get("current_period_end") or ts)
++    remaining_frac = _proration_fraction(ts, cur_start, cur_end)
++    if interval_changed:
++        # SUBX-11: an INTERVAL change starts a FRESH cycle on the new cadence now. The
++        # subscriber is charged the new plan's full price MINUS a credit for the unused
++        # remainder of the current (old-interval) cycle; the period is reset to
++        # now + new interval and the next renewal lands one new-interval out.
++        credit_for_unused = int(round(old_price * remaining_frac))
++        proration_amount = max(0, int(new_price) - credit_for_unused)
++    else:
++        # same-interval upgrade: charge the price DELTA for the remaining time; keep
++        # the current period end (they already paid the base for this cycle).
++        proration_amount = calculate_proration(
++            current_price=old_price,
++            new_price=int(new_price),
++            now=ts,
++            period_start=cur_start,
++            period_end=cur_end,
++        )
+     if proration_amount < 0:
+         proration_amount = 0
+     upgrade_pm = None
+@@ -2444,12 +2616,20 @@
+             idempotency_key=f"{subscription_id}:upgrade:{int(sub.get('current_period_end') or ts)}:{body.plan_id}",
+         )
+ 
+-    # switch the plan NOW; the cycle they already paid keeps its period end (they
+-    # only owe the upgrade delta for the remaining time).
++    # switch the plan NOW; a same-interval upgrade keeps the period end (they only owe
++    # the upgrade delta for the remaining time), while an INTERVAL change (SUBX-11)
++    # starts a fresh cycle on the new cadence now.
+     sub["plan_id"] = body.plan_id
+     sub["interval"] = interval
+     sub["price_cents"] = int(new_price)
+     sub["proration_policy"] = body.proration_policy
++    if interval_changed:
++        sub["current_period_start"] = ts
++        sub["current_period_end"] = ts + interval_seconds(interval)
++        sub["next_billing_date"] = sub["current_period_end"]
++    # a plan change resets any old-plan discount (renewal now bills the new list price)
++    sub.pop("discount", None)
++    sub.pop("discount_remaining_months", None)
+     if upgrade_pm:
+         sub["payment_method_id"] = upgrade_pm
+     for _k in ("pending_change", "pending_plan_id", "pending_interval", "pending_price_cents", "pending_apply_at"):
+@@ -2542,38 +2722,29 @@
+     sub = normalize_subscription(sub)
+     if sub["creator_id"] != creator_id:
+         raise HTTPException(status_code=403, detail="Not authorized to manage this subscriber")
+-    sub["status"] = "canceled"
+-    sub["auto_renew"] = False
+-    sub["cancel_at_period_end"] = False
+-    sub["renewal_policy"] = "manual"
+-    sub["current_period_end"] = now_ts()
+-    sub["updated_at"] = now_ts()
++    # SUBX-12: a creator REMOVE is a real immediate refund + creator clawback (was a
++    # phantom mark-invoice-refunded that never touched the card or the creator's live
++    # credit). Route through the shared immediate-cancel path so the subscriber's card
++    # is refunded the unused prorated remainder and the creator credit is reversed --
++    # identical money to /cancel(immediate). A gift's refund goes to the gifter.
++    now = now_ts()
++    receipt = _apply_immediate_cancel(
++        sub, now=now, actor=creator_id, reason=body.reason or "creator_removed", do_refund=True,
++    )
+     save_subscription(sub)
+     record_billing_subscription(sub)
+-
+-    refunded = mark_invoice_refunded(subscription_id, body.reason or "creator_removed")
+-    if refunded:
+-        record_billing_transaction(
+-            user_sub=sub["subscriber_id"],
+-            amount_cents=-int(refunded.get("amount_cents", 0)),
+-            currency=refunded.get("currency", sub.get("currency") or "usd"),
+-            description=f"Subscription refund {subscription_id}",
+-            status="REVERTED",
+-            external_ref=refunded.get("invoice_id") or subscription_id,
+-            metadata={"subscription_id": subscription_id, "reason": body.reason or "creator_removed"},
++    refunded = bool(receipt and not receipt.get("idempotent_replay") and int(receipt.get("refunded_cents") or 0) > 0)
++    if receipt and not receipt.get("idempotent_replay"):
++        audit_event(
++            "subscription_refunded",
++            sub["subscriber_id"],
++            request,
++            outcome="success",
++            subscription_id=subscription_id,
++            creator_id=creator_id,
++            refunded_cents=receipt.get("refunded_cents"),
++            clawback_cents=receipt.get("clawback_cents"),
+         )
+-        refund_entry = {
+-            "entry_id": new_id("led"),
+-            "subscription_id": subscription_id,
+-            "subscriber_id": sub["subscriber_id"],
+-            "entry_type": "refund",
+-            "amount_cents": int(refunded.get("amount_cents", 0)),
+-            "currency": refunded.get("currency", sub.get("currency")),
+-            "created_at": now_ts(),
+-            "metadata": {"invoice_id": refunded.get("invoice_id")},
+-        }
+-        save_ledger_entry(creator_id, refund_entry)
+-
+     audit_event(
+         "subscription_removed_by_creator",
+         creator_id,
+@@ -2581,7 +2752,7 @@
+         outcome="success",
+         subscription_id=subscription_id,
+         subscriber_id=sub["subscriber_id"],
+-        refunded=bool(refunded),
++        refunded=refunded,
+     )
+     put_notification(
+         recipient_user_id=sub["subscriber_id"],
