@@ -194,6 +194,8 @@ private val SUBSCRIPTION_ALERT_EVENTS: Set<String> = setOf(
     "subscription_started", "subscription_new_subscriber", "subscription_renewed",
     "subscription_renewal_failed", "subscription_expiring", "subscription_expired",
     "subscription_canceled", "subscription_gifted",
+    // SUBX-51: plan-change / creator-removal / trial-conversion lifecycle alerts.
+    "subscription_changed", "subscription_removed", "subscription_converted",
 )
 
 internal fun isSubscriptionAlert(event: String?): Boolean =

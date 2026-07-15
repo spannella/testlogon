@@ -80,6 +80,9 @@ def _build_action_url(alert_type: str, details: Dict[str, Any]) -> Optional[str]
         "subscription_expiring": "/subscriptions/manage",
         "subscription_expired": "/subscriptions/manage",
         "subscription_canceled": "/subscriptions/manage",
+        "subscription_changed": "/subscriptions/manage",
+        "subscription_removed": "/subscriptions/manage",
+        "subscription_converted": "/subscriptions/manage",
         "subscription_gifted": "/subscriptions/manage",
         "payout_initiated": "/wallet/payouts",
         "payout_paid": "/wallet/payouts",
@@ -172,6 +175,8 @@ ALERT_EVENT_TYPES: List[str] = [
     # Subscriptions (SUB-E1/E5): lifecycle notifications (default-on transactional)
     "subscription_renewed","subscription_renewal_failed","subscription_expiring","subscription_expired",
     "subscription_new_subscriber","subscription_canceled","subscription_gifted",
+    # SUBX-51: plan-change / creator-removal / trial-conversion lifecycle alerts (default-on)
+    "subscription_changed","subscription_removed","subscription_converted",
     "cart.abandoned",
     # Achievements (ENGAGE-001)
     "achievement_unlocked",
@@ -209,6 +214,9 @@ DEFAULT_PUSH_EVENT_TYPES: List[str] = [
     "subscription_new_subscriber",  # SUB-E5: a new subscriber joined (creator)
     "subscription_canceled",        # SUB-E5: a subscription was canceled
     "subscription_gifted",          # SUB-E5: a gift subscription
+    "subscription_changed",         # SUBX-51: your plan changed (upgrade / scheduled downgrade)
+    "subscription_removed",         # SUBX-51: a creator removed your subscription
+    "subscription_converted",       # SUBX-51: your trial converted to paid
     # MODX-15: moderation/DMCA events are consequential + time-sensitive -> default-on push.
     "moderation_content_deleted","moderation_content_removed","moderation_content_hidden","moderation_content_reinstated","moderation_content_restored","moderation_violation_confirmed","moderation_hold_escalated","moderation_report_received","moderation_report_resolved","moderation_poster_responded","moderation_warning","moderation_ban","moderation_sla_breach","moderation_extortion_criminal_surge","dmca_claim_filed","dmca_content_restored","dmca_counter_notice_received","dmca_repeat_infringer_ban",
 ]
@@ -900,7 +908,7 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
         }
         title = pretty.get(event, event.replace("_", " "))
         alert_id = ""
-        if event not in _NO_ALERT_EVENTS:
+        if event not in _NO_ALERT_EVENTS and not event.startswith("subscription_"):
             wr = write_alert(user_sub, event=event, outcome=outcome, title=title, details={**payload, "alert_type": alert_type})
             alert_id = (wr or {}).get("alert_id", "")
             send_push_for_alert(user_sub, alert_type, title, f"{event} ({outcome})", alert_id)

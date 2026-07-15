@@ -1859,12 +1859,12 @@ async def subscribe(
         actor_name = get_profile_identity(subscriber_id).get("display_name") or subscriber_id
         emit_social_alert(
             recipient_user_id=plan["creator_id"],
-            alert_type="subscription_started",
+            alert_type="subscription_new_subscriber",  # SUBX-51: dedicated type (was mis-typed subscription_started)
             actor_user_id=subscriber_id,
             actor_display_name=actor_name,
             title=f"{actor_name} subscribed to you",
             details={"plan_id": plan_id, "subscriber_id": subscriber_id, "subscription_id": subscription_id},
-            action_url="/subscriptions",
+            action_url="/subscriptions/subscribers",  # SUBX-50: land on the E4 Subscribers console
         )
     except Exception:
         logger.warning("subscription social alert failed creator=%s", plan["creator_id"], exc_info=True)
@@ -2583,6 +2583,35 @@ async def update_subscription_renewal(
         auto_renew=body.auto_renew,
         effective=body.effective,
     )
+    # SUBX-51: turning auto-renew OFF is a cancel — it was silent before. Push both parties.
+    if not body.auto_renew:
+        try:
+            from app.services.social_alerts import emit_social_alert as _emit_sa
+            from app.services.profile import get_profile_identity as _gpi
+            _c_name = _gpi(sub["creator_id"]).get("display_name") or sub["creator_id"]
+            _s_name = _gpi(sub["subscriber_id"]).get("display_name") or sub["subscriber_id"]
+            _immediate = (body.effective == "immediate")
+            _sub_title = ("Your subscription to %s is canceled" % _c_name) if _immediate else ("Your subscription to %s will not renew" % _c_name)
+            _emit_sa(
+                recipient_user_id=sub["subscriber_id"],
+                alert_type="subscription_canceled",
+                actor_user_id=sub["creator_id"],
+                actor_display_name=_c_name,
+                title=_sub_title,
+                details={"subscription_id": subscription_id, "creator_id": sub["creator_id"], "ends_at": int(sub.get("current_period_end") or 0), "cancel_at_period_end": not _immediate},
+                action_url=f"/subscriptions/manage?subscriptionId={subscription_id}&creatorId={sub['creator_id']}",
+            )
+            _emit_sa(
+                recipient_user_id=sub["creator_id"],
+                alert_type="subscription_canceled",
+                actor_user_id=sub["subscriber_id"],
+                actor_display_name=_s_name,
+                title=f"{_s_name} turned off auto-renew" if not _immediate else f"{_s_name} canceled their subscription",
+                details={"subscription_id": subscription_id, "subscriber_id": sub["subscriber_id"]},
+                action_url="/subscriptions/subscribers",
+            )
+        except Exception:
+            logger.warning("renewal-toggle cancel alert failed sub=%s", subscription_id, exc_info=True)
     refresh_subscription_calendar_events(sub)
     return attach_subscription_profiles(sub)
 
@@ -2636,6 +2665,22 @@ async def convert_trial(
         plan_id=sub["plan_id"],
         creator_id=sub["creator_id"],
     )
+    # SUBX-51: trial conversion was silent — push the subscriber a receipt + deep-link.
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _c_name = _gpi(sub["creator_id"]).get("display_name") or sub["creator_id"]
+        _emit_sa(
+            recipient_user_id=sub["subscriber_id"],
+            alert_type="subscription_converted",
+            actor_user_id=sub["creator_id"],
+            actor_display_name=_c_name,
+            title=f"Your trial converted to a paid subscription to {_c_name}",
+            details={"subscription_id": subscription_id, "creator_id": sub["creator_id"], "plan_id": sub["plan_id"], "amount_cents": int(sub.get("price_cents") or 0)},
+            action_url=f"/subscriptions/manage?subscriptionId={subscription_id}&creatorId={sub['creator_id']}",
+        )
+    except Exception:
+        logger.warning("trial-convert social alert failed sub=%s", subscription_id, exc_info=True)
     refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
 
@@ -2706,6 +2751,44 @@ async def retry_subscription_payment(
     return attach_subscription_profiles(sub)
 
 
+def _emit_subscription_changed(sub, plan, request, *, applied: bool, direction: str) -> None:
+    """SUBX-51: notify the subscriber (and creator) of a plan change. ``applied`` False =
+    a scheduled downgrade/period-end change; True = an immediate upgrade now in effect."""
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _c_name = _gpi(sub["creator_id"]).get("display_name") or sub["creator_id"]
+        _s_name = _gpi(sub["subscriber_id"]).get("display_name") or sub["subscriber_id"]
+        _plan_name = (plan or {}).get("name") or (plan or {}).get("title") or "a new plan"
+        if applied:
+            _sub_title = f"Your subscription to {_c_name} changed to {_plan_name}"
+        elif direction == "downgrade":
+            _sub_title = f"Your plan change to {_plan_name} is scheduled for the end of this period"
+        else:
+            _sub_title = f"Your plan change to {_plan_name} is scheduled"
+        _mgr = f"/subscriptions/manage?subscriptionId={sub['subscription_id']}&creatorId={sub['creator_id']}"
+        _emit_sa(
+            recipient_user_id=sub["subscriber_id"],
+            alert_type="subscription_changed",
+            actor_user_id=sub["creator_id"],
+            actor_display_name=_c_name,
+            title=_sub_title,
+            details={"subscription_id": sub["subscription_id"], "creator_id": sub["creator_id"], "plan_id": sub.get("plan_id"), "direction": direction, "applied": applied},
+            action_url=_mgr,
+        )
+        _emit_sa(
+            recipient_user_id=sub["creator_id"],
+            alert_type="subscription_changed",
+            actor_user_id=sub["subscriber_id"],
+            actor_display_name=_s_name,
+            title=(f"{_s_name} upgraded to {_plan_name}" if (applied and direction == "upgrade") else f"{_s_name} scheduled a plan change"),
+            details={"subscription_id": sub["subscription_id"], "subscriber_id": sub["subscriber_id"], "plan_id": sub.get("plan_id"), "direction": direction, "applied": applied},
+            action_url="/subscriptions/subscribers",
+        )
+    except Exception:
+        logger.warning("plan-change social alert failed sub=%s", sub.get("subscription_id"), exc_info=True)
+
+
 @router.post("/api/subscriptions/{subscription_id}/change-plan", response_model=SubscriptionOut)
 async def change_subscription_plan(
     subscription_id: str,
@@ -2774,6 +2857,7 @@ async def change_subscription_plan(
             plan_id=body.plan_id,
             effective="period_end",
         )
+        _emit_subscription_changed(sub, plan, request, applied=False, direction=("upgrade" if is_upgrade else "downgrade"))
         refresh_subscription_calendar_events(sub, plan)
         return attach_subscription_profiles(sub)
 
@@ -2911,6 +2995,7 @@ async def change_subscription_plan(
         plan_id=body.plan_id,
         proration_amount_cents=proration_amount,
     )
+    _emit_subscription_changed(sub, plan, request, applied=True, direction="upgrade")
     refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
 
@@ -2967,6 +3052,22 @@ async def remove_subscriber(
         notif_type="subscription_removed",
         payload={"subscription_id": subscription_id, "creator_id": creator_id},
     )
+    # SUBX-51: promote removal from in-app-only to a real default-on push + deep-link.
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _c_name = _gpi(creator_id).get("display_name") or creator_id
+        _emit_sa(
+            recipient_user_id=sub["subscriber_id"],
+            alert_type="subscription_removed",
+            actor_user_id=creator_id,
+            actor_display_name=_c_name,
+            title=f"Your subscription to {_c_name} was ended by the creator",
+            details={"subscription_id": subscription_id, "creator_id": creator_id, "refunded": refunded},
+            action_url=f"/subscriptions/manage?subscriptionId={subscription_id}&creatorId={creator_id}",
+        )
+    except Exception:
+        logger.warning("removal social alert failed sub=%s", subscription_id, exc_info=True)
     refresh_subscription_calendar_events(sub)
     return attach_subscription_profiles(sub)
 

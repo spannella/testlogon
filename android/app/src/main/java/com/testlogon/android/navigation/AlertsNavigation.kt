@@ -1,5 +1,6 @@
 package com.testlogon.android.navigation
 
+import android.net.Uri
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
@@ -36,18 +37,30 @@ fun NavGraphBuilder.alertsDestination(navController: NavHostController) {
             // SUB-E5: a subscription alert deep-links to Subscribers (creator) or manage-subscription.
             // The backend sets a per-recipient action_url; we route on its path, using the event to
             // disambiguate the bare "/subscriptions" path (creator-new-subscriber vs gift-recipient).
-            onOpenSubscription = { event, actionUrl ->  // SUB-E5: (event, actionUrl)
+            onOpenSubscription = { event, actionUrl ->  // SUB-E5 / SUBX-50: (event, actionUrl)
                 val path = actionUrl.substringBefore('?').trimEnd('/').lowercase()
+                // SUBX-50: pull subscriptionId/creatorId off the action_url query so a
+                // renewal-failed / cancel / removal / convert push lands on the SPECIFIC sub's
+                // Manage/PAST_DUE recovery screen (SUBX-21/22), not the arg-less manage list.
+                val query = actionUrl.substringAfter('?', "")
+                val params = query.split('&').mapNotNull { kv ->
+                    val i = kv.indexOf('=')
+                    if (i <= 0) null else kv.substring(0, i) to Uri.decode(kv.substring(i + 1))
+                }.toMap()
+                val subscriptionId = params["subscriptionId"]?.takeIf { it.isNotBlank() }
+                val creatorId = params["creatorId"]?.takeIf { it.isNotBlank() }
+                val manageRoute = ManageSubscriptionDest.build(subscriptionId = subscriptionId, creatorId = creatorId)
                 val dest = when {
                     // creator-side (new-subscriber / renewed / canceled / gifted) -> E4 Subscribers screen
                     path.endsWith("/subscribers") -> CreatorSubscribersDest.ROUTE
-                    // subscriber-side (started / renewed / renewal-failed / expiring / expired / gifter) -> manage
-                    path.endsWith("/manage") -> ManageSubscriptionDest.ROUTE
+                    // subscriber-side (started / renewed / renewal-failed / expiring / expired / changed /
+                    // removed / converted / gifter) -> the SPECIFIC sub's manage/recovery screen
+                    path.endsWith("/manage") -> manageRoute
                     // bare "/subscriptions": a creator's new-subscriber alert -> Subscribers screen; a
                     // gift-recipient's alert (subscription_gifted) falls through to manage their new sub.
                     event == "subscription_started" || event == "subscription_new_subscriber" ->
                         CreatorSubscribersDest.ROUTE
-                    else -> ManageSubscriptionDest.ROUTE
+                    else -> manageRoute
                 }
                 navController.navigate(dest) { launchSingleTop = true }
             },

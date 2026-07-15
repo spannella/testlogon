@@ -119,6 +119,16 @@ def _emit(alert_type: str, *, recipient: str, actor: str, title: str, details: D
     except Exception:
         logger.warning("subscription alert %s failed recipient=%s", alert_type, recipient, exc_info=True)
 
+def _manage_url(sub: Dict[str, Any]) -> str:
+    """SUBX-50: deep-link the SUBSCRIBER to the SPECIFIC sub's Manage/PAST_DUE recovery
+    screen (SUBX-21/22) instead of the arg-less manage list, so a multi-creator
+    subscriber lands on the right one."""
+    sid = str(sub.get("subscription_id") or "")
+    cid = str(sub.get("creator_id") or "")
+    if not sid:
+        return "/subscriptions/manage"
+    return "/subscriptions/manage?subscriptionId=%s&creatorId=%s" % (sid, cid)
+
 
 # ---------------------------------------------------------------------------
 # amount
@@ -161,6 +171,7 @@ def _expire(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any])
         actor=sub["creator_id"],
         title="Your subscription has expired",
         details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "reason": reason},
+        action_url=_manage_url(sub),
     )
     summary["expired"].append(sub["subscription_id"])
     logger.info("subscription_expired id=%s reason=%s", sub["subscription_id"], reason)
@@ -205,6 +216,7 @@ def _decline(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any]
         actor=sub["creator_id"],
         title="Your subscription payment failed — update your card",
         details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "attempt": attempts, "reason": reason},
+        action_url=_manage_url(sub),  # SUBX-50: land on the PAST_DUE update-card recovery screen
     )
     if entered_grace:
         _emit(
@@ -213,6 +225,7 @@ def _decline(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any]
             actor=sub["creator_id"],
             title="Your subscription is about to expire",
             details={"subscription_id": sub["subscription_id"], "grace_until": sub["grace_until"], "creator_id": sub["creator_id"]},
+            action_url=_manage_url(sub),
         )
     summary["dunning"].append({"subscription_id": sub["subscription_id"], "attempt": attempts, "grace": entered_grace})
     logger.info("subscription_dunning id=%s attempt=%s grace=%s reason=%s", sub["subscription_id"], attempts, entered_grace, reason)
@@ -381,6 +394,15 @@ def _apply_pending_change(sub: Dict[str, Any], now: int) -> bool:
     sub.pop("discount_remaining_months", None)
     for k in ("pending_change", "pending_plan_id", "pending_interval", "pending_price_cents", "pending_apply_at"):
         sub.pop(k, None)
+    # SUBX-51: notify the subscriber that their SCHEDULED plan change is now in effect.
+    _emit(
+        "subscription_changed",
+        recipient=sub["subscriber_id"],
+        actor=sub["creator_id"],
+        title="Your subscription plan changed",
+        details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "direction": (pending.get("direction") or "change"), "applied": True},
+        action_url=_manage_url(sub),
+    )
     return True
 
 
@@ -452,9 +474,38 @@ def _maybe_expiring_notice(sub: Dict[str, Any], now: int, boundary: int, summary
         actor=sub["creator_id"],
         title="Your subscription is ending soon",
         details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "ends_at": boundary},
+        action_url=_manage_url(sub),
     )
     summary.setdefault("expiring_soon", []).append({"subscription_id": sub["subscription_id"], "ends_at": boundary})
     logger.info("subscription_expiring_advance id=%s ends_at=%s", sub["subscription_id"], boundary)
+
+
+def _maybe_prerenewal_notice(sub: Dict[str, Any], now: int, boundary: int, summary: Dict[str, Any]) -> None:
+    """SUBX-52: emit a "Renews in Nd for $X" advance reminder N days before an
+    AUTO-RENEW subscription re-bills. Fires ONCE per boundary (idempotent via the
+    ``prerenewal_notified_period`` marker)."""
+    if not boundary or boundary <= now:
+        return
+    window = _expiring_notice_days() * 86400
+    if boundary - now > window:
+        return
+    if int(sub.get("prerenewal_notified_period") or 0) == boundary:
+        return
+    amount = _renewal_amount(sub)
+    days = max(1, int(round((boundary - now) / 86400.0)))
+    sub["prerenewal_notified_period"] = boundary
+    sub["updated_at"] = now
+    _save(sub)
+    _emit(
+        "subscription_renewed",
+        recipient=sub["subscriber_id"],
+        actor=sub["creator_id"],
+        title="Your subscription renews in %d day%s for $%.2f" % (days, "" if days == 1 else "s", amount / 100.0),
+        details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "renews_at": boundary, "amount_cents": amount, "advance": True},
+        action_url=_manage_url(sub),
+    )
+    summary.setdefault("prerenewal_soon", []).append({"subscription_id": sub["subscription_id"], "renews_at": boundary})
+    logger.info("subscription_prerenewal_advance id=%s renews_at=%s", sub["subscription_id"], boundary)
 
 
 def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
@@ -523,6 +574,9 @@ def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
         if not due:
             if not auto_renew or cancel_ape:
                 _maybe_expiring_notice(sub, now, cpe, summary)
+            else:
+                # SUBX-52: auto-renew sub still active -> advance "renews in Nd for $X" reminder
+                _maybe_prerenewal_notice(sub, now, (nbd or cpe), summary)
             return
     else:  # past_due
         if next_retry and next_retry > now:
