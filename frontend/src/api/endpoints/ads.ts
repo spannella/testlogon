@@ -91,7 +91,7 @@ export const setAdConfig = (
 
 // ─── Advertiser Campaign Manager (ADS-001) ────────────────────────────────
 
-import type { AdAccount, AdCreative, Campaign } from "../types";
+import type { AdCreative } from "../types";
 // ─── Advertiser Account & Campaign (ADS-001) ─────────────────────────────
 
 import type { AdAccount, Campaign, AdBillingEntry, AdInvoice } from "../types";
