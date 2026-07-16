@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 
 from app.core.settings import S
 from app.core.tables import T, _to_decimal
+from app.core.aws_clients import ddb_transact_client
 from app.core.time import now_ts
 from app.services.billing_config import split_fee
 from app.services.collaborations import get_collaboration
@@ -158,7 +159,7 @@ def write_collaboration_split_ledger(
     # Atomic all-or-nothing write (credits + debit). A cancellation/error leaves
     # NO ledger rows rather than a half-written credit-without-debit orphan.
     try:
-        T.billing.meta.client.transact_write_items(TransactItems=tx_items)
+        ddb_transact_client().transact_write_items(TransactItems=tx_items)
     except ClientError:
         logger.warning(
             "collab split transact failed; no ledger rows written for collab %s",

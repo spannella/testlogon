@@ -35,6 +35,7 @@ from fastapi import HTTPException
 
 from app.core.settings import S
 from app.core.tables import T, _to_decimal
+from app.core.aws_clients import ddb_transact_client
 from app.core.time import now_ts
 from app.services.billing_config import split_fee
 from app.services.billing_shared import ddb_get, ddb_put, ddb_query_pk, user_pk
@@ -189,7 +190,7 @@ def _transact_tip_ledger(
                 }
             }
         )
-    client = T.billing.meta.client
+    client = ddb_transact_client()
     try:
         client.transact_write_items(TransactItems=tx_items)
         return True
@@ -625,7 +626,7 @@ def reverse_tip(
             }
         },
     ]
-    client = T.billing.meta.client
+    client = ddb_transact_client()
     try:
         client.transact_write_items(TransactItems=tx_items)
     except ClientError as exc:
