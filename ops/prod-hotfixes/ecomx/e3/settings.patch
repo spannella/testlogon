@@ -1,0 +1,18 @@
+diff --git a/app/core/settings.py b/app/core/settings.py
+index 4cfd5225..49f13585 100644
+--- a/app/core/settings.py
++++ b/app/core/settings.py
+@@ -1257,6 +1257,13 @@ class Settings:
+     shipment_tracking_table_name: str = os.environ.get("SHIPMENT_TRACKING_TABLE_NAME", "shipment_tracking")
+     live_stream_products_table_name: str = os.environ.get("DDB_LIVE_STREAM_PRODUCTS", "LiveStreamProducts")
+     shipment_webhook_secret: str = os.environ.get("SHIPMENT_WEBHOOK_SECRET", "")
++    # ECOMX-30: background shipment-tracking progression runner. When enabled a
++    # timer advances in-flight ship-group shipments one honest step each cycle
++    # (EasyPost poll when keyed; internal mock progression otherwise) so a
++    # shipped order reaches delivered without an admin clicking simulate.
++    shipment_progression_enabled: bool = os.environ.get("SHIPMENT_PROGRESSION_ENABLED", "false").lower() not in ("0", "false", "")
++    shipment_progression_interval_seconds: int = int(os.environ.get("SHIPMENT_PROGRESSION_INTERVAL_SECONDS", "300"))
++    shipment_progression_batch_size: int = int(os.environ.get("SHIPMENT_PROGRESSION_BATCH_SIZE", "200"))
+     # EasyPost integration (config-gated shipment tracking). When the key is
+     # set, real EasyPost Trackers are created on ship + tracker.updated webhooks
+     # drive status; when absent the internal/simulate driver is used (unchanged).

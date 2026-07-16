@@ -832,6 +832,8 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_kyc_residency_expiry_task)
     from app.services.carrier_tracking_poller import start_carrier_polling_task
     app.add_event_handler("startup", start_carrier_polling_task)
+    from app.services.shipment_tracking_runner import start_shipment_progression_task  # ECOMX-30
+    app.add_event_handler("startup", start_shipment_progression_task)
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
