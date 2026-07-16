@@ -276,13 +276,25 @@ def get_quick_stats(*, user_id: str) -> Dict[str, Any]:
         if ts >= today_start:
             today_cents += amount
 
+    # TIPX-D5: wire the real in-flight payout figure (MON-004 is live via
+    # creator_payouts.get_available_balance -> pending_cents = requested/approved/
+    # processing payouts not yet debited). Best-effort: any failure falls back to 0
+    # so the earnings quick-stats never breaks on a payout-service hiccup.
+    pending_payout_cents = 0
+    try:
+        from app.services.creator_payouts import get_available_balance
+
+        pending_payout_cents = int(get_available_balance(user_id).get("pending_cents", 0))
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("quick_stats_pending_payout_lookup_failed", exc_info=True)
+
     return {
         "today_cents": today_cents,
         "this_week_cents": week_cents,
         "this_month_cents": month_cents,
         "all_time_cents": all_time_cents,
         "currency": "USD",
-        "pending_payout_cents": 0,  # populated after MON-004
+        "pending_payout_cents": pending_payout_cents,  # TIPX-D5 (MON-004 wired)
     }
 
 

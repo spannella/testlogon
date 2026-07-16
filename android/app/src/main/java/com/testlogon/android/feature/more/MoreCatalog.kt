@@ -1024,6 +1024,15 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.WALLET,
             section = MoreSection.ACCOUNT,
         ),
+        // TIPX-D3/D4: ledger-backed tip insights (top supporters + received/sent history).
+        MoreEntry(
+            id = "tip_insights",
+            labelRes = R.string.more_entry_tip_insights,
+            icon = Icons.Outlined.Insights,
+            route = MoreRoutes.TIP_INSIGHTS,
+            hub = MoreHub.WALLET,
+            section = MoreSection.ACCOUNT,
+        ),
         MoreEntry(
             id = "per_content_revenue",
             labelRes = R.string.more_entry_per_content_revenue,

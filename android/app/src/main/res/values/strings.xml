@@ -1912,6 +1912,7 @@
 
     <!-- AND-251/252/253: creator earnings dashboard + per-content revenue -->
     <string name="more_entry_earnings">Earnings</string>
+    <string name="more_entry_tip_insights">Tip insights</string>
     <string name="more_entry_per_content_revenue">Per-content revenue</string>
     <string name="more_entry_engagement">Engagement rate</string>
 

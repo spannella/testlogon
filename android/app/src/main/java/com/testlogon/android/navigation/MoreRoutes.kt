@@ -125,6 +125,9 @@ object MoreRoutes {
     // the registered composable route carries an optional `?range=` deep-link arg.
     const val EARNINGS = EarningsDest.ROUTE_BASE
 
+    // TIPX-D3/D4: ledger-backed tip insights (top supporters + received/sent history).
+    const val TIP_INSIGHTS = TipInsightsDest.ROUTE
+
     // AND-253: the per-content revenue list (sortable, cursor-paged).
     const val PER_CONTENT_REVENUE = PerContentRevenueDest.ROUTE
 
@@ -532,6 +535,7 @@ object MoreRoutes {
             WALLET_TRANSACTIONS,
             WALLET,
             EARNINGS,
+            TIP_INSIGHTS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,
             ANALYTICS_DASHBOARD,

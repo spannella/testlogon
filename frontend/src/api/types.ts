@@ -415,18 +415,60 @@ export interface ActivityFeedResp {
   next_cursor: string | null;
 }
 
+export interface TipSurfaceBucket {
+  count: number;
+  total_cents: number;
+}
+
+// TIPX-D1: the tips-summary is now LEDGER-backed. total_tips_cents is NET (fee
+// already deducted), covers all 8 tip surfaces, and excludes reversed tips, so
+// it reconciles to the earnings tips bucket and the leaderboard. net/source are
+// present on the ledger-backed response; by_surface carries every surface.
 export interface TipsSummary {
   total_tips_cents: number;
   tip_count: number;
+  unique_tippers?: number;
+  net?: boolean;
+  source?: string;
   top_tippers: Array<{
     user_id: string;
     display_name: string;
     total_cents: number;
+    tip_count?: number;
   }>;
   by_type: {
-    post_tip: { count: number; total_cents: number };
-    message_tip: { count: number; total_cents: number };
+    post_tip: TipSurfaceBucket;
+    message_tip: TipSurfaceBucket;
   };
+  by_surface?: Record<string, TipSurfaceBucket>;
+}
+
+// TIPX-D4: a tipper-side sent-tip receipt (one debit row = one receipt).
+export interface TipSentItem {
+  entry_id: string;
+  ts: number;
+  amount_cents: number;
+  reason: string;
+  content_type: string;
+  content_id: string;
+  counterparty_user_id: string;
+  counterparty_display_name: string;
+  platform_fee_cents: number;
+  tip_payment_id: string;
+  currency: string;
+}
+
+export interface TipsSentResp {
+  items: TipSentItem[];
+  next_cursor?: string | null;
+}
+
+export interface TipsSentSummary {
+  period: string;
+  total_sent_cents: number;
+  tip_count: number;
+  unique_recipients: number;
+  source: string;
 }
 
 // ─── Activity Feed (SOC-003) ───────────────────────────────────

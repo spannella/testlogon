@@ -177,6 +177,7 @@ from app.routers.vod_bridge import router as vod_bridge_router
 from app.routers.creator_earnings import router as creator_earnings_router
 from app.routers.tip_leaderboard import router as tip_leaderboard_router
 from app.routers.tip_leaderboard import internal_router as tip_leaderboard_internal_router
+from app.routers.tips_measurement import router as tips_measurement_router
 from app.routers.creator_analytics import router as creator_analytics_router
 from app.routers.creator_analytics import public_router as creator_analytics_public_router
 from app.routers.creator_analytics import internal_router as creator_analytics_internal_router
@@ -937,6 +938,7 @@ def create_app() -> FastAPI:
     app.include_router(creator_earnings_router)
     app.include_router(tip_leaderboard_router)
     app.include_router(tip_leaderboard_internal_router)
+    app.include_router(tips_measurement_router)  # TIPX-D measurement
     app.include_router(creator_analytics_router)
     app.include_router(creator_analytics_public_router)
     app.include_router(creator_analytics_internal_router)
