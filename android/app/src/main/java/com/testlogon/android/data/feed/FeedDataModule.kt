@@ -36,6 +36,12 @@ object FeedApiModule {
     fun providePollApi(retrofit: Retrofit): PollApi =
         retrofit.create(PollApi::class.java)
 
+    /** SOCIAL-002 — public reposting API on the shared Retrofit. */
+    @Provides
+    @Singleton
+    fun provideRepostApi(retrofit: Retrofit): RepostApi =
+        retrofit.create(RepostApi::class.java)
+
     /** Arbitrary text-option poll vote and close client (ui polls routes) shared across surfaces. */
     @Provides
     @Singleton
@@ -69,6 +75,11 @@ abstract class FeedDataModule {
     @Binds
     @Singleton
     abstract fun bindPostActionsRepository(impl: PostActionsRepositoryImpl): PostActionsRepository
+
+    /** SOCIAL-002 — repost / un-repost repository. */
+    @Binds
+    @Singleton
+    abstract fun bindRepostRepository(impl: RepostRepositoryImpl): RepostRepository
 
     /** AND-179 — poll vote repository. */
     @Binds

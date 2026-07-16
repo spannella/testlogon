@@ -84,7 +84,6 @@ import {
   type BroadcastProfile,
   type BroadcastSessionStatus,
   type BroadcastAuditEntry,
-  type BroadcastRecordingResponse,
 } from "@/api/endpoints/broadcast";
 import { useAuthStore } from "@/stores/authStore";
 
@@ -612,7 +611,6 @@ function SessionDetailDialog({
   onDelete: (id: string) => void;
 }) {
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
-  const [recordingData, setRecordingData] = useState<BroadcastRecordingResponse | null>(null);
   const [showRecordingPlayer, setShowRecordingPlayer] = useState(false);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [allowViewerDownload, setAllowViewerDownload] = useState(false);

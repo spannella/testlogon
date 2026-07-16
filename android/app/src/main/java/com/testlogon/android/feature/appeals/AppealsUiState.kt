@@ -2,6 +2,7 @@ package com.testlogon.android.feature.appeals
 
 import androidx.annotation.StringRes
 import com.testlogon.android.data.appeals.AppealsPage
+import com.testlogon.android.data.appeals.EnforcementOption
 
 /**
  * Single render-ready state for the "My appeals" screen. One immutable data class (not a sealed
@@ -30,6 +31,11 @@ data class SubmitFormState(
     val enforcementId: String = "",
     val appealText: String = "",
     val isSubmitting: Boolean = false,
+    // MODX-13: the user selectable enforcement history + loading state, so the id is
+    // PICKED (never hand-typed). [options] empty after a load falls back to free text.
+    val options: List<EnforcementOption> = emptyList(),
+    val optionsLoading: Boolean = false,
+    val optionsLoaded: Boolean = false,
 ) {
     val canSubmit: Boolean
         get() = !isSubmitting && enforcementId.isNotBlank() && appealText.isNotBlank()

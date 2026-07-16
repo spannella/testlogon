@@ -156,7 +156,7 @@ export default function DelegatesPage() {
     onError: (err: any) => toast.error(err?.message ?? "Failed to save settings"),
   });
 
-  const handlePresetChange = (presetKey: string, perms: string[], setPerms: (p: string[]) => void, setPresetState: (p: string) => void) => {
+  const handlePresetChange = (presetKey: string, _perms: string[], setPerms: (p: string[]) => void, setPresetState: (p: string) => void) => {
     const found = presetsQ.data?.find((p: PermissionPresetOut) => p.key === presetKey);
     if (found) {
       setPerms(found.permissions);

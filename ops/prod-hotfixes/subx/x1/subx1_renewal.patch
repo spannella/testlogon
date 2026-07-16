@@ -1,0 +1,55 @@
+--- /tmp/dev_subrenewal.bak	2026-07-15 16:41:11.265956523 -0400
++++ app/services/subscription_renewal.py	2026-07-15 16:41:57.397387839 -0400
+@@ -174,18 +174,26 @@
+     sub["dunning_last_at"] = now
+     sub["dunning_last_reason"] = reason
+     sub["updated_at"] = now
++    # SUBX-13: ANCHOR the dunning cadence to the FIRST decline so retries land on
++    # ABSOLUTE days 1/3/5/7 from that anchor (was: each retry added the gap to the
++    # PREVIOUS retry time -> cumulative 1/4/9/16 drift, and a late sweep pushed the
++    # whole schedule out). first_decline_at is the fixed anchor for both the retry
++    # schedule and the grace horizon.
++    if attempts == 1:
++        sub["first_decline_at"] = now
++    first_decline_at = int(sub.get("first_decline_at") or now)
+     # SUB-E1: establish the ACCESS horizon on the FIRST decline so content access
+     # CONTINUES through the entire dunning + grace window (has_active_subscription
+-    # reads grace_until as the grace-extended end). Horizon = last-retry day + grace
+-    # days; the period itself (current_period_end) has already elapsed by now.
++    # reads grace_until as the grace-extended end). Horizon = anchor + last-retry day
++    # + grace days; the period itself (current_period_end) has already elapsed by now.
+     if attempts == 1:
+         horizon_days = (max(retry_days) if retry_days else 0) + _grace_days()
+-        sub["grace_until"] = now + horizon_days * 86400
++        sub["grace_until"] = first_decline_at + horizon_days * 86400
+     entered_grace = False
+     if attempts <= len(retry_days):
+-        gap_days = retry_days[attempts - 1]
++        retry_day = retry_days[attempts - 1]
+         sub["dunning_state"] = "retrying"
+-        sub["dunning_next_retry_at"] = now + gap_days * 86400
++        sub["dunning_next_retry_at"] = first_decline_at + retry_day * 86400
+     else:
+         entered_grace = True
+         sub["dunning_state"] = "grace"
+@@ -262,6 +270,9 @@
+         "billing_reason": ("trial_conversion" if trial_conversion else "subscription_renewal"),
+     }
+     # advance the record BEFORE reconcile so the recurring order carries the new period
++    # SUBX-10: advance current_period_start to the OLD period end so proration/refund
++    # on the new cycle is measured against THIS cycle, not the whole lifetime.
++    sub["current_period_start"] = old_cpe
+     sub["current_period_end"] = new_cpe
+     sub["next_billing_date"] = new_cpe
+     sub["status"] = "active"
+@@ -269,8 +280,8 @@
+         sub["trial_converted_at"] = now
+     sub["last_renewed_at"] = now
+     sub["renewal_count"] = int(sub.get("renewal_count") or 0) + 1
+-    # clear dunning
+-    for k in ("dunning_state", "dunning_attempts", "dunning_next_retry_at", "grace_until", "dunning_last_at", "dunning_last_reason"):
++    # clear dunning (SUBX-13: also clear the first_decline_at anchor)
++    for k in ("dunning_state", "dunning_attempts", "dunning_next_retry_at", "grace_until", "dunning_last_at", "dunning_last_reason", "first_decline_at"):
+         sub.pop(k, None)
+     if int(sub.get("discount_remaining_months") or 0) > 0:
+         sub["discount_remaining_months"] = int(sub["discount_remaining_months"]) - 1

@@ -26,6 +26,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -71,14 +76,25 @@ fun ProductsShelfPanel(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val expanded by viewModel.expanded.collectAsStateWithLifecycle()
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     ProductsShelf(
         state = state,
         expanded = expanded,
         onToggle = viewModel::setExpanded,
         onBuy = { product -> onBuy(product.categoryId, product.itemId) },
+        onReport = { product ->
+            reportTarget = ReportTarget.Content(
+                product.itemId,
+                "catalog_item",
+                categoryId = product.categoryId,
+                itemId = product.itemId,
+            )
+        },
         onRetry = viewModel::retry,
         modifier = modifier,
     )
+    // MODX-12 - report a catalog product from the live shelf.
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
 }
 
 /**
@@ -95,6 +111,7 @@ fun ProductsShelf(
     onBuy: (ShelfProduct) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    onReport: (ShelfProduct) -> Unit = {},
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -119,7 +136,7 @@ fun ProductsShelf(
                     ProductsShelfUiState.Empty ->
                         ShelfMessage(stringResource(R.string.shelf_empty))
                     is ProductsShelfUiState.Error -> ShelfErrorRow(state.retryable, onRetry)
-                    is ProductsShelfUiState.Ready -> ShelfRow(state.products, onBuy)
+                    is ProductsShelfUiState.Ready -> ShelfRow(state.products, onBuy, onReport)
                 }
             }
         }
@@ -127,19 +144,19 @@ fun ProductsShelf(
 }
 
 @Composable
-private fun ShelfRow(products: List<ShelfProduct>, onBuy: (ShelfProduct) -> Unit) {
+private fun ShelfRow(products: List<ShelfProduct>, onBuy: (ShelfProduct) -> Unit, onReport: (ShelfProduct) -> Unit = {}) {
     LazyRow(
         modifier = Modifier.fillMaxWidth().testTag(ShelfTestTags.ROW),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(products, key = { it.itemId }) { product ->
-            ProductShelfCard(product = product, onBuy = { onBuy(product) })
+            ProductShelfCard(product = product, onBuy = { onBuy(product) }, onReport = { onReport(product) })
         }
     }
 }
 
 @Composable
-private fun ProductShelfCard(product: ShelfProduct, onBuy: () -> Unit) {
+private fun ProductShelfCard(product: ShelfProduct, onBuy: () -> Unit, onReport: () -> Unit = {}) {
     val cardCd = stringResource(
         R.string.shelf_card_cd,
         product.name,
@@ -198,6 +215,12 @@ private fun ProductShelfCard(product: ShelfProduct, onBuy: () -> Unit) {
             modifier = Modifier.fillMaxWidth().testTag(ShelfTestTags.BUY),
         ) {
             Text(stringResource(R.string.shelf_buy))
+        }
+        TextButton(
+            onClick = onReport,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.msg_action_report))
         }
     }
 }

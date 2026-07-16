@@ -90,6 +90,14 @@ class CreateCampaignViewModel @Inject constructor(
     private val _selfPromoMode = MutableStateFlow(SELF_PROMO_MODES.first())
     val selfPromoMode: StateFlow<String> = _selfPromoMode.asStateFlow()
 
+    // ADV3-5 (B7): optional flight (start/end) dates entered at creation. Held as epoch MILLIS (what the
+    // Material date picker emits, UTC midnight); converted to Unix SECONDS on submit (server field unit).
+    private val _startDateMillis = MutableStateFlow<Long?>(null)
+    val startDateMillis: StateFlow<Long?> = _startDateMillis.asStateFlow()
+
+    private val _endDateMillis = MutableStateFlow<Long?>(null)
+    val endDateMillis: StateFlow<Long?> = _endDateMillis.asStateFlow()
+
     private val _submitState = MutableStateFlow<SubmitState>(SubmitState.Idle)
     val submitState: StateFlow<SubmitState> = _submitState.asStateFlow()
 
@@ -129,6 +137,8 @@ class CreateCampaignViewModel @Inject constructor(
     fun onBidCpaUsd(text: String) { _bidCpaUsd.value = text; clearError() }
     fun onSelfPromo(on: Boolean) { _isSelfPromo.value = on; clearError() }
     fun onSelfPromoMode(mode: String) { _selfPromoMode.value = mode }
+    fun onStartDate(millis: Long?) { _startDateMillis.value = millis }
+    fun onEndDate(millis: Long?) { _endDateMillis.value = millis }
 
     /** True when an account is selected, a name is present, and budget/bid parse into their valid ranges. */
     val canSubmit: Boolean
@@ -175,8 +185,9 @@ class CreateCampaignViewModel @Inject constructor(
                 bidCpcCents = cpc,
                 bidCpaCents = cpa,
                 category = null,
-                startDate = null,
-                endDate = null,
+                // ADV3-5 (B7): flight dates -> Unix seconds (server field unit). A self-promo omits them.
+                startDate = if (selfPromo) null else _startDateMillis.value?.let { it / 1000 },
+                endDate = if (selfPromo) null else _endDateMillis.value?.let { it / 1000 },
                 isSelfPromo = selfPromo,
                 selfPromoMode = if (selfPromo) _selfPromoMode.value else null,
             )

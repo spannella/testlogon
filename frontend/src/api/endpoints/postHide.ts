@@ -26,17 +26,15 @@ export interface HiddenPostsPageResponse {
 }
 
 export async function hidePost(postId: string): Promise<HideMutationResponse> {
-  const { data } = await api.post<HideMutationResponse>("/feed/hide", {
+  return api.post<HideMutationResponse>("/feed/hide", {
     post_id: postId,
   });
-  return data;
 }
 
 export async function unhidePost(postId: string): Promise<HideMutationResponse> {
-  const { data } = await api.post<HideMutationResponse>("/feed/unhide", {
+  return api.post<HideMutationResponse>("/feed/unhide", {
     post_id: postId,
   });
-  return data;
 }
 
 export async function listHiddenPosts(
@@ -46,8 +44,5 @@ export async function listHiddenPosts(
   const params = new URLSearchParams();
   if (cursor) params.set("cursor", cursor);
   params.set("limit", String(limit));
-  const { data } = await api.get<HiddenPostsPageResponse>(
-    `/feed/hidden?${params.toString()}`,
-  );
-  return data;
+  return api.get<HiddenPostsPageResponse>(`/feed/hidden?${params.toString()}`);
 }

@@ -199,6 +199,10 @@ class AdsBillingViewModel @Inject constructor(
                 is ApiResult.Success -> {
                     applyNewBalance(result.data.newBalanceCents)
                     refreshLedger()
+                    // ADV3-3 (B8): clear the amount on success so the Confirm button (guarded by
+                    // canSubmitDeposit, which requires a valid in-range amount) can no longer re-fire the
+                    // SAME deposit from the still-open sheet. The sheet now shows the success + a Done action.
+                    _amountText.value = ""
                     _depositState.value = DepositState.Success(result.data.newBalanceCents)
                 }
                 is ApiResult.Failure ->

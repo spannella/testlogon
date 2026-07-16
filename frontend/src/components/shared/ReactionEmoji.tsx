@@ -1,7 +1,6 @@
 // MSG-007: Render a single reaction key. Custom emoji reactions use the key
 // format `custom:shortcode` and render as an inline <img>; Unicode reactions
 // render as plain text.
-import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { resolveCustomShortcodes } from "@/api/endpoints/customEmojis";
 

@@ -259,7 +259,7 @@ export default function ContentDetailPage() {
                       <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(v: number) => formatCents(v)} />
+                  <Tooltip formatter={(v) => formatCents(Number(v))} />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>

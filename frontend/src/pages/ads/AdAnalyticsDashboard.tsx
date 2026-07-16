@@ -4,6 +4,7 @@ import {
   getAnalyticsSummary,
   getAnalyticsTimeseries,
   getAnalyticsBreakdown,
+  getAdRoasReport,
   exportAnalyticsCsv,
 } from "@/api/endpoints/ads";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -102,9 +103,17 @@ export default function AdAnalyticsDashboard() {
     staleTime: 60_000,
   });
 
+  const roasQ = useQuery({
+    queryKey: ["ad-analytics", "roas", accountId, daysNum],
+    queryFn: () => getAdRoasReport(accountId, { days: daysNum }),
+    enabled: !!accountId,
+    staleTime: 60_000,
+  });
+
   const summary = summaryQ.data;
   const timeseries = timeseriesQ.data ?? [];
   const breakdown = breakdownQ.data ?? [];
+  const roas = roasQ.data;
 
   const handleExport = () => {
     const url = exportAnalyticsCsv(accountId, { days: daysNum });
@@ -175,11 +184,75 @@ export default function AdAnalyticsDashboard() {
             format="currency"
           />
           <KpiCard
-            title="CPA"
-            value={summary.cpa_cents}
+            title="CPC"
+            value={summary.cpc_cents}
+            changePct={summary.cpc_change_pct}
             format="currency"
           />
         </div>
+      )}
+
+      {/* ROAS & Conversions (ADV3-8) - sourced from the same ledger as the KPIs */}
+      {roas && (
+        <Card data-testid="ad-roas-panel">
+          <CardHeader>
+            <CardTitle>ROAS &amp; Conversions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div>
+                <p className="text-sm text-muted-foreground">Conversions</p>
+                <p className="text-xl font-semibold">
+                  {roas.totals.conversions.toLocaleString()}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Conversion Value</p>
+                <p className="text-xl font-semibold">
+                  ${(roas.totals.conversion_value_cents / 100).toFixed(2)}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Spend</p>
+                <p className="text-xl font-semibold">
+                  ${(roas.totals.spend_cents / 100).toFixed(2)}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">ROAS</p>
+                <p className="text-xl font-semibold">{roas.totals.roas.toFixed(2)}x</p>
+              </div>
+            </div>
+            {roas.campaigns.length > 0 && (
+              <table className="w-full text-sm mt-4">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2">Campaign</th>
+                    <th className="text-right py-2">Conv.</th>
+                    <th className="text-right py-2">Value</th>
+                    <th className="text-right py-2">Spend</th>
+                    <th className="text-right py-2">ROAS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roas.campaigns.map((c) => (
+                    <tr key={c.campaign_id ?? "unknown"} className="border-b">
+                      <td className="py-1.5">{c.campaign_id ?? "unknown"}</td>
+                      <td className="text-right">{c.conversions.toLocaleString()}</td>
+                      <td className="text-right">
+                        ${(c.conversion_value_cents / 100).toFixed(2)}
+                      </td>
+                      <td className="text-right">
+                        ${(c.spend_cents / 100).toFixed(2)}
+                      </td>
+                      <td className="text-right">{c.roas.toFixed(2)}x</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* Time Series Chart Area */}

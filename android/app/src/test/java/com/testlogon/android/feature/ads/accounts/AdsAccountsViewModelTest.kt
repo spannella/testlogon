@@ -53,6 +53,18 @@ class AdsAccountsViewModelTest {
             limit: Int,
         ): ApiResult<List<AdBillingEntry>> = ApiResult.Success(emptyList())
 
+        // ADV3-4 (B2): interface additions - not exercised by this test, stubbed.
+        override suspend fun getCampaign(accountId: String, campaignId: String) =
+            error("getCampaign not used in this test")
+        override suspend fun updateCampaign(
+            accountId: String,
+            campaignId: String,
+            status: String?,
+            budgetCents: Long?,
+            bidCpmCents: Int?,
+            bidCpcCents: Int?,
+            bidCpaCents: Int?,
+        ) = error("updateCampaign not used in this test")
         override suspend fun getInvoice(accountId: String, month: String): ApiResult<AdInvoice> =
             ApiResult.Success(AdInvoice(totalChargesCents = 0L, totalDepositsCents = 0L))
 

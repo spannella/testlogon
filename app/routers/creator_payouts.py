@@ -16,16 +16,24 @@ from app.models import (
     PayoutCreateOut,
     PayoutActionOut,
     PayoutListOut,
+    WalletSummaryOut,
+    PayoutDetailOut,
     PayoutOut,
     PayoutRequestIn,
     PayoutMethodIn,
     PayoutMethodUpdateIn,
     PayoutMethodOut,
     PayoutMethodListOut,
+    ConnectAccountOut,
+    ConnectOnboardingOut,
+    W9SubmitIn,
+    PayoutTaxInfoOut,
 )
 from app.services.creator_payouts import (
     cancel_payout,
     get_available_balance,
+    get_wallet_summary,
+    get_payout_detail,
     list_user_payouts,
     request_payout,
     list_payout_methods,
@@ -33,7 +41,13 @@ from app.services.creator_payouts import (
     update_payout_method,
     delete_payout_method,
     set_default_payout_method,
+    verify_payout_method,
+    create_connect_account,
+    create_connect_onboarding_link,
+    get_connect_account,
+    PayoutGateError,
 )
+from app.services import tax_info_w9
 from app.core.settings import S
 
 logger = logging.getLogger(__name__)
@@ -56,6 +70,24 @@ def payout_balance(session=Depends(require_ui_session)):
     )
 
 
+@router.get("/wallet", response_model=WalletSummaryOut)
+def wallet_summary(session=Depends(require_ui_session)):
+    """PAY-50 wallet home: available + held(+release date) + pending + lifetime paid."""
+    result = get_wallet_summary(session["user_sub"])
+    return WalletSummaryOut(
+        available_cents=result["available_cents"],
+        held_cents=result["held_cents"],
+        held_count=result["held_count"],
+        held_release_at=result["held_release_at"],
+        pending_cents=result["pending_cents"],
+        pending_count=result["pending_count"],
+        lifetime_paid_cents=result["lifetime_paid_cents"],
+        total_earned_cents=result["total_earned_cents"],
+        currency=result["currency"],
+        minimum_payout_cents=S.payout_minimum_cents,
+    )
+
+
 @router.post("/request", response_model=PayoutCreateOut, status_code=201)
 def create_payout_request(body: PayoutRequestIn, session=Depends(require_ui_session)):
     """Request a payout withdrawal."""
@@ -67,6 +99,11 @@ def create_payout_request(body: PayoutRequestIn, session=Depends(require_ui_sess
             method=body.method,
             notes=body.notes,
             method_id=body.method_id,
+        )
+    except PayoutGateError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": exc.code, "message": exc.message, "kyc_status": exc.kyc_status},
         )
     except ValueError as exc:
         msg = str(exc)
@@ -120,6 +157,26 @@ def list_payouts(
 # ─── Payout Methods (GAP-0195 / FIN-009) ──────────────────────────────
 
 
+@router.get("/tax-info", response_model=PayoutTaxInfoOut)
+def get_payout_tax_info(session=Depends(require_ui_session)):
+    """W-9 status for the pre-withdrawal tax gate (masked; never the raw TIN)."""
+    result = tax_info_w9.get_tax_info(session["user_sub"])
+    if not result:
+        return PayoutTaxInfoOut(on_file=False)
+    return PayoutTaxInfoOut(on_file=True, **result)
+
+
+@router.post("/tax-info", response_model=PayoutTaxInfoOut, status_code=201)
+def submit_payout_tax_info(body: W9SubmitIn, session=Depends(require_ui_session)):
+    """Collect the creator's W-9. The TIN is KMS-tokenized and masked to last-4;
+    the raw SSN/EIN is never stored, logged, or echoed back."""
+    try:
+        result = tax_info_w9.submit_tax_info(user_sub=session["user_sub"], **body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_tin", "message": str(exc)})
+    return PayoutTaxInfoOut(on_file=True, **result)
+
+
 def _method_error(exc: ValueError) -> HTTPException:
     code, _, msg = str(exc).partition(":")
     return HTTPException(status_code=400, detail={"code": code, "message": msg or code})
@@ -171,3 +228,78 @@ def set_default_method(method_id: str, session=Depends(require_ui_session)):
     except LookupError:
         raise HTTPException(status_code=404, detail="Payout method not found")
     return PayoutMethodOut(**result)
+
+
+
+# ---------------------------------------------------------------------------
+# PAY-B (PAY-11/12): routable-destination verification + Stripe Connect seam.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/methods/{method_id}/verify", response_model=PayoutMethodOut)
+def verify_method(method_id: str, session=Depends(require_ui_session)):
+    """Verify a payout method (PAY-12). Mock -> verified; real when keyed.
+
+    A payout can only target a verified method.
+    """
+    try:
+        result = verify_payout_method(session["user_sub"], method_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Payout method not found")
+    except ValueError as exc:
+        raise _method_error(exc)
+    return PayoutMethodOut(**result)
+
+
+@router.get("/connect", response_model=ConnectAccountOut)
+def get_connect(session=Depends(require_ui_session)):
+    """Return the creator's Stripe Connect account status (creates none)."""
+    acct = get_connect_account(session["user_sub"])
+    if not acct:
+        return ConnectAccountOut(
+            connect_account_id="", onboarding_status="none", payouts_enabled=False
+        )
+    return ConnectAccountOut(
+        connect_account_id=acct.get("connect_account_id", ""),
+        onboarding_status=acct.get("onboarding_status", "pending"),
+        payouts_enabled=bool(acct.get("payouts_enabled", False)),
+    )
+
+
+@router.post("/connect/account", response_model=ConnectAccountOut, status_code=201)
+def create_connect(session=Depends(require_ui_session)):
+    """Create (or return) the creator's Stripe Connect account id (PAY-11)."""
+    acct = create_connect_account(session["user_sub"])
+    return ConnectAccountOut(
+        connect_account_id=acct.get("connect_account_id", ""),
+        onboarding_status=acct.get("onboarding_status", "pending"),
+        payouts_enabled=bool(acct.get("payouts_enabled", False)),
+    )
+
+
+@router.post("/connect/onboarding-link", response_model=ConnectOnboardingOut)
+def connect_onboarding_link(session=Depends(require_ui_session)):
+    """Return a Connect onboarding link (real AccountLink when keyed; mock
+    onboarding-complete otherwise) (PAY-11)."""
+    result = create_connect_onboarding_link(session["user_sub"])
+    return ConnectOnboardingOut(**result)
+
+
+# ---------------------------------------------------------------------------
+# PAY-50 (PAY-F): per-payout statement/detail. Registered LAST so the literal
+# GET routes (/balance, /wallet, /methods, /tax-info, /connect) always win over
+# this catch-all {payout_id} param route.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{payout_id}", response_model=PayoutDetailOut)
+def payout_detail(payout_id: str, session=Depends(require_ui_session)):
+    """Payout statement/detail: lifecycle timeline + transfer ref + method last-4
+    + fail/return/hold reason. User-scoped (403 on another creator's payout)."""
+    try:
+        result = get_payout_detail(session["user_sub"], payout_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Not your payout")
+    return PayoutDetailOut(**result)

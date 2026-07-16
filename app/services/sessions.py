@@ -335,10 +335,19 @@ async def require_ui_session(
     x_impersonation_token: Optional[str] = Header(default=None, alias="X-IMPERSONATION-TOKEN"),
 ) -> Dict[str, str]:
     principal = getattr(getattr(request, "state", None), "api_key_principal", None)
-    if isinstance(principal, dict):
+    # APIK-E0-4 (FAIL-CLOSED): honor the api-key principal only when the route admitted the
+    # key via maybe_enforce_api_key_route_policy (api_key_route_authorized marker). Un-gated/
+    # session-only routers never set the marker -> fall through to normal session auth.
+    _route_authorized = bool(getattr(getattr(request, "state", None), "api_key_route_authorized", False))
+    if isinstance(principal, dict) and _route_authorized:
         principal_sub = str(principal.get("user_sub") or "").strip()
         if principal_sub:
             role = normalize_role(getattr(auth_user, "role", None))
+            # MODX-2 (A14): a banned identity acting via an api-key principal must be
+            # blocked exactly like a session. Run the ban check BEFORE honoring the
+            # key and returning (ADMIN/ROOT are exempt, mirroring the session path).
+            if role not in {Role.ADMIN, Role.ROOT} and is_user_currently_banned(principal_sub):
+                raise HTTPException(403, "account is banned")
             request.state.user_sub = principal_sub
             request.state.user_role = role.value
             return {

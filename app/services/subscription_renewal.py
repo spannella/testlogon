@@ -119,6 +119,16 @@ def _emit(alert_type: str, *, recipient: str, actor: str, title: str, details: D
     except Exception:
         logger.warning("subscription alert %s failed recipient=%s", alert_type, recipient, exc_info=True)
 
+def _manage_url(sub: Dict[str, Any]) -> str:
+    """SUBX-50: deep-link the SUBSCRIBER to the SPECIFIC sub's Manage/PAST_DUE recovery
+    screen (SUBX-21/22) instead of the arg-less manage list, so a multi-creator
+    subscriber lands on the right one."""
+    sid = str(sub.get("subscription_id") or "")
+    cid = str(sub.get("creator_id") or "")
+    if not sid:
+        return "/subscriptions/manage"
+    return "/subscriptions/manage?subscriptionId=%s&creatorId=%s" % (sid, cid)
+
 
 # ---------------------------------------------------------------------------
 # amount
@@ -161,6 +171,7 @@ def _expire(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any])
         actor=sub["creator_id"],
         title="Your subscription has expired",
         details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "reason": reason},
+        action_url=_manage_url(sub),
     )
     summary["expired"].append(sub["subscription_id"])
     logger.info("subscription_expired id=%s reason=%s", sub["subscription_id"], reason)
@@ -174,18 +185,26 @@ def _decline(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any]
     sub["dunning_last_at"] = now
     sub["dunning_last_reason"] = reason
     sub["updated_at"] = now
+    # SUBX-13: ANCHOR the dunning cadence to the FIRST decline so retries land on
+    # ABSOLUTE days 1/3/5/7 from that anchor (was: each retry added the gap to the
+    # PREVIOUS retry time -> cumulative 1/4/9/16 drift, and a late sweep pushed the
+    # whole schedule out). first_decline_at is the fixed anchor for both the retry
+    # schedule and the grace horizon.
+    if attempts == 1:
+        sub["first_decline_at"] = now
+    first_decline_at = int(sub.get("first_decline_at") or now)
     # SUB-E1: establish the ACCESS horizon on the FIRST decline so content access
     # CONTINUES through the entire dunning + grace window (has_active_subscription
-    # reads grace_until as the grace-extended end). Horizon = last-retry day + grace
-    # days; the period itself (current_period_end) has already elapsed by now.
+    # reads grace_until as the grace-extended end). Horizon = anchor + last-retry day
+    # + grace days; the period itself (current_period_end) has already elapsed by now.
     if attempts == 1:
         horizon_days = (max(retry_days) if retry_days else 0) + _grace_days()
-        sub["grace_until"] = now + horizon_days * 86400
+        sub["grace_until"] = first_decline_at + horizon_days * 86400
     entered_grace = False
     if attempts <= len(retry_days):
-        gap_days = retry_days[attempts - 1]
+        retry_day = retry_days[attempts - 1]
         sub["dunning_state"] = "retrying"
-        sub["dunning_next_retry_at"] = now + gap_days * 86400
+        sub["dunning_next_retry_at"] = first_decline_at + retry_day * 86400
     else:
         entered_grace = True
         sub["dunning_state"] = "grace"
@@ -197,6 +216,7 @@ def _decline(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any]
         actor=sub["creator_id"],
         title="Your subscription payment failed — update your card",
         details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "attempt": attempts, "reason": reason},
+        action_url=_manage_url(sub),  # SUBX-50: land on the PAST_DUE update-card recovery screen
     )
     if entered_grace:
         _emit(
@@ -205,6 +225,7 @@ def _decline(sub: Dict[str, Any], now: int, reason: str, summary: Dict[str, Any]
             actor=sub["creator_id"],
             title="Your subscription is about to expire",
             details={"subscription_id": sub["subscription_id"], "grace_until": sub["grace_until"], "creator_id": sub["creator_id"]},
+            action_url=_manage_url(sub),
         )
     summary["dunning"].append({"subscription_id": sub["subscription_id"], "attempt": attempts, "grace": entered_grace})
     logger.info("subscription_dunning id=%s attempt=%s grace=%s reason=%s", sub["subscription_id"], attempts, entered_grace, reason)
@@ -262,6 +283,9 @@ def _renewal_success(sub: Dict[str, Any], now: int, pi_id: Optional[str], amount
         "billing_reason": ("trial_conversion" if trial_conversion else "subscription_renewal"),
     }
     # advance the record BEFORE reconcile so the recurring order carries the new period
+    # SUBX-10: advance current_period_start to the OLD period end so proration/refund
+    # on the new cycle is measured against THIS cycle, not the whole lifetime.
+    sub["current_period_start"] = old_cpe
     sub["current_period_end"] = new_cpe
     sub["next_billing_date"] = new_cpe
     sub["status"] = "active"
@@ -269,8 +293,8 @@ def _renewal_success(sub: Dict[str, Any], now: int, pi_id: Optional[str], amount
         sub["trial_converted_at"] = now
     sub["last_renewed_at"] = now
     sub["renewal_count"] = int(sub.get("renewal_count") or 0) + 1
-    # clear dunning
-    for k in ("dunning_state", "dunning_attempts", "dunning_next_retry_at", "grace_until", "dunning_last_at", "dunning_last_reason"):
+    # clear dunning (SUBX-13: also clear the first_decline_at anchor)
+    for k in ("dunning_state", "dunning_attempts", "dunning_next_retry_at", "grace_until", "dunning_last_at", "dunning_last_reason", "first_decline_at"):
         sub.pop(k, None)
     if int(sub.get("discount_remaining_months") or 0) > 0:
         sub["discount_remaining_months"] = int(sub["discount_remaining_months"]) - 1
@@ -356,11 +380,29 @@ def _apply_pending_change(sub: Dict[str, Any], now: int) -> bool:
     if pending.get("price_cents") is not None:
         sub["price_cents"] = int(pending["price_cents"])
     sub["plan_change_applied_at"] = now
+    # SUBX-30/33: a DOWNGRADE (or period-end change) applies now -> re-resolve the
+    # tier level so the subscriber drops to the new tier exactly at period end.
+    try:
+        from app.services.subscription_access import get_plan_level as _gpl
+        _lvl = _gpl(str(sub.get("creator_id") or ""), str(sub["plan_id"]))
+        if _lvl:
+            sub["tier_level"] = _lvl
+    except Exception:
+        pass
     # a plan change resets any old-plan discount
     sub.pop("discount", None)
     sub.pop("discount_remaining_months", None)
     for k in ("pending_change", "pending_plan_id", "pending_interval", "pending_price_cents", "pending_apply_at"):
         sub.pop(k, None)
+    # SUBX-51: notify the subscriber that their SCHEDULED plan change is now in effect.
+    _emit(
+        "subscription_changed",
+        recipient=sub["subscriber_id"],
+        actor=sub["creator_id"],
+        title="Your subscription plan changed",
+        details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "direction": (pending.get("direction") or "change"), "applied": True},
+        action_url=_manage_url(sub),
+    )
     return True
 
 
@@ -432,9 +474,38 @@ def _maybe_expiring_notice(sub: Dict[str, Any], now: int, boundary: int, summary
         actor=sub["creator_id"],
         title="Your subscription is ending soon",
         details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "ends_at": boundary},
+        action_url=_manage_url(sub),
     )
     summary.setdefault("expiring_soon", []).append({"subscription_id": sub["subscription_id"], "ends_at": boundary})
     logger.info("subscription_expiring_advance id=%s ends_at=%s", sub["subscription_id"], boundary)
+
+
+def _maybe_prerenewal_notice(sub: Dict[str, Any], now: int, boundary: int, summary: Dict[str, Any]) -> None:
+    """SUBX-52: emit a "Renews in Nd for $X" advance reminder N days before an
+    AUTO-RENEW subscription re-bills. Fires ONCE per boundary (idempotent via the
+    ``prerenewal_notified_period`` marker)."""
+    if not boundary or boundary <= now:
+        return
+    window = _expiring_notice_days() * 86400
+    if boundary - now > window:
+        return
+    if int(sub.get("prerenewal_notified_period") or 0) == boundary:
+        return
+    amount = _renewal_amount(sub)
+    days = max(1, int(round((boundary - now) / 86400.0)))
+    sub["prerenewal_notified_period"] = boundary
+    sub["updated_at"] = now
+    _save(sub)
+    _emit(
+        "subscription_renewed",
+        recipient=sub["subscriber_id"],
+        actor=sub["creator_id"],
+        title="Your subscription renews in %d day%s for $%.2f" % (days, "" if days == 1 else "s", amount / 100.0),
+        details={"subscription_id": sub["subscription_id"], "plan_id": sub.get("plan_id"), "creator_id": sub["creator_id"], "renews_at": boundary, "amount_cents": amount, "advance": True},
+        action_url=_manage_url(sub),
+    )
+    summary.setdefault("prerenewal_soon", []).append({"subscription_id": sub["subscription_id"], "renews_at": boundary})
+    logger.info("subscription_prerenewal_advance id=%s renews_at=%s", sub["subscription_id"], boundary)
 
 
 def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
@@ -503,6 +574,9 @@ def _process(sub: Dict[str, Any], now: int, summary: Dict[str, Any]) -> None:
         if not due:
             if not auto_renew or cancel_ape:
                 _maybe_expiring_notice(sub, now, cpe, summary)
+            else:
+                # SUBX-52: auto-renew sub still active -> advance "renews in Nd for $X" reminder
+                _maybe_prerenewal_notice(sub, now, (nbd or cpe), summary)
             return
     else:  # past_due
         if next_retry and next_retry > now:

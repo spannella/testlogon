@@ -29,7 +29,113 @@ DEFAULT_CREATOR_REVENUE_SHARE_BPS = 7000
 MIN_DEPOSIT_CENTS = 5000  # $50 minimum deposit
 
 
-def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "") -> dict:
+# ── ADV3-12 (E5): advertiser spend limits (velocity cap + minimal-KYC gate) ──
+# Spend entry types that count against the daily velocity cap + KYC threshold.
+# Deposits, reversals, refunds and credits are NOT advertiser spend and are
+# exempt so a refund/reversal can always be booked.
+_SPEND_ENTRY_TYPES = frozenset({
+    "impression_charge", "click_charge", "conversion_charge",
+    "ad_message_delivered_charge", "ad_message_open_charge", "ad_message_click_charge",
+})
+
+
+def _account_is_settled(acct: Dict[str, Any]) -> bool:
+    """An account is ESTABLISHED once it has settled >= 1 real deposit
+    (``first_settled_at`` stamped by deposit_funds after a charged deposit) or an
+    admin marks it settled. New / auto-provisioned (seller-boost) accounts are
+    throttled to the lower new-account daily cap until then."""
+    return bool(acct.get("first_settled_at")) or bool(acct.get("settled"))
+
+
+def _daily_spend_cap_cents(acct: Dict[str, Any]) -> int:
+    """Resolve the per-day spend cap for an account: an explicit per-account
+    override wins, else established vs new-account global cap. 0 disables."""
+    override = int(acct.get("daily_spend_cap_cents", 0) or 0)
+    if override > 0:
+        return override
+    if _account_is_settled(acct):
+        return int(getattr(S, "ad_account_daily_spend_cap_cents", 0) or 0)
+    return int(getattr(S, "ad_new_account_daily_spend_cap_cents", 0) or 0)
+
+
+def _account_spent_today_cents(account_id: str, date_str: str) -> int:
+    try:
+        item = T.ad_billing.get_item(
+            Key={"pk": f"ACCT#{account_id}", "sk": f"SPENDDAY#{date_str}"}
+        ).get("Item") or {}
+        return int(item.get("spent_cents", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _bump_account_spent_today(account_id: str, date_str: str, amount_cents: int, ts: int) -> None:
+    try:
+        T.ad_billing.update_item(
+            Key={"pk": f"ACCT#{account_id}", "sk": f"SPENDDAY#{date_str}"},
+            UpdateExpression=(
+                "SET spent_cents = if_not_exists(spent_cents, :z) + :amt, "
+                "entry_type = :et, updated_at = :ts, "
+                "expires_at = if_not_exists(expires_at, :ttl)"
+            ),
+            ExpressionAttributeValues={
+                ":z": 0, ":amt": int(amount_cents), ":et": "account_spend_day",
+                ":ts": ts, ":ttl": ts + 5 * 86400,
+            },
+        )
+    except Exception:
+        logger.warning("ad_spend_day_bump_failed account=%s", account_id)
+
+
+def _kyc_cleared(acct: Dict[str, Any]) -> bool:
+    return (
+        bool(acct.get("kyc_cleared"))
+        or str(acct.get("kyc_status", "")).lower() == "verified"
+    )
+
+
+def check_spend_limits(*, account_id: str, charge_cents: int, entry_type: str) -> Dict[str, Any]:
+    """ADV3-12 (E5): pre-charge advertiser-limit gate. Returns {"allowed": bool,
+    "reason": str, "cap_cents": int, "spent_today_cents": int}.
+
+    Two hard gates on real ad spend (never on deposits/reversals):
+      * daily spend VELOCITY cap (per account; lower for new/boost accounts until
+        first settlement) -- blunts a compromised/burst account before the
+        reactive fraud auto-suspend can see enough events;
+      * minimal-KYC gate -- once lifetime spend would cross the KYC threshold the
+        account must be KYC-cleared to keep spending.
+
+    Read-then-act (mild TOCTOU acceptable for a soft abuse limit) and fails OPEN
+    on any internal error so a bug here can never wedge legitimate billing."""
+    if entry_type not in _SPEND_ENTRY_TYPES or int(charge_cents) <= 0:
+        return {"allowed": True, "reason": "exempt"}
+    try:
+        from app.services.ad_accounts import get_ad_account
+        acct = get_ad_account(account_id) or {}
+    except Exception:
+        return {"allowed": True, "reason": "acct_lookup_failed"}
+
+    # 1. Minimal-KYC threshold gate.
+    kyc_threshold = int(acct.get("kyc_required_spend_cents",
+                                 getattr(S, "ad_account_kyc_required_spend_cents", 0)) or 0)
+    if kyc_threshold > 0 and not _kyc_cleared(acct):
+        lifetime = int(acct.get("lifetime_spend_cents", 0) or 0)
+        if lifetime + int(charge_cents) > kyc_threshold:
+            return {"allowed": False, "reason": "kyc_required",
+                    "kyc_threshold_cents": kyc_threshold, "lifetime_spend_cents": lifetime}
+
+    # 2. Daily spend velocity cap.
+    cap = _daily_spend_cap_cents(acct)
+    if cap > 0:
+        date_str = datetime.fromtimestamp(now_ts(), tz=timezone.utc).strftime("%Y-%m-%d")
+        spent = _account_spent_today_cents(account_id, date_str)
+        if spent + int(charge_cents) > cap:
+            return {"allowed": False, "reason": "spend_velocity_exceeded",
+                    "cap_cents": cap, "spent_today_cents": spent}
+    return {"allowed": True, "reason": "ok"}
+
+
+def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "",
+                  *, internal: bool = False) -> dict:
     """Add funds to advertiser account balance.
 
     ADV-101: the payment_method_id is now actually CHARGED via the stripe-mock
@@ -50,10 +156,71 @@ def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "
         owner_sub = (_acct or {}).get("owner_sub", "")
     except Exception:
         owner_sub = ""
-    payment_intent_id = _charge_deposit(
-        owner_sub=owner_sub, account_id=account_id,
-        amount_cents=amount_cents, payment_method_id=payment_method_id,
-    )
+    from fastapi import HTTPException
+    # ADV3-1 (A1/A2/B9): a PUBLIC deposit MUST be backed by a real charge -- never
+    # credit free budget. A missing payment method is a hard 400 (no ledger, no
+    # credit). The internal-seed caller (internal=True) keeps the legacy
+    # ledger-only path so seeding/back-office top-ups without a card still work.
+    if not internal and not payment_method_id:
+        raise HTTPException(400, {
+            "code": "payment_method_required",
+            "message": "A payment method is required to fund an ad account.",
+        })
+
+    # ADV3-1: application-level deposit idempotency, claimed BEFORE the charge so a
+    # double-fired deposit can neither double-charge nor double-credit -- this holds
+    # even against a stripe-mock that does not itself honor the processor
+    # idempotency_key (a real Stripe returns the same PaymentIntent for the same
+    # key; the mock returns a fresh one). Keyed on the SAME
+    # (account, amount, payment_method) tuple the PaymentIntent idempotency_key uses
+    # so the app-level guard and the processor guard agree. Released on a failed /
+    # again-uncharged charge so a genuine retry (e.g. a different card) can fund.
+    idem_key = ""
+    if not internal and payment_method_id:
+        idem_key = "addep:%s:%s:%s" % (account_id, amount_cents, payment_method_id)
+        try:
+            T.ad_billing.put_item(
+                Item={"pk": f"ACCT#{account_id}", "sk": f"DEPIDEMP#{idem_key}",
+                      "entry_type": "deposit_idempotency", "created_at": now_ts()},
+                ConditionExpression="attribute_not_exists(sk)",
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                logger.info("ad_deposit_duplicate account=%s key=%s", account_id, idem_key)
+                return {"ok": True, "reason": "duplicate",
+                        "new_balance_cents": _get_balance(account_id)}
+            raise
+
+    def _release_idem():
+        if idem_key:
+            try:
+                T.ad_billing.delete_item(
+                    Key={"pk": f"ACCT#{account_id}", "sk": f"DEPIDEMP#{idem_key}"}
+                )
+            except Exception:
+                pass
+
+    # Charge the payment method. A decline / processor error raises 402 (below,
+    # inside _charge_deposit) -- release the idem claim first so a retry can fund.
+    try:
+        payment_intent_id = _charge_deposit(
+            owner_sub=owner_sub, account_id=account_id,
+            amount_cents=amount_cents, payment_method_id=payment_method_id,
+        )
+    except Exception:
+        _release_idem()
+        raise
+
+    if not internal and not payment_intent_id:
+        # Stripe unconfigured (dev stub) despite a supplied card: LOUD simulation
+        # (uncharged_simulation ledger row + critical alert), never a silent free
+        # credit; release the idem claim so a retry can fund once configured.
+        _release_idem()
+        _record_uncharged_deposit(account_id, amount_cents, payment_method_id)
+        raise HTTPException(402, {
+            "code": "charge_unavailable",
+            "message": "Deposit could not be charged (payment processor unavailable).",
+        })
 
     ts = now_ts()
     entry_id = f"dep_{uuid.uuid4().hex[:12]}"
@@ -80,11 +247,23 @@ def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "
         "created_at": ts,
     })
 
-    # Increment account balance (only reached after a successful charge)
+    # Increment account balance (only reached after a successful charge).
+    # ADV3-12 (E5): stamp first_settled_at on the FIRST real (charged) deposit so
+    # the account graduates from the new/boost lower daily-spend cap to the
+    # established cap. A ledger-only internal top-up (no payment_intent) does NOT
+    # graduate the account.
+    _settle_marker = (
+        ", first_settled_at = if_not_exists(first_settled_at, :ts), settled = :true"
+        if payment_intent_id else ""
+    )
+    _upd_vals = {":z": 0, ":amt": amount_cents}
+    if _settle_marker:
+        _upd_vals[":ts"] = ts
+        _upd_vals[":true"] = True
     T.ad_accounts.update_item(
         Key={"pk": f"ACCT#{account_id}", "sk": "META"},
-        UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt",
-        ExpressionAttributeValues={":z": 0, ":amt": amount_cents},
+        UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt" + _settle_marker,
+        ExpressionAttributeValues=_upd_vals,
     )
 
     return {"ok": True, "entry_id": entry_id, "new_balance_cents": _get_balance(account_id)}
@@ -154,18 +333,66 @@ def _charge_deposit(*, owner_sub: str, account_id: str, amount_cents: int,
     return pi.get("id")
 
 
+def _record_uncharged_deposit(account_id: str, amount_cents: int, payment_method_id: str) -> None:
+    """ADV3-1: LOUD degrade for a public deposit that could not be charged because
+    the processor rail is unconfigured (dev stub). Writes an ``uncharged_simulation``
+    ledger row (NOT a ``budget_deposit`` -- no balance is credited) and emits a
+    critical alert so a silent free-credit can never masquerade as a real deposit.
+    """
+    ts = now_ts()
+    entry_id = f"depsim_{uuid.uuid4().hex[:12]}"
+    month_key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
+    try:
+        T.ad_billing.put_item(Item={
+            "pk": f"ACCT#{account_id}",
+            "sk": f"LEDGER#{ts}#{entry_id}",
+            "entry_id": entry_id,
+            "account_id": account_id,
+            "entry_type": "budget_deposit_uncharged",
+            "amount_cents": amount_cents,
+            "state": "uncharged_simulation",
+            "reason": "Deposit not charged (payment processor unavailable)",
+            "meta": {"payment_method_id": payment_method_id, "stripe_payment_intent_id": ""},
+            "month_key": month_key,
+            "created_at": ts,
+        })
+    except Exception:
+        logger.warning("ad_deposit_uncharged_ledger_failed account=%s", account_id)
+    try:
+        from app.services.ad_accounts import get_ad_account
+        from app.services.alerts import write_alert
+        owner_sub = (get_ad_account(account_id) or {}).get("owner_sub", "")
+        write_alert(
+            owner_sub or account_id,
+            event="ad_deposit_uncharged",
+            outcome="critical",
+            title="Ad deposit could not be charged",
+            details={"account_id": account_id, "amount_cents": amount_cents,
+                     "reason": "payment_processor_unconfigured"},
+        )
+    except Exception:
+        logger.warning("ad_deposit_uncharged_alert_failed account=%s", account_id)
+
+
 def charge_impression(
     *, account_id: str, campaign_id: str, creative_id: str,
     creator_id: str, content_id: str, bid_cpm_cents: int,
     idempotency_key: str = "",
+    surface: str = "", slot_type: str = "", geo_country: str = "",
 ) -> dict:
-    """Charge advertiser for one impression (CPM model)."""
+    """Charge advertiser for one impression (CPM model).
+
+    ADV3-9 (D6): surface / slot_type / geo_country are stamped on the ledger meta
+    so the analytics rollup can attribute REAL spend into the per-surface and
+    per-geo breakdowns (previously spend=0 on every non-creative dimension).
+    """
     charge_cents = max(1, bid_cpm_cents // 1000)
     return _process_charge(
         account_id=account_id, campaign_id=campaign_id,
         entry_type="impression_charge", charge_cents=charge_cents,
         creator_id=creator_id, reason="Ad impression",
-        meta={"creative_id": creative_id, "content_id": content_id, "model": "cpm"},
+        meta={"creative_id": creative_id, "content_id": content_id, "model": "cpm",
+              "surface": surface, "slot_type": slot_type, "geo_country": geo_country},
         idempotency_key=idempotency_key,
     )
 
@@ -174,13 +401,19 @@ def charge_click(
     *, account_id: str, campaign_id: str, creative_id: str,
     creator_id: str, content_id: str, bid_cpc_cents: int,
     idempotency_key: str = "",
+    surface: str = "", slot_type: str = "", geo_country: str = "",
 ) -> dict:
-    """Charge advertiser for one click (CPC model)."""
+    """Charge advertiser for one click (CPC model).
+
+    ADV3-9 (D6): surface / slot_type / geo_country stamped on ledger meta for the
+    per-surface / per-geo spend breakdown.
+    """
     return _process_charge(
         account_id=account_id, campaign_id=campaign_id,
         entry_type="click_charge", charge_cents=bid_cpc_cents,
         creator_id=creator_id, reason="Ad click",
-        meta={"creative_id": creative_id, "content_id": content_id, "model": "cpc"},
+        meta={"creative_id": creative_id, "content_id": content_id, "model": "cpc",
+              "surface": surface, "slot_type": slot_type, "geo_country": geo_country},
         idempotency_key=idempotency_key,
     )
 
@@ -250,6 +483,26 @@ def _process_charge(
                 return {"ok": True, "reason": "duplicate", "charge_cents": 0}
             raise
 
+    # ADV3-12 (E5): advertiser spend-limit gate (daily velocity cap + minimal-KYC
+    # threshold) BEFORE the debit. A blocked charge writes nothing (release any
+    # idempotency marker so a later, in-limits retry can still charge once).
+    _limit = check_spend_limits(
+        account_id=account_id, charge_cents=charge_cents, entry_type=entry_type,
+    )
+    if not _limit.get("allowed"):
+        if idempotency_key:
+            try:
+                T.ad_billing.delete_item(
+                    Key={"pk": f"ACCT#{account_id}", "sk": f"IDEMP#{idempotency_key}"}
+                )
+            except Exception:
+                pass
+        logger.info("ad_charge_limit_blocked account=%s campaign=%s reason=%s amount=%s",
+                    account_id, campaign_id, _limit.get("reason"), charge_cents)
+        return {"ok": False, "reason": _limit.get("reason", "limit_blocked"),
+                "charge_cents": charge_cents, **{k: v for k, v in _limit.items()
+                                                 if k not in ("allowed", "reason")}}
+
     # 1. Debit advertiser balance FIRST, funds-guarded so it can never go negative.
     try:
         T.ad_accounts.update_item(
@@ -275,13 +528,69 @@ def _process_charge(
             return {"ok": False, "reason": "insufficient_funds", "charge_cents": charge_cents}
         raise
 
-    # 2. Increment campaign spend
-    T.ad_campaigns.update_item(
-        Key={"pk": f"ACCT#{account_id}", "sk": f"CAMPAIGN#{campaign_id}"},
-        UpdateExpression="SET spent_today_cents = if_not_exists(spent_today_cents, :z) + :amt, "
-                         "lifetime_spent_cents = if_not_exists(lifetime_spent_cents, :z) + :amt",
-        ExpressionAttributeValues={":z": 0, ":amt": charge_cents},
-    )
+    # 2. Increment campaign spend -- HARD budget guard (ADV3-2/A4). When the
+    #    campaign has a positive budget_cents the spend bump is a CONDITIONAL write
+    #    that rejects the charge when it would push lifetime_spent_cents past
+    #    budget_cents, so concurrent charges can NEVER overshoot the advertiser's
+    #    budget. On rejection we roll the account debit back (refund balance +
+    #    back out lifetime_spend), release any idempotency marker, and report
+    #    budget_exceeded -- nothing else is written.
+    campaign_budget_cents = 0
+    try:
+        from app.services.ad_campaigns import get_campaign as _gc_budget
+        campaign_budget_cents = int((_gc_budget(account_id, campaign_id) or {}).get("budget_cents", 0) or 0)
+    except Exception:
+        campaign_budget_cents = 0
+
+    _spend_kwargs = {
+        "Key": {"pk": f"ACCT#{account_id}", "sk": f"CAMPAIGN#{campaign_id}"},
+        "UpdateExpression": "SET spent_today_cents = if_not_exists(spent_today_cents, :z) + :amt, "
+                            "lifetime_spent_cents = if_not_exists(lifetime_spent_cents, :z) + :amt",
+        "ExpressionAttributeValues": {":z": 0, ":amt": charge_cents},
+    }
+    if campaign_budget_cents > 0:
+        # prior lifetime_spent must leave room for this charge (budget - amt).
+        _spend_kwargs["ConditionExpression"] = (
+            "attribute_not_exists(lifetime_spent_cents) OR lifetime_spent_cents <= :budget_room"
+        )
+        _spend_kwargs["ExpressionAttributeValues"][":budget_room"] = campaign_budget_cents - charge_cents
+
+    try:
+        T.ad_campaigns.update_item(**_spend_kwargs)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            # Roll back the account debit performed in step 1.
+            try:
+                T.ad_accounts.update_item(
+                    Key={"pk": f"ACCT#{account_id}", "sk": "META"},
+                    UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt, "
+                                     "lifetime_spend_cents = if_not_exists(lifetime_spend_cents, :z) - :amt",
+                    ExpressionAttributeValues={":z": 0, ":amt": charge_cents},
+                )
+            except Exception:
+                logger.warning("ad_budget_guard_rollback_failed account=%s campaign=%s",
+                               account_id, campaign_id)
+            if idempotency_key:
+                try:
+                    T.ad_billing.delete_item(
+                        Key={"pk": f"ACCT#{account_id}", "sk": f"IDEMP#{idempotency_key}"}
+                    )
+                except Exception:
+                    pass
+            logger.info("ad_charge_budget_exceeded account=%s campaign=%s amount=%s budget=%s",
+                        account_id, campaign_id, charge_cents, campaign_budget_cents)
+            return {"ok": False, "reason": "budget_exceeded", "charge_cents": charge_cents}
+        raise
+
+    # ADV3-12 (E5): the debit + budget guard cleared -> count this spend toward
+    # the account's daily velocity cap (post-commit so a rejected charge above
+    # never inflates the counter).
+    if entry_type in _SPEND_ENTRY_TYPES and charge_cents > 0:
+        _bump_account_spent_today(
+            account_id,
+            datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d"),
+            charge_cents, ts,
+        )
 
     # 3. Revenue split. Returns the split detail (per-party shares + credit-row
     #    pointers) so it can be denormalized onto the charge ledger row -> the
@@ -869,7 +1178,13 @@ def reverse_ad_charge(
         "meta": {
             "reversal_of": entry_id, "reversal_reason": reason, "reversal_actor": actor,
             "original_entry_type": etype, "creator_id": creator_id,
-            "creator_clawback_cents": creator_share if creator_id else 0,
+            # ADV3-2/A6: the real clawback is the MEMBER share in a syndicate split
+            # (the treasury took the remainder); a non-syndicate reversal claws the
+            # full creator_share. member_clawback already encodes both cases.
+            "creator_clawback_cents": member_clawback if creator_id else 0,
+            "member_clawback_cents": member_clawback if creator_id else 0,
+            "treasury_debit_cents": treasury_debit_planned,
+            "is_syndicate_split": is_syndicate_split,
             "platform_reversal_cents": platform_share,
         },
         "month_key": month_key, "created_at": ts,

@@ -49,6 +49,8 @@
     <string name="more_title">More</string>
     <string name="more_empty">Nothing here yet</string>
     <string name="more_section_account">Account</string>
+    <string name="more_section_advertising">Advertising</string>
+    <string name="more_entry_advertise">Advertise (create &amp; manage ads)</string>
     <string name="more_section_security">Security</string>
     <string name="more_section_app">App</string>
     <string name="more_section_support">Support</string>
@@ -1140,7 +1142,6 @@
 
     <!-- AND-163 — report message -->
     <string name="msg_action_report">Report</string>
-    <string name="report_title">Report message</string>
     <string name="report_statement_hint">Tell us what\'s wrong</string>
     <string name="report_counter">%1$d / %2$d</string>
     <string name="report_submit">Submit report</string>
@@ -1163,7 +1164,6 @@
     <string name="report_flow_reason_label">Reason (required, 5–2000 characters)</string>
     <string name="report_flow_retry">Retry</string>
     <string name="report_flow_done">Done</string>
-    <string name="report_confirm_title">Report submitted</string>
     <string name="report_already_reported">You\'ve already reported this</string>
     <string name="report_flow_topic_checked">%1$s, selected</string>
     <string name="report_flow_topic_unchecked">%1$s, not selected</string>
@@ -1234,6 +1234,15 @@
     <string name="feed_bookmark_failed">Couldn\'t save post. Retry.</string>
     <string name="feed_bookmark_retry">Retry</string>
     <string name="feed_share_no_target">No app available to share with.</string>
+
+    <!-- Feed: reposting (SOCIAL-002) -->
+    <string name="feed_repost">Repost</string>
+    <string name="feed_quote_repost">Quote repost</string>
+    <string name="feed_undo_repost">Undo repost</string>
+    <string name="feed_reposted_by">%1$s reposted</string>
+    <string name="feed_quote_repost_hint">Add a comment…</string>
+    <string name="feed_repost_cancel">Cancel</string>
+    <string name="feed_repost_failed">Couldn\'t repost. Try again.</string>
 
     <!-- Feed: paywall unlock (AND-177) -->
     <string name="paywall_unlocking">Unlocking…</string>
@@ -1388,6 +1397,7 @@
     <string name="clip_action_comment">Comment</string>
     <string name="clip_action_share">Share</string>
     <string name="clip_action_bookmark">Bookmark</string>
+    <string name="clip_action_bookmark_remove">Remove bookmark</string>
     <string name="clip_action_mute">Mute</string>
     <string name="clip_action_unmute">Unmute</string>
 
@@ -1551,7 +1561,7 @@
     <!-- AND-224: Payment methods management -->
     <string name="more_entry_payment_methods">Payment methods</string>
     <!-- AND-235: subscription tiers browse -->
-    <string name="more_entry_subscription_tiers">Subscription tiers</string>
+    <string name="more_entry_subscription_tiers">Your subscription tiers</string>
     <!-- AND-237: manage / cancel subscription -->
     <string name="more_entry_manage_subscription">Manage subscription</string>
     <string name="payment_methods_title">Payment methods</string>
@@ -1986,17 +1996,56 @@
 
     <!-- AND-258/259/260 — creator payouts -->
     <string name="more_entry_payouts">Payout history</string>
-    <string name="more_entry_payout_setup">Request a payout</string>
+    <string name="more_entry_payout_setup">Withdraw</string>
+    <!-- PAY-52 — Wallet home entry -->
+    <string name="more_entry_wallet">Wallet</string>
 
-    <!-- Payout status labels (AND-260) -->
+    <!-- Payout status labels (AND-260 + PAY-52 lifecycle extensions) -->
     <string name="payout_status_requested">Requested</string>
     <string name="payout_status_approved">Approved</string>
     <string name="payout_status_processing">Processing</string>
+    <string name="payout_status_paid">Paid</string>
     <string name="payout_status_completed">Completed</string>
+    <string name="payout_status_failed">Failed</string>
+    <string name="payout_status_returned">Returned</string>
+    <string name="payout_status_held">On hold</string>
     <string name="payout_status_rejected">Rejected</string>
     <string name="payout_status_cancelled">Cancelled</string>
     <string name="payout_status_unknown">Unknown</string>
     <string name="payout_status_cd">Status: %1$s</string>
+
+    <!-- PAY-52 — Wallet home (money-OUT surface) -->
+    <string name="wallet_title">Wallet</string>
+    <string name="wallet_loading">Loading your wallet…</string>
+    <string name="wallet_error_generic">Couldn\'t load your wallet.</string>
+    <string name="wallet_available_label">Available to withdraw</string>
+    <string name="wallet_withdraw_action">Withdraw</string>
+    <string name="wallet_minimum_note">Minimum payout: %1$s</string>
+    <string name="wallet_held_label">On hold</string>
+    <string name="wallet_held_until">Releases %1$s</string>
+    <string name="wallet_held_none">No funds on hold</string>
+    <string name="wallet_pending_label">Pending payouts</string>
+    <string name="wallet_pending_count">%1$d in progress</string>
+    <string name="wallet_lifetime_paid_label">Lifetime paid out</string>
+    <string name="wallet_total_earned_label">Total earned</string>
+    <string name="wallet_view_history">Payout history &amp; statements</string>
+
+    <!-- PAY-52 — withdraw destination picker -->
+    <string name="payout_withdraw_no_verified_method">Add and verify a payout destination above before you can withdraw.</string>
+
+    <!-- PAY-53 — payout statement/detail -->
+    <string name="payout_detail_loading">Loading payout…</string>
+    <string name="payout_detail_error_generic">Couldn\'t load this payout.</string>
+    <string name="payout_detail_provider">Transfer provider</string>
+    <string name="payout_detail_provider_unknown">Pending</string>
+    <string name="payout_detail_transfer_ref">Transfer reference</string>
+    <string name="payout_detail_attempts">Transfer attempts</string>
+    <string name="payout_detail_fail_reason">Reason</string>
+    <string name="payout_detail_hold_reason">On hold</string>
+    <string name="payout_detail_debit_reversed">Your balance has been restored.</string>
+    <string name="payout_detail_timeline_title">Timeline</string>
+    <string name="payout_timeline_hold_released">Hold released</string>
+    <string name="payout_date_pending">Pending</string>
 
     <!-- Payout method labels (AND-259/260) -->
     <string name="payout_method_bank_transfer">Bank Transfer</string>
@@ -2046,6 +2095,81 @@
     <string name="payout_gate_verify_action">Verify identity</string>
     <string name="payout_gate_unknown_title">Verification status unavailable</string>
     <string name="payout_gate_unknown_body">We couldn\'t confirm your verification status. Payouts are disabled until we can.</string>
+
+    <!-- PAY-22 - pre-withdrawal gate (KYC identity + W-9 tax info) -->
+    <string name="payout_withdraw_gate_title">Verify your identity and tax info to withdraw</string>
+    <string name="payout_withdraw_gate_subtitle">Both steps are required before you can withdraw.</string>
+    <string name="payout_gate_step_kyc">Identity verification</string>
+    <string name="payout_gate_step_tax">Tax info (W-9)</string>
+    <string name="payout_gate_step_done">Done</string>
+    <string name="payout_gate_step_pending">Required</string>
+    <string name="payout_gate_loading">Checking your withdrawal eligibility…</string>
+    <string name="payout_gate_refresh">Refresh status</string>
+    <string name="payout_kyc_panel_title">Verify your identity</string>
+    <string name="payout_kyc_panel_body">You must complete identity verification (KYC) before you can withdraw.</string>
+    <string name="payout_kyc_status_line">Current status: %1$s</string>
+    <string name="payout_kyc_verify_action">Verify your identity</string>
+    <string name="payout_kyc_status_none">Not started</string>
+    <string name="payout_kyc_status_draft">Draft</string>
+    <string name="payout_kyc_status_submitted">Submitted</string>
+    <string name="payout_kyc_status_under_review">Under review</string>
+    <string name="payout_kyc_status_needs_more_info">More info needed</string>
+    <string name="payout_kyc_status_approved">Approved</string>
+    <string name="payout_kyc_status_rejected">Rejected</string>
+    <string name="payout_kyc_status_expired">Expired</string>
+    <string name="payout_tax_panel_title">Tax information (W-9)</string>
+    <string name="payout_tax_panel_body">Provide your W-9 tax details before you can withdraw. Required for 1099 reporting.</string>
+    <string name="payout_tax_legal_name">Legal name</string>
+    <string name="payout_tax_classification">Tax classification</string>
+    <string name="payout_tax_class_individual">Individual (SSN)</string>
+    <string name="payout_tax_class_business">Business (EIN)</string>
+    <string name="payout_tax_tin_ssn">Social Security Number (SSN)</string>
+    <string name="payout_tax_tin_ein">Employer ID Number (EIN)</string>
+    <string name="payout_tax_tin_sec_note">We mask your TIN — only the last 4 digits are ever stored.</string>
+    <string name="payout_tax_address">Street address</string>
+    <string name="payout_tax_city">City</string>
+    <string name="payout_tax_state">State</string>
+    <string name="payout_tax_zip">ZIP code</string>
+    <string name="payout_tax_certify">Under penalties of perjury, I certify that this information is correct.</string>
+    <string name="payout_tax_submit">Save tax info</string>
+    <string name="payout_tax_saved">Tax info saved.</string>
+
+    <!-- PAY-13 - routable payout methods (bank / PayPal / Stripe Connect) -->
+    <string name="payout_methods_section_title">Payout destinations</string>
+    <string name="payout_methods_empty">No payout destinations yet. Add one to receive payouts.</string>
+    <string name="payout_methods_loading">Loading destinations…</string>
+    <string name="payout_methods_sec_note">For your security we store only the last 4 digits - never the full account number.</string>
+    <string name="payout_method_add">Add payout destination</string>
+    <string name="payout_method_add_cancel">Cancel</string>
+    <string name="payout_method_type_label">Destination type</string>
+    <string name="payout_method_type_bank">Bank account</string>
+    <string name="payout_method_type_paypal">PayPal</string>
+    <string name="payout_method_type_connect">Stripe Connect</string>
+    <string name="payout_method_routing_label">Routing number</string>
+    <string name="payout_method_account_label">Account number</string>
+    <string name="payout_method_wire_label">Send as wire (instead of ACH)</string>
+    <string name="payout_method_paypal_email_label">PayPal email</string>
+    <string name="payout_method_nickname_label">Nickname (optional)</string>
+    <string name="payout_method_set_default">Set as default</string>
+    <string name="payout_method_add_submit">Add destination</string>
+    <string name="payout_method_connect_blurb">Connect a Stripe account to receive payouts. We open Stripe onboarding; under the current sandbox it completes automatically (no real account is linked).</string>
+    <string name="payout_method_connect_action">Connect with Stripe</string>
+    <string name="payout_method_added">Payout destination added.</string>
+    <string name="payout_method_verify_action">Verify</string>
+    <string name="payout_method_verify_done">Destination verified.</string>
+    <string name="payout_method_default_action">Set default</string>
+    <string name="payout_method_default_badge">Default</string>
+    <string name="payout_method_remove_action">Remove</string>
+    <string name="payout_method_verify_note">Only a verified destination can receive a payout.</string>
+    <string name="payout_method_status_unverified">Unverified</string>
+    <string name="payout_method_status_verifying">Verifying…</string>
+    <string name="payout_method_status_verified">Verified</string>
+    <string name="payout_method_status_failed">Verification failed</string>
+    <string name="payout_method_status_unknown">Unknown</string>
+    <string name="payout_method_bank_display">Bank ••••%1$s</string>
+    <string name="payout_method_routing_display">Routing ••%1$s</string>
+    <string name="payout_method_paypal_display">PayPal: %1$s</string>
+    <string name="payout_method_connect_display">Stripe Connect: %1$s</string>
 
     <!-- AND-261 — READ-ONLY bulk/batch payout tools -->
     <string name="more_entry_bulk_payouts">Bulk payouts</string>
@@ -3670,6 +3794,7 @@
     <string name="deposit_amount_range_error">Enter an amount between $50.00 and $100,000.00.</string>
     <string name="deposit_confirm">Confirm deposit</string>
     <string name="deposit_success">Deposit successful.</string>
+    <string name="deposit_done">Done</string>
     <string name="deposit_success_with_balance">Deposit successful. New balance: %1$s</string>
 
     <!-- AND-368: READ-ONLY ad-analytics dashboard -->
@@ -3728,6 +3853,12 @@
     <string name="create_campaign_review">Submit for review</string>
     <string name="create_campaign_review_done">Submitted — status: %1$s</string>
     <string name="create_campaign_continue">Add a creative</string>
+    <string name="create_campaign_start_date_label">Start date (optional)</string>
+    <string name="create_campaign_end_date_label">End date (optional)</string>
+    <string name="create_campaign_pick_date">Pick</string>
+    <string name="create_campaign_date_ok">Set</string>
+    <string name="create_campaign_date_clear">Clear</string>
+    <string name="create_campaign_add_funds">Add funds to this account</string>
 
     <string name="create_creative_title">Create creative</string>
     <string name="create_creative_account_label">Ad account</string>
@@ -3775,7 +3906,11 @@
     <string name="ad_analytics_kpi_clicks">Clicks</string>
     <string name="ad_analytics_kpi_spend">Spend</string>
     <string name="ad_analytics_kpi_ctr">CTR</string>
+    <string name="ad_analytics_kpi_cpc">CPC</string>
     <string name="ad_analytics_kpi_cpa">CPA</string>
+    <string name="ad_analytics_dimension_creative">By creative</string>
+    <string name="ad_analytics_dimension_surface">By placement</string>
+    <string name="ad_analytics_dimension_targeting">By geo</string>
     <string name="ad_analytics_kpi_ecpm">eCPM</string>
     <string name="ad_analytics_kpi_completion_rate">Completion rate</string>
     <string name="ad_analytics_chart_spend_title">Spend over time</string>
@@ -3869,6 +4004,13 @@
     <string name="blocked_profile_placeholder_body">Unblock to see their profile and contact them again.</string>
     <string name="cannot_contact_banner">You can\'t message this user.</string>
     <string name="block_update_failed">Couldn\'t update — tap to retry.</string>
+
+    <!-- P0-BLOCK: blocked-users management screen -->
+    <string name="blocked_users_title">Blocked users</string>
+    <string name="blocked_users_empty_title">No blocked users</string>
+    <string name="blocked_users_empty_body">People you block cannot message you, follow you, or see your content. Blocked users appear here.</string>
+    <string name="unblock_confirm_title">Unblock @%1$s?</string>
+    <string name="unblock_confirm_body">They will be able to message you, follow you, and see your content again.</string>
 
     <!-- AND-384: DMCA copyright-takedown submit form -->
     <string name="more_entry_dmca">File a DMCA notice</string>
@@ -4051,6 +4193,8 @@
     <string name="more_entry_questionnaire_builder">Questionnaire builder</string>
     <string name="more_entry_custom_emojis">Custom emojis</string>
     <string name="more_entry_geo_rules">Geo-blocking</string>
+    <string name="more_entry_blocked_users">Blocked users</string>
+    <string name="block_author_action">Block author</string>
     <string name="more_entry_call_rate">Call rate</string>
     <string name="more_entry_message_privacy">Message privacy</string>
     <string name="more_entry_vod_rentals">My rentals</string>
@@ -4218,11 +4362,16 @@
     <string name="appeals_withdraw_success">Appeal withdrawn.</string>
     <string name="appeals_withdraw_failed">Could not withdraw the appeal. Please try again.</string>
     <string name="appeals_submit_title">File an appeal</string>
-    <string name="appeals_submit_helper">The Enforcement ID is shown on the enforcement notice you received.</string>
+    <string name="appeals_submit_helper">Pick the enforcement action you want to appeal from your history, then explain why it should be reviewed.</string>
     <string name="appeals_submit_action">Submit</string>
     <string name="appeals_submit_success">Appeal submitted.</string>
     <string name="appeals_submit_failed">Could not submit the appeal. Please try again.</string>
     <string name="appeals_field_enforcement_id">Enforcement ID</string>
+    <string name="appeals_field_enforcement">Enforcement to appeal</string>
+    <string name="appeals_options_loading">Loading your enforcement history…</string>
+    <string name="appeals_option_already_appealed">Already appealed</string>
+    <string name="appeals_no_enforcements">You have no enforcement actions on your account to appeal. If you receive a warning, removal, or ban, it will show up here.</string>
+
     <string name="appeals_field_appeal_text">Appeal text</string>
     <string name="appeals_refresh_failed_stale">Could not refresh. Showing the last loaded appeals.</string>
     <string name="appeals_status_submitted">Submitted</string>
@@ -4934,4 +5083,55 @@
     <string name="creator_subs_confirm_stop_body">%1$s keeps access until the period ends, then will not renew.</string>
     <string name="creator_subs_confirm_remove_title">Remove subscriber?</string>
     <string name="creator_subs_confirm_remove_body">%1$s loses access now and is refunded the unused portion.</string>
+    <!-- SUBX-42/43 creator reporting reconciliation + tier authoring -->
+    <string name="creator_subs_stat_past_due_mrr">Past-due MRR</string>
+    <string name="creator_subs_refunded_to_date">Refunded to date: %1$s</string>
+    <string name="creator_subs_window_note">Revenue is lifetime; growth/churn over the last %1$d days.</string>
+    <string name="creator_subs_by_tier_title">Revenue by tier</string>
+    <string name="creator_subs_tier_active">%1$d active</string>
+    <string name="creator_subs_tier_mrr">MRR %1$s</string>
+    <string name="creator_subs_tier_net">Net to date %1$s</string>
+    <string name="creator_subs_tier_filter_all">All tiers</string>
+    <string name="creator_subs_action_refund">Refund</string>
+    <string name="creator_subs_confirm_refund_title">Refund subscriber?</string>
+    <string name="creator_subs_confirm_refund_body">Refund %1$s the unused portion of their cycle? This revokes their access.</string>
+    <string name="more_entry_creator_tiers">Manage tiers</string>
+    <string name="tier_manager_title">Your subscription tiers</string>
+    <string name="tier_manager_new">New tier</string>
+    <string name="tier_manager_empty_title">No tiers yet</string>
+    <string name="tier_manager_empty_body">Create your first subscription tier so fans can subscribe.</string>
+    <string name="tier_manager_archived_badge">Archived</string>
+    <string name="tier_manager_edit">Edit</string>
+    <string name="tier_manager_archive">Archive</string>
+    <string name="tier_manager_move_up">Move up</string>
+    <string name="tier_manager_move_down">Move down</string>
+    <string name="tier_manager_level_label">Tier level %1$d</string>
+    <string name="tier_editor_new_title">New tier</string>
+    <string name="tier_editor_edit_title">Edit tier</string>
+    <string name="tier_editor_name">Tier name</string>
+    <string name="tier_editor_description">Description (optional)</string>
+    <string name="tier_editor_price">Price (per cycle)</string>
+    <string name="tier_editor_interval_month">Monthly</string>
+    <string name="tier_editor_interval_year">Yearly</string>
+    <string name="tier_editor_level">Tier level (optional)</string>
+    <string name="tier_editor_benefit_hint">Add a perk</string>
+    <string name="tier_editor_add_benefit">Add</string>
+    <string name="tier_editor_save">Save</string>
+    <string name="tier_editor_cancel">Cancel</string>
+    <string name="tier_editor_name_required">Enter a tier name and a price above 0.</string>
+    <!-- SUBX-20..24 subscriber self-service -->
+    <string name="more_entry_my_subscriptions">My subscriptions</string>
+    <string name="my_subs_title">My subscriptions</string>
+    <string name="my_subs_empty_title">No subscriptions yet</string>
+    <string name="my_subs_empty_body">Subscriptions you start will appear here.</string>
+    <string name="my_subs_renews_on">Renews on %1$s</string>
+    <string name="my_subs_ends_on">Ends on %1$s</string>
+    <string name="my_subs_past_due_banner">Payment failed — update your card to keep access.</string>
+    <string name="manage_sub_by_creator">by %1$s</string>
+    <string name="manage_sub_past_due_banner">Your last payment failed. Update your card and retry to keep your subscription.</string>
+    <string name="manage_sub_update_card_action">Update payment method</string>
+    <string name="manage_sub_retry_payment_action">Retry payment</string>
+    <string name="subscribe_view_content">View content</string>
+    <string name="subscribe_add_card_action">Add a payment method</string>
+    <string name="profile_public_subscribe">Subscribe</string>
 </resources>

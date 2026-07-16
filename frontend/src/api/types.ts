@@ -2441,6 +2441,7 @@ export interface FeedPost {
   tip_total_cents?: number;
   liked_by_me?: boolean;
   unlocked?: boolean;
+  locked?: boolean;
   reactions_counts?: Record<string, number>;
   my_reactions?: string[];
   created_at: string;
@@ -2543,12 +2544,29 @@ export interface GroupMember {
 }
 
 // GROUP-002: Group Feed
-export interface GroupFeedPost extends FeedPost {
+// Matches backend GroupFeedPostOut (app/models.py) — a flat shape distinct
+// from FeedPost (uses user_* fields, `text`, single `image_url`).
+export interface GroupFeedPost {
+  post_id: string;
+  user_id: string;
+  user_display_name?: string;
+  user_avatar_url?: string | null;
+  text?: string | null;
+  body_format?: string;
+  image_url?: string | null;
   group_id: string;
   audience: "public" | "members_only";
   pinned: boolean;
   pinned_at?: number;
   pinned_by?: string;
+  unlock_price_cents?: number | null;
+  unlocked: boolean;
+  tip_total_cents: number;
+  reactions_counts: Record<string, number>;
+  my_reactions: string[];
+  comment_count: number;
+  created_at: number;
+  updated_at?: number;
 }
 
 export interface GroupFeedResponse {
@@ -4481,11 +4499,22 @@ export interface EarningsBreakdown {
   other: number;
 }
 
+export interface TimeSeriesPoint {
+  date: string;
+  total: number;
+  tips: number;
+  subscriptions: number;
+  unlocks: number;
+  vod_purchases: number;
+  other: number;
+}
+
 export interface EarningsSummary {
   total_cents: number;
   breakdown: EarningsBreakdown;
   transaction_count: number;
   currency: string;
+  time_series?: TimeSeriesPoint[];
 }
 
 export interface EarningsTransaction {
@@ -6325,8 +6354,15 @@ export interface AdAnalyticsSummary {
   clicks: number;
   ctr_pct: number;
   spend_cents: number;
+  // ADV3-8: cpc_cents (spend/clicks) is the true CPC previously mislabeled cpa_cents;
+  // cpa_cents is now the true cost-per-conversion.
+  cpc_cents: number;
   cpa_cents: number;
   effective_cpm_cents: number;
+  conversions: number;
+  conversion_revenue_cents: number;
+  roas: number;
+  unique_users: number;
   completes: number;
   skips: number;
   completion_rate_pct: number;
@@ -6334,7 +6370,31 @@ export interface AdAnalyticsSummary {
   impressions_change_pct: number;
   clicks_change_pct: number;
   spend_change_pct: number;
+  ctr_change_pct: number;
+  cpc_change_pct: number;
+  effective_cpm_change_pct: number;
   days: number;
+}
+
+export interface AdCampaignRoas {
+  campaign_id?: string | null;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  spend_cents: number;
+  conversion_value_cents: number;
+  ctr_pct: number;
+  cpa_cents: number;
+  roas: number;
+}
+
+export interface AdRoasReport {
+  account_id?: string | null;
+  campaign_id?: string | null;
+  days: number;
+  computed_at: number;
+  totals: AdCampaignRoas;
+  campaigns: AdCampaignRoas[];
 }
 
 export interface AdTimeSeriesPoint {
@@ -13182,7 +13242,7 @@ export interface AutoReplyRule {
   creator_id: string;
   trigger_pattern: string;
   response_template: string;
-  match_type: string;
+  match_type: "keyword" | "regex" | "contains" | "exact";
   priority: number;
   enabled: boolean;
   created_at: number;
@@ -13406,4 +13466,476 @@ export interface ShipGroupOut {
 export interface ShipGroupListOut {
   order_id: string;
   ship_groups: ShipGroupOut[];
+}
+
+
+// ─── P1 tsc-cleanup: endpoint DTOs (added to match backend response models) ──
+// These interfaces were missing from types.ts even though endpoint files under
+// src/api/endpoints referenced them, producing TS2305/TS2724 across the project.
+// Shapes mirror the FastAPI/pydantic models in app/models.py + service returns.
+
+// -- Ads: creatives / targeting / serving (ADS-002..004) --
+export interface AdCreative {
+  creative_id: string;
+  campaign_id: string;
+  account_id: string;
+  format: string;
+  title: string;
+  status: string;
+  rotation_weight?: number;
+  skip_after_seconds?: number;
+  created_at?: number;
+  updated_at?: number;
+  headline?: string;
+  body_text?: string;
+  cta_text?: string;
+  cta_url?: string;
+  alt_text?: string;
+  width?: number;
+  height?: number;
+  duration_seconds?: number;
+  promo_code_id?: string;
+  affiliate_link_id?: string;
+  ctas?: Record<string, unknown>[];
+  image_url?: string;
+  video_url?: string;
+  thumbnail_url?: string;
+  review_notes?: string;
+  reviewed_by?: string;
+}
+
+export interface AdTargeting {
+  target_set_id: string;
+  campaign_id: string;
+  name: string;
+  age_ranges?: string[] | null;
+  genders?: string[] | null;
+  country_codes?: string[] | null;
+  regions?: string[] | null;
+  cities?: string[] | null;
+  content_categories?: string[] | null;
+  active_hours?: number[] | null;
+  device_types?: string[] | null;
+  new_user_only?: boolean;
+  creator_ids?: string[] | null;
+  content_types?: string[] | null;
+  exclude_creator_ids?: string[] | null;
+  exclude_categories?: string[] | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AudienceEstimate {
+  estimated_reach: number;
+  targeting_summary: Record<string, unknown>;
+}
+
+export interface CreatorAdSettings {
+  allow_ads?: boolean;
+  allowed_ad_categories?: string[];
+  min_cpm_cents?: number;
+  updated_at?: number | null;
+}
+
+export interface AdBlock {
+  account_id: string;
+  blocked_at?: number;
+  reason?: string;
+}
+
+export interface AdServeRequest {
+  surface: string;
+  content_type?: string;
+  creator_id: string;
+  content_id: string;
+  slot_type?: string;
+  user_context?: Record<string, unknown> | null;
+  content_owner_id?: string;
+}
+
+export interface AdServeResponse {
+  filled: boolean;
+  status: string;
+  creative_id?: string | null;
+  format?: string | null;
+  title?: string;
+  headline?: string | null;
+  body_text?: string | null;
+  cta_text?: string | null;
+  cta_url?: string | null;
+  ctas?: Record<string, unknown>[];
+  image_url?: string | null;
+  video_url?: string | null;
+  thumbnail_url?: string | null;
+  alt_text?: string | null;
+  width?: number | null;
+  height?: number | null;
+  duration_seconds?: number | null;
+  skip_after_seconds?: number;
+  rotation_weight?: number;
+  review_notes?: string | null;
+  reviewed_by?: string | null;
+  promo_code_id?: string | null;
+  affiliate_link_id?: string | null;
+}
+
+export interface AdTrackRequest {
+  event: string;
+  creative_id: string;
+  campaign_id: string;
+  account_id: string;
+  surface: string;
+  slot_type: string;
+  content_id: string;
+  creator_id: string;
+  view_time_ms?: number;
+  user_agent?: string;
+  geo_country?: string;
+  ad_click_id?: string;
+}
+
+export interface AdTrackResponse {
+  ok: boolean;
+  event_id?: string;
+  flagged?: boolean;
+  fraud_score?: number;
+}
+
+export interface AdServingStats {
+  campaign_id: string;
+  impressions: number;
+  clicks: number;
+  skips: number;
+  ctr_pct: number;
+}
+
+// -- Bot auto-reply (BOT-003) --
+export interface AutoReplyTestResult {
+  matched: boolean;
+  first_match?: Record<string, unknown> | null;
+  all_matches?: Record<string, unknown>[];
+  match_count?: number;
+}
+
+// -- Admin bulk payouts --
+export type BulkKind = "payout" | "refund";
+
+export interface BulkEligibleItem {
+  ref_id: string;
+  amount_cents: number;
+  recipient: string;
+  currency?: string;
+  status?: string;
+  created_at?: number;
+}
+
+export interface BulkPreviewIn {
+  kind: BulkKind;
+  ref_ids?: string[];
+}
+
+export interface BulkExecuteIn {
+  kind?: BulkKind;
+  ref_ids?: string[];
+  batch_id?: string;
+}
+
+export interface BulkBatchItem {
+  ref_id: string;
+  amount_cents: number;
+  recipient?: string;
+  status: string;
+  reason?: string;
+}
+
+export interface BulkBatchOut {
+  batch_id: string;
+  created_at: number;
+  created_by?: string | null;
+  kind: string;
+  status: string;
+  item_count: number;
+  success_count?: number;
+  failure_count?: number;
+  total_cents: number;
+  items?: BulkBatchItem[];
+  undo_expires_at?: number | null;
+  undo_performed_at?: number | null;
+}
+
+// -- Creator earnings quick stats (MON) --
+export interface EarningsQuickStats {
+  today_cents?: number;
+  this_week_cents?: number;
+  this_month_cents?: number;
+  all_time_cents?: number;
+  currency?: string;
+  pending_payout_cents?: number;
+}
+
+// -- Remote compute: EC2 (INFRA-003) --
+export interface Ec2LaunchIn {
+  label: string;
+  instance_type: string;
+  ami_id: string;
+  ssh_key_id?: string | null;
+  auto_terminate_after?: number;
+  startup_script?: string;
+  template_id?: string | null;
+  security_group_id?: string | null;
+}
+
+export interface Ec2InstanceOut {
+  instance_id: string;
+  ec2_instance_id: string;
+  label: string;
+  instance_type: string;
+  ami_id: string;
+  ami_name: string;
+  status: string;
+  public_ip: string;
+  private_ip: string;
+  ssh_key_id?: string;
+  host_id?: string;
+  created_at?: number;
+  started_at?: number;
+  stopped_at?: number;
+  terminated_at?: number;
+  last_activity_at?: number;
+  auto_terminate_after?: number;
+  // NOTE: referenced by Ec2LauncherPage for the SSH/RDP button gating, but the
+  // backend Ec2InstanceOut model does NOT populate this — always undefined at
+  // runtime (latent bug: the windows check never gates). Kept optional to
+  // preserve current behavior without inventing a served field. TODO tsc:
+  os_type?: string;
+}
+
+export interface Ec2InstanceListOut {
+  instances: Ec2InstanceOut[];
+  count: number;
+}
+
+export interface Ec2InstanceTypeInfo {
+  instance_type: string;
+  vcpu?: number;
+  memory_gb?: number;
+  cost_cents_per_min?: number;
+  description?: string;
+}
+
+export interface Ec2InstanceTypeListOut {
+  types: Ec2InstanceTypeInfo[];
+}
+
+export interface Ec2AmiInfo {
+  ami_id: string;
+  name: string;
+  os_type?: string;
+  username?: string;
+}
+
+export interface Ec2AmiListOut {
+  amis: Ec2AmiInfo[];
+}
+
+// -- Remote compute: SSH keys (INFRA) --
+export interface UploadSshKeyIn {
+  label: string;
+  private_key_pem: string;
+  passphrase?: string | null;
+}
+
+export interface GenerateSshKeyIn {
+  label: string;
+  key_type?: string;
+  key_bits?: number;
+}
+
+export interface SshKeyOut {
+  key_id: string;
+  label: string;
+  key_type: string;
+  key_bits: number;
+  public_key_openssh: string;
+  public_key_fingerprint: string;
+  passphrase_protected: boolean;
+  created_at: number;
+  last_used_at: number;
+  associated_hosts?: string[];
+  use_count?: number;
+}
+
+export interface SshKeyListOut {
+  keys: SshKeyOut[];
+  count: number;
+}
+
+export interface PublicKeyOut {
+  key_id: string;
+  public_key_openssh: string;
+  public_key_fingerprint: string;
+}
+
+// -- Agent LLM provider keys --
+export interface LlmKeyCreateIn {
+  provider: string;
+  label: string;
+  api_key: string;
+  base_url?: string;
+  model_preference?: string;
+  voice_preference?: string;
+  rate_limit_rpm?: number;
+  monthly_budget_cents?: number;
+}
+
+export interface LlmKeyRotateIn {
+  new_api_key: string;
+}
+
+export interface LlmKeyAssignIn {
+  worker_id: string;
+}
+
+export interface LlmKeyOut {
+  key_id: string;
+  user_id?: string;
+  provider: string;
+  label: string;
+  key_suffix?: string;
+  base_url?: string;
+  model_preference?: string;
+  voice_preference?: string;
+  available_models?: string[];
+  rate_limit_rpm?: number;
+  monthly_budget_cents?: number;
+  current_month_usage_cents?: number;
+  total_requests?: number;
+  total_tokens_used?: number;
+  status?: string;
+  last_tested_at?: number;
+  last_used_at?: number;
+  created_at?: number;
+  updated_at?: number;
+  assigned_worker_ids?: string[];
+}
+
+export interface LlmKeyListOut {
+  keys: LlmKeyOut[];
+  count: number;
+}
+
+export interface LlmKeyTestOut {
+  ok: boolean;
+  models?: string[];
+  error?: string;
+  latency_ms?: number;
+}
+
+export interface LlmKeyUsageOut {
+  key_id: string;
+  provider: string;
+  local_usage_cents?: number;
+  local_total_requests?: number;
+  local_total_tokens?: number;
+  provider_balance_cents?: number | null;
+  provider_usage_cents?: number | null;
+  budget_remaining_cents?: number | null;
+}
+
+export interface LlmProviderInfo {
+  provider: string;
+  display_name: string;
+  base_url: string;
+  models?: string[];
+  supports_usage_api?: boolean;
+  stt_model?: string;
+  default_voice_id?: string;
+}
+
+export interface LlmProviderListOut {
+  providers: LlmProviderInfo[];
+}
+
+// -- Syndicates (SYND-001/002) --
+export interface SyndicateMemberOut {
+  user_id: string;
+  display_name?: string;
+  role?: string;
+  joined_at?: number;
+}
+
+export interface SyndicateOut {
+  syndicate_id: string;
+  name: string;
+  description?: string;
+  admin_user_id: string;
+  status?: string;
+  member_count?: number;
+  created_at?: number;
+  updated_at?: number;
+  members?: SyndicateMemberOut[];
+}
+
+export interface SyndicateInviteOut {
+  syndicate_id: string;
+  syndicate_name?: string;
+  user_id: string;
+  invited_by: string;
+  invited_at?: number;
+  status: string;
+}
+
+export interface SyndicateRequestOut {
+  syndicate_id: string;
+  user_id: string;
+  display_name?: string;
+  requested_at?: number;
+  message?: string;
+  status: string;
+}
+
+export interface SyndicateAuditOut {
+  event_id: string;
+  actor_id: string;
+  action: string;
+  target_id?: string;
+  details?: Record<string, unknown> | null;
+  ts?: number;
+}
+
+export interface SyndicateUserEntry {
+  syndicate_id: string;
+  syndicate_name?: string;
+  role?: string;
+  joined_at?: number;
+}
+
+export interface BundlePlanOut {
+  plan_id: string;
+  plan_type?: string;
+  syndicate_id: string;
+  name: string;
+  description?: string;
+  price_cents?: number;
+  interval?: string;
+  status?: string;
+  included_creator_ids?: string[];
+  current_members?: SyndicateMemberOut[];
+  created_at?: number;
+}
+
+export interface BundleSubscriptionOut {
+  subscription_id: string;
+  plan_id: string;
+  plan_type?: string;
+  syndicate_id: string;
+  syndicate_name?: string;
+  status: string;
+  price_cents?: number;
+  interval?: string;
+  current_period_start?: number;
+  current_period_end?: number;
+  created_at?: number;
+  cancelled_at?: number | null;
+  included_creators?: SyndicateMemberOut[];
 }

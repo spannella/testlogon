@@ -63,6 +63,7 @@ object AdsBillingTestTags {
     const val DEPOSIT_PM = "ads_deposit_payment_method"
     const val DEPOSIT_CONFIRM = "ads_deposit_confirm"
     const val DEPOSIT_SUCCESS = "ads_deposit_success"
+    const val DEPOSIT_DONE = "ads_deposit_done"
     const val ERROR_RETRY = "ads_error_retry"
 
     /** Per-row ledger tag (suffix is the row index). */
@@ -413,15 +414,27 @@ private fun DepositSheet(
                 else -> Unit
             }
 
-            TlButton(
-                text = stringResource(R.string.deposit_confirm),
-                onClick = onConfirm,
-                enabled = canSubmitDeposit && !submitting,
-                loading = submitting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag(AdsBillingTestTags.DEPOSIT_CONFIRM),
-            )
+            // ADV3-3 (B8): on a successful deposit swap Confirm for a terminal "Done" that dismisses the
+            // sheet, so the completed deposit cannot be accidentally re-submitted from the open sheet.
+            if (depositState is DepositState.Success) {
+                TlButton(
+                    text = stringResource(R.string.deposit_done),
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(AdsBillingTestTags.DEPOSIT_DONE),
+                )
+            } else {
+                TlButton(
+                    text = stringResource(R.string.deposit_confirm),
+                    onClick = onConfirm,
+                    enabled = canSubmitDeposit && !submitting,
+                    loading = submitting,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(AdsBillingTestTags.DEPOSIT_CONFIRM),
+                )
+            }
         }
     }
 }

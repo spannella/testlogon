@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 
 from app.services.sessions import require_ui_session
 from app.models import (
@@ -21,7 +22,7 @@ from app.models import (
 )
 from app.services import user_groups as svc
 
-router = APIRouter(prefix="/ui/groups", tags=["user-groups"])
+router = APIRouter(prefix="/ui/groups", tags=["user-groups"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 # ---------------------------------------------------------------------------

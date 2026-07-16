@@ -64,7 +64,7 @@ export function MentionsFeed() {
               <p className={cn("text-sm", !alert.read_at && "font-medium")}>
                 {alert.title}
               </p>
-              {alert.details?.text_preview && (
+              {!!alert.details?.text_preview && (
                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
                   {String(alert.details.text_preview)}
                 </p>

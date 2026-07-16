@@ -39,10 +39,24 @@ fun payoutStatusLabelRes(status: PayoutStatus): Int = when (status) {
     PayoutStatus.REQUESTED -> R.string.payout_status_requested
     PayoutStatus.APPROVED -> R.string.payout_status_approved
     PayoutStatus.PROCESSING -> R.string.payout_status_processing
+    PayoutStatus.PAID -> R.string.payout_status_paid
     PayoutStatus.COMPLETED -> R.string.payout_status_completed
+    PayoutStatus.FAILED -> R.string.payout_status_failed
+    PayoutStatus.RETURNED -> R.string.payout_status_returned
+    PayoutStatus.HELD -> R.string.payout_status_held
     PayoutStatus.REJECTED -> R.string.payout_status_rejected
     PayoutStatus.CANCELLED -> R.string.payout_status_cancelled
     PayoutStatus.UNKNOWN -> R.string.payout_status_unknown
+}
+
+/**
+ * PAY-53: label for a raw lifecycle-timeline status string (a superset of the chip vocabulary — it also
+ * includes `held`/`hold_released`). Falls back to the [PayoutStatus] label for the known values.
+ */
+fun payoutTimelineStatusLabelRes(rawStatus: String): Int = when (rawStatus.trim().lowercase()) {
+    "hold_released" -> R.string.payout_timeline_hold_released
+    "held", "on_hold" -> R.string.payout_status_held
+    else -> payoutStatusLabelRes(PayoutStatus.from(rawStatus))
 }
 
 /** String-resource id for a payout [PayoutMethodType] label, derived from the raw `method` string. */

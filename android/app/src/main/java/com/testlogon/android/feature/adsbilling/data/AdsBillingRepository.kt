@@ -8,6 +8,7 @@ import com.testlogon.android.core.model.ads.AdBillingEntry
 import com.testlogon.android.core.model.ads.AdCampaign
 import com.testlogon.android.core.model.ads.AdInvoice
 import com.testlogon.android.core.model.ads.DepositResult
+import com.testlogon.android.core.network.ads.AdCampaignUpdateIn
 import com.testlogon.android.core.network.ads.AdDepositIn
 import com.testlogon.android.core.network.ads.AdsAccountsApi
 import com.testlogon.android.core.network.error.ApiErrorParser
@@ -50,6 +51,26 @@ interface AdsBillingRepository {
      */
     suspend fun getCampaigns(accountId: String): ApiResult<List<AdCampaign>>
 
+    /**
+     * ADV3-4 (B2) - GET one campaign (for the management detail screen). Idempotent GET.
+     */
+    suspend fun getCampaign(accountId: String, campaignId: String): ApiResult<AdCampaign>
+
+    /**
+     * ADV3-4 (B2) - PATCH a campaign: pause/resume (via [status]), edit [budgetCents] / [bidCpmCents] /
+     * [bidCpcCents] / [bidCpaCents], or archive. Only non-null args are sent. The server returns {"ok":true}
+     * so this maps to Unit; the caller re-reads via [getCampaign]. NON-idempotent -> callers never auto-retry.
+     */
+    suspend fun updateCampaign(
+        accountId: String,
+        campaignId: String,
+        status: String? = null,
+        budgetCents: Long? = null,
+        bidCpmCents: Int? = null,
+        bidCpcCents: Int? = null,
+        bidCpaCents: Int? = null,
+    ): ApiResult<Unit>
+
     /** GET the account summary (balance + lifetime spend + company name + status), mapped. Idempotent GET. */
     suspend fun getAccount(accountId: String): ApiResult<AdAccountSummary>
 
@@ -85,6 +106,38 @@ class AdsBillingRepositoryImpl @Inject constructor(
         withContext(Dispatchers.IO) {
             call { api.listAdsAccountCampaigns(accountId).map { it.toDomain() } }
         }
+
+    override suspend fun getCampaign(
+        accountId: String,
+        campaignId: String,
+    ): ApiResult<AdCampaign> = withContext(Dispatchers.IO) {
+        call { api.getCampaign(accountId, campaignId).toDomain() }
+    }
+
+    override suspend fun updateCampaign(
+        accountId: String,
+        campaignId: String,
+        status: String?,
+        budgetCents: Long?,
+        bidCpmCents: Int?,
+        bidCpcCents: Int?,
+        bidCpaCents: Int?,
+    ): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        call {
+            api.updateCampaign(
+                accountId,
+                campaignId,
+                AdCampaignUpdateIn(
+                    status = status,
+                    budgetCents = budgetCents,
+                    bidCpmCents = bidCpmCents,
+                    bidCpcCents = bidCpcCents,
+                    bidCpaCents = bidCpaCents,
+                ),
+            )
+            Unit
+        }
+    }
 
     override suspend fun getAccount(accountId: String): ApiResult<AdAccountSummary> =
         withContext(Dispatchers.IO) {

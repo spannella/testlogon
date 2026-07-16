@@ -213,7 +213,7 @@ export default function Ec2LauncherPage() {
                     <TableCell>{inst.instance_type}</TableCell>
                     <TableCell>{statusBadge(inst.status)}</TableCell>
                     <TableCell className="font-mono text-sm">{inst.public_ip || "-"}</TableCell>
-                    <TableCell>{relativeTime(inst.created_at)}</TableCell>
+                    <TableCell>{relativeTime(inst.created_at ?? 0)}</TableCell>
                     <TableCell className="text-right space-x-1">
                       {inst.status === "running" && (
                         <>

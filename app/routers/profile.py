@@ -459,6 +459,11 @@ async def get_public_profile(identifier: str, req: Request):
     except Exception:
         pass
 
+    # MODX-11: an account-level moderation hold hides the profile from everyone but
+    # the owner (who keeps access so they can respond / appeal).
+    if _account_moderation_hidden(user_sub) and viewer_sub != user_sub:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
     if viewer_sub and viewer_sub != user_sub:
         try:
             from app.services.social import get_follow_status
@@ -658,6 +663,15 @@ async def profile_meta_tags(identifier: str):
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+def _account_moderation_hidden(user_sub: str) -> bool:
+    # MODX-11: True when an account-level moderation hold hides this profile.
+    try:
+        item = T.profile.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+    except Exception:
+        return False
+    return bool(item.get("moderation_hidden") or item.get("moderation_removed"))
+
 
 def _profile_lookup_etag(body: dict) -> str:
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)

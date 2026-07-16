@@ -64,6 +64,7 @@ class AdAnalyticsScreenTest {
                 AdAnalyticsScreen(
                     state = state,
                     onBack = {},
+                    onDimensionChanged = {},
                     onRangeChanged = { preset ->
                         // In-test reducer: swap the rendered preset (mirrors the VM re-query selecting a range).
                         state = when (val s = state) {

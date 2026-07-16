@@ -88,7 +88,6 @@ import {
   deleteShipGroup,
   formatCents,
   prettyStatus,
-  ORDER_LIFECYCLE_STATUSES,
   type OrderLifecycle,
   type OrderLifecycleStatus,
   type OrderAdjustmentType,

@@ -77,6 +77,9 @@ fun PostDetailRoute(
         onSubscribeClick = onSubscribeClick,
         onLikeToggle = { viewModel.onLikeToggle() },
         onToggleReaction = { emoji -> viewModel.onToggleReaction(emoji) },
+        onRepost = { viewModel.onRepost() },
+        onQuoteRepost = { quote -> viewModel.onRepost(quote) },
+        onUndoRepost = { viewModel.onUndoRepost() },
         onCommentCountChanged = viewModel::onCommentCountChanged,
         isOwnPost = isOwnPost,
         modifier = modifier,
@@ -98,6 +101,10 @@ fun PostDetailScreen(
     onSubscribeClick: (creatorId: String) -> Unit = {},
     onLikeToggle: () -> Unit = {},
     onToggleReaction: (emoji: String) -> Unit = {},
+    // SOCIAL-002 — repost / quote-repost / undo-repost of the detail post.
+    onRepost: () -> Unit = {},
+    onQuoteRepost: (quote: String) -> Unit = {},
+    onUndoRepost: () -> Unit = {},
     onCommentCountChanged: (delta: Int) -> Unit = {},
     // #25 — viewer authored this post => hide tipping in the comments.
     isOwnPost: Boolean = false,
@@ -162,6 +169,9 @@ fun PostDetailScreen(
                             onSubscribeClick = onSubscribeClick,
                             onLikeToggle = { onLikeToggle() },
                             onToggleReaction = { _, emoji -> onToggleReaction(emoji) },
+                            onRepost = { onRepost() },
+                            onQuoteRepost = { _, quote -> onQuoteRepost(quote) },
+                            onUndoRepost = { onUndoRepost() },
                             // #25 — can't tip your own post.
                             showTip = !isOwnPost,
                             // #3 — author sees a priced "Locked · $X" badge on their own locked post.

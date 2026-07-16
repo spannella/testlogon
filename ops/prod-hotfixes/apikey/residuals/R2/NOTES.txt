@@ -1,0 +1,47 @@
+R2 — API-KEY residual (#118): GET /ui/videos/admin/by-status/{status} 500 on legacy status
+=============================================================================================
+
+SYMPTOM (pre-existing, auth-independent — fails for BOTH api-key AND UI-session admin)
+  GET /ui/videos/admin/by-status/ready  -> 500
+  Root cause: list_videos_by_status() queries the ByStatusCreatedAt GSI and passes every
+  row through video_from_item(), which built VideoMetadataModel(status=<raw db value>).
+  `status` is the VideoStatus Literal; a stored value outside that Literal (e.g. "ready")
+  makes pydantic raise ValidationError -> the whole listing 500s on one legacy row.
+
+PROBE (prod, read-only — ops/.../R2/probe_r2.py, 61 rows scanned)
+  Only ONE dirty *real* (v_) video row:
+      v_advb2_6a4db687   status='ready'      (advertising-v2 seed artifact)
+  VideoStatus enum has NO "ready" (created/probing/probe_failed/pending_encoding/encoding/
+  encoding_failed/pending_review/approved/rejected/published/archived/deleted).
+  No live code path writes status="ready" to a v_ VideoMetadata row (the "ready" hits in the
+  codebase are broadcast/call recordings, kyc artifacts, download_mp4_status — other domains).
+  => "ready" is a legacy/seed artifact, NOT a real video-lifecycle state.
+  The 'other'-prefix dirty rows (vid_/vidV_ status None/pending, TICKET# rows) are filtered
+  out by the endpoint's begins_with("v_") FilterExpression and never deserialized.
+
+FIX (least-surprising, tolerant parse — do NOT pollute the lifecycle enum)
+  app/services/video_metadata_store.py: added a tolerant coercion used by video_from_item.
+    _VALID_VIDEO_STATUSES = frozenset(get_args(VideoStatus))   # stays in lockstep w/ model
+    _DEFAULT_VIDEO_STATUS = "created"
+    _coerce_video_status(raw): unknown/legacy -> logs a warning + returns "created";
+                               known values pass through unchanged.
+    video_from_item(): status=item.get("status") or "created"  ->  status=_coerce_video_status(item.get("status"))
+  A listing now surfaces the legacy row (bucketed to the safe default) instead of 500ing.
+  Normal path unchanged; enum + state-machine transitions untouched.
+
+BEFORE -> AFTER
+  GET /ui/videos/admin/by-status/ready :  500  ->  200 (returns the ready rows)
+  valid statuses (published/created/...) :  200 ->  200 (unchanged)
+
+VERIFY (prod DDB, in-process TestClient, synthetic user/key/video/entitlement, auto-cleaned)
+  ops/.../R2/verify_r2.py  = 14/14 PASS
+    - UNIT: old VideoMetadataModel(status="ready") raises; new video_from_item coerces -> created
+    - UI-session admin: by-status/ready 200 (not 500), includes ready rows (synthetic + real v_advb2); published/created still 200
+    - admin api-key (video:moderate + api_package entitlement): by-status/ready 200; published 200
+    - NEG: video:write -> by-status/ready 403 api_key_scope_denied (moderate required); no-key -> 401
+  E6 5-domain parity regression suite = 57/57 SUITE GREEN (video pass=10/10 — no E5/E6 regression)
+
+DEPLOY (LIVE PROD HOTFIX, mirrored byte-for-byte to dev clone android-impl)
+  prod .bak: /home/ubuntu/testlogon/app/services/video_metadata_store.py.bak_apikres_20260713_204900
+  deployed sha256(app/services/video_metadata_store.py) = 73801cc3a546188856e5f9181aecfb78f1e5fad57f7e3fa49fc0102a855b3ac3
+  restart: sudo -u ubuntu bash /home/ubuntu/restart_backend.sh ; openapi 200 (127.0.0.1:8000)

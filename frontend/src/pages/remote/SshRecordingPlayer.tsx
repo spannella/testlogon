@@ -32,7 +32,7 @@ export default function SshRecordingPlayer({
     [events],
   );
   const totalDuration = useMemo(
-    () => (outputEvents.length ? outputEvents[outputEvents.length - 1][0] : 0),
+    () => (outputEvents.length ? (outputEvents[outputEvents.length - 1]?.[0] ?? 0) : 0),
     [outputEvents],
   );
 
@@ -53,8 +53,8 @@ export default function SshRecordingPlayer({
       setPlaying(false);
       return;
     }
-    const prevOffset = index > 0 ? outputEvents[index - 1][0] : 0;
-    const nextOffset = outputEvents[index][0];
+    const prevOffset = index > 0 ? (outputEvents[index - 1]?.[0] ?? 0) : 0;
+    const nextOffset = outputEvents[index]?.[0] ?? 0;
     const delayMs = Math.max(0, (nextOffset - prevOffset) * 1000) / speed;
     timerRef.current = window.setTimeout(() => {
       setIndex((i) => i + 1);
@@ -81,7 +81,7 @@ export default function SshRecordingPlayer({
   };
 
   const cycleSpeed = () => {
-    const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
+    const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length] ?? 1;
     setSpeed(next);
   };
 

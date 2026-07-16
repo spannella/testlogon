@@ -117,7 +117,7 @@ export const contributeToTreasury = (groupId: string, amountCents: number) =>
 export const getTreasuryLedger = (
   groupId: string,
   params?: { cursor?: string; limit?: number },
-) => api.get<TreasuryLedgerResponse>(`/ui/groups/${groupId}/treasury/ledger`, { params });
+) => api.get<TreasuryLedgerResponse>(`/ui/groups/${groupId}/treasury/ledger`, feedParams(params));
 
 export const getTreasuryContributors = (groupId: string) =>
   api.get<ContributorListResponse>(`/ui/groups/${groupId}/treasury/contributors`);

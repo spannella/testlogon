@@ -118,8 +118,17 @@ export const deleteOrgEvent = (orgId: string, eventId: string) =>
 
 // ── Files ────────────────────────────────────────────────────────
 
+export interface OrgFileNode {
+  node_id: string;
+  name: string;
+  size?: number;
+  content_type?: string;
+  uploaded_by?: string;
+  created_at?: number;
+}
+
 export const listOrgFiles = (orgId: string) =>
-  api.get(`/ui/orgs/${orgId}/files`);
+  api.get<OrgFileNode[]>(`/ui/orgs/${orgId}/files`);
 
 export const uploadOrgFile = (orgId: string, file: File) => {
   const form = new FormData();

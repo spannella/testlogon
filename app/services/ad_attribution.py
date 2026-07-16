@@ -125,6 +125,9 @@ def attribute_conversion(
             return {"attributed": False, "reason": "no_click"}
 
     resolved_click_id = str(row.get("ad_click_id"))
+    # ADV3-2/A5: remember the pre-claim status so an insufficient-funds /
+    # budget-exceeded conversion can be UN-consumed (reverted) and retried later.
+    _prev_status = str(row.get("status", "") or "clicked")
 
     # Atomic last-click claim -> the primary idempotency guard: exactly one
     # successful claim (and therefore at most one conversion charge) per click.
@@ -201,6 +204,36 @@ def attribute_conversion(
             result["charge"] = {"ok": False, "reason": "charge_error"}
     else:
         result["charge"] = {"ok": True, "reason": "no_cpa_bid", "charge_cents": 0}
+
+    # ADV3-2/A5: an insufficient-funds (or budget-exceeded) conversion must NOT
+    # consume the click. Revert the atomic claim so a later retry -- after the
+    # advertiser refunds/refills -- can re-attribute + charge EXACTLY once. The
+    # _process_charge idempotency marker is released on insufficient funds /
+    # budget-exceeded, so the retry is clean (no double-charge).
+    _charge = result.get("charge") or {}
+    if (not _charge.get("ok")) and str(_charge.get("reason", "")) in (
+        "insufficient_funds", "budget_exceeded"
+    ):
+        try:
+            T.ad_clicks.update_item(
+                Key={"ad_click_id": resolved_click_id},
+                UpdateExpression=(
+                    "SET #s = :prev REMOVE converted_at, conversion_type, "
+                    "conversion_value_cents"
+                ),
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":prev": _prev_status},
+            )
+        except Exception:
+            logger.warning("ad_conversion_claim_revert_failed click=%s", resolved_click_id)
+        logger.info(
+            "ad_conversion_deferred click=%s reason=%s (claim reverted for retry)",
+            resolved_click_id, _charge.get("reason", ""),
+        )
+        result["attributed"] = False
+        result["reason"] = "charge_deferred"
+        return result
+
     logger.info(
         "ad_conversion_attributed click=%s type=%s owner=%s cpa=%s",
         resolved_click_id, conversion_type, content_owner_sub or "-", bid_cpa_cents,

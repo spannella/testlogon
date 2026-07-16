@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, get_args
 from uuid import uuid4
 
 from boto3.dynamodb.conditions import Key
@@ -15,8 +16,36 @@ from app.models_video import (
     UpdateVideoIn,
     VideoMetadataModel,
     VideoRendition,
+    VideoStatus,
 )
 from app.services.video_state_machine import validate_transition
+
+
+logger = logging.getLogger(__name__)
+
+# Canonical video-lifecycle statuses, derived from the VideoStatus Literal so
+# this stays in lockstep with the model. DynamoDB rows may carry legacy or
+# unknown status values (e.g. seed/import artifacts such as "ready") that are
+# not part of the modeled lifecycle. Deserializing such a value verbatim into
+# the VideoStatus Literal raises a pydantic ValidationError, which 500s any
+# admin listing that surfaces the row (e.g. GET /ui/videos/admin/by-status/
+# {status}). We coerce unknown values to the safe default so a listing never
+# fails on a single legacy row; the normal path is unchanged.
+_VALID_VIDEO_STATUSES = frozenset(get_args(VideoStatus))
+_DEFAULT_VIDEO_STATUS = "created"
+
+
+def _coerce_video_status(raw: Any) -> str:
+    """Return a valid VideoStatus, coercing unknown/legacy values safely."""
+    status = raw or _DEFAULT_VIDEO_STATUS
+    if status not in _VALID_VIDEO_STATUSES:
+        logger.warning(
+            "video_metadata: coercing unknown/legacy status %r to %r",
+            status,
+            _DEFAULT_VIDEO_STATUS,
+        )
+        return _DEFAULT_VIDEO_STATUS
+    return status
 
 
 def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
@@ -194,7 +223,7 @@ def video_from_item(item: Dict[str, Any]) -> VideoMetadataModel:
         owner_user_id=item["owner_user_id"],
         title=item["title"],
         description=item.get("description"),
-        status=item.get("status") or "created",
+        status=_coerce_video_status(item.get("status")),
         created_at=int(item.get("created_at") or 0),
         updated_at=int(item.get("updated_at") or 0),
         source_type=item.get("source_type") or "upload",

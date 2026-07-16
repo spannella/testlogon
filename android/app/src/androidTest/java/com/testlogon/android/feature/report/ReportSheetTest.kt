@@ -85,20 +85,20 @@ class ReportSheetTest {
 
         // (1) five topic checkboxes shown.
         ReportReason.SELECTABLE.forEach { topic ->
-            rule.onNodeWithTag(ReportFlowTestTags.topicRow(topic)).assertIsDisplayed()
+            rule.onNodeWithTag(ReportTestTags.topicRow(topic)).assertIsDisplayed()
         }
         // (2) Submit disabled initially.
-        rule.onNodeWithTag(ReportFlowTestTags.SUBMIT).assertIsNotEnabled()
+        rule.onNodeWithTag(ReportTestTags.SUBMIT).assertIsNotEnabled()
 
         // (3) check a topic + type a valid reason -> Submit enabled.
-        rule.onNodeWithTag(ReportFlowTestTags.topicRow(ReportReason.SPAM)).performClick()
-        rule.onNodeWithTag(ReportFlowTestTags.REASON_FIELD).performTextInput("repeated spam links")
-        rule.onNodeWithTag(ReportFlowTestTags.SUBMIT).assertIsEnabled()
+        rule.onNodeWithTag(ReportTestTags.topicRow(ReportReason.SPAM)).performClick()
+        rule.onNodeWithTag(ReportTestTags.STATEMENT_FIELD).performTextInput("repeated spam links")
+        rule.onNodeWithTag(ReportTestTags.SUBMIT).assertIsEnabled()
 
         // (4) tap Submit -> confirmation + Done invokes the SUBMITTED outcome.
-        rule.onNodeWithTag(ReportFlowTestTags.SUBMIT).performClick()
-        rule.onNodeWithTag(ReportFlowTestTags.SUCCESS).assertIsDisplayed()
-        rule.onNodeWithTag(ReportFlowTestTags.DONE).assertHasClickAction().performClick()
+        rule.onNodeWithTag(ReportTestTags.SUBMIT).performClick()
+        rule.onNodeWithTag(ReportTestTags.SUCCESS).assertIsDisplayed()
+        rule.onNodeWithTag(ReportTestTags.DONE).assertHasClickAction().performClick()
         assertEquals(ReportOutcome.SUBMITTED, outcome)
     }
 
@@ -107,17 +107,17 @@ class ReportSheetTest {
     fun retryableError_showsRetry_preservesState_recovers() {
         render(terminalOnSubmit = ReportUiState.Phase.Error("server boom", retryable = true))
 
-        rule.onNodeWithTag(ReportFlowTestTags.topicRow(ReportReason.HARASSMENT)).performClick()
-        rule.onNodeWithTag(ReportFlowTestTags.REASON_FIELD).performTextInput("illegal content")
-        rule.onNodeWithTag(ReportFlowTestTags.SUBMIT).performClick()
+        rule.onNodeWithTag(ReportTestTags.topicRow(ReportReason.HARASSMENT)).performClick()
+        rule.onNodeWithTag(ReportTestTags.STATEMENT_FIELD).performTextInput("illegal content")
+        rule.onNodeWithTag(ReportTestTags.SUBMIT).performClick()
 
         // Inline error + Retry visible; reason text still populated.
-        rule.onNodeWithTag(ReportFlowTestTags.ERROR).assertIsDisplayed()
-        rule.onNodeWithTag(ReportFlowTestTags.RETRY).assertIsDisplayed()
-        rule.onNodeWithTag(ReportFlowTestTags.REASON_FIELD).assertIsDisplayed()
+        rule.onNodeWithTag(ReportTestTags.ERROR).assertIsDisplayed()
+        rule.onNodeWithTag(ReportTestTags.RETRY).assertIsDisplayed()
+        rule.onNodeWithTag(ReportTestTags.STATEMENT_FIELD).assertIsDisplayed()
 
-        rule.onNodeWithTag(ReportFlowTestTags.RETRY).performClick()
-        rule.onNodeWithTag(ReportFlowTestTags.SUCCESS).assertIsDisplayed()
+        rule.onNodeWithTag(ReportTestTags.RETRY).performClick()
+        rule.onNodeWithTag(ReportTestTags.SUCCESS).assertIsDisplayed()
     }
 
     // TC-AND-383-12 (a11y: checkbox role + reachable controls)
@@ -127,9 +127,9 @@ class ReportSheetTest {
 
         // Each topic row is a toggleable (Role.Checkbox) with a click action.
         ReportReason.SELECTABLE.forEach { topic ->
-            rule.onNodeWithTag(ReportFlowTestTags.topicRow(topic)).assertHasClickAction()
+            rule.onNodeWithTag(ReportTestTags.topicRow(topic)).assertHasClickAction()
         }
         // Submit exposes a disabled state when the form is incomplete.
-        rule.onNodeWithTag(ReportFlowTestTags.SUBMIT).assertIsNotEnabled()
+        rule.onNodeWithTag(ReportTestTags.SUBMIT).assertIsNotEnabled()
     }
 }

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_scope
-from app.auth.roles import AdminScope, admin_profile_has_scope, normalize_admin_profile
+from app.auth.roles import AdminScope, Role, admin_profile_has_scope, normalize_admin_profile, normalize_role
 from app.core.aws import ddb
 from app.core.settings import S
 from app.core.tables import T
@@ -39,6 +39,32 @@ MESSAGES_TABLE = os.environ.get("DDB_MESSAGES", "Messages")
 SERIALIZER = TypeSerializer()
 POLICY_CATEGORY_RANK = {"spam": 1, "sexual": 2, "racist": 2, "criminal": 3, "extortion": 4}
 
+# MODX-18 (D5): live 6-category taxonomy (+ illegal lane) with the legacy report
+# topics accepted as server-side synonyms, so filtering by either the new
+# canonical category or the historical topic returns the same tickets.
+_CATEGORY_SYNONYMS: dict[str, set[str]] = {
+    "sexual": {"sexual"},
+    "violence_threats": {"violence_threats", "criminal"},
+    "hate": {"hate", "racist"},
+    "harassment": {"harassment", "extortion"},
+    "spam": {"spam"},
+    "other": {"other"},
+    "illegal": {"illegal", "csam"},
+    "criminal": {"violence_threats", "criminal"},
+    "racist": {"hate", "racist"},
+    "extortion": {"harassment", "extortion"},
+    "csam": {"illegal", "csam"},
+}
+
+
+def _topic_match_set(topic: str | None) -> set[str]:
+    if not topic:
+        return set()
+    return _CATEGORY_SYNONYMS.get(topic, {topic})
+
+
+CLAIM_TTL_SECONDS = 30 * 60  # MODX-20 (D8): stale claims auto-release after 30 min.
+
 
 def _require_senior_moderation_for_permanent_ban(*, admin: AuthenticatedUser) -> None:
     if admin.role.name == "ROOT":
@@ -59,14 +85,62 @@ def _require_senior_moderation_for_permanent_ban(*, admin: AuthenticatedUser) ->
 
 
 
+def _admin_user_has_senior_scope(user_sub: str) -> bool:
+    """MODX-7: is ``user_sub`` a real admin that actually holds the SENIOR
+    moderation scope (or ROOT)? Looks the user up in the users table — a
+    caller-supplied string that is not a real senior admin is rejected."""
+    if not user_sub:
+        return False
+    try:
+        item = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
+    except ClientError:
+        item = None
+    if not item:
+        return False
+    try:
+        role = normalize_role(item.get("role"))
+    except Exception:
+        role = None
+    if role == Role.ROOT:
+        return True
+    if role != Role.ADMIN:
+        return False
+    profile = normalize_admin_profile(item.get("admin_profile"))
+    return admin_profile_has_scope(profile, AdminScope.CONTENT_MODERATION_SENIOR)
+
+
 def _require_dual_approval_for_permanent_ban(*, admin: AuthenticatedUser, second_approver_admin_user_id: str | None) -> None:
-    if not bool(getattr(S, "moderation_dual_approval_permanent_ban_enabled", False)):
+    """MODX-7: real, non-self-attested dual approval. The second approver must be
+    supplied, be DISTINCT from the acting admin, EXIST, and actually hold the
+    CONTENT_MODERATION_SENIOR scope (or be ROOT). A fabricated/non-senior/absent
+    approver id is rejected. The approval is recorded as an auditable action."""
+    if not bool(getattr(S, "moderation_dual_approval_permanent_ban_enabled", True)):
         return
     approver = str(second_approver_admin_user_id or "").strip()
     if not approver:
-        raise HTTPException(status_code=403, detail="second approver is required for permanent ban")
+        raise HTTPException(status_code=403, detail={"code": "dual_approval_required", "message": "second approver is required for permanent ban"})
     if approver == admin.sub:
-        raise HTTPException(status_code=403, detail="second approver must be different from acting admin")
+        raise HTTPException(status_code=403, detail={"code": "dual_approval_self", "message": "second approver must be different from acting admin"})
+    if not _admin_user_has_senior_scope(approver):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "dual_approval_invalid_approver",
+                "message": "second approver must be an existing admin holding the senior moderation scope",
+                "required_scope": AdminScope.CONTENT_MODERATION_SENIOR.value,
+            },
+        )
+    # Record the second signature as an auditable, attributable action.
+    try:
+        write_moderation_audit_event(
+            action="permanent_ban_dual_approval_recorded",
+            actor_user_id=admin.sub,
+            ticket_id="",
+            target_user_id="",
+            metadata={"second_approver_admin_user_id": approver},
+        )
+    except Exception:
+        pass
 
 def _encode_cursor(cursor: Dict[str, Any] | None) -> str | None:
     if not cursor:
@@ -151,6 +225,14 @@ class ModerationTicketDetailOut(BaseModel):
     case_state: str = ""
     hold_until: int | None = None
     owner_user_id: str | None = None
+    distinct_reporter_count: int = 0
+    needs_human_review: bool = False
+    human_review_reason: str | None = None
+    illegal_lane: bool = False
+    sla_deadline: int | None = None
+    # MODX-14 (C3): surface the poster hold-response so the admin final call is not made blind.
+    poster_response: str | None = None
+    responded_at: int | None = None
 
 
 class ModerationDecisionIn(BaseModel):
@@ -183,6 +265,7 @@ class ModerationKpisOut(BaseModel):
     open_ticket_count: int
     critical_backlog: int
     oldest_open_age_minutes: int
+    on_hold_count: int = 0
     extortion_criminal_reports_window_count: int
 
 
@@ -281,6 +364,50 @@ def _get_ticket_or_404(ticket_id: str) -> dict[str, Any]:
     if not item or item.get("entity_type") != "moderation_ticket":
         raise HTTPException(status_code=404, detail="ticket not found")
     return item
+
+
+def _claim_is_active(ticket_item: Dict[str, Any], *, now: int | None = None) -> bool:
+    """A ticket is EXCLUSIVELY claimed only when a moderator claimed it through
+    the claim endpoint (which stamps assigned_at). A bare assigned_admin_user_id
+    with no claim timestamp (auto/legacy triage assignment) is NOT an exclusive
+    claim, and a claim older than the TTL auto-releases."""
+    assignee = str(ticket_item.get("assigned_admin_user_id") or "")
+    if not assignee:
+        return False
+    assigned_at = _parse_int(ticket_item.get("assigned_at"), 0)
+    if assigned_at <= 0:
+        return False  # MODX-20 (D8): assignment without a claim stamp is not a lock.
+    now = int(now or time.time())
+    if (now - assigned_at) > CLAIM_TTL_SECONDS:
+        return False  # MODX-20 (D8): stale claim -> treated as released.
+    return True
+
+
+def _enforce_claim(ticket_item: Dict[str, Any], admin: AuthenticatedUser, *, steal: bool = False) -> None:
+    """MODX-20 (D8): a fresh claim reserves the ticket for its assignee. Another
+    moderator must pass steal=true to act on it (recorded as an audit steal). An
+    unassigned or TTL-expired (stale) claim is free to act on."""
+    assignee = str(ticket_item.get("assigned_admin_user_id") or "")
+    if not _claim_is_active(ticket_item):
+        return
+    if assignee == admin.sub:
+        return
+    if steal:
+        write_moderation_audit_event(
+            action="ticket_claim_stolen",
+            actor_user_id=admin.sub,
+            ticket_id=str(ticket_item.get("ticket_id") or ""),
+            metadata={"previous_assignee": assignee},
+        )
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "ticket_claimed_by_other",
+            "assigned_admin_user_id": assignee,
+            "message": "ticket is claimed by another moderator; retry with steal=true to take it over",
+        },
+    )
 
 
 def _linked_reports(ticket_id: str) -> list[dict[str, Any]]:
@@ -631,7 +758,10 @@ def get_user_enforcement_history(
 def list_moderation_tickets(
     status: str | None = Query(default=None),
     queue: str | None = Query(default=None),
-    topic: Literal["sexual", "extortion", "criminal", "spam", "racist"] | None = Query(default=None),
+    topic: Literal[
+        "sexual", "violence_threats", "hate", "spam", "harassment", "other", "illegal",
+        "extortion", "criminal", "racist", "csam",
+    ] | None = Query(default=None),
     assignee: str | None = Query(default=None),
     limit: int = Query(default=25, ge=1, le=100),
     cursor: str | None = Query(default=None),
@@ -657,14 +787,16 @@ def list_moderation_tickets(
         if exclusive_start_key:
             query_kwargs["ExclusiveStartKey"] = exclusive_start_key
 
-        if topic and index_name != "ByLatestReportAt":
-            query_kwargs["FilterExpression"] = Attr("aggregated_topics").contains(topic)
-
         resp = T.moderation_tickets.query(**query_kwargs)
         items = [i for i in resp.get("Items", []) if i.get("entity_type") == "moderation_ticket"]
 
-        if topic and index_name == "ByLatestReportAt":
-            items = [i for i in items if topic in set(i.get("aggregated_topics") or [])]
+        # MODX-18 (D5): match against the live category AND its legacy synonyms.
+        if topic:
+            _match = _topic_match_set(topic)
+            items = [
+                i for i in items
+                if _match & {str(v) for v in (i.get("aggregated_topics") or [])}
+            ]
 
         if status and index_name != "ByStatusLatestReportAt":
             items = [i for i in items if str(i.get("status") or "") == status]
@@ -710,6 +842,12 @@ def get_moderation_ticket_detail(
     _hold_until_raw = _case.get("hold_until") if _case.get("hold_until") is not None else ticket_item.get("hold_until")
     _hold_until = _parse_int(_hold_until_raw, 0) or None
     _owner = str(_case.get("owner_user_id") or offender_user_id or "") or None
+    # MODX-3: distinct reporters (not raw events) + the human-review / illegal flags.
+    _rids = _case.get("reporter_ids")
+    if isinstance(_rids, (set, frozenset, list, tuple)):
+        _distinct = len({str(r) for r in _rids if r})
+    else:
+        _distinct = _parse_int(_case.get("distinct_reporter_count"), 0)
 
     return ModerationTicketDetailOut(
         ticket=_to_ticket_out(ticket_item),
@@ -717,6 +855,13 @@ def get_moderation_ticket_detail(
         case_state=_case_state,
         hold_until=_hold_until,
         owner_user_id=_owner,
+        distinct_reporter_count=_distinct,
+        needs_human_review=bool(_case.get("needs_human_review")),
+        human_review_reason=(str(_case.get("human_review_reason")) if _case.get("human_review_reason") else None),
+        illegal_lane=bool(_case.get("illegal_lane")),
+        sla_deadline=(_parse_int(_case.get("sla_deadline"), 0) or None),
+        poster_response=(str(_case.get("poster_response")) if _case.get("poster_response") else None),
+        responded_at=(_parse_int(_case.get("responded_at"), 0) or None),
         linked_reports=[
             LinkedReportOut(
                 report_id=str(r.get("report_id") or ""),
@@ -746,16 +891,17 @@ def claim_moderation_ticket(
     T.moderation_tickets.update_item(
         Key={"ticket_id": ticket_id},
         ConditionExpression="#status = :open",
-        UpdateExpression="SET #assigned_admin_user_id = :admin_sub, #updated_at = :updated_at",
+        UpdateExpression="SET #assigned_admin_user_id = :admin_sub, #assigned_at = :now, #updated_at = :now",
         ExpressionAttributeNames={
             "#status": "status",
             "#assigned_admin_user_id": "assigned_admin_user_id",
+            "#assigned_at": "assigned_at",
             "#updated_at": "updated_at",
         },
         ExpressionAttributeValues={
             ":open": "open",
             ":admin_sub": admin.sub,
-            ":updated_at": str(int(time.time())),
+            ":now": int(time.time()),
         },
     )
 
@@ -1114,6 +1260,19 @@ def _modab_case_and_meta(ticket_id: str):
     return ticket, case, meta
 
 
+def _modab_guard(fn, **kwargs):
+    """MODX-1/MODX-2: translate a guarded moderation_case state error into a clean
+    HTTP 409 instead of an unhandled 500. An admin action on a re-report ticket
+    whose case is in an incompatible state (e.g. an illegal transition, or a
+    terminal case that was not reopened) must surface as a conflict, never a 500."""
+    try:
+        return fn(**kwargs)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=f"moderation_case_state_conflict: {exc}") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 def _modab_tag_ticket(ticket_id: str, *, status: str, admin_sub: str, case_state: str, resolution: str | None = None, hold_until: int | None = None) -> None:
     now = str(int(time.time()))
     names = {"#s": "status", "#ua": "updated_at", "#cs": "moderation_case_state"}
@@ -1136,12 +1295,14 @@ def _modab_tag_ticket(ticket_id: str, *, status: str, admin_sub: str, case_state
 @router.post("/tickets/{ticket_id}/dismiss", response_model=_CaseActionOut)
 def dismiss_moderation_case(
     ticket_id: str,
+    steal: bool = Query(default=False),
     admin: AuthenticatedUser = Depends(require_content_moderation_admin),
 ) -> _CaseActionOut:
     ensure_admin_actions_enabled(admin)
     from app.services import moderation_lifecycle as _life
     ticket, case, meta = _modab_case_and_meta(ticket_id)
-    res = _life.admin_dismiss(case=case, metadata=meta, admin_user_id=admin.sub)
+    _enforce_claim(ticket, admin, steal=steal)
+    res = _modab_guard(_life.admin_dismiss, case=case, metadata=meta, admin_user_id=admin.sub)
     _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="no_violation")
     write_moderation_audit_event(
         action="content_case_dismissed",
@@ -1158,12 +1319,14 @@ def dismiss_moderation_case(
 @router.post("/tickets/{ticket_id}/confirm", response_model=_CaseActionOut)
 def confirm_moderation_case(
     ticket_id: str,
+    steal: bool = Query(default=False),
     admin: AuthenticatedUser = Depends(require_content_moderation_admin),
 ) -> _CaseActionOut:
     ensure_admin_actions_enabled(admin)
     from app.services import moderation_lifecycle as _life
     ticket, case, meta = _modab_case_and_meta(ticket_id)
-    res = _life.admin_confirm_hold(case=case, metadata=meta, admin_user_id=admin.sub)
+    _enforce_claim(ticket, admin, steal=steal)
+    res = _modab_guard(_life.admin_confirm_hold, case=case, metadata=meta, admin_user_id=admin.sub)
     _modab_tag_ticket(ticket_id, status="open", admin_sub=admin.sub, case_state=res["state"], hold_until=res.get("hold_until"))
     write_moderation_audit_event(
         action="content_violation_confirmed",
@@ -1181,15 +1344,28 @@ def confirm_moderation_case(
 def final_call_moderation_case(
     ticket_id: str,
     inp: _FinalCallIn,
+    steal: bool = Query(default=False),
     admin: AuthenticatedUser = Depends(require_content_moderation_admin),
 ) -> _CaseActionOut:
     ensure_admin_actions_enabled(admin)
     from app.services import moderation_lifecycle as _life
+    from app.services import moderation_reporter_reputation as _rep
+    from app.services import moderation_case as _mc
     ticket, case, meta = _modab_case_and_meta(ticket_id)
+    _enforce_claim(ticket, admin, steal=steal)
     note = str(inp.note or "").strip()
 
+    # MODX-5 (A13): an admin may not adjudicate a case where they are the owner or
+    # the sole reporter (conflict of interest).
+    if _rep.is_conflicted_admin(case, admin.sub):
+        raise HTTPException(status_code=403, detail={"code": "moderation_conflict_of_interest", "message": "cannot make the final call on your own content or a case where you are the sole reporter"})
+
+    # MODX-8: any final-call action on a locked illegal/CSAM case is SENIOR-only.
+    if _mc.is_illegal_category(case.get("categories") or []) or bool(case.get("illegal_lane")):
+        _require_senior_moderation_for_permanent_ban(admin=admin)
+
     if inp.action == "reinstate":
-        res = _life.admin_final_reinstate(case=case, metadata=meta, admin_user_id=admin.sub)
+        res = _modab_guard(_life.admin_final_reinstate, case=case, metadata=meta, admin_user_id=admin.sub)
         _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="no_violation")
         write_moderation_audit_event(
             action="content_case_reinstated",
@@ -1209,8 +1385,14 @@ def final_call_moderation_case(
         ensure_permanent_ban_scope_rollout(admin)
         _require_dual_approval_for_permanent_ban(admin=admin, second_approver_admin_user_id=inp.second_approver_admin_user_id)
 
-    res = _life.admin_final_delete(case=case, metadata=meta, admin_user_id=admin.sub, source_ticket_id=ticket_id, note=note or "admin_final_delete")
+    res = _modab_guard(_life.admin_final_delete, case=case, metadata=meta, admin_user_id=admin.sub, source_ticket_id=ticket_id, note=note or "admin_final_delete")
     owner = str(res.get("owner_user_id") or "")
+
+    # MODX-2: a lost race / already-terminal case is a clean no-op (changed=False):
+    # nothing was deleted by THIS call, so do not apply a ban or re-close as a new
+    # deletion — surface the current state as a conflict.
+    if res.get("changed") is False:
+        raise HTTPException(status_code=409, detail=f"moderation_case_state_conflict: not in a deletable state (state={res.get('state')})")
 
     if inp.ban and owner:
         ban_enf_id = f"enf_{uuid.uuid4().hex[:20]}"
@@ -1257,3 +1439,407 @@ def final_call_moderation_case(
         metadata={"case_id": case["case_id"], "enforcement_id": res.get("enforcement_id"), "banned": bool(inp.ban)},
     )
     return _CaseActionOut(ok=True, ticket_id=ticket_id, case_id=case["case_id"], state=res["state"], hidden=True, owner_user_id=owner, enforcement_id=res.get("enforcement_id"))
+
+
+# ── MODX-19: ban management (active-enforcement roster + lift) ────────────────
+class BanRosterEntryOut(BaseModel):
+    user_id: str
+    enforcement_id: str
+    source_ticket_id: str = ""
+    created_at: int = 0
+    created_by_admin_user_id: str | None = None
+    duration_days: int = 0
+    ban_until: int = 0
+    permanent: bool = False
+    note: str = ""
+    account_status: str = ""
+    active: bool = True
+
+
+class BanRosterOut(BaseModel):
+    items: list[BanRosterEntryOut]
+    next_cursor: str | None = None
+
+
+def _active_ban_enforcements() -> list[dict[str, Any]]:
+    """All active ban enforcement rows. Prefers the ByStatusCreatedAt GSI
+    (status HASH) and falls back to a bounded scan if the index is unavailable."""
+    rows: list[dict[str, Any]] = []
+    esk = None
+    try:
+        while True:
+            kwargs: dict[str, Any] = {
+                "IndexName": "ByStatusCreatedAt",
+                "KeyConditionExpression": Key("status").eq("active"),
+                "ScanIndexForward": False,
+            }
+            if esk:
+                kwargs["ExclusiveStartKey"] = esk
+            resp = T.user_enforcement_history.query(**kwargs)
+            rows.extend(resp.get("Items", []))
+            esk = resp.get("LastEvaluatedKey")
+            if not esk:
+                break
+    except ClientError:
+        rows = []
+        esk = None
+        for _ in range(20):
+            kwargs = {"FilterExpression": Attr("status").eq("active")}
+            if esk:
+                kwargs["ExclusiveStartKey"] = esk
+            resp = T.user_enforcement_history.scan(**kwargs)
+            rows.extend(resp.get("Items", []))
+            esk = resp.get("LastEvaluatedKey")
+            if not esk:
+                break
+    return [
+        r for r in rows
+        if r.get("entity_type") == "user_enforcement" and str(r.get("enforcement_type")) == "ban"
+    ]
+
+
+def _ban_roster_entry(r: dict[str, Any], *, now: int) -> BanRosterEntryOut:
+    uid = str(r.get("user_id") or "")
+    acct: dict[str, Any] = {}
+    try:
+        acct = T.account_state.get_item(Key={"user_sub": uid}).get("Item") or {}
+    except Exception:
+        acct = {}
+    acct_status = str(acct.get("status") or "")
+    ban_until = _parse_int(acct.get("ban_until"), 0)
+    currently_banned = acct_status in ("banned", "suspended") and (ban_until == 0 or now < ban_until)
+    active = str(r.get("status") or "") == "active" and currently_banned
+    return BanRosterEntryOut(
+        user_id=uid,
+        enforcement_id=str(r.get("enforcement_id") or ""),
+        source_ticket_id=str(r.get("source_ticket_id") or ""),
+        created_at=_parse_int(r.get("created_at"), 0),
+        created_by_admin_user_id=str(r.get("created_by_admin_user_id") or "") or None,
+        duration_days=_parse_int(r.get("duration_days"), 0),
+        ban_until=ban_until,
+        permanent=bool(acct_status in ("banned", "suspended") and ban_until == 0),
+        note=str(r.get("note") or acct.get("ban_note") or ""),
+        account_status=acct_status,
+        active=active,
+    )
+
+
+@router.get("/bans", response_model=BanRosterOut)
+def list_moderation_bans(
+    user: str | None = Query(default=None),
+    include_inactive: bool = Query(default=False),
+    _admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> BanRosterOut:
+    """MODX-19 (D4): active-ban roster. ``?user=`` returns that user's full ban
+    history (active + lifted/expired); the default roster returns only currently
+    active bans."""
+    ensure_admin_board_enabled(_admin)
+    now = int(time.time())
+    if user:
+        rows = [
+            r for r in _query_enforcement_history_by_offender(str(user))
+            if str(r.get("enforcement_type")) == "ban"
+        ]
+    else:
+        rows = _active_ban_enforcements()
+    entries = [_ban_roster_entry(r, now=now) for r in rows]
+    if not user and not include_inactive:
+        entries = [e for e in entries if e.active]
+    entries.sort(key=lambda e: e.created_at, reverse=True)
+    return BanRosterOut(items=entries, next_cursor=None)
+
+
+class BanLiftIn(BaseModel):
+    note: str | None = Field(default=None, max_length=2000)
+    enforcement_id: str | None = Field(default=None, max_length=128)
+
+
+class BanLiftOut(BaseModel):
+    ok: bool
+    user_id: str
+    account_status: str
+    lifted_enforcement_ids: list[str] = Field(default_factory=list)
+
+
+@router.post("/bans/{user_id}/lift", response_model=BanLiftOut)
+def lift_moderation_ban(
+    user_id: str,
+    inp: BanLiftIn,
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> BanLiftOut:
+    """MODX-19 (D4): reverse a wrongful/permanent ban. Sets account_state back to
+    ``active`` (fail-closed ban gate re-admits the user), closes the matching active
+    ban enforcement row(s) as ``lifted``, writes an audit event, notifies the user.
+    Idempotent."""
+    ensure_admin_actions_enabled(admin)
+    uid = str(user_id or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="user_id required")
+    now = str(int(time.time()))
+    acct: dict[str, Any] = {}
+    try:
+        acct = T.account_state.get_item(Key={"user_sub": uid}).get("Item") or {}
+    except Exception:
+        acct = {}
+    T.account_state.put_item(
+        Item={
+            "user_sub": uid,
+            "status": "active",
+            "updated_at": int(time.time()),
+            "reason": "moderation_ban_lifted",
+            "requested_by": admin.sub,
+            "ban_until": 0,
+            "lifted_at": int(time.time()),
+            "lifted_by_admin_user_id": admin.sub,
+            "ban_note": str(inp.note or acct.get("ban_note") or "")[:500],
+        }
+    )
+    rows = [
+        r for r in _query_enforcement_history_by_offender(uid)
+        if str(r.get("enforcement_type")) == "ban" and str(r.get("status")) == "active"
+    ]
+    if inp.enforcement_id:
+        rows = [r for r in rows if str(r.get("enforcement_id")) == str(inp.enforcement_id)]
+    lifted: list[str] = []
+    for r in rows:
+        enf_id = str(r.get("enforcement_id") or "")
+        if not enf_id:
+            continue
+        try:
+            T.user_enforcement_history.update_item(
+                Key={"user_id": uid, "enforcement_id": enf_id},
+                UpdateExpression="SET #s = :lifted, #la = :now, #lb = :admin",
+                ExpressionAttributeNames={"#s": "status", "#la": "lifted_at", "#lb": "lifted_by_admin_user_id"},
+                ExpressionAttributeValues={":lifted": "lifted", ":now": now, ":admin": admin.sub},
+            )
+            lifted.append(enf_id)
+        except Exception:
+            pass
+    write_moderation_audit_event(
+        action="ban_lifted",
+        actor_user_id=admin.sub,
+        target_user_id=uid,
+        metadata={"lifted_enforcement_ids": lifted, "note": str(inp.note or "")[:500]},
+    )
+    try:
+        from app.services.alerts import write_alert
+        write_alert(
+            uid,
+            event="moderation_ban_lifted",
+            outcome="resolved",
+            title="Account restriction lifted",
+            details={"action": "ban_lifted", "note": str(inp.note or "")[:500]},
+        )
+    except Exception:
+        pass
+    return BanLiftOut(ok=True, user_id=uid, account_status="active", lifted_enforcement_ids=lifted)
+
+
+# ── MODX-20: decision audit-trail read ───────────────────────────────────────
+class AuditEventOut(BaseModel):
+    audit_id: str
+    action: str
+    actor_user_id: str
+    ticket_id: str = ""
+    content_type: str = ""
+    content_id: str = ""
+    target_user_id: str = ""
+    created_at: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuditTrailOut(BaseModel):
+    items: list[AuditEventOut]
+
+
+def _project_audit(row: dict[str, Any]) -> AuditEventOut:
+    return AuditEventOut(
+        audit_id=str(row.get("audit_id") or ""),
+        action=str(row.get("action") or ""),
+        actor_user_id=str(row.get("actor_user_id") or ""),
+        ticket_id=str(row.get("ticket_id") or ""),
+        content_type=str(row.get("content_type") or ""),
+        content_id=str(row.get("content_id") or ""),
+        target_user_id=str(row.get("target_user_id") or ""),
+        created_at=_parse_int(row.get("created_at"), 0),
+        metadata=(row.get("metadata") if isinstance(row.get("metadata"), dict) else {}),
+    )
+
+
+def _query_audit(index_name: str, key_attr: str, key_val: str, limit: int) -> list[dict[str, Any]]:
+    try:
+        resp = T.moderation_audit_log.query(
+            IndexName=index_name,
+            KeyConditionExpression=Key(key_attr).eq(key_val),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        rows = resp.get("Items", [])
+    except ClientError:
+        rows = []
+    rows.sort(key=lambda r: _parse_int(r.get("created_at"), 0), reverse=True)
+    return rows[:limit]
+
+
+@router.get("/tickets/{ticket_id}/audit", response_model=AuditTrailOut)
+def get_ticket_audit_trail(
+    ticket_id: str,
+    limit: int = Query(default=100, ge=1, le=200),
+    _admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> AuditTrailOut:
+    """MODX-20 (D6): who/when/why decision timeline for one ticket."""
+    ensure_admin_board_enabled(_admin)
+    rows = _query_audit("ByTicketCreatedAt", "ticket_id", ticket_id, limit)
+    return AuditTrailOut(items=[_project_audit(r) for r in rows])
+
+
+@router.get("/audit", response_model=AuditTrailOut)
+def get_audit_by_actor(
+    actor: str = Query(...),
+    limit: int = Query(default=100, ge=1, le=200),
+    _admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> AuditTrailOut:
+    """MODX-20 (D6): every moderation action taken by one moderator."""
+    ensure_admin_board_enabled(_admin)
+    rows = _query_audit("ByActorCreatedAt", "actor_user_id", actor, limit)
+    return AuditTrailOut(items=[_project_audit(r) for r in rows])
+
+
+# ── MODX-20: unclaim / reassign ──────────────────────────────────────────────
+@router.post("/tickets/{ticket_id}/unclaim", response_model=ModerationTicketOut)
+def unclaim_moderation_ticket(
+    ticket_id: str,
+    reassign_to: str | None = Query(default=None),
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> ModerationTicketOut:
+    """MODX-20 (D8): release a claim (or hand it to another moderator) so an
+    abandoned claim never wedges the assignee filter."""
+    ensure_admin_actions_enabled(admin)
+    ticket_item = _get_ticket_or_404(ticket_id)
+    assignee = str(ticket_item.get("assigned_admin_user_id") or "")
+    new_assignee = str(reassign_to or "").strip()
+    now = int(time.time())
+    if new_assignee:
+        T.moderation_tickets.update_item(
+            Key={"ticket_id": ticket_id},
+            UpdateExpression="SET assigned_admin_user_id = :a, assigned_at = :now, updated_at = :nows",
+            ExpressionAttributeValues={":a": new_assignee, ":now": now, ":nows": str(now)},
+        )
+        action, meta = "ticket_reassigned", {"from": assignee, "to": new_assignee}
+    else:
+        T.moderation_tickets.update_item(
+            Key={"ticket_id": ticket_id},
+            UpdateExpression="REMOVE assigned_admin_user_id, assigned_at SET updated_at = :nows",
+            ExpressionAttributeValues={":nows": str(now)},
+        )
+        action, meta = "ticket_unassigned", {"from": assignee}
+    write_moderation_audit_event(action=action, actor_user_id=admin.sub, ticket_id=ticket_id, metadata=meta)
+    return _to_ticket_out(_get_ticket_or_404(ticket_id))
+
+
+# ── MODX-22: bulk triage actions ─────────────────────────────────────────────
+class BulkModerationIn(BaseModel):
+    ticket_ids: list[str] = Field(default_factory=list, max_length=100)
+    action: Literal["dismiss", "confirm", "reinstate", "delete"]
+    note: str | None = Field(default=None, max_length=2000)
+    steal: bool = False
+
+
+class BulkItemResultOut(BaseModel):
+    ticket_id: str
+    ok: bool
+    state: str | None = None
+    error_code: str | None = None
+    error: str | None = None
+
+
+class BulkModerationOut(BaseModel):
+    action: str
+    total: int
+    succeeded: int
+    failed: int
+    results: list[BulkItemResultOut]
+
+
+@router.post("/tickets/bulk", response_model=BulkModerationOut)
+def bulk_moderation_action(
+    inp: BulkModerationIn,
+    admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> BulkModerationOut:
+    """MODX-22 (D11): apply one triage action to many tickets, returning a per-item
+    outcome. Each item runs the SAME guarded state-machine path as the single-ticket
+    endpoints, so a brigade wave can be cleared in one call without losing per-item
+    correctness (illegal-state / claimed / conflict errors are reported, not fatal)."""
+    ensure_admin_actions_enabled(admin)
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for t in (inp.ticket_ids or []):
+        tid = str(t).strip()
+        if tid and tid not in seen:
+            seen.add(tid)
+            uniq.append(tid)
+    results: list[BulkItemResultOut] = []
+    for tid in uniq:
+        try:
+            if inp.action == "dismiss":
+                r = dismiss_moderation_case(tid, steal=inp.steal, admin=admin)
+            elif inp.action == "confirm":
+                r = confirm_moderation_case(tid, steal=inp.steal, admin=admin)
+            elif inp.action == "reinstate":
+                r = final_call_moderation_case(tid, _FinalCallIn(action="reinstate", note=inp.note), steal=inp.steal, admin=admin)
+            else:  # delete
+                r = final_call_moderation_case(tid, _FinalCallIn(action="delete", note=inp.note), steal=inp.steal, admin=admin)
+            results.append(BulkItemResultOut(ticket_id=tid, ok=True, state=getattr(r, "state", None)))
+        except HTTPException as exc:
+            code = None
+            detail = exc.detail
+            if isinstance(detail, dict):
+                code = str(detail.get("code") or "") or None
+                msg = str(detail.get("message") or detail)
+            else:
+                msg = str(detail)
+            results.append(BulkItemResultOut(ticket_id=tid, ok=False, error_code=code, error=msg))
+        except Exception as exc:  # noqa: BLE001
+            results.append(BulkItemResultOut(ticket_id=tid, ok=False, error=str(exc)))
+    succeeded = sum(1 for r in results if r.ok)
+    return BulkModerationOut(
+        action=inp.action,
+        total=len(uniq),
+        succeeded=succeeded,
+        failed=len(uniq) - succeeded,
+        results=results,
+    )
+
+
+# ── MODX-18 (D16): read-only auto-hide rules panel ───────────────────────────
+class AutoHideRulesOut(BaseModel):
+    severe_categories: list[str]
+    lower_categories: list[str]
+    illegal_categories: list[str]
+    lower_hide_distinct_reporter_threshold: int
+    severe_distinct_reporter_floor: int
+    velocity_burst_min: int
+    new_account_age_seconds: int
+    protected_account_age_seconds: int
+    hold_window_seconds: int
+
+
+@router.get("/auto-hide-rules", response_model=AutoHideRulesOut)
+def get_auto_hide_rules(
+    _admin: AuthenticatedUser = Depends(require_content_moderation_admin),
+) -> AutoHideRulesOut:
+    """MODX-18 (D16): surface the (currently hardcoded) auto-hide thresholds so an
+    operator can see WHY content auto-hid instead of guessing."""
+    ensure_admin_board_enabled(_admin)
+    from app.services import moderation_case as _mc
+    return AutoHideRulesOut(
+        severe_categories=sorted(_mc.SEVERE_CATEGORIES),
+        lower_categories=sorted(_mc.LOWER_CATEGORIES),
+        illegal_categories=sorted(_mc.ILLEGAL_CATEGORIES),
+        lower_hide_distinct_reporter_threshold=int(_mc.LOWER_HIDE_THRESHOLD),
+        severe_distinct_reporter_floor=int(_mc.SEVERE_DISTINCT_FLOOR),
+        velocity_burst_min=int(_mc.VELOCITY_BURST_MIN),
+        new_account_age_seconds=int(_mc.NEW_ACCOUNT_AGE_SECONDS),
+        protected_account_age_seconds=int(_mc.PROTECTED_ACCOUNT_AGE_SECONDS),
+        hold_window_seconds=int(_mc.HOLD_WINDOW_SECONDS),
+    )

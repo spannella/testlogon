@@ -10,7 +10,7 @@ function formatCents(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-export default function EarningsSummaryCard({ breakdown, currency }: EarningsSummaryCardProps) {
+export default function EarningsSummaryCard({ breakdown }: EarningsSummaryCardProps) {
   const items = [
     { label: "Subscriptions", value: breakdown.subscriptions },
     { label: "Tips", value: breakdown.tips },

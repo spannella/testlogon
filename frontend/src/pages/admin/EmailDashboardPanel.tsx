@@ -97,7 +97,7 @@ export default function EmailDashboardPanel({ days = 7 }: { days?: number }) {
     queryFn: () => getEmailComplaints(20),
     staleTime: 10_000,
   });
-  const deliveries = useQuery({
+  useQuery({
     queryKey: ["admin-email", "deliveries"],
     queryFn: () => getEmailDeliveries(20),
     staleTime: 10_000,

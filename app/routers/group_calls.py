@@ -9,6 +9,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 
 from app.core.settings import S
 from app.models import (
@@ -42,7 +43,7 @@ from app.services.group_call_service import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/ui/calls/group", tags=["group-calls"])
+router = APIRouter(prefix="/ui/calls/group", tags=["group-calls"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 # ---------------------------------------------------------------------------

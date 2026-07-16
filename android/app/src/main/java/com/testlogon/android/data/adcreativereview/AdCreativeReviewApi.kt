@@ -66,6 +66,12 @@ data class PendingCreativeDto(
     @Json(name = "height") val height: Int? = null,
     @Json(name = "duration_seconds") val durationSeconds: Int? = null,
     @Json(name = "rotation_weight") val rotationWeight: Int? = null,
+    // ADV3-11 (E1): automated ad-policy pass results, stamped at submit-for-review.
+    // Absent/empty on legacy rows -> screen renders no risk badge (clean).
+    @Json(name = "policy_decision") val policyDecision: String? = null,
+    @Json(name = "policy_score") val policyScore: Int? = null,
+    @Json(name = "policy_flags") val policyFlags: List<String> = emptyList(),
+    @Json(name = "policy_reasons") val policyReasons: List<String> = emptyList(),
 )
 
 @JsonClass(generateAdapter = true)

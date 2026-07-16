@@ -1,7 +1,29 @@
 import { api } from "@/api/client";
 
+// W4/MODX-18: full backend content-type taxonomy. The prior 6-value union silently
+// excluded the video/video_comment/syndicate_post/catalog/broadcast/story/clip/account
+// surfaces the backend `CreateModerationReportIn` now accepts, so a report against any of
+// those surfaces was untypeable at the call site.
+export type ModerationReportContentType =
+  | "feed_post"
+  | "feed_comment"
+  | "feed_media"
+  | "message"
+  | "message_media"
+  | "video"
+  | "video_comment"
+  | "syndicate_post"
+  | "profile_photo"
+  | "user"
+  | "account"
+  | "catalog_item"
+  | "catalog_review"
+  | "broadcast_message"
+  | "story"
+  | "clip";
+
 export interface CreateModerationReportReq {
-  content_type: "feed_post" | "feed_comment" | "feed_media" | "message" | "message_media" | "profile_photo";
+  content_type: ModerationReportContentType;
   content_id: string;
   topics: string[];
   reason_text: string;
@@ -11,6 +33,17 @@ export interface CreateModerationReportReq {
   conversation_id?: string;
   message_id?: string;
   profile_user_id?: string;
+  // Content-type-specific correlation ids the backend validates per surface
+  // (syndicate_post→syndicate_id, catalog_item→category_id/item_id,
+  // catalog_review→review_id, broadcast_message→session_id, video→video_id, story→story_id, clip→clip_id).
+  video_id?: string;
+  syndicate_id?: string;
+  category_id?: string;
+  item_id?: string;
+  review_id?: string;
+  session_id?: string;
+  story_id?: string;
+  clip_id?: string;
 }
 
 export interface ModerationTicket {
@@ -42,6 +75,21 @@ export interface ModerationLinkedReport {
   metadata: Record<string, unknown>;
 }
 
+// MODX-17 (D7): the REAL projected shape emitted by admin_moderation._project_enforcement_row.
+// The old UI type ({ ticket_id, decision, decided_by, decided_at }) never matched the payload,
+// so every prior-enforcement row rendered `undefined`.
+export interface ModerationEnforcementRecord {
+  user_id: string;
+  enforcement_id: string;
+  enforcement_type: string;
+  status: string;
+  source_ticket_id: string;
+  created_at: number;
+  created_by_admin_user_id?: string | null;
+  duration_days: number;
+  note: string;
+}
+
 export interface ModerationTicketDetailResp {
   ticket: ModerationTicket;
   content_snapshot: Record<string, unknown>;
@@ -51,13 +99,109 @@ export interface ModerationTicketDetailResp {
     total_tickets: number;
     open_tickets: number;
     total_reports: number;
+    total_enforcements?: number;
   };
-  prior_enforcement_history: Array<{
+  prior_enforcement_history: ModerationEnforcementRecord[];
+  // MODX-17 (D1): the state-machine surface the web board must operate on.
+  case_state: string;
+  hold_until?: number | null;
+  owner_user_id?: string | null;
+  distinct_reporter_count: number;
+  needs_human_review: boolean;
+  human_review_reason?: string | null;
+  illegal_lane: boolean;
+  sla_deadline?: number | null;
+  poster_response?: string | null;
+  responded_at?: number | null;
+}
+
+// MODX-18 (D5): the live 6-category taxonomy (+ illegal lane) with legacy topics accepted
+// server-side as synonyms. Replaces the dead Literal["sexual","extortion","criminal","spam","racist"].
+export type ModerationTopic =
+  | "sexual"
+  | "violence_threats"
+  | "hate"
+  | "harassment"
+  | "spam"
+  | "other"
+  | "illegal"
+  | "extortion"
+  | "criminal"
+  | "racist"
+  | "csam";
+
+export interface ModerationKpis {
+  generated_at: number;
+  lookback_hours: number;
+  surge_window_minutes: number;
+  ticket_volume: number;
+  resolution_count: number;
+  resolution_latency_avg_seconds: number;
+  resolution_latency_p95_seconds: number;
+  warning_count: number;
+  ban_count: number;
+  warning_rate: number;
+  ban_rate: number;
+  open_ticket_count: number;
+  critical_backlog: number;
+  oldest_open_age_minutes: number;
+  on_hold_count: number;
+  extortion_criminal_reports_window_count: number;
+}
+
+export interface ModerationCaseActionResp {
+  ok: boolean;
+  ticket_id: string;
+  case_id: string;
+  state: string;
+  hidden: boolean;
+  hold_until?: number | null;
+  owner_user_id?: string | null;
+  enforcement_id?: string | null;
+}
+
+export interface ModerationBanEntry {
+  user_id: string;
+  enforcement_id: string;
+  source_ticket_id: string;
+  created_at: number;
+  created_by_admin_user_id?: string | null;
+  duration_days: number;
+  ban_until: number;
+  permanent: boolean;
+  note: string;
+  account_status: string;
+  active: boolean;
+}
+
+export interface ModerationBanRoster {
+  items: ModerationBanEntry[];
+  next_cursor?: string | null;
+}
+
+export interface ModerationAuditEvent {
+  audit_id: string;
+  action: string;
+  actor_user_id: string;
+  ticket_id: string;
+  content_type?: string;
+  content_id?: string;
+  target_user_id: string;
+  created_at: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ModerationBulkResult {
+  action: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{
     ticket_id: string;
-    decision: string;
-    note: string;
-    decided_at: number;
-    decided_by: string;
+    ok: boolean;
+    state?: string | null;
+    error_code?: string | null;
+    error?: string | null;
   }>;
 }
 
@@ -67,7 +211,7 @@ export const createModerationReport = (body: CreateModerationReportReq) =>
 export const listModerationTickets = (params?: {
   status?: string;
   queue?: string;
-  topic?: "sexual" | "extortion" | "criminal" | "spam" | "racist";
+  topic?: ModerationTopic;
   assignee?: string;
   limit?: number;
   cursor?: string;
@@ -89,6 +233,79 @@ export const getModerationTicketDetail = (ticketId: string) =>
 export const claimModerationTicket = (ticketId: string) =>
   api.post<ModerationTicket>(`/v1/admin/moderation/tickets/${encodeURIComponent(ticketId)}/claim`, {});
 
+export const unclaimModerationTicket = (ticketId: string, reassignTo?: string) =>
+  api.post<ModerationTicket>(
+    `/v1/admin/moderation/tickets/${encodeURIComponent(ticketId)}/unclaim`,
+    {},
+    reassignTo ? { reassign_to: reassignTo } : undefined,
+  );
+
+// MODX-17 (D1): the STATE-MACHINE actions (the legacy decide/resolve below are kept as thin
+// compatibility wrappers over the same tickets, but a moderator should drive these).
+export const dismissModerationCase = (ticketId: string, steal = false) =>
+  api.post<ModerationCaseActionResp>(
+    `/v1/admin/moderation/tickets/${encodeURIComponent(ticketId)}/dismiss`,
+    {},
+    steal ? { steal: "true" } : undefined,
+  );
+
+export const confirmModerationCase = (ticketId: string, steal = false) =>
+  api.post<ModerationCaseActionResp>(
+    `/v1/admin/moderation/tickets/${encodeURIComponent(ticketId)}/confirm`,
+    {},
+    steal ? { steal: "true" } : undefined,
+  );
+
+export const finalCallModerationCase = (
+  ticketId: string,
+  body: {
+    action: "reinstate" | "delete";
+    note?: string;
+    ban?: boolean;
+    ban_duration_days?: number;
+    second_approver_admin_user_id?: string;
+  },
+  steal = false,
+) =>
+  api.post<ModerationCaseActionResp>(
+    `/v1/admin/moderation/tickets/${encodeURIComponent(ticketId)}/final-call`,
+    body,
+    steal ? { steal: "true" } : undefined,
+  );
+
+// MODX-22 (D11): bulk triage over many tickets.
+export const bulkModerationAction = (body: {
+  ticket_ids: string[];
+  action: "dismiss" | "confirm" | "reinstate" | "delete";
+  note?: string;
+  steal?: boolean;
+}) => api.post<ModerationBulkResult>("/v1/admin/moderation/tickets/bulk", body);
+
+// MODX-18 (D12): KPIs for the header strip.
+export const getModerationKpis = () =>
+  api.get<ModerationKpis>("/v1/admin/moderation/kpis");
+
+// MODX-20 (D6): decision audit trail.
+export const getTicketAuditTrail = (ticketId: string) =>
+  api.get<{ items: ModerationAuditEvent[] }>(`/v1/admin/moderation/tickets/${encodeURIComponent(ticketId)}/audit`);
+
+export const getAuditByActor = (actor: string) =>
+  api.get<{ items: ModerationAuditEvent[] }>("/v1/admin/moderation/audit", { actor });
+
+// MODX-19 (D4): ban management.
+export const listModerationBans = (includeInactive = false) =>
+  api.get<ModerationBanRoster>(
+    "/v1/admin/moderation/bans",
+    includeInactive ? { include_inactive: "true" } : {},
+  );
+
+export const liftModerationBan = (userId: string, note?: string) =>
+  api.post<{ ok: boolean; user_id: string; account_status: string; lifted_enforcement_ids: string[] }>(
+    `/v1/admin/moderation/bans/${encodeURIComponent(userId)}/lift`,
+    { note },
+  );
+
+// ---- Legacy compatibility wrappers (kept so existing callers/tests still resolve). ----
 export const decideModerationTicket = (
   ticketId: string,
   body: { decision: "no_violation" | "remove" | "warn" | "ban"; note?: string },

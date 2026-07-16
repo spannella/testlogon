@@ -25,8 +25,6 @@ import { useEmojiStore } from "@/stores/emojiStore";
 import { listMyCustomEmojis } from "@/api/endpoints/customEmojis";
 import type { CustomEmoji } from "@/api/types";
 
-const CUSTOM_TAB = "__custom__";
-
 export interface EmojiPickerProps {
   onSelect: (emoji: string) => void;
   onClose?: () => void;
@@ -155,7 +153,7 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
               size="icon"
               className="h-8 w-8 shrink-0 text-lg"
               data-testid="emoji-skin-tone-trigger"
-              aria-label={`Skin tone: ${currentTone.label}`}
+              aria-label={`Skin tone: ${currentTone?.label}`}
             >
               {applySkinTone("✋", skinTone)}
             </Button>

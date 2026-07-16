@@ -30,8 +30,8 @@ enum class SubscriberFilter(val wire: String?) {
     CANCELED("canceled"),
 }
 
-/** SUB-E4-3 — a creator management action awaiting confirmation. */
-enum class SubscriberActionKind { STOP_RENEWAL, REMOVE }
+/** SUB-E4-3 — a creator management action awaiting confirmation. SUBX-43 adds REFUND (revokes access). */
+enum class SubscriberActionKind { STOP_RENEWAL, REMOVE, REFUND }
 
 /** SUB-E4-3 — the pending confirm-dialog target. */
 data class PendingSubscriberAction(
@@ -50,6 +50,8 @@ sealed interface CreatorSubscribersUiState {
         /** SUB-E4-2 MRR/analytics; null when the analytics read failed (list can still render). */
         val analytics: SubscriptionAnalytics? = null,
         val filter: SubscriberFilter = SubscriberFilter.ALL,
+        /** SUBX-43 (C6) — per-tier (plan) filter; null = all tiers. */
+        val planFilter: String? = null,
         val subscribers: List<CreatorSubscriberRow> = emptyList(),
         val total: Int = 0,
         val nextCursor: String? = null,
@@ -90,11 +92,11 @@ class CreatorSubscribersViewModel @Inject constructor(
     }
 
     /** Full (re)load: analytics + the first page of subscribers for the current filter. */
-    fun load(filter: SubscriberFilter = currentFilter()) {
+    fun load(filter: SubscriberFilter = currentFilter(), planFilter: String? = currentContent()?.planFilter) {
         _uiState.value = CreatorSubscribersUiState.Loading
         viewModelScope.launch {
             val analyticsDeferred = async { repository.getMyAnalytics() }
-            val listDeferred = async { repository.getMySubscribers(status = filter.wire) }
+            val listDeferred = async { repository.getMySubscribers(status = filter.wire, planId = planFilter) }
             val analyticsResult = analyticsDeferred.await()
             val listResult = listDeferred.await()
 
@@ -103,6 +105,7 @@ class CreatorSubscribersViewModel @Inject constructor(
                     _uiState.value = CreatorSubscribersUiState.Content(
                         analytics = (analyticsResult as? ApiResult.Success)?.data,
                         filter = filter,
+                        planFilter = planFilter,
                         subscribers = listResult.data.subscribers,
                         total = listResult.data.total,
                         nextCursor = listResult.data.nextCursor,
@@ -131,7 +134,29 @@ class CreatorSubscribersViewModel @Inject constructor(
         if (content.filter == filter && !content.loadingList) return
         _uiState.value = content.copy(filter = filter, loadingList = true, subscribers = emptyList(), nextCursor = null)
         viewModelScope.launch {
-            when (val result = repository.getMySubscribers(status = filter.wire)) {
+            when (val result = repository.getMySubscribers(status = filter.wire, planId = content.planFilter)) {
+                is ApiResult.Success -> updateContent {
+                    it.copy(
+                        loadingList = false,
+                        subscribers = result.data.subscribers,
+                        total = result.data.total,
+                        nextCursor = result.data.nextCursor,
+                    )
+                }
+                else -> updateContent {
+                    it.copy(loadingList = false, actionError = errorMapper.map(result).message)
+                }
+            }
+        }
+    }
+
+    /** SUBX-43 (C6) — switch the per-tier (plan) filter and reload the list. null = all tiers. */
+    fun onTierFilterSelected(planId: String?) {
+        val content = currentContent() ?: return
+        if (content.planFilter == planId && !content.loadingList) return
+        _uiState.value = content.copy(planFilter = planId, loadingList = true, subscribers = emptyList(), nextCursor = null)
+        viewModelScope.launch {
+            when (val result = repository.getMySubscribers(status = content.filter.wire, planId = planId)) {
                 is ApiResult.Success -> updateContent {
                     it.copy(
                         loadingList = false,
@@ -154,7 +179,7 @@ class CreatorSubscribersViewModel @Inject constructor(
         if (content.loadingMore || content.loadingList) return
         _uiState.value = content.copy(loadingMore = true)
         viewModelScope.launch {
-            when (val result = repository.getMySubscribers(status = content.filter.wire, cursor = cursor)) {
+            when (val result = repository.getMySubscribers(status = content.filter.wire, planId = content.planFilter, cursor = cursor)) {
                 is ApiResult.Success -> updateContent {
                     it.copy(
                         loadingMore = false,
@@ -176,6 +201,9 @@ class CreatorSubscribersViewModel @Inject constructor(
 
     fun onRemoveClicked(row: CreatorSubscriberRow) = requestAction(row, SubscriberActionKind.REMOVE)
 
+    /** SUBX-43 (C6) — creator issues a refund for this subscriber (revokes access; shared rail). */
+    fun onRefundClicked(row: CreatorSubscriberRow) = requestAction(row, SubscriberActionKind.REFUND)
+
     private fun requestAction(row: CreatorSubscriberRow, kind: SubscriberActionKind) {
         val content = currentContent() ?: return
         if (content.actioningId != null) return
@@ -192,11 +220,13 @@ class CreatorSubscribersViewModel @Inject constructor(
         val subId = pending.row.subscriptionId
         _uiState.value = content.copy(pendingAction = null, actioningId = subId)
         viewModelScope.launch {
-            val result = when (pending.kind) {
+            val result: ApiResult<*> = when (pending.kind) {
                 SubscriberActionKind.STOP_RENEWAL ->
                     repository.stopSubscriberRenewal(subId, reason = "creator_stop_renewal")
                 SubscriberActionKind.REMOVE ->
                     repository.removeSubscriber(subId, reason = "creator_removed")
+                SubscriberActionKind.REFUND ->
+                    repository.refundSubscriber(subId, reason = "creator_refund")
             }
             when (result) {
                 is ApiResult.Success -> reloadAfterAction(subId)
@@ -214,8 +244,9 @@ class CreatorSubscribersViewModel @Inject constructor(
     /** After a successful remove/stop-renewal, re-pull analytics + the current filter page. */
     private suspend fun reloadAfterAction(subId: String) {
         val filter = currentFilter()
+        val planFilter = currentContent()?.planFilter
         val analyticsResult = repository.getMyAnalytics()
-        val listResult = repository.getMySubscribers(status = filter.wire)
+        val listResult = repository.getMySubscribers(status = filter.wire, planId = planFilter)
         updateContent { c ->
             val subs = (listResult as? ApiResult.Success)?.data?.subscribers ?: c.subscribers.filterNot { it.subscriptionId == subId }
             c.copy(

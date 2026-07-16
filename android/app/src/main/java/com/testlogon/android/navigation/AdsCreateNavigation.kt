@@ -49,6 +49,8 @@ fun NavGraphBuilder.adsCreateDestinations(navController: NavHostController) {
         CreateCampaignRoute(
             onBack = { navController.popBackStack() },
             onCreated = { navController.navigateToCreateCreative() },
+            // ADV3-4 (B3): fund the specific campaign account (real accountId, not the firstOrNull ceiling).
+            onAddFunds = { accountId -> navController.navigateToAdsBilling(accountId) },
         )
     }
     composable(route = CreateCreativeDest.ROUTE) {

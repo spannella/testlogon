@@ -5,12 +5,13 @@ Authenticated endpoints under ``/ui/groups`` and public feed under ``/public/gro
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 
 from app.services.sessions import require_ui_session
 from app.models import CreateGroupPostIn
 from app.core.settings import S
 
-router = APIRouter(tags=["group-feed"])
+router = APIRouter(tags=["group-feed"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 public_group_feed_router = APIRouter(tags=["group-feed-public"])
 
 

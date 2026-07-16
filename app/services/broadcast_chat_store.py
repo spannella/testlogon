@@ -291,7 +291,7 @@ def get_chat_history(
         # Exclude soft-deleted items and private-chat messages (GAP-0125):
         # private_chat-kind messages share this table but must never appear
         # in the public chat history.
-        "FilterExpression": Attr("deleted").ne(True) & Attr("kind").ne("private_chat"),
+        "FilterExpression": Attr("deleted").ne(True) & Attr("kind").ne("private_chat") & Attr("moderation_hidden").ne(True),
     }
     if before_sort_key:
         kwargs["KeyConditionExpression"] = (
@@ -326,7 +326,7 @@ def fetch_chat_messages_after(
         # Exclude soft-deleted items and private-chat messages (GAP-0125):
         # the SSE polling path must never leak private_chat-kind messages
         # into the public chat stream.
-        "FilterExpression": Attr("deleted").ne(True) & Attr("kind").ne("private_chat"),
+        "FilterExpression": Attr("deleted").ne(True) & Attr("kind").ne("private_chat") & Attr("moderation_hidden").ne(True),
     }
     if after_sort_key:
         kwargs["KeyConditionExpression"] = (

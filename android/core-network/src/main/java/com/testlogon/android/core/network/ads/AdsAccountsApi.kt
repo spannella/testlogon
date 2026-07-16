@@ -2,6 +2,7 @@ package com.testlogon.android.core.network.ads
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -127,6 +128,30 @@ interface AdsAccountsApi {
         @Path("accountId") accountId: String,
         @Path("campaignId") campaignId: String,
     ): AdSubmitAckDto
+
+    /**
+     * ADV3-4 (B2) - GET one campaign under [accountId] (name / status / budget / spend). Idempotent GET;
+     * used by the campaign-management detail screen to show + refresh a single campaign after a PATCH.
+     */
+    @GET("ui/ads/accounts/{accountId}/campaigns/{campaignId}")
+    suspend fun getCampaign(
+        @Path("accountId") accountId: String,
+        @Path("campaignId") campaignId: String,
+    ): AdCampaignDto
+
+    /**
+     * ADV3-4 (B2) - PATCH a campaign (pause/resume via status, or edit budget_cents / bid_cpm_cents /
+     * bid_cpc_cents / bid_cpa_cents, or archive). Mirrors backend CampaignUpdateIn; only the non-null body
+     * fields are sent. The server returns {"ok": true} (NOT the campaign), so the caller re-reads via
+     * getCampaign. NON-idempotent for status transitions (the server validates the transition); the repo /
+     * VM never auto-retry it.
+     */
+    @PATCH("ui/ads/accounts/{accountId}/campaigns/{campaignId}")
+    suspend fun updateCampaign(
+        @Path("accountId") accountId: String,
+        @Path("campaignId") campaignId: String,
+        @Body body: AdCampaignUpdateIn,
+    ): AdCampaignPatchAckDto
 
     /** ADV-109 - POST create a draft creative under [campaignId] -> 201 draft. */
     @POST("ui/ads/campaigns/{campaignId}/creatives")

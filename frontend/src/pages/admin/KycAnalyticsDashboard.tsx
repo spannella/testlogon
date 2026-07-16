@@ -290,7 +290,7 @@ export default function KycAnalyticsDashboard() {
                 data-testid={`granularity-${g}`}
                 onClick={() => setGranularity(g)}
               >
-                {g[0].toUpperCase() + g.slice(1)}
+                {g.charAt(0).toUpperCase() + g.slice(1)}
               </Button>
             ))}
           </div>

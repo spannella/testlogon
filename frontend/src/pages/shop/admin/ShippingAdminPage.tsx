@@ -761,7 +761,7 @@ function ShipmentsTab() {
                       onClick={() =>
                         advanceMut.mutate({
                           shipmentId: s.shipment_id,
-                          target: advanceTarget[s.shipment_id],
+                          target: advanceTarget[s.shipment_id]!,
                           reason: advanceReason[s.shipment_id],
                         })
                       }

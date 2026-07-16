@@ -67,6 +67,12 @@ class AppealsViewModelTest {
             return loadResult
         }
 
+        var optionsResult: ApiResult<List<com.testlogon.android.data.appeals.EnforcementOption>> =
+            ApiResult.Success(emptyList())
+
+        override suspend fun loadEnforcementOptions(): ApiResult<List<com.testlogon.android.data.appeals.EnforcementOption>> =
+            optionsResult
+
         override suspend fun submitAppeal(enforcementId: String, appealText: String): ApiResult<Unit> {
             submitCount++
             lastEnforcementId = enforcementId

@@ -128,10 +128,13 @@ object MoreRoutes {
     // AND-253: the per-content revenue list (sortable, cursor-paged).
     const val PER_CONTENT_REVENUE = PerContentRevenueDest.ROUTE
 
+    // PAY-52: the money-OUT Wallet home (real available/held/pending/lifetime + Withdraw CTA + history).
+    const val WALLET = WalletDest.ROUTE
+
     // AND-260: the creator payout history list (paged amount/status/date + detail).
     const val PAYOUTS = PayoutHistoryDest.ROUTE
 
-    // AND-259: the payout setup + KYC gate (request a payout; FLAGGED identity-verification gate).
+    // AND-259 / PAY-52: the withdraw screen — payout methods + KYC/W-9 gate + amount flow (real request_payout).
     const val PAYOUT_SETUP = PayoutSetupDest.ROUTE
 
     // AND-261: the READ-ONLY bulk/batch payout tools (admin batch list + detail; no execute action).
@@ -217,8 +220,14 @@ object MoreRoutes {
     // AND-237: manage / cancel the viewer's current subscription (arg-less route).
     const val MANAGE_SUBSCRIPTION = ManageSubscriptionDest.ROUTE
 
+    // SUBX-20: the subscriber's "My subscriptions" list (all subs -> correct-target manage).
+    const val MY_SUBSCRIPTIONS = MySubscriptionsDest.ROUTE
+
     // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
     const val CREATOR_SUBSCRIBERS = CreatorSubscribersDest.ROUTE
+
+    // SUBX-40: creator tier authoring (create/price/benefits/level/archive/reorder; Growth hub).
+    const val CREATOR_TIERS = CreatorTierManagerDest.ROUTE
 
     // AND-238: "My fan clubs" — self-browse the viewer's fan-club channels (SELF sentinel creator id).
     // Plain constant (no Uri.encode) so the JVM MoreCatalog integrity test stays Android-free.
@@ -279,6 +288,11 @@ object MoreRoutes {
     // AND-367: ads-account billing read view (balance/lifetime-spend + ledger + monthly invoice) + the
     // DEPOSIT add-funds sheet. No ads-accounts list yet, so the hub opens a known sample account id (plain
     // constant, no Uri.encode, so the JVM MoreCatalog integrity test stays Android-free).
+    // ADV3-4 (B4) / ADV3-5 (B5): the "Advertise" hub landing = the advertiser-accounts LIST. Removes the
+    // single-account ceiling (routes billing/campaigns/analytics with a real accountId) + launches the
+    // create wizard. Plain route constant (no nav arg).
+    const val ADS_ACCOUNTS = AdsAccountsDest.ROUTE
+
     const val ADS_BILLING = AdsBillingDest.STUB_ROUTE
 
     // AND-368: READ-ONLY ad-analytics dashboard (KPI summary + time-series charts + breakdown over a
@@ -451,6 +465,9 @@ object MoreRoutes {
     // B-APIKEY (batch 7): developer API-keys management (list / create-shown-once / revoke).
     const val API_KEYS = ApiKeysListDest.ROUTE
 
+    // P0-BLOCK: Settings/Privacy — the blocked-users management screen (list + unblock).
+    const val BLOCKED_USERS = BlockedUsersDest.ROUTE
+
     // Web-parity: questionnaire BUILDER (creator authoring: drafts list -> create -> sections +
     // questions of 9 types -> publish). Distinct from the respondent renderer.
     const val QUESTIONNAIRE_BUILDER = QuestionnaireBuilderListDest.ROUTE
@@ -513,6 +530,7 @@ object MoreRoutes {
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,
+            WALLET,
             EARNINGS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,
@@ -555,7 +573,9 @@ object MoreRoutes {
             BILLING_CONFIG,
             SUBSCRIPTION_TIERS,
             CREATOR_SUBSCRIBERS,
+            CREATOR_TIERS,
             MANAGE_SUBSCRIPTION,
+            MY_SUBSCRIPTIONS,
             FAN_CLUB,
             ORGS_MEMBERS,
             GROUPS,
@@ -570,6 +590,7 @@ object MoreRoutes {
             AD_MESSAGE_COMPOSE,
             AD_MESSAGE_QUEUE,
             AD_MASS_DM,
+            ADS_ACCOUNTS,
             ADS_BILLING,
             AD_ANALYTICS,
             ADS_CAMPAIGNS,
@@ -645,6 +666,7 @@ object MoreRoutes {
             PRIVACY_EXPORT,
             KYC,
             API_KEYS,
+            BLOCKED_USERS,
             QUESTIONNAIRE_BUILDER,
             DELEGATION_KEYS,
             CUSTOM_EMOJIS,

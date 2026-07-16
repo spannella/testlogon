@@ -23,7 +23,7 @@ from app.services.filemanager import get_node, norm_path
 from app.services.alerts import audit_event
 from app.services.profile import get_profile_identity
 from app.services.purchase_history import record_billing_transaction
-from app.services.subscription_access import get_subscription_settings, set_subscription_settings
+from app.services.subscription_access import get_subscription_settings, set_subscription_settings, is_platform_admin, get_plan_level
 from app.services.subscription_cycle_orders import emit_subscription_cycle_order
 from app.auth.policy import require_admin_or_root
 
@@ -339,6 +339,12 @@ class PlanCreateIn(BaseModel):
     asset_paths: List[str] = Field(default_factory=list)
     # SUB-E0: structured tier benefits/perks (list of {label, detail}).
     benefits: conlist(PlanBenefit, max_length=50) = Field(default_factory=list)
+    # SUBX-30: optional explicit ordered tier level (>=1; higher = more premium).
+    # When omitted the level is DERIVED by price rank (subscription_access.get_plan_level).
+    level: Optional[conint(ge=1, le=100)] = None
+    # SUBX-43 (C10): optional presentation order (ascending; lower = shown first).
+    # When omitted the plan sorts after ordered plans by created_at desc.
+    display_order: Optional[conint(ge=0, le=100000)] = None
 
 
 class PlanUpdateIn(BaseModel):
@@ -353,6 +359,15 @@ class PlanUpdateIn(BaseModel):
     asset_paths: Optional[conlist(str, max_length=50)] = None
     # SUB-E0: replace the plan's structured benefits/perks (None = leave unchanged).
     benefits: Optional[conlist(PlanBenefit, max_length=50)] = None
+    # SUBX-30: set/replace the plan's explicit tier level (None = leave unchanged).
+    level: Optional[conint(ge=1, le=100)] = None
+    # SUBX-43 (C10): set the plan's presentation order (None = leave unchanged).
+    display_order: Optional[conint(ge=0, le=100000)] = None
+
+
+class PlanReorderIn(BaseModel):
+    # SUBX-43 (C10): ordered list of the creator's plan ids; index -> display_order.
+    plan_ids: conlist(str, min_length=1, max_length=100)
 
 
 class PlanOut(BaseModel):
@@ -364,6 +379,10 @@ class PlanOut(BaseModel):
     currency: str = "USD"
     interval: str = "month"
     annual_price_cents: Optional[int] = None
+    # SUBX-30: ordered tier level (>=1); absent on older/seeded plans -> None (derived).
+    level: Optional[int] = None
+    # SUBX-43 (C10): presentation order; absent -> None (sorts after ordered plans).
+    display_order: Optional[int] = None
     # Tolerant defaults: stored plans (esp. older/seeded ones) may omit these
     # optional-metadata fields; the list/get endpoints must not 500 on them.
     status: str = "active"
@@ -458,6 +477,15 @@ class SubscriptionResumeIn(BaseModel):
     reason: Optional[str] = None
 
 
+class SubscriptionRetryPaymentIn(BaseModel):
+    # SUBX-22: subscriber-driven PAST_DUE recovery. Optionally swap the PM (the
+    # subscriber just added / selected a card) then retry the failed renewal charge
+    # on the SAME funds-guarded rail the sweeper uses. Clears past_due ONLY on a real
+    # collected charge (no phantom credit, no free extension).
+    payment_method_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class SubscriptionRenewalIn(BaseModel):
     auto_renew: bool = True
     effective: Literal["immediate", "period_end"] = "period_end"
@@ -501,6 +529,9 @@ class EarningsOut(BaseModel):
     currency: str
     gross_cents: int
     fee_cents: int
+    # SUBX-42 (C5): subscription refund clawbacks (T.billing reversals) subtracted so
+    # net == the withdrawable balance after a cancel/dispute refund.
+    refunded_cents: int = 0
     net_cents: int
 
 
@@ -591,6 +622,55 @@ def save_plan(plan: Dict[str, Any]) -> None:
         ddb_put_item(item)
 
 
+def _plan_sort_key(plan: Dict[str, Any]):
+    """SUBX-43 (C10): sort a creator's plans by explicit ``display_order`` ascending
+    (creator-arranged good/better/best), then newest-first for un-ordered plans. A
+    plan with no display_order sorts after every explicitly-ordered plan."""
+    order = plan.get("display_order")
+    has_order = order is not None
+    return (
+        0 if has_order else 1,
+        int(order) if has_order else 0,
+        -int(plan.get("created_at") or 0),
+    )
+
+
+def _creator_subscription_reversals(creator_id: str) -> List[Dict[str, Any]]:
+    """SUBX-42 (C4/C5): the creator's subscription REFUND clawbacks booked to
+    ``T.billing`` by ``_reverse_subscription_charge`` (``type='reversal'``,
+    ``meta.content_type='subscription'``).
+
+    These NET clawbacks are why ``/earnings`` + analytics ``net`` must be reduced to
+    reconcile with the withdrawable balance: a refund flips the original mirror-credit
+    to ``state='reversed'`` (dropping it from ``get_available_balance``) and books a
+    ``reversal`` entry here, but the sub LEDGER only ever holds ``charge``/``fee`` —
+    so a report that reads the sub ledger alone OVERSTATES net after any refund.
+
+    Returns ``[{subscription_id, amount_cents (net clawback), ts, currency}]``.
+    """
+    out: List[Dict[str, Any]] = []
+    try:
+        rows = billing_query_pk(T.billing, user_pk(creator_id))
+    except Exception:
+        logger.warning("subscription reversal read failed creator=%s", creator_id, exc_info=True)
+        return out
+    for it in rows:
+        if not str(it.get("sk", "")).startswith("LEDGER#"):
+            continue
+        if it.get("type") != "reversal":
+            continue
+        meta = it.get("meta") or {}
+        if meta.get("content_type") != "subscription":
+            continue
+        out.append({
+            "subscription_id": meta.get("subscription_id") or it.get("subscription_id"),
+            "amount_cents": int(it.get("amount_cents") or 0),
+            "ts": int(it.get("ts") or it.get("created_at") or 0),
+            "currency": it.get("currency") or "usd",
+        })
+    return out
+
+
 # -----------------------------
 # Subscription helpers
 # -----------------------------
@@ -629,6 +709,30 @@ def count_active_subscribers(creator_id: str) -> int:
         if status in _ACTIVE_SUBSCRIBER_STATUSES:
             count += 1
     return count
+
+
+def _find_active_sub_for_creator(subscriber_id: str, creator_id: str) -> Optional[Dict[str, Any]]:
+    """SUBX-15: return the subscriber's existing NON-terminal subscription to this
+    creator (active / trialing / past_due / canceling), if any. Used to reject a
+    double-subscribe (which would double-charge) and to return the existing sub
+    instead. Terminal subs (canceled/expired) are ignored so a lapsed subscriber
+    can subscribe again."""
+    try:
+        items = ddb_query(pk_subscriber(subscriber_id))
+    except Exception:
+        return None
+    live = {"active", "trialing", "past_due", "canceling"}
+    for it in items:
+        if not it.get("sk", "").startswith("SUB#"):
+            continue
+        if it.get("creator_id") != creator_id:
+            continue
+        if (it.get("status") or "").lower() not in live:
+            continue
+        meta = ddb_get_item(pk_subscription(it["subscription_id"]), "META")
+        if meta:
+            return normalize_subscription(meta)
+    return None
 
 
 def build_invoice_item(invoice: Dict[str, Any]) -> Dict[str, Any]:
@@ -836,7 +940,10 @@ def _reverse_subscription_charge(
     creator_id = sub["creator_id"]
     payer = payer_id or sub.get("gifter_id") or sub["subscriber_id"]
     currency = sub.get("currency", "usd")
-    period_gross = int(sub.get("price_cents") or 0)
+    # SUBX-14: refund what was ACTUALLY collected this cycle (latest paid invoice),
+    # not the list ``price_cents`` — a discounted subscriber must not be over-refunded
+    # now that ``price_cents`` stores the undiscounted list price.
+    period_gross = _current_cycle_charge_cents(subscription_id, sub)
     period_end = int(sub.get("current_period_end") or now)
     marker_key = f"{subscription_id}#{period_end}"
 
@@ -1216,6 +1323,69 @@ def _proration_fraction(now: int, period_start: int, period_end: int) -> float:
     return min(1.0, max(0.0, remaining / total))
 
 
+def _current_period_start(sub: Dict[str, Any]) -> int:
+    """SUBX-10: the start of the CURRENT billing cycle (NOT the whole-lifetime
+    ``start_at``). Prefer the persisted ``current_period_start`` (written at
+    subscribe/gift and advanced each renewal); fall back to deriving it as
+    ``current_period_end - interval`` so proration on a renewed sub is computed
+    against the current cycle, not the entire subscription lifetime."""
+    cps = sub.get("current_period_start")
+    if cps:
+        return int(cps)
+    cpe = int(sub.get("current_period_end") or now_ts())
+    return cpe - interval_seconds(sub.get("interval", "month"))
+
+
+def _current_cycle_charge_cents(subscription_id: str, sub: Dict[str, Any]) -> int:
+    """SUBX-10/14: the GROSS amount actually collected for the current cycle, used
+    to size a prorated refund. Reads the latest PAID invoice (the real charge) so a
+    DISCOUNTED subscriber is refunded what they paid, not the (higher) list price.
+    Falls back to the sub's stored price when no paid invoice is found."""
+    try:
+        items = ddb_query(pk_subscription(subscription_id))
+        paid = [it for it in items if it.get("sk", "").startswith("INV#") and (it.get("status") or "").lower() == "paid"]
+        paid.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+        if paid:
+            return int(paid[0].get("amount_cents") or 0)
+    except Exception:
+        logger.warning("current-cycle charge lookup failed sub=%s", subscription_id, exc_info=True)
+    return int(sub.get("price_cents") or 0)
+
+
+def _apply_immediate_cancel(
+    sub: Dict[str, Any],
+    *,
+    now: int,
+    actor: Optional[str],
+    reason: str,
+    do_refund: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """SUBX-15: the ONE shared immediate-cancel path used by every cancel surface
+    (subscriber cancel, renewal-off immediate, creator remove). Refunds the unused
+    prorated remainder of the CURRENT cycle (SUBX-10 denominator) + claws back the
+    creator credit via the real reversal rail, THEN revokes access (status canceled,
+    period ends now). Refund is computed BEFORE the period is collapsed so the
+    reversal marker/fraction see the real period. Returns the refund receipt (or
+    None when nothing was refundable)."""
+    receipt = None
+    if do_refund:
+        frac = _proration_fraction(
+            now, _current_period_start(sub), int(sub.get("current_period_end") or now)
+        )
+        if frac > 0:
+            receipt = _reverse_subscription_charge(
+                sub, now=now, refund_fraction=frac, reason=reason, actor=actor,
+            )
+    sub["status"] = "canceled"
+    sub["canceled_at"] = now
+    sub["current_period_end"] = now
+    sub["auto_renew"] = False
+    sub["cancel_at_period_end"] = False
+    sub["renewal_policy"] = "manual"
+    sub["updated_at"] = now
+    return receipt
+
+
 def calculate_proration(
     *,
     current_price: int,
@@ -1252,6 +1422,10 @@ async def create_plan(
         "currency": body.currency.lower(),
         "interval": body.interval,
         "annual_price_cents": int(body.annual_price_cents) if body.annual_price_cents else None,
+        # SUBX-30: explicit ordered tier level (None -> derived by price rank at read time).
+        "level": int(body.level) if body.level else None,
+        # SUBX-43 (C10): presentation order (None -> sorts after ordered plans).
+        "display_order": int(body.display_order) if body.display_order is not None else None,
         "status": "active",
         "metadata": body.metadata,
         "benefits": [b.model_dump() for b in body.benefits],
@@ -1276,7 +1450,7 @@ async def create_plan(
 async def list_plans(creator_id: str, include_profile: bool = Query(default=False)):
     items = ddb_query(pk_creator(creator_id))
     plans = [it for it in items if it.get("sk", "").startswith("PLAN#")]
-    plans.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+    plans.sort(key=_plan_sort_key)
     if include_profile:
         return [attach_creator_profile(p) for p in plans]
     return plans
@@ -1302,6 +1476,10 @@ async def update_plan(
             updated[field] = value
     if body.annual_price_cents is not None:
         updated["annual_price_cents"] = int(body.annual_price_cents)
+    if body.level is not None:
+        updated["level"] = int(body.level)  # SUBX-30
+    if body.display_order is not None:
+        updated["display_order"] = int(body.display_order)  # SUBX-43 (C10)
     if body.benefits is not None:
         updated["benefits"] = [b.model_dump() for b in body.benefits]
     if body.asset_paths is not None:
@@ -1343,6 +1521,50 @@ async def archive_plan(
     return attach_creator_profile(plan)
 
 
+@router.post("/api/creators/{creator_id}/plans/reorder", response_model=List[PlanOut])
+async def reorder_plans(
+    creator_id: str,
+    body: PlanReorderIn,
+    request: Request,
+    x_user_id: Optional[str] = Header(default=None),
+):
+    """SUBX-43 (C10): set the creator's tier presentation order. The request lists
+    the creator's plan ids in the desired order; each plan's ``display_order`` is
+    rewritten to its index. Plan ids not owned by the creator are ignored; the
+    response is the re-sorted plan list. Owner-gated (creator only)."""
+    require_user(x_user_id, creator_id)
+    items = ddb_query(pk_creator(creator_id))
+    plans_by_id = {
+        it["plan_id"]: it
+        for it in items
+        if it.get("sk", "").startswith("PLAN#") and it.get("plan_id")
+    }
+    ts = now_ts()
+    order = 0
+    seen: set = set()
+    for pid in body.plan_ids:
+        plan = plans_by_id.get(pid)
+        if not plan or pid in seen:
+            continue
+        seen.add(pid)
+        # save_plan reads META for the canonical copy (creator index may lack fields)
+        meta = ddb_get_item(pk_plan(pid), "META") or plan
+        meta["display_order"] = order
+        meta["updated_at"] = ts
+        save_plan(meta)
+        order += 1
+    audit_event(
+        "subscription_plans_reordered",
+        creator_id,
+        request,
+        outcome="success",
+        plan_ids=list(body.plan_ids),
+    )
+    refreshed = [it for it in ddb_query(pk_creator(creator_id)) if it.get("sk", "").startswith("PLAN#")]
+    refreshed.sort(key=_plan_sort_key)
+    return [attach_creator_profile(p) for p in refreshed]
+
+
 @router.post("/api/plans/{plan_id}/subscribe", response_model=SubscriptionOut)
 async def subscribe(
     plan_id: str,
@@ -1372,6 +1594,13 @@ async def subscribe(
             if prior:
                 return attach_subscription_profiles(normalize_subscription(prior))
 
+    # SUBX-15: DOUBLE-SUBSCRIBE GUARD. A subscriber can hold at most ONE live
+    # subscription per creator. If one already exists (active/trialing/past_due/
+    # canceling) return it instead of creating a second record + second charge.
+    existing_live = _find_active_sub_for_creator(subscriber_id, plan["creator_id"])
+    if existing_live:
+        return attach_subscription_profiles(existing_live)
+
     ts = now_ts()
     subscription_id = new_id("sub")
     provider_subscription_id = new_id("stub_sub")
@@ -1387,6 +1616,11 @@ async def subscribe(
     # current_uses increment is the real double-use guard.
     promo_validation = None
     promo_trial_days = 0
+    # SUBX-14: keep the LIST (undiscounted) price separate from the amount actually
+    # collected for the INITIAL cycle. ``price_cents`` on the sub is the recurring LIST
+    # price (MRR + renewals read it); ``charge_price`` is what we charge NOW. A creator
+    # discount only re-applies on renewals while ``discount_remaining_months`` > 0.
+    charge_price = base_price
     if body.promo_code:
         from app.services import promo_codes as _promo_codes
 
@@ -1402,7 +1636,7 @@ async def subscribe(
                 status_code=400,
                 detail=promo_validation.get("message") or "Invalid or expired promo code",
             )
-        price_cents = int(promo_validation["final_price_cents"])
+        charge_price = int(promo_validation["final_price_cents"])
         promo_trial_days = int(promo_validation.get("free_trial_days") or 0)
     elif body.discount_code:
         discount = _get_discount(plan["creator_id"], body.discount_code)
@@ -1414,9 +1648,8 @@ async def subscribe(
             "duration": discount.get("duration"),
             "duration_months": discount.get("duration_months"),
         }
-        price_cents = _apply_discount(base_price, discount)
-    else:
-        price_cents = base_price
+        charge_price = _apply_discount(base_price, discount)
+    price_cents = base_price
     trial_end = None
     trial_start = None
     status = "active"
@@ -1441,12 +1674,12 @@ async def subscribe(
     # discounted ($0) subscribes collect no funds now and skip the charge.
     payment_method_id: Optional[str] = None
     payment_intent_id: Optional[str] = None
-    charging = status != "trialing" and int(price_cents) > 0
+    charging = status != "trialing" and int(charge_price) > 0
     if charging:
         payment_method_id = resolve_subscription_payment_method(subscriber_id, body.payment_method_id)
         payment_intent_id = _charge_subscription_payment_intent(
             subscriber_id=subscriber_id,
-            amount_cents=int(price_cents),
+            amount_cents=int(charge_price),
             currency=plan["currency"],
             payment_method_id=payment_method_id,
             plan_id=plan_id,
@@ -1465,11 +1698,17 @@ async def subscribe(
         "plan_id": plan_id,
         "creator_id": plan["creator_id"],
         "subscriber_id": subscriber_id,
+        # SUBX-30: persist the resolved tier level so the tier gate is stable against
+        # later re-ranking, and legacy/other readers get a level without a lookup.
+        "tier_level": get_plan_level(plan["creator_id"], plan_id),
         "interval": interval,
         "provider": "stripe" if payment_intent_id else "stub",
         "provider_subscription_id": provider_subscription_id,
         "status": status,
         "start_at": ts,
+        # SUBX-10: current-cycle start (advanced each renewal) so proration/refund
+        # math uses THIS cycle, not the whole-lifetime start_at.
+        "current_period_start": ts,
         "current_period_end": period_end,
         # SUB-E0: authoritative next-charge timestamp for the E1 renewal engine.
         "next_billing_date": period_end,
@@ -1488,10 +1727,13 @@ async def subscribe(
     }
     if applied_discount:
         sub["discount"] = applied_discount
+        # SUBX-14: the INITIAL cycle is already discounted (charge_price). A "once"
+        # code therefore has NO remaining renewal discount (0, was 1 -> double-apply).
+        # A "repeating N-months" code discounts N cycles TOTAL, so N-1 renewals remain.
         if applied_discount.get("duration") == "repeating":
-            sub["discount_remaining_months"] = int(applied_discount.get("duration_months") or 0)
+            sub["discount_remaining_months"] = max(0, int(applied_discount.get("duration_months") or 0) - 1)
         elif applied_discount.get("duration") == "once":
-            sub["discount_remaining_months"] = 1
+            sub["discount_remaining_months"] = 0
     creator_settings = get_subscription_settings(plan["creator_id"])
     if creator_settings.get("disable_auto_renew"):
         sub["auto_renew"] = False
@@ -1510,7 +1752,10 @@ async def subscribe(
             "provider_invoice_id": payment_intent_id or new_id("stub_inv"),
             "payment_intent_id": payment_intent_id,
             "payment_method_id": payment_method_id,
-            "amount_cents": int(sub["price_cents"]),
+            # SUBX-14: the invoice records what was COLLECTED (discounted initial),
+            # not the list price now stored on the sub.
+            "amount_cents": int(charge_price),
+            "list_price_cents": int(base_price),
             "currency": plan["currency"],
             "status": "paid",
             "period_start": ts,
@@ -1614,12 +1859,12 @@ async def subscribe(
         actor_name = get_profile_identity(subscriber_id).get("display_name") or subscriber_id
         emit_social_alert(
             recipient_user_id=plan["creator_id"],
-            alert_type="subscription_started",
+            alert_type="subscription_new_subscriber",  # SUBX-51: dedicated type (was mis-typed subscription_started)
             actor_user_id=subscriber_id,
             actor_display_name=actor_name,
             title=f"{actor_name} subscribed to you",
             details={"plan_id": plan_id, "subscriber_id": subscriber_id, "subscription_id": subscription_id},
-            action_url="/subscriptions",
+            action_url="/subscriptions/subscribers",  # SUBX-50: land on the E4 Subscribers console
         )
     except Exception:
         logger.warning("subscription social alert failed creator=%s", plan["creator_id"], exc_info=True)
@@ -1727,6 +1972,12 @@ async def gift_subscription(
             if prior:
                 return attach_subscription_profiles(normalize_subscription(prior))
 
+    # SUBX-15: don't gift on top of an existing live subscription (would double-charge
+    # the gifter for access the recipient already has). Return the recipient's sub.
+    existing_recipient = _find_active_sub_for_creator(recipient_id, plan["creator_id"])
+    if existing_recipient:
+        return attach_subscription_profiles(existing_recipient)
+
     ts = now_ts()
     subscription_id = new_id("sub")
     provider_subscription_id = new_id("stub_sub")
@@ -1754,11 +2005,14 @@ async def gift_subscription(
         "plan_id": plan_id,
         "creator_id": plan["creator_id"],
         "subscriber_id": recipient_id,
+        # SUBX-30: gifted sub records its tier level too (unlocks that tier's content).
+        "tier_level": get_plan_level(plan["creator_id"], plan_id),
         "interval": interval,
         "provider": "stripe" if payment_intent_id else "stub",
         "provider_subscription_id": provider_subscription_id,
         "status": "active",
         "start_at": ts,
+        "current_period_start": ts,
         "current_period_end": period_end,
         "next_billing_date": period_end,
         # the recipient has NO PM on this sub -> nothing to charge even if a renewal
@@ -1925,14 +2179,32 @@ async def refund_subscription(
     user_id = require_user(x_user_id)
     if user_id not in (sub["subscriber_id"], sub["creator_id"], sub.get("gifter_id")):
         raise HTTPException(status_code=403, detail="Not authorized to refund this subscription")
+    # SUBX-02: only the creator / gifter / platform-admin may issue a FULL (>=1.0)
+    # refund; a subscriber may only self-refund the unused prorated remainder.
+    privileged = (user_id in (sub["creator_id"], sub.get("gifter_id"))) or is_platform_admin(user_id)
     now = now_ts()
     if body.fraction is not None:
         frac = max(0.0, min(1.0, float(body.fraction)))
     else:
-        frac = _proration_fraction(now, int(sub.get("start_at") or now), int(sub.get("current_period_end") or now))
+        # SUBX-10: prorate against the CURRENT cycle, not the whole-lifetime start_at.
+        frac = _proration_fraction(now, _current_period_start(sub), int(sub.get("current_period_end") or now))
+    if frac >= 1.0 and not privileged:
+        raise HTTPException(status_code=403, detail="Only the creator or an admin can issue a full refund")
     if frac <= 0:
         raise HTTPException(status_code=400, detail="Nothing to refund for the current period")
     receipt = _reverse_subscription_charge(sub, now=now, refund_fraction=frac, reason=(body.reason or "refund"), actor=user_id)
+    # SUBX-02: a refunded cycle no longer grants access -> REVOKE now (mirror the
+    # immediate-cancel path) so has_active_subscription flips False + content re-locks;
+    # no refund-and-keep-access. Idempotent (an idempotent replay reverses nothing).
+    if not receipt.get("idempotent_replay"):
+        sub["status"] = "canceled"
+        sub["canceled_at"] = now
+        sub["current_period_end"] = now
+        sub["auto_renew"] = False
+        sub["cancel_at_period_end"] = False
+        sub["updated_at"] = now
+        save_subscription(sub)
+        record_billing_subscription(sub)
     audit_event(
         "subscription_refunded",
         sub["subscriber_id"],
@@ -2102,17 +2374,11 @@ async def cancel_subscription(
         # default (locked decision) + claw back the creator credit (state=reversed,
         # not inflating), idempotent -- unless refund=False was explicitly passed. A
         # fully-elapsed period yields fraction 0 -> no refund (also makes a repeat
-        # immediate-cancel a no-op).
+        # immediate-cancel a no-op). SUBX-15: shared immediate-cancel path.
         do_refund = body.refund if body.refund is not None else True
-        if do_refund:
-            frac = _proration_fraction(now, int(sub.get("start_at") or now), int(sub.get("current_period_end") or now))
-            if frac > 0:
-                refund_receipt = _reverse_subscription_charge(
-                    sub, now=now, refund_fraction=frac, reason="immediate_cancel", actor=user_id,
-                )
-        sub["status"] = "canceled"
-        sub["canceled_at"] = now
-        sub["current_period_end"] = now
+        refund_receipt = _apply_immediate_cancel(
+            sub, now=now, actor=user_id, reason="immediate_cancel", do_refund=do_refund,
+        )
     sub["updated_at"] = now
     save_subscription(sub)
     record_billing_subscription(sub)
@@ -2201,11 +2467,34 @@ async def resume_subscription(
     user_id = require_user(x_user_id)
     if user_id not in (sub["subscriber_id"], sub["creator_id"]):
         raise HTTPException(status_code=403, detail="Not authorized to resume this subscription")
+    # SUBX-15: resume must never yield an active-but-LOCKED sub. Resume only restores
+    # a cancel-at-period-end sub that still has PAID time left (current_period_end in
+    # the future). A LAPSED sub (period already elapsed, or immediately-canceled with
+    # a refund) cannot be resumed for free — the caller must re-subscribe (real
+    # charge, fresh period). We surface that as 409 rather than flipping it to a
+    # false-active state.
+    now = now_ts()
+    period_end = int(sub.get("current_period_end") or 0)
+    if not period_end or period_end <= now:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "subscription_lapsed",
+                "message": "This subscription has lapsed; subscribe again to reactivate.",
+                "plan_id": sub.get("plan_id"),
+                "creator_id": sub.get("creator_id"),
+            },
+        )
     sub["cancel_at_period_end"] = False
     sub["auto_renew"] = True
     sub["status"] = "active"
     sub["renewal_policy"] = "auto"
-    sub["updated_at"] = now_ts()
+    # SUBX-15: clear any dunning residue so a resumed sub renews cleanly.
+    for _k in ("dunning_state", "dunning_attempts", "dunning_next_retry_at", "grace_until",
+               "dunning_last_at", "dunning_last_reason", "first_decline_at"):
+        sub.pop(_k, None)
+    sub["next_billing_date"] = period_end
+    sub["updated_at"] = now
     save_subscription(sub)
     record_billing_subscription(sub)
     put_notification(
@@ -2252,23 +2541,39 @@ async def update_subscription_renewal(
     user_id = require_user(x_user_id)
     if user_id not in (sub["subscriber_id"], sub["creator_id"]):
         raise HTTPException(status_code=403, detail="Not authorized to update renewal settings")
+    now = now_ts()
+    refund_receipt = None
     sub["auto_renew"] = body.auto_renew
     if body.renewal_policy:
         sub["renewal_policy"] = body.renewal_policy
     if not body.auto_renew:
         if body.effective == "immediate":
-            sub["status"] = "canceled"
-            sub["cancel_at_period_end"] = False
-            sub["current_period_end"] = now_ts()
+            # SUBX-15: an IMMEDIATE renewal-off is a full immediate cancel and must
+            # refund + revoke IDENTICALLY to /cancel (previously it revoked with NO
+            # refund). Routes through the shared immediate-cancel path.
+            refund_receipt = _apply_immediate_cancel(
+                sub, now=now, actor=user_id, reason="immediate_cancel", do_refund=True,
+            )
         else:
             sub["status"] = "canceling"
             sub["cancel_at_period_end"] = True
     else:
         sub["status"] = "active"
         sub["cancel_at_period_end"] = False
-    sub["updated_at"] = now_ts()
+    sub["updated_at"] = now
     save_subscription(sub)
     record_billing_subscription(sub)
+    if refund_receipt:
+        audit_event(
+            "subscription_refunded",
+            sub["subscriber_id"],
+            request,
+            outcome="success",
+            subscription_id=subscription_id,
+            creator_id=sub["creator_id"],
+            refunded_cents=refund_receipt.get("refunded_cents"),
+            clawback_cents=refund_receipt.get("clawback_cents"),
+        )
     audit_event(
         "subscription_renewal_updated",
         sub["subscriber_id"],
@@ -2278,6 +2583,35 @@ async def update_subscription_renewal(
         auto_renew=body.auto_renew,
         effective=body.effective,
     )
+    # SUBX-51: turning auto-renew OFF is a cancel — it was silent before. Push both parties.
+    if not body.auto_renew:
+        try:
+            from app.services.social_alerts import emit_social_alert as _emit_sa
+            from app.services.profile import get_profile_identity as _gpi
+            _c_name = _gpi(sub["creator_id"]).get("display_name") or sub["creator_id"]
+            _s_name = _gpi(sub["subscriber_id"]).get("display_name") or sub["subscriber_id"]
+            _immediate = (body.effective == "immediate")
+            _sub_title = ("Your subscription to %s is canceled" % _c_name) if _immediate else ("Your subscription to %s will not renew" % _c_name)
+            _emit_sa(
+                recipient_user_id=sub["subscriber_id"],
+                alert_type="subscription_canceled",
+                actor_user_id=sub["creator_id"],
+                actor_display_name=_c_name,
+                title=_sub_title,
+                details={"subscription_id": subscription_id, "creator_id": sub["creator_id"], "ends_at": int(sub.get("current_period_end") or 0), "cancel_at_period_end": not _immediate},
+                action_url=f"/subscriptions/manage?subscriptionId={subscription_id}&creatorId={sub['creator_id']}",
+            )
+            _emit_sa(
+                recipient_user_id=sub["creator_id"],
+                alert_type="subscription_canceled",
+                actor_user_id=sub["subscriber_id"],
+                actor_display_name=_s_name,
+                title=f"{_s_name} turned off auto-renew" if not _immediate else f"{_s_name} canceled their subscription",
+                details={"subscription_id": subscription_id, "subscriber_id": sub["subscriber_id"]},
+                action_url="/subscriptions/subscribers",
+            )
+        except Exception:
+            logger.warning("renewal-toggle cancel alert failed sub=%s", subscription_id, exc_info=True)
     refresh_subscription_calendar_events(sub)
     return attach_subscription_profiles(sub)
 
@@ -2301,73 +2635,26 @@ async def convert_trial(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
 
+    # SUBX-01: route the MANUAL trial conversion through the SAME funds-guarded rail
+    # the sweeper uses (subscription_renewal._attempt_renewal, trial_conversion=True)
+    # so it REALLY charges the card captured up front. A missing / declined PM -> 402
+    # and NO creator credit / NO period advance (was: a phantom stub_inv invoice plus a
+    # real creator credit with ZERO dollars collected).
+    from app.services.subscription_renewal import _attempt_renewal
+
     ts = now_ts()
-    sub["status"] = "active"
-    sub["trial_converted_at"] = ts
-    sub["current_period_end"] = ts + interval_seconds(sub["interval"])
-    sub["updated_at"] = ts
-    save_subscription(sub)
-    record_billing_subscription(sub)
-
-    invoice_id = new_id("inv")
-    invoice = {
-        "invoice_id": invoice_id,
-        "subscription_id": subscription_id,
-        "subscriber_id": sub["subscriber_id"],
-        "provider_invoice_id": new_id("stub_inv"),
-        "amount_cents": int(sub["price_cents"]),
-        "currency": sub["currency"],
-        "status": "paid",
-        "period_start": ts,
-        "period_end": sub["current_period_end"],
-        "created_at": ts,
+    _subx_summary: Dict[str, Any] = {
+        "renewed": [], "dunning": [], "expired": [], "canceled": [],
+        "idempotent_skips": [], "grandfather_skips": [], "trial_converted": [],
+        "plan_changed": [], "expiring_soon": [],
     }
-    recurring = emit_subscription_cycle_order_and_reconcile(subscription=sub, plan=plan, invoice=invoice)
-    invoice["recurring_order_id"] = recurring["order_id"]
-    save_invoice(invoice)
-    record_billing_payment(invoice, subscription_id)
-    record_billing_transaction(
-        user_sub=sub["subscriber_id"],
-        amount_cents=int(invoice["amount_cents"]),
-        currency=invoice["currency"],
-        description=f"Subscription {sub['plan_id']}",
-        status="COMPLETED",
-        external_ref=invoice_id,
-        metadata={"subscription_id": subscription_id, "creator_id": sub["creator_id"]},
-    )
-
-    fee_cents = int(invoice["amount_cents"] * FEE_BPS / 10000)
-    charge_entry = {
-        "entry_id": new_id("led"),
-        "subscription_id": subscription_id,
-        "subscriber_id": sub["subscriber_id"],
-        "entry_type": "charge",
-        "amount_cents": invoice["amount_cents"],
-        "currency": invoice["currency"],
-        "created_at": ts,
-        "metadata": {"invoice_id": invoice_id},
-    }
-    fee_entry = {
-        "entry_id": new_id("led"),
-        "subscription_id": subscription_id,
-        "subscriber_id": sub["subscriber_id"],
-        "entry_type": "fee",
-        "amount_cents": fee_cents,
-        "currency": invoice["currency"],
-        "created_at": ts,
-        "metadata": {"invoice_id": invoice_id},
-    }
-    save_ledger_entry(sub["creator_id"], charge_entry)
-    save_ledger_entry(sub["creator_id"], fee_entry)
-    _mirror_creator_credit_to_billing(
-        sub["creator_id"],
-        int(invoice["amount_cents"]) - fee_cents,
-        currency=invoice["currency"],
-        created_at=ts,
-        subscription_id=subscription_id,
-        subscriber_id=sub["subscriber_id"],
-        invoice_id=invoice_id,
-    )
+    _attempt_renewal(sub, ts, _subx_summary, trial_conversion=True)
+    if (sub.get("status") or "").lower() != "active":
+        # decline / no payment method -> dunning (past_due); nothing was credited
+        raise HTTPException(
+            status_code=402,
+            detail={"code": "payment_failed", "message": "Trial conversion charge did not succeed. Update your payment method and try again."},
+        )
 
     audit_event(
         "subscription_trial_converted",
@@ -2378,8 +2665,128 @@ async def convert_trial(
         plan_id=sub["plan_id"],
         creator_id=sub["creator_id"],
     )
+    # SUBX-51: trial conversion was silent — push the subscriber a receipt + deep-link.
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _c_name = _gpi(sub["creator_id"]).get("display_name") or sub["creator_id"]
+        _emit_sa(
+            recipient_user_id=sub["subscriber_id"],
+            alert_type="subscription_converted",
+            actor_user_id=sub["creator_id"],
+            actor_display_name=_c_name,
+            title=f"Your trial converted to a paid subscription to {_c_name}",
+            details={"subscription_id": subscription_id, "creator_id": sub["creator_id"], "plan_id": sub["plan_id"], "amount_cents": int(sub.get("price_cents") or 0)},
+            action_url=f"/subscriptions/manage?subscriptionId={subscription_id}&creatorId={sub['creator_id']}",
+        )
+    except Exception:
+        logger.warning("trial-convert social alert failed sub=%s", subscription_id, exc_info=True)
     refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
+
+
+@router.post("/api/subscriptions/{subscription_id}/retry-payment", response_model=SubscriptionOut)
+async def retry_subscription_payment(
+    subscription_id: str,
+    body: SubscriptionRetryPaymentIn,
+    request: Request,
+    x_user_id: Optional[str] = Header(default=None),
+):
+    """SUBX-22: subscriber-driven PAST_DUE recovery. The dunning notification
+    ("update your card") deep-links the subscriber here. Optionally swap the PM,
+    then retry the failed renewal charge on the SAME funds-guarded rail the sweeper
+    uses (subscription_renewal._attempt_renewal). A real collected charge clears
+    past_due -> active and advances the period; a decline / missing PM raises 402
+    and leaves the sub in dunning (NO phantom credit, NO free extension)."""
+    sub = ddb_get_item(pk_subscription(subscription_id), "META")
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    sub = normalize_subscription(sub)
+    user_id = require_user(x_user_id)
+    if user_id not in (sub["subscriber_id"], sub["creator_id"]):
+        raise HTTPException(status_code=403, detail="Not authorized to retry this subscription")
+    status = (sub.get("status") or "").lower()
+    if status == "active":
+        # Idempotent: already recovered (e.g. the sweeper retried first). Nothing to charge.
+        return attach_subscription_profiles(sub)
+    if status != "past_due":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "not_recoverable", "message": "This subscription is not awaiting a payment retry."},
+        )
+    # SUBX-22: an explicit PM swap (the subscriber added / selected a new card) is
+    # validated + adopted BEFORE the retry so the charge uses the fresh card. A
+    # missing / unowned PM raises 402 (resolve_subscription_payment_method).
+    if body.payment_method_id:
+        pm = resolve_subscription_payment_method(sub["subscriber_id"], body.payment_method_id)
+        sub["payment_method_id"] = pm
+        sub["updated_at"] = now_ts()
+        save_subscription(sub)
+
+    from app.services.subscription_renewal import _attempt_renewal
+
+    ts = now_ts()
+    _subx_summary: Dict[str, Any] = {
+        "renewed": [], "dunning": [], "expired": [], "canceled": [],
+        "idempotent_skips": [], "grandfather_skips": [], "trial_converted": [],
+        "plan_changed": [], "expiring_soon": [],
+    }
+    _attempt_renewal(sub, ts, _subx_summary)
+    if (sub.get("status") or "").lower() != "active":
+        # decline / no payment method -> stays past_due (dunning); nothing credited.
+        raise HTTPException(
+            status_code=402,
+            detail={"code": "payment_failed", "message": "The retry charge did not succeed. Update your payment method and try again."},
+        )
+    audit_event(
+        "subscription_payment_retried",
+        sub["subscriber_id"],
+        request,
+        outcome="success",
+        subscription_id=subscription_id,
+        plan_id=sub.get("plan_id"),
+        creator_id=sub["creator_id"],
+    )
+    refresh_subscription_calendar_events(sub)
+    return attach_subscription_profiles(sub)
+
+
+def _emit_subscription_changed(sub, plan, request, *, applied: bool, direction: str) -> None:
+    """SUBX-51: notify the subscriber (and creator) of a plan change. ``applied`` False =
+    a scheduled downgrade/period-end change; True = an immediate upgrade now in effect."""
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _c_name = _gpi(sub["creator_id"]).get("display_name") or sub["creator_id"]
+        _s_name = _gpi(sub["subscriber_id"]).get("display_name") or sub["subscriber_id"]
+        _plan_name = (plan or {}).get("name") or (plan or {}).get("title") or "a new plan"
+        if applied:
+            _sub_title = f"Your subscription to {_c_name} changed to {_plan_name}"
+        elif direction == "downgrade":
+            _sub_title = f"Your plan change to {_plan_name} is scheduled for the end of this period"
+        else:
+            _sub_title = f"Your plan change to {_plan_name} is scheduled"
+        _mgr = f"/subscriptions/manage?subscriptionId={sub['subscription_id']}&creatorId={sub['creator_id']}"
+        _emit_sa(
+            recipient_user_id=sub["subscriber_id"],
+            alert_type="subscription_changed",
+            actor_user_id=sub["creator_id"],
+            actor_display_name=_c_name,
+            title=_sub_title,
+            details={"subscription_id": sub["subscription_id"], "creator_id": sub["creator_id"], "plan_id": sub.get("plan_id"), "direction": direction, "applied": applied},
+            action_url=_mgr,
+        )
+        _emit_sa(
+            recipient_user_id=sub["creator_id"],
+            alert_type="subscription_changed",
+            actor_user_id=sub["subscriber_id"],
+            actor_display_name=_s_name,
+            title=(f"{_s_name} upgraded to {_plan_name}" if (applied and direction == "upgrade") else f"{_s_name} scheduled a plan change"),
+            details={"subscription_id": sub["subscription_id"], "subscriber_id": sub["subscriber_id"], "plan_id": sub.get("plan_id"), "direction": direction, "applied": applied},
+            action_url="/subscriptions/subscribers",
+        )
+    except Exception:
+        logger.warning("plan-change social alert failed sub=%s", sub.get("subscription_id"), exc_info=True)
 
 
 @router.post("/api/subscriptions/{subscription_id}/change-plan", response_model=SubscriptionOut)
@@ -2413,7 +2820,14 @@ async def change_subscription_plan(
     # period end (no immediate money). An explicit effective="period_end" also
     # schedules.
     old_price = int(sub["price_cents"])
-    is_upgrade = int(new_price) > old_price
+    old_interval = sub.get("interval", "month")
+    interval_changed = old_interval != interval
+    # SUBX-11: classify up/down on a COMMON monthly-equivalent basis so a month->year
+    # switch (annual price >> monthly price, but same or cheaper per month) is not
+    # mis-classified as an "upgrade" and mis-charged the raw annual-vs-monthly delta.
+    old_monthly = _sube4_monthly_equiv_cents(old_price, old_interval)
+    new_monthly = _sube4_monthly_equiv_cents(int(new_price), interval)
+    is_upgrade = new_monthly > old_monthly
     schedule_at_period_end = (not is_upgrade) or (body.effective == "period_end")
 
     if schedule_at_period_end:
@@ -2443,19 +2857,34 @@ async def change_subscription_plan(
             plan_id=body.plan_id,
             effective="period_end",
         )
+        _emit_subscription_changed(sub, plan, request, applied=False, direction=("upgrade" if is_upgrade else "downgrade"))
         refresh_subscription_calendar_events(sub, plan)
         return attach_subscription_profiles(sub)
 
     # ---- UPGRADE: immediate, prorated DELTA charge via the E0 rail ----
-    # delta = (new_price - old_price) * remaining_fraction (>=0 for an upgrade with
-    # time left; a fully-elapsed period yields 0 -> switch plan with no charge).
-    proration_amount = calculate_proration(
-        current_price=old_price,
-        new_price=int(new_price),
-        now=ts,
-        period_start=int(sub.get("start_at") or ts),
-        period_end=int(sub.get("current_period_end") or ts),
-    )
+    # SUBX-10: prorate against the CURRENT cycle (current_period_start..end), NOT the
+    # whole-lifetime start_at, so a sub that has renewed N times is charged the delta
+    # for the time left in THIS cycle only.
+    cur_start = _current_period_start(sub)
+    cur_end = int(sub.get("current_period_end") or ts)
+    remaining_frac = _proration_fraction(ts, cur_start, cur_end)
+    if interval_changed:
+        # SUBX-11: an INTERVAL change starts a FRESH cycle on the new cadence now. The
+        # subscriber is charged the new plan's full price MINUS a credit for the unused
+        # remainder of the current (old-interval) cycle; the period is reset to
+        # now + new interval and the next renewal lands one new-interval out.
+        credit_for_unused = int(round(old_price * remaining_frac))
+        proration_amount = max(0, int(new_price) - credit_for_unused)
+    else:
+        # same-interval upgrade: charge the price DELTA for the remaining time; keep
+        # the current period end (they already paid the base for this cycle).
+        proration_amount = calculate_proration(
+            current_price=old_price,
+            new_price=int(new_price),
+            now=ts,
+            period_start=cur_start,
+            period_end=cur_end,
+        )
     if proration_amount < 0:
         proration_amount = 0
     upgrade_pm = None
@@ -2474,12 +2903,25 @@ async def change_subscription_plan(
             idempotency_key=f"{subscription_id}:upgrade:{int(sub.get('current_period_end') or ts)}:{body.plan_id}",
         )
 
-    # switch the plan NOW; the cycle they already paid keeps its period end (they
-    # only owe the upgrade delta for the remaining time).
+    # switch the plan NOW; a same-interval upgrade keeps the period end (they only owe
+    # the upgrade delta for the remaining time), while an INTERVAL change (SUBX-11)
+    # starts a fresh cycle on the new cadence now.
     sub["plan_id"] = body.plan_id
     sub["interval"] = interval
     sub["price_cents"] = int(new_price)
+    # SUBX-30/33: an UPGRADE unlocks the higher tier IMMEDIATELY -> re-resolve and
+    # persist the new tier level now. (A scheduled DOWNGRADE keeps the current
+    # higher tier_level until _apply_pending_change re-resolves it at period end,
+    # so paid-for access is never lost early.)
+    sub["tier_level"] = get_plan_level(sub["creator_id"], body.plan_id)
     sub["proration_policy"] = body.proration_policy
+    if interval_changed:
+        sub["current_period_start"] = ts
+        sub["current_period_end"] = ts + interval_seconds(interval)
+        sub["next_billing_date"] = sub["current_period_end"]
+    # a plan change resets any old-plan discount (renewal now bills the new list price)
+    sub.pop("discount", None)
+    sub.pop("discount_remaining_months", None)
     if upgrade_pm:
         sub["payment_method_id"] = upgrade_pm
     for _k in ("pending_change", "pending_plan_id", "pending_interval", "pending_price_cents", "pending_apply_at"):
@@ -2553,6 +2995,7 @@ async def change_subscription_plan(
         plan_id=body.plan_id,
         proration_amount_cents=proration_amount,
     )
+    _emit_subscription_changed(sub, plan, request, applied=True, direction="upgrade")
     refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
 
@@ -2572,38 +3015,29 @@ async def remove_subscriber(
     sub = normalize_subscription(sub)
     if sub["creator_id"] != creator_id:
         raise HTTPException(status_code=403, detail="Not authorized to manage this subscriber")
-    sub["status"] = "canceled"
-    sub["auto_renew"] = False
-    sub["cancel_at_period_end"] = False
-    sub["renewal_policy"] = "manual"
-    sub["current_period_end"] = now_ts()
-    sub["updated_at"] = now_ts()
+    # SUBX-12: a creator REMOVE is a real immediate refund + creator clawback (was a
+    # phantom mark-invoice-refunded that never touched the card or the creator's live
+    # credit). Route through the shared immediate-cancel path so the subscriber's card
+    # is refunded the unused prorated remainder and the creator credit is reversed --
+    # identical money to /cancel(immediate). A gift's refund goes to the gifter.
+    now = now_ts()
+    receipt = _apply_immediate_cancel(
+        sub, now=now, actor=creator_id, reason=body.reason or "creator_removed", do_refund=True,
+    )
     save_subscription(sub)
     record_billing_subscription(sub)
-
-    refunded = mark_invoice_refunded(subscription_id, body.reason or "creator_removed")
-    if refunded:
-        record_billing_transaction(
-            user_sub=sub["subscriber_id"],
-            amount_cents=-int(refunded.get("amount_cents", 0)),
-            currency=refunded.get("currency", sub.get("currency") or "usd"),
-            description=f"Subscription refund {subscription_id}",
-            status="REVERTED",
-            external_ref=refunded.get("invoice_id") or subscription_id,
-            metadata={"subscription_id": subscription_id, "reason": body.reason or "creator_removed"},
+    refunded = bool(receipt and not receipt.get("idempotent_replay") and int(receipt.get("refunded_cents") or 0) > 0)
+    if receipt and not receipt.get("idempotent_replay"):
+        audit_event(
+            "subscription_refunded",
+            sub["subscriber_id"],
+            request,
+            outcome="success",
+            subscription_id=subscription_id,
+            creator_id=creator_id,
+            refunded_cents=receipt.get("refunded_cents"),
+            clawback_cents=receipt.get("clawback_cents"),
         )
-        refund_entry = {
-            "entry_id": new_id("led"),
-            "subscription_id": subscription_id,
-            "subscriber_id": sub["subscriber_id"],
-            "entry_type": "refund",
-            "amount_cents": int(refunded.get("amount_cents", 0)),
-            "currency": refunded.get("currency", sub.get("currency")),
-            "created_at": now_ts(),
-            "metadata": {"invoice_id": refunded.get("invoice_id")},
-        }
-        save_ledger_entry(creator_id, refund_entry)
-
     audit_event(
         "subscription_removed_by_creator",
         creator_id,
@@ -2611,13 +3045,29 @@ async def remove_subscriber(
         outcome="success",
         subscription_id=subscription_id,
         subscriber_id=sub["subscriber_id"],
-        refunded=bool(refunded),
+        refunded=refunded,
     )
     put_notification(
         recipient_user_id=sub["subscriber_id"],
         notif_type="subscription_removed",
         payload={"subscription_id": subscription_id, "creator_id": creator_id},
     )
+    # SUBX-51: promote removal from in-app-only to a real default-on push + deep-link.
+    try:
+        from app.services.social_alerts import emit_social_alert as _emit_sa
+        from app.services.profile import get_profile_identity as _gpi
+        _c_name = _gpi(creator_id).get("display_name") or creator_id
+        _emit_sa(
+            recipient_user_id=sub["subscriber_id"],
+            alert_type="subscription_removed",
+            actor_user_id=creator_id,
+            actor_display_name=_c_name,
+            title=f"Your subscription to {_c_name} was ended by the creator",
+            details={"subscription_id": subscription_id, "creator_id": creator_id, "refunded": refunded},
+            action_url=f"/subscriptions/manage?subscriptionId={subscription_id}&creatorId={creator_id}",
+        )
+    except Exception:
+        logger.warning("removal social alert failed sub=%s", subscription_id, exc_info=True)
     refresh_subscription_calendar_events(sub)
     return attach_subscription_profiles(sub)
 
@@ -2806,6 +3256,18 @@ async def list_earnings(
             gross += int(entry.get("amount_cents", 0))
         if entry.get("entry_type") == "fee":
             fee += int(entry.get("amount_cents", 0))
+    # SUBX-42 (C5): subtract subscription refund clawbacks (booked to T.billing, not
+    # the sub ledger) so the earnings report matches the actual withdrawable balance.
+    refunded = 0
+    for rev in _creator_subscription_reversals(creator_id):
+        ts = rev.get("ts", 0)
+        if period_start and ts < period_start:
+            continue
+        if period_end and ts > period_end:
+            continue
+        if rev.get("currency"):
+            currency = rev["currency"]
+        refunded += int(rev.get("amount_cents") or 0)
     return {
         "creator_id": creator_id,
         "period_start": period_start,
@@ -2813,14 +3275,28 @@ async def list_earnings(
         "currency": currency,
         "gross_cents": gross,
         "fee_cents": fee,
-        "net_cents": gross - fee,
+        "refunded_cents": refunded,
+        "net_cents": gross - fee - refunded,
     }
 
 
 @router.post("/api/billing/webhooks/{provider}")
-async def billing_webhook(provider: str, body: WebhookIn):
+async def billing_webhook(
+    provider: str,
+    body: WebhookIn,
+    x_webhook_secret: Optional[str] = Header(default=None, alias="X-Subscription-Webhook-Secret"),
+):
     if provider not in ("stub", "paypal", "ccbill"):
         raise HTTPException(status_code=400, detail="Unsupported provider")
+    # SUBX-03: authenticate the billing webhook with a shared secret (seam mirrors
+    # admin_payouts.payout_provider_webhook). When SUBSCRIPTION_WEBHOOK_SECRET is set,
+    # an unsigned / forged caller is rejected 401 and mutates NOTHING -- closing the
+    # free un-expire / extend / dunning-bypass hole.
+    _wh_secret = os.environ.get("SUBSCRIPTION_WEBHOOK_SECRET", "") or getattr(S, "subscription_webhook_secret", "") or ""
+    if _wh_secret:
+        import hmac as _hmac
+        if not _hmac.compare_digest(str(x_webhook_secret or ""), str(_wh_secret)):
+            raise HTTPException(status_code=401, detail="invalid_webhook_secret")
     event_id = new_id("wh")
     ddb_put_item({
         "pk": f"WEBHOOK#{provider}",
@@ -2898,12 +3374,10 @@ async def billing_webhook(provider: str, body: WebhookIn):
             }
             save_ledger_entry(sub["creator_id"], entry)
     elif event_type == "invoice.paid":
-        sub["status"] = "active"
-        sub["current_period_end"] = ts + interval_seconds(sub.get("interval", "month"))
-        sub["auto_renew"] = True
-        if sub.get("discount_remaining_months"):
-            sub["discount_remaining_months"] = max(0, int(sub["discount_remaining_months"]) - 1)
-
+        # SUBX-03: BOOKKEEPING-ONLY. A signed invoice.paid must NOT extend the period /
+        # un-expire / re-enable auto-renew off a webhook alone; only a real captured charge
+        # (the funds-guarded renewal sweeper) advances the lifecycle. Record the invoice
+        # for audit but leave status / current_period_end / auto_renew intact.
         amount_cents = body.metadata.get("amount_cents") or body.metadata.get("amount") or sub.get("price_cents")
         try:
             amount_cents = int(amount_cents)
@@ -3078,6 +3552,23 @@ class SubE4SubscriberListOut(BaseModel):
     subscribers: List[SubE4SubscriberOut]
 
 
+class SubE4TierBreakdownOut(BaseModel):
+    """SUBX-43 (C8): per-tier (plan) slice of the creator's book. Revenue is
+    attributed to a subscription's CURRENT plan; sums reconcile to the creator-wide
+    aggregate (a sub with no plan_id is bucketed under plan_id=None)."""
+    plan_id: Optional[str] = None
+    plan_name: Optional[str] = None
+    level: Optional[int] = None
+    active_subscribers: int = 0
+    trialing: int = 0
+    past_due: int = 0
+    total_subscribers: int = 0
+    mrr_cents: int = 0
+    gross_revenue_to_date_cents: int = 0
+    refunded_to_date_cents: int = 0
+    net_revenue_to_date_cents: int = 0
+
+
 class SubE4AnalyticsOut(BaseModel):
     creator_id: str
     currency: str
@@ -3088,33 +3579,43 @@ class SubE4AnalyticsOut(BaseModel):
     past_due: int
     canceled_total: int
     total_subscribers: int
-    # recurring revenue (monthly-equivalent gross of ACTIVE, non-trial subs)
+    # recurring revenue. SUBX-42 (C4): MRR = monthly-equiv LIST price of ACTIVE,
+    # non-trial, AUTO-RENEWING, non-gift subs (excludes gifts + cancel-at-period-end
+    # + past_due). past_due surfaced separately as the recoverable book.
     mrr_cents: int
     arpu_cents: int
-    # growth/churn over the trailing 30d window
+    # SUBX-43 (C9): past_due monthly-equiv (recoverable MRR), reported distinctly.
+    past_due_mrr_cents: int = 0
+    # growth/churn over the trailing window
     period_days: int
     new_subs_30d: int
     churned_30d: int
+    # SUBX-43 (C7): cohort churn — churned_in_window / active_at_window_start.
+    active_at_window_start: int = 0
     churn_rate: float
-    # lifetime subscription revenue from the creator ledger
+    # lifetime subscription revenue from the creator ledger + T.billing reversals
     gross_revenue_to_date_cents: int
     fee_to_date_cents: int
     refunded_to_date_cents: int
     net_revenue_to_date_cents: int
+    # SUBX-43 (C8): per-tier breakdown (sorted by presentation order then level).
+    by_tier: List[SubE4TierBreakdownOut] = Field(default_factory=list)
 
 
 @router.get("/api/creators/{creator_id}/subscribers", response_model=SubE4SubscriberListOut)
 async def list_creator_subscribers(
     creator_id: str,
     status: Optional[str] = Query(default=None, description="active|trialing|past_due|canceled"),
+    plan_id: Optional[str] = Query(default=None, description="SUBX-43: filter to one tier"),
     limit: int = Query(default=50, ge=1, le=200),
     cursor: Optional[str] = Query(default=None),
     x_user_id: Optional[str] = Header(default=None),
 ):
     """SUB-E4-1: owner-scoped creator subscriber list off the CREATOR#SUB# index.
     Per-sub subscriber id+name, plan/tier name, status, since (start_at),
-    period-end/next-billing, is_gift, is_trial. Optional status filter + paginated
-    (opaque cursor). A creator sees only their own subscribers; admin may see any."""
+    period-end/next-billing, is_gift, is_trial. Optional status filter + SUBX-43
+    per-tier (plan_id) filter + paginated (opaque cursor). A creator sees only their
+    own subscribers; admin may see any."""
     _sube4_require_creator_or_admin(x_user_id, creator_id)
     now = now_ts()
     subs, plan_names = _sube4_creator_sub_rows(creator_id)
@@ -3125,6 +3626,11 @@ async def list_creator_subscribers(
         if allowed is None:
             allowed = {status_key}
         subs = [s for s in subs if (s.get("status") or "").lower() in allowed]
+
+    # SUBX-43 (C6): per-tier filter for the creator subscriber list.
+    plan_filter = (plan_id or "").strip()
+    if plan_filter:
+        subs = [s for s in subs if (s.get("plan_id") or "") == plan_filter]
 
     # newest-subscribed first; stable tiebreak on subscription_id
     subs.sort(key=lambda s: (int(s.get("start_at") or s.get("created_at") or 0), s.get("subscription_id", "")), reverse=True)
@@ -3174,22 +3680,64 @@ async def get_creator_subscription_analytics(
     period_days: int = Query(default=30, ge=1, le=365),
     x_user_id: Optional[str] = Header(default=None),
 ):
-    """SUB-E4-2: MRR/analytics computed from the creator's real subscription
-    records + ledger. active/trialing/past_due counts; MRR = sum of the
-    monthly-equivalent GROSS price of ACTIVE non-trial subs (year -> price/12);
-    ARPU = MRR/active; new (start_at in window) + churned (canceled/expired in
-    window) + churn rate; lifetime subscription revenue from the ledger. Owner-scoped."""
+    """SUB-E4-2 (+ SUBX-42/43): MRR/analytics computed from the creator's real
+    subscription records + ledger + T.billing reversals.
+
+    SUBX-42 corrections vs the E4 baseline:
+      * MRR (C4) = monthly-equiv LIST price of ACTIVE, non-trial, AUTO-RENEWING,
+        non-gift subs — gifts (auto_renew=False) and cancel-at-period-end subs no
+        longer inflate it; ``list_price_cents`` (falls back to ``price_cents``) is
+        used so a discounted sub is counted at list, not the promo price (C3).
+      * refunded_to_date (C4/C5) folds the T.billing subscription reversals the sub
+        ledger never recorded, so net reconciles to the withdrawable balance.
+    SUBX-43 additions:
+      * past_due_mrr (C9) surfaced distinctly as the recoverable book.
+      * cohort churn (C7): churned_in_window / active_at_window_start.
+      * per-tier breakdown (C8): counts/MRR/revenue per plan, reconciling to totals.
+    Owner-scoped."""
     _sube4_require_creator_or_admin(x_user_id, creator_id)
     now = now_ts()
     cutoff = now - period_days * 86400
 
     items = ddb_query(pk_creator(creator_id))
     active = trialing = past_due = canceled_total = total = 0
-    mrr = 0
+    mrr = past_due_mrr = 0
     new_subs = 0
     churned = 0
+    active_at_start = 0
     currency = "usd"
-    gross = fee = refunded = 0
+    gross = fee = 0
+
+    plan_meta: Dict[str, Dict[str, Any]] = {}
+    sub_plan: Dict[str, Optional[str]] = {}
+    tiers: Dict[Optional[str], Dict[str, Any]] = {}
+
+    def _tier(pid: Optional[str]) -> Dict[str, Any]:
+        if pid not in tiers:
+            meta = plan_meta.get(pid or "", {})
+            tiers[pid] = {
+                "plan_id": pid,
+                "plan_name": meta.get("name"),
+                "level": meta.get("level"),
+                "display_order": meta.get("display_order"),
+                "created_at": meta.get("created_at") or 0,
+                "active": 0, "trialing": 0, "past_due": 0, "total": 0,
+                "mrr": 0, "gross": 0, "fee": 0, "refunded": 0,
+            }
+        return tiers[pid]
+
+    def _list_price(s: Dict[str, Any]) -> int:
+        return int(s.get("list_price_cents") or s.get("price_cents") or 0)
+
+    # First pass: index plans (for per-tier name/level/order) so tier buckets resolve.
+    for it in items:
+        if it.get("sk", "").startswith("PLAN#") and it.get("plan_id"):
+            plan_meta[it["plan_id"]] = {
+                "name": it.get("name") or it["plan_id"],
+                "level": it.get("level"),
+                "display_order": it.get("display_order"),
+                "created_at": it.get("created_at") or 0,
+            }
 
     for it in items:
         sk = it.get("sk", "")
@@ -3199,37 +3747,98 @@ async def get_creator_subscription_analytics(
             st = (s.get("status") or "").lower()
             if s.get("currency"):
                 currency = s.get("currency")
+            pid = s.get("plan_id")
+            sub_plan[s.get("subscription_id")] = pid
+            tb = _tier(pid)
+            tb["total"] += 1
+            is_gift = bool(s.get("is_gift", False))
+            renewing = bool(s.get("auto_renew", True)) and not bool(s.get("cancel_at_period_end", False))
+            monthly = _sube4_monthly_equiv_cents(_list_price(s), s.get("interval") or "month")
             if st == "active":
                 active += 1
-                if not _sube4_is_trial(s, now):
-                    mrr += _sube4_monthly_equiv_cents(int(s.get("price_cents") or 0), s.get("interval") or "month")
+                tb["active"] += 1
+                # SUBX-42 (C4): only recurring, non-gift, non-trial subs are MRR.
+                if not _sube4_is_trial(s, now) and renewing and not is_gift:
+                    mrr += monthly
+                    tb["mrr"] += monthly
             elif st == "trialing":
                 trialing += 1
+                tb["trialing"] += 1
             elif st == "past_due":
                 past_due += 1
+                tb["past_due"] += 1
+                if not is_gift:
+                    past_due_mrr += monthly  # SUBX-43 (C9): recoverable book
             elif st in _SUBE4_CANCELED_STATUSES:
                 canceled_total += 1
                 churn_ts = int(s.get("updated_at") or s.get("canceled_at") or 0)
                 if churn_ts >= cutoff and st in ("canceled", "cancelled", "expired"):
                     churned += 1
-            if int(s.get("start_at") or s.get("created_at") or 0) >= cutoff:
+            # SUBX-43 (C7): cohort denominator — subs that existed at window start
+            # (started before cutoff and were NOT already canceled before cutoff).
+            start_at = int(s.get("start_at") or s.get("created_at") or 0)
+            if start_at >= cutoff:
                 new_subs += 1
-        elif sk.startswith("LEDGER#"):
-            etype = it.get("entry_type")
-            amt = int(it.get("amount_cents") or 0)
-            if it.get("currency"):
-                currency = it.get("currency")
-            if etype == "charge":
-                gross += amt
-            elif etype == "fee":
-                fee += amt
-            elif etype == "refund":
-                refunded += amt
+            elif start_at < cutoff:
+                churn_ts = int(s.get("updated_at") or s.get("canceled_at") or 0)
+                canceled_before_window = st in _SUBE4_CANCELED_STATUSES and churn_ts < cutoff
+                if not canceled_before_window:
+                    active_at_start += 1
+    # SUBX-43 (C8): the CREATOR# partition returns LEDGER# rows BEFORE SUB# rows
+    # (sk ordering), so per-tier revenue must be attributed in a SECOND pass, after
+    # the sub->plan map is fully built (else all revenue falls into the None bucket).
+    for it in items:
+        if not it.get("sk", "").startswith("LEDGER#"):
+            continue
+        etype = it.get("entry_type")
+        amt = int(it.get("amount_cents") or 0)
+        if it.get("currency"):
+            currency = it.get("currency")
+        led_sub = it.get("subscription_id")
+        tier_key = sub_plan.get(led_sub) if led_sub in sub_plan else None
+        if etype == "charge":
+            gross += amt
+            _tier(tier_key)["gross"] += amt
+        elif etype == "fee":
+            fee += amt
+            _tier(tier_key)["fee"] += amt
+
+    # SUBX-42 (C4/C5): fold T.billing subscription reversals into refunded/net.
+    refunded = 0
+    for rev in _creator_subscription_reversals(creator_id):
+        amt = int(rev.get("amount_cents") or 0)
+        refunded += amt
+        rev_sub = rev.get("subscription_id")
+        _tier(sub_plan.get(rev_sub) if rev_sub in sub_plan else None)["refunded"] += amt
 
     arpu = int(round(mrr / active)) if active else 0
-    churn_denom = active + churned
-    churn_rate = round(churned / churn_denom, 4) if churn_denom else 0.0
+    # SUBX-43 (C7): cohort churn share = churned_in_window / active_at_window_start.
+    churn_rate = round(churned / active_at_start, 4) if active_at_start else 0.0
     net = gross - fee - refunded
+
+    by_tier = []
+    for tb in sorted(
+        tiers.values(),
+        key=lambda t: (
+            0 if t.get("display_order") is not None else 1,
+            int(t.get("display_order")) if t.get("display_order") is not None else 0,
+            int(t.get("level")) if t.get("level") is not None else 0,
+            -int(t.get("created_at") or 0),
+        ),
+    ):
+        by_tier.append(SubE4TierBreakdownOut(
+            plan_id=tb["plan_id"],
+            plan_name=tb["plan_name"],
+            level=tb["level"],
+            active_subscribers=tb["active"],
+            trialing=tb["trialing"],
+            past_due=tb["past_due"],
+            total_subscribers=tb["total"],
+            mrr_cents=tb["mrr"],
+            gross_revenue_to_date_cents=tb["gross"],
+            refunded_to_date_cents=tb["refunded"],
+            net_revenue_to_date_cents=tb["gross"] - tb["fee"] - tb["refunded"],
+        ))
 
     return SubE4AnalyticsOut(
         creator_id=creator_id,
@@ -3242,13 +3851,16 @@ async def get_creator_subscription_analytics(
         total_subscribers=total,
         mrr_cents=mrr,
         arpu_cents=arpu,
+        past_due_mrr_cents=past_due_mrr,
         period_days=period_days,
         new_subs_30d=new_subs,
         churned_30d=churned,
+        active_at_window_start=active_at_start,
         churn_rate=churn_rate,
         gross_revenue_to_date_cents=gross,
         fee_to_date_cents=fee,
         refunded_to_date_cents=refunded,
         net_revenue_to_date_cents=net,
+        by_tier=by_tier,
     )
 # === END SUB-E4 ===

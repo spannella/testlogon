@@ -55,10 +55,6 @@ function formatDateTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
-function formatDate(ts: number): string {
-  return new Date(ts * 1000).toLocaleDateString();
-}
-
 // ─── Calendar Grid ──────────────────────────────────────────────
 
 function CalendarGrid({

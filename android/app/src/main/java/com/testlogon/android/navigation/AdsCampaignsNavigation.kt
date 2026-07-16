@@ -45,6 +45,12 @@ fun NavGraphBuilder.adsCampaignsDestination(navController: NavHostController) {
             navArgument(AdsCampaignsViewModel.ARG_ACCOUNT_ID) { type = NavType.StringType },
         ),
     ) {
-        AdsCampaignsRoute(onBack = { navController.popBackStack() })
+        AdsCampaignsRoute(
+            onBack = { navController.popBackStack() },
+            // ADV3-4 (B2): a row opens the campaign-management detail screen.
+            onOpenCampaign = { accountId, campaignId ->
+                navController.navigateToAdCampaignDetail(accountId, campaignId)
+            },
+        )
     }
 }

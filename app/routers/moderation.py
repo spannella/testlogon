@@ -15,6 +15,7 @@ from app.core.aws import ddb
 from app.core.tables import T
 from app.core.normalize import client_ip_from_request
 from app.services.alerts import audit_event, write_alert
+from app.services.push import send_push_for_alert
 from app.services.content_reports_store import create_content_report
 from app.services.moderation_audit_log import write_moderation_audit_event
 from app.services.moderation_tickets_store import upsert_open_ticket_for_report
@@ -28,7 +29,7 @@ RATE_LIMIT_USER_WINDOW_SECONDS = int(os.environ.get("MODERATION_REPORT_RATE_LIMI
 RATE_LIMIT_USER_MAX = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_USER_MAX", "8"))
 RATE_LIMIT_IP_WINDOW_SECONDS = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_IP_WINDOW_SECONDS", "60"))
 RATE_LIMIT_IP_MAX = int(os.environ.get("MODERATION_REPORT_RATE_LIMIT_IP_MAX", "20"))
-ALLOWED_TOPICS = {"sexual", "extortion", "criminal", "spam", "racist", "harassment", "hate", "violence_threats", "other", "licensing_ip"}
+ALLOWED_TOPICS = {"sexual", "extortion", "criminal", "spam", "racist", "harassment", "hate", "violence_threats", "other", "licensing_ip", "illegal", "csam"}
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ router = APIRouter(prefix="/v1/moderation", tags=["moderation"])
 
 
 class CreateModerationReportIn(BaseModel):
-    content_type: Literal["feed_post", "feed_comment", "feed_media", "message", "message_media", "video", "video_comment", "syndicate_post", "profile_photo"]
+    content_type: Literal["feed_post", "feed_comment", "feed_media", "message", "message_media", "video", "video_comment", "syndicate_post", "profile_photo", "user", "account", "catalog_item", "catalog_review", "broadcast_message", "story", "clip"]
     content_id: str = Field(min_length=1, max_length=256)
     topics: List[str] = Field(min_length=1, max_length=5)
     reason_text: str = Field(min_length=5, max_length=2000)
@@ -46,6 +47,13 @@ class CreateModerationReportIn(BaseModel):
     video_id: Optional[str] = Field(default=None, max_length=256)
     media_index: Optional[int] = Field(default=None, ge=0)
     syndicate_id: Optional[str] = Field(default=None, max_length=256)
+    category_id: Optional[str] = Field(default=None, max_length=256)
+    item_id: Optional[str] = Field(default=None, max_length=256)
+    review_id: Optional[str] = Field(default=None, max_length=256)
+    session_id: Optional[str] = Field(default=None, max_length=256)
+    story_id: Optional[str] = Field(default=None, max_length=256)
+    clip_id: Optional[str] = Field(default=None, max_length=256)
+    profile_user_id: Optional[str] = Field(default=None, max_length=256)
 
     @field_validator("topics")
     @classmethod
@@ -118,8 +126,21 @@ def _message_exists(conversation_id: str, message_id: str) -> bool:
 
 
 def _profile_photo_exists(user_id: str) -> bool:
-    item = T.profile.get_item(Key={"user_id": user_id}).get("Item") or {}
-    return bool(item.get("profile_photo_url"))
+    # MODX-10: T.profile is keyed by user_sub and stores the photo NESTED under
+    # `profile`; the prior top-level/user_id read always missed -> photo reports 404'd.
+    item = T.profile.get_item(Key={"user_sub": user_id}).get("Item") or {}
+    profile = item.get("profile") or {}
+    return bool(profile.get("profile_photo_url"))
+
+
+def _user_exists(user_id: str) -> bool:
+    # MODX-11: an account is reportable even with NO profile photo.
+    try:
+        if T.users.get_item(Key={"user_sub": user_id}).get("Item"):
+            return True
+    except Exception:
+        pass
+    return bool(T.profile.get_item(Key={"user_sub": user_id}).get("Item"))
 
 
 def _validate_content_exists(inp: CreateModerationReportIn) -> None:
@@ -191,6 +212,48 @@ def _validate_content_exists(inp: CreateModerationReportIn) -> None:
         except Exception:
             _sp = None
         if not _sp:
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type in ("user", "account"):
+        if not _user_exists(inp.content_id):
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "catalog_item":
+        if not inp.category_id:
+            raise HTTPException(status_code=400, detail="category_id is required for catalog_item")
+        _ci = T.catalog.get_item(Key={"PK": f"CAT#{inp.category_id}", "SK": f"ITEM#{inp.content_id}"}).get("Item")
+        if not _ci:
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "catalog_review":
+        if not inp.item_id:
+            raise HTTPException(status_code=400, detail="item_id is required for catalog_review")
+        _cr = T.catalog.get_item(Key={"PK": f"ITEM#{inp.item_id}", "SK": f"REVIEW#{inp.content_id}"}).get("Item")
+        if not _cr:
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "broadcast_message":
+        if not inp.session_id:
+            raise HTTPException(status_code=400, detail="session_id is required for broadcast_message")
+        from app.services.broadcast_chat_store import _find_sort_key
+        if not _find_sort_key(inp.session_id, inp.content_id):
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "story":
+        from app.services.stories import get_story
+        if not get_story(inp.content_id):
+            raise HTTPException(status_code=404, detail="content not found")
+        return
+
+    if inp.content_type == "clip":
+        from app.services.broadcast_clip import get_clip
+        _cl = get_clip(inp.content_id)
+        if not _cl or not _cl.get("clip_id"):
             raise HTTPException(status_code=404, detail="content not found")
         return
 
@@ -360,13 +423,17 @@ def _create_report(inp: CreateModerationReportIn, ctx: Dict[str, str], request: 
             content_id=inp.content_id,
             metadata={"idempotency_window_seconds": IDEMPOTENCY_WINDOW_SECONDS},
         )
-        write_alert(
+        _wr = write_alert(
             reporter_user_id,
             event="moderation_report_received",
             outcome="success",
             title="Report received",
-            details={"report_id": report_id, "ticket_id": ticket_id, "status": "deduplicated"},
+            details={"report_id": report_id, "ticket_id": ticket_id, "status": "deduplicated", "alert_type": "moderation_report_received"},
         )
+        try:
+            send_push_for_alert(reporter_user_id, "moderation_report_received", "Report received", "We already have your report and it is being reviewed.", (_wr or {}).get("alert_id", ""))
+        except Exception:
+            logger.exception("report_received push failed")
         return CreateModerationReportOut(
             ok=True,
             report_id=report_id,
@@ -426,18 +493,30 @@ def _create_report(inp: CreateModerationReportIn, ctx: Dict[str, str], request: 
                 "media_index": inp.media_index,
                 "video_id": getattr(inp, "video_id", None),
                 "syndicate_id": getattr(inp, "syndicate_id", None),
+                "category_id": getattr(inp, "category_id", None),
+                "item_id": getattr(inp, "item_id", None),
+                "review_id": getattr(inp, "review_id", None),
+                "session_id": getattr(inp, "session_id", None),
+                "story_id": getattr(inp, "story_id", None),
+                "clip_id": getattr(inp, "clip_id", None),
+                "profile_user_id": getattr(inp, "profile_user_id", None),
             },
             now_ts=now_ts,
         )
     except Exception:
         logger.exception("moderation_case.on_report_filed failed (report still recorded)")
-    write_alert(
+    _wr = write_alert(
         reporter_user_id,
         event="moderation_report_received",
         outcome="success",
         title="Report received",
-        details={"report_id": report_id, "ticket_id": ticket_id, "status": "submitted"},
+        details={"report_id": report_id, "ticket_id": ticket_id, "status": "submitted", "alert_type": "moderation_report_received"},
     )
+    # MODX-15 (C7/C8): confirm receipt with a real push + set the what-happens-next expectation.
+    try:
+        send_push_for_alert(reporter_user_id, "moderation_report_received", "Report received", "Thanks for reporting. Our team will review it and you will be told the outcome.", (_wr or {}).get("alert_id", ""))
+    except Exception:
+        logger.exception("report_received push failed")
 
     return CreateModerationReportOut(
         ok=True,
@@ -529,6 +608,27 @@ def _hold_respond(case_id: str, ctx: Dict[str, str], inp: HoldRespondIn) -> Hold
     return HoldActionOut(ok=True, case_id=case_id, state=str(res.get("state") or ""))
 
 
+def _hold_dispute(case_id: str, ctx: Dict[str, str], inp: HoldRespondIn) -> HoldActionOut:
+    """MODX-4 (C9): give AUTO-HIDDEN under_review content a recourse BEFORE an
+    admin ever touches it. The poster can contest the hide; the case is flagged
+    for a human and the linked ticket surfaces on the board (content stays hidden
+    pending review — no state skip)."""
+    uid = str(ctx.get("user_sub") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    from app.services import moderation_lifecycle as _life
+    try:
+        res = _life.poster_dispute(case_id=case_id, owner_user_id=uid, statement=inp.statement)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="not the content owner")
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "case_not_found":
+            raise HTTPException(status_code=404, detail="case not found") from exc
+        raise HTTPException(status_code=409, detail=msg) from exc
+    return HoldActionOut(ok=True, case_id=case_id, state=str(res.get("state") or ""))
+
+
 def _hold_close(case_id: str, ctx: Dict[str, str]) -> HoldActionOut:
     uid = str(ctx.get("user_sub") or "").strip()
     if not uid:
@@ -554,6 +654,16 @@ def hold_respond(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_sessio
 @compat_router.post("/holds/{case_id}/respond", response_model=HoldActionOut)
 def hold_respond_compat(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_session)):
     return _hold_respond(case_id, ctx, inp)
+
+
+@router.post("/holds/{case_id}/dispute", response_model=HoldActionOut)
+def hold_dispute(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_session)):
+    return _hold_dispute(case_id, ctx, inp)
+
+
+@compat_router.post("/holds/{case_id}/dispute", response_model=HoldActionOut)
+def hold_dispute_compat(case_id: str, inp: HoldRespondIn, ctx=Depends(require_ui_session)):
+    return _hold_dispute(case_id, ctx, inp)
 
 
 @router.post("/holds/{case_id}/close", response_model=HoldActionOut)
@@ -651,6 +761,85 @@ def _list_my_cases(ctx: Dict[str, str]) -> "MyModerationCasesOut":
         raise HTTPException(status_code=503, detail="unavailable")
     out.sort(key=lambda c: c.updated_at, reverse=True)
     return MyModerationCasesOut(cases=out)
+
+
+# -- MODX-15 (C7): reporter feedback -- the reports THIS user filed + their outcome --
+class MyFiledReportOut(BaseModel):
+    report_id: str = ""
+    content_type: str = ""
+    content_id: str = ""
+    topics: List[str] = []
+    ticket_id: str = ""
+    created_at: int = 0
+    outcome: str = "pending"
+    outcome_state: str = ""
+
+
+class MyFiledReportsOut(BaseModel):
+    reports: List[MyFiledReportOut]
+
+
+_REPORT_OUTCOME = {
+    "deleted": "action_taken",
+    "hold": "action_taken",
+    "awaiting_final": "action_taken",
+    "dismissed": "no_violation",
+    "reinstated": "no_violation",
+    "visible": "pending",
+    "under_review": "pending",
+}
+
+
+def _list_my_filed_reports(ctx: Dict[str, str]) -> "MyFiledReportsOut":
+    uid = str(ctx.get("user_sub") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    out: List[MyFiledReportOut] = []
+    try:
+        resp = T.content_reports.query(
+            IndexName="ByReporterCreatedAt",
+            KeyConditionExpression=Key("reporter_user_id").eq(uid),
+            ScanIndexForward=False,
+            Limit=50,
+        )
+    except ClientError:
+        logger.exception("moderation._list_my_filed_reports query failed for %s", uid)
+        raise HTTPException(status_code=503, detail="unavailable")
+    from app.services import moderation_case as _mc
+    for it in resp.get("Items", []) or []:
+        if it.get("entity_type") != "content_report":
+            continue
+        ctype = str(it.get("content_type") or "")
+        cid = str(it.get("content_id") or "")
+        state = ""
+        try:
+            _case = _mc.get_case_for_content(ctype, cid) or {}
+            state = str(_case.get("state") or "")
+        except Exception:
+            state = ""
+        topics_raw = it.get("topics") or []
+        topics = [str(t) for t in topics_raw] if isinstance(topics_raw, (list, tuple)) else []
+        out.append(MyFiledReportOut(
+            report_id=str(it.get("report_id") or ""),
+            content_type=ctype,
+            content_id=cid,
+            topics=topics,
+            ticket_id=str(it.get("linked_ticket_id") or ""),
+            created_at=_mod_coerce_int(it.get("created_at")) or 0,
+            outcome=_REPORT_OUTCOME.get(state, "pending"),
+            outcome_state=state,
+        ))
+    return MyFiledReportsOut(reports=out)
+
+
+@router.get("/reports/mine", response_model=MyFiledReportsOut)
+def list_my_filed_reports(ctx=Depends(require_ui_session)):
+    return _list_my_filed_reports(ctx)
+
+
+@compat_router.get("/reports/mine", response_model=MyFiledReportsOut)
+def list_my_filed_reports_compat(ctx=Depends(require_ui_session)):
+    return _list_my_filed_reports(ctx)
 
 
 @router.get("/cases/mine", response_model=MyModerationCasesOut)

@@ -15,7 +15,9 @@ pids = [f"pR1_{TS}", f"pR2_{TS}", f"pR3_{TS}", f"pR4_{TS}", f"pR5_{TS}",
 owners = [f"ownR1_{TS}", f"ownR2_{TS}", f"ownR3_{TS}", f"ownR4_{TS}", f"ownR5_{TS}",
           f"ownA_{TS}", f"ownB_{TS}", f"ownC_{TS}", f"ownD_{TS}", f"ownD2_{TS}",
           f"ownE_{TS}", f"ownF_{TS}", f"ownG_{TS}", f"ownH_{TS}"]
-state_users = [f"trust_{TS}", f"ownE_{TS}", f"ownF_{TS}"]
+state_users = [f"trust_{TS}", f"ownE_{TS}", f"ownF_{TS}",
+               # MODX-3/MODX-5 reporter reputation + credibility seeds
+               f"ahtrust_{TS}", f"repR3a_{TS}", f"repR3b_{TS}", f"repR3c_{TS}", f"repE_{TS}"]
 n = 0
 for pid in pids:
     ddb.Table(APP_TABLE).delete_item(Key={"pk": f"POST#{pid}", "sk": "META"}); n += 1

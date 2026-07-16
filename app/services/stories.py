@@ -100,6 +100,8 @@ def get_user_stories(user_id: str, include_expired: bool = False) -> List[Dict[s
             it for it in items
             if int(it.get("expires_at", 0)) > now or it.get("highlighted") is True
         ]
+    # MODX-12: drop moderation-hidden stories from listings (reversible on reinstate).
+    items = [it for it in items if not (it.get("moderation_hidden") or it.get("moderation_removed"))]
     return items
 
 
@@ -223,7 +225,7 @@ def get_story_bar(user_id: str) -> List[Dict[str, Any]]:
             Limit=10,
         )
         items = resp.get("Items", [])
-        active = [it for it in items if int(it.get("expires_at", 0)) > now or it.get("highlighted") is True]
+        active = [it for it in items if (int(it.get("expires_at", 0)) > now or it.get("highlighted") is True) and not (it.get("moderation_hidden") or it.get("moderation_removed"))]
         if not active:
             continue
 

@@ -6,6 +6,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.testlogon.android.feature.adminmod.BanManagementRoute
 import com.testlogon.android.feature.adminmod.ModerationBoardRoute
 import com.testlogon.android.feature.adminmod.ModerationDetailArgs
 import com.testlogon.android.feature.adminmod.ModerationDetailRoute
@@ -26,6 +27,11 @@ data object ModerationTicketDest {
     fun build(ticketId: String): String = "admin/moderation/${Uri.encode(ticketId)}"
 }
 
+/** MODX-19: the ban-management roster, reachable from the board top bar. */
+data object ModerationBansDest {
+    const val ROUTE = "admin/moderation-bans"
+}
+
 fun NavGraphBuilder.moderationBoardDestinations(navController: NavHostController) {
     composable(ModerationBoardDest.ROUTE) {
         ModerationBoardRoute(
@@ -33,7 +39,13 @@ fun NavGraphBuilder.moderationBoardDestinations(navController: NavHostController
             onOpenTicket = { ticketId ->
                 navController.navigate(ModerationTicketDest.build(ticketId)) { launchSingleTop = true }
             },
+            onOpenBans = {
+                navController.navigate(ModerationBansDest.ROUTE) { launchSingleTop = true }
+            },
         )
+    }
+    composable(ModerationBansDest.ROUTE) {
+        BanManagementRoute(onBack = { navController.popBackStack() })
     }
     composable(
         route = ModerationTicketDest.ROUTE,

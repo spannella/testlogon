@@ -1,0 +1,52 @@
+R1 -- API-KEY registry drift residual (#118). LIVE PROD HOTFIX.
+Prod EC2 i-08f937fc705ebea75 (us-east-2) via SSM. Backend uvicorn app.main:app :8000.
+
+WHAT CHANGED (app/services/api_key_route_scope_registry.py + test mirror):
+PART A -- registered the accidentally-unmapped live product routes (were 403
+  unmapped_route to keys) with the correct EXISTING scopes:
+  +12 catalog taxonomy/detail reads      -> shopping:catalog:read  (ent=False)
+  +1  cart-scoped read (abandonment)     -> shopping:cart:write    (ent=False)
+  +3  order/tracking reads               -> shopping:orders:read   (ent=True)
+  +10 tickets collab reads/writes        -> tickets:read | tickets:write
+  +4  PROD-FORWARD reals (absent on dev clone -> dev-only stale):
+        POST /tickets/{id}/close, /reopen -> tickets:write
+        POST /posts/{id}/write-in         -> newsfeed:write
+        POST /messaging/.../messages/poll -> messager:write
+  = 29 new registry rows. Checkout stays shopping:checkout:write (distinct money scope).
+PART A (deny-list) -- 86 intentionally fail-closed routes documented in the
+  INTENTIONAL API-KEY DENY-LIST section of API_KEY_ROUTE_EXEMPTIONS (exempt ==
+  unmapped == 403 to every scoped key; excluded from the unregistered signal):
+    26 catalog admin mutations (session/admin-only; no catalog-write scope by design)
+     2 cart-abandonment admin ops
+    33 messaging delegate (creator-impersonation) surface (session/admin-only)
+    21 video social/monetization/moderation surface (fail-closed, APIK-E5)
+     4 groups money confirm-donation + social comments (fail-closed, APIK-E4)
+  KB reads remain session-auth exemptions: no fitting api-key scope exists and no
+  KB route was unregistered -- inventing a kb scope was out of scope (deliberately skipped).
+PART B -- classify_registry_drift: critical now == (stale_route_count > threshold),
+  i.e. registry rows pointing at DEAD routes = the REAL problem. Accidental
+  unregistered becomes a triage "warning", never a false "critical". Intentional
+  routes on the deny-list do not inflate the signal. Both drift-startup tests
+  unchanged; the 3 classify unit assertions updated to the new semantics.
+
+DRIFT BEFORE -> AFTER (prod, live app.state.api_key_registry_drift):
+  unregistered_live_route_count:         90 -> 0
+  stale_route_count:                      0 -> 0
+  gated-but-unmapped (startup coverage): 114 -> 0
+  status:                          critical -> ok (GREEN)
+NOTE: dev clone shows stale_route_count=4 (the 4 PROD-FORWARD rows) -- known
+  dev-behind-prod router divergence, not registry rot; prod (verify target) = 0.
+
+DEPLOY: files mirrored byte-for-byte dev->prod (sha256 match), ubuntu:ubuntu.
+  registry new sha256 = e209ef4008aa938ab4cf2374888a5bb267eea680ad5805f0f4097a924a0bf8a2
+  test     new sha256 = 777a6ec77dd5522b0c48fced0974d20221ab7077d287f5cd9da1a788fa6d42ad
+  .bak (prod):
+    app/services/api_key_route_scope_registry.py.bak_apikres_20260713_203420
+    tests/test_api_key_route_scope_registry.py.bak_apikres_20260713_203438
+  restart: sudo -u ubuntu bash /home/ubuntu/restart_backend.sh ; openapi 200.
+
+VERIFY (prod DDB, synthetic keys, auto-cleaned 0 residue):
+  verify_r1.py           -> 37/37 PASS
+  E6 parity regression   -> 57/57 SUITE GREEN (no regression; UI-session + dak_ intact)
+  admin:all wildcard (APIK-E0-1 god-mode, grant-gated to admin/root) bypasses the
+  deny-list by design -- unchanged by R1; scoped keys stay fail-closed 403 unmapped_route.

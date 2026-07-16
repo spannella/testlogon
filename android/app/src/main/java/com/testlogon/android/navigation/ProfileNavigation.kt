@@ -28,6 +28,8 @@ fun NavGraphBuilder.publicProfileDestination(
     navController: NavHostController,
     // AND-238: only the authenticated graph wires the fan-club entry (the route is auth-only).
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    // SUBX-24: only the authenticated graph wires the Subscribe entry (auth-only affordance).
+    onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     // AND-390: only the unauthenticated graph wires the Sign-in CTA (the CTA is hidden when signed in).
     onSignIn: () -> Unit = {},
 ) {
@@ -41,6 +43,7 @@ fun NavGraphBuilder.publicProfileDestination(
         val context = LocalContext.current
         PublicProfileRoute(
             onOpenFanClub = onOpenFanClub,
+            onSubscribe = onSubscribe,
             onSignIn = onSignIn,
             onBack = {
                 // AND-390 FR-9: in-app nav pops to the previous screen; a cold-start deep link has an

@@ -23,6 +23,7 @@ import com.testlogon.android.data.feed.Poll
 import com.testlogon.android.data.feed.PollRepository
 import com.testlogon.android.data.feed.PollVoteResult
 import com.testlogon.android.data.feed.PostActionsRepository
+import com.testlogon.android.data.feed.RepostRepository
 import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.data.feed.PostEngagementRepository
 import com.testlogon.android.data.feed.applyResultsPage
@@ -66,6 +67,7 @@ class FeedViewModel @Inject constructor(
     private val repository: FeedRepository,
     private val engagement: PostEngagementRepository,
     private val actions: PostActionsRepository,
+    private val reposts: RepostRepository,
     private val bookmarks: FeedBookmarkRepository,
     private val polls: PollRepository,
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
@@ -128,6 +130,11 @@ class FeedViewModel @Inject constructor(
     // AND-176 — per-post bookmark toggle serialization (last-write-wins).
     private val bookmarkJobs = mutableMapOf<String, Job>()
 
+    // SOCIAL-002 — optimistic repost overlay (post id -> reposted + count), applied like the like overlay
+    // so the repost toggle + count update immediately; a per-post job supersedes any in-flight request.
+    private val repostOverrides = MutableStateFlow<Map<String, RepostState>>(emptyMap())
+    private val repostJobs = mutableMapOf<String, Job>()
+
     // AND-179 — per-post poll vote state + in-flight guard.
     private val pollStates = MutableStateFlow<Map<String, PollCardState>>(emptyMap())
     val pollUiStates: StateFlow<Map<String, PollCardState>> = pollStates.asStateFlow()
@@ -157,6 +164,14 @@ class FeedViewModel @Inject constructor(
                     tipReactions[post.id]?.let { withReactions.copy(tipReactions = it) } ?: withReactions
                 }
         }
+            // SOCIAL-002 — nested combine (the 5-arg combine above is at max typed arity) applies the
+            // optimistic repost overlay so a repost/undo reflects immediately without a refetch.
+            .combine(repostOverrides) { data, overrides ->
+                if (overrides.isEmpty()) data
+                else data.map { post ->
+                    overrides[post.id]?.let { post.copy(repostedByMe = it.reposted, repostCount = it.repostCount) } ?: post
+                }
+            }
 
     /** AND-176 — reactive set of saved post ids (drives the per-post bookmark icon). */
     val savedIds: StateFlow<Set<String>> =
@@ -324,6 +339,67 @@ class FeedViewModel @Inject constructor(
         job.invokeOnCompletion { if (bookmarkJobs[postId] === job) bookmarkJobs.remove(postId) }
     }
 
+    // ---- SOCIAL-002: repost / quote-repost / undo-repost ----
+
+    /** Repost [post] to the viewer's own feed (no commentary). Optimistic; supersedes in-flight. */
+    fun onRepost(post: FeedPost) = doRepost(post, null)
+
+    /** Quote-repost [post] with the viewer's ≤500-char commentary. */
+    fun onQuoteRepost(post: FeedPost, quote: String) =
+        doRepost(post, quote.trim().takeIf { it.isNotBlank() })
+
+    private fun doRepost(post: FeedPost, quote: String?) {
+        if (post.repostedByMe) return // already reposted; the backend rejects a duplicate with 409
+        val before = RepostState(post.repostedByMe, post.repostCount)
+        val optimistic = RepostState(reposted = true, repostCount = post.repostCount + 1)
+        repostOverrides.update { it + (post.id to optimistic) }
+        repostJobs.remove(post.id)?.cancel()
+        val job = viewModelScope.launch {
+            try {
+                when (val r = reposts.repost(post.id, quote)) {
+                    // Reconcile to the authoritative count when the server returns one; otherwise (idempotent
+                    // 409, or the server omitted it) keep the optimistic overlay.
+                    is ApiResult.Success ->
+                        r.data?.let { count -> repostOverrides.update { m -> m + (post.id to RepostState(true, count)) } }
+                    is ApiResult.Failure -> rollbackRepost(post.id, before, r.error.message)
+                    is ApiResult.NetworkError -> rollbackRepost(post.id, before, REPOST_FAIL_MESSAGE)
+                }
+            } catch (e: CancellationException) {
+                throw e // superseded by a newer tap
+            }
+        }
+        repostJobs[post.id] = job
+        job.invokeOnCompletion { if (repostJobs[post.id] === job) repostJobs.remove(post.id) }
+    }
+
+    /** Undo the viewer's repost of [post]. Optimistic; supersedes in-flight. */
+    fun onUndoRepost(post: FeedPost) {
+        if (!post.repostedByMe) return
+        val before = RepostState(post.repostedByMe, post.repostCount)
+        val optimistic = RepostState(reposted = false, repostCount = (post.repostCount - 1).coerceAtLeast(0))
+        repostOverrides.update { it + (post.id to optimistic) }
+        repostJobs.remove(post.id)?.cancel()
+        val job = viewModelScope.launch {
+            try {
+                when (val r = reposts.undo(post.id)) {
+                    is ApiResult.Success ->
+                        r.data?.let { count -> repostOverrides.update { m -> m + (post.id to RepostState(false, count)) } }
+                    is ApiResult.Failure -> rollbackRepost(post.id, before, r.error.message)
+                    is ApiResult.NetworkError -> rollbackRepost(post.id, before, REPOST_FAIL_MESSAGE)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            }
+        }
+        repostJobs[post.id] = job
+        job.invokeOnCompletion { if (repostJobs[post.id] === job) repostJobs.remove(post.id) }
+    }
+
+    private fun rollbackRepost(postId: String, before: RepostState, message: String) {
+        repostOverrides.update { it + (postId to before) }
+        _events.trySend(FeedEvent.ShowError(message))
+    }
+
     // ---- AND-179: poll voting ----
 
     /** Seed the per-post poll state from the loaded post if not already tracked. Idempotent. */
@@ -456,6 +532,7 @@ class FeedViewModel @Inject constructor(
         const val OFFLINE_LIKE_MESSAGE = "Couldn't update like. Try again."
         const val OFFLINE_HIDE_MESSAGE = "Couldn't hide post. Tap to retry."
         const val BOOKMARK_FAIL_MESSAGE = "Couldn't save post. Retry."
+        const val REPOST_FAIL_MESSAGE = "Couldn't repost. Try again."
         const val OFFLINE_POLL_MESSAGE = "Couldn't submit vote. Tap to retry."
     }
 }
@@ -509,3 +586,6 @@ sealed interface FeedEvent {
 /** Applies an optimistic / reconciled [LikeState] over a post (AND-173). */
 private fun FeedPost.applyLike(state: LikeState): FeedPost =
     copy(likedByMe = state.liked, likeCount = state.likeCount)
+
+/** SOCIAL-002 — optimistic / reconciled repost overlay for a post: the viewer's reposted flag + tally. */
+data class RepostState(val reposted: Boolean, val repostCount: Int)

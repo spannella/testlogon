@@ -55,7 +55,7 @@ describe("ConversationList profile links", () => {
     renderList();
 
     const profileTriggers = await screen.findAllByRole("link", { name: /open bob profile/i });
-    await userEvent.click(profileTriggers[0]);
+    await userEvent.click(profileTriggers[0]!);
 
     expect(await screen.findByTestId("profile-route")).toBeInTheDocument();
   });

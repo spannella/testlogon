@@ -110,6 +110,16 @@ class FakeFeedBookmarkRepository(
     }
 
     override suspend fun hydrate(postIds: List<String>): ApiResult<Unit> = ApiResult.Success(Unit)
+
+    // P0-consumer/bookmarks — generalised overloads (feed only exercises the post variants).
+    override fun savedIdsFor(contentType: String): Flow<Set<String>> = _saved
+
+    override fun isBookmarked(contentType: String, contentId: String): Flow<Boolean> = _saved.map { contentId in it }
+
+    override suspend fun setBookmarked(contentType: String, contentId: String, bookmarked: Boolean): ApiResult<Unit> =
+        setBookmarked(contentId, bookmarked)
+
+    override suspend fun hydrate(contentType: String, contentIds: List<String>): ApiResult<Unit> = ApiResult.Success(Unit)
 }
 
 /**

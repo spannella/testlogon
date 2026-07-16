@@ -79,6 +79,46 @@ data class AppealsPage(
     val isEmpty: Boolean get() = appeals.isEmpty()
 }
 
+/** MODX-13: one selectable enforcement in the appeal picker. */
+data class EnforcementOption(
+    val enforcementId: String,
+    val enforcementType: String,
+    val status: String,
+    val createdAtSeconds: Long,
+    val durationDays: Int,
+    val note: String,
+    val hasAppeal: Boolean,
+) {
+    /** A member-legible one-liner for the dropdown row, e.g. "Ban - 7 days - Jun 17, 2026". */
+    fun label(): String {
+        val type = enforcementType.replace("_", " ").ifBlank { "enforcement" }
+            .replaceFirstChar { it.uppercase(Locale.getDefault()) }
+        val dur = when {
+            durationDays <= 0 && type.contains("an", ignoreCase = true) -> ""
+            durationDays <= 0 -> ""
+            else -> " - $durationDays day${if (durationDays == 1) "" else "s"}"
+        }
+        val date = if (createdAtSeconds > 0L) " - " + DATE_FORMAT.format(Date(createdAtSeconds * 1000L)) else ""
+        return "$type$dur$date"
+    }
+
+    private companion object {
+        private val DATE_FORMAT = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+    }
+}
+
+internal fun EnforcementOptionDto.toDomain(): EnforcementOption = EnforcementOption(
+    enforcementId = enforcementId,
+    enforcementType = enforcementType,
+    status = status,
+    createdAtSeconds = createdAt,
+    durationDays = durationDays,
+    note = note,
+    hasAppeal = hasAppeal,
+)
+
+internal fun EnforcementOptionsDto.toDomain(): List<EnforcementOption> = items.map { it.toDomain() }
+
 // ---- Mappers (DTO -> domain) ----
 
 internal fun AppealDto.toDomain(): Appeal = Appeal(

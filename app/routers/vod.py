@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from pydantic import AliasChoices, BaseModel, Field
 
 from app.services.sessions import require_ui_session
@@ -30,7 +31,7 @@ from app.services.video_metadata_store import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/ui/videos", tags=["vod"])
+router = APIRouter(prefix="/ui/videos", tags=["vod"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 _s3 = s3_client()
 

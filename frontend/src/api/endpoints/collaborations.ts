@@ -21,7 +21,12 @@ export async function listCollaborations(params?: {
   cursor?: string;
   limit?: number;
 }): Promise<CollaborationListOut> {
-  return api.get<CollaborationListOut>(BASE, params);
+  const query: Record<string, string> = {};
+  if (params?.role) query.role = params.role;
+  if (params?.status) query.status = params.status;
+  if (params?.cursor) query.cursor = params.cursor;
+  if (params?.limit != null) query.limit = String(params.limit);
+  return api.get<CollaborationListOut>(BASE, query);
 }
 
 export async function getCollaboration(collabId: string): Promise<CollaborationOut> {

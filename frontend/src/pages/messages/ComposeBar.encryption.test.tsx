@@ -163,7 +163,7 @@ describe("ComposeBar lottery validation and submit states", () => {
   it("keeps submit disabled when lottery total is not 100%", async () => {
     const onSendText = vi.fn();
     const onSendLottery = vi.fn();
-    renderWithClient(<ComposeBar onSendText={onSendText} onSendLottery={onSendLottery} />);
+    renderWithClient(<ComposeBar conversationId="conv-x" onSendText={onSendText} onSendLottery={onSendLottery} />);
 
     await userEvent.click(screen.getByLabelText(/Lottery message/i));
     const percentInputs = screen.getAllByLabelText(/Weight percent/i);
@@ -179,7 +179,7 @@ describe("ComposeBar lottery validation and submit states", () => {
   it("submits lottery payload when outcomes are valid and total is 100%", async () => {
     const onSendText = vi.fn();
     const onSendLottery = vi.fn();
-    renderWithClient(<ComposeBar onSendText={onSendText} onSendLottery={onSendLottery} />);
+    renderWithClient(<ComposeBar conversationId="conv-x" onSendText={onSendText} onSendLottery={onSendLottery} />);
 
     await userEvent.click(screen.getByLabelText(/Lottery message/i));
 

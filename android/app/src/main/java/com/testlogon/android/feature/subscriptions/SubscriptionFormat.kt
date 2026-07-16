@@ -34,6 +34,17 @@ fun formatTierPrice(
     }
 }
 
+/**
+ * SUBX-24 — monthly-equivalent price (cents) for cross-interval up/downgrade classification: a $50/yr
+ * plan should NOT be labelled an "upgrade" over an $8/mo plan by raw price. Yearly /12, weekly *52/12,
+ * monthly/unknown as-is. Pure + JVM-testable (mirrors the backend M5 monthly-equiv fix).
+ */
+fun monthlyEquivCents(priceCents: Long, interval: BillingInterval): Long = when (interval) {
+    BillingInterval.YEAR -> priceCents / 12
+    BillingInterval.WEEK -> (priceCents * 52) / 12
+    BillingInterval.MONTH, BillingInterval.UNKNOWN -> priceCents
+}
+
 /** Suffix label for a billing interval, e.g. "/month". Empty for free tiers / unknown intervals. */
 fun intervalSuffix(interval: BillingInterval, monthLabel: String, yearLabel: String, weekLabel: String): String =
     when (interval) {

@@ -57,6 +57,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.testlogon.android.data.report.ReportTarget
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -138,6 +140,8 @@ fun LiveChatPanel(
 
     // Message-actions sheet (long-press): react + reply.
     var actionTarget by remember { mutableStateOf<ChatMessage?>(null) }
+    // MODX-12 - live-chat message report target.
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     // Composer options sheet.
     var optionsOpen by remember { mutableStateOf(false) }
 
@@ -214,9 +218,23 @@ fun LiveChatPanel(
                     Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = null)
                     Text(stringResource(R.string.live_chat_reply), modifier = Modifier.padding(start = 8.dp))
                 }
+                if (!target.isSelf) {
+                    TextButton(
+                        onClick = {
+                            reportTarget = ReportTarget.Content(target.id, "broadcast_message", sessionId = target.sessionId)
+                            actionTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.msg_action_report), modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
             }
         }
     }
+
+    // MODX-12 - live-chat message report (viewer -> the moderation state machine).
+    ContentReportSheetHost(target = reportTarget, onDismiss = { reportTarget = null })
 
     // ---- Composer options bottom sheet (gating) ----
     if (optionsOpen) {

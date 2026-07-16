@@ -1,0 +1,235 @@
+diff --git a/app/core/settings.py b/app/core/settings.py
+index 5177368c..4cfd5225 100644
+--- a/app/core/settings.py
++++ b/app/core/settings.py
+@@ -1941,6 +1941,43 @@ class Settings:
+     ad_fraud_score_threshold: int = int(os.environ.get("AD_FRAUD_SCORE_THRESHOLD", "70"))
+     ad_fraud_auto_suspend_rate_bps: int = int(os.environ.get("AD_FRAUD_AUTO_SUSPEND_RATE_BPS", "2000"))
+ 
++    # ── Ad policy / limits / abuse (ADV3-10..12 / EPIC E5) ───────────────────
++    # Automated content-policy pass on submit-for-review + the three
++    # review-bypass surfaces (seller-boost, sponsored-as-creator, ad-messaging).
++    ad_policy_screening_enabled: bool = os.environ.get(
++        "AD_POLICY_SCREENING_ENABLED", "1"
++    ) not in ("0", "false", "False")
++    # Platform-standard disclosure/label forced onto any advertiser-supplied
++    # paid content that ships an empty label (E3/E7 -- disclosure is not optional).
++    ad_default_disclosure_label: str = os.environ.get(
++        "AD_DEFAULT_DISCLOSURE_LABEL", "Paid partnership"
++    )
++    # Account-level daily spend velocity cap (cents). An ESTABLISHED account
++    # (has settled >=1 real deposit) may spend up to the established cap/day; a
++    # NEW / auto-provisioned (boost) account is throttled to the new-account cap
++    # until first settlement. An account may carry a per-account override
++    # (`daily_spend_cap_cents`). Caps default high so normal delivery is
++    # unaffected; a compromised/burst account is blunted before reactive suspend.
++    ad_account_daily_spend_cap_cents: int = int(
++        os.environ.get("AD_ACCOUNT_DAILY_SPEND_CAP_CENTS", "500000")  # $5,000/day
++    )
++    ad_new_account_daily_spend_cap_cents: int = int(
++        os.environ.get("AD_NEW_ACCOUNT_DAILY_SPEND_CAP_CENTS", "20000")  # $200/day
++    )
++    # Minimal-KYC gate: once an account's lifetime spend would cross this, a
++    # charge is blocked until the account is KYC-cleared (`kyc_cleared`/`kyc_status
++    # == verified`, or a per-account `kyc_required_spend_cents` override). 0
++    # disables the gate.
++    ad_account_kyc_required_spend_cents: int = int(
++        os.environ.get("AD_ACCOUNT_KYC_REQUIRED_SPEND_CENTS", "100000")  # $1,000 lifetime
++    )
++    # Global per-recipient sponsored-message frequency cap (messages/user/day
++    # across ALL creators+advertisers) so a user cannot be blanketed by many
++    # senders each under their own audience cap (E7).
++    ad_msg_recipient_daily_cap: int = int(
++        os.environ.get("AD_MSG_RECIPIENT_DAILY_CAP", "5")
++    )
++
+     # Ad Scheduling & Dayparting (ADS-016)
+     # Schedule (dayparting + flights) is stored on the existing campaign
+     # record; no separate table is required.
+diff --git a/app/services/ad_billing.py b/app/services/ad_billing.py
+index 390ea582..129c54ed 100644
+--- a/app/services/ad_billing.py
++++ b/app/services/ad_billing.py
+@@ -29,6 +29,111 @@ DEFAULT_CREATOR_REVENUE_SHARE_BPS = 7000
+ MIN_DEPOSIT_CENTS = 5000  # $50 minimum deposit
+ 
+ 
++# ── ADV3-12 (E5): advertiser spend limits (velocity cap + minimal-KYC gate) ──
++# Spend entry types that count against the daily velocity cap + KYC threshold.
++# Deposits, reversals, refunds and credits are NOT advertiser spend and are
++# exempt so a refund/reversal can always be booked.
++_SPEND_ENTRY_TYPES = frozenset({
++    "impression_charge", "click_charge", "conversion_charge",
++    "ad_message_delivered_charge", "ad_message_open_charge", "ad_message_click_charge",
++})
++
++
++def _account_is_settled(acct: Dict[str, Any]) -> bool:
++    """An account is ESTABLISHED once it has settled >= 1 real deposit
++    (``first_settled_at`` stamped by deposit_funds after a charged deposit) or an
++    admin marks it settled. New / auto-provisioned (seller-boost) accounts are
++    throttled to the lower new-account daily cap until then."""
++    return bool(acct.get("first_settled_at")) or bool(acct.get("settled"))
++
++
++def _daily_spend_cap_cents(acct: Dict[str, Any]) -> int:
++    """Resolve the per-day spend cap for an account: an explicit per-account
++    override wins, else established vs new-account global cap. 0 disables."""
++    override = int(acct.get("daily_spend_cap_cents", 0) or 0)
++    if override > 0:
++        return override
++    if _account_is_settled(acct):
++        return int(getattr(S, "ad_account_daily_spend_cap_cents", 0) or 0)
++    return int(getattr(S, "ad_new_account_daily_spend_cap_cents", 0) or 0)
++
++
++def _account_spent_today_cents(account_id: str, date_str: str) -> int:
++    try:
++        item = T.ad_billing.get_item(
++            Key={"pk": f"ACCT#{account_id}", "sk": f"SPENDDAY#{date_str}"}
++        ).get("Item") or {}
++        return int(item.get("spent_cents", 0) or 0)
++    except Exception:
++        return 0
++
++
++def _bump_account_spent_today(account_id: str, date_str: str, amount_cents: int, ts: int) -> None:
++    try:
++        T.ad_billing.update_item(
++            Key={"pk": f"ACCT#{account_id}", "sk": f"SPENDDAY#{date_str}"},
++            UpdateExpression=(
++                "SET spent_cents = if_not_exists(spent_cents, :z) + :amt, "
++                "entry_type = :et, updated_at = :ts, "
++                "expires_at = if_not_exists(expires_at, :ttl)"
++            ),
++            ExpressionAttributeValues={
++                ":z": 0, ":amt": int(amount_cents), ":et": "account_spend_day",
++                ":ts": ts, ":ttl": ts + 5 * 86400,
++            },
++        )
++    except Exception:
++        logger.warning("ad_spend_day_bump_failed account=%s", account_id)
++
++
++def _kyc_cleared(acct: Dict[str, Any]) -> bool:
++    return (
++        bool(acct.get("kyc_cleared"))
++        or str(acct.get("kyc_status", "")).lower() == "verified"
++    )
++
++
++def check_spend_limits(*, account_id: str, charge_cents: int, entry_type: str) -> Dict[str, Any]:
++    """ADV3-12 (E5): pre-charge advertiser-limit gate. Returns {"allowed": bool,
++    "reason": str, "cap_cents": int, "spent_today_cents": int}.
++
++    Two hard gates on real ad spend (never on deposits/reversals):
++      * daily spend VELOCITY cap (per account; lower for new/boost accounts until
++        first settlement) -- blunts a compromised/burst account before the
++        reactive fraud auto-suspend can see enough events;
++      * minimal-KYC gate -- once lifetime spend would cross the KYC threshold the
++        account must be KYC-cleared to keep spending.
++
++    Read-then-act (mild TOCTOU acceptable for a soft abuse limit) and fails OPEN
++    on any internal error so a bug here can never wedge legitimate billing."""
++    if entry_type not in _SPEND_ENTRY_TYPES or int(charge_cents) <= 0:
++        return {"allowed": True, "reason": "exempt"}
++    try:
++        from app.services.ad_accounts import get_ad_account
++        acct = get_ad_account(account_id) or {}
++    except Exception:
++        return {"allowed": True, "reason": "acct_lookup_failed"}
++
++    # 1. Minimal-KYC threshold gate.
++    kyc_threshold = int(acct.get("kyc_required_spend_cents",
++                                 getattr(S, "ad_account_kyc_required_spend_cents", 0)) or 0)
++    if kyc_threshold > 0 and not _kyc_cleared(acct):
++        lifetime = int(acct.get("lifetime_spend_cents", 0) or 0)
++        if lifetime + int(charge_cents) > kyc_threshold:
++            return {"allowed": False, "reason": "kyc_required",
++                    "kyc_threshold_cents": kyc_threshold, "lifetime_spend_cents": lifetime}
++
++    # 2. Daily spend velocity cap.
++    cap = _daily_spend_cap_cents(acct)
++    if cap > 0:
++        date_str = datetime.fromtimestamp(now_ts(), tz=timezone.utc).strftime("%Y-%m-%d")
++        spent = _account_spent_today_cents(account_id, date_str)
++        if spent + int(charge_cents) > cap:
++            return {"allowed": False, "reason": "spend_velocity_exceeded",
++                    "cap_cents": cap, "spent_today_cents": spent}
++    return {"allowed": True, "reason": "ok"}
++
++
+ def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "",
+                   *, internal: bool = False) -> dict:
+     """Add funds to advertiser account balance.
+@@ -142,11 +247,23 @@ def deposit_funds(account_id: str, amount_cents: int, payment_method_id: str = "
+         "created_at": ts,
+     })
+ 
+-    # Increment account balance (only reached after a successful charge)
++    # Increment account balance (only reached after a successful charge).
++    # ADV3-12 (E5): stamp first_settled_at on the FIRST real (charged) deposit so
++    # the account graduates from the new/boost lower daily-spend cap to the
++    # established cap. A ledger-only internal top-up (no payment_intent) does NOT
++    # graduate the account.
++    _settle_marker = (
++        ", first_settled_at = if_not_exists(first_settled_at, :ts), settled = :true"
++        if payment_intent_id else ""
++    )
++    _upd_vals = {":z": 0, ":amt": amount_cents}
++    if _settle_marker:
++        _upd_vals[":ts"] = ts
++        _upd_vals[":true"] = True
+     T.ad_accounts.update_item(
+         Key={"pk": f"ACCT#{account_id}", "sk": "META"},
+-        UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt",
+-        ExpressionAttributeValues={":z": 0, ":amt": amount_cents},
++        UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt" + _settle_marker,
++        ExpressionAttributeValues=_upd_vals,
+     )
+ 
+     return {"ok": True, "entry_id": entry_id, "new_balance_cents": _get_balance(account_id)}
+@@ -366,6 +483,26 @@ def _process_charge(
+                 return {"ok": True, "reason": "duplicate", "charge_cents": 0}
+             raise
+ 
++    # ADV3-12 (E5): advertiser spend-limit gate (daily velocity cap + minimal-KYC
++    # threshold) BEFORE the debit. A blocked charge writes nothing (release any
++    # idempotency marker so a later, in-limits retry can still charge once).
++    _limit = check_spend_limits(
++        account_id=account_id, charge_cents=charge_cents, entry_type=entry_type,
++    )
++    if not _limit.get("allowed"):
++        if idempotency_key:
++            try:
++                T.ad_billing.delete_item(
++                    Key={"pk": f"ACCT#{account_id}", "sk": f"IDEMP#{idempotency_key}"}
++                )
++            except Exception:
++                pass
++        logger.info("ad_charge_limit_blocked account=%s campaign=%s reason=%s amount=%s",
++                    account_id, campaign_id, _limit.get("reason"), charge_cents)
++        return {"ok": False, "reason": _limit.get("reason", "limit_blocked"),
++                "charge_cents": charge_cents, **{k: v for k, v in _limit.items()
++                                                 if k not in ("allowed", "reason")}}
++
+     # 1. Debit advertiser balance FIRST, funds-guarded so it can never go negative.
+     try:
+         T.ad_accounts.update_item(
+@@ -445,6 +582,16 @@ def _process_charge(
+             return {"ok": False, "reason": "budget_exceeded", "charge_cents": charge_cents}
+         raise
+ 
++    # ADV3-12 (E5): the debit + budget guard cleared -> count this spend toward
++    # the account's daily velocity cap (post-commit so a rejected charge above
++    # never inflates the counter).
++    if entry_type in _SPEND_ENTRY_TYPES and charge_cents > 0:
++        _bump_account_spent_today(
++            account_id,
++            datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d"),
++            charge_cents, ts,
++        )
++
+     # 3. Revenue split. Returns the split detail (per-party shares + credit-row
+     #    pointers) so it can be denormalized onto the charge ledger row -> the
+     #    ADV-502 reversal can back the split out precisely + self-contained.

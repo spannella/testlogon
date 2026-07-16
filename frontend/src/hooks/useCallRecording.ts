@@ -42,35 +42,44 @@ export interface UseCallRecordingReturn {
 }
 
 // API helpers
+// NOTE: the `api` client returns the parsed JSON body directly (there is no
+// axios-style `.data` envelope), so these helpers return the body as-is.
 async function apiRequestRecording(callId: string) {
-  const resp = await apiClient.post(`/messages/calls/${callId}/recording/request`);
-  return resp.data;
+  return apiClient.post<{ recording_id: string }>(
+    `/messages/calls/${callId}/recording/request`,
+  );
 }
 
 async function apiConsentRecording(callId: string) {
-  const resp = await apiClient.post(`/messages/calls/${callId}/recording/consent`);
-  return resp.data;
+  return apiClient.post<{ recording_id: string }>(
+    `/messages/calls/${callId}/recording/consent`,
+  );
 }
 
 async function apiDeclineRecording(callId: string) {
-  const resp = await apiClient.post(`/messages/calls/${callId}/recording/decline`);
-  return resp.data;
+  return apiClient.post<{ ok: boolean }>(
+    `/messages/calls/${callId}/recording/decline`,
+  );
 }
 
 async function apiPresignUpload(callId: string, contentType: string, fileSizeBytes: number) {
-  const resp = await apiClient.post(`/messages/calls/${callId}/recording/upload/presign`, {
-    content_type: contentType,
-    file_size_bytes: fileSizeBytes,
-  });
-  return resp.data;
+  return apiClient.post<{ upload_url: string; recording_id: string }>(
+    `/messages/calls/${callId}/recording/upload/presign`,
+    {
+      content_type: contentType,
+      file_size_bytes: fileSizeBytes,
+    },
+  );
 }
 
 async function apiCompleteUpload(callId: string, recordingId: string, durationSeconds: number) {
-  const resp = await apiClient.post(`/messages/calls/${callId}/recording/upload/complete`, {
-    recording_id: recordingId,
-    duration_seconds: durationSeconds,
-  });
-  return resp.data;
+  return apiClient.post<{ ok: boolean }>(
+    `/messages/calls/${callId}/recording/upload/complete`,
+    {
+      recording_id: recordingId,
+      duration_seconds: durationSeconds,
+    },
+  );
 }
 
 function selectMimeType(): string {
@@ -275,7 +284,7 @@ export function useCallRecording({
 
     // Upload the recording
     if (callId && recordingId && chunksRef.current.length > 0) {
-      const mimeType = selectMimeType().split(";")[0];
+      const mimeType = selectMimeType().split(";")[0] ?? "video/webm";
       const blob = new Blob(chunksRef.current, { type: mimeType });
       const durationSec = Math.max(1, Math.floor((Date.now() - startTimeRef.current) / 1000));
 

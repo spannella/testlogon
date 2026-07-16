@@ -219,6 +219,8 @@ from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.subscription_renewal import start_subscription_renewal_task
+from app.services.creator_payouts import start_payout_runner_task  # PAY-D
+from app.routers.admin_payouts import payd_admin_router, payd_webhook_router  # PAY-D
 from app.services.payment_provider_health import start_provider_health_check_task
 from app.services.llm_provider_keys import start_llm_usage_reset_task
 from app.services.ad_daily_reset import start_ad_daily_reset_task
@@ -455,6 +457,42 @@ def _playback_entitlement_middleware():
         return await call_next(request)
     return _middleware
 
+
+# --- APIK-E0-1: API-key principal injection (folds prod hotfix; decoupled from scope) ---
+# When api-key headers (X-API-Key / Authorization: ApiKey) are present, validate the key and
+# set request.state.api_key_principal so the shared identity deps resolve the OWNER for ALL
+# routers -- matching prod. SECURITY (APIK-E0-4): the identity bridge only HONORS this
+# principal when maybe_enforce_api_key_route_policy has set api_key_route_authorized, so
+# un-gated/session-only routers fail CLOSED (no unscoped-owner over-scope).
+def _api_key_principal_middleware():
+    async def _middleware(request: Request, call_next):
+        try:
+            from app.services.api_key_policy_enforcement import _has_api_key_headers, _has_bearer_header
+            from app.services.api_key_auth_dependency import require_api_key_principal
+            from app.core.settings import S as _S
+            state = getattr(request, "state", None)
+            already = getattr(state, "api_key_principal", None) if state is not None else None
+            if not isinstance(already, dict) and _has_api_key_headers(request):
+                mode = str(getattr(_S, "api_key_dual_credential_mode", "prefer_api_key") or "prefer_api_key").strip().lower()
+                proceed = True
+                if _has_bearer_header(request):
+                    if mode == "prefer_session":
+                        proceed = False
+                    elif mode == "reject":
+                        return JSONResponse(status_code=400, content={"detail": {"code": "api_key_dual_credential_conflict", "reason": "dual_credential_conflict", "message": "Both API key and Bearer credentials were provided"}})
+                if proceed:
+                    try:
+                        await require_api_key_principal(request)
+                    except Exception:
+                        # present-but-invalid key (revoked/expired/CIDR/bad): do NOT
+                        # authenticate -- leave principal unset so route auth 401/403s.
+                        pass
+        except Exception:
+            logger.debug("api_key_principal_middleware fell through", exc_info=True)
+        return await call_next(request)
+    return _middleware
+
+
 # --- GAP-0323: crawler-detection meta-tag middleware ---------------------
 # Social bots (Facebook, Twitter/X, Discord, Slack, LinkedIn, ...) do not
 # execute JS, so client-side react-helmet-async produces no OG/meta tags for
@@ -624,6 +662,7 @@ def create_app() -> FastAPI:
     app.middleware("http")(_api_consumer_rate_limit_middleware())   # PLT-001: between IP RL and metering
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())
+    app.middleware("http")(_api_key_principal_middleware())  # APIK-E0-1: set api_key_principal for ALL routers (bridge gated by APIK-E0-4)
     if METRICS_ENABLED:
         app.middleware("http")(metrics_middleware)
         set_app_info(app.title, app.version)
@@ -766,6 +805,7 @@ def create_app() -> FastAPI:
 
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
+    app.add_event_handler("startup", start_payout_runner_task)  # PAY-D payout runner
     app.add_event_handler("startup", start_subscription_renewal_task)  # SUB-E1
     app.add_event_handler("startup", start_provider_health_check_task)
     app.add_event_handler("startup", start_llm_usage_reset_task)
@@ -905,6 +945,8 @@ def create_app() -> FastAPI:
     from app.routers.live_commerce import router as live_commerce_router  # LIVECOM
     app.include_router(live_commerce_router)
     app.include_router(admin_payouts_router)
+    app.include_router(payd_admin_router)  # PAY-D runner trigger
+    app.include_router(payd_webhook_router)  # PAY-D provider webhook
     app.include_router(billing_config_router)
     app.include_router(admin_rate_limits_router)
     app.include_router(admin_jobs_router)
@@ -1164,6 +1206,8 @@ def create_app() -> FastAPI:
     app.include_router(consumer_tax_documents_admin_router)
     from app.routers.tax_form_1099 import tax_form_1099_router
     app.include_router(tax_form_1099_router)
+    from app.routers.tax_1099 import tax_1099_router  # PAY-E (PAY-40)
+    app.include_router(tax_1099_router)
     app.include_router(crm_campaigns_router)
 
     # CRM Reports & Dashboards (RPT-001..RPT-009)

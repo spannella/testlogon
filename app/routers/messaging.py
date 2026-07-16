@@ -15602,6 +15602,11 @@ async def create_call_invite(
     from app.services.messaging_call_lifecycle import CallLifecycleError, create_invite
     from app.core.settings import S as _settings
 
+    # BLOCK-P0: cannot ring a user you have blocked or who has blocked you
+    from app.services.blocking import is_any_block
+    if is_any_block(user_id, body.callee_user_id):
+        raise HTTPException(status_code=403, detail={"code": "blocked", "message": "Blocked"})
+
     paid = body.paid
     rate_cents = 0
     max_dur = 0

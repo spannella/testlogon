@@ -95,6 +95,15 @@ def apply_ban(
         }
     )
 
+    # MODX-6: link the offender's device/email/IP fingerprints (backfilled from
+    # signup signals on account_state) so a new account created on the same
+    # device/email/IP can be flagged as likely ban-evasion at registration.
+    try:
+        from app.services.moderation_ban_fingerprint import record_ban_fingerprints
+        record_ban_fingerprints(user_sub=offender_user_id, source_ticket_id=ticket_id, now_ts=ts)
+    except Exception:
+        logger.exception("apply_ban: ban-fingerprint capture failed for %s", offender_user_id)
+
     write_alert(
         offender_user_id,
         event="moderation_ban",

@@ -40,7 +40,7 @@ export default function CreativePreview({ creative, surface }: CreativePreviewPr
             className="w-full"
             style={{ maxHeight: 400 }}
           />
-          {creative.skip_after_seconds > 0 && (
+          {(creative.skip_after_seconds ?? 0) > 0 && (
             <p className="text-xs text-muted-foreground p-2">
               Skippable after {creative.skip_after_seconds}s
             </p>

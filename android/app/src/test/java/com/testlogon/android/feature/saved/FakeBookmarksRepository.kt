@@ -5,6 +5,7 @@ import androidx.paging.PagingState
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.bookmarks.Bookmark
+import com.testlogon.android.data.bookmarks.BookmarkCollection
 import com.testlogon.android.data.bookmarks.BookmarkPage
 import com.testlogon.android.data.bookmarks.BookmarksRepository
 import kotlinx.coroutines.CompletableDeferred
@@ -16,9 +17,12 @@ class FakeBookmarksRepository(
 
     var unsaveResult: ApiResult<Unit> = ApiResult.Success(Unit)
     var resaveResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var moveResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var collectionsResult: ApiResult<List<BookmarkCollection>> = ApiResult.Success(emptyList())
 
     val unsaveCalls = mutableListOf<Pair<String, String>>()
     var resaveCalls = 0
+    val moveCalls = mutableListOf<Triple<String, String, String>>()
 
     /** Optional gate to hold the unsave in flight (assert the optimistic window). */
     var unsaveGate: CompletableDeferred<Unit>? = null
@@ -43,6 +47,22 @@ class FakeBookmarksRepository(
         resaveCalls++
         return resaveResult
     }
+
+    override suspend fun move(contentType: String, contentId: String, collectionId: String): ApiResult<Unit> {
+        moveCalls += Triple(contentType, contentId, collectionId)
+        return moveResult
+    }
+
+    override suspend fun collections(): ApiResult<List<BookmarkCollection>> = collectionsResult
+
+    override suspend fun createCollection(name: String): ApiResult<BookmarkCollection> =
+        ApiResult.Success(BookmarkCollection(id = "col_new", name = name, itemCount = 0, createdAtIso = null))
+
+    override suspend fun renameCollection(collectionId: String, name: String): ApiResult<Unit> =
+        ApiResult.Success(Unit)
+
+    override suspend fun deleteCollection(collectionId: String): ApiResult<Unit> =
+        ApiResult.Success(Unit)
 
     private class StaticPagingSource(private val items: List<Bookmark>) :
         PagingSource<String, Bookmark>() {

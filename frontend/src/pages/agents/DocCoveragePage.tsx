@@ -6,6 +6,7 @@ import {
   listDocCoverageDetails,
   triggerFreshnessCheck,
 } from "@/api/endpoints/docsAgent";
+import type { DocTypeSummary } from "@/api/types";
 import StaleDocsPanel from "@/pages/agents/StaleDocsPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -90,7 +91,7 @@ export default function DocCoveragePage() {
   const total = summary?.total_docs ?? 0;
   const stale = summary?.stale_docs ?? 0;
   const fresh = total - stale;
-  const byType = summary?.by_type ?? {};
+  const byType: Record<string, DocTypeSummary> = summary?.by_type ?? {};
 
   return (
     <div data-testid="doc-coverage-page" className="space-y-6 p-4">

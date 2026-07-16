@@ -122,6 +122,27 @@ def _enforce_capability_plan_or_403(user_sub: str, capabilities: List[str]) -> N
     )
 
 
+def _enforce_wildcard_owner_role_or_403(user_sub: str, capabilities: List[str]) -> None:
+    # APIK-E0-1: the admin:all wildcard may be granted ONLY to admin/root owners.
+    if "admin:all" not in {str(c).strip().lower() for c in capabilities or []}:
+        return
+    from app.auth.roles import normalize_role, Role
+    try:
+        item = T.users.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+    except Exception:
+        item = {}
+    role = normalize_role(item.get("role"))
+    if role not in {Role.ADMIN, Role.ROOT}:
+        raise HTTPException(
+            403,
+            {
+                "code": "api_key_wildcard_forbidden",
+                "message": "The admin:all capability may only be granted to admin/root owners",
+                "details": {"required_role": "admin", "owner_role": role.value},
+            },
+        )
+
+
 def effective_api_key_capabilities(item: Dict[str, Any]) -> List[str]:
     if not isinstance(item, dict):
         return list(CANONICAL_API_KEY_CAPABILITIES)
@@ -149,7 +170,8 @@ def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = N
         ttl = 0  # user explicitly chose no expiry
 
     normalized_capabilities = _normalize_capabilities_or_400(capabilities)
-    _enforce_capability_plan_or_403(user_sub, normalized_capabilities)
+    _enforce_wildcard_owner_role_or_403(user_sub, normalized_capabilities)
+    _enforce_capability_plan_or_403(user_sub, [c for c in normalized_capabilities if c != "admin:all"])
 
     item = {
         "key_id": key_id,
@@ -357,7 +379,8 @@ def set_api_key_self_limits(
 
 def set_api_key_capabilities(user_sub: str, key_id: str, capabilities: List[str] | None) -> Dict[str, Any]:
     normalized = _normalize_capabilities_or_400(capabilities)
-    _enforce_capability_plan_or_403(user_sub, normalized)
+    _enforce_wildcard_owner_role_or_403(user_sub, normalized)
+    _enforce_capability_plan_or_403(user_sub, [c for c in normalized if c != "admin:all"])
     try:
         T.api_keys.update_item(
             Key={"key_id": key_id},

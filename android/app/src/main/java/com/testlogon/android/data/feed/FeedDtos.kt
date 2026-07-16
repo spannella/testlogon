@@ -57,6 +57,13 @@ data class PostDto(
     @Json(name = "like_count") val likeCount: Int = 0,
     @Json(name = "comment_count") val commentCount: Int = 0,
     @Json(name = "liked_by_me") val likedByMe: Boolean = false,
+    // SOCIAL-002 (public reposting) — repost tally + per-viewer state, plus, when THIS feed row was
+    // sourced from a repost FEEDREF, the reposter attribution + optional quote/commentary. All defaulted
+    // so an organic (never-reposted) post maps cleanly.
+    @Json(name = "repost_count") val repostCount: Int = 0,
+    @Json(name = "reposted_by_me") val repostedByMe: Boolean = false,
+    @Json(name = "reposted_by") val repostedBy: RepostedByDto? = null,
+    @Json(name = "repost_quote") val repostQuote: String? = null,
     // #20 — full emoji reactions (distinct from like). Per-emoji counts + the viewer's own reactions.
     @Json(name = "reactions_counts") val reactionsCounts: Map<String, Int>? = null,
     @Json(name = "my_reactions") val myReactions: List<String>? = null,
@@ -77,6 +84,11 @@ data class PostDto(
     // reused from the sponsored block) carries the author id for the Subscribe CTA.
     @Json(name = "subscriber_only") val subscriberOnly: Boolean = false,
     @Json(name = "subscriber_locked") val subscriberLocked: Boolean = false,
+    // SUBX-31: the minimum tier LEVEL this subscriber-only post requires (0 = any
+    // active sub - the pre-tier binary default) + the display NAME of that tier so
+    // the lock card can name the required tier and upsell to it.
+    @Json(name = "required_tier_level") val requiredTierLevel: Int = 0,
+    @Json(name = "required_tier_name") val requiredTierName: String? = null,
     // --- ADV-105 sponsored (paid) unit fields (injected by newsfeed sponsored path; ADV-104) ---
     // A server-injected sponsored post carries is_sponsored=true plus the creative + serving metadata.
     // All defaulted so an organic post (no sponsored keys) maps cleanly.
@@ -109,6 +121,13 @@ data class PostDto(
     @Json(name = "poll_data") val pollData: PollDataDto? = null,
     @Json(name = "poll_vote_counts") val pollVoteCounts: Map<String, Map<String, Int>>? = null,
     @Json(name = "poll_my_votes") val pollMyVotes: Map<String, List<String>>? = null,
+)
+
+/** SOCIAL-002 — reposter attribution attached to a feed row sourced from a repost FEEDREF. */
+@JsonClass(generateAdapter = true)
+data class RepostedByDto(
+    @Json(name = "user_id") val userId: String = "",
+    @Json(name = "display_name") val displayName: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

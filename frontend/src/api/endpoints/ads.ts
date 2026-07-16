@@ -91,7 +91,7 @@ export const setAdConfig = (
 
 // ─── Advertiser Campaign Manager (ADS-001) ────────────────────────────────
 
-import type { AdAccount, AdCreative, Campaign } from "../types";
+import type { AdCreative } from "../types";
 // ─── Advertiser Account & Campaign (ADS-001) ─────────────────────────────
 
 import type { AdAccount, Campaign, AdBillingEntry, AdInvoice } from "../types";
@@ -339,6 +339,7 @@ import type {
   AdAnalyticsSummary,
   AdTimeSeriesPoint,
   AdBreakdownEntry,
+  AdRoasReport,
 } from "../types";
 
 /** Get analytics summary (KPIs with period comparison) */
@@ -374,6 +375,18 @@ export const getAnalyticsBreakdown = (
   if (params?.dimension) qp.set("dimension", params.dimension);
   if (params?.days) qp.set("days", String(params.days));
   return api.get<AdBreakdownEntry[]>(`/ui/ads/analytics/breakdown?${qp}`);
+};
+
+/** ADV3-8: ROAS report (spend / conversions / attributed value / ROAS) from the
+ * ad_billing ledger - the single source of truth reconciling with the KPI summary. */
+export const getAdRoasReport = (
+  accountId: string,
+  params?: { campaign_id?: string; days?: number },
+): Promise<AdRoasReport> => {
+  const qp = new URLSearchParams({ account_id: accountId });
+  if (params?.campaign_id) qp.set("campaign_id", params.campaign_id);
+  if (params?.days) qp.set("days", String(params.days));
+  return api.get<AdRoasReport>(`/ui/ads/roas?${qp}`);
 };
 
 /** Export analytics as CSV */

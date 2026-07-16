@@ -20,9 +20,10 @@ import javax.inject.Singleton
  * Owns the cursor [PagingSource] and the unsave / resave (Undo) mutations, all wrapped in
  * [ApiResult] mapping wire DTOs to the domain [Bookmark]. Mutations are never auto-retried.
  *
- * Per the spec's tolerant contract, a 404 on DELETE is treated as already-removed (Success) since the
- * web client relies on server idempotency — the row should stay gone with no error. Other non-2xx
- * fold into Failure; transport errors fold into NetworkError. CancellationException is re-thrown.
+ * P0-consumer/bookmarks adds collection CRUD + the move mutation on top (all owner-scoped on the
+ * backend). Per the spec's tolerant contract, a 404 on DELETE is treated as already-removed (Success)
+ * since the web client relies on server idempotency. Other non-2xx fold into Failure; transport errors
+ * fold into NetworkError. CancellationException is re-thrown.
  */
 interface BookmarksRepository {
 
@@ -43,6 +44,20 @@ interface BookmarksRepository {
 
     /** Re-create a bookmark (Undo). */
     suspend fun resave(bookmark: Bookmark): ApiResult<Unit>
+
+    /** Move a bookmark into [collectionId]; owner-scoped (404 if not owned). */
+    suspend fun move(contentType: String, contentId: String, collectionId: String): ApiResult<Unit>
+
+    // ── Collections ──────────────────────────────────────────────────────────
+
+    suspend fun collections(): ApiResult<List<BookmarkCollection>>
+
+    /** Create a collection; 400 (max_collections_reached) surfaces as Failure. */
+    suspend fun createCollection(name: String): ApiResult<BookmarkCollection>
+
+    suspend fun renameCollection(collectionId: String, name: String): ApiResult<Unit>
+
+    suspend fun deleteCollection(collectionId: String): ApiResult<Unit>
 }
 
 @Singleton
@@ -100,6 +115,48 @@ class BookmarksRepositoryImpl @Inject constructor(
         when (val r = apiCall { api.createBookmark(body) }) {
             is ApiResult.Success -> ApiResult.Success(Unit)
             is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun move(contentType: String, contentId: String, collectionId: String): ApiResult<Unit> =
+        withContext(io) {
+            when (val r = apiCall { api.moveBookmark(contentType, contentId, MoveBookmarkBody(collectionId)) }) {
+                is ApiResult.Success -> ApiResult.Success(Unit)
+                is ApiResult.Failure -> r
+                is ApiResult.NetworkError -> r
+            }
+        }
+
+    override suspend fun collections(): ApiResult<List<BookmarkCollection>> = withContext(io) {
+        when (val r = apiCall { api.listCollections() }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.collections.map { it.toDomain() })
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun createCollection(name: String): ApiResult<BookmarkCollection> = withContext(io) {
+        when (val r = apiCall { api.createCollection(CollectionNameBody(name)) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.toDomain())
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun renameCollection(collectionId: String, name: String): ApiResult<Unit> = withContext(io) {
+        when (val r = apiCall { api.renameCollection(collectionId, CollectionNameBody(name)) }) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            is ApiResult.Failure -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun deleteCollection(collectionId: String): ApiResult<Unit> = withContext(io) {
+        when (val r = apiCall { api.deleteCollection(collectionId) }) {
+            is ApiResult.Success -> ApiResult.Success(Unit)
+            // Tolerate already-deleted.
+            is ApiResult.Failure -> if (r.error.status == HTTP_NOT_FOUND) ApiResult.Success(Unit) else r
             is ApiResult.NetworkError -> r
         }
     }

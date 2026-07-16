@@ -446,6 +446,9 @@ async def list_items(
     for item in items:
         if item.get("entity") != "item":
             continue
+        # MODX-12: hide moderation-held catalog items from non-owners.
+        if (item.get("moderation_hidden") or item.get("moderation_removed")) and item.get("creator_id") != ctx["user_sub"]:
+            continue
         # GEO-001 (GAP-0216): drop items the viewer's region is blocked from.
         if _item_geo_blocked(request, item):
             continue
@@ -883,6 +886,9 @@ async def list_reviews(
     out: List[CatalogReviewOut] = []
     for item in items:
         if item.get("entity") != "review":
+            continue
+        # MODX-12: hide moderation-held reviews.
+        if item.get("moderation_hidden") or item.get("moderation_removed"):
             continue
         out.append(
             CatalogReviewOut(

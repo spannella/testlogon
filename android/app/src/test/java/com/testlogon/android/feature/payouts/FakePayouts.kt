@@ -9,6 +9,12 @@ import com.testlogon.android.data.payouts.Payout
 import com.testlogon.android.data.payouts.PayoutBatch
 import com.testlogon.android.data.payouts.PayoutBatchItem
 import com.testlogon.android.data.payouts.PayoutBatchStatus
+import com.testlogon.android.data.payouts.AddPayoutMethodInput
+import com.testlogon.android.data.payouts.ConnectAccount
+import com.testlogon.android.data.payouts.ConnectOnboarding
+import com.testlogon.android.data.payouts.PayoutMethod
+import com.testlogon.android.data.payouts.PayoutMethodStatus
+import com.testlogon.android.data.payouts.RoutableMethodType
 import com.testlogon.android.data.payouts.PayoutActionResult
 import com.testlogon.android.data.payouts.PayoutBalance
 import com.testlogon.android.data.payouts.PayoutCreateResult
@@ -18,6 +24,10 @@ import com.testlogon.android.data.payouts.PayoutRequestDraft
 import com.testlogon.android.data.payouts.PayoutRequestOutcome
 import com.testlogon.android.data.payouts.PayoutSetupData
 import com.testlogon.android.data.payouts.PayoutSetupRepository
+import com.testlogon.android.data.payouts.PayoutTaxInfo
+import com.testlogon.android.data.payouts.W9Submission
+import com.testlogon.android.data.payouts.WithdrawGateInputs
+import com.testlogon.android.core.model.kyc.KycCaseStatus
 import com.testlogon.android.data.payouts.PayoutStatus
 import com.testlogon.android.data.payouts.PayoutsRepository
 import com.testlogon.android.data.payouts.TierStatus
@@ -90,6 +100,54 @@ class FakePayoutSetupRepository : PayoutSetupRepository {
         lastDraft = draft
         return requestOutcome
     }
+
+    // PAY-22 - pre-withdrawal gate doubles (default: both satisfied -> gate open).
+    var withdrawGateResult: ApiResult<WithdrawGateInputs> = ApiResult.Success(
+        WithdrawGateInputs(kycApproved = true, kycStatus = KycCaseStatus.APPROVED, taxInfo = sampleTaxInfo()),
+    )
+    var submitTaxResult: ApiResult<PayoutTaxInfo> = ApiResult.Success(sampleTaxInfo())
+    var submitTaxCalls = 0
+        private set
+
+    override suspend fun loadWithdrawGate(): ApiResult<WithdrawGateInputs> = withdrawGateResult
+    override suspend fun submitTaxInfo(submission: W9Submission): ApiResult<PayoutTaxInfo> {
+        submitTaxCalls++
+        return submitTaxResult
+    }
+
+    // ---- PAY-13: routable payout-method doubles ----
+
+    var methodsResult: ApiResult<List<PayoutMethod>> = ApiResult.Success(emptyList())
+    var addMethodResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod())
+    var verifyResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod(status = PayoutMethodStatus.VERIFIED))
+    var setDefaultResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod(isDefault = true))
+    var deleteResult: ApiResult<Unit> = ApiResult.Success(Unit)
+    var connectResult: ApiResult<ConnectAccount> = ApiResult.Success(ConnectAccount("acct_mock_x", "complete", true))
+    var onboardingResult: ApiResult<ConnectOnboarding> =
+        ApiResult.Success(ConnectOnboarding("acct_mock_x", "", "complete", true, false))
+
+    var addMethodCalls = 0
+        private set
+    var lastAddInput: AddPayoutMethodInput? = null
+        private set
+    var verifyCalls = 0
+        private set
+
+    override suspend fun loadMethods(): ApiResult<List<PayoutMethod>> = methodsResult
+    override suspend fun addMethod(input: AddPayoutMethodInput): ApiResult<PayoutMethod> {
+        addMethodCalls++
+        lastAddInput = input
+        return addMethodResult
+    }
+    override suspend fun verifyMethod(methodId: String): ApiResult<PayoutMethod> {
+        verifyCalls++
+        return verifyResult
+    }
+    override suspend fun setDefaultMethod(methodId: String): ApiResult<PayoutMethod> = setDefaultResult
+    override suspend fun deleteMethod(methodId: String): ApiResult<Unit> = deleteResult
+    override suspend fun getConnect(): ApiResult<ConnectAccount> = connectResult
+    override suspend fun createConnectAccount(): ApiResult<ConnectAccount> = connectResult
+    override suspend fun createConnectOnboardingLink(): ApiResult<ConnectOnboarding> = onboardingResult
 }
 
 /**
@@ -187,4 +245,43 @@ fun sampleTierStatus(
     requiredTierForPayouts = KycTier(required),
     eligibleForPayoutTier = eligible,
     unmetRequirements = unmet,
+)
+
+
+fun sampleMethod(
+    id: String = "pm_1",
+    type: RoutableMethodType = RoutableMethodType.BANK_ACH,
+    status: PayoutMethodStatus = PayoutMethodStatus.UNVERIFIED,
+    isDefault: Boolean = false,
+): PayoutMethod = PayoutMethod(
+    methodId = id,
+    type = type,
+    rawType = type.wire,
+    accountLast4 = if (type.isBank) "6789" else "",
+    routingLast4 = if (type.isBank) "0021" else "",
+    paypalEmail = if (type == RoutableMethodType.PAYPAL) "creator@example.com" else "",
+    nickname = "Primary",
+    isDefault = isDefault,
+    status = status,
+    connectAccountId = if (type == RoutableMethodType.STRIPE_CONNECT) "acct_mock_x" else "",
+    externalAccountRef = "btok_mock_abc",
+    createdAtEpochSeconds = 1_748_628_251L,
+    updatedAtEpochSeconds = 1_748_800_800L,
+)
+
+fun sampleTaxInfo(
+    onFile: Boolean = true,
+    certified: Boolean = true,
+    tinLast4: String = "6789",
+): PayoutTaxInfo = PayoutTaxInfo(
+    onFile = onFile,
+    legalName = "Jane Creator",
+    tinLast4 = tinLast4,
+    tinType = "ssn",
+    addressLine1 = "1 Main St",
+    city = "Austin",
+    state = "TX",
+    zipCode = "78701",
+    certified = certified,
+    certifiedAt = 1_748_800_800L,
 )

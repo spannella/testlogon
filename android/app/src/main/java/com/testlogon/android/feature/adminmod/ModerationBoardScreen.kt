@@ -13,22 +13,40 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.adminmod.ModerationKpisDto
 import com.testlogon.android.data.adminmod.ModerationTicketDto
 
 object ModerationBoardTestTags {
@@ -46,14 +65,20 @@ object ModerationBoardTestTags {
     const val EMPTY = "mod_board_empty"
     const val FORBIDDEN = "mod_board_forbidden"
     const val ERROR_RETRY = "mod_board_error_retry"
+    const val SELECT_TOGGLE = "mod_board_select_toggle"
+    const val BULK_BAR = "mod_board_bulk_bar"
+    const val BANS = "mod_board_bans"
     fun ticket(id: String) = "mod_ticket_$id"
     fun filter(status: String?) = "mod_filter_${status ?: "all"}"
+    fun topicFilter(topic: String?) = "mod_topic_${topic ?: "all"}"
+    fun bulk(action: String) = "mod_bulk_$action"
 }
 
 @Composable
 fun ModerationBoardRoute(
     onBack: () -> Unit,
     onOpenTicket: (String) -> Unit,
+    onOpenBans: () -> Unit = {},
     viewModel: ModerationBoardViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -61,9 +86,17 @@ fun ModerationBoardRoute(
         state = state,
         onBack = onBack,
         onOpenTicket = onOpenTicket,
+        onOpenBans = onOpenBans,
         onSetFilter = viewModel::setFilter,
+        onSetTopicFilter = viewModel::setTopicFilter,
         onRefresh = viewModel::refresh,
         onRetry = viewModel::retry,
+        onLoadMore = viewModel::loadMore,
+        onToggleSelectionMode = viewModel::toggleSelectionMode,
+        onToggleSelected = viewModel::toggleSelected,
+        onRunBulk = viewModel::runBulk,
+        onClearBulkMessage = viewModel::clearBulkMessage,
+        onDismissTransientError = viewModel::dismissTransientError,
     )
 }
 
@@ -72,32 +105,89 @@ fun ModerationBoardScreen(
     state: ModerationBoardUiState,
     onBack: () -> Unit,
     onOpenTicket: (String) -> Unit,
+    onOpenBans: () -> Unit,
     onSetFilter: (String?) -> Unit,
+    onSetTopicFilter: (String?) -> Unit,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
+    onToggleSelectionMode: () -> Unit,
+    onToggleSelected: (String) -> Unit,
+    onRunBulk: (ModerationBulkAction) -> Unit,
+    onClearBulkMessage: () -> Unit,
+    onDismissTransientError: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val activeFilter = when (state) {
+    val content = state as? ModerationBoardUiState.Content
+    val activeStatus = when (state) {
         is ModerationBoardUiState.Content -> state.statusFilter
         is ModerationBoardUiState.Empty -> state.statusFilter
         else -> null
     }
+    val activeTopic = when (state) {
+        is ModerationBoardUiState.Content -> state.topicFilter
+        is ModerationBoardUiState.Empty -> state.topicFilter
+        else -> null
+    }
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(content?.bulkMessage) {
+        content?.bulkMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            onClearBulkMessage()
+        }
+    }
+    // A failed pull-to-refresh sets transientError; surface it (it was previously swallowed silently).
+    LaunchedEffect(content?.transientError) {
+        content?.transientError?.let {
+            snackbarHostState.showSnackbar(adminOpsErrorMessage(it))
+            onDismissTransientError()
+        }
+    }
+
     Scaffold(
         modifier = modifier.testTag(ModerationBoardTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("Moderation board") },
+                title = { Text(if (content?.selectionMode == true) "${content.selectedIds.size} selected" else "Moderation board") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = {
+                    IconButton(onClick = onOpenBans, modifier = Modifier.testTag(ModerationBoardTestTags.BANS)) {
+                        Icon(Icons.Outlined.Block, contentDescription = "Ban management")
+                    }
+                    if (content != null) {
+                        IconButton(
+                            onClick = onToggleSelectionMode,
+                            modifier = Modifier.testTag(ModerationBoardTestTags.SELECT_TOGGLE),
+                        ) {
+                            Icon(
+                                if (content.selectionMode) Icons.Outlined.Close else Icons.Outlined.Checklist,
+                                contentDescription = if (content.selectionMode) "Cancel selection" else "Select tickets",
+                            )
+                        }
+                    }
+                },
             )
+        },
+        bottomBar = {
+            if (content?.selectionMode == true && content.selectedIds.isNotEmpty()) {
+                BulkActionBar(
+                    inFlight = content.bulkInFlight,
+                    selectedCount = content.selectedIds.size,
+                    onRunBulk = onRunBulk,
+                )
+            }
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            FilterRow(active = activeFilter, onSetFilter = onSetFilter)
-            val isRefreshing = (state as? ModerationBoardUiState.Content)?.isRefreshing == true
+            content?.kpis?.let { KpiStrip(it) }
+            FilterRow(active = activeStatus, onSetFilter = onSetFilter)
+            TopicFilterRow(active = activeTopic, onSetTopicFilter = onSetTopicFilter)
+            val isRefreshing = content?.isRefreshing == true
             PullToRefreshBox(
                 isRefreshing = isRefreshing,
                 onRefresh = onRefresh,
@@ -124,19 +214,173 @@ fun ModerationBoardScreen(
                         message = adminOpsErrorMessage(state.type),
                         onRetry = onRetry,
                     )
-                    is ModerationBoardUiState.Content -> LazyColumn(
-                        modifier = Modifier.fillMaxSize().testTag(ModerationBoardTestTags.LIST),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        items(items = state.tickets, key = { it.ticketId }) { t ->
-                            TicketRow(t, onClick = { onOpenTicket(t.ticketId) })
-                        }
-                    }
+                    is ModerationBoardUiState.Content -> TicketList(state, onOpenTicket, onToggleSelected, onLoadMore)
                 }
             }
         }
     }
+}
+
+@Composable
+private fun TicketList(
+    content: ModerationBoardUiState.Content,
+    onOpenTicket: (String) -> Unit,
+    onToggleSelected: (String) -> Unit,
+    onLoadMore: () -> Unit,
+) {
+    val listState = rememberLazyListState()
+    // MODX-21: infinite scroll — request the next page when the tail becomes visible.
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            content.canPaginate && !content.isLoadingMore && last >= content.tickets.size - 3
+        }
+    }
+    LaunchedEffect(shouldLoadMore) { if (shouldLoadMore) onLoadMore() }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().testTag(ModerationBoardTestTags.LIST),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(items = content.tickets, key = { it.ticketId }) { t ->
+            TicketRow(
+                ticket = t,
+                selectionMode = content.selectionMode,
+                selected = t.ticketId in content.selectedIds,
+                onClick = {
+                    if (content.selectionMode) onToggleSelected(t.ticketId) else onOpenTicket(t.ticketId)
+                },
+            )
+        }
+        if (content.isLoadingMore) {
+            item(key = "__loading_more__") {
+                Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
+                    CircularProgressIndicator()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BulkActionBar(
+    inFlight: Boolean,
+    selectedCount: Int,
+    onRunBulk: (ModerationBulkAction) -> Unit,
+) {
+    // Destructive bulk actions (Delete / Confirm hold) route through a confirmation first.
+    var pendingConfirm by remember { mutableStateOf<ModerationBulkAction?>(null) }
+    Surface(tonalElevation = 3.dp, modifier = Modifier.testTag(ModerationBoardTestTags.BULK_BAR)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (inFlight) {
+                CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
+            }
+            ModerationBulkAction.entries.forEach { action ->
+                AssistChip(
+                    onClick = {
+                        if (!inFlight) {
+                            if (action.destructive) pendingConfirm = action else onRunBulk(action)
+                        }
+                    },
+                    label = { Text(action.label) },
+                    modifier = Modifier.testTag(ModerationBoardTestTags.bulk(action.wire)),
+                )
+            }
+        }
+    }
+
+    pendingConfirm?.let { action ->
+        val verb = action.label.lowercase()
+        val plural = if (selectedCount == 1) "case" else "cases"
+        AlertDialog(
+            onDismissRequest = { pendingConfirm = null },
+            modifier = Modifier.testTag("mod_bulk_confirm"),
+            title = { Text("${action.label}?") },
+            text = {
+                Text(
+                    if (action == ModerationBulkAction.DELETE) {
+                        "This will hard-delete the content on $selectedCount selected $plural. This cannot be undone."
+                    } else {
+                        "This will $verb on $selectedCount selected $plural."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val a = action
+                        pendingConfirm = null
+                        onRunBulk(a)
+                    },
+                    modifier = Modifier.testTag("mod_bulk_confirm_yes"),
+                ) { Text(action.label) }
+            },
+            dismissButton = { TextButton(onClick = { pendingConfirm = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Queue-health KPI strip (parity with the web board): Open backlog / On hold / Critical / Oldest open. */
+@Composable
+private fun KpiStrip(kpis: ModerationKpisDto) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag("mod_board_kpis"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        KpiCard("Open backlog", kpis.openTicketCount.toString())
+        KpiCard("On hold", kpis.onHoldCount.toString())
+        KpiCard(
+            "Critical",
+            kpis.criticalBacklog.toString(),
+            emphasise = kpis.criticalBacklog > 0,
+        )
+        KpiCard("Oldest open", oldestOpenLabel(kpis.oldestOpenAgeMinutes))
+    }
+}
+
+@Composable
+private fun KpiCard(label: String, value: String, emphasise: Boolean = false) {
+    Card(
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = if (emphasise) MaterialTheme.colorScheme.errorContainer
+            else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (emphasise) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (emphasise) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun oldestOpenLabel(minutes: Int): String = when {
+    minutes <= 0 -> "-"
+    minutes < 60 -> "${minutes}m"
+    minutes < 1440 -> "${minutes / 60}h"
+    else -> "${minutes / 1440}d"
 }
 
 @Composable
@@ -160,57 +404,122 @@ private fun FilterRow(active: String?, onSetFilter: (String?) -> Unit) {
 }
 
 @Composable
-private fun TicketRow(ticket: ModerationTicketDto, onClick: () -> Unit) {
+private fun TopicFilterRow(active: String?, onSetTopicFilter: (String?) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MODERATION_TOPIC_FILTERS.forEach { topic ->
+            FilterChip(
+                selected = active == topic,
+                onClick = { onSetTopicFilter(topic) },
+                label = { Text(topic?.replace('_', ' ')?.replaceFirstChar { it.uppercase() } ?: "Any reason") },
+                modifier = Modifier.testTag(ModerationBoardTestTags.topicFilter(topic)),
+            )
+        }
+    }
+}
+
+@Composable
+private fun TicketRow(
+    ticket: ModerationTicketDto,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(ModerationBoardTestTags.ticket(ticket.ticketId))
             .clickable(onClick = onClick),
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = ticket.contentType.ifBlank { "content" }.replace('_', ' '),
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = ticket.status.ifBlank { "-" }.replace('_', ' '),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    text = "Priority ${ticket.priority.ifBlank { "-" }}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = "${ticket.reportCount} reports",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (selectionMode) {
+                Checkbox(checked = selected, onCheckedChange = { onClick() }, modifier = Modifier.padding(end = 8.dp))
             }
-            if (ticket.aggregatedTopics.isNotEmpty()) {
-                Text(
-                    text = ticket.aggregatedTopics.joinToString(", "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (ticket.latestReportAt > 0L) {
-                Text(
-                    text = relativeSeconds(ticket.latestReportAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = ticket.contentType.ifBlank { "content" }.replace('_', ' '),
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (isIllegalTopics(ticket.aggregatedTopics)) IllegalBadge()
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = ticket.status.ifBlank { "-" }.replace('_', ' '),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    val highPriority = ticket.priority.equals("high", ignoreCase = true) ||
+                        ticket.priority.equals("critical", ignoreCase = true)
+                    Text(
+                        text = "Priority ${ticket.priority.ifBlank { "-" }}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (highPriority) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = if (highPriority) androidx.compose.ui.text.font.FontWeight.Bold else null,
+                    )
+                    Text(
+                        text = reportCountLabel(ticket.reportCount),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (ticket.aggregatedTopics.isNotEmpty()) {
+                    Text(
+                        text = ticket.aggregatedTopics.joinToString(", "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (ticket.latestReportAt > 0L) {
+                    Text(
+                        text = relativeSeconds(ticket.latestReportAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
+    }
+}
+
+/** The highest-priority moderation signal — the taxonomy keys the backend treats as illegal. */
+internal fun isIllegalTopics(topics: List<String>): Boolean =
+    topics.any { it.equals("illegal", ignoreCase = true) || it.equals("csam", ignoreCase = true) }
+
+/** Pluralised report count ("1 report" / "2 reports") — was always the plural form. */
+internal fun reportCountLabel(count: Int): String = if (count == 1) "1 report" else "$count reports"
+
+/** Prominent error-coloured badge flagging illegal content in a mixed queue (parity with web). */
+@Composable
+internal fun IllegalBadge() {
+    Surface(
+        color = MaterialTheme.colorScheme.error,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+        modifier = Modifier.testTag("mod_illegal_badge"),
+    ) {
+        Text(
+            text = "Illegal",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onError,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }
 

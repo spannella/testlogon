@@ -146,7 +146,7 @@ fun SyndicateOverviewRoute(
         LocalSyndicateCurrentUserId provides currentUserId,
         LocalSyndicateSponsoredImpression provides viewModel::onSponsoredImpression,
         LocalSyndicateSponsoredClick provides viewModel::onSponsoredClick,
-        LocalSyndicateReport provides { post -> reportTarget = ReportTarget.Content(post.postId, "feed_post") },
+        LocalSyndicateReport provides { post -> reportTarget = ReportTarget.Content(post.postId, "syndicate_post", syndicateId = viewModel.syndicateId) },
     ) {
     SyndicateOverviewScreen(
         state = state,

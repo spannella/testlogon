@@ -16,7 +16,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -26,7 +25,6 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { BulkActionBar } from "@/components/shared/BulkActionBar";
 import {
   getCategories,
   getCategoryItems,
@@ -34,9 +32,7 @@ import {
   deleteCategory,
   deleteCatalogItem,
   reorderCatalogItems,
-  bulkDeleteCatalogItems,
 } from "@/api/endpoints/cart";
-import { useMultiSelect } from "@/hooks/useMultiSelect";
 import SortableList from "@/components/shared/SortableList";
 import { ItemEditor } from "./ItemEditor";
 import type { CatalogCategory, CatalogItem } from "@/api/types";

@@ -59,7 +59,7 @@ export const downloadShareLink = async (
   }
   const disposition = resp.headers.get("Content-Disposition") || "";
   const match = disposition.match(/filename="([^"]+)"/);
-  const fileName = match ? match[1] : "download";
+  const fileName = match?.[1] ?? "download";
   const blob = await resp.blob();
   return { blob, fileName };
 };

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { KeyRound, Plus, MoreHorizontal, FlaskConical, RotateCw, Trash2, BarChart3 } from "lucide-react";
+import { KeyRound, Plus, MoreHorizontal, FlaskConical, RotateCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -83,7 +83,7 @@ export default function LlmKeysPage() {
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ["llm-keys"] });
       if (res.ok) {
-        toast.success(`Key test passed (${res.models.length} models, ${res.latency_ms}ms)`);
+        toast.success(`Key test passed (${res.models?.length ?? 0} models, ${res.latency_ms}ms)`);
       } else {
         toast.error(`Key test failed: ${res.error}`);
       }
@@ -161,23 +161,23 @@ export default function LlmKeysPage() {
                       {k.model_preference || "-"}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={STATUS_VARIANT[k.status] ?? "secondary"}>
-                        {statusLabel(k.status)}
+                      <Badge variant={STATUS_VARIANT[k.status ?? ""] ?? "secondary"}>
+                        {statusLabel(k.status ?? "")}
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {k.monthly_budget_cents > 0 ? (
+                      {(k.monthly_budget_cents ?? 0) > 0 ? (
                         <div className="w-24">
                           <Progress
                             value={Math.min(
                               100,
-                              (k.current_month_usage_cents / k.monthly_budget_cents) * 100,
+                              ((k.current_month_usage_cents ?? 0) / (k.monthly_budget_cents ?? 1)) * 100,
                             )}
                             className="h-2"
                           />
                           <p className="text-xs text-muted-foreground mt-0.5">
-                            ${(k.current_month_usage_cents / 100).toFixed(2)} / $
-                            {(k.monthly_budget_cents / 100).toFixed(2)}
+                            ${((k.current_month_usage_cents ?? 0) / 100).toFixed(2)} / $
+                            {((k.monthly_budget_cents ?? 0) / 100).toFixed(2)}
                           </p>
                         </div>
                       ) : (

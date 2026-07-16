@@ -30,6 +30,7 @@ from app.services.ttl import with_ttl
 # --------------------------------------------------------------------------- #
 
 ALERT_CATEGORIES: Dict[str, set] = {
+    "payouts": {"payout_initiated", "payout_paid", "payout_failed", "payout_returned"},
     "activity": {"new_follower", "post_liked", "post_reaction", "post_comment",
                  "comment_reply", "mention", "subscription_started", "post_shared",
                  "post_tip", "message_tip"},
@@ -42,6 +43,8 @@ ALERT_CATEGORIES: Dict[str, set] = {
                  "ticket_created", "ticket_assigned", "ticket_replied",
                  "ticket_status_changed", "ticket_reopened"},
     "commerce": {"cart.abandoned", "order_shipped", "order_out_for_delivery", "order_delivered"},
+    # MODX-15: moderation / DMCA lifecycle notifications get their own category + push.
+    "moderation": {"moderation_content_deleted", "moderation_content_removed", "moderation_content_hidden", "moderation_content_reinstated", "moderation_content_restored", "moderation_violation_confirmed", "moderation_hold_escalated", "moderation_report_received", "moderation_report_resolved", "moderation_poster_responded", "moderation_warning", "moderation_ban", "moderation_sla_breach", "moderation_extortion_criminal_surge", "dmca_claim_filed", "dmca_content_restored", "dmca_counter_notice_received", "dmca_repeat_infringer_ban"},
 }
 
 # Reverse lookup: event -> category
@@ -77,7 +80,14 @@ def _build_action_url(alert_type: str, details: Dict[str, Any]) -> Optional[str]
         "subscription_expiring": "/subscriptions/manage",
         "subscription_expired": "/subscriptions/manage",
         "subscription_canceled": "/subscriptions/manage",
+        "subscription_changed": "/subscriptions/manage",
+        "subscription_removed": "/subscriptions/manage",
+        "subscription_converted": "/subscriptions/manage",
         "subscription_gifted": "/subscriptions/manage",
+        "payout_initiated": "/wallet/payouts",
+        "payout_paid": "/wallet/payouts",
+        "payout_failed": "/wallet/payouts",
+        "payout_returned": "/wallet/payouts",
         "post_shared":      f"/feed?post={post_id}" if post_id else None,
         "post_tip":         f"/feed?post={post_id}" if post_id else None,
         "message_tip":      f"/messages/{conv_id}" if conv_id else None,
@@ -92,6 +102,16 @@ def _build_action_url(alert_type: str, details: Dict[str, Any]) -> Optional[str]
         "ticket_assigned":  f"/tickets/{ticket_id}" if ticket_id else "/tickets",
         "ticket_replied":   f"/tickets/{ticket_id}" if ticket_id else "/tickets",
         "ticket_status_changed": f"/tickets/{ticket_id}" if ticket_id else "/tickets",
+        # MODX-15/C6: enforcement outcomes deep-link to the appeal channel, not the (empty)
+        # open-cases list; poster review events land on the content-review screen.
+        "moderation_ban": "/appeals",
+        "moderation_content_deleted": "/appeals",
+        "moderation_content_removed": "/appeals",
+        "moderation_violation_confirmed": "/moderation/review",
+        "moderation_hold_escalated": "/moderation/review",
+        "moderation_content_hidden": "/moderation/review",
+        "moderation_content_reinstated": "/moderation/review",
+        "moderation_content_restored": "/moderation/review",
     }
     return url_map.get(alert_type)
 
@@ -140,6 +160,8 @@ _NO_ALERT_EVENTS: frozenset = frozenset({
 })
 
 ALERT_EVENT_TYPES: List[str] = [
+    # Payouts (PAY-D / PAY-34): creator payout lifecycle (default-on transactional)
+    "payout_initiated","payout_paid","payout_failed","payout_returned",
     "login_success","login_failure","mfa_success","mfa_failure","challenge_created","challenge_revoked",
     "challenge_failed","api_key_created","api_key_revoked","api_key_ip_rules_updated","session_revoked",
     "totp_device_added","totp_device_removed","rate_limited","access_denied","security_event",
@@ -153,6 +175,8 @@ ALERT_EVENT_TYPES: List[str] = [
     # Subscriptions (SUB-E1/E5): lifecycle notifications (default-on transactional)
     "subscription_renewed","subscription_renewal_failed","subscription_expiring","subscription_expired",
     "subscription_new_subscriber","subscription_canceled","subscription_gifted",
+    # SUBX-51: plan-change / creator-removal / trial-conversion lifecycle alerts (default-on)
+    "subscription_changed","subscription_removed","subscription_converted",
     "cart.abandoned",
     # Achievements (ENGAGE-001)
     "achievement_unlocked",
@@ -163,6 +187,8 @@ ALERT_EVENT_TYPES: List[str] = [
     # Commerce / buyer delivery lifecycle (ECOM D4)
     "order_out_for_delivery",
     "order_delivered",
+    # MODX-15: moderation / DMCA lifecycle events (push default-on transactional).
+    "moderation_content_deleted","moderation_content_removed","moderation_content_hidden","moderation_content_reinstated","moderation_content_restored","moderation_violation_confirmed","moderation_hold_escalated","moderation_report_received","moderation_report_resolved","moderation_poster_responded","moderation_warning","moderation_ban","moderation_sla_breach","moderation_extortion_criminal_surge","dmca_claim_filed","dmca_content_restored","dmca_counter_notice_received","dmca_repeat_infringer_ban",
 ]
 
 # ECOM-SELLER P2 - TRANSACTIONAL push events that are ON-BY-DEFAULT (opt-OUT, not
@@ -170,6 +196,10 @@ ALERT_EVENT_TYPES: List[str] = [
 # still disable one via ``push_opt_out_event_types``. Keep to genuinely
 # transactional order/payment events (never social/marketing noise).
 DEFAULT_PUSH_EVENT_TYPES: List[str] = [
+    "payout_initiated",  # PAY-D: your withdrawal is processing
+    "payout_paid",       # PAY-D: your withdrawal was paid
+    "payout_failed",     # PAY-D: your withdrawal failed
+    "payout_returned",   # PAY-D: your withdrawal was returned
     "shop_item_sold",        # you sold an item -> ship it
     "subscription_started",  # a subscription/payment succeeded
     "post_tip",              # you received a tip
@@ -184,6 +214,11 @@ DEFAULT_PUSH_EVENT_TYPES: List[str] = [
     "subscription_new_subscriber",  # SUB-E5: a new subscriber joined (creator)
     "subscription_canceled",        # SUB-E5: a subscription was canceled
     "subscription_gifted",          # SUB-E5: a gift subscription
+    "subscription_changed",         # SUBX-51: your plan changed (upgrade / scheduled downgrade)
+    "subscription_removed",         # SUBX-51: a creator removed your subscription
+    "subscription_converted",       # SUBX-51: your trial converted to paid
+    # MODX-15: moderation/DMCA events are consequential + time-sensitive -> default-on push.
+    "moderation_content_deleted","moderation_content_removed","moderation_content_hidden","moderation_content_reinstated","moderation_content_restored","moderation_violation_confirmed","moderation_hold_escalated","moderation_report_received","moderation_report_resolved","moderation_poster_responded","moderation_warning","moderation_ban","moderation_sla_breach","moderation_extortion_criminal_surge","dmca_claim_filed","dmca_content_restored","dmca_counter_notice_received","dmca_repeat_infringer_ban",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
@@ -873,7 +908,7 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
         }
         title = pretty.get(event, event.replace("_", " "))
         alert_id = ""
-        if event not in _NO_ALERT_EVENTS:
+        if event not in _NO_ALERT_EVENTS and not event.startswith("subscription_"):
             wr = write_alert(user_sub, event=event, outcome=outcome, title=title, details={**payload, "alert_type": alert_type})
             alert_id = (wr or {}).get("alert_id", "")
             send_push_for_alert(user_sub, alert_type, title, f"{event} ({outcome})", alert_id)

@@ -2553,6 +2553,23 @@ class AppealOut(BaseModel):
     modified_duration_days: Optional[int] = None
 
 
+class EnforcementOptionOut(BaseModel):
+    """MODX-13: one selectable enforcement in the appeal picker (the user never types
+    an opaque enforcement id by hand)."""
+    enforcement_id: str
+    enforcement_type: str = ""
+    status: str = ""
+    source_ticket_id: Optional[str] = None
+    created_at: int = 0
+    duration_days: int = 0
+    note: str = ""
+    has_appeal: bool = False
+
+
+class EnforcementOptionsOut(BaseModel):
+    items: List[EnforcementOptionOut] = Field(default_factory=list)
+
+
 class AppealCreateOut(BaseModel):
     ok: bool
     appeal_id: str
@@ -2715,6 +2732,49 @@ class PayoutActionOut(BaseModel):
     status: str
 
 
+class WalletSummaryOut(BaseModel):
+    available_cents: int = 0
+    held_cents: int = 0
+    held_count: int = 0
+    held_release_at: Optional[int] = None
+    pending_cents: int = 0
+    pending_count: int = 0
+    lifetime_paid_cents: int = 0
+    total_earned_cents: int = 0
+    currency: str = "USD"
+    minimum_payout_cents: int = 1000
+
+
+class PayoutTimelineEvent(BaseModel):
+    status: str
+    ts: int = 0
+    note: str = ""
+
+
+class PayoutDetailOut(BaseModel):
+    payout_id: str
+    user_id: str
+    amount_cents: int
+    method: str = "bank_transfer"
+    method_id: str = ""
+    method_last4: str = ""
+    status: str
+    created_at: int
+    updated_at: int
+    completed_at: Optional[int] = None
+    notes: str = ""
+    reject_reason: str = ""
+    fail_reason: str = ""
+    approved_by: str = ""
+    manual_hold: bool = False
+    hold_reason: str = ""
+    debit_reversed: bool = False
+    transfer_provider: str = ""
+    transfer_ref: str = ""
+    transfer_attempts: int = 0
+    timeline: List[PayoutTimelineEvent] = []
+
+
 class PayoutStatsOut(BaseModel):
     total_requested: int = 0
     total_requested_amount_cents: int = 0
@@ -2733,10 +2793,15 @@ class PayoutMarkPaidIn(BaseModel):
 # -- Payout Methods (GAP-0195 / FIN-009) --
 
 class PayoutMethodIn(BaseModel):
-    method_type: str = Field(..., pattern="^(bank_ach|bank_wire|paypal|check)$")
+    method_type: str = Field(..., pattern="^(bank_ach|bank_wire|paypal|check|stripe_connect)$")
+    # SEC-004: full account/routing are WRITE-ONLY — tokenized server-side, never
+    # stored. Only the last-4 (below) + an opaque token are persisted.
+    account_number: str = Field(default="", max_length=17, pattern=r"^\d{0,17}$")
+    routing_number: str = Field(default="", max_length=9, pattern=r"^\d{0,9}$")
     account_last4: str = Field(default="", max_length=4, pattern=r"^\d{0,4}$")
     routing_last4: str = Field(default="", max_length=4, pattern=r"^\d{0,4}$")
     paypal_email: str = Field(default="", max_length=254)
+    connect_account_id: str = Field(default="", max_length=64)
     nickname: str = Field(default="", max_length=100)
     set_as_default: bool = False
 
@@ -2753,12 +2818,29 @@ class PayoutMethodOut(BaseModel):
     paypal_email: str = ""
     nickname: str = ""
     is_default: bool = False
+    method_status: str = "unverified"
+    connect_account_id: str = ""
+    external_account_ref: str = ""
     created_at: int
     updated_at: int
 
 
 class PayoutMethodListOut(BaseModel):
     methods: List[PayoutMethodOut]
+
+
+class ConnectAccountOut(BaseModel):
+    connect_account_id: str = ""
+    onboarding_status: str = "pending"
+    payouts_enabled: bool = False
+
+
+class ConnectOnboardingOut(BaseModel):
+    connect_account_id: str = ""
+    onboarding_url: str = ""
+    onboarding_status: str = "pending"
+    payouts_enabled: bool = False
+    real: bool = False
 
 
 # ─── Tip Leaderboards (SOCIAL-005) ──────────────────────────────────
@@ -10925,6 +11007,16 @@ class W9StatusOut(BaseModel):
     certified: bool = False
     certified_at: Optional[int] = None
     updated_at: int = 0
+
+
+class PayoutTaxInfoOut(W9StatusOut):
+    """W-9 status for the payouts pre-withdrawal gate (PAY-21).
+
+    on_file tells the app whether a W-9 has been collected. The TIN is always
+    masked to tin_last4 — the raw SSN/EIN is never included.
+    """
+
+    on_file: bool = False
 
 
 class TaxInfoAdminOut(W9StatusOut):

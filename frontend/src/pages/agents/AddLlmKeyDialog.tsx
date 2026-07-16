@@ -109,7 +109,7 @@ export default function AddLlmKeyDialog({ open, onOpenChange }: Props) {
               >
                 <p className="font-medium text-sm">{p.display_name}</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {p.models.length > 0 ? `${p.models.length} models` : "Custom endpoint"}
+                  {(p.models?.length ?? 0) > 0 ? `${p.models?.length} models` : "Custom endpoint"}
                 </p>
               </Card>
             ))}
@@ -162,7 +162,7 @@ export default function AddLlmKeyDialog({ open, onOpenChange }: Props) {
               </div>
             )}
 
-            {selectedProvider.models.length > 0 && (
+            {(selectedProvider.models?.length ?? 0) > 0 && (
               <div className="space-y-2">
                 <Label>Model Preference</Label>
                 <Select value={modelPref} onValueChange={setModelPref}>
@@ -170,7 +170,7 @@ export default function AddLlmKeyDialog({ open, onOpenChange }: Props) {
                     <SelectValue placeholder="Select model (optional)" />
                   </SelectTrigger>
                   <SelectContent>
-                    {selectedProvider.models.map((m) => (
+                    {(selectedProvider.models ?? []).map((m) => (
                       <SelectItem key={m} value={m}>
                         {m}
                       </SelectItem>

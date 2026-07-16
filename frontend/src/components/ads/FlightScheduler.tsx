@@ -38,9 +38,11 @@ export default function FlightScheduler({
     .filter(({ f }) => f.start_date && f.end_date)
     .sort((a, b) => a.f.start_date.localeCompare(b.f.start_date));
   for (let k = 0; k < sorted.length - 1; k++) {
-    if (sorted[k].f.end_date >= sorted[k + 1].f.start_date) {
-      overlapIdx.add(sorted[k].i);
-      overlapIdx.add(sorted[k + 1].i);
+    const cur = sorted[k];
+    const next = sorted[k + 1];
+    if (cur && next && cur.f.end_date >= next.f.start_date) {
+      overlapIdx.add(cur.i);
+      overlapIdx.add(next.i);
     }
   }
 

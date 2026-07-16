@@ -196,7 +196,8 @@ def check_vod_access(
 
     # 4. Subscription check (only for subscription-compatible access modes)
     if access_mode in ("subscriber_only", "subscriber_free"):
-        has_sub = has_active_subscription(subscriber_id=user_id, creator_id=creator_id)
+        _req_level = int(getattr(video, "required_tier_level", 0) or 0)  # SUBX-31
+        has_sub = has_active_subscription(subscriber_id=user_id, creator_id=creator_id, required_level=_req_level)
         if has_sub:
             # Write audit record (best-effort, won't overwrite paid purchases)
             _record_subscription_access(

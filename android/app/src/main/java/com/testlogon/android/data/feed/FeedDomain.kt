@@ -27,6 +27,17 @@ data class FeedPost(
     val likeCount: Int,
     val commentCount: Int,
     val likedByMe: Boolean,
+    /** SOCIAL-002 — number of times this post has been reposted. */
+    val repostCount: Int = 0,
+    /** SOCIAL-002 — true when THIS viewer has already reposted this post (drives the toggle + Undo). */
+    val repostedByMe: Boolean = false,
+    /**
+     * SOCIAL-002 — non-null when this feed row was sourced from a repost FEEDREF: who reposted it (for
+     * the "↻ {name} reposted" attribution header). Null for an organically-authored feed row.
+     */
+    val repostedBy: RepostAttribution? = null,
+    /** SOCIAL-002 — the reposter's optional ≤500-char quote / commentary, rendered above the reposted card. */
+    val repostQuote: String? = null,
     /**
      * #4 (B-GROUPUNIFY) — the group this post was posted to, or null for a normal (personal) post. Group
      * posts are bridged into the unified feed/my-posts server-side; this lets the UI badge them
@@ -94,6 +105,12 @@ data class SponsoredInfo(
     val ctas: List<CtaAction> = emptyList(),
 )
 
+/** SOCIAL-002 — the reposter identity for a reposted feed row's attribution header. */
+data class RepostAttribution(
+    val userId: String,
+    val displayName: String?,
+)
+
 /** #3 — raw lock info used to badge a locked post on its AUTHOR's own (un-redacted) view. */
 data class AuthorLock(
     val priceCents: Int?,
@@ -140,7 +157,12 @@ sealed interface Paywall {
      * Re-locks automatically when the subscription lapses because the server re-marks it locked
      * (has_active_subscription is lifecycle-aware).
      */
-    data class SubscriberLocked(val creatorId: String) : Paywall
+    data class SubscriberLocked(
+        val creatorId: String,
+        // SUBX-31: the tier the viewer must buy to unlock (0/null = any active sub).
+        val requiredTierLevel: Int = 0,
+        val requiredTierName: String? = null,
+    ) : Paywall
 
     data class Locked(
         val lockType: LockType,
@@ -175,6 +197,15 @@ internal fun PostDto.toDomain(): FeedPost {
         likeCount = likeCount,
         commentCount = commentCount,
         likedByMe = likedByMe,
+        // SOCIAL-002 — repost tally + per-viewer state + (when this row is a repost) the reposter
+        // attribution and quote. The quote is the reposter's commentary, not protected post content, so
+        // it survives the lock redaction above.
+        repostCount = repostCount,
+        repostedByMe = repostedByMe,
+        repostedBy = repostedBy?.takeIf { it.userId.isNotBlank() }?.let {
+            RepostAttribution(userId = it.userId, displayName = it.displayName?.takeIf { n -> n.isNotBlank() })
+        },
+        repostQuote = repostQuote?.takeIf { it.isNotBlank() },
         groupId = groupId?.takeIf { it.isNotBlank() },
         reactions = reactionTallies(reactionsCounts, myReactions),
         tipReactions = tipReactions.orEmpty().map {
@@ -244,7 +275,11 @@ internal fun PostDto.toPaywall(): Paywall {
     // The owner + active subscribers get subscriber_locked=false and see the real body, so this
     // fires only for a genuinely gated-out viewer. Precedence over the tip/price lock.
     if (subscriberLocked) {
-        return Paywall.SubscriberLocked(creatorId?.takeIf { it.isNotBlank() } ?: authorId)
+        return Paywall.SubscriberLocked(
+            creatorId = creatorId?.takeIf { it.isNotBlank() } ?: authorId,
+            requiredTierLevel = requiredTierLevel,
+            requiredTierName = requiredTierName?.takeIf { it.isNotBlank() },
+        )
     }
     val effectivelyLocked = locked && !unlocked
     if (!effectivelyLocked) return Paywall.Unlocked

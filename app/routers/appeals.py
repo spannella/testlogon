@@ -10,16 +10,19 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.auth.deps import AuthenticatedUser, get_authenticated_user
+from app.auth.deps import AuthenticatedUser, get_authenticated_user, require_appellant
 from app.models import (
     AppealCreateIn,
     AppealCreateOut,
     AppealListOut,
     AppealOut,
     AppealWithdrawOut,
+    EnforcementOptionOut,
+    EnforcementOptionsOut,
 )
 from app.services.appeals import (
     file_appeal,
+    list_enforcement_options,
     get_appeal,
     list_user_appeals,
     withdraw_appeal,
@@ -30,10 +33,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/appeals", tags=["appeals"])
 
 
+@router.get("/enforcement-options", response_model=EnforcementOptionsOut)
+async def list_my_enforcement_options(
+    user: AuthenticatedUser = Depends(require_appellant),
+):
+    """MODX-13: the appellant enforcement picker. Returns THIS user own enforcement
+    records so the appeal form offers a selectable list instead of a hand-typed id.
+    Reachable while banned (``require_appellant``)."""
+    rows = list_enforcement_options(user.sub)
+    return EnforcementOptionsOut(items=[EnforcementOptionOut(**r) for r in rows])
+
+
 @router.post("", response_model=AppealCreateOut, status_code=201)
 async def submit_appeal(
     body: AppealCreateIn,
-    user: AuthenticatedUser = Depends(get_authenticated_user),
+    user: AuthenticatedUser = Depends(require_appellant),
 ):
     """Submit a new appeal against an enforcement action."""
     try:
@@ -59,7 +73,7 @@ async def list_my_appeals(
     status: Optional[str] = Query(None, description="Filter by status"),
     limit: int = Query(25, ge=1, le=100),
     cursor: Optional[str] = Query(None),
-    user: AuthenticatedUser = Depends(get_authenticated_user),
+    user: AuthenticatedUser = Depends(require_appellant),
 ):
     """List the authenticated user's appeals."""
     result = list_user_appeals(user.sub, status=status, limit=limit, cursor=cursor)
@@ -72,7 +86,7 @@ async def list_my_appeals(
 @router.get("/{appeal_id}", response_model=AppealOut)
 async def get_my_appeal(
     appeal_id: str,
-    user: AuthenticatedUser = Depends(get_authenticated_user),
+    user: AuthenticatedUser = Depends(require_appellant),
 ):
     """Get a specific appeal. Only the appeal owner may view."""
     item = get_appeal(appeal_id)
@@ -86,7 +100,7 @@ async def get_my_appeal(
 @router.post("/{appeal_id}/withdraw", response_model=AppealWithdrawOut)
 async def withdraw_my_appeal(
     appeal_id: str,
-    user: AuthenticatedUser = Depends(get_authenticated_user),
+    user: AuthenticatedUser = Depends(require_appellant),
 ):
     """Withdraw a pending appeal."""
     try:

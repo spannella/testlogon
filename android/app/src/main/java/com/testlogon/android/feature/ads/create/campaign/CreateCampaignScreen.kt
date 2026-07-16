@@ -16,6 +16,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -27,6 +29,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -57,6 +61,9 @@ object CreateCampaignTestTags {
     const val BID_CPA = "create_campaign_bid_cpa"
     const val SELF_PROMO = "create_campaign_self_promo_toggle"
     const val FILL_MODE = "create_campaign_fill_mode"
+    const val START_DATE = "create_campaign_start_date"
+    const val END_DATE = "create_campaign_end_date"
+    const val ADD_FUNDS = "create_campaign_add_funds"
     const val SUBMIT = "create_campaign_submit"
     const val SUCCESS = "create_campaign_success"
     const val REVIEW = "create_campaign_review"
@@ -68,6 +75,7 @@ object CreateCampaignTestTags {
 fun CreateCampaignRoute(
     onBack: () -> Unit,
     onCreated: (campaignId: String) -> Unit,
+    onAddFunds: (accountId: String) -> Unit = {},
     viewModel: CreateCampaignViewModel = hiltViewModel(),
 ) {
     val accounts by viewModel.accountsState.collectAsStateWithLifecycle()
@@ -81,6 +89,8 @@ fun CreateCampaignRoute(
     val bidCpa by viewModel.bidCpaUsd.collectAsStateWithLifecycle()
     val isSelfPromo by viewModel.isSelfPromo.collectAsStateWithLifecycle()
     val selfPromoMode by viewModel.selfPromoMode.collectAsStateWithLifecycle()
+    val startDate by viewModel.startDateMillis.collectAsStateWithLifecycle()
+    val endDate by viewModel.endDateMillis.collectAsStateWithLifecycle()
     val submit by viewModel.submitState.collectAsStateWithLifecycle()
     val review by viewModel.reviewState.collectAsStateWithLifecycle()
 
@@ -109,9 +119,14 @@ fun CreateCampaignRoute(
         onBidCpa = viewModel::onBidCpaUsd,
         onSelfPromo = viewModel::onSelfPromo,
         onSelfPromoMode = viewModel::onSelfPromoMode,
+        startDateMillis = startDate,
+        endDateMillis = endDate,
+        onStartDate = viewModel::onStartDate,
+        onEndDate = viewModel::onEndDate,
         onSubmit = viewModel::submit,
         onSubmitForReview = viewModel::submitForReview,
         onContinue = onCreated,
+        onAddFunds = { selectedAccount?.let(onAddFunds) },
         onBack = onBack,
     )
 }
@@ -143,9 +158,14 @@ fun CreateCampaignScreen(
     onBidCpa: (String) -> Unit,
     onSelfPromo: (Boolean) -> Unit,
     onSelfPromoMode: (String) -> Unit,
+    startDateMillis: Long? = null,
+    endDateMillis: Long? = null,
+    onStartDate: (Long?) -> Unit = {},
+    onEndDate: (Long?) -> Unit = {},
     onSubmit: () -> Unit,
     onSubmitForReview: () -> Unit,
     onContinue: (campaignId: String) -> Unit,
+    onAddFunds: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -180,6 +200,7 @@ fun CreateCampaignScreen(
                     isSelfPromo = isSelfPromo,
                     onSubmitForReview = onSubmitForReview,
                     onContinue = { onContinue(success.campaign.campaignId) },
+                    onAddFunds = onAddFunds,
                 )
                 return@Column
             }
@@ -280,6 +301,24 @@ fun CreateCampaignScreen(
                 testTag = CreateCampaignTestTags.BUDGET_TYPE,
             )
 
+            // ADV3-5 (B7): optional flight (start/end) dates. Hidden for a free self-promo.
+            if (!isSelfPromo) {
+                FlightDateField(
+                    label = stringResource(R.string.create_campaign_start_date_label),
+                    millis = startDateMillis,
+                    enabled = !submitting,
+                    onPick = onStartDate,
+                    testTag = CreateCampaignTestTags.START_DATE,
+                )
+                FlightDateField(
+                    label = stringResource(R.string.create_campaign_end_date_label),
+                    millis = endDateMillis,
+                    enabled = !submitting,
+                    onPick = onEndDate,
+                    testTag = CreateCampaignTestTags.END_DATE,
+                )
+            }
+
             // Money fields are hidden for a self-promo (it is free — no budget, no bids, no funding step).
             if (!isSelfPromo) {
             OutlinedTextField(
@@ -352,6 +391,7 @@ private fun CampaignCreatedCard(
     isSelfPromo: Boolean,
     onSubmitForReview: () -> Unit,
     onContinue: () -> Unit,
+    onAddFunds: () -> Unit = {},
 ) {
     Card(modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.SUCCESS)) {
         Column(
@@ -403,12 +443,69 @@ private fun CampaignCreatedCard(
                     Text(stringResource(R.string.create_campaign_review))
                 }
             }
+            // ADV3-4 (B3): prompt funding the specific campaign account (paid campaigns only).
+            if (!isSelfPromo) {
+                androidx.compose.material3.OutlinedButton(
+                    onClick = onAddFunds,
+                    modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.ADD_FUNDS),
+                ) {
+                    Text(stringResource(R.string.create_campaign_add_funds))
+                }
+            }
             Button(
                 onClick = onContinue,
                 modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.CONTINUE),
             ) {
                 Text(stringResource(R.string.create_campaign_continue))
             }
+        }
+    }
+}
+
+/** ADV3-5 (B7): a read-only date field that opens a Material date picker; a cleared pick sends null. */
+@Composable
+private fun FlightDateField(
+    label: String,
+    millis: Long?,
+    enabled: Boolean,
+    onPick: (Long?) -> Unit,
+    testTag: String,
+) {
+    var show by remember { mutableStateOf(false) }
+    val display = millis?.let {
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+            timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }.format(java.util.Date(it))
+    } ?: ""
+    OutlinedTextField(
+        value = display,
+        onValueChange = {},
+        readOnly = true,
+        enabled = enabled,
+        label = { Text(label) },
+        trailingIcon = {
+            TextButton(onClick = { if (enabled) show = true }) {
+                Text(stringResource(R.string.create_campaign_pick_date))
+            }
+        },
+        modifier = Modifier.fillMaxWidth().testTag(testTag),
+    )
+    if (show) {
+        val pickerState = rememberDatePickerState(initialSelectedDateMillis = millis)
+        DatePickerDialog(
+            onDismissRequest = { show = false },
+            confirmButton = {
+                TextButton(onClick = { onPick(pickerState.selectedDateMillis); show = false }) {
+                    Text(stringResource(R.string.create_campaign_date_ok))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onPick(null); show = false }) {
+                    Text(stringResource(R.string.create_campaign_date_clear))
+                }
+            },
+        ) {
+            DatePicker(state = pickerState)
         }
     }
 }

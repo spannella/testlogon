@@ -6,7 +6,7 @@ from fastapi import HTTPException, Request
 
 from app.services.api_metering_contract import route_id_from_request
 from app.services.api_keys import effective_api_key_capabilities
-from app.services.api_key_capabilities import expand_api_key_capabilities
+from app.services.api_key_capabilities import expand_api_key_capabilities, WILDCARD_API_KEY_CAPABILITY
 from app.services.api_key_route_scope_registry import resolve_required_scopes_for_route
 
 EntitlementGate = Callable[[Request | None, Dict[str, Any], list[str]], bool | Dict[str, Any] | None]
@@ -32,6 +32,18 @@ def requires_scope(
     request: Request | None = None,
     entitlement_gate: Optional[EntitlementGate] = None,
 ) -> Dict[str, Any]:
+    # APIK-E0-1: an admin:all wildcard key is allowed on EVERY route (incl. unmapped),
+    # bypassing per-scope and entitlement checks.
+    _granted_all = set(expand_api_key_capabilities(effective_api_key_capabilities(key_item)))
+    if WILDCARD_API_KEY_CAPABILITY in _granted_all:
+        return {
+            "ok": True,
+            "wildcard": True,
+            "required_scopes": _normalize_required_scopes(required_scopes),
+            "granted_scopes": sorted(_granted_all),
+            "api_key_id": str(key_item.get("key_id") or ""),
+            "entitlement": None,
+        }
     required = _normalize_required_scopes(required_scopes)
     if not required:
         raise HTTPException(

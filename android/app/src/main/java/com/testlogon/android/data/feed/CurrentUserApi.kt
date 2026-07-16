@@ -42,6 +42,17 @@ class CurrentUserRepository @Inject constructor(
     @Volatile
     private var cachedAdmin: Boolean? = null
 
+    /**
+     * Drops the cached identity + admin signal so the NEXT read re-fetches `GET /ui/me`. Called on
+     * every auth-state boundary (login / logout / account-switch). Without this, an in-session account
+     * switch keeps serving the PRIOR user's `is_admin`, so a freshly signed-in moderator could not see
+     * the Admin/Moderation hub until a full process restart (the More-hub discoverability bug).
+     */
+    fun invalidate() {
+        cached = null
+        cachedAdmin = null
+    }
+
     /** The signed-in user's `user_sub`, cached after the first successful lookup. */
     suspend fun currentUserSub(): ApiResult<String> = withContext(Dispatchers.IO) {
         cached?.let { return@withContext ApiResult.Success(it) }

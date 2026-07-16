@@ -1,0 +1,68 @@
+diff --git a/app/routers/admin_moderation.py b/app/routers/admin_moderation.py
+index 9ec54adb..3ff86bc6 100644
+--- a/app/routers/admin_moderation.py
++++ b/app/routers/admin_moderation.py
+@@ -1114,6 +1114,19 @@ def _modab_case_and_meta(ticket_id: str):
+     return ticket, case, meta
+ 
+ 
++def _modab_guard(fn, **kwargs):
++    """MODX-1/MODX-2: translate a guarded moderation_case state error into a clean
++    HTTP 409 instead of an unhandled 500. An admin action on a re-report ticket
++    whose case is in an incompatible state (e.g. an illegal transition, or a
++    terminal case that was not reopened) must surface as a conflict, never a 500."""
++    try:
++        return fn(**kwargs)
++    except ValueError as exc:
++        raise HTTPException(status_code=409, detail=f"moderation_case_state_conflict: {exc}") from exc
++    except PermissionError as exc:
++        raise HTTPException(status_code=403, detail=str(exc)) from exc
++
++
+ def _modab_tag_ticket(ticket_id: str, *, status: str, admin_sub: str, case_state: str, resolution: str | None = None, hold_until: int | None = None) -> None:
+     now = str(int(time.time()))
+     names = {"#s": "status", "#ua": "updated_at", "#cs": "moderation_case_state"}
+@@ -1141,7 +1154,7 @@ def dismiss_moderation_case(
+     ensure_admin_actions_enabled(admin)
+     from app.services import moderation_lifecycle as _life
+     ticket, case, meta = _modab_case_and_meta(ticket_id)
+-    res = _life.admin_dismiss(case=case, metadata=meta, admin_user_id=admin.sub)
++    res = _modab_guard(_life.admin_dismiss, case=case, metadata=meta, admin_user_id=admin.sub)
+     _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="no_violation")
+     write_moderation_audit_event(
+         action="content_case_dismissed",
+@@ -1163,7 +1176,7 @@ def confirm_moderation_case(
+     ensure_admin_actions_enabled(admin)
+     from app.services import moderation_lifecycle as _life
+     ticket, case, meta = _modab_case_and_meta(ticket_id)
+-    res = _life.admin_confirm_hold(case=case, metadata=meta, admin_user_id=admin.sub)
++    res = _modab_guard(_life.admin_confirm_hold, case=case, metadata=meta, admin_user_id=admin.sub)
+     _modab_tag_ticket(ticket_id, status="open", admin_sub=admin.sub, case_state=res["state"], hold_until=res.get("hold_until"))
+     write_moderation_audit_event(
+         action="content_violation_confirmed",
+@@ -1189,7 +1202,7 @@ def final_call_moderation_case(
+     note = str(inp.note or "").strip()
+ 
+     if inp.action == "reinstate":
+-        res = _life.admin_final_reinstate(case=case, metadata=meta, admin_user_id=admin.sub)
++        res = _modab_guard(_life.admin_final_reinstate, case=case, metadata=meta, admin_user_id=admin.sub)
+         _modab_tag_ticket(ticket_id, status="closed", admin_sub=admin.sub, case_state=res["state"], resolution="no_violation")
+         write_moderation_audit_event(
+             action="content_case_reinstated",
+@@ -1209,9 +1222,15 @@ def final_call_moderation_case(
+         ensure_permanent_ban_scope_rollout(admin)
+         _require_dual_approval_for_permanent_ban(admin=admin, second_approver_admin_user_id=inp.second_approver_admin_user_id)
+ 
+-    res = _life.admin_final_delete(case=case, metadata=meta, admin_user_id=admin.sub, source_ticket_id=ticket_id, note=note or "admin_final_delete")
++    res = _modab_guard(_life.admin_final_delete, case=case, metadata=meta, admin_user_id=admin.sub, source_ticket_id=ticket_id, note=note or "admin_final_delete")
+     owner = str(res.get("owner_user_id") or "")
+ 
++    # MODX-2: a lost race / already-terminal case is a clean no-op (changed=False):
++    # nothing was deleted by THIS call, so do not apply a ban or re-close as a new
++    # deletion — surface the current state as a conflict.
++    if res.get("changed") is False:
++        raise HTTPException(status_code=409, detail=f"moderation_case_state_conflict: not in a deletable state (state={res.get('state')})")
++
+     if inp.ban and owner:
+         ban_enf_id = f"enf_{uuid.uuid4().hex[:20]}"
+         now = str(int(time.time()))

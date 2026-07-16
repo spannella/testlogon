@@ -1,4 +1,3 @@
-import * as React from "react";
 import { PhoneMissed, PhoneCall } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { WaveformPlayer } from "./WaveformPlayer";

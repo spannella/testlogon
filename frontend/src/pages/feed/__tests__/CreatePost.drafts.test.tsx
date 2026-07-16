@@ -570,7 +570,7 @@ describe("CreatePost server-backed draft controls", () => {
       expect(getDraftPost).toHaveBeenCalledWith("d_1");
     });
 
-    let resolveSave: ((value: any) => void) | null = null;
+    let resolveSave: (value: any) => void = () => {};
     const pendingSave = new Promise((resolve) => {
       resolveSave = resolve;
     });

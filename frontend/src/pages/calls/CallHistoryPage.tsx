@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Phone, PhoneIncoming, PhoneOutgoing, Video, Trash2, BarChart3, Loader2 } from "lucide-react";
+import { Phone, PhoneIncoming, PhoneOutgoing, Video, Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/shared/PageHeader";

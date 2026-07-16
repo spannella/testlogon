@@ -44,10 +44,14 @@ ALLOWED_TRANSITIONS: Dict[str, set] = {
     STATE_DELETED: set(),
 }
 
-# -- Categories (D-CATEGORIES: 6) + back-compat map for the legacy 5 topics --
-SEVERE_CATEGORIES = {"sexual", "violence_threats", "hate"}
+# -- Categories (D-CATEGORIES: 6 + MODX-8 illegal lane) + back-compat map --
+SEVERE_CATEGORIES = {"sexual", "violence_threats", "hate", "illegal"}
 LOWER_CATEGORIES = {"spam", "harassment", "other"}
 CATEGORIES = SEVERE_CATEGORIES | LOWER_CATEGORIES
+
+# MODX-8: the gravest category rides a DISTINCT locked lane (see
+# moderation_illegal_lane); ``csam`` normalises to ``illegal``.
+ILLEGAL_CATEGORIES = {"illegal", "csam"}
 
 # Legacy topic -> new category (keep old reports working end-to-end).
 LEGACY_CATEGORY_MAP = {
@@ -56,10 +60,17 @@ LEGACY_CATEGORY_MAP = {
     "racist": "hate",
     "sexual": "sexual",
     "spam": "spam",
+    "csam": "illegal",
 }
 
-# D-AUTOHIDE: lower-severity hides at >=3 reports OR a trusted reporter.
+# D-AUTOHIDE: lower-severity hides at >=3 DISTINCT reporters OR a trusted reporter.
 LOWER_HIDE_THRESHOLD = 3
+
+# MODX-3 anti-weaponization tuning.
+SEVERE_DISTINCT_FLOOR = 2          # a severe 1st-report from one account never auto-hides
+VELOCITY_BURST_MIN = 3             # >=N fresh/untrusted distinct reporters in a burst => human review
+NEW_ACCOUNT_AGE_SECONDS = 7 * 86400  # accounts younger than this are "fresh" (burner-shaped)
+PROTECTED_ACCOUNT_AGE_SECONDS = 30 * 86400  # established targets get a corroboration tier
 
 HOLD_WINDOW_SECONDS = 30 * 86400  # 30 days
 
@@ -103,6 +114,15 @@ def is_severe(categories: Iterable[str]) -> bool:
     return any(normalize_category(c) in SEVERE_CATEGORIES for c in (categories or []))
 
 
+def is_illegal_category(categories: Iterable[str]) -> bool:
+    """MODX-8: does any category route to the locked illegal/CSAM lane?"""
+    for c in (categories or []):
+        raw = str(c or "").strip().lower()
+        if raw in ILLEGAL_CATEGORIES or normalize_category(c) == "illegal":
+            return True
+    return False
+
+
 def is_trusted_reporter(reporter_user_id: str) -> bool:
     """Simple trusted-reporter signal (D-AUTOHIDE).
 
@@ -126,17 +146,109 @@ def is_trusted_reporter(reporter_user_id: str) -> bool:
     return score >= 1 and false_rate <= 0.2
 
 
-def should_auto_hide(*, categories: Iterable[str], report_count: int, trusted: bool) -> Tuple[bool, str]:
-    """Guarded auto-hide decision (D-AUTOHIDE).
+def _account_age_seconds(user_id: str, *, now_ts: Optional[int] = None) -> Optional[int]:
+    """Best-effort account age. Prefers ``account_state``/``users`` created_at.
+    Returns None when unknown (treated as fresh/uncredible by callers)."""
+    if not user_id:
+        return None
+    ts = int(now_ts or time.time())
+    for tbl, key in ((T.account_state, "user_sub"), (T.users, "user_sub")):
+        try:
+            it = tbl.get_item(Key={key: user_id}).get("Item") or {}
+        except ClientError:
+            it = {}
+        for f in ("created_at", "signup_at", "account_created_at"):
+            v = it.get(f)
+            if v is not None:
+                try:
+                    return max(0, ts - int(float(v)))
+                except (TypeError, ValueError):
+                    continue
+        if bool(it.get("established")):
+            return PROTECTED_ACCOUNT_AGE_SECONDS + 1
+    return None
 
-    - SEVERE category -> hide on the 1st report.
-    - LOWER category  -> hide only at report_count>=3 OR a trusted reporter.
+
+def reporter_is_credible(reporter_user_id: str, *, now_ts: Optional[int] = None) -> bool:
+    """A reporter is *credible* (not a fresh burner) when trusted OR their account
+    is older than the fresh-account window. Uncredible => burner-shaped."""
+    if not reporter_user_id:
+        return False
+    if is_trusted_reporter(reporter_user_id):
+        return True
+    age = _account_age_seconds(reporter_user_id, now_ts=now_ts)
+    return age is not None and age >= NEW_ACCOUNT_AGE_SECONDS
+
+
+def is_protected_target(owner_user_id: str, *, now_ts: Optional[int] = None) -> bool:
+    """MODX-3 target-protection tier: an established/verified creator needs
+    corroboration (>=2 distinct reporters) before ANY auto-hide, so a single
+    actor can't darken a high-value account."""
+    if not owner_user_id:
+        return False
+    try:
+        u = T.users.get_item(Key={"user_sub": owner_user_id}).get("Item") or {}
+    except ClientError:
+        u = {}
+    if bool(u.get("verified")) or bool(u.get("is_verified")):
+        return True
+    age = _account_age_seconds(owner_user_id, now_ts=now_ts)
+    return age is not None and age >= PROTECTED_ACCOUNT_AGE_SECONDS
+
+
+def evaluate_reporters(reporter_ids: Iterable[str], *, now_ts: Optional[int] = None) -> Dict[str, Any]:
+    """Summarise a case's distinct reporter set for the auto-hide decision."""
+    ids = sorted({str(r) for r in (reporter_ids or []) if r})
+    credible = [r for r in ids[:25] if reporter_is_credible(r, now_ts=now_ts)]
+    trusted = [r for r in ids[:25] if is_trusted_reporter(r)]
+    return {
+        "distinct": len(ids),
+        "credible": len(credible),
+        "any_trusted": bool(trusted),
+        "fresh_untrusted": len(ids) - len(credible),
+    }
+
+
+def should_auto_hide(
+    *,
+    categories: Iterable[str],
+    distinct_reporter_count: int,
+    credible_reporter_count: int,
+    any_trusted: bool,
+    protected_target: bool,
+    velocity_suspect: bool,
+) -> Tuple[bool, str]:
+    """MODX-3 guarded, anti-weaponization auto-hide decision.
+
+    A single throwaway account (or one account's repeated reports) can NEVER
+    auto-hide: the decision is driven by the DISTINCT reporter set, and severe
+    content needs either a trusted reporter or >=2 distinct reporters with at
+    least one CREDIBLE (non-burner). A burst of fresh/untrusted accounts is
+    suppressed to human review instead of auto-hiding. Protected (established/
+    verified) targets always require corroboration.
     """
+    distinct = int(distinct_reporter_count or 0)
+    credible = int(credible_reporter_count or 0)
+
+    # Coordinated fresh-account brigade -> never auto-hide; route to a human.
+    if velocity_suspect:
+        return False, "velocity_suppressed_human_review"
+
+    # Protected target: corroboration is mandatory before any auto-hide.
+    if protected_target and distinct < SEVERE_DISTINCT_FLOOR:
+        return False, "awaiting_corroboration_protected"
+
     if is_severe(categories):
-        return True, "severe_category"
-    if trusted:
+        if any_trusted:
+            return True, "trusted_reporter"
+        if distinct >= SEVERE_DISTINCT_FLOOR and credible >= 1:
+            return True, "severe_corroborated"
+        return False, "awaiting_corroboration"
+
+    # LOWER severity.
+    if any_trusted:
         return True, "trusted_reporter"
-    if int(report_count or 0) >= LOWER_HIDE_THRESHOLD:
+    if distinct >= LOWER_HIDE_THRESHOLD and credible >= 1:
         return True, "report_threshold"
     return False, ""
 
@@ -148,12 +260,15 @@ def aggregate_report(
     categories: Iterable[str],
     owner_user_id: Optional[str],
     ticket_id: Optional[str],
+    reporter_user_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     now_ts: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Create-or-aggregate the moderation case for a piece of content.
 
-    One case per content ref. Atomically ADDs report_count + the category set.
+    One case per content ref. Atomically ADDs report_count, the category set, and
+    (MODX-3/MODX-5) the DISTINCT ``reporter_ids`` set — a self-report
+    (reporter == owner) is dropped so it can never pad the auto-hide counts.
     Returns the fresh case dict.
     """
     ts = int(now_ts or time.time())
@@ -161,6 +276,11 @@ def aggregate_report(
     cats = normalize_categories(categories) or ["other"]
     cat_set = set(cats)
     md = {k: v for k, v in (metadata or {}).items() if v is not None}
+    # COI (MODX-5 A13): a self-report never counts toward the distinct set.
+    reporter = str(reporter_user_id or "").strip()
+    if reporter and owner_user_id and reporter == str(owner_user_id):
+        reporter = ""
+    rid_set = {reporter} if reporter else None
 
     base_item: Dict[str, Any] = {
         "case_id": cid,
@@ -179,6 +299,9 @@ def aggregate_report(
         base_item["owner_user_id"] = owner_user_id
     if ticket_id:
         base_item["ticket_id"] = ticket_id
+    if rid_set:
+        base_item["reporter_ids"] = set(rid_set)
+        base_item["first_report_at"] = ts
     if md:
         base_item["content_metadata"] = md
 
@@ -192,6 +315,7 @@ def aggregate_report(
     names = {"#rc": "report_count", "#cats": "categories", "#ua": "updated_at"}
     values: Dict[str, Any] = {":one": 1, ":cats": cat_set, ":ts": ts}
     set_parts = ["#ua = :ts"]
+    add_parts = ["#rc :one", "#cats :cats"]
     if owner_user_id:
         names["#owner"] = "owner_user_id"
         set_parts.append("#owner = if_not_exists(#owner, :owner)")
@@ -200,7 +324,13 @@ def aggregate_report(
         names["#tk"] = "ticket_id"
         set_parts.append("#tk = if_not_exists(#tk, :tk)")
         values[":tk"] = ticket_id
-    upd = "SET " + ", ".join(set_parts) + " ADD #rc :one, #cats :cats"
+    if rid_set:
+        names["#rids"] = "reporter_ids"
+        values[":rids"] = set(rid_set)
+        add_parts.append("#rids :rids")
+        names["#fra"] = "first_report_at"
+        set_parts.append("#fra = if_not_exists(#fra, :ts)")
+    upd = "SET " + ", ".join(set_parts) + " ADD " + ", ".join(add_parts)
     try:
         T.moderation_cases.update_item(
             Key={"case_id": cid},
@@ -213,24 +343,33 @@ def aggregate_report(
     return get_case(cid) or dict(base_item)
 
 
-def transition(
+def transition_result(
     case_id: str,
     to_state: str,
     *,
     expected_from: Optional[Iterable[str]] = None,
     extra: Optional[Dict[str, Any]] = None,
     now_ts: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Idempotent, guarded state transition.
+) -> Tuple[bool, Dict[str, Any]]:
+    """Idempotent, guarded state transition returning ``(changed, case)``.
 
-    Rejects illegal transitions (a case cannot skip states). A no-op when the
-    case is already in ``to_state``.
+    ``changed`` is True ONLY when THIS call actually moved the case into
+    ``to_state`` (i.e. it won the DB conditional write). A no-op (already in
+    ``to_state``) and a lost race (a concurrent writer transitioned first) BOTH
+    return ``changed=False``.
+
+    This is the act-AFTER-guard primitive (MODX-2): a caller that performs an
+    irreversible side-effect (hard delete, violation strike, un-hide) must do so
+    ONLY when ``changed`` is True, so concurrent finalizers/dismissers can never
+    double-act, and an illegal-state delete raises BEFORE any content is touched.
+
+    Rejects illegal transitions (a case cannot skip states).
     """
     ts = int(now_ts or time.time())
     case = get_case(case_id)
     frm = str((case or {}).get("state") or STATE_VISIBLE)
     if to_state == frm:
-        return case or {}
+        return False, case or {}
     allowed = ALLOWED_TRANSITIONS.get(frm, set())
     if to_state not in allowed:
         raise ValueError(f"illegal moderation_case transition {frm} -> {to_state}")
@@ -255,9 +394,93 @@ def transition(
         )
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            return get_case(case_id) or {}
+            # Lost the race: another writer already moved the case -> NOT our change.
+            return False, get_case(case_id) or {}
         raise
-    return get_case(case_id) or {}
+    return True, get_case(case_id) or {}
+
+
+def transition(
+    case_id: str,
+    to_state: str,
+    *,
+    expected_from: Optional[Iterable[str]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+    now_ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Back-compat wrapper over ``transition_result`` returning just the case dict.
+
+    Prefer ``transition_result`` when the caller must know whether it actually
+    moved the case (act-AFTER-guard). Rejects illegal transitions; no-op when the
+    case is already in ``to_state``.
+    """
+    _changed, case = transition_result(
+        case_id, to_state, expected_from=expected_from, extra=extra, now_ts=now_ts
+    )
+    return case
+
+
+def reopen_terminal_case(
+    case_id: str,
+    *,
+    categories: Iterable[str],
+    ticket_id: Optional[str] = None,
+    now_ts: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """MODX-1: open a FRESH lifecycle on previously-actioned (terminal) content.
+
+    A ``case_id`` is a deterministic hash of ``(content_type, content_id)``, so a
+    re-report of ``dismissed``/``reinstated``/``deleted`` content reuses the same
+    (frozen) case. This atomically resets that terminal case back to ``visible``:
+    clears ``hidden``, drops the hold/terminal markers, resets ``report_count`` to
+    1 and ``categories`` to THIS report's, bumps ``reopen_count``, and re-points
+    ``ticket_id`` at the newly-minted open ticket.
+
+    Conditional on the case still being terminal, so concurrent re-reports reopen
+    EXACTLY ONCE (the loser is a no-op -> returns None). Returns the reopened case
+    on success, else None (not terminal / lost race).
+    """
+    ts = int(now_ts or time.time())
+    cats = set(normalize_categories(categories) or ["other"])
+    names = {
+        "#s": "state", "#ua": "updated_at", "#h": "hidden",
+        "#rc": "report_count", "#cats": "categories",
+        "#ra": "reopened_at", "#rn": "reopen_count",
+    }
+    values: Dict[str, Any] = {
+        ":vis": STATE_VISIBLE, ":ts": ts, ":false": False,
+        ":one": 1, ":zero": 0, ":cats": cats,
+        ":dismissed": STATE_DISMISSED, ":reinstated": STATE_REINSTATED, ":deleted": STATE_DELETED,
+    }
+    set_parts = [
+        "#s = :vis", "#ua = :ts", "#h = :false",
+        "#rc = :one", "#cats = :cats", "#ra = :ts",
+        "#rn = if_not_exists(#rn, :zero) + :one",
+    ]
+    if ticket_id:
+        names["#tk"] = "ticket_id"
+        values[":tk"] = ticket_id
+        set_parts.append("#tk = :tk")
+    remove_parts = [
+        "hold_until", "deleted_at", "delete_reason", "reinstated_at",
+        "reinstated_by", "dismissed_at", "dismissed_by", "confirmed_at",
+        "confirmed_by", "poster_response", "responded_at", "hidden_at", "hide_reason",
+    ]
+    upd = "SET " + ", ".join(set_parts) + " REMOVE " + ", ".join(remove_parts)
+    try:
+        T.moderation_cases.update_item(
+            Key={"case_id": case_id},
+            UpdateExpression=upd,
+            ConditionExpression="#s = :dismissed OR #s = :reinstated OR #s = :deleted",
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return None
+        logger.exception("moderation_case.reopen_terminal_case failed for %s", case_id)
+        return None
+    return get_case(case_id)
 
 
 def mark_under_review(case_id: str, *, hide_reason: str, now_ts: Optional[int] = None) -> Dict[str, Any]:
@@ -353,6 +576,7 @@ def on_report_filed(
         categories=topics,
         owner_user_id=owner,
         ticket_id=ticket_id,
+        reporter_user_id=reporter_user_id,
         metadata=metadata,
         now_ts=ts,
     )
@@ -370,15 +594,95 @@ def on_report_filed(
         "owner_user_id": owner,
     }
 
-    # Already hidden or terminal -> nothing new to hide (idempotent aggregation only).
-    if bool(case.get("hidden")) or state in TERMINAL_STATES or state != STATE_VISIBLE:
+    # MODX-1: a re-report of previously-actioned (terminal) content must open a
+    # FRESH actionable case instead of hitting the frozen terminal state. Reopen
+    # to `visible`, then fall through and re-evaluate the guarded auto-hide below
+    # (so a severe re-report re-hides, and admin actions on the re-report ticket
+    # act on a live, non-terminal case -> no 500).
+    if state in TERMINAL_STATES:
+        reopened = reopen_terminal_case(
+            case_id, categories=normalize_categories(topics), ticket_id=ticket_id, now_ts=ts
+        )
+        case = reopened or get_case(case_id) or case
+        state = str(case.get("state") or STATE_VISIBLE)
+        report_count = int(case.get("report_count") or 1)
+        cats = list(case.get("categories") or normalize_categories(topics))
+        result.update({
+            "state": state,
+            "report_count": report_count,
+            "categories": sorted({normalize_category(c) for c in cats}),
+            "reopened": True,
+        })
+
+    # Persist the current distinct-reporter count for the admin detail DTO.
+    reporter_ids = list(case.get("reporter_ids") or [])
+    distinct_reporter_count = len({str(r) for r in reporter_ids if r})
+    result["distinct_reporter_count"] = distinct_reporter_count
+
+    # MODX-8: illegal/CSAM content takes the DISTINCT locked lane — immediate
+    # restricted hide on the FIRST report (no distinct-reporter/trust gate),
+    # preserve evidence, mandated-report, senior-only queue. NEVER the public hold.
+    if is_illegal_category(cats):
+        if bool(case.get("hidden")) or state != STATE_VISIBLE:
+            result["illegal_lane"] = True
+            return result
+        try:
+            from app.services import moderation_illegal_lane as _illegal
+            esc = _illegal.escalate(
+                case_id=case_id,
+                content_type=content_type,
+                content_id=content_id,
+                owner_user_id=owner,
+                categories=cats,
+                reporter_user_id=reporter_user_id,
+                ticket_id=ticket_id,
+                metadata=metadata,
+                now_ts=ts,
+            )
+            _notify_owner_hidden(esc.get("owner_user_id") or owner, content_type=content_type, case_id=case_id, reason="illegal_content", categories=cats)
+            result.update({
+                "state": STATE_UNDER_REVIEW,
+                "auto_hidden_now": True,
+                "illegal_lane": True,
+                "owner_user_id": esc.get("owner_user_id") or owner,
+                "hide_decision_reason": "illegal_lane",
+            })
+        except Exception:
+            logger.exception("on_report_filed: illegal-lane escalation failed for %s", case_id)
         return result
 
-    trusted = is_trusted_reporter(reporter_user_id)
-    do_hide, reason = should_auto_hide(categories=cats, report_count=report_count, trusted=trusted)
+    # Already hidden or (still) non-visible -> nothing new to hide (idempotent).
+    if bool(case.get("hidden")) or state != STATE_VISIBLE:
+        return result
+
+    # MODX-3: decide on the DISTINCT reporter set + credibility, not raw events.
+    rep_summary = evaluate_reporters(reporter_ids, now_ts=ts)
+    trusted = rep_summary["any_trusted"] or is_trusted_reporter(reporter_user_id)
+    protected = is_protected_target(owner, now_ts=ts)
+    # Coordinated fresh-account brigade: a burst of >=N distinct fresh/untrusted
+    # reporters with zero credible corroboration -> route to human, never hide.
+    velocity_suspect = (
+        rep_summary["fresh_untrusted"] >= VELOCITY_BURST_MIN and rep_summary["credible"] == 0 and not trusted
+    )
+    do_hide, reason = should_auto_hide(
+        categories=cats,
+        distinct_reporter_count=distinct_reporter_count,
+        credible_reporter_count=rep_summary["credible"],
+        any_trusted=trusted,
+        protected_target=protected,
+        velocity_suspect=velocity_suspect,
+    )
     result["hide_decision_reason"] = reason
     result["trusted_reporter"] = trusted
+    result["protected_target"] = protected
+    result["velocity_suspect"] = velocity_suspect
+
     if not do_hide:
+        # Flag brigades / suppressed auto-hides for a human on the case so a mod
+        # can see the coordinated-report signal and act (never a silent hide).
+        if velocity_suspect or reason in ("awaiting_corroboration", "awaiting_corroboration_protected"):
+            _flag_needs_human_review(case_id, reason=reason, distinct=distinct_reporter_count, now_ts=ts)
+            result["needs_human_review"] = True
         return result
 
     resolved_owner = mhide.hide_content(
@@ -393,3 +697,32 @@ def on_report_filed(
 
     result.update({"state": STATE_UNDER_REVIEW, "auto_hidden_now": True, "owner_user_id": resolved_owner})
     return result
+
+
+def _flag_needs_human_review(case_id: str, *, reason: str, distinct: int, now_ts: int) -> None:
+    """Mark a case that a guard SUPPRESSED (brigade / uncorroborated) for human
+    triage. Best-effort; keeps the content visible (no silent hide)."""
+    try:
+        T.moderation_cases.update_item(
+            Key={"case_id": case_id},
+            UpdateExpression=(
+                "SET needs_human_review = :t, human_review_reason = :r, "
+                "distinct_reporter_count = :d, human_review_flagged_at = :ts"
+            ),
+            ExpressionAttributeValues={":t": True, ":r": str(reason or "")[:64], ":d": int(distinct), ":ts": int(now_ts)},
+        )
+    except ClientError:
+        logger.exception("moderation_case._flag_needs_human_review failed for %s", case_id)
+    try:
+        from app.services.moderation_audit_log import write_moderation_audit_event
+        write_moderation_audit_event(
+            action="auto_hide_suppressed_human_review",
+            actor_user_id="system",
+            ticket_id="",
+            content_type="",
+            content_id="",
+            target_user_id="",
+            metadata={"case_id": case_id, "reason": reason, "distinct_reporter_count": int(distinct)},
+        )
+    except Exception:
+        logger.exception("moderation_case._flag_needs_human_review audit failed for %s", case_id)

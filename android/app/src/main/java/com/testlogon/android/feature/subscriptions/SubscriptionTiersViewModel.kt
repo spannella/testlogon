@@ -72,8 +72,11 @@ sealed interface SubscriptionsEvent {
     /** FLAGGED: payments unavailable (BillingAuthorizer stub NotConfigured / checkout flag off). */
     data object PaymentsUnavailable : SubscriptionsEvent
 
-    /** AND-237 — open the manage / cancel screen for the current subscription. */
-    data object NavigateToManage : SubscriptionsEvent
+    /** AND-237 / SUBX-21 — open the manage screen for the viewer's sub WITH THIS creator. */
+    data class NavigateToManage(
+        val subscriptionId: String?,
+        val creatorId: String,
+    ) : SubscriptionsEvent
 
     /** Generic transient snackbar (e.g. refresh failed). */
     data class ShowMessage(val message: String) : SubscriptionsEvent
@@ -203,10 +206,29 @@ class SubscriptionTiersViewModel @Inject constructor(
         }
     }
 
-    /** AND-237 — open the manage / cancel screen for the viewer's current subscription. */
+    /** AND-237 / SUBX-21 — open manage for the viewer's sub WITH THIS creator (resolves the id). */
     fun onManageClick() {
-        viewModelScope.launch { _events.send(SubscriptionsEvent.NavigateToManage) }
+        viewModelScope.launch {
+            val subId = currentSubscriptionIdOrNull()
+            _events.send(SubscriptionsEvent.NavigateToManage(subscriptionId = subId, creatorId = creatorId))
+        }
     }
+
+    /** SUBX-21 - the viewer's active/trialing/past_due subscription id WITH THIS creator, if any. */
+    private suspend fun currentSubscriptionIdOrNull(): String? =
+        when (val subs = repository.getMySubscriptions()) {
+            is ApiResult.Success -> subs.data
+                .filter {
+                    it.creatorId == creatorId && (
+                        it.status == SubscriptionState.ACTIVE ||
+                            it.status == SubscriptionState.TRIALING ||
+                            it.status == SubscriptionState.PAST_DUE
+                        )
+                }
+                .maxByOrNull { it.currentPeriodEndEpochSeconds ?: 0L }
+                ?.subscriptionId
+            else -> null
+        }
 
     private suspend fun currentTierIdOrNull(): String? =
         when (val subs = repository.getMySubscriptions()) {

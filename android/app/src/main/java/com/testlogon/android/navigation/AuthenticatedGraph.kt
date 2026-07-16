@@ -85,7 +85,17 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-092: saved / bookmarks (paged + unsave). Row-open is delegated to E14/E24 detail
         // screens that are not yet wired, so it is a safe no-op for now.
         composable(MainDest.Saved.route) {
-            SavedRoute(onBack = { navController.popBackStack() })
+            SavedRoute(
+                onBack = { navController.popBackStack() },
+                // P0-consumer/bookmarks: tapping a saved item deep-links to the post/video detail.
+                onOpen = { contentType, contentId ->
+                    val route = when (contentType) {
+                        "video" -> VideoDetailDest.build(contentId)
+                        else -> PostDetailDest.build(contentId)
+                    }
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+            )
         }
         // AND-093: achievements (earned/locked + progress); links to the leaderboard.
         composable(MainDest.Achievements.route) {
@@ -114,6 +124,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
                     launchSingleTop = true
                 }
             },
+            // SUBX-24: organic Subscribe entry on a creator profile -> that creator's tier browse.
+            onSubscribe = { creatorId, displayName ->
+                navController.navigate(SubscriptionTiersDest.build(creatorId, displayName)) {
+                    launchSingleTop = true
+                }
+            },
         )
         // AND-100: read-only post detail (in-app nav + deep link).
         postDetailDestination(navController)
@@ -136,6 +152,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // (name/status/budget/spend). Route reachable via navigateToAdsCampaigns(accountId); the More-hub
         // uses a sample account id (no ads-accounts list yet).
         adsCampaignsDestination(navController)
+        // ADV3-4 (B2/B4): advertiser-accounts LIST (ads-accounts) - the discovery surface that removes the
+        // firstOrNull() single-account ceiling (routes billing/campaigns/analytics with a REAL accountId) +
+        // the campaign-management DETAIL (ads-campaign/{accountId}/{campaignId}) reached from a row tap
+        // (pause/resume/edit-budget/edit-bid/archive via the existing PATCH + an Add-funds CTA).
+        adsAccountsDestination(navController)
+        adCampaignDetailDestination(navController)
         // ADV-107/108/109: advertiser CREATE flow (create ad account -> create campaign -> create
         // creative + asset upload -> submit-for-review). Real account/campaign pickers feed the studio
         // editors via AdsStudioSelection (replacing the first-of-first auto-resolve).
@@ -234,8 +256,12 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         manageSubscriptionDestination(navController)
         // SUB-E4-3: creator subscribers + MRR/analytics dashboard (owner-scoped; Growth hub).
         creatorSubscribersDestination(navController)
+        // SUBX-40: creator tier authoring (create/price/benefits/level/archive/reorder; Growth hub).
+        creatorTierManagerDestination(navController)
         // SUB-E2: gift a creator subscription to another user (gifter pays one no-renew cycle).
         giftSubscriptionDestination(navController)
+        // SUBX-20: the subscriber's "My subscriptions" list (all subs -> correct-target Manage).
+        mySubscriptionsDestination(navController)
         // AND-238/239/240: fan-club channels list (tier-grouped) + channel messages + tier members.
         fanClubDestinations(navController)
         // AND-243: invoices list (paged) + invoice detail (line items/totals + email + view-PDF).
@@ -428,6 +454,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // B-APIKEY (batch 7): developer API-keys management. List (label/prefix/created+expiry/scopes) with a
         // per-row revoke -> a create that shows the one-time secret exactly once. Backed by /ui/api_keys.
         apiKeysDestinations(navController)
+        // P0-BLOCK: Blocked Users management (Settings / Privacy) — list + confirm-gated unblock
+        // over /ui/social/blocked + /ui/social/unblock.
+        blockedUsersDestinations(navController)
         // Web-parity: questionnaire BUILDER (creator authoring). Drafts list -> create -> per-draft
         // editor (sections + 9 question types + publish) over /questionnaires/drafts*.
         questionnaireBuilderDestinations(navController)
@@ -568,6 +597,12 @@ internal fun NavHostController.navigateToNotificationTarget(target: Notification
             navigate(MainDest.Settings.route) { launchSingleTop = true }
         NotificationTarget.ModerationReview ->
             navigate(ModerationReviewDest.ROUTE) { launchSingleTop = true }
+        is NotificationTarget.Appeals ->
+            // MODX-15 (C6): a ban / removal alert opens the appeal channel, pre-filled when known.
+            navigate(
+                target.enforcementId?.takeIf { it.isNotBlank() }?.let(AppealsDest::build)
+                    ?: AppealsDest.ROUTE,
+            ) { launchSingleTop = true }
         NotificationTarget.Unknown ->
             // No first-party detail route yet for this kind — land on the Notification Center so a
             // push tap is never a dead end (AND-108 §13 R1; swap to a per-entity route on merge).

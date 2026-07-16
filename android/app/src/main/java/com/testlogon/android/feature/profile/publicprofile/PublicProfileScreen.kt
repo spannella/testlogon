@@ -25,6 +25,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +42,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.testlogon.android.R
+import com.testlogon.android.core.ui.blocking.BlockConfirmDialog
+import com.testlogon.android.feature.blocking.BlockInteractionViewModel
 import com.testlogon.android.core.model.profile.PublicProfile
 import com.testlogon.android.core.ui.scaffold.TlScaffold
 import com.testlogon.android.core.ui.state.EmptyState
@@ -50,7 +53,7 @@ import com.testlogon.android.core.ui.state.StaleBanner
 import com.testlogon.android.data.report.ReportTarget
 import com.testlogon.android.feature.profile.ProfileTestTags
 import com.testlogon.android.feature.profile.components.ProfileHeader
-import com.testlogon.android.feature.report.ReportSheet
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import kotlinx.coroutines.launch
 
 /**
@@ -67,6 +70,8 @@ fun PublicProfileRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    // SUBX-24: organic Subscribe entry -> the creator's subscription tier browse.
+    onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     // Defaulted no-op so the authenticated graph (where the CTA is hidden) need not supply it.
     onSignIn: () -> Unit = {},
     shareIntents: ProfileShareIntents = remember { ProfileShareIntents() },
@@ -90,6 +95,7 @@ fun PublicProfileRoute(
         onRetry = viewModel::onRetry,
         onBack = onBack,
         onOpenFanClub = onOpenFanClub,
+        onSubscribe = onSubscribe,
         onSignIn = onSignIn,
         onShare = { displayName ->
             val url = viewModel.shareUrl ?: return@PublicProfileScreen
@@ -123,6 +129,7 @@ fun PublicProfileScreen(
     shareUrl: String? = null,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onSignIn: () -> Unit = {},
     onShare: (displayName: String) -> Unit = {},
     onCopyLink: () -> Unit = {},
@@ -187,6 +194,7 @@ fun PublicProfileScreen(
                     isAuthenticated = isAuthenticated,
                     onRetry = onRetry,
                     onOpenFanClub = onOpenFanClub,
+                    onSubscribe = onSubscribe,
                     onSignIn = onSignIn,
                 )
 
@@ -227,6 +235,7 @@ private fun PublicContent(
     isAuthenticated: Boolean,
     onRetry: () -> Unit,
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
+    onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onSignIn: () -> Unit = {},
 ) {
     Column(
@@ -270,6 +279,17 @@ private fun PublicContent(
         // AND-390: auth-only affordances (fan-club, report) are HIDDEN (not disabled) when signed out;
         // the unauthenticated viewer instead gets a non-blocking Sign-in CTA (FR-7/FR-8).
         if (isAuthenticated) {
+            // SUBX-24: organic Subscribe entry -> the creator's subscription tiers.
+            Button(
+                onClick = { onSubscribe(profile.userId, profile.displayName) },
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .testTag(ProfileTestTags.PUBLIC_SUBSCRIBE),
+            ) {
+                Text(stringResource(R.string.profile_public_subscribe))
+            }
+
             // AND-238: entry point into this creator's fan-club channels.
             OutlinedButton(
                 onClick = { onOpenFanClub(profile.userId, profile.displayName) },
@@ -292,11 +312,42 @@ private fun PublicContent(
             ) {
                 Text(stringResource(R.string.msg_action_report))
             }
-            reportTarget?.let { tgt ->
-                ReportSheet(
-                    target = tgt,
-                    onDismiss = { reportTarget = null },
-                    onCompleted = { reportTarget = null },
+            // MODX-7 — route through the SAME host every other surface uses (consistent wiring +
+            // report_* tags). USER targets get no licensing/DMCA entry (a profile is not a copyright
+            // claim surface); the host enforces that.
+            ContentReportSheetHost(
+                target = reportTarget,
+                onDismiss = { reportTarget = null },
+            )
+
+            // P0-BLOCK: block / unblock this user, on the same surface as report. Uses the shared
+            // BlockInteractionViewModel (hydrated with the viewed user) + shared confirm dialog.
+            val blockVm: BlockInteractionViewModel = hiltViewModel()
+            val blockState by blockVm.uiState.collectAsStateWithLifecycle()
+            LaunchedEffect(profile.userId) { blockVm.hydrate(profile.userId, profile.identifier) }
+            OutlinedButton(
+                onClick = {
+                    if (blockState.blockedByMe) blockVm.onUnblock() else blockVm.onBlockRequested()
+                },
+                enabled = !blockState.inFlight,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .testTag("public_block_user"),
+            ) {
+                Text(
+                    if (blockState.blockedByMe) stringResource(R.string.unblock_action)
+                    else stringResource(R.string.block_action, profile.identifier),
+                )
+            }
+            if (blockState.confirmVisible) {
+                BlockConfirmDialog(
+                    title = stringResource(R.string.block_confirm_title, profile.identifier),
+                    body = stringResource(R.string.block_confirm_body),
+                    confirmLabel = stringResource(R.string.block_confirm_cta),
+                    dismissLabel = stringResource(R.string.block_confirm_cancel),
+                    onConfirm = blockVm::onBlockConfirmed,
+                    onDismiss = blockVm::onBlockDismissed,
                 )
             }
         } else {

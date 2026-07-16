@@ -19,40 +19,40 @@ import type {
 const BASE = "/v1/kyc/business-cases";
 
 export async function createKybCase(data: KybCreateRequest): Promise<KybCaseEnvelope> {
-  return (await api.post(BASE, data)).data;
+  return api.post<KybCaseEnvelope>(BASE, data);
 }
 
 export async function listKybCases(): Promise<KybCaseListEnvelope> {
-  return (await api.get(BASE)).data;
+  return api.get<KybCaseListEnvelope>(BASE);
 }
 
 export async function getKybCase(caseId: string): Promise<KybCaseEnvelope> {
-  return (await api.get(`${BASE}/${caseId}`)).data;
+  return api.get<KybCaseEnvelope>(`${BASE}/${caseId}`);
 }
 
 export async function patchKybCase(
   caseId: string,
   data: Partial<KybCreateRequest> & { expected_version: number },
 ): Promise<KybCaseEnvelope> {
-  return (await api.patch(`${BASE}/${caseId}`, data)).data;
+  return api.patch<KybCaseEnvelope>(`${BASE}/${caseId}`, data);
 }
 
 export async function submitKybCase(
   caseId: string,
   data: { expected_version: number },
 ): Promise<KybCaseEnvelope> {
-  return (await api.post(`${BASE}/${caseId}/submit`, data)).data;
+  return api.post<KybCaseEnvelope>(`${BASE}/${caseId}/submit`, data);
 }
 
 export async function addKybUbo(
   caseId: string,
   data: KybUboAddRequest,
 ): Promise<KybUboEnvelope> {
-  return (await api.post(`${BASE}/${caseId}/ubos`, data)).data;
+  return api.post<KybUboEnvelope>(`${BASE}/${caseId}/ubos`, data);
 }
 
 export async function listKybUbos(caseId: string): Promise<KybUboListEnvelope> {
-  return (await api.get(`${BASE}/${caseId}/ubos`)).data;
+  return api.get<KybUboListEnvelope>(`${BASE}/${caseId}/ubos`);
 }
 
 export async function linkKybUbo(
@@ -60,64 +60,67 @@ export async function linkKybUbo(
   uboId: string,
   data: { personal_kyc_case_id: string },
 ): Promise<KybUboEnvelope> {
-  return (await api.post(`${BASE}/${caseId}/ubos/${uboId}/link`, data)).data;
+  return api.post<KybUboEnvelope>(`${BASE}/${caseId}/ubos/${uboId}/link`, data);
 }
 
 export async function removeKybUbo(caseId: string, uboId: string): Promise<void> {
-  await api.delete(`${BASE}/${caseId}/ubos/${uboId}`);
+  await api.del(`${BASE}/${caseId}/ubos/${uboId}`);
 }
 
 export async function addKybDirector(
   caseId: string,
   data: KybDirectorAddRequest,
 ): Promise<KybDirectorEnvelope> {
-  return (await api.post(`${BASE}/${caseId}/directors`, data)).data;
+  return api.post<KybDirectorEnvelope>(`${BASE}/${caseId}/directors`, data);
 }
 
 export async function listKybDirectors(caseId: string): Promise<KybDirectorListEnvelope> {
-  return (await api.get(`${BASE}/${caseId}/directors`)).data;
+  return api.get<KybDirectorListEnvelope>(`${BASE}/${caseId}/directors`);
 }
 
 export async function removeKybDirector(caseId: string, directorId: string): Promise<void> {
-  await api.delete(`${BASE}/${caseId}/directors/${directorId}`);
+  await api.del(`${BASE}/${caseId}/directors/${directorId}`);
 }
 
 export async function addKybDocument(
   caseId: string,
   data: KybDocumentRequest,
 ): Promise<KybDocumentEnvelope> {
-  return (await api.post(`${BASE}/${caseId}/documents`, data)).data;
+  return api.post<KybDocumentEnvelope>(`${BASE}/${caseId}/documents`, data);
 }
 
 export async function setKybAddress(
   caseId: string,
   data: KybAddressRequest,
 ): Promise<{ address: Record<string, unknown> }> {
-  return (await api.post(`${BASE}/${caseId}/addresses`, data)).data;
+  return api.post<{ address: Record<string, unknown> }>(`${BASE}/${caseId}/addresses`, data);
 }
 
 export async function adminKybQueue(status?: string): Promise<KybAdminQueueEnvelope> {
-  return (await api.get(`${BASE}/admin/queue`, { params: status ? { status } : {} })).data;
+  return api.get<KybAdminQueueEnvelope>(
+    `${BASE}/admin/queue`,
+    status ? { status } : undefined,
+  );
 }
 
 export async function adminGetKybCase(caseId: string): Promise<KybCaseEnvelope> {
-  return (await api.get(`${BASE}/admin/${caseId}`)).data;
+  return api.get<KybCaseEnvelope>(`${BASE}/admin/${caseId}`);
 }
 
 export async function adminScreenKybCase(caseId: string): Promise<KybScreeningEnvelope> {
-  return (await api.post(`${BASE}/admin/${caseId}/screen`, {})).data;
+  return api.post<KybScreeningEnvelope>(`${BASE}/admin/${caseId}/screen`, {});
 }
 
 export async function adminApproveKybCase(
   caseId: string,
   data: { expected_version: number; reason_codes?: string[]; note?: string },
 ): Promise<KybCaseEnvelope> {
-  return (await api.post(`${BASE}/admin/${caseId}/approve`, data)).data;
+  return api.post<KybCaseEnvelope>(`${BASE}/admin/${caseId}/approve`, data);
 }
 
 export async function adminRejectKybCase(
   caseId: string,
   data: { expected_version: number; reason_codes?: string[]; note?: string },
 ): Promise<KybCaseEnvelope> {
-  return (await api.post(`${BASE}/admin/${caseId}/reject`, data)).data;
+  return api.post<KybCaseEnvelope>(`${BASE}/admin/${caseId}/reject`, data);
 }

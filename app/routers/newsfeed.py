@@ -104,6 +104,9 @@ def _inject_sponsored_posts(
 
     result: List[Dict[str, Any]] = []
     sponsored_count = 0
+    # ADV3-7 (C4): thread already-won campaign ids so each slot draws a
+    # DISTINCT advertiser instead of the top bidder monopolizing the page.
+    won_campaign_ids: Set[str] = set()
 
     for i, post in enumerate(posts):
         result.append(post)
@@ -116,10 +119,15 @@ def _inject_sponsored_posts(
                     extra={"viewer_id": viewer_id, "reason": "allow_ads_near_false"},
                 )
                 continue
-            sponsored = _fetch_sponsored_post(viewer_id, i, hidden_ids)
+            sponsored = _fetch_sponsored_post(
+                viewer_id, i, hidden_ids, exclude_campaign_ids=won_campaign_ids
+            )
             if sponsored:
                 result.append(sponsored)
                 sponsored_count += 1
+                _cid = sponsored.get("campaign_id")
+                if _cid:
+                    won_campaign_ids.add(str(_cid))
 
     return result
 
@@ -128,10 +136,11 @@ def _fetch_sponsored_post(
     viewer_id: str,
     position: int,
     hidden_ids: Set[str],
+    exclude_campaign_ids: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Fetch a sponsored post from the ad serving engine."""
     try:
-        from app.services.ad_serving import serve_ad
+        from app.services.ad_serving import commit_ad_click, serve_ad
         ad = serve_ad(
             surface="newsfeed",
             content_type="post",
@@ -139,6 +148,8 @@ def _fetch_sponsored_post(
             content_id=f"feed_slot_{position}",
             slot_type="sponsored_post",
             user_id=viewer_id,
+            exclude_campaign_ids=exclude_campaign_ids,
+            defer_ad_click=True,
         )
         if not ad.get("filled") or ad.get("is_house_ad"):
             return None
@@ -150,6 +161,10 @@ def _fetch_sponsored_post(
                 extra={"viewer_id": viewer_id, "reason": "hidden", "creative_id": creative_id},
             )
             return None
+
+        # ADV3-7 (C4): commit the deferred AdClicks row only now that this
+        # unit is being kept (a no-fill / hidden spin leaves no orphan row).
+        commit_ad_click(ad)
 
         ts = int(time.time())
         sponsored = {
@@ -1419,6 +1434,9 @@ class CreatePostRequest(ContentFieldsMixin):
     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     visibility: Literal["followers", "public"] = "followers"
     subscriber_only: bool = False  # SUB-E3: per-post subscriber-only gate
+    # SUBX-31: minimum tier level required to unlock this subscriber-only post
+    # (0/None = any active subscriber unlocks - the pre-tier binary default).
+    required_tier_level: Optional[int] = Field(default=None, ge=1, le=100)
     # B8 B-LOCK: accept "price"/"none" aliases so a fixed-price locked post created
     # by the app (which sent "price") or an explicit unlock ("none") validates; the
     # value is normalized to the canonical fixed_price/tip_lottery/None below.
@@ -2289,7 +2307,8 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     if (not locked_body) and viewer_id and _sub_author and _sub_author != viewer_id and bool(post.get("subscriber_only")):
         try:
             from app.services.subscription_access import content_locked_for_viewer as _clfv
-            _sub_locked = _clfv(viewer_id, _sub_author, subscriber_only=True)
+            _req_level = int(post.get("required_tier_level") or 0)
+            _sub_locked = _clfv(viewer_id, _sub_author, subscriber_only=True, required_level=_req_level)
         except Exception:
             _sub_locked = False
     if _sub_locked:
@@ -2376,6 +2395,10 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "visibility": post.get("visibility", "followers"),
         "subscriber_only": bool(post.get("subscriber_only")),
         "subscriber_locked": _sub_locked,
+        # SUBX-31: the tier the locked-out viewer must buy (level + display name)
+        # so the app SubscriberLockCard can name the required tier + upsell to it.
+        "required_tier_level": int(post.get("required_tier_level") or 0),
+        "required_tier_name": (_subx_tier_label(_sub_author, int(post.get("required_tier_level") or 0)) if _sub_locked else None),
         "creator_id": _sub_author,
         "locked": bool(post.get("locked")),
         "lock_expired": lock_expired,
@@ -2797,6 +2820,15 @@ def has_unlocked(user_id: str, post_id: str) -> bool:
     return bool(it and it.get("unlocked") is True)
 
 
+def _subx_tier_label(creator_id, required_level) -> Optional[str]:
+    """SUBX-31: best-effort display name of the required tier for the lock card."""
+    try:
+        from app.services.subscription_access import tier_label_for_level
+        return tier_label_for_level(str(creator_id or ""), int(required_level or 0))
+    except Exception:
+        return None
+
+
 def _subscriber_locked_post(post: Dict[str, Any], viewer_id) -> bool:
     """SUB-E3: True when a per-post subscriber-only item must be locked for the
     viewer (owner/admin/active-subscriber bypass via content_locked_for_viewer)."""
@@ -2804,7 +2836,10 @@ def _subscriber_locked_post(post: Dict[str, Any], viewer_id) -> bool:
     if not author or author == viewer_id or not bool(post.get("subscriber_only")):
         return False
     try:
-        return content_locked_for_viewer(viewer_id, author, subscriber_only=True)
+        return content_locked_for_viewer(
+            viewer_id, author, subscriber_only=True,
+            required_level=int(post.get("required_tier_level") or 0),
+        )
     except Exception:
         return False
 
@@ -3826,6 +3861,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "video_id": video_id,
         "visibility": req.visibility,
         "subscriber_only": bool(getattr(req, "subscriber_only", False)),
+        "required_tier_level": int(getattr(req, "required_tier_level", 0) or 0),  # SUBX-31
         "locked": locked,
         "lock_type": lock_type,
         "unlock_price_cents": unlock_price_cents,
@@ -5367,6 +5403,11 @@ def list_interesting_posts(
 
     Powers the "more like this" feed-ranking boost: callers prioritise these
     posts (and same-author posts) in ranking.
+
+    ADV3-7 (C6): this endpoint returns a bare post_id LIST (a ranking-signal
+    lookup), not a rendered feed of post objects, so it carries no sponsored
+    slots by design -- it is intentionally unmonetized. Sponsored injection
+    lives on the rendered surfaces (GET /feed and GET /feed/for-you).
     """
     post_ids = _post_interesting_svc.list_interesting_post_ids(user_id, limit=limit)
     return {"post_ids": post_ids, "count": len(post_ids)}
@@ -5967,6 +6008,12 @@ def view_for_you_feed(
     if not items:
         return _chronological_fallback("chronological_fallback")
 
+    # ADV3-7 (C6): the ranked For-You branch previously returned WITHOUT ad
+    # injection (only chronological GET /feed monetized). Inject sponsored
+    # posts here too so the ranked surface carries paid inventory; the
+    # injector honours each post's allow_ads_near flag.
+    items = _inject_sponsored_posts(items, user_id)
+
     record_newsfeed_recsys_request(mode="for_you", source="for_you")
     record_newsfeed_recsys_latency(source="for_you", elapsed_seconds=time.perf_counter() - started)
     logger.info(
@@ -6226,6 +6273,12 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
     post_author = post.get("user_id")
     if post_author and post_author != user_id and not can_view_post(user_id, post):
         raise HTTPException(status_code=403, detail="Not authorized to comment on this post")
+
+    # BLOCK-P0: a blocked user (either direction) cannot comment on the author's post
+    if post_author and post_author != user_id:
+        from app.services.blocking import is_any_block
+        if is_any_block(user_id, post_author):
+            raise HTTPException(status_code=403, detail={"code": "blocked", "message": "Blocked"})
 
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to comment")

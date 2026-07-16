@@ -72,6 +72,19 @@ class Settings:
     api_key_messager_phase: str = os.environ.get("API_KEY_MESSAGER_PHASE", "ga")
     api_key_messager_canary_percent: int = int(os.environ.get("API_KEY_MESSAGER_CANARY_PERCENT", "0"))
     api_key_messager_canary_subjects: str = os.environ.get("API_KEY_MESSAGER_CANARY_SUBJECTS", "")
+
+    # APIK-E0-3: groups rollout product (default shadow until E4 canary->GA)
+    api_key_groups: bool = os.environ.get("API_KEY_GROUPS", "1") not in ("0", "false", "False")
+    api_key_groups_phase: str = os.environ.get("API_KEY_GROUPS_PHASE", "ga")
+    api_key_groups_canary_percent: int = int(os.environ.get("API_KEY_GROUPS_CANARY_PERCENT", "0"))
+    api_key_groups_canary_subjects: str = os.environ.get("API_KEY_GROUPS_CANARY_SUBJECTS", "")
+
+    # APIK-E0-3: video rollout product (default shadow until E5 canary->GA)
+    api_key_video: bool = os.environ.get("API_KEY_VIDEO", "1") not in ("0", "false", "False")
+    api_key_video_phase: str = os.environ.get("API_KEY_VIDEO_PHASE", "ga")
+    api_key_video_canary_percent: int = int(os.environ.get("API_KEY_VIDEO_CANARY_PERCENT", "0"))
+    api_key_video_canary_subjects: str = os.environ.get("API_KEY_VIDEO_CANARY_SUBJECTS", "")
+
     api_key_dual_credential_mode: str = os.environ.get("API_KEY_DUAL_CREDENTIAL_MODE", "prefer_api_key")
     api_key_registry_drift_warn_threshold: int = int(os.environ.get("API_KEY_REGISTRY_DRIFT_WARN_THRESHOLD", "0"))
     api_key_rollout_state_allow_subjects: bool = os.environ.get("API_KEY_ROLLOUT_STATE_ALLOW_SUBJECTS", "0") not in ("0", "false", "False")
@@ -701,7 +714,7 @@ class Settings:
     dmca_claims_table_name: str = os.environ.get("DDB_DMCA_CLAIMS", "DmcaClaims")
     moderation_dual_approval_permanent_ban_enabled: bool = os.environ.get(
         "MODERATION_DUAL_APPROVAL_PERMANENT_BAN_ENABLED",
-        "false",
+        "true",  # MODX-7: real dual-approval ON by default
     ).lower() in ("1", "true", "yes", "on")
     moderation_kpi_lookback_hours: int = int(os.environ.get("MODERATION_KPI_LOOKBACK_HOURS", "24"))
     moderation_kpi_surge_window_minutes: int = int(os.environ.get("MODERATION_KPI_SURGE_WINDOW_MINUTES", "15"))
@@ -1792,6 +1805,16 @@ class Settings:
     message_edit_window_seconds: int = int(os.environ.get("MESSAGE_EDIT_WINDOW_SECONDS", str(15 * 60)))
     payout_hold_days: int = int(os.environ.get("PAYOUT_HOLD_DAYS", "7"))
     payout_minimum_cents: int = int(os.environ.get("PAYOUT_MINIMUM_CENTS", "1000"))
+    # PAY-20/21 (PAY-C): verified-before-any-payout gate. Blocks request_payout
+    # until the creator has an APPROVED KYC case AND a W-9 on file. Default ON.
+    payout_verification_gate_enabled: bool = os.environ.get("PAYOUT_VERIFICATION_GATE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
+    # PAY-D (PAY-30..33): scheduled payout runner + bounded retry config.
+    payout_runner_enabled: bool = os.environ.get("PAYOUT_RUNNER_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    payout_runner_interval_seconds: int = int(os.environ.get("PAYOUT_RUNNER_INTERVAL_SECONDS", "300"))
+    payout_runner_min_age_seconds: int = int(os.environ.get("PAYOUT_RUNNER_MIN_AGE_SECONDS", "0"))
+    payout_max_transfer_attempts: int = int(os.environ.get("PAYOUT_MAX_TRANSFER_ATTEMPTS", "4"))
+    payout_retry_backoff_seconds: str = os.environ.get("PAYOUT_RETRY_BACKOFF_SECONDS", "60,300,900")
     payout_min_cents: int = int(os.environ.get("PAYOUT_MIN_CENTS", os.environ.get("PAYOUT_MINIMUM_CENTS", "1000")))
     # Bulk Payout & Refund Tools (FIN-017)
     bulk_payout_batches_table_name: str = os.environ.get("DDB_BULK_PAYOUT_BATCHES", "BulkPayoutBatches")
@@ -1917,6 +1940,43 @@ class Settings:
     ad_fraud_events_table_name: str = os.environ.get("DDB_AD_FRAUD_EVENTS", "AdFraudEvents")
     ad_fraud_score_threshold: int = int(os.environ.get("AD_FRAUD_SCORE_THRESHOLD", "70"))
     ad_fraud_auto_suspend_rate_bps: int = int(os.environ.get("AD_FRAUD_AUTO_SUSPEND_RATE_BPS", "2000"))
+
+    # ── Ad policy / limits / abuse (ADV3-10..12 / EPIC E5) ───────────────────
+    # Automated content-policy pass on submit-for-review + the three
+    # review-bypass surfaces (seller-boost, sponsored-as-creator, ad-messaging).
+    ad_policy_screening_enabled: bool = os.environ.get(
+        "AD_POLICY_SCREENING_ENABLED", "1"
+    ) not in ("0", "false", "False")
+    # Platform-standard disclosure/label forced onto any advertiser-supplied
+    # paid content that ships an empty label (E3/E7 -- disclosure is not optional).
+    ad_default_disclosure_label: str = os.environ.get(
+        "AD_DEFAULT_DISCLOSURE_LABEL", "Paid partnership"
+    )
+    # Account-level daily spend velocity cap (cents). An ESTABLISHED account
+    # (has settled >=1 real deposit) may spend up to the established cap/day; a
+    # NEW / auto-provisioned (boost) account is throttled to the new-account cap
+    # until first settlement. An account may carry a per-account override
+    # (`daily_spend_cap_cents`). Caps default high so normal delivery is
+    # unaffected; a compromised/burst account is blunted before reactive suspend.
+    ad_account_daily_spend_cap_cents: int = int(
+        os.environ.get("AD_ACCOUNT_DAILY_SPEND_CAP_CENTS", "500000")  # $5,000/day
+    )
+    ad_new_account_daily_spend_cap_cents: int = int(
+        os.environ.get("AD_NEW_ACCOUNT_DAILY_SPEND_CAP_CENTS", "20000")  # $200/day
+    )
+    # Minimal-KYC gate: once an account's lifetime spend would cross this, a
+    # charge is blocked until the account is KYC-cleared (`kyc_cleared`/`kyc_status
+    # == verified`, or a per-account `kyc_required_spend_cents` override). 0
+    # disables the gate.
+    ad_account_kyc_required_spend_cents: int = int(
+        os.environ.get("AD_ACCOUNT_KYC_REQUIRED_SPEND_CENTS", "100000")  # $1,000 lifetime
+    )
+    # Global per-recipient sponsored-message frequency cap (messages/user/day
+    # across ALL creators+advertisers) so a user cannot be blanketed by many
+    # senders each under their own audience cap (E7).
+    ad_msg_recipient_daily_cap: int = int(
+        os.environ.get("AD_MSG_RECIPIENT_DAILY_CAP", "5")
+    )
 
     # Ad Scheduling & Dayparting (ADS-016)
     # Schedule (dayparting + flights) is stored on the existing campaign

@@ -30,7 +30,13 @@ export function PostActions({ postId, postStatus, isOwn, onEdit }: PostActionsPr
   const [reportServerError, setReportServerError] = useState<string | null>(null);
 
   const deleteMut = useMutation({
-    mutationFn: () => (postStatus === "scheduled" ? cancelScheduledPost(postId) : deletePost(postId)),
+    mutationFn: async () => {
+      if (postStatus === "scheduled") {
+        await cancelScheduledPost(postId);
+      } else {
+        await deletePost(postId);
+      }
+    },
     onSuccess: () => {
       toast.success(postStatus === "scheduled" ? "Scheduled post cancelled" : "Post deleted");
       void invalidateFeedCaches(queryClient);

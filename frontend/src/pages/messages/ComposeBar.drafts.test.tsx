@@ -88,13 +88,13 @@ describe("ComposeBar draft integration", () => {
     expect(screen.getByText("Saved drafts")).toBeInTheDocument();
     expect(screen.getByText("draft from A")).toBeInTheDocument();
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]!);
     expect(hookSpy.loadDraft).toHaveBeenCalledWith("d-a1");
     await waitFor(() => {
       expect(toastMock.success).toHaveBeenCalledWith("Draft loaded");
     });
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]!);
     expect(hookSpy.deleteDraft).toHaveBeenCalledWith("d-a1");
     expect(toastMock.success).toHaveBeenCalledWith("Draft removed");
   });
@@ -115,7 +115,7 @@ describe("ComposeBar draft integration", () => {
   it("save draft updates loaded draft instead of creating a new one", async () => {
     renderWithClient(<ComposeBar conversationId="conv-a" onSendText={vi.fn()} />);
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]!);
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Type a message/i)).toHaveValue("draft from A");
     });
@@ -141,7 +141,7 @@ describe("ComposeBar draft integration", () => {
     const onSendText = vi.fn();
     renderWithClient(<ComposeBar conversationId="conv-a" onSendText={onSendText} />);
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]!);
     await userEvent.click(screen.getByLabelText(/Send message/i));
 
     await waitFor(() => {
@@ -157,7 +157,7 @@ describe("ComposeBar draft integration", () => {
     await userEvent.type(composer, "temporary text");
     expect(composer).toHaveValue("temporary text");
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]!);
 
     await waitFor(() => {
       expect(composer).toHaveValue("draft from A");
@@ -196,7 +196,7 @@ describe("ComposeBar draft integration", () => {
     hookSpy.loadDraft.mockResolvedValueOnce(null);
     renderWithClient(<ComposeBar conversationId="conv-a" onSendText={vi.fn()} />);
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]!);
 
     expect(toastMock.error).toHaveBeenCalledWith("Draft unavailable");
   });
@@ -278,7 +278,7 @@ describe("ComposeBar draft integration", () => {
     vi.useFakeTimers();
     renderWithClient(<ComposeBar conversationId="conv-a" onSendText={vi.fn()} />);
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]!);
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Type a message/i)).toHaveValue("draft from A");
     });
@@ -300,7 +300,7 @@ describe("ComposeBar draft integration", () => {
     vi.useFakeTimers();
     renderWithClient(<ComposeBar conversationId="conv-a" onSendText={vi.fn()} />);
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]!);
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Type a message/i)).toHaveValue("draft from A");
     });
@@ -346,7 +346,7 @@ describe("ComposeBar draft integration", () => {
     vi.useFakeTimers();
     renderWithClient(<ComposeBar conversationId="conv-a" onSendText={vi.fn()} />);
 
-    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: "Load" })[0]!);
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Type a message/i)).toHaveValue("draft from A");
     });

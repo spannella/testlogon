@@ -36,6 +36,7 @@ object ProfileTestTags {
     const val PUBLIC_SHARE = "public_share"
     const val PUBLIC_COPY_LINK = "public_copy_link"
     const val PUBLIC_SIGN_IN_CTA = "public_sign_in_cta"
+    const val PUBLIC_SUBSCRIBE = "public_subscribe"
     const val PUBLIC_OPEN_FANCLUB = "public_open_fanclub"
     const val PUBLIC_REPORT_USER = "public_report_user"
 }

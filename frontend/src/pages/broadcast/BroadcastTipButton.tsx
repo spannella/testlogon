@@ -69,7 +69,7 @@ export function BroadcastTipButton({
 
   const tipMut = useMutation({
     mutationFn: () => {
-      const cents = useCustom ? Math.round(parseFloat(customAmount) * 100) : amountCents;
+      const cents = useCustom ? Math.round(parseFloat(customAmount) * 100) : (amountCents ?? 0);
       return sendBroadcastTip(sessionId, {
         amount_cents: cents,
         text: message || undefined,
@@ -93,7 +93,7 @@ export function BroadcastTipButton({
 
   const effectiveAmount = useCustom
     ? Math.round(parseFloat(customAmount || "0") * 100)
-    : amountCents;
+    : (amountCents ?? 0);
   const isValidAmount =
     effectiveAmount >= tipMinCents && effectiveAmount <= tipMaxCents;
 

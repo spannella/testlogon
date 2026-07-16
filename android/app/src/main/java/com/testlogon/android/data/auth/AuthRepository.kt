@@ -85,6 +85,21 @@ fun interface PushLogoutHandler {
     }
 }
 
+/**
+ * Seam invoked on every auth-state boundary (fresh login / logout) to drop any in-memory identity
+ * cache keyed to the PRIOR session — notably the cached `GET /ui/me.is_admin` signal. Without this,
+ * an in-session account switch keeps serving the previous user's admin flag, so a freshly signed-in
+ * moderator cannot see the Admin/Moderation hub until a full process restart. Defaulted to a no-op so
+ * direct-construction AuthRepository tests are unaffected; Hilt binds it to [CurrentUserRepository].
+ */
+fun interface IdentityCacheInvalidator {
+    fun invalidate()
+
+    companion object {
+        val NOOP = IdentityCacheInvalidator {}
+    }
+}
+
 @Singleton
 class AuthRepositoryImpl @Inject constructor(
     private val api: AuthApi,
@@ -109,6 +124,9 @@ class AuthRepositoryImpl @Inject constructor(
     // logout / session-expiry / account-switch. Defaulted for direct-construction tests; Hilt injects
     // the process-global singleton.
     private val delegateRoutingStore: DelegateRoutingStore = DelegateRoutingStore(),
+    // More-hub discoverability: drop the cached /ui/me admin signal on login/logout so an in-session
+    // account switch re-resolves the role. Defaulted no-op for direct-construction tests; Hilt binds real.
+    private val identityCacheInvalidator: IdentityCacheInvalidator = IdentityCacheInvalidator.NOOP,
 ) : AuthRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -121,6 +139,8 @@ class AuthRepositoryImpl @Inject constructor(
         // manage-as-creator delegate context NOW so the new session never routes sends to the previous
         // creator delegate endpoints (login-of-a-different-user leak).
         resetDelegateContext()
+        // Drop the prior session's cached /ui/me (incl. is_admin) so the new user's role re-resolves.
+        identityCacheInvalidator.invalidate()
         return apiCall {
             api.sessionStart(
                 SessionStartReq(challengeContext = mapOf("username" to username, "password" to password)),
@@ -226,6 +246,8 @@ class AuthRepositoryImpl @Inject constructor(
         // AND-118: wipe all user-scoped Room cache rows so account B never sees account A's content.
         // Best-effort and self-bounded — never blocks or fails logout.
         runCatching { cacheCleaner.clearAllUserScopedCache() }
+        // Drop the cached /ui/me admin signal so a later sign-in never inherits this session's role.
+        identityCacheInvalidator.invalidate()
         _cachedUser.value = null
         telemetry.log(AuthEvent.LogoutResult(outcome = AuthOutcome.SUCCESS))
         ApiResult.Success(Unit)

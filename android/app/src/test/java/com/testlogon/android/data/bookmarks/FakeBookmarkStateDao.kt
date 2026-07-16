@@ -12,6 +12,9 @@ class FakeBookmarkStateDao : BookmarkStateDao {
 
     override fun observeIds(): Flow<List<String>> = rows.map { list -> list.map { it.contentId } }
 
+    override fun observeIdsForType(type: String): Flow<List<String>> =
+        rows.map { list -> list.filter { it.contentType == type }.map { it.contentId } }
+
     override fun isBookmarked(type: String, id: String): Flow<Boolean> =
         rows.map { list -> list.any { it.contentType == type && it.contentId == id } }
 

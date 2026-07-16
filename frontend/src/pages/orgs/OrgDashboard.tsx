@@ -14,7 +14,6 @@ import {
   inviteMember,
   listOrgEvents,
   listOrgFiles,
-  type OrgOut,
   type OrgMemberOut,
   type OrgEventOut,
 } from "@/api/endpoints/orgs";
@@ -161,7 +160,7 @@ export default function OrgDashboard() {
                 <p className="text-muted-foreground">No files uploaded yet.</p>
               ) : (
                 <div className="space-y-2">
-                  {files.map((f: any) => (
+                  {files.map((f) => (
                     <div key={f.node_id} className="flex items-center justify-between rounded-md border p-3">
                       <span className="text-sm">{f.name}</span>
                       <span className="text-xs text-muted-foreground">{f.uploaded_by}</span>

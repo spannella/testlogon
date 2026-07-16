@@ -22,4 +22,4 @@ export const unmarkPostInteresting = (postId: string) =>
 
 /** List post_ids the current viewer has marked interesting. */
 export const listInterestingPosts = (limit = 200) =>
-  api.get<PostInterestingList>("/feed/interesting", { params: { limit } });
+  api.get<PostInterestingList>("/feed/interesting", { limit: String(limit) });

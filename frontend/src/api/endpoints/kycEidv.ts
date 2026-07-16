@@ -10,9 +10,7 @@ const BASE = "/v1/kyc";
 
 /** List supported eID schemes, optionally filtered by country. */
 export const getEidSchemes = (country?: string) =>
-  api.get<EidSchemesList>(`${BASE}/eid/schemes`, {
-    params: country ? { country } : undefined,
-  });
+  api.get<EidSchemesList>(`${BASE}/eid/schemes`, country ? { country } : undefined);
 
 /** Start an eID verification session for a draft case. */
 export const startEidVerification = (caseId: string, scheme: string) =>
@@ -34,6 +32,4 @@ export const completeEidCallback = (
   assertion: string,
   signature: string,
 ) =>
-  api.get(`${BASE}/eid/callback`, {
-    params: { session_id: sessionId, assertion, signature },
-  });
+  api.get(`${BASE}/eid/callback`, { session_id: sessionId, assertion, signature });

@@ -6,7 +6,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
   Users,
-  Shield,
   ShieldCheck,
   Crown,
   Trash2,
@@ -46,7 +45,6 @@ import {
   inviteToGroup,
   reviewJoinRequest,
 } from "@/api/endpoints/groups";
-import type { UserGroup, GroupMember } from "@/api/types";
 
 const settingsSchema = z.object({
   name: z.string().min(3).max(100),

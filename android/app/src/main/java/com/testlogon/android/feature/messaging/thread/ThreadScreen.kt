@@ -124,6 +124,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.material.icons.filled.Block
+import com.testlogon.android.feature.blocking.BlockInteractionViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -133,7 +135,9 @@ import com.testlogon.android.R
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.messaging.MessageMedia
+import com.testlogon.android.data.report.ReportTarget
 import com.testlogon.android.feature.messaging.media.FileMessageBubble
+import com.testlogon.android.feature.report.ContentReportSheetHost
 import com.testlogon.android.feature.messaging.media.FullScreenImageViewer
 import com.testlogon.android.feature.messaging.media.InlineVideoPlayer
 import com.testlogon.android.feature.messaging.media.VideoClipBubble
@@ -191,12 +195,13 @@ fun ThreadRoute(
     modifier: Modifier = Modifier,
     onOpenGroupDetails: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel(),
-    reportViewModel: com.testlogon.android.feature.messaging.report.ReportViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    // AND-163 — report sheet state (owned by the separate ReportViewModel/ReportSheet).
-    val reportState by reportViewModel.uiState.collectAsStateWithLifecycle()
-    val reportConfirmation = stringResource(R.string.report_confirmation)
+    // MODX-7 — the unified report sheet target (opened from the Report message action; null = closed).
+    // A MESSAGE target routes to the message endpoint (reason_code = first selected topic) inside the
+    // shared ReportFlowRepository; the reporter feedback (in-sheet "report received") is now identical
+    // to every other surface, so the old per-thread confirmation Snackbar is gone.
+    var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
     // AND-146 — remote typers in this conversation.
     val typingUsers by viewModel.typingUsers.collectAsStateWithLifecycle()
     // AND-151 — in-conversation search state.
@@ -434,9 +439,12 @@ fun ThreadRoute(
         onTipConfirm = viewModel::onTipConfirm,
         onTipDismiss = viewModel::onTipDismiss,
         onAction = { action ->
-            // AND-163 — intercept Report to open the dedicated report sheet; everything else to the VM.
+            // MODX-7 — intercept Report to open the unified report sheet; everything else to the VM.
             if (action is ThreadAction.Report) {
-                reportViewModel.open(state.conversationId, action.messageId)
+                reportTarget = ReportTarget.Message(
+                    id = action.messageId,
+                    conversationId = state.conversationId,
+                )
             } else {
                 viewModel.onAction(action)
             }
@@ -485,22 +493,13 @@ fun ThreadRoute(
         )
     }
 
-    // AND-163 — report sheet + one-shot confirmation snackbar.
-    com.testlogon.android.feature.messaging.report.ReportSheet(
-        state = reportState,
-        onReason = reportViewModel::onReasonSelected,
-        onStatement = reportViewModel::onStatementChanged,
-        onSubmit = reportViewModel::submit,
-        onDismiss = reportViewModel::dismiss,
+    // MODX-7 — the ONE unified report sheet (multi-select topics + statement + in-sheet "report received"
+    // feedback + retry). A MESSAGE target is routed to the message endpoint by ReportFlowRepository; no
+    // licensing/DMCA entry is offered for messages (Content-only). Null target renders nothing.
+    ContentReportSheetHost(
+        target = reportTarget,
+        onDismiss = { reportTarget = null },
     )
-    LaunchedEffect(Unit) {
-        reportViewModel.events.collect { event ->
-            when (event) {
-                com.testlogon.android.feature.messaging.report.ReportEvent.Submitted ->
-                    snackbarHostState.showSnackbar(reportConfirmation)
-            }
-        }
-    }
 
     // Send-options sheet: view-once / locked / scheduled for the next message.
     if (state.messageOptionsVisible) {
@@ -1077,6 +1076,24 @@ fun ThreadScreen(
     androidx.activity.compose.BackHandler(enabled = imeVisible && !searchActive) {
         dismissKeyboard()
     }
+    // P0-BLOCK: block / unblock the DM peer. Hoisted here so the overflow menu item and the
+    // composer gate share one state. Only meaningful for a 1:1 DM with a resolved peer.
+    val blockVm: BlockInteractionViewModel = hiltViewModel()
+    val blockState by blockVm.uiState.collectAsStateWithLifecycle()
+    val blockPeerId = state.peerUserSub?.takeIf { state.isDm }
+    LaunchedEffect(blockPeerId) {
+        if (blockPeerId != null) blockVm.hydrate(blockPeerId, state.title)
+    }
+    if (blockState.confirmVisible) {
+        com.testlogon.android.core.ui.blocking.BlockConfirmDialog(
+            title = stringResource(R.string.block_confirm_title, state.title.ifBlank { blockPeerId.orEmpty() }),
+            body = stringResource(R.string.block_confirm_body),
+            confirmLabel = stringResource(R.string.block_confirm_cta),
+            dismissLabel = stringResource(R.string.block_confirm_cancel),
+            onConfirm = blockVm::onBlockConfirmed,
+            onDismiss = blockVm::onBlockDismissed,
+        )
+    }
     Scaffold(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
@@ -1173,6 +1190,23 @@ fun ThreadScreen(
                                 modifier = Modifier.testTag("thread_call_video"),
                             )
                         }
+                        // P0-BLOCK: block / unblock the DM peer (1:1 only, resolved peer).
+                        blockPeerId?.let { peer ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (blockState.blockedByMe) stringResource(R.string.unblock_action)
+                                        else stringResource(R.string.block_action, state.title.ifBlank { peer }),
+                                    )
+                                },
+                                leadingIcon = { Icon(Icons.Filled.Block, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    if (blockState.blockedByMe) blockVm.onUnblock() else blockVm.onBlockRequested()
+                                },
+                                modifier = Modifier.testTag("thread_block_user"),
+                            )
+                        }
                         // AND-158/159 — group details (participants / settings).
                         androidx.compose.material3.DropdownMenuItem(
                             text = { Text(stringResource(R.string.group_details_cd)) },
@@ -1230,6 +1264,15 @@ fun ThreadScreen(
                     modifier = Modifier.navigationBarsPadding().imePadding(),
                 )
                 else -> Column {
+                    // P0-BLOCK: when contact is blocked (either direction) the composer is replaced
+                    // by a banner so there is no dead-end 403 on send.
+                    if (blockState.contactBlocked) {
+                        com.testlogon.android.core.ui.blocking.CannotContactBanner(
+                            message = stringResource(R.string.cannot_contact_banner),
+                            modifier = Modifier.navigationBarsPadding().imePadding(),
+                        )
+                        return@Column
+                    }
                     // AND-146 — typing indicator sits directly above the composer.
                     com.testlogon.android.feature.messaging.typing.TypingIndicator(users = typingUsers)
                     MessageComposer(

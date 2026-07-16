@@ -93,7 +93,7 @@ export function hexToHsl(hex: string): string {
 export function contrastForeground(hsl: string): string {
   const m = hsl.match(/(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%/);
   if (!m) return "210 40% 98%";
-  return parseFloat(m[3]) > 55 ? "222 84% 5%" : "210 40% 98%";
+  return parseFloat(m[3] ?? "0") > 55 ? "222 84% 5%" : "210 40% 98%";
 }
 
 /** Resolve the effective accent HSL for a config (preset > custom > preset-color). */

@@ -185,7 +185,7 @@ export function CreatePost() {
     const [datePart, timePart] = localStr.split("T");
     const [y, m, d] = (datePart || "").split("-").map(Number);
     const [hh, mm] = (timePart || "").split(":").map(Number);
-    const utcGuess = new Date(Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0));
+    const utcGuess = new Date(Date.UTC(y || 0, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0));
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: tz,
       year: "numeric",
@@ -197,7 +197,7 @@ export function CreatePost() {
     }).formatToParts(utcGuess);
     const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
     const tzAsUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), 0);
-    const targetAsUtc = Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0);
+    const targetAsUtc = Date.UTC(y || 0, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0);
     return new Date(utcGuess.getTime() + (targetAsUtc - tzAsUtc));
   };
 
@@ -277,7 +277,7 @@ export function CreatePost() {
 
     setImageUrls(draft.image_urls ?? []);
     const rawFilePaths = draft.file_paths ?? [];
-    const validatedFiles = await Promise.all(rawFilePaths.map(async (path) => {
+    const validatedFiles = await Promise.all(rawFilePaths.map(async (path): Promise<FileEntry | null> => {
       try {
         const info = await getFileInfo(path);
         return {
@@ -463,7 +463,7 @@ export function CreatePost() {
   });
 
   const saveDraftMutation = useMutation({
-    mutationFn: async ({ mode }: { mode: DraftSaveMode }) => {
+    mutationFn: async ({ mode: _mode }: { mode: DraftSaveMode }) => {
       const payload = buildDraftPayload();
       if (activeDraftId) {
         return updateDraftPost(activeDraftId, {
@@ -768,7 +768,7 @@ export function CreatePost() {
       return;
     }
 
-    mutation.mutate();
+    mutation.mutate(undefined);
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
