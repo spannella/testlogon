@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getProfileByIdentifier, patchProfile, ProfileLookupError, clearProfileLookupCache } from "@/api/endpoints/profile";
+import { getProfileByIdentifier, patchProfile, clearProfileLookupCache } from "@/api/endpoints/profile";
 import { api } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
 import { useImpersonationStore } from "@/stores/impersonationStore";
@@ -118,7 +118,7 @@ describe("profile lookup endpoint contract", () => {
       } as Response),
     );
 
-    await expect(getProfileByIdentifier("missing")).rejects.toMatchObject<Partial<ProfileLookupError>>({
+    await expect(getProfileByIdentifier("missing")).rejects.toMatchObject({
       code: "not_found_or_suppressed",
       status: 404,
       message: "Profile not available",
@@ -137,7 +137,7 @@ describe("profile lookup endpoint contract", () => {
       } as Response),
     );
 
-    await expect(getProfileByIdentifier("alice")).rejects.toMatchObject<Partial<ProfileLookupError>>({
+    await expect(getProfileByIdentifier("alice")).rejects.toMatchObject({
       code: "rate_limited",
       status: 429,
       retryAfterSeconds: 17,
@@ -162,7 +162,7 @@ describe("profile lookup endpoint contract", () => {
       } as Response),
     );
 
-    await expect(getProfileByIdentifier("alice")).rejects.toMatchObject<Partial<ProfileLookupError>>({
+    await expect(getProfileByIdentifier("alice")).rejects.toMatchObject({
       code: "rate_limited",
       status: 429,
       retryAfterSeconds: 33,
@@ -172,7 +172,7 @@ describe("profile lookup endpoint contract", () => {
   it("validates empty identifiers before fetch", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
-    await expect(getProfileByIdentifier("   ")).rejects.toMatchObject<Partial<ProfileLookupError>>({
+    await expect(getProfileByIdentifier("   ")).rejects.toMatchObject({
       code: "not_found_or_suppressed",
       status: 404,
     });

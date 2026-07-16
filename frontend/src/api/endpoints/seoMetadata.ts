@@ -14,9 +14,11 @@ export const getSeoMetadata = (
   secondaryId?: string,
 ) =>
   api.get<SeoMetadata>("/seo/metadata", {
-    params: { type, id, ...(secondaryId ? { secondary_id: secondaryId } : {}) },
+    type,
+    id,
+    ...(secondaryId ? { secondary_id: secondaryId } : {}),
   });
 
 /** Fetch SEO/OpenGraph metadata for a public URL path (e.g. "/u/alice"). */
 export const getSeoMetadataForPath = (path: string) =>
-  api.get<SeoMetadata>("/seo/metadata", { params: { path } });
+  api.get<SeoMetadata>("/seo/metadata", { path });

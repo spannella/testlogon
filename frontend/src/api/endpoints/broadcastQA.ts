@@ -1,97 +1,54 @@
-import client from "../client";
+import { api } from "../client";
 import type { QAQuestion, QAQueueResponse, QAStats } from "../types";
 
-export const toggleQAMode = async (sessionId: string, enabled: boolean) =>
-  client
-    .post(`/broadcast/sessions/${sessionId}/qa-mode`, { enabled })
-    .then((r) => r.data);
+export const toggleQAMode = (sessionId: string, enabled: boolean) =>
+  api.post(`/broadcast/sessions/${sessionId}/qa-mode`, { enabled });
 
-export const submitQuestion = async (sessionId: string, text: string) =>
-  client
-    .post<QAQuestion>(
-      `/broadcast/sessions/${sessionId}/qa/questions`,
-      { text },
-    )
-    .then((r) => r.data);
+export const submitQuestion = (sessionId: string, text: string) =>
+  api.post<QAQuestion>(`/broadcast/sessions/${sessionId}/qa/questions`, { text });
 
-export const listQuestions = async (
+export const listQuestions = (
   sessionId: string,
   status = "pending",
   limit = 50,
 ) =>
-  client
-    .get<QAQueueResponse>(
-      `/broadcast/sessions/${sessionId}/qa/questions`,
-      { params: { status, limit } },
-    )
-    .then((r) => r.data);
+  api.get<QAQueueResponse>(`/broadcast/sessions/${sessionId}/qa/questions`, {
+    status,
+    limit: String(limit),
+  });
 
-export const featureQuestion = async (
-  sessionId: string,
-  questionId: string,
-) =>
-  client
-    .post<QAQuestion>(
-      `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/feature`,
-    )
-    .then((r) => r.data);
+export const featureQuestion = (sessionId: string, questionId: string) =>
+  api.post<QAQuestion>(
+    `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/feature`,
+  );
 
-export const answerQuestion = async (
-  sessionId: string,
-  questionId: string,
-) =>
-  client
-    .post<QAQuestion>(
-      `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/answer`,
-    )
-    .then((r) => r.data);
+export const answerQuestion = (sessionId: string, questionId: string) =>
+  api.post<QAQuestion>(
+    `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/answer`,
+  );
 
-export const dismissQuestion = async (
-  sessionId: string,
-  questionId: string,
-) =>
-  client
-    .post<QAQuestion>(
-      `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/dismiss`,
-    )
-    .then((r) => r.data);
+export const dismissQuestion = (sessionId: string, questionId: string) =>
+  api.post<QAQuestion>(
+    `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/dismiss`,
+  );
 
-export const removeQuestion = async (
-  sessionId: string,
-  questionId: string,
-) =>
-  client
-    .post(
-      `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/remove`,
-    )
-    .then((r) => r.data);
+export const removeQuestion = (sessionId: string, questionId: string) =>
+  api.post(
+    `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/remove`,
+  );
 
-export const upvoteQuestion = async (
-  sessionId: string,
-  questionId: string,
-) =>
-  client
-    .post<QAQuestion>(
-      `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/upvote`,
-    )
-    .then((r) => r.data);
+export const upvoteQuestion = (sessionId: string, questionId: string) =>
+  api.post<QAQuestion>(
+    `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/upvote`,
+  );
 
-export const removeUpvote = async (
-  sessionId: string,
-  questionId: string,
-) =>
-  client
-    .delete<QAQuestion>(
-      `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/upvote`,
-    )
-    .then((r) => r.data);
+export const removeUpvote = (sessionId: string, questionId: string) =>
+  api.del<QAQuestion>(
+    `/broadcast/sessions/${sessionId}/qa/questions/${questionId}/upvote`,
+  );
 
-export const getFeaturedQuestion = async (sessionId: string) =>
-  client
-    .get<QAQuestion>(`/broadcast/sessions/${sessionId}/qa/featured`)
-    .then((r) => r.data);
+export const getFeaturedQuestion = (sessionId: string) =>
+  api.get<QAQuestion>(`/broadcast/sessions/${sessionId}/qa/featured`);
 
-export const getQAStats = async (sessionId: string) =>
-  client
-    .get<QAStats>(`/broadcast/sessions/${sessionId}/qa/stats`)
-    .then((r) => r.data);
+export const getQAStats = (sessionId: string) =>
+  api.get<QAStats>(`/broadcast/sessions/${sessionId}/qa/stats`);

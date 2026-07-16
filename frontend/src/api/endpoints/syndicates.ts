@@ -62,7 +62,7 @@ export const listRequests = (syndicateId: string) =>
   api.get<SyndicateRequestOut[]>(`/ui/syndicates/${syndicateId}/requests`);
 
 export const getAuditLog = (syndicateId: string, limit = 50) =>
-  api.get<SyndicateAuditOut[]>(`/ui/syndicates/${syndicateId}/audit`, { params: { limit } });
+  api.get<SyndicateAuditOut[]>(`/ui/syndicates/${syndicateId}/audit`, { limit: String(limit) });
 
 // -- Bundle Plans (SYND-002) --
 

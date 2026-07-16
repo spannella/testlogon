@@ -93,9 +93,12 @@ export async function listDelegatedMessages(
   conversationId: string,
   params?: { limit?: number; before?: string },
 ): Promise<DelegatedMessage[]> {
+  const query: Record<string, string> = {};
+  if (params?.limit != null) query.limit = String(params.limit);
+  if (params?.before) query.before = params.before;
   return api.get<DelegatedMessage[]>(
     `${MSG_BASE}/${creatorId}/conversations/${conversationId}/messages`,
-    params,
+    query,
   );
 }
 
@@ -114,8 +117,11 @@ export async function listChatDelegateAudit(
   creatorId: string,
   params?: { conversation_id?: string; limit?: number },
 ): Promise<ChatDelegateAuditEntry[]> {
+  const query: Record<string, string> = {};
+  if (params?.conversation_id) query.conversation_id = params.conversation_id;
+  if (params?.limit != null) query.limit = String(params.limit);
   return api.get<ChatDelegateAuditEntry[]>(
     `${MSG_BASE}/${creatorId}/audit`,
-    params,
+    query,
   );
 }

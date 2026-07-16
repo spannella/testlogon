@@ -30,7 +30,7 @@ describe("lottery create endpoint", () => {
 
   it("sends Idempotency-Key header for lottery create", async () => {
     vi.spyOn(featureFlags, "isMessagingDmLotteryEnabled").mockReturnValue(true);
-    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("uuid-123");
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("uuid-123" as ReturnType<typeof globalThis.crypto.randomUUID>);
     const apiSpy = vi.spyOn(client, "api").mockResolvedValue({} as never);
 
     const body: CreateLotteryMessageReq = {
@@ -98,7 +98,7 @@ describe("lottery create endpoint", () => {
 
   it("caps conversation segment in idempotency key to stay within backend length limits", async () => {
     vi.spyOn(featureFlags, "isMessagingDmLotteryEnabled").mockReturnValue(true);
-    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("uuid-123");
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("uuid-123" as ReturnType<typeof globalThis.crypto.randomUUID>);
     const apiSpy = vi.spyOn(client, "api").mockResolvedValue({} as never);
 
     const body: CreateLotteryMessageReq = {
@@ -116,7 +116,7 @@ describe("lottery create endpoint", () => {
     await createLotteryMessage(body);
 
     const [[, requestInit]] = apiSpy.mock.calls as [[string, { headers: Record<string, string> }]];
-    const key = requestInit.headers["Idempotency-Key"];
+    const key = requestInit.headers["Idempotency-Key"] ?? "";
     expect(key).toBe("lottery_create:cccccccccccccccc_9d757fad:uuid-123");
     expect(key.length).toBeLessThanOrEqual(128);
   });

@@ -59,42 +59,37 @@ export interface SignatureTemplateMigrationListResponse {
 }
 
 export async function listSignatureTemplates(): Promise<SignatureTemplateListResponse> {
-  const { data } = await api.get<SignatureTemplateListResponse>("/ui/signing/templates");
-  return data;
+  return api.get<SignatureTemplateListResponse>("/ui/signing/templates");
 }
 
 export async function listSignatureTemplateVersions(
   templateKey: string,
 ): Promise<SignatureTemplateVersionsResponse> {
-  const { data } = await api.get<SignatureTemplateVersionsResponse>(
+  return api.get<SignatureTemplateVersionsResponse>(
     `/ui/signing/templates/${encodeURIComponent(templateKey)}/versions`,
   );
-  return data;
 }
 
 export async function getSignatureTemplateVersion(
   templateKey: string,
   version: number,
 ): Promise<SignatureTemplateVersion> {
-  const { data } = await api.get<SignatureTemplateVersion>(
+  return api.get<SignatureTemplateVersion>(
     `/ui/signing/templates/${encodeURIComponent(templateKey)}/versions/${version}`,
   );
-  return data;
 }
 
 export async function createSignatureTemplateVersion(
   input: CreateSignatureTemplateVersionInput,
 ): Promise<SignatureTemplateVersion> {
-  const { data } = await api.post<SignatureTemplateVersion>("/ui/signing/templates", input);
-  return data;
+  return api.post<SignatureTemplateVersion>("/ui/signing/templates", input);
 }
 
 export async function checkSignatureTemplateMigration(
   pins: SignatureTemplatePin[],
 ): Promise<SignatureTemplateMigrationListResponse> {
-  const { data } = await api.post<SignatureTemplateMigrationListResponse>(
+  return api.post<SignatureTemplateMigrationListResponse>(
     "/ui/signing/templates/migration-check",
     { pins },
   );
-  return data;
 }
