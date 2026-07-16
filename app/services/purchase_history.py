@@ -372,6 +372,32 @@ def record_billing_transaction(
     return txn_id
 
 
+def has_purchased_item(user_sub: str, item_id: str) -> bool:
+    """ECOMX-53: verified-purchase check for the review gate.
+
+    True iff *user_sub* has at least one shop purchase_transactions row whose
+    order line-items include *item_id* AND whose money status is PENDING or
+    COMPLETED (both are post-charge states after ECOMX-10 — a FAILED/declined
+    checkout never writes a completed txn, so a non-purchaser cannot review).
+    Digital/self orders are COMPLETED at t=0; physical orders are PENDING until
+    delivery — both mean the buyer actually paid for the item.
+    """
+    if not user_sub or not item_id:
+        return False
+    resp = T.purchase_transactions.query(
+        KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
+        ExpressionAttributeValues={":u": user_sub, ":p": "TXN#"},
+    )
+    for txn in resp.get("Items", []):
+        if str(txn.get("status") or "").upper() not in ("PENDING", "COMPLETED"):
+            continue
+        md = txn.get("metadata") or {}
+        for li in (md.get("items") or []):
+            if str(li.get("item_id") or "") == str(item_id):
+                return True
+    return False
+
+
 def list_transactions(user_sub: str, limit: int, status: Optional[str]) -> List[Dict[str, Any]]:
     resp = T.purchase_transactions.query(
         KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",

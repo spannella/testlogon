@@ -422,14 +422,21 @@ def approve_request(
         },
     )
 
-    # Send alert to customer
-    write_alert(
+    # Send alert to customer (ECOMX-52: also fire a tappable push).
+    _atitle = f"Your refund of ${amount / 100:.2f} has been approved"
+    _ares = write_alert(
         user_id,
         event="refund_approved",
         outcome="success",
-        title=f"Your refund of ${amount / 100:.2f} has been approved",
-        details={"refund_request_id": request_id, "amount_cents": amount},
+        title=_atitle,
+        details={"alert_type": "refund_approved", "refund_request_id": request_id, "amount_cents": amount},
     )
+    try:
+        from app.services.push import send_push_for_alert
+        _aaid = (_ares or {}).get("alert_id", request_id) if isinstance(_ares, dict) else request_id
+        send_push_for_alert(user_id, "refund_approved", _atitle, "Tap to view your refund.", _aaid, action_url="/purchases")
+    except Exception:
+        logger.exception("refund_approved push failed request_id=%s", request_id)
 
     # Audit event
     audit_event(
@@ -492,13 +499,20 @@ def reject_request(
         },
     )
 
-    write_alert(
+    _dtitle = "Your refund request was denied"
+    _dres = write_alert(
         user_id,
         event="refund_denied",
         outcome="info",
-        title="Your refund request was denied",
-        details={"refund_request_id": request_id, "admin_notes": notes},
+        title=_dtitle,
+        details={"alert_type": "refund_denied", "refund_request_id": request_id, "admin_notes": notes},
     )
+    try:
+        from app.services.push import send_push_for_alert
+        _daid = (_dres or {}).get("alert_id", request_id) if isinstance(_dres, dict) else request_id
+        send_push_for_alert(user_id, "refund_denied", _dtitle, "Tap for details.", _daid, action_url="/purchases")
+    except Exception:
+        logger.exception("refund_denied push failed request_id=%s", request_id)
 
     audit_event(
         "refund_request_denied",

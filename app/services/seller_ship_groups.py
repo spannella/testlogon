@@ -325,6 +325,96 @@ def get_for_seller(seller_id: str, ship_group_id: str) -> Optional[Dict[str, Any
     return row
 
 
+def _iter_all_for_seller(seller_id: str) -> List[Dict[str, Any]]:
+    """Every ship group for a seller (paginated scan of their own partition)."""
+    rows: List[Dict[str, Any]] = []
+    start_key = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("seller_id").eq(seller_id),
+            "Limit": 200,
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = T.seller_ship_groups.query(**kwargs)
+        rows.extend(resp.get("Items", []))
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return rows
+
+
+# ECOMX-51: statuses at which a seller still OWES fulfilment work (the order is
+# paid + allocated to them but not yet shipped/completed/cancelled/returned).
+_OPEN_FULFILMENT_STATES = frozenset({"approved", "allocated", "picking", "packed", "backorder", "held"})
+_TERMINAL_NEGATIVE_STATES = frozenset({"cancelled", "returned"})
+
+
+def seller_analytics(seller_id: str, *, from_ts: int = 0, to_ts: int = 0) -> Dict[str, Any]:
+    """ECOMX-51: month-to-date-style seller sales analytics derived from the
+    seller's OWN ship groups (never another seller's items).
+
+    GMV = sum of subtotal_cents over non-cancelled/non-returned groups in range.
+    units = sum of line-item quantities. AOV = GMV / order_count. Also returns
+    the open-fulfilment count (groups the seller still needs to ship) and the
+    top item by revenue. Cancelled/returned groups are excluded from GMV/units
+    but counted separately so the seller can see refunds/returns.
+    """
+    rows = _iter_all_for_seller(seller_id)
+    gmv = 0
+    units = 0
+    order_count = 0
+    open_fulfilment = 0
+    cancelled_or_returned = 0
+    shipped_count = 0
+    delivered_count = 0
+    by_item: Dict[str, Dict[str, Any]] = {}
+    currency = "USD"
+
+    for r in rows:
+        created = int(r.get("created_at", 0) or 0)
+        if from_ts and created < from_ts:
+            continue
+        if to_ts and created > to_ts:
+            continue
+        status = str(r.get("status") or "")
+        currency = str(r.get("currency") or currency)
+        if status in _TERMINAL_NEGATIVE_STATES:
+            cancelled_or_returned += 1
+            continue
+        subtotal = int(r.get("subtotal_cents", 0) or 0)
+        gmv += subtotal
+        order_count += 1
+        if status in _OPEN_FULFILMENT_STATES:
+            open_fulfilment += 1
+        if status == "shipped":
+            shipped_count += 1
+        if status in ("completed", "delivered"):
+            delivered_count += 1
+        for li in (r.get("line_items") or []):
+            qty = int(li.get("quantity", 0) or 0)
+            units += qty
+            iid = str(li.get("item_id") or li.get("sku") or li.get("name") or "item")
+            slot = by_item.setdefault(iid, {"item_id": iid, "name": str(li.get("name") or ""), "units": 0, "revenue_cents": 0})
+            slot["units"] += qty
+            slot["revenue_cents"] += int(li.get("line_total_cents", 0) or 0)
+
+    aov = int(round(gmv / order_count)) if order_count else 0
+    top_item = max(by_item.values(), key=lambda x: x["revenue_cents"], default=None)
+    return {
+        "gmv_cents": gmv,
+        "units": units,
+        "order_count": order_count,
+        "aov_cents": aov,
+        "open_fulfilment_count": open_fulfilment,
+        "shipped_count": shipped_count,
+        "delivered_count": delivered_count,
+        "cancelled_or_returned_count": cancelled_or_returned,
+        "top_item": top_item,
+        "currency": currency,
+    }
+
+
 def list_by_order(order_id: str) -> List[Dict[str, Any]]:
     """All seller groups for one order (per-order multi-seller view / admin / verify)."""
     resp = T.seller_ship_groups.query(

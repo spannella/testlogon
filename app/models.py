@@ -716,7 +716,15 @@ class CatalogReviewCreateIn(BaseModel):
     rating: int = Field(ge=1, le=5)
     title: Optional[str] = None
     body: Optional[str] = None
+    # ECOMX-53: reviewer display name is caller-supplied ONLY as a label; the
+    # authoritative author identity is forced from the session user_sub server
+    # side (see add_review). A spoofed ``reviewer`` can no longer impersonate.
     reviewer: Optional[str] = None
+
+
+class CatalogReviewSellerResponseIn(BaseModel):
+    # ECOMX-53 (E10): a seller/owner public reply to a review.
+    response: str = Field(min_length=1, max_length=2000)
 
 
 class CatalogReviewOut(BaseModel):
@@ -727,6 +735,10 @@ class CatalogReviewOut(BaseModel):
     body: Optional[str] = None
     reviewer: Optional[str] = None
     created_at: str
+    # ECOMX-53: verified-purchase badge + optional seller response.
+    verified_purchase: bool = False
+    seller_response: Optional[str] = None
+    seller_response_at: Optional[str] = None
 
 
 class CatalogReviewListOut(CatalogPageOut):
@@ -2651,6 +2663,10 @@ class EarningsBreakdown(BaseModel):
     tips: int = 0
     unlocks: int = 0
     vod_purchases: int = 0
+    # ECOMX-50: shop + live-commerce revenue as distinct earnings buckets
+    # (previously collapsed into "other").
+    shop_sales: int = 0
+    live_commerce: int = 0
     other: int = 0
 
 

@@ -290,3 +290,54 @@ def settle_stream_order(
                 order_id, host_commission_total, seller_net_total, platform_fee_total,
                 pool_total, gross_total)
     return summary
+
+
+def session_summary(broadcast_session_id: str) -> dict:
+    """ECOMX-55 (E7): per-stream live-commerce sales/commission summary.
+
+    Aggregates every settled order-settlement marker for a broadcast session
+    (GMV, host commission, seller net, platform fee, order count). There is no
+    GSI on broadcast_session_id, so we bounded-scan the settlement markers
+    (SK == "SETTLEMENT") filtered to this session — the same access pattern the
+    orphan-sweep uses. Only terminal (status == "settled") markers count so an
+    in-flight settle never inflates the summary.
+    """
+    from boto3.dynamodb.conditions import Attr
+
+    gmv = 0
+    host_commission = 0
+    seller_net = 0
+    platform_fee = 0
+    pool = 0
+    order_count = 0
+    start_key = None
+    filt = (
+        Attr("SK").eq("SETTLEMENT")
+        & Attr("broadcast_session_id").eq(str(broadcast_session_id))
+        & Attr("status").eq("settled")
+    )
+    while True:
+        kwargs = {"FilterExpression": filt, "Limit": 500}
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = T.live_stream_products.scan(**kwargs)
+        for m in resp.get("Items", []):
+            order_count += 1
+            gmv += int(m.get("gross_total_cents", 0) or 0)
+            host_commission += int(m.get("host_commission_total_cents", 0) or 0)
+            seller_net += int(m.get("seller_net_total_cents", 0) or 0)
+            platform_fee += int(m.get("platform_fee_total_cents", 0) or 0)
+            pool += int(m.get("pool_total_cents", 0) or 0)
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+
+    return {
+        "broadcast_session_id": str(broadcast_session_id),
+        "order_count": order_count,
+        "gmv_cents": gmv,
+        "host_commission_cents": host_commission,
+        "seller_net_cents": seller_net,
+        "platform_fee_cents": platform_fee,
+        "pool_cents": pool,
+    }

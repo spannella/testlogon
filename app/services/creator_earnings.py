@@ -39,13 +39,22 @@ def classify_entry(entry: Dict[str, Any]) -> str:
     Supports both old format (reason="Tip sent") and new format
     (reason="Tip: message", meta.content_type="message").
 
-    Returns one of: "tips", "subscriptions", "unlocks", "vod_purchases", "other".
+    Returns one of: "tips", "subscriptions", "unlocks", "vod_purchases", "shop_sales", "live_commerce", "other".
     """
     reason = (entry.get("reason") or "").lower()
     meta = entry.get("meta") or {}
 
     # New-format entries with content_type in meta
     content_type = meta.get("content_type", "")
+    # ECOMX-50: commerce credits carry an explicit content_type on the ledger
+    # meta ("shop" from shoppingcart seller-credit, "livecom" from
+    # live_commerce_split). Classify them into their OWN buckets so shop +
+    # live-commerce revenue no longer collapses into "other" (and is NOT
+    # double-counted against tips/subs/ads which key off different content_types).
+    if content_type == "shop":
+        return "shop_sales"
+    if content_type == "livecom":
+        return "live_commerce"
     if content_type in ("message", "post", "comment", "message_react", "post_react", "video", "video_comment"):
         return "tips"
 
@@ -54,6 +63,12 @@ def classify_entry(entry: Dict[str, Any]) -> str:
         return "tips"
     if "subscription" in reason:
         return "subscriptions"
+    # ECOMX-50: reason-based fallback for commerce credits written before the
+    # content_type convention (defensive; live rows all carry content_type).
+    if "shop sale" in reason:
+        return "shop_sales"
+    if "live-stream" in reason or "live commerce" in reason:
+        return "live_commerce"
     if "unlock" in reason:
         return "unlocks"
     if "vod" in reason:
@@ -231,7 +246,7 @@ def get_earnings_summary(
     result = summary.to_dict()
 
     # Ensure all canonical categories are present in breakdown
-    for cat in ("subscriptions", "tips", "unlocks", "vod_purchases", "other"):
+    for cat in ("subscriptions", "tips", "unlocks", "vod_purchases", "shop_sales", "live_commerce", "other"):
         result["breakdown"].setdefault(cat, 0)
 
     logger.info(

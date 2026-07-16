@@ -23,6 +23,7 @@ from app.routers.api_usage import router as api_usage_router
 from app.routers.alerts import router as alerts_router
 from app.routers.shipment_tracking import router as shipment_tracking_router  # ECOM D4
 from app.routers.seller_ship_groups import router as seller_ship_groups_router  # ECOM-SELLER (E0 reconcile)
+from app.routers.seller_ship_groups import analytics_router as seller_analytics_router  # ECOMX-51 (E5)
 from app.routers.wishlist import router as wishlist_router  # ECOM E5 (E0 reconcile)
 from app.routers.account import router as account_router
 from app.routers.push import router as push_router
@@ -693,6 +694,7 @@ def create_app() -> FastAPI:
     app.include_router(alerts_router)
     app.include_router(shipment_tracking_router)  # ECOM D4 shipment tracking
     app.include_router(seller_ship_groups_router)  # ECOM-SELLER seller sales/fulfilment (E0)
+    app.include_router(seller_analytics_router)  # ECOMX-51 seller sales analytics (E5)
     app.include_router(wishlist_router)  # ECOM E5 wishlist (E0)
     app.include_router(account_router)
     app.include_router(push_router)

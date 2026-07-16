@@ -22,6 +22,9 @@ from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/ui/seller/sales", tags=["seller-sales"])
 
+# ECOMX-51: seller sales analytics (GMV / units / AOV / open-fulfilment / top item).
+analytics_router = APIRouter(prefix="/ui/seller", tags=["seller-sales"])
+
 
 def _require_enabled() -> None:
     if not S.order_lifecycle_enabled:
@@ -148,3 +151,50 @@ async def transition_seller_sale(
     except ssg.IllegalShipGroupTransition as exc:
         raise HTTPException(409, {"code": "illegal_transition", "detail": str(exc)})
     return _row_to_out(row)
+
+
+class SellerTopItemOut(BaseModel):
+    item_id: str = ""
+    name: str = ""
+    units: int = 0
+    revenue_cents: int = 0
+
+
+class SellerAnalyticsOut(BaseModel):
+    gmv_cents: int = 0
+    units: int = 0
+    order_count: int = 0
+    aov_cents: int = 0
+    open_fulfilment_count: int = 0
+    shipped_count: int = 0
+    delivered_count: int = 0
+    cancelled_or_returned_count: int = 0
+    top_item: Optional[SellerTopItemOut] = None
+    currency: str = "USD"
+
+
+@analytics_router.get("/analytics", response_model=SellerAnalyticsOut)
+async def get_seller_analytics(
+    from_ts: int = Query(default=0, ge=0),
+    to_ts: int = Query(default=0, ge=0),
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+) -> SellerAnalyticsOut:
+    """ECOMX-51: month-to-date shop revenue + units + AOV + open-fulfilment count
+    + top item for the authenticated seller (scoped to their OWN ship groups)."""
+    _require_enabled()
+    from app.services import seller_ship_groups as ssg
+
+    data = ssg.seller_analytics(ctx["user_sub"], from_ts=from_ts, to_ts=to_ts)
+    top = data.get("top_item")
+    return SellerAnalyticsOut(
+        gmv_cents=data["gmv_cents"],
+        units=data["units"],
+        order_count=data["order_count"],
+        aov_cents=data["aov_cents"],
+        open_fulfilment_count=data["open_fulfilment_count"],
+        shipped_count=data["shipped_count"],
+        delivered_count=data["delivered_count"],
+        cancelled_or_returned_count=data["cancelled_or_returned_count"],
+        top_item=(SellerTopItemOut(**top) if top else None),
+        currency=data["currency"],
+    )

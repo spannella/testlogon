@@ -523,6 +523,7 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "POST:/ui/catalog/categories/{category_id}/items/{item_id}/images/upload": {"reason": "session-auth catalog route, not in initial API-key rollout scope"},
     "POST:/ui/catalog/file-bundles": {"reason": "session-auth catalog route, not in initial API-key rollout scope"},
     "POST:/ui/catalog/items/{item_id}/reviews": {"reason": "session-auth catalog route, not in initial API-key rollout scope"},
+    "POST:/ui/catalog/items/{item_id}/reviews/{review_id}/response": {"reason": "session-auth catalog route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/cancel/request": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/cancel/respond": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/complete": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},

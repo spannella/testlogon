@@ -475,6 +475,35 @@ def _maybe_refund(order_id: str, *, actor: str) -> None:
                 notes=f"Auto-approved on order {order_id} cancel-refund",
             )
             logger.info("order_cancel_refund_ok order_id=%s txn=%s", order_id, buyer_debit_txn_id)
+            # ECOMX-52 (E8): a self-cancel-refund now fires an explicit,
+            # tappable order_refunded confirmation to the buyer (previously the
+            # buyer cancelled + was refunded with ZERO notification).
+            try:
+                from app.services.alerts import write_alert
+                _rtitle = "Your order was cancelled and refunded"
+                _rres = write_alert(
+                    str(buyer_id),
+                    event="order_refunded",
+                    outcome="success",
+                    title=_rtitle,
+                    details={
+                        "alert_type": "order_refunded",
+                        "order_id": order_id,
+                        "txn_id": str(buyer_debit_txn_id),
+                    },
+                )
+                try:
+                    from app.services.push import send_push_for_alert
+                    _raid = (_rres or {}).get("alert_id", order_id) if isinstance(_rres, dict) else order_id
+                    send_push_for_alert(
+                        str(buyer_id), "order_refunded", _rtitle,
+                        "Your refund is on its way.", _raid,
+                        action_url=f"/orders?order={order_id}",
+                    )
+                except Exception:
+                    logger.exception("order_refunded push failed order_id=%s", order_id)
+            except Exception:
+                logger.exception("order_refunded alert failed order_id=%s", order_id)
             return
         except Exception:
             logger.error("order_cancel_refund_failed order_id=%s txn=%s", order_id,
