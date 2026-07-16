@@ -1557,6 +1557,16 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_TRACKING", "partition_key": "tracking_number_norm"},
             ],
         ),
+        # ECOMX-E0/E4: per-seller ship groups (was prod-only). PK seller_id /
+        # SK ship_group_id; GSI_ORDER (partition order_id) for the per-order view.
+        TableDef(
+            _resolve_table_name(S.seller_ship_groups_table_name, "seller_ship_groups"),
+            "seller_id",
+            "ship_group_id",
+            gsi=[
+                {"index_name": "GSI_ORDER", "partition_key": "order_id"},
+            ],
+        ),
         TableDef(
             _resolve_table_name(S.payment_incidents_table_name, "payment_incidents"),
             "incident_id",

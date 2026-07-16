@@ -54,7 +54,7 @@ object OrderReviewTestTags {
     const val LIST = "order_review_list"
     const val TOTAL = "order_review_total"
     const val PLACE_ORDER = "order_review_place_order"
-    const val CHOOSE_METHOD = "order_review_choose_method"
+    const val ADDRESS_ROW = "order_review_address_row"
     const val EMPTY = "order_review_empty"
     const val ERROR = "order_review_error"
 
@@ -69,23 +69,32 @@ object OrderReviewTestTags {
 fun OrderReviewRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    // AND-227/228/229: provider-selection entry point. "Place order" still routes through the
-    // BillingAuthorizer stub (AND-031); this callback opens the redirect checkout (hosted/PayPal/CCBill).
-    onChoosePaymentMethod: (totalCents: Long, currency: String) -> Unit = { _, _ -> },
+    // ECOMX-40 (B3): open the shipping-address step.
+    onSelectAddress: () -> Unit = {},
+    // ECOMX-40 (B3): the address_id handed back from the address step (nav SavedStateHandle).
+    selectedAddressId: String? = null,
     // FIX (ecom residual #1): fired when the reliable purchase completes; routes to order confirmation.
     onOrderComplete: (txnId: String?, orderId: String) -> Unit = { _, _ -> },
     viewModel: CheckoutSessionViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val placing by viewModel.placing.collectAsStateWithLifecycle()
+    val addressId by viewModel.selectedAddressId.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val paymentsUnavailable = stringResource(R.string.checkout_payments_unavailable)
+    val addressRequired = stringResource(R.string.checkout_address_required)
+
+    // ECOMX-40 (B3): fold the address step's result back into the VM state.
+    LaunchedEffect(selectedAddressId) {
+        if (selectedAddressId != null) viewModel.onAddressSelected(selectedAddressId)
+    }
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
                 is CheckoutEvent.PaymentsUnavailable -> snackbarHostState.showSnackbar(paymentsUnavailable)
                 is CheckoutEvent.PaymentFailed -> snackbarHostState.showSnackbar(event.message)
+                is CheckoutEvent.AddressRequired -> snackbarHostState.showSnackbar(addressRequired)
                 is CheckoutEvent.PurchaseComplete -> onOrderComplete(event.txnId, event.orderId)
             }
         }
@@ -94,9 +103,10 @@ fun OrderReviewRoute(
     OrderReviewScreen(
         state = state,
         placing = placing,
+        selectedAddressId = addressId,
         snackbarHostState = snackbarHostState,
         onPlaceOrder = viewModel::placeOrder,
-        onChoosePaymentMethod = onChoosePaymentMethod,
+        onSelectAddress = onSelectAddress,
         onRetry = viewModel::retry,
         onBack = onBack,
         modifier = modifier,
@@ -112,7 +122,9 @@ fun OrderReviewScreen(
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    onChoosePaymentMethod: (totalCents: Long, currency: String) -> Unit = { _, _ -> },
+    // ECOMX-40 (B3): the currently selected shipping address (null until picked).
+    selectedAddressId: String? = null,
+    onSelectAddress: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(OrderReviewTestTags.SCREEN),
@@ -135,8 +147,8 @@ fun OrderReviewScreen(
                 PlaceOrderBar(
                     session = state.session,
                     placing = placing,
+                    hasAddress = !selectedAddressId.isNullOrBlank(),
                     onPlaceOrder = onPlaceOrder,
-                    onChoosePaymentMethod = onChoosePaymentMethod,
                 )
             }
         },
@@ -161,22 +173,66 @@ fun OrderReviewScreen(
                         modifier = Modifier.testTag(OrderReviewTestTags.ERROR),
                     )
 
-                is OrderReviewUiState.Ready -> OrderReviewContent(session = state.session)
+                is OrderReviewUiState.Ready ->
+                    OrderReviewContent(
+                        session = state.session,
+                        selectedAddressId = selectedAddressId,
+                        onSelectAddress = onSelectAddress,
+                    )
             }
         }
     }
 }
 
 @Composable
-private fun OrderReviewContent(session: CheckoutSession) {
+private fun OrderReviewContent(
+    session: CheckoutSession,
+    selectedAddressId: String?,
+    onSelectAddress: () -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag(OrderReviewTestTags.LIST),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // ECOMX-40 (B3): the reachable shipping-address step. Required before Place order.
+        item(key = "__address_row") {
+            ShippingAddressRow(hasAddress = !selectedAddressId.isNullOrBlank(), onSelectAddress = onSelectAddress)
+            HorizontalDivider()
+        }
         items(session.lineItems, key = { it.sku }) { line ->
             OrderReviewLine(line, session.currency)
             HorizontalDivider()
+        }
+    }
+}
+
+/** ECOMX-40 (B3) — the tappable "Shipping address" row that opens the address step. */
+@Composable
+private fun ShippingAddressRow(hasAddress: Boolean, onSelectAddress: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().testTag(OrderReviewTestTags.ADDRESS_ROW)
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                text = stringResource(R.string.checkout_shipping_address_label),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = if (hasAddress) stringResource(R.string.checkout_address_selected)
+                else stringResource(R.string.checkout_address_none),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        androidx.compose.material3.TextButton(onClick = onSelectAddress) {
+            Text(
+                if (hasAddress) stringResource(R.string.checkout_address_change)
+                else stringResource(R.string.checkout_address_add),
+            )
         }
     }
 }
@@ -213,8 +269,8 @@ private fun OrderReviewLine(line: CheckoutLineItem, currency: String) {
 private fun PlaceOrderBar(
     session: CheckoutSession,
     placing: Boolean,
+    hasAddress: Boolean,
     onPlaceOrder: () -> Unit,
-    onChoosePaymentMethod: (totalCents: Long, currency: String) -> Unit,
 ) {
     Surface(tonalElevation = 3.dp) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -226,9 +282,18 @@ private fun PlaceOrderBar(
                     modifier = Modifier.testTag(OrderReviewTestTags.TOTAL),
                 )
             }
+            // ECOMX-40 (B3): merchandise subtotal shown; shipping + sales tax are computed at
+            // charge time from the shipping address and reflected on the confirmation/receipt.
+            Text(
+                text = stringResource(R.string.checkout_shipping_tax_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // ECOMX-41 (B4): ONE checkout CTA (the dual "Choose payment method" button is removed).
+            // Disabled until a shipping address is chosen (ECOMX-40 B3).
             Button(
                 onClick = onPlaceOrder,
-                enabled = !placing,
+                enabled = !placing && hasAddress,
                 modifier = Modifier.fillMaxWidth().testTag(OrderReviewTestTags.PLACE_ORDER),
             ) {
                 if (placing) {
@@ -240,14 +305,6 @@ private fun PlaceOrderBar(
                     Spacer(Modifier.width(8.dp))
                 }
                 Text(stringResource(R.string.checkout_place_order))
-            }
-            // AND-227/228/229: provider-selection entry — choose a redirect method (hosted/PayPal/CCBill).
-            androidx.compose.material3.OutlinedButton(
-                onClick = { onChoosePaymentMethod(session.totalCents, session.currency) },
-                enabled = !placing,
-                modifier = Modifier.fillMaxWidth().testTag(OrderReviewTestTags.CHOOSE_METHOD),
-            ) {
-                Text(stringResource(R.string.checkout_choose_payment_method))
             }
         }
     }

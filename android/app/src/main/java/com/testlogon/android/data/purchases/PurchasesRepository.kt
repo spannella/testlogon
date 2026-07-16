@@ -38,6 +38,9 @@ interface PurchasesRepository {
 
     /** One-shot transaction detail by id (maps PurchaseTransactionInfo). */
     suspend fun detail(txnId: String): ApiResult<PurchaseDetail>
+
+    /** ECOMX-42 (B6) — buyer confirms delivery; returns the refreshed (completed) detail. */
+    suspend fun confirmReceived(txnId: String): ApiResult<PurchaseDetail>
 }
 
 @Singleton
@@ -63,6 +66,11 @@ class PurchasesRepositoryImpl @Inject constructor(
     override suspend fun detail(txnId: String): ApiResult<PurchaseDetail> =
         withContext(io) {
             call { api.getTransaction(txnId) }.map { it.toDomain() }
+        }
+
+    override suspend fun confirmReceived(txnId: String): ApiResult<PurchaseDetail> =
+        withContext(io) {
+            call { api.confirmReceived(txnId) }.map { it.toDomain() }
         }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {

@@ -1505,6 +1505,26 @@
     <string name="checkout_empty_title">Nothing to check out</string>
     <string name="checkout_empty_body">Your cart is empty.</string>
     <string name="checkout_payments_unavailable">Payments are unavailable right now.</string>
+    <!-- ECOMX-40 (B3): checkout shipping-address step + shipping/tax notice. -->
+    <string name="checkout_shipping_address_label">Shipping address</string>
+    <string name="checkout_address_none">No address selected</string>
+    <string name="checkout_address_selected">Delivering to your selected address</string>
+    <string name="checkout_address_add">Add</string>
+    <string name="checkout_address_change">Change</string>
+    <string name="checkout_address_required">Select a shipping address to continue.</string>
+    <string name="checkout_shipping_tax_note">Shipping and sales tax are added at checkout.</string>
+    <!-- ECOMX-43 (B5): digital library / access. -->
+    <string name="order_digital_access_title">Digital items</string>
+    <string name="order_digital_open">Open / Download</string>
+    <string name="order_library_title">Your library</string>
+    <string name="order_library_empty">No digital purchases yet.</string>
+    <!-- ECOMX-42 (B6): confirm receipt. -->
+    <string name="order_confirm_received">Confirm delivery</string>
+    <string name="order_confirm_received_done">Delivery confirmed.</string>
+    <!-- ECOMX-44 (B7): quantity stepper. -->
+    <string name="pdp_qty_label">Quantity</string>
+    <string name="pdp_qty_decrease">Decrease quantity</string>
+    <string name="pdp_qty_increase">Increase quantity</string>
 
     <!-- AND-214: Address / shipping (address management slice; shipping quote/apply has no backend) -->
     <string name="address_title">Shipping address</string>

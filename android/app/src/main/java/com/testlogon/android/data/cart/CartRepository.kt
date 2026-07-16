@@ -77,6 +77,9 @@ interface CartRepository {
         // the commission split (affiliate: host commission + seller net + platform; own: host keeps pool).
         broadcastSessionId: String? = null,
         hostId: String? = null,
+        // ECOMX-40 (B3): the shipping address chosen in the checkout address step + shipping method.
+        addressId: String? = null,
+        shippingMethod: String? = null,
     ): ApiResult<CartPurchaseResult> =
         ApiResult.NetworkError(UnsupportedOperationException("purchase not implemented"), isTimeout = false)
 
@@ -177,6 +180,8 @@ class CartRepositoryImpl @Inject constructor(
         adClickId: String?,
         broadcastSessionId: String?,
         hostId: String?,
+        addressId: String?,
+        shippingMethod: String?,
     ): ApiResult<CartPurchaseResult> = withContext(io) {
         call {
             api.purchaseCart(
@@ -188,6 +193,8 @@ class CartRepositoryImpl @Inject constructor(
                     adClickId = adClickId,
                     broadcastSessionId = broadcastSessionId,
                     hostId = hostId,
+                    addressId = addressId,
+                    shippingMethod = shippingMethod,
                 ),
             )
         }.map { it.toDomain() }.also {

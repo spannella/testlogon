@@ -526,6 +526,7 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "POST:/ui/purchase-history/transactions/{txn_id}/cancel/request": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/cancel/respond": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/complete": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
+    "POST:/ui/purchase-history/transactions/{txn_id}/confirm-received": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/revert": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/v1/fs/admin/mounts/{mount_id}/disable": {"reason": "session-auth file manager route, not in initial API-key rollout scope"},
     "POST:/v1/fs/admin/mounts/{mount_id}/reconcile-disable": {"reason": "session-auth file manager route, not in initial API-key rollout scope"},

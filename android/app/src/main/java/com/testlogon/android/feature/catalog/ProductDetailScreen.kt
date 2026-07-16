@@ -56,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,6 +92,11 @@ object ProductDetailTestTags {
     const val ATTRIBUTES = "product_detail_attributes"
     const val STOCK = "product_detail_stock"
     const val ADD_TO_CART = "product_detail_add_to_cart"
+    // ECOMX-44 (B7): quantity stepper.
+    const val QTY_STEPPER = "product_detail_qty_stepper"
+    const val QTY_DECREASE = "product_detail_qty_decrease"
+    const val QTY_INCREASE = "product_detail_qty_increase"
+    const val QTY_VALUE = "product_detail_qty_value"
     const val NOT_FOUND = "product_detail_not_found"
     const val ERROR = "product_detail_error"
 
@@ -149,7 +155,7 @@ fun ProductDetailRoute(
         reviewSubmitState = reviewSubmitState,
         isSaved = isSaved,
         snackbarHostState = snackbarHostState,
-        onAddToCart = { viewModel.addToCart() },
+        onAddToCart = { qty -> viewModel.addToCart(qty) },
         onToggleWishlist = viewModel::toggleWishlist,
         onSubmitReview = viewModel::submitReview,
         onDeleteReview = viewModel::deleteReview,
@@ -168,7 +174,7 @@ fun ProductDetailScreen(
     reviewSubmitState: ReviewSubmitStatus,
     isSaved: Boolean,
     snackbarHostState: SnackbarHostState,
-    onAddToCart: () -> Unit,
+    onAddToCart: (quantity: Int) -> Unit,
     onToggleWishlist: () -> Unit,
     onSubmitReview: (rating: Int, title: String, body: String) -> Unit,
     onDeleteReview: (reviewId: String) -> Unit,
@@ -621,7 +627,7 @@ private fun AttributeList(item: CatalogItem) {
 private fun AddToCartBar(
     item: CatalogItem,
     addState: AddToCartStatus,
-    onAddToCart: () -> Unit,
+    onAddToCart: (quantity: Int) -> Unit,
 ) {
     val outOfStock = item.isOutOfStock
     val inFlight = addState == AddToCartStatus.InFlight
@@ -630,10 +636,48 @@ private fun AddToCartBar(
         inFlight -> stringResource(R.string.catalog_detail_adding)
         else -> stringResource(R.string.catalog_detail_add_to_cart)
     }
+    // ECOMX-44 (B7): quantity stepper. Clamped to 1..maxQty (available stock when known).
+    val maxQty = if (item.stockStatus == "unlimited" || item.stockCount == null) MAX_QTY
+    else (item.stockCount ?: 1).coerceAtLeast(1).coerceAtMost(MAX_QTY)
+    var qty by rememberSaveable(item.itemId) { mutableStateOf(1) }
+    if (qty > maxQty) qty = maxQty
+
     Surface(tonalElevation = 3.dp) {
-        Box(Modifier.fillMaxWidth().padding(16.dp)) {
+        Column(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (!outOfStock) {
+                Row(
+                    Modifier.fillMaxWidth().testTag(ProductDetailTestTags.QTY_STEPPER),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text(stringResource(R.string.pdp_qty_label), style = MaterialTheme.typography.titleSmall)
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        androidx.compose.material3.OutlinedIconButton(
+                            onClick = { if (qty > 1) qty-- },
+                            enabled = qty > 1 && !inFlight,
+                            modifier = Modifier.testTag(ProductDetailTestTags.QTY_DECREASE)
+                                .semantics { contentDescription = "Decrease quantity" },
+                        ) { Text("−", style = MaterialTheme.typography.titleLarge) }
+                        Text(
+                            text = qty.toString(),
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                                .testTag(ProductDetailTestTags.QTY_VALUE),
+                        )
+                        androidx.compose.material3.OutlinedIconButton(
+                            onClick = { if (qty < maxQty) qty++ },
+                            enabled = qty < maxQty && !inFlight,
+                            modifier = Modifier.testTag(ProductDetailTestTags.QTY_INCREASE)
+                                .semantics { contentDescription = "Increase quantity" },
+                        ) { Text("+", style = MaterialTheme.typography.titleLarge) }
+                    }
+                }
+            }
             Button(
-                onClick = onAddToCart,
+                onClick = { onAddToCart(qty) },
                 enabled = !outOfStock && !inFlight,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -653,3 +697,5 @@ private fun AddToCartBar(
         }
     }
 }
+
+private const val MAX_QTY = 99

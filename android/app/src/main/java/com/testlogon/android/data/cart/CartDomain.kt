@@ -105,6 +105,10 @@ data class CartPurchaseResult(
     val purchasedTotalCents: Long,
     val currency: String,
     val discountCents: Long,
+    // ECOMX-40 (B3): shipping/tax breakdown; null when the order collected neither (digital/self).
+    val merchandiseCents: Long? = null,
+    val shippingCents: Long? = null,
+    val taxCents: Long? = null,
 )
 
 internal fun CartPurchaseOutDto.toDomain(): CartPurchaseResult = CartPurchaseResult(
@@ -114,4 +118,7 @@ internal fun CartPurchaseOutDto.toDomain(): CartPurchaseResult = CartPurchaseRes
     purchasedTotalCents = purchasedTotalCents,
     currency = currency ?: "USD",
     discountCents = discountCents ?: 0L,
+    merchandiseCents = merchandiseCents,
+    shippingCents = shippingCents,
+    taxCents = taxCents,
 )

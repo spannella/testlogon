@@ -1255,6 +1255,7 @@ class Settings:
     orders_table_name: str = os.environ.get("ORDERS_TABLE_NAME", "orders")
     order_items_table_name: str = os.environ.get("ORDER_ITEMS_TABLE_NAME", "order_items")
     shipment_tracking_table_name: str = os.environ.get("SHIPMENT_TRACKING_TABLE_NAME", "shipment_tracking")
+    seller_ship_groups_table_name: str = os.environ.get("SELLER_SHIP_GROUPS_TABLE_NAME", "seller_ship_groups")  # ECOMX-E0/E4
     live_stream_products_table_name: str = os.environ.get("DDB_LIVE_STREAM_PRODUCTS", "LiveStreamProducts")
     shipment_webhook_secret: str = os.environ.get("SHIPMENT_WEBHOOK_SECRET", "")
     # ECOMX-30: background shipment-tracking progression runner. When enabled a
@@ -3511,6 +3512,16 @@ class Settings:
     shipping_enabled: bool = os.environ.get("SHIPPING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     shipping_rate_estimation_enabled: bool = os.environ.get("SHIPPING_RATE_ESTIMATION_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     shipping_default_currency: str = os.environ.get("SHIPPING_DEFAULT_CURRENCY", "usd")
+    # ── ECOMX-40 (A7/B3): checkout shipping + sales-tax on physical orders. ──
+    # When a physical cart is checked out WITH a shipping address, add a shipping
+    # fee (from the rate engine when enabled+seeded, else this flat default) and a
+    # sales-tax line (tax_bps on the post-discount subtotal) to the charged total.
+    # Digital-only / self-purchase carts (no ship-to) collect neither.
+    checkout_shipping_tax_enabled: bool = os.environ.get(
+        "CHECKOUT_SHIPPING_TAX_ENABLED", "true"
+    ).lower() in ("1", "true", "yes", "on")
+    checkout_flat_shipping_cents: int = int(os.environ.get("CHECKOUT_FLAT_SHIPPING_CENTS", "599"))
+    checkout_tax_bps: int = int(os.environ.get("CHECKOUT_TAX_BPS", "725"))  # 7.25% default
     shipping_default_item_weight_oz: int = int(os.environ.get("SHIPPING_DEFAULT_ITEM_WEIGHT_OZ", "16"))
     shipping_dim_divisor: int = int(os.environ.get("SHIPPING_DIM_DIVISOR", "139"))
     shipping_carriers_table_name: str = os.environ.get("SHIPPING_CARRIERS_TABLE_NAME", "shipping_carriers")

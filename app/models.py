@@ -486,6 +486,10 @@ class PurchaseTransactionInfo(PurchaseTransactionSummary):
     metadata: Optional[Dict[str, Any]] = None
     receipt_path: Optional[str] = None
     receipt_generated_at: Optional[int] = None
+    # ECOMX-42 (B2): the physical fulfilment state from the order-lifecycle header
+    # (distinct from `status`, which is the money state PENDING/COMPLETED).
+    order_status: Optional[str] = None
+    fulfillment_status: Optional[str] = None
 
 
 class PurchaseTransactionCreated(BaseModel):
@@ -1000,6 +1004,12 @@ class ShoppingCartTotalOut(BaseModel):
 class CartPurchaseIn(BaseModel):
     promo_code: Optional[str] = None
     promo_code_id: Optional[str] = None
+    # ECOMX-40 (B3): shipping address selected in the checkout address step; the
+    # order's ship_to + shipping/tax computation key off it. Digital-only carts
+    # may omit it (no shipping/tax collected).
+    address_id: Optional[str] = None
+    # ECOMX-40: chosen shipping method code (from the rate estimate); optional.
+    shipping_method: Optional[str] = None
     # ADV-403: optional last-click CPA attribution handle carried from an ad CTA.
     ad_click_id: Optional[str] = None
     # LIVECOM L3: in-stream purchase attribution (broadcast session + host).
@@ -1019,6 +1029,10 @@ class ShoppingCartPurchaseOut(BaseModel):
     discount_cents: Optional[int] = None
     promo_code_id: Optional[str] = None
     promo_discount_type: Optional[str] = None
+    # ECOMX-40 (B3): shipping + tax breakdown so the app can show the true total.
+    merchandise_cents: Optional[int] = None
+    shipping_cents: Optional[int] = None
+    tax_cents: Optional[int] = None
 
 
 class WorkingHoursWindow(BaseModel):
