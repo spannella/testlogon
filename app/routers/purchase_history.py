@@ -121,25 +121,52 @@ async def ui_get_tracking(txn_id: str, ctx=Depends(require_ui_session)):
     shipping = info.get("shipping") or {}
     carrier = shipping.get("carrier")
     tracking_number = shipping.get("tracking_number")
-    if not carrier or not tracking_number:
+    if carrier and tracking_number:
+        tracking_url = build_tracking_url(carrier, tracking_number)
         return {
             "txn_id": txn_id,
-            "tracking_url": None,
-            "carrier": None,
-            "tracking_number": None,
-            "status": None,
-            "carrier_events": None,
+            "tracking_url": tracking_url,
+            "carrier": carrier,
+            "tracking_number": tracking_number,
+            "status": shipping.get("status"),
+            "carrier_events": shipping.get("carrier_events"),
+            "estimated_delivery": shipping.get("estimated_delivery"),
+            "delivered_at": shipping.get("delivered_at"),
         }
-    tracking_url = build_tracking_url(carrier, tracking_number)
+    # ECOMX-23: the cart-purchase path never wrote a `shipping` key on the txn —
+    # the REAL tracking lives on the order's seller ship-group shipment_tracking
+    # records (keyed by ship_group_id, not txn_id). Resolve the order off the txn
+    # (external_ref/metadata.order_id) and return its FIRST shipment's tracking so
+    # the buyer's txn-tracking view populates instead of the permanent-empty stub.
+    order_id = str(info.get("external_ref") or (info.get("metadata") or {}).get("order_id") or "")
+    if order_id:
+        try:
+            from app.services import order_fulfillment_bridge as _bridge
+            agg = _bridge.order_tracking(order_id, buyer_sub=ctx["user_sub"])
+            shipments = agg.get("shipments") or []
+            primary = next((sh for sh in shipments if sh.get("tracking_number")), (shipments[0] if shipments else None))
+            if primary:
+                return {
+                    "txn_id": txn_id,
+                    "order_id": order_id,
+                    "fulfillment_status": agg.get("fulfillment_status"),
+                    "tracking_url": primary.get("tracking_url") or None,
+                    "carrier": primary.get("carrier") or None,
+                    "tracking_number": primary.get("tracking_number") or None,
+                    "status": primary.get("status") or None,
+                    "carrier_events": primary.get("events") or None,
+                    "shipment_count": agg.get("shipment_count", 0),
+                    "shipments": shipments,
+                }
+        except Exception:
+            pass
     return {
         "txn_id": txn_id,
-        "tracking_url": tracking_url,
-        "carrier": carrier,
-        "tracking_number": tracking_number,
-        "status": shipping.get("status"),
-        "carrier_events": shipping.get("carrier_events"),
-        "estimated_delivery": shipping.get("estimated_delivery"),
-        "delivered_at": shipping.get("delivered_at"),
+        "tracking_url": None,
+        "carrier": None,
+        "tracking_number": None,
+        "status": None,
+        "carrier_events": None,
     }
 
 

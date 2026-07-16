@@ -396,4 +396,16 @@ def transition(
             _st.create_on_ship(updated)
         except Exception:
             logger.exception("create_on_ship failed for sg %s", ship_group_id)
+    # ECOMX-20/21: write the ship-group edge BACK to the order header — the
+    # header is a derived aggregate of all its ship groups (min stage; header
+    # advances only when EVERY group reaches a stage; partial ship => the header
+    # shows partially_shipped, not fully shipped). Best-effort; never blocks the
+    # seller. This is the bridge that ends the dead-end-at-approved header.
+    try:
+        from app.services import order_fulfillment_bridge as _bridge
+        _bridge.reconcile_order(str(updated.get("order_id") or ""),
+                                actor="system:ship-group",
+                                reason=f"ship-group {ship_group_id} -> {target}")
+    except Exception:
+        logger.exception("order aggregate reconcile failed for sg %s", ship_group_id)
     return updated

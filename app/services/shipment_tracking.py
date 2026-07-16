@@ -338,6 +338,18 @@ def advance(*, ship_group_id: Optional[str] = None, tracking_number: Optional[st
     alert = _STATUS_ALERTS.get(new_status)
     if alert and _claim_notify(sg_id, new_status):
         _notify_buyer(rec, alert[0], alert[1])
+    # ECOMX-21/23: bridge the tracking edge back to the order header so a
+    # delivered/out-for-delivery tracking event advances the aggregate (all
+    # groups delivered => header completed). Best-effort; the tracking write
+    # already committed above regardless.
+    order_id = str(rec.get("order_id") or "")
+    if order_id and new_status in (STATUS_OUT_FOR_DELIVERY, STATUS_DELIVERED):
+        try:
+            from app.services import order_fulfillment_bridge as _bridge
+            _bridge.reconcile_order(order_id, actor="system:tracking",
+                                    reason=f"tracking {sg_id} -> {new_status}")
+        except Exception:
+            logger.exception("order aggregate reconcile failed on tracking %s", sg_id)
     return get_tracking(sg_id) or rec
 
 

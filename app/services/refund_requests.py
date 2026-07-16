@@ -443,6 +443,18 @@ def approve_request(
         admin_notes=notes or "",
     )
 
+    # ECOMX-22: return flow. If this refund is against an order that already
+    # SHIPPED (or completed), the header can't just cancel — it must move to
+    # `returned` and the inventory must be restocked. mark_returned no-ops on a
+    # pre-ship order (that path stays a cancel). Best-effort; never fails the
+    # refund that already committed above.
+    if order_id_ref:
+        try:
+            from app.services import order_fulfillment_bridge as _bridge
+            _bridge.mark_returned(order_id_ref, actor=f"refund:{admin_id}")
+        except Exception:
+            logger.exception("refund return-flow bridge failed order=%s", order_id_ref)
+
     item["status"] = "approved"
     item["admin_user_id"] = admin_id
     item["admin_notes"] = notes or ""
