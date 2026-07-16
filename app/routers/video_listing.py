@@ -827,6 +827,7 @@ class VideoTipIn(BaseModel):
     amount_cents: int = Field(..., ge=1)
     currency: str = "usd"
     payment_method_id: Optional[str] = None
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"[A-Za-z0-9._:-]+")  # TIPX-A3
 
 
 class VideoTipOut(BaseModel):
@@ -866,7 +867,7 @@ def tip_video_endpoint(
         content_type="video",
         content_id=video_id,
         meta={"video_id": video_id},
-        idempotency_key="videotip:" + uuid.uuid4().hex,
+        idempotency_key=(f"videotip:{video_id}:{body.client_request_id}" if getattr(body, "client_request_id", None) else "videotip:" + uuid.uuid4().hex),  # TIPX-A3
     )
 
     # Accumulate tip_total_cents on the video metadata row (best-effort additive).
@@ -903,6 +904,7 @@ class VideoCommentTipIn(BaseModel):
     amount_cents: int = Field(..., ge=1)
     currency: str = "usd"
     payment_method_id: Optional[str] = None
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"[A-Za-z0-9._:-]+")  # TIPX-A3
 
 
 class VideoCommentTipOut(BaseModel):
@@ -946,7 +948,7 @@ def tip_video_comment_endpoint(
         content_type="video_comment",
         content_id=comment_id,
         meta={"video_id": video_id, "comment_id": comment_id},
-        idempotency_key="vidcmttip:" + uuid.uuid4().hex,
+        idempotency_key=(f"vidcmttip:{comment_id}:{body.client_request_id}" if getattr(body, "client_request_id", None) else "vidcmttip:" + uuid.uuid4().hex),  # TIPX-A3
     )
 
     new_total = bump_comment_tip_total(

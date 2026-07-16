@@ -1977,6 +1977,7 @@ class SendTipIn(BaseModel):
     currency: str = "USD"
     note: Optional[str] = Field(default=None, max_length=500)
     payment_method_id: Optional[str] = None
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"[A-Za-z0-9._:-]+")  # TIPX-A3
 
 
 class SendImagePresignIn(BaseModel):
@@ -12155,6 +12156,7 @@ class TipReactIn(BaseModel):
     amount_cents: int = Field(..., ge=1)
     emoji: Optional[str] = Field(default=None, max_length=64)
     payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"[A-Za-z0-9._:-]+")  # TIPX-A3
 
 
 @router.post("/conversations/{conversation_id}/messages/{message_id}/reactions/tip")
@@ -12189,7 +12191,7 @@ def tip_react_to_message(
         content_type="message_react",
         content_id=message_id,
         meta={"conversation_id": conversation_id, "emoji": emoji},
-        idempotency_key=f"msgreacttip:{message_id}:{uuid.uuid4().hex}",
+        idempotency_key=(f"msgreacttip:{message_id}:{inp.client_request_id}" if getattr(inp, "client_request_id", None) else f"msgreacttip:{message_id}:{uuid.uuid4().hex}"),  # TIPX-A3
     )
 
     ts = now_ts()
@@ -15152,28 +15154,9 @@ def send_message_tip(
     tip_payment_id = "tip_" + new_id()
     ts = now_ts()
 
-    update_expr = (
-        "SET tip_amount_cents = if_not_exists(tip_amount_cents, :zero) + :amt, "
-        "tip_currency = :cur, tip_payment_id = :pid, tip_updated_at = :ts"
-    )
-    expr_values: dict = {
-        ":zero": 0,
-        ":amt": inp.amount_cents,
-        ":cur": inp.currency,
-        ":pid": tip_payment_id,
-        ":ts": ts,
-    }
-    if inp.payment_method_id:
-        update_expr += ", tip_payment_method_id = :pmid"
-        expr_values[":pmid"] = inp.payment_method_id
-
-    tbl_msgs.update_item(
-        Key={"conversation_id": conversation_id, "message_id": message_id},
-        UpdateExpression=update_expr,
-        ExpressionAttributeValues=expr_values,
-    )
-
-    # Write billing ledger debit + credit entries for the tip
+    # TIPX-A1: CHARGE FIRST -- a declined charge (402) must leave NO tip_amount_cents
+    # bump / tip_payment_id stamp (no phantom tip badge on a message that was
+    # never paid). The row is stamped only after charge_tip returns successfully.
     msg_author = msg.get("sender_id")
     if msg_author and msg_author != user_id:
         from app.services.tips import charge_tip
@@ -15186,8 +15169,22 @@ def send_message_tip(
             content_type="message",
             content_id=message_id,
             meta={"conversation_id": conversation_id},
-            idempotency_key="msgtip:" + new_id(),
+            idempotency_key=(f"msgtip:{message_id}:{inp.client_request_id}" if getattr(inp, "client_request_id", None) else f"msgtip:{message_id}"),  # TIPX-A3
             tip_payment_id=tip_payment_id,
+        )
+        # TIPX-A1: stamp the message row ONLY after the charge succeeded.
+        _phmt_expr = (
+            "SET tip_amount_cents = if_not_exists(tip_amount_cents, :zero) + :amt, "
+            "tip_currency = :cur, tip_payment_id = :pid, tip_updated_at = :ts"
+        )
+        _phmt_vals: dict = {":zero": 0, ":amt": inp.amount_cents, ":cur": inp.currency, ":pid": tip_payment_id, ":ts": ts}
+        if inp.payment_method_id:
+            _phmt_expr += ", tip_payment_method_id = :pmid"
+            _phmt_vals[":pmid"] = inp.payment_method_id
+        tbl_msgs.update_item(
+            Key={"conversation_id": conversation_id, "message_id": message_id},
+            UpdateExpression=_phmt_expr,
+            ExpressionAttributeValues=_phmt_vals,
         )
         # FIN-001: generate an invoice for the tip (best-effort)
         from app.services.invoices import create_invoice_safe

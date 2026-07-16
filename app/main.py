@@ -185,6 +185,7 @@ from app.routers.per_content_revenue import per_content_revenue_router
 from app.routers.creator_dashboard import router as creator_dashboard_router
 from app.routers.creator_payouts import router as creator_payouts_router
 from app.routers.admin_payouts import router as admin_payouts_router
+from app.routers.admin_tip_reversal import router as admin_tip_reversal_router  # TIPX-A2
 from app.routers.billing_config import billing_config_router
 from app.routers.admin_rate_limits import router as admin_rate_limits_router
 from app.routers.privacy import router as privacy_router, admin_router as admin_privacy_router
@@ -945,6 +946,7 @@ def create_app() -> FastAPI:
     from app.routers.live_commerce import router as live_commerce_router  # LIVECOM
     app.include_router(live_commerce_router)
     app.include_router(admin_payouts_router)
+    app.include_router(admin_tip_reversal_router)  # TIPX-A2
     app.include_router(payd_admin_router)  # PAY-D runner trigger
     app.include_router(payd_webhook_router)  # PAY-D provider webhook
     app.include_router(billing_config_router)
