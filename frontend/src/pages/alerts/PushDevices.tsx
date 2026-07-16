@@ -69,7 +69,7 @@ export function PushDevices() {
 
       // 2. Fetch VAPID public key from server
       const vapidResp = await getVapidKey();
-      const vapidPublicKey = vapidResp.data?.vapid_public_key ?? (vapidResp as any).vapid_public_key;
+      const vapidPublicKey = vapidResp.vapid_public_key;
       if (!vapidPublicKey) {
         toast.error("Push not configured on server");
         return;
