@@ -211,6 +211,10 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "GET:/ui/shoppingcart/carts/{cart_id}/abandonment-status": {"product": "shopping", "required_scopes": ["shopping:cart:write"], "entitlement_required": False},
     "GET:/ui/shoppingcart/orders/{order_id}": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
     "GET:/ui/purchase-history/transactions/{txn_id}/tracking": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
+    # ECOMX-02 (E0): wishlist router mounted -> register its policy-guarded routes.
+    "GET:/ui/wishlist": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "POST:/ui/wishlist": {"product": "shopping", "required_scopes": ["shopping:cart:write"], "entitlement_required": False},
+    "DELETE:/ui/wishlist/{category_id}/{item_id}": {"product": "shopping", "required_scopes": ["shopping:cart:write"], "entitlement_required": False},
     # Messager -- APIK-E2 (#118): full messaging parity. messager:manage>=write>=read.
     # read=reads/realtime/search/receipts-view; write=bootstrap+rich-sends(incl image presign)+
     # reactions+read-receipts+calls+pins/forward+privacy; manage=participant/lifecycle admin+

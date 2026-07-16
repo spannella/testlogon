@@ -825,6 +825,48 @@ def purchase_cart(
     # ECM-008: convert this cart's soft reservations into committed stock.
     _ecm_commit(user_sub, cart_id)
 
+    # ECOM Bug #2: advance the /ui/orders lifecycle header out of pending_payment.
+    # purchase_cart captures payment synchronously (buyer debit COMPLETED, stock
+    # decremented, seller credited) so the order is paid -- move it from the seeded
+    # `created` (legacy "pending_payment") state to `approved` (legacy "approved")
+    # via the canonical order_lifecycle state machine. Best-effort + idempotent
+    # (keyed off the canonical cart idempotency key); never blocks the purchase and
+    # only fires on the first successful purchase (replays return earlier).
+    try:
+        if S.order_lifecycle_enabled and order_id:
+            from app.services import order_lifecycle as _ol
+            _hdr = _ol.get_order_header(order_id)
+            if _hdr and str(_hdr.get("lifecycle_status") or "") == "created":
+                _ol.transition_order(
+                    order_id,
+                    "approved",
+                    actor=user_sub,
+                    reason="Cart purchase paid",
+                    idempotency_key=canonical_idempotency_key,
+                )
+    except Exception:
+        import logging as _logging_ol
+        _logging_ol.getLogger(__name__).exception(
+            "Failed to advance order lifecycle for cart %s order %s", cart_id, order_id
+        )
+
+    # ECOM-SELLER (G1-G4): on order approval, split the paid cart into per-seller
+    # ship-groups (each = that seller's line items w/ REAL names + the buyer ship
+    # address), notify each seller (you-sold-it alert+push), backfill line names.
+    try:
+        if S.order_lifecycle_enabled and order_id:
+            from app.services import seller_ship_groups as _ssg
+            _ssg.populate_on_approval(
+                order_id=order_id,
+                buyer_sub=user_sub,
+                cart_items=items,
+                buyer=buyer,
+                currency=str(cart.get("currency", "USD")),
+            )
+    except Exception:
+        import logging as _lg_ssg
+        _lg_ssg.getLogger(__name__).exception("seller ship-group populate failed for order %s", order_id)
+
     return {
         "cart_id": cart_id,
         "order_id": order_id,
