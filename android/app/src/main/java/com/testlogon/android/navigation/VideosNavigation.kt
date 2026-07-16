@@ -107,6 +107,8 @@ fun NavGraphBuilder.videoDetailDestination(navController: NavHostController) {
             },
             // ADV2-210 (F2): route a pre-roll CTA tap to the existing product/cart/subscribe/profile dests.
             onCtaNavigate = { dest -> navController.navigateCta(dest) },
+            // TIPX-B3 (F3): empty-wallet tipper adds a card in-flow, then returns to the tip sheet.
+            onAddCard = { navController.navigate(AddCardDest.ROUTE) { launchSingleTop = true } },
         )
     }
 }

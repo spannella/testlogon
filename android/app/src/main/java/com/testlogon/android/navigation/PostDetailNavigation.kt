@@ -28,6 +28,8 @@ fun NavGraphBuilder.postDetailDestination(navController: NavHostController) {
         deepLinks = postDetailDeepLinks(),
     ) {
         PostDetailRoute(
+            // TIPX-B3 (F3) - empty-wallet tipper adds a card in-flow, then returns to the tip sheet.
+            onAddCard = { navController.navigate(AddCardDest.ROUTE) { launchSingleTop = true } },
             // SUB-E3-2 - a subscriber-only post lock card opens this creator subscribe flow.
             onSubscribeClick = { creatorId ->
                 if (creatorId.isNotBlank()) {

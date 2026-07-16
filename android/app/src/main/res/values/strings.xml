@@ -1260,6 +1260,10 @@
     <string name="tip_sent">Tip sent</string>
     <string name="tip_payments_unavailable">Payments are unavailable right now.</string>
     <string name="tip_cancel">Cancel</string>
+    <!-- TIPX-B (tipper flow) — shared Done + in-flow add-card copy. -->
+    <string name="tip_done">Done</string>
+    <string name="tip_no_card_body">You don\'t have a payment method yet. Add a card to send this tip.</string>
+    <string name="tip_add_card">Add a card</string>
 
     <!-- Feed: polls (AND-179) -->
     <string name="poll_closed">Poll closed</string>

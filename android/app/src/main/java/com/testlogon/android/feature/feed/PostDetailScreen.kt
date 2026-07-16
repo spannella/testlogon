@@ -52,6 +52,8 @@ fun PostDetailRoute(
     onLinkClick: (url: String) -> Unit = {},
     // SUB-E3-2 - open the subscribe flow for a subscriber-only post lock card.
     onSubscribeClick: (creatorId: String) -> Unit = {},
+    // TIPX-B3 (F3) - navigate to add-card when an empty-wallet tipper wants to tip a comment.
+    onAddCard: () -> Unit = {},
     viewModel: PostDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -82,6 +84,9 @@ fun PostDetailRoute(
         onUndoRepost = { viewModel.onUndoRepost() },
         onCommentCountChanged = viewModel::onCommentCountChanged,
         isOwnPost = isOwnPost,
+        commentsContent = { onCount ->
+            CommentsSection(onCommentCountChanged = onCount, isOwnPost = isOwnPost, onAddCard = onAddCard)
+        },
         modifier = modifier,
     )
 }

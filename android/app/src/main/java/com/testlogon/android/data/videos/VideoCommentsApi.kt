@@ -139,6 +139,8 @@ data class VideoComment(
     val id: String,
     val authorId: String,
     val text: String,
+    /** TIPX-B4 (F7) — viewer authored this comment (authorship, not a permission proxy); hides Tip. */
+    val isOwnAuthor: Boolean = false,
     val canDelete: Boolean,
     val canEdit: Boolean,
     val parentCommentId: String?,
@@ -234,6 +236,7 @@ class VideoCommentsRepository @Inject constructor(
             id = commentId,
             authorId = userId,
             text = text.orEmpty(),
+            isOwnAuthor = mine,
             canDelete = mine,
             canEdit = mine && kind == "text",
             parentCommentId = parentCommentId?.takeIf { it.isNotBlank() },

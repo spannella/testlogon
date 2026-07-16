@@ -33,6 +33,7 @@ object TipSheetTestTags {
     const val CUSTOM = "tip_custom"
     const val SEND = "tip_send"
     const val CONFIRMED = "tip_confirmed"
+    const val DONE = "tip_done"
     fun preset(cents: Int): String = "tip_preset_$cents"
 }
 
@@ -53,6 +54,7 @@ fun TipSheet(
     onDismiss: () -> Unit,
     onVisibility: (TipVisibility) -> Unit = {},
 ) {
+    // TIPX-B4 (F8) — the Confirmed body gets an explicit Done that dismisses the sheet.
     if (state is TipSheetState.Hidden) return
     val submitting = state is TipSheetState.Submitting
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -74,7 +76,7 @@ fun TipSheet(
             when (state) {
                 is TipSheetState.Entry -> TipEntryBody(state, onSelectPreset, onCustomAmount, onSend, onVisibility)
                 is TipSheetState.Submitting -> TipSubmittingBody()
-                is TipSheetState.Confirmed -> TipConfirmedBody(state)
+                is TipSheetState.Confirmed -> TipConfirmedBody(state, onDismiss)
                 is TipSheetState.Hidden -> Unit
             }
         }
@@ -122,7 +124,7 @@ private fun TipSubmittingBody() {
 }
 
 @Composable
-private fun TipConfirmedBody(state: TipSheetState.Confirmed) {
+private fun TipConfirmedBody(state: TipSheetState.Confirmed, onDone: () -> Unit) {
     // TIP-505 - the tipper always sees their own amount; a private tip is labelled "sent privately".
     val amount = PriceFormatter.format(state.receipt.amountCents) ?: "${state.receipt.amountCents}"
     val label = if (state.visibility.isPrivate) {
@@ -144,6 +146,12 @@ private fun TipConfirmedBody(state: TipSheetState.Confirmed) {
         Text(
             text = label,
             style = MaterialTheme.typography.titleMedium,
+        )
+        // TIPX-B4 (F8) — explicit Done so the tipper isn't left guessing (scrim still dismisses too).
+        TlButton(
+            text = stringResource(R.string.tip_done),
+            onClick = onDone,
+            modifier = Modifier.fillMaxWidth().testTag(TipSheetTestTags.DONE),
         )
     }
 }

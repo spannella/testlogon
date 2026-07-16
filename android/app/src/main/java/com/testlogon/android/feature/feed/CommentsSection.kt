@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Gif
 import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Close
@@ -33,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -90,6 +90,12 @@ object CommentsTestTags {
     const val TIP_COMMENT_OPEN = "tip_comment_open"
     const val TIP_COMMENT_SHEET = "tip_comment_sheet"
     fun tipCommentSheetPreset(cents: Int) = "tip_comment_sheet_$cents"
+    // TIPX-B2/B3 — shared-composer comment tip sheet nodes.
+    const val TIP_COMMENT_CUSTOM = "tip_comment_custom"
+    const val TIP_COMMENT_SEND = "tip_comment_send"
+    const val TIP_COMMENT_CONFIRMED = "tip_comment_confirmed"
+    const val TIP_COMMENT_DONE = "tip_comment_done"
+    const val TIP_COMMENT_ADD_CARD = "tip_comment_add_card"
     const val TIP_COMMENT_ATTACH = "tip_comment_attach"
     const val TIP_COMMENT_ATTACH_CLEAR = "tip_comment_attach_clear"
     fun tipCommentAttachPreset(cents: Int) = "tip_comment_attach_$cents"
@@ -110,6 +116,9 @@ fun CommentsSection(
     modifier: Modifier = Modifier,
     // #25 — when true the viewer authored the post; tipping is hidden (you can't tip your own content).
     isOwnPost: Boolean = false,
+    // TIPX-B3 (F3) — navigate to the add-card screen when an empty-wallet tipper taps "Add a card" in
+    // the tip sheet's NoCard state. Default no-op keeps existing embeds compiling; the nav host wires it.
+    onAddCard: () -> Unit = {},
     viewModel: CommentsViewModel = hiltViewModel(),
 ) {
     val comments = viewModel.comments.collectAsLazyPagingItems()
@@ -134,6 +143,18 @@ fun CommentsSection(
 
     // #25 — keep the VM's own-post flag in sync so it can gate tipping.
     androidx.compose.runtime.LaunchedEffect(isOwnPost) { viewModel.setOwnPost(isOwnPost) }
+
+    // TIPX-B3 (F3) — when the tipper returns from the add-card screen (ON_RESUME) while the tip sheet is
+    // parked in NoCard, resume it to Entry with their chosen amount preserved so they can send right away
+    // (the billing seam re-resolves the freshly-added card on the next Send).
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.resumeTipAfterAddCard()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Reconcile: when an add/delete succeeds the VM bumps refreshSignal; re-fetch the server page.
     androidx.compose.runtime.LaunchedEffect(refreshSignal) {
@@ -216,11 +237,15 @@ fun CommentsSection(
             onPickSticker = viewModel::pickSticker,
         )
     }
-    tip.target?.let {
+    if (tip !is CommentTipState.Hidden) {
         CommentTipSheet(
             state = tip,
-            onConfirm = viewModel::confirmTip,
+            onSelectPreset = viewModel::selectTipPreset,
+            onCustomAmount = viewModel::setTipCustomAmount,
+            onVisibility = viewModel::setTipVisibility,
+            onSend = viewModel::sendTip,
             onDismiss = viewModel::dismissTip,
+            onAddCard = onAddCard,
         )
     }
 
@@ -441,7 +466,9 @@ private fun CommentRow(
             }
             // Tip another member's comment (creator monetization). #25 — hidden on your own post
             // (you can't tip yourself) and on your own comment.
-            if (!comment.canDelete && !isOwnPost && !comment.pending && !comment.failed) {
+            // TIPX-B4 (F7) — gate on real authorship (isOwnAuthor), NOT the canDelete permission proxy,
+            // so a moderator/admin who can delete others' comments still sees the Tip button.
+            if (!comment.isOwnAuthor && !isOwnPost && !comment.pending && !comment.failed) {
                 TextButton(onClick = { onTip(comment) }, modifier = Modifier.testTag(CommentsTestTags.TIP_COMMENT_OPEN)) {
                     Icon(
                         Icons.Filled.AttachMoney,
@@ -859,33 +886,112 @@ private fun MediaGrid(loading: Boolean, error: String?, count: Int, content: @Co
     }
 }
 
-/** AND-174 (comment tipping) — preset-amount tip bottom sheet. */
+/**
+ * TIPX-B2/B3/B4 (F2/F5/F6/F8) — comment tip bottom sheet backed by the shared [TipComposerContent]:
+ * presets + custom amount + public/private visibility + an EXPLICIT Send (no more one-tap accidental
+ * charge) + inline error + an in-sheet amount RECEIPT on Confirmed (with a Done button) + an in-flow
+ * add-card path when the wallet is empty. Same component/UX as the feed/DM/video tip sheets.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CommentTipSheet(
     state: CommentTipState,
-    onConfirm: (Int) -> Unit,
+    onSelectPreset: (Int) -> Unit,
+    onCustomAmount: (String) -> Unit,
+    onVisibility: (com.testlogon.android.feature.common.tip.TipVisibility) -> Unit,
+    onSend: () -> Unit,
     onDismiss: () -> Unit,
+    onAddCard: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+    val submitting = state is CommentTipState.Submitting
+    ModalBottomSheet(
+        onDismissRequest = { if (!submitting) onDismiss() },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
         Column(
-            Modifier.fillMaxWidth().padding(16.dp).testTag(CommentsTestTags.TIP_COMMENT_SHEET),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp)
+                .testTag(CommentsTestTags.TIP_COMMENT_SHEET),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("Send a tip", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.presetsCents.forEach { cents ->
-                    OutlinedButton(
-                        onClick = { onConfirm(cents) },
-                        enabled = !state.submitting,
-                        modifier = Modifier.testTag(CommentsTestTags.tipCommentSheetPreset(cents)),
-                    ) {
-                        Text("$" + "%.2f".format(cents / 100.0))
-                    }
-                }
+            Text(
+                stringResource(R.string.tip_sheet_title),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            when (state) {
+                is CommentTipState.Entry ->
+                    com.testlogon.android.feature.common.tip.TipComposerContent(
+                        presetsCents = state.presetsCents.map(Int::toLong),
+                        selectedCents = state.selectedCents?.toLong(),
+                        customText = state.customAmountText,
+                        canSend = state.canSend,
+                        inFlight = false,
+                        onSelectPreset = { onSelectPreset(it.toInt()) },
+                        onCustomAmount = onCustomAmount,
+                        onSend = onSend,
+                        error = state.error,
+                        visibility = state.visibility,
+                        onVisibility = onVisibility,
+                        presetTag = { CommentsTestTags.tipCommentSheetPreset(it.toInt()) },
+                        customTag = CommentsTestTags.TIP_COMMENT_CUSTOM,
+                        sendTag = CommentsTestTags.TIP_COMMENT_SEND,
+                    )
+                is CommentTipState.Submitting ->
+                    Button(
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth().testTag(CommentsTestTags.TIP_COMMENT_SEND),
+                    ) { CircularProgressIndicator(modifier = Modifier.size(20.dp)) }
+                is CommentTipState.Confirmed ->
+                    CommentTipConfirmed(state, onDismiss)
+                is CommentTipState.NoCard ->
+                    CommentTipNoCard(onAddCard)
+                is CommentTipState.Hidden -> Unit
             }
-            if (state.submitting) CircularProgressIndicator(modifier = Modifier.size(24.dp))
-            Box(Modifier.fillMaxWidth().height(16.dp))
         }
+    }
+}
+
+/** TIPX-B2/B4 (F6/F8) — in-sheet amount receipt + explicit Done for a confirmed comment tip. */
+@Composable
+private fun CommentTipConfirmed(state: CommentTipState.Confirmed, onDone: () -> Unit) {
+    val amount = "$" + "%.2f".format(state.amountCents / 100.0)
+    val label = if (state.visibility.isPrivate) {
+        stringResource(R.string.tip_sent_private) + " · " + amount
+    } else {
+        stringResource(R.string.tip_sent) + " · " + amount
+    }
+    Column(
+        Modifier.fillMaxWidth().testTag(CommentsTestTags.TIP_COMMENT_CONFIRMED),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            Icons.Filled.CheckCircle,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(40.dp),
+        )
+        Text(label, style = MaterialTheme.typography.titleMedium)
+        Button(
+            onClick = onDone,
+            modifier = Modifier.fillMaxWidth().testTag(CommentsTestTags.TIP_COMMENT_DONE),
+        ) { Text(stringResource(R.string.tip_done)) }
+    }
+}
+
+/** TIPX-B3 (F3) — empty-wallet: an actionable add-card CTA (re-opens the sheet on return). */
+@Composable
+private fun CommentTipNoCard(onAddCard: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            stringResource(R.string.tip_no_card_body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(
+            onClick = onAddCard,
+            modifier = Modifier.fillMaxWidth().testTag(CommentsTestTags.TIP_COMMENT_ADD_CARD),
+        ) { Text(stringResource(R.string.tip_add_card)) }
     }
 }

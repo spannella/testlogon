@@ -105,6 +105,13 @@ data class Comment(
     /** #23 — emoji reaction tallies for this comment (empty when none). */
     val reactions: List<ReactionTally> = emptyList(),
     // ---- client-only optimistic flags ----
+    /**
+     * TIPX-B4 (F7) - DERIVED: the viewer authored this comment (viewer sub == authorId). Used to hide
+     * the Tip button on your own comment. Kept SEPARATE from [canDelete] so a moderator/admin (who may
+     * gain delete on others' comments) still sees the Tip button — tipping is authorship-gated, not
+     * permission-gated.
+     */
+    val isOwnAuthor: Boolean = false,
     /** DERIVED: authorId == current user id (no server field). */
     val canDelete: Boolean = false,
     /** DERIVED: own, non-deleted comment can be edited. */
@@ -146,6 +153,7 @@ internal fun CommentDto.toDomain(currentUserId: String?): Comment = Comment(
     stickerUrl = stickerUrl,
     imageUrl = imageUrl,
     reactions = reactionTallies(reactionsCounts, myReactions),
+    isOwnAuthor = authorId.isNotBlank() && authorId == currentUserId,
     canDelete = !deleted && authorId.isNotBlank() && authorId == currentUserId,
     canEdit = !deleted && authorId.isNotBlank() && authorId == currentUserId,
     localKey = commentId,
