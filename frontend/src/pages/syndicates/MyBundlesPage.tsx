@@ -16,7 +16,6 @@ import { listMyBundles, cancelBundleSubscription } from "@/api/endpoints/syndica
 import type { BundleSubscriptionOut } from "@/api/types";
 
 export default function MyBundlesPage() {
-  const queryClient = useQueryClient();
 
   const { data: bundles = [] } = useQuery({
     queryKey: ["my-bundles"],
@@ -86,7 +85,7 @@ function BundleCard({ bundle }: { bundle: BundleSubscriptionOut }) {
       </CardHeader>
       <CardContent className="space-y-2">
         <p className="text-lg font-medium">
-          ${(bundle.price_cents / 100).toFixed(2)}/{bundle.interval}
+          ${((bundle.price_cents ?? 0) / 100).toFixed(2)}/{bundle.interval}
         </p>
         {periodStart && periodEnd && (
           <p className="text-sm text-muted-foreground">

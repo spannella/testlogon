@@ -27,8 +27,9 @@ const ALLOWED_KEYS: Array<keyof MessagingDraftEvent> = [
 export function sanitizeMessagingDraftEvent(payload: MessagingDraftEvent): MessagingDraftEvent {
   const safe: Partial<MessagingDraftEvent> = {};
   for (const key of ALLOWED_KEYS) {
-    if (payload[key] !== undefined) {
-      safe[key] = payload[key];
+    const val = payload[key];
+    if (val !== undefined) {
+      (safe as Record<string, unknown>)[key] = val;
     }
   }
   return safe as MessagingDraftEvent;

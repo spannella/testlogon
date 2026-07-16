@@ -187,7 +187,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
-import { useAuthStore } from "@/stores/authStore";
 import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { isBroadcastNavigationEnabled } from "@/lib/featureFlags";
 

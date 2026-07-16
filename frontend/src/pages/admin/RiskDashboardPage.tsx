@@ -65,7 +65,7 @@ export default function RiskDashboardPage() {
   const [overrideReason, setOverrideReason] = useState("");
   const [profileUser, setProfileUser] = useState<string | null>(null);
 
-  const { data: distribution, isLoading: distLoading } = useQuery({
+  const { data: distribution } = useQuery({
     queryKey: ["risk", "distribution"],
     queryFn: fetchRiskDistribution,
   });
@@ -362,7 +362,7 @@ export default function RiskDashboardPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {userProfile.history.map((entry: Record<string, unknown>, i: number) => (
+                      {userProfile.history.map((entry, i: number) => (
                         <TableRow key={i}>
                           <TableCell>
                             {new Date((entry.created_at as number) * 1000).toLocaleString()}

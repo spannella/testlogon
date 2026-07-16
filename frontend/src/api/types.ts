@@ -2441,6 +2441,7 @@ export interface FeedPost {
   tip_total_cents?: number;
   liked_by_me?: boolean;
   unlocked?: boolean;
+  locked?: boolean;
   reactions_counts?: Record<string, number>;
   my_reactions?: string[];
   created_at: string;
@@ -2543,12 +2544,29 @@ export interface GroupMember {
 }
 
 // GROUP-002: Group Feed
-export interface GroupFeedPost extends FeedPost {
+// Matches backend GroupFeedPostOut (app/models.py) — a flat shape distinct
+// from FeedPost (uses user_* fields, `text`, single `image_url`).
+export interface GroupFeedPost {
+  post_id: string;
+  user_id: string;
+  user_display_name?: string;
+  user_avatar_url?: string | null;
+  text?: string | null;
+  body_format?: string;
+  image_url?: string | null;
   group_id: string;
   audience: "public" | "members_only";
   pinned: boolean;
   pinned_at?: number;
   pinned_by?: string;
+  unlock_price_cents?: number | null;
+  unlocked: boolean;
+  tip_total_cents: number;
+  reactions_counts: Record<string, number>;
+  my_reactions: string[];
+  comment_count: number;
+  created_at: number;
+  updated_at?: number;
 }
 
 export interface GroupFeedResponse {
@@ -4481,11 +4499,22 @@ export interface EarningsBreakdown {
   other: number;
 }
 
+export interface TimeSeriesPoint {
+  date: string;
+  total: number;
+  tips: number;
+  subscriptions: number;
+  unlocks: number;
+  vod_purchases: number;
+  other: number;
+}
+
 export interface EarningsSummary {
   total_cents: number;
   breakdown: EarningsBreakdown;
   transaction_count: number;
   currency: string;
+  time_series?: TimeSeriesPoint[];
 }
 
 export interface EarningsTransaction {
@@ -13213,7 +13242,7 @@ export interface AutoReplyRule {
   creator_id: string;
   trigger_pattern: string;
   response_template: string;
-  match_type: string;
+  match_type: "keyword" | "regex" | "contains" | "exact";
   priority: number;
   enabled: boolean;
   created_at: number;
@@ -13674,6 +13703,11 @@ export interface Ec2InstanceOut {
   terminated_at?: number;
   last_activity_at?: number;
   auto_terminate_after?: number;
+  // NOTE: referenced by Ec2LauncherPage for the SSH/RDP button gating, but the
+  // backend Ec2InstanceOut model does NOT populate this — always undefined at
+  // runtime (latent bug: the windows check never gates). Kept optional to
+  // preserve current behavior without inventing a served field. TODO tsc:
+  os_type?: string;
 }
 
 export interface Ec2InstanceListOut {

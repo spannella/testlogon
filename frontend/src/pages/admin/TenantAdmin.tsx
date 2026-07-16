@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Building2, Plus, Trash2, Globe, Pencil } from "lucide-react";
+import { Building2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -42,12 +42,8 @@ import { Badge } from "@/components/ui/badge";
 import {
   createTenant,
   listTenants,
-  updateTenant,
   deleteTenant,
-  addDomain,
-  removeDomain,
 } from "@/api/endpoints/tenants";
-import type { TenantOut } from "@/api/types";
 
 function statusColor(status: string) {
   switch (status) {
@@ -65,7 +61,6 @@ function statusColor(status: string) {
 export default function TenantAdmin() {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
-  const [editTenant, setEditTenant] = useState<TenantOut | null>(null);
   const [slug, setSlug] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [plan, setPlan] = useState("starter");

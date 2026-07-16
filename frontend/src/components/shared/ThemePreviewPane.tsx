@@ -6,7 +6,6 @@ import { useUiStore } from "@/stores/uiStore";
  * using inline styles to reflect the current accent / density / font size.
  */
 export function ThemePreviewPane() {
-  const accentColor = useUiStore((s) => s.accentColor);
   const highContrast = useUiStore((s) => s.highContrast);
   const density = useUiStore((s) => s.density);
 

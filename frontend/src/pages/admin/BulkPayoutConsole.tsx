@@ -201,14 +201,14 @@ export default function BulkPayoutConsole() {
           <h2>Preview</h2>
           <p>
             Items: {preview.item_count} | Eligible:{" "}
-            {preview.items.filter((i) => i.status === "pending").length} |
+            {(preview.items ?? []).filter((i) => i.status === "pending").length} |
             Ineligible:{" "}
-            {preview.items.filter((i) => i.status === "skipped").length} | Total:{" "}
+            {(preview.items ?? []).filter((i) => i.status === "skipped").length} | Total:{" "}
             <span data-testid="preview-total">{fmtCents(preview.total_cents)}</span>
           </p>
           <table>
             <tbody>
-              {preview.items.map((i) => (
+              {(preview.items ?? []).map((i) => (
                 <tr key={i.ref_id}>
                   <td>{i.ref_id}</td>
                   <td>{fmtCents(i.amount_cents)}</td>
@@ -236,7 +236,7 @@ export default function BulkPayoutConsole() {
           </p>
           <table>
             <tbody>
-              {result.items.map((i) => (
+              {(result.items ?? []).map((i) => (
                 <tr key={i.ref_id}>
                   <td>{i.ref_id}</td>
                   <td>{fmtCents(i.amount_cents)}</td>
@@ -294,7 +294,7 @@ export default function BulkPayoutConsole() {
           </p>
           <table>
             <tbody>
-              {detail.items.map((i) => (
+              {(detail.items ?? []).map((i) => (
                 <tr key={i.ref_id}>
                   <td>{i.ref_id}</td>
                   <td>{fmtCents(i.amount_cents)}</td>

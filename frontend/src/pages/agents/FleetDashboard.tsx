@@ -43,13 +43,7 @@ import {
   deleteTemplate,
   createFromTemplate,
 } from "@/api/endpoints/agentFleet";
-import type {
-  WorkerSummary,
-  FleetStatus,
-  Capacity,
-  WorkerTemplate,
-  WorkerTemplateIn,
-} from "@/api/types";
+import type { WorkerTemplateIn } from "@/api/types";
 
 // ─── Status badge colors ────────────────────────────────────────
 

@@ -71,7 +71,7 @@ describe("BillingOverview e2e provider retry matrix", () => {
     expect(await screen.findByText(/Payment issue needs confirmation/i)).toBeInTheDocument();
 
     const retryButtons = await screen.findAllByRole("button", { name: "Confirm and Retry Charge" });
-    await userEvent.click(retryButtons[0]);
+    await userEvent.click(retryButtons[0]!);
     await userEvent.click(await screen.findByRole("button", { name: "Retry Charge" }));
 
     await waitFor(() => {

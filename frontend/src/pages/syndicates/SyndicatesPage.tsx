@@ -25,7 +25,6 @@ import {
 } from "@/api/endpoints/syndicates";
 
 export default function SyndicatesPage() {
-  const queryClient = useQueryClient();
 
   const { data: mySyndicates = [] } = useQuery({
     queryKey: ["syndicates", "mine"],
@@ -68,7 +67,7 @@ export default function SyndicatesPage() {
                 >
                   <div>
                     <p className="font-medium">{s.syndicate_name}</p>
-                    <p className="text-sm text-muted-foreground">Joined {new Date(s.joined_at * 1000).toLocaleDateString()}</p>
+                    <p className="text-sm text-muted-foreground">Joined {new Date((s.joined_at ?? 0) * 1000).toLocaleDateString()}</p>
                   </div>
                   <Badge variant={s.role === "admin" ? "default" : "secondary"}>
                     {s.role}
@@ -176,7 +175,7 @@ function CreateSyndicateDialog() {
   );
 }
 
-function PendingInvitesCard({ invites }: { invites: Array<{ syndicate_id: string; syndicate_name: string; invited_by: string; status: string }> }) {
+function PendingInvitesCard({ invites }: { invites: Array<{ syndicate_id: string; syndicate_name?: string; invited_by: string; status: string }> }) {
   const queryClient = useQueryClient();
 
   const respondMut = useMutation({
@@ -218,7 +217,7 @@ function PendingInvitesCard({ invites }: { invites: Array<{ syndicate_id: string
   );
 }
 
-function DiscoverSyndicateRow({ syndicate }: { syndicate: { syndicate_id: string; name: string; description: string; member_count: number } }) {
+function DiscoverSyndicateRow({ syndicate }: { syndicate: { syndicate_id: string; name: string; description?: string; member_count?: number } }) {
   const queryClient = useQueryClient();
   const [requested, setRequested] = useState(false);
 

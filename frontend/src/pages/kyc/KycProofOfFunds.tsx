@@ -55,7 +55,7 @@ export default function KycProofOfFunds() {
 
   async function refresh() {
     const res = await kycProofOfFundsApi.listMine();
-    setSubmissions(res.data.submissions);
+    setSubmissions(res.submissions);
   }
 
   async function submit() {
@@ -78,7 +78,7 @@ export default function KycProofOfFunds() {
 
   async function loadReview() {
     const res = await kycProofOfFundsApi.listByStatus(reviewStatus);
-    setReviewItems(res.data.submissions);
+    setReviewItems(res.submissions);
   }
 
   async function adjudicate(id: string, decision: string) {

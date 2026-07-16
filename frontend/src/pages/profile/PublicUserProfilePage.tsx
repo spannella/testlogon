@@ -58,7 +58,7 @@ export default function PublicUserProfilePage() {
   });
 
   const contactMut = useMutation({
-    mutationFn: async (userSub: string) => addContact({ contact_id: userSub }),
+    mutationFn: async (userSub: string) => addContact({ user_id: userSub }),
     onSuccess: () => toast.success("Added to contacts"),
     onError: () => toast.error("Unable to add contact right now"),
   });

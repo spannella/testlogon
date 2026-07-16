@@ -63,7 +63,7 @@ export function hexToHsl(hex: string): string {
 export function contrastForeground(hsl: string): string {
   const match = hsl.match(/(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%/);
   if (!match) return "210 40% 98%";
-  const l = parseFloat(match[3]);
+  const l = parseFloat(match[3] ?? "0");
   // If lightness > 55%, use dark foreground; else light
   return l > 55 ? "222 84% 5%" : "210 40% 98%";
 }

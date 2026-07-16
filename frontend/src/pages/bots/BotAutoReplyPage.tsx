@@ -13,7 +13,7 @@ import {
   ToggleRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -393,8 +393,8 @@ export default function BotAutoReplyPage() {
           title="Delete Auto-Reply Rule"
           description={`Delete the rule matching "${deleteTarget.trigger_pattern}"? This cannot be undone.`}
           onConfirm={() => deleteMut.mutate(deleteTarget.rule_id)}
-          confirmText="Delete"
-          variant="destructive"
+          confirmLabel="Delete"
+          variant="danger"
         />
       )}
 

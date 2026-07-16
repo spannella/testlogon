@@ -32,7 +32,7 @@ export function extractCustomShortcodes(text: string | null | undefined): string
   let m: RegExpExecArray | null;
   CUSTOM_SHORTCODE_RE.lastIndex = 0;
   while ((m = CUSTOM_SHORTCODE_RE.exec(text)) !== null) {
-    const code = m[1].toLowerCase();
+    const code = (m[1] ?? "").toLowerCase();
     if (!SHORTCODE_MAP.has(code)) out.add(code);
   }
   return Array.from(out);
@@ -57,7 +57,7 @@ export function splitCustomEmojiText(
   let m: RegExpExecArray | null;
   CUSTOM_SHORTCODE_RE.lastIndex = 0;
   while ((m = CUSTOM_SHORTCODE_RE.exec(text)) !== null) {
-    const code = m[1].toLowerCase();
+    const code = (m[1] ?? "").toLowerCase();
     const url = customEmojiMap[code];
     if (!url) continue;
     if (m.index > lastIndex) {

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { MessageCircle, Trash2, VolumeX, Send, Reply, Clock, Lock, Ticket, Package } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -47,7 +46,6 @@ export function BroadcastChat({ sessionId, isBroadcaster }: BroadcastChatProps) 
   const [lotteryResult, setLotteryResult] = useState<BroadcastLotteryResultEntry | null>(null);
   // Product share state (LCOM-002 / GAP-0290)
   const [showProductPicker, setShowProductPicker] = useState(false);
-  const queryClient = useQueryClient();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);

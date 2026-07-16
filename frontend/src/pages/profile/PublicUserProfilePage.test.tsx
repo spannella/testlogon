@@ -128,7 +128,7 @@ describe("PublicUserProfilePage", () => {
 
   it("renders not-found state for suppressed or missing profiles", async () => {
     vi.mocked(getProfileByIdentifier).mockRejectedValue(
-      new ProfileLookupError("not_found_or_suppressed", "Profile not available", 404),
+      new ProfileLookupError("not_found_or_suppressed", "Profile not available", 404, "Profile not available"),
     );
 
     renderAt("/u/missing");

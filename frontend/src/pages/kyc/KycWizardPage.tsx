@@ -26,7 +26,6 @@ import {
 } from "@/hooks/useKycTranslations";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { CameraCapture } from "@/components/shared/CameraCapture";
 import { FaceComparisonResult } from "@/pages/kyc/FaceComparisonResult";
 import { EidVerificationPanel } from "@/components/shared/EidVerificationPanel";

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Mic, Video, Square, Play, RotateCcw, Send, X, Loader2 } from "lucide-react";
+import { Mic, Video, Square, RotateCcw, Send, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { sendVoicemail } from "@/api/endpoints/messaging";
 import { toast } from "sonner";
@@ -102,7 +102,7 @@ export function VoicemailRecorder({ conversationId, callId, onSent, onSkip }: Vo
         analyserRef.current.getByteTimeDomainData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i++) {
-          const v = (data[i] - 128) / 128;
+          const v = ((data[i] ?? 128) - 128) / 128;
           sum += v * v;
         }
         const rms = Math.min(1, Math.sqrt(sum / data.length) * 2);
@@ -168,7 +168,7 @@ export function VoicemailRecorder({ conversationId, callId, onSent, onSkip }: Vo
         callId,
         durationSeconds: Math.max(1, elapsed),
         waveform,
-        contentType: mimeType.split(";")[0], // strip codec params
+        contentType: mimeType.split(";")[0] ?? mimeType, // strip codec params
         mode,
       });
       setPhase("sent");

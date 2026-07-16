@@ -62,7 +62,7 @@ export function EditPostDialog({
     const [datePart, timePart] = localStr.split("T");
     const [y, m, d] = (datePart || "").split("-").map(Number);
     const [hh, mm] = (timePart || "").split(":").map(Number);
-    const utcGuess = new Date(Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0));
+    const utcGuess = new Date(Date.UTC(y || 0, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0));
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: tz,
       year: "numeric",
@@ -74,7 +74,7 @@ export function EditPostDialog({
     }).formatToParts(utcGuess);
     const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
     const tzAsUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), 0);
-    const targetAsUtc = Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0);
+    const targetAsUtc = Date.UTC(y || 0, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0);
     return new Date(utcGuess.getTime() + (targetAsUtc - tzAsUtc));
   };
 
@@ -123,7 +123,7 @@ export function EditPostDialog({
     if (!body.trim() && imageUrls.length === 0) return;
     const canEditUnlockLimit = isLockedPost && unlockLimitFeatureEnabled;
     const parsedUnlockLimit = canEditUnlockLimit && unlockLimitEnabled ? Number.parseInt(unlockLimitInput, 10) : undefined;
-    if (canEditUnlockLimit && unlockLimitEnabled && (!Number.isFinite(parsedUnlockLimit) || parsedUnlockLimit < 1)) {
+    if (canEditUnlockLimit && unlockLimitEnabled && (!Number.isFinite(parsedUnlockLimit) || (parsedUnlockLimit ?? 0) < 1)) {
       setUnlockLimitError("Unlock limit must be a whole number greater than 0.");
       return;
     }

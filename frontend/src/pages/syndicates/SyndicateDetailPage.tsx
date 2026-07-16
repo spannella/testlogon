@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Users, UserPlus, Shield, Clock, LogOut, Trash2, ArrowLeftRight, Package, Plus } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Users, UserPlus, Clock, LogOut, Trash2, ArrowLeftRight, Package, Plus } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -30,7 +30,6 @@ import {
   removeMember,
   listBundlePlans,
   createBundlePlan,
-  updateBundlePlan,
   archiveBundlePlan,
   subscribeToBundlePlan,
 } from "@/api/endpoints/syndicates";
@@ -149,7 +148,7 @@ export default function SyndicateDetailPage() {
                     <div>
                       <p className="font-medium">{m.display_name || m.user_id}</p>
                       <p className="text-sm text-muted-foreground">
-                        Joined {new Date(m.joined_at * 1000).toLocaleDateString()}
+                        Joined {new Date((m.joined_at ?? 0) * 1000).toLocaleDateString()}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -246,7 +245,7 @@ export default function SyndicateDetailPage() {
                             {a.target_id && <span className="font-medium">{a.target_id}</span>}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            {new Date(a.ts * 1000).toLocaleString()}
+                            {new Date((a.ts ?? 0) * 1000).toLocaleString()}
                           </p>
                         </div>
                       </div>
@@ -405,7 +404,7 @@ function BundlePlansTab({ syndicateId, isAdmin }: { syndicateId: string; isAdmin
                   <p className="text-sm text-muted-foreground mb-2">{p.description}</p>
                 )}
                 <p className="text-lg font-medium mb-3">
-                  ${(p.price_cents / 100).toFixed(2)}/{p.interval}
+                  ${((p.price_cents ?? 0) / 100).toFixed(2)}/{p.interval}
                 </p>
                 <div className="flex gap-2">
                   {isAdmin && p.status === "active" && (
@@ -536,7 +535,7 @@ function CreateBundlePlanDialog({ syndicateId }: { syndicateId: string }) {
   );
 }
 
-function RequestRow({ syndicateId, request }: { syndicateId: string; request: { user_id: string; message: string; requested_at: number } }) {
+function RequestRow({ syndicateId, request }: { syndicateId: string; request: { user_id: string; message?: string; requested_at?: number } }) {
   const queryClient = useQueryClient();
 
   const approveMut = useMutation({
@@ -559,7 +558,7 @@ function RequestRow({ syndicateId, request }: { syndicateId: string; request: { 
         <p className="font-medium">{request.user_id}</p>
         {request.message && <p className="text-sm text-muted-foreground">{request.message}</p>}
         <p className="text-xs text-muted-foreground">
-          {new Date(request.requested_at * 1000).toLocaleDateString()}
+          {new Date((request.requested_at ?? 0) * 1000).toLocaleDateString()}
         </p>
       </div>
       <div className="flex gap-2">

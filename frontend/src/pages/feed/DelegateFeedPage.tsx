@@ -23,11 +23,7 @@ import {
   getFeedAnalytics,
   getFeedDelegateAudit,
 } from "@/api/endpoints/delegateFeed";
-import type {
-  DelegatedPostOut,
-  FeedAnalyticsOut,
-  FeedDelegateAuditEntry,
-} from "@/api/types";
+import type { DelegatedPostOut } from "@/api/types";
 
 export default function DelegateFeedPage() {
   const { creatorId } = useParams<{ creatorId: string }>();

@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,6 @@ import { Play, Pause, Square, Users, Link2, Copy } from "lucide-react";
 
 export default function WatchPartyPage() {
   const { partyId } = useParams<{ partyId: string }>();
-  const navigate = useNavigate();
   const qc = useQueryClient();
 
   const { data: party, isLoading } = useQuery({

@@ -21,7 +21,7 @@ vi.mock("@/stores/authStore", () => ({
   useAuthStore: (selector: (s: { accessToken: string | null }) => unknown) => selector({ accessToken: "token" }),
 }));
 
-const canAccessPaymentIncidentQueue = vi.fn(() => true);
+const canAccessPaymentIncidentQueue = vi.fn((..._args: unknown[]) => true);
 vi.mock("@/lib/adminCapabilities", () => ({
   canAccessPaymentIncidentQueue: (...args: unknown[]) => canAccessPaymentIncidentQueue(...args),
 }));

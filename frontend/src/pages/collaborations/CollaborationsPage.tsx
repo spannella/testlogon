@@ -14,7 +14,6 @@ import {
 } from "@/api/endpoints/collaborations";
 import type {
   CollaborationOut,
-  CollaborationSettingsOut,
   CollaborationSettingsIn,
   CollaborationCreateIn,
   CollaborationRevisionOut,
@@ -234,7 +233,7 @@ function CreateCollaborationDialog({
   const [recipientId, setRecipientId] = useState("");
   const [title, setTitle] = useState("");
   const [splitPct, setSplitPct] = useState(60);
-  const [contentTypes, setContentTypes] = useState<string[]>(["broadcast", "post"]);
+  const [contentTypes] = useState<string[]>(["broadcast", "post"]);
 
   const createMut = useMutation({
     mutationFn: (data: CollaborationCreateIn) => createCollaboration(data),

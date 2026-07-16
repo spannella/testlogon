@@ -152,7 +152,7 @@ function mountStatusVariant(status: string): "default" | "secondary" | "destruct
 function maskAppleId(value: string): string {
   const raw = (value || "").trim();
   if (!raw.includes("@")) return raw ? "••••" : "";
-  const [local, domain] = raw.split("@", 2);
+  const [local = "", domain = ""] = raw.split("@", 2);
   const localMasked = local.length <= 2 ? `${local.charAt(0) || "•"}•` : `${local.slice(0, 2)}••••`;
   return `${localMasked}@${domain}`;
 }

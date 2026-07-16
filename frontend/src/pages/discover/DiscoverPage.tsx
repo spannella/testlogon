@@ -48,24 +48,6 @@ function UserCard({ user }: { user: DiscoveryUser }) {
   );
 }
 
-function useDebounce(value: string, delay: number) {
-  const [debounced, setDebounced] = useState(value);
-  const timeoutRef = useState<ReturnType<typeof setTimeout> | null>(null);
-
-  const update = useCallback(
-    (newValue: string) => {
-      if (timeoutRef[0]) clearTimeout(timeoutRef[0]);
-      timeoutRef[0] = setTimeout(() => setDebounced(newValue), delay);
-    },
-    [delay, timeoutRef],
-  );
-
-  if (value !== debounced && !timeoutRef[0]) {
-    update(value);
-  }
-
-  return debounced;
-}
 
 export default function DiscoverPage() {
   const [query, setQuery] = useState("");

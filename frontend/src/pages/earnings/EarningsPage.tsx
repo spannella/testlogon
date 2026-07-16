@@ -185,8 +185,8 @@ function RevenueChart({
           tickFormatter={(v: number) => `$${v}`}
         />
         <Tooltip
-          formatter={(value: number) =>
-            `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          formatter={(value) =>
+            `$${Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
           }
         />
         <Legend />

@@ -191,7 +191,7 @@ export default function TargetingEditorPage() {
       device_types: t.device_types || [],
       content_types: t.content_types || [],
       content_categories: t.content_categories || [],
-      new_user_only: t.new_user_only,
+      new_user_only: t.new_user_only ?? false,
       creator_ids: t.creator_ids || [],
       exclude_creator_ids: t.exclude_creator_ids || [],
       exclude_categories: t.exclude_categories || [],

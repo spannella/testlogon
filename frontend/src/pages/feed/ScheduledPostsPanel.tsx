@@ -158,7 +158,7 @@ export function ScheduledPostsPanel() {
           initialScheduledAtLocal={editingPost.scheduled_at_local}
           initialBody={editingPost.body}
           initialImageUrls={editingPost.image_urls}
-          initialBodyRich={(editingPost.body_rich as Record<string, unknown>) ?? null}
+          initialBodyRich={(editingPost.body_rich as unknown as import("./MarkdownComposer").RichDoc) ?? null}
         />
       )}
     </>

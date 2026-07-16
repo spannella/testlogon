@@ -51,7 +51,6 @@ import CombineVideosDialog from "@/components/shared/CombineVideosDialog";
 import {
   presignVideoUpload,
   completeVideoUpload,
-  completeVideoUploadLegacy,
   listMyVideos,
   updateVideo,
   deleteVideo,

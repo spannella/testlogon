@@ -19,14 +19,6 @@ import {
   type MessageEncryptionEnvelope,
 } from "@/lib/messageEncryption";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -95,7 +87,7 @@ const QUICK_REACT_EMOJI = "❤️";
 // stored under the "custom:shortcode" key (see ReactionEmoji). Normalize here.
 function normalizeReactionKey(picked: string): string {
   const m = /^:([a-zA-Z0-9_-]+):$/.exec(picked);
-  if (m) return `custom:${m[1].toLowerCase()}`;
+  if (m) return `custom:${(m[1] ?? "").toLowerCase()}`;
   return picked;
 }
 
@@ -645,7 +637,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
 
   const reportMut = useMutation({
     mutationFn: ({ topics, reason_text }: ReportContentPayload) => reportMessage(conversationId, message.message_id, {
-      reason_code: topics[0],
+      reason_code: topics[0] ?? "",
       statement: reason_text,
     }),
     onSuccess: () => {
@@ -1209,7 +1201,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                     )
                   ) : (
                     <p className="text-xs text-muted-foreground">
-                      {lotterySelectedOutcome.payload_type.toUpperCase()} outcome selected
+                      {String(lotterySelectedOutcome.payload_type).toUpperCase()} outcome selected
                     </p>
                   )}
                 </>

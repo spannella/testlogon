@@ -64,7 +64,7 @@ declare global {
   }
 }
 
-type TerminalInstance = ReturnType<NonNullable<typeof window.Terminal>> | null;
+type TerminalInstance = InstanceType<NonNullable<typeof window.Terminal>> | null;
 
 async function loadXterm(): Promise<{ Terminal: NonNullable<typeof window.Terminal>; FitAddon: NonNullable<typeof window.FitAddon>["FitAddon"] }> {
   // Use globally injected stubs in tests.

@@ -183,7 +183,6 @@ const GroupsListPage = lazy(() => import("@/pages/groups/GroupsListPage"));
 const EarningsPage = lazy(() => import("@/pages/earnings/EarningsPage"));
 const GroupSettingsPage = lazy(() => import("@/pages/groups/GroupSettingsPage"));
 const TargetingEditor = lazy(() => import("@/pages/ads/TargetingEditor"));
-const CreativeEditor = lazy(() => import("@/pages/ads/CreativeEditor"));
 const CreativeListPage = lazy(() => import("@/pages/ads/CreativeListPage"));
 const AdvertiserDashboard = lazy(() => import("@/pages/ads/AdvertiserDashboard"));
 const CampaignList = lazy(() => import("@/pages/ads/CampaignList"));

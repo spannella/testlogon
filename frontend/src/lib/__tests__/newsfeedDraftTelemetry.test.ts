@@ -8,7 +8,7 @@ describe("reportDraftLifecycleEvent", () => {
   });
 
   it("uses sendBeacon when available", () => {
-    const beaconSpy = vi.fn(() => true);
+    const beaconSpy = vi.fn((_url?: string, _data?: unknown) => true);
     Object.defineProperty(globalThis, "navigator", {
       value: { sendBeacon: beaconSpy },
       configurable: true,

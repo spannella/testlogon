@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag, Bookmark, BookmarkCheck, Hash, Clock, AlertCircle, RotateCcw, Trash2, Sparkles } from "lucide-react";
+import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag, Bookmark, BookmarkCheck, Clock, AlertCircle, RotateCcw, Trash2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -87,7 +87,7 @@ function PostImageGrid({ urls, imageVariants, onClickImage }: PostImageGridProps
         onClick={() => onClickImage(0)}
       >
         <ResponsiveImage
-          src={urls[0]}
+          src={urls[0] ?? ""}
           variants={imageVariants?.[0]}
           alt=""
           className="max-h-80 w-full rounded-lg object-cover transition-transform hover:scale-[1.02]"
@@ -126,7 +126,7 @@ function PostImageGrid({ urls, imageVariants, onClickImage }: PostImageGridProps
           aria-label="Open image 1"
           onClick={() => onClickImage(0)}
         >
-          <ResponsiveImage src={urls[0]} variants={imageVariants?.[0]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" loading="lazy" />
+          <ResponsiveImage src={urls[0] ?? ""} variants={imageVariants?.[0]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" loading="lazy" />
         </button>
         {/* Two square cells below */}
         {urls.slice(1).map((url, i) => (
@@ -833,7 +833,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         initialBody={post.body}
         initialImageUrls={imageUrls}
         initialBodyRich={(post.body_rich as any) ?? null}
-        initialUnlockPriceCents={post.unlock_price_cents}
+        initialUnlockPriceCents={post.unlock_price_cents ?? undefined}
         initialUnlockLimit={post.unlock_limit ?? null}
       />
 

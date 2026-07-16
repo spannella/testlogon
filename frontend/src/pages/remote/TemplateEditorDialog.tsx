@@ -305,7 +305,7 @@ export function TemplateEditorDialog({
                   value={row.key}
                   onChange={(e) => {
                     const next = [...envRows];
-                    next[idx] = { ...next[idx], key: e.target.value };
+                    next[idx] = { ...(next[idx] ?? { key: "", value: "" }), key: e.target.value };
                     setEnvRows(next);
                   }}
                 />
@@ -314,7 +314,7 @@ export function TemplateEditorDialog({
                   value={row.value}
                   onChange={(e) => {
                     const next = [...envRows];
-                    next[idx] = { ...next[idx], value: e.target.value };
+                    next[idx] = { ...(next[idx] ?? { key: "", value: "" }), value: e.target.value };
                     setEnvRows(next);
                   }}
                 />

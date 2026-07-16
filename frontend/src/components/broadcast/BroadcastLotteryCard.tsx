@@ -31,7 +31,8 @@ export function BroadcastLotteryCard({
   const { data: lottery } = useQuery<BroadcastLotteryViewerStatus>({
     queryKey: ["broadcast-lottery", sessionId, lotteryId],
     queryFn: () => getLotteryStatus(sessionId, lotteryId),
-    refetchInterval: lottery?.status !== "drawn" ? 5000 : false,
+    refetchInterval: (query) =>
+      query.state.data?.status !== "drawn" ? 5000 : false,
   });
 
   // Countdown timer

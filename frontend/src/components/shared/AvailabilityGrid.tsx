@@ -65,7 +65,7 @@ export function slotKeyFor(dateIso: string, minuteOfDay: number): string {
 function dayHeader(dateIso: string): { label: string; sub: string } {
   const d = new Date(`${dateIso}T00:00:00Z`);
   return {
-    label: DAY_LABELS[d.getUTCDay()],
+    label: DAY_LABELS[d.getUTCDay()] ?? "",
     sub: `${d.getUTCMonth() + 1}/${d.getUTCDate()}`,
   };
 }

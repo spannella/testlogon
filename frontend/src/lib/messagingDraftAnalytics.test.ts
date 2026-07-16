@@ -37,7 +37,7 @@ describe("messagingDraftAnalytics", () => {
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
-    const evt = handler.mock.calls[0][0] as CustomEvent;
+    const evt = handler.mock.calls[0]![0] as CustomEvent;
     expect(evt.detail).toEqual({
       event: "draft_fallback",
       outcome: "success",

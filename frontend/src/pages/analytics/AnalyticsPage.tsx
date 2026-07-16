@@ -8,8 +8,6 @@ import {
   UserPlus,
   Users,
   RefreshCw,
-  TrendingUp,
-  TrendingDown,
 } from "lucide-react";
 import {
   AreaChart,
@@ -22,7 +20,6 @@ import {
   PieChart,
   Pie,
   Cell,
-  BarChart,
   Bar,
   Legend,
   ComposedChart,
@@ -341,7 +338,7 @@ export default function AnalyticsPage() {
                         <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v: number) => formatCents(v)} />
+                    <Tooltip formatter={(v) => formatCents(Number(v))} />
                     <Legend />
                   </PieChart>
                 </ResponsiveContainer>

@@ -1,4 +1,3 @@
-import { cn } from "@/lib/utils";
 import type { ImageVariant } from "@/api/types";
 
 interface ResponsiveImageProps {

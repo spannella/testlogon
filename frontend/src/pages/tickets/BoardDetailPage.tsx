@@ -310,7 +310,7 @@ export default function BoardDetailPage() {
                     onClick={() =>
                       setDraftColumns((prev) => {
                         const next = [...prev];
-                        [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                        [next[idx - 1], next[idx]] = [next[idx]!, next[idx - 1]!];
                         return next;
                       })
                     }
@@ -325,7 +325,7 @@ export default function BoardDetailPage() {
                     onClick={() =>
                       setDraftColumns((prev) => {
                         const next = [...prev];
-                        [next[idx + 1], next[idx]] = [next[idx], next[idx + 1]];
+                        [next[idx + 1], next[idx]] = [next[idx]!, next[idx + 1]!];
                         return next;
                       })
                     }

@@ -18,7 +18,7 @@ export function extractSourceKey(src: string | undefined): string | null {
   if (!src) return null;
   const idx = src.indexOf("s3_key=");
   if (idx === -1) return null;
-  const raw = src.slice(idx + "s3_key=".length).split("&")[0];
+  const raw = src.slice(idx + "s3_key=".length).split("&")[0] ?? "";
   try {
     return decodeURIComponent(raw);
   } catch {

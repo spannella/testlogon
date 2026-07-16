@@ -1,4 +1,3 @@
-import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Users, X, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";

@@ -393,7 +393,6 @@ export function TransactionDetail() {
             deliveredAt={txn.shipping?.delivered_at}
             completedAt={txn.completed_at}
             revertedAt={txn.reverted_at}
-            carrierEvents={txn.shipping?.carrier_events}
           />
         </CardContent>
       </Card>

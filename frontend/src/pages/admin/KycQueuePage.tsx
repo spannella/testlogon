@@ -71,10 +71,6 @@ function formatWaitTime(seconds: number | null): string {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
-function formatDate(ts: number): string {
-  return new Date(ts * 1000).toLocaleString();
-}
-
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function KycQueuePage() {
