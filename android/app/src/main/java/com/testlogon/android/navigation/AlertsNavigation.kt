@@ -5,6 +5,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
 import com.testlogon.android.feature.alerts.AlertsRoute
+import com.testlogon.android.feature.messaging.nav.MessagingRoutes
 
 /** The alerts-inbox route (reached from the More hub). Mirrors the web /alerts page. */
 data object AlertsDest {
@@ -33,6 +34,20 @@ fun NavGraphBuilder.alertsDestination(navController: NavHostController) {
             // payout's statement/detail (action_url `/wallet/payouts/{payout_id}`).
             onOpenPayout = { payoutId ->
                 navController.navigate(PayoutDetailDest.build(payoutId)) { launchSingleTop = true }
+            },
+            // TIPX-E2: a tip alert deep-links to the tipped content (post/thread/video) or,
+            // for reversal/refund receipts, the Tip insights history screen.
+            onOpenPost = { postId ->
+                navController.navigate(PostDetailDest.build(postId)) { launchSingleTop = true }
+            },
+            onOpenThread = { conversationId ->
+                navController.navigate(MessagingRoutes.thread(conversationId)) { launchSingleTop = true }
+            },
+            onOpenVideo = { videoId ->
+                navController.navigate(VideoDetailDest.build(videoId)) { launchSingleTop = true }
+            },
+            onOpenTips = {
+                navController.navigate(TipInsightsDest.ROUTE) { launchSingleTop = true }
             },
             // SUB-E5: a subscription alert deep-links to Subscribers (creator) or manage-subscription.
             // The backend sets a per-recipient action_url; we route on its path, using the event to

@@ -40,6 +40,7 @@ SOCIAL_ALERT_TYPES: List[str] = [
     "post_shared",
     "post_tip",
     "message_tip",
+    "tip_received",
 ]
 
 BATCH_KEY_PATTERNS: Dict[str, str] = {

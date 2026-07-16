@@ -321,6 +321,32 @@ def _charge_tip_payment_intent(
     return pi.get("id")
 
 
+def _notify_tip_best_effort(entry: "TipLedgerEntry", result: "TipResult") -> None:
+    """TIPX-E1: fire the recipient alert + tipper receipt for a committed tip.
+
+    Best-effort: a notification failure must never break a charge/credit that
+    already committed. Routes EVERY surface through the one choke point so no
+    surface can be silent (comment/video/message-react/attached) or dead-link.
+    """
+    try:
+        from app.services.tip_notifications import notify_tip
+
+        notify_tip(
+            tipper_id=entry.tipper_user_id,
+            recipient_id=entry.recipient_user_id,
+            amount_cents=result.charged_cents,
+            net_cents=result.net_cents,
+            fee_cents=result.fee_cents,
+            currency=entry.currency,
+            content_type=entry.content_type,
+            content_id=entry.content_id,
+            tip_payment_id=result.tip_payment_id,
+            meta=getattr(entry, "extra_meta", None) or {},
+        )
+    except Exception:
+        logger.warning("notify_tip failed tip=%s", result.tip_payment_id, exc_info=True)
+
+
 def charge_tip(
     *,
     tipper_id: str,
@@ -406,6 +432,8 @@ def charge_tip(
             credit_entry_id=split.get("credit_entry_id", ""),
         )
         _store_idempotent_receipt(tipper_id, idempotency_key, result)
+        # TIPX-E1: single-choke-point tip notification (recipient alert + tipper receipt).
+        _notify_tip_best_effort(entry, result)
         return result
 
     # 6b. TIP-501: write the paired debit/credit + idempotency receipt ATOMICALLY.
@@ -443,6 +471,8 @@ def charge_tip(
 
     # 7. Notify the recipient's dashboard stream (best-effort).
     publish_tip_dashboard_sse(entry)
+    # TIPX-E1: single-choke-point tip notification (recipient alert + tipper receipt).
+    _notify_tip_best_effort(entry, result)
     return result
 
 
@@ -635,6 +665,24 @@ def reverse_tip(
             )
         except Exception:
             logger.warning("stripe refund skipped for tip=%s", tip_payment_id, exc_info=True)
+
+    # TIPX-E3 (N8): notify BOTH parties on the first reversal (best-effort).
+    try:
+        from app.services.tip_notifications import notify_tip_reversed
+
+        notify_tip_reversed(
+            tipper_id=tipper_id,
+            recipient_id=recipient_id,
+            gross_cents=gross_cents,
+            net_cents=net_cents,
+            currency=currency,
+            content_type=content_type,
+            content_id=content_id,
+            tip_payment_id=tip_payment_id,
+            reason=reason,
+        )
+    except Exception:
+        logger.warning("notify_tip_reversed failed tip=%s", tip_payment_id, exc_info=True)
 
     return receipt
 

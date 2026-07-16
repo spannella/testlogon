@@ -33,7 +33,8 @@ ALERT_CATEGORIES: Dict[str, set] = {
     "payouts": {"payout_initiated", "payout_paid", "payout_failed", "payout_returned"},
     "activity": {"new_follower", "post_liked", "post_reaction", "post_comment",
                  "comment_reply", "mention", "subscription_started", "post_shared",
-                 "post_tip", "message_tip"},
+                 "post_tip", "message_tip",
+                 "tip_received", "tip_sent", "tip_reversed", "tip_refunded"},
     "security": {"login_success", "login_failure", "mfa_success", "mfa_failure",
                  "api_key_created", "api_key_revoked", "session_revoked",
                  "totp_device_added", "totp_device_removed", "device_new",
@@ -172,6 +173,8 @@ ALERT_EVENT_TYPES: List[str] = [
     "new_follower","post_liked","post_reaction","post_comment",
     "comment_reply","mention","subscription_started","post_shared",
     "post_tip","message_tip",
+    # TIPX-E1/E3: unified tip notifications — recipient/sender/reversal (default-on transactional)
+    "tip_received","tip_sent","tip_reversed","tip_refunded",
     # Subscriptions (SUB-E1/E5): lifecycle notifications (default-on transactional)
     "subscription_renewed","subscription_renewal_failed","subscription_expiring","subscription_expired",
     "subscription_new_subscriber","subscription_canceled","subscription_gifted",
@@ -204,6 +207,10 @@ DEFAULT_PUSH_EVENT_TYPES: List[str] = [
     "subscription_started",  # a subscription/payment succeeded
     "post_tip",              # you received a tip
     "message_tip",           # you received a message tip
+    "tip_received",          # TIPX-E1: you received a tip (comment/video/broadcast/profile/react)
+    "tip_sent",              # TIPX-E1: your tip receipt
+    "tip_reversed",          # TIPX-E3: a tip you received was reversed
+    "tip_refunded",          # TIPX-E3: your tip was refunded
     "order_shipped",         # your order has shipped (buyer, D3)
     "order_out_for_delivery",  # your order is out for delivery (buyer, D4)
     "order_delivered",         # your order was delivered (buyer, D4)
