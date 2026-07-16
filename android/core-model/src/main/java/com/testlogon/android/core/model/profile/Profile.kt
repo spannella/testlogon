@@ -97,6 +97,8 @@ data class PublicProfile(
     val hasSubscriptionPlans: Boolean,
     val createdAtEpochSeconds: Long?,
     val discoverability: String?,
+    /** TIPX-C2 - aggregate direct-creator tip support (cents), rendered on the profile to both parties. */
+    val tipTotalCents: Int = 0,
 )
 
 /**

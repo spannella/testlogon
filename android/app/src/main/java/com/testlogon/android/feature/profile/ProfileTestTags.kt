@@ -37,6 +37,8 @@ object ProfileTestTags {
     const val PUBLIC_COPY_LINK = "public_copy_link"
     const val PUBLIC_SIGN_IN_CTA = "public_sign_in_cta"
     const val PUBLIC_SUBSCRIBE = "public_subscribe"
+    // TIPX-C2 - "Tip this creator" affordance on the public profile.
+    const val PUBLIC_TIP = "public_tip_creator"
     const val PUBLIC_OPEN_FANCLUB = "public_open_fanclub"
     const val PUBLIC_REPORT_USER = "public_report_user"
 }

@@ -87,6 +87,8 @@ data class PublicProfileDataDto(
     @Json(name = "has_subscription_plans") val hasSubscriptionPlans: Boolean = false,
     @Json(name = "created_at") val createdAt: Long? = null,
     @Json(name = "discoverability") val discoverability: String? = null,
+    // TIPX-C2 - aggregate direct-creator tip support in cents.
+    @Json(name = "tip_total_cents") val tipTotalCents: Int = 0,
 )
 
 /**

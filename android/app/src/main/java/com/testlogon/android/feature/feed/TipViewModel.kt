@@ -104,6 +104,13 @@ class TipViewModel @Inject constructor(
             when (val outcome = tips.tip(entry.postId, cents)) {
                 is TipOutcome.Success -> {
                     _state.value = TipSheetState.Confirmed(outcome.receipt, visibility = entry.visibility)
+                    // TIPX-C1 - a public tip advances the post's rendered "Tipped $X" badge. A private
+                    // tip still credits the creator but must not surface the amount publicly, so skip it.
+                    outcome.receipt.tipTotalCents?.let { total ->
+                        if (!entry.visibility.isPrivate) {
+                            _effects.trySend(TipEffect.TotalUpdated(entry.postId, total))
+                        }
+                    }
                     _effects.trySend(TipEffect.ShowSnackbar(SNACKBAR_SENT))
                 }
                 TipOutcome.PaymentsUnavailable ->
@@ -168,6 +175,8 @@ sealed interface TipEffect {
     data class ShowSnackbar(val message: String) : TipEffect
     /** TIP-204 - a successful post tip-reaction; the host forwards the badge to the feed overlay. */
     data class ReactionBadge(val postId: String, val badge: com.testlogon.android.data.feed.TipReactionBadge) : TipEffect
+    /** TIPX-C1 - a successful direct (public) tip; the host forwards the new total to the feed overlay. */
+    data class TotalUpdated(val postId: String, val tipTotalCents: Int) : TipEffect
 }
 
 /**

@@ -5138,4 +5138,5 @@
     <string name="subscribe_view_content">View content</string>
     <string name="subscribe_add_card_action">Add a payment method</string>
     <string name="profile_public_subscribe">Subscribe</string>
+    <string name="profile_public_tip_creator">Tip this creator</string>
 </resources>
