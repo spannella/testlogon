@@ -1678,11 +1678,24 @@ class AdminRefundDenyIn(BaseModel):
 # ── Billing Disputes / Chargebacks (BILLING-001) ─────────────────────────────
 
 class DisputeFileIn(BaseModel):
-    """Customer-initiated dispute (e.g. a chargeback claim) for a transaction."""
+    """Customer-initiated dispute (e.g. a chargeback claim) for a transaction.
+
+    DISP-010: ``reason`` is now the canonical enum
+    (not_received|not_as_described|unauthorized|duplicate|quality); ``charge_type``
+    + ``charge_ref`` (or ``transaction_entry_id`` for auto-detection) locate the
+    underlying charge for the reversal-rail dispatcher; ``reason_detail`` carries
+    the free-text the old ``reason`` field used to.
+    """
     transaction_entry_id: Optional[str] = Field(default=None, max_length=200)
     amount_cents: int = Field(ge=1)
     currency: str = "USD"
-    reason: str = Field(min_length=10, max_length=2000)
+    # accept the enum OR a legacy free-text reason (>=1 char); gating happens in
+    # dispute_lifecycle.validate_reason once the charge_type is known.
+    reason: str = Field(min_length=1, max_length=2000)
+    reason_detail: Optional[str] = Field(default=None, max_length=2000)
+    charge_type: Optional[str] = Field(default=None, max_length=40)
+    charge_ref: Optional[str] = Field(default=None, max_length=200)
+    recipient_id: Optional[str] = Field(default=None, max_length=200)
     provider: str = Field(default="manual", max_length=40)
 
 
@@ -1711,7 +1724,10 @@ class DisputeRespondIn(BaseModel):
 
 
 class DisputeResolveIn(BaseModel):
-    resolution: str = Field(pattern="^(won|lost|accepted)$")
+    # DISP-013: user-track outcomes drive the reversal dispatcher; legacy
+    # won|lost|accepted still accepted + mapped for the old admin path.
+    resolution: str = Field(pattern="^(refunded|partial|denied|won|lost|accepted)$")
+    override_amount_cents: Optional[int] = Field(default=None, ge=1)
     notes: Optional[str] = Field(default=None, max_length=2000)
 
 

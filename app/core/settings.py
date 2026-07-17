@@ -2247,6 +2247,8 @@ class Settings:
     billing_disputes_table_name: str = os.environ.get("DDB_BILLING_DISPUTES", "BillingDisputes")
     billing_disputes_enabled: bool = os.environ.get("BILLING_DISPUTES_ENABLED", "1") not in ("0", "false", "False")
     billing_disputes_default_deadline_days: int = int(os.environ.get("BILLING_DISPUTES_DEADLINE_DAYS", "14"))
+    dispute_response_window_days: int = int(os.environ.get("DISPUTE_RESPONSE_WINDOW_DAYS", "7"))
+    dispute_auto_refund_threshold_cents: int = int(os.environ.get("DISPUTE_AUTO_REFUND_THRESHOLD_CENTS", "0"))
 
     # Notification Delivery Enhancements (NOTIFY-001)
     notification_dispatch_enabled: bool = os.environ.get("NOTIFICATION_DISPATCH_ENABLED", "1") not in ("0", "false", "False")
