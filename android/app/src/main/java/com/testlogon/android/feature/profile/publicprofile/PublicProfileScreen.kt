@@ -76,20 +76,34 @@ fun PublicProfileRoute(
     onSignIn: () -> Unit = {},
     shareIntents: ProfileShareIntents = remember { ProfileShareIntents() },
     viewModel: PublicProfileViewModel = hiltViewModel(),
+    tipViewModel: ProfileTipViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val isAuthenticated by viewModel.isAuthenticated.collectAsStateWithLifecycle()
+    val tipState by tipViewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    var tipTotalOverride by remember { mutableStateOf<Int?>(null) }
     val linkCopied = stringResource(R.string.link_copied)
     val copyFailed = stringResource(R.string.link_copy_failed)
     val shareFailed = stringResource(R.string.share_profile_failed)
+
+    LaunchedEffect(tipViewModel) {
+        tipViewModel.effects.collect { effect ->
+            when (effect) {
+                is ProfileTipEffect.ShowSnackbar -> snackbarHostState.showSnackbar(effect.message)
+                is ProfileTipEffect.TotalUpdated -> tipTotalOverride = effect.tipTotalCents
+            }
+        }
+    }
 
     PublicProfileScreen(
         state = state,
         identifier = viewModel.identifier,
         isAuthenticated = isAuthenticated,
+        tipTotalOverride = tipTotalOverride,
+        onTipCreator = { creatorId, displayName -> tipViewModel.open(creatorId, displayName) },
         shareUrl = viewModel.shareUrl,
         snackbarHostState = snackbarHostState,
         onRetry = viewModel::onRetry,
@@ -115,6 +129,14 @@ fun PublicProfileRoute(
         },
         modifier = modifier,
     )
+
+    ProfileTipSheet(
+        state = tipState,
+        onSelectPreset = tipViewModel::selectPreset,
+        onCustomAmount = tipViewModel::setCustomAmount,
+        onSend = tipViewModel::send,
+        onDismiss = tipViewModel::dismiss,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -128,6 +150,8 @@ fun PublicProfileScreen(
     isAuthenticated: Boolean = false,
     shareUrl: String? = null,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    tipTotalOverride: Int? = null,
+    onTipCreator: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onSignIn: () -> Unit = {},
@@ -192,6 +216,8 @@ fun PublicProfileScreen(
                     profile = state.profile,
                     isStale = state.isStale,
                     isAuthenticated = isAuthenticated,
+                    tipTotalOverride = tipTotalOverride,
+                    onTipCreator = onTipCreator,
                     onRetry = onRetry,
                     onOpenFanClub = onOpenFanClub,
                     onSubscribe = onSubscribe,
@@ -233,6 +259,8 @@ private fun PublicContent(
     profile: PublicProfile,
     isStale: Boolean,
     isAuthenticated: Boolean,
+    tipTotalOverride: Int? = null,
+    onTipCreator: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onRetry: () -> Unit,
     onOpenFanClub: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
     onSubscribe: (creatorId: String, displayName: String?) -> Unit = { _, _ -> },
@@ -276,9 +304,29 @@ private fun PublicContent(
         )
         StatsRow(profile = profile, modifier = Modifier.padding(horizontal = 16.dp))
 
+        val supportCents = maxOf(profile.tipTotalCents, tipTotalOverride ?: 0)
+        if (supportCents > 0) {
+            Text(
+                text = "Tips received · $" + String.format(java.util.Locale.US, "%.2f", supportCents / 100.0),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp).testTag("public_tip_total"),
+            )
+        }
+
         // AND-390: auth-only affordances (fan-club, report) are HIDDEN (not disabled) when signed out;
         // the unauthenticated viewer instead gets a non-blocking Sign-in CTA (FR-7/FR-8).
         if (isAuthenticated) {
+            Button(
+                onClick = { onTipCreator(profile.identifier, profile.displayName) },
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .testTag(ProfileTestTags.PUBLIC_TIP),
+            ) {
+                Text(stringResource(R.string.profile_public_tip_creator))
+            }
+
             // SUBX-24: organic Subscribe entry -> the creator's subscription tiers.
             Button(
                 onClick = { onSubscribe(profile.userId, profile.displayName) },

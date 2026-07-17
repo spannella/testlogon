@@ -130,7 +130,12 @@ class TipsGoalsViewModel @AssistedInject constructor(
             try {
                 when (val auth = billing.authorize(amountCents, currency, memo = TIP_MEMO)) {
                     is BillingResult.Authorized -> {
-                        if (auth.paymentMethodId.isBlank()) {
+                        // TIPX-B1 (F1) - a BLANK payment-method id is the DEBUG/dev-demo path
+                        // (RealBillingAuthorizer authorizes blank; the dev backend mock-completes the
+                        // charge + falls back to the tip-default PM). Only a RELEASE build treats blank
+                        // as "no instrument -> payments unavailable"; in DEBUG we proceed so live-
+                        // broadcast tipping works end-to-end in the demo/test build.
+                        if (auth.paymentMethodId.isBlank() && !com.testlogon.android.BuildConfig.DEBUG) {
                             _effects.trySend(TipsEffect.PaymentsUnavailable)
                             return@launch
                         }

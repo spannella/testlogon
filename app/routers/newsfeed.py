@@ -428,6 +428,23 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
+def _stable_tip_idem(surface: str, tipper_id: str, content_id: str, client_request_id):
+    """TIPX-A3: deterministic tip idempotency key.
+
+    When the client supplies a stable ``client_request_id`` the key is
+    ``{surface}:{content_id}:{crid}`` so a transparent retry of the SAME tip
+    action replays the stored receipt (charged once). Absent a client id we
+    fall back to a per-request-unique key (prior behavior) so distinct
+    intentional tips on the same content are not collapsed.
+
+    Mirrors the stable ``msgtip:{mid}`` / ``bctip:{msg_id}`` pattern.
+    """
+    crid = (client_request_id or "").strip()
+    if crid:
+        return f"{surface}:{content_id}:{crid}"
+    return f"{surface}:{content_id}:{uuid.uuid4().hex}"
+
+
 # ─── Hashtag extraction (SOCIAL-006) ────────────────────────────────────────
 _HASHTAG_RE = re.compile(r"#([a-zA-Z][a-zA-Z0-9_]{0,49})\b")
 _TAG_VALID_RE = re.compile(r"^[a-z][a-z0-9_]{0,49}$")
@@ -1715,6 +1732,7 @@ class CreateCommentRequest(ContentFieldsMixin):
     # create-comment handler charges it (recipient = the POST author) via
     # charge_tip BEFORE the comment row is written, then stamps tip_total_cents.
     tip_amount_cents: Optional[int] = Field(default=None, ge=1)
+    tip_client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"[A-Za-z0-9._:-]+")  # TIPX-A3
     tip_currency: str = "usd"
     tip_payment_method_id: Optional[str] = None
     # FEED-004: emoji/GIF/sticker comments. `kind` selects the content type.
@@ -1848,6 +1866,9 @@ class TipRequest(BaseModel):
     # tip so charge_tip can resolve the tipper's saved PM (falls back to
     # tip-default -> default when None).
     payment_method_id: Optional[str] = None
+    # TIPX-A3: client-supplied idempotency key. The same id for the same tip
+    # action replays the receipt (a double-tap / retry charges once).
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"[A-Za-z0-9._:-]+")
 
 
 class UnfollowRequest(BaseModel):
@@ -2033,6 +2054,9 @@ class PostTipRequest(BaseModel):
     amount_cents: int = Field(..., ge=1)
     currency: str = "usd"
     payment_method_id: Optional[str] = None
+    # TIPX-A3: client-supplied idempotency key. The same id for the same tip
+    # action replays the receipt (a double-tap / retry charges once).
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"[A-Za-z0-9._:-]+")
 
 
 class ReactionRequest(BaseModel):
@@ -5044,16 +5068,9 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
         if req.payment_method_id not in pm_ids:
             raise HTTPException(status_code=400, detail="Payment method not found")
 
-    # TIP-007: the mock PaymentProvider stub is replaced by the centralized
-    # charge_tip seam (called below, after the tip_total bump). The stub always
-    # "succeeded", so removing it changes no behavior.
-    updated = ddb_update_item(
-        key={"pk": pk_post(post_id), "sk": sk_post()},
-        update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
-        expr_vals={":z": 0, ":amt": req.amount_cents},
-    )
-
-    # Write billing ledger debit + credit entries via the centralized charge_tip seam.
+    # TIPX-A1: charge FIRST, bump the public tip_total AFTER a successful charge
+    # so a declined charge (402) leaves NO inflated total + no ledger row.
+    updated: dict = {}
     post_author = post.get("user_id")
     _tip_txn_id = ""
     if post_author and post_author != user_id:
@@ -5067,9 +5084,15 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep, _kyc: object
             content_type="post",
             content_id=post_id,
             meta={"post_id": post_id},
-            idempotency_key=new_id("posttip"),
+            idempotency_key=_stable_tip_idem("posttip", user_id, post_id, getattr(req, "client_request_id", None)),
         )
         _tip_txn_id = _tp.tip_payment_id
+        # TIPX-A1: bump the public tip total ONLY now that the charge succeeded.
+        updated = ddb_update_item(
+            key={"pk": pk_post(post_id), "sk": sk_post()},
+            update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
+            expr_vals={":z": 0, ":amt": req.amount_cents},
+        )
         try:
             from app.services.activity_feed import record_social_interaction
             record_social_interaction(recipient_id=post_author, actor_id=user_id, kind="tip", target_type="post", target_id=post_id, extra={"amount_cents": req.amount_cents, "currency": req.currency})
@@ -5240,6 +5263,9 @@ class PostTipReactRequest(BaseModel):
     currency: str = "usd"
     emoji: Optional[str] = None
     payment_method_id: Optional[str] = None
+    # TIPX-A3: client-supplied idempotency key. The same id for the same tip
+    # action replays the receipt (a double-tap / retry charges once).
+    client_request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"[A-Za-z0-9._:-]+")
 
 
 @router.post("/posts/{post_id}/reactions/tip")
@@ -5274,7 +5300,7 @@ def tip_react_to_post(post_id: str, req: PostTipReactRequest, user_id: UserIdDep
         content_type="post_react",
         content_id=post_id,
         meta={"post_id": post_id, "emoji": emoji},
-        idempotency_key=new_id("postreacttip"),
+        idempotency_key=_stable_tip_idem("postreacttip", user_id, post_id, getattr(req, "client_request_id", None)),
     )
 
     # Only reached on a successful charge. Record the money-reaction badge + running
@@ -6310,7 +6336,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
             content_type="comment",
             content_id=comment_id,
             meta={"post_id": post_id, "comment_id": comment_id, "carried": True},
-            idempotency_key=new_id("cmtcarry"),
+            idempotency_key=_stable_tip_idem("cmtcarry", user_id, comment_id, getattr(req, "tip_client_request_id", None)),
         )
         comment_tip_total = int(req.tip_amount_cents)
 
@@ -6713,7 +6739,7 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
             content_type="comment",
             content_id=comment_id,
             meta={"post_id": post_id, "comment_id": comment_id},
-            idempotency_key=new_id("cmttip"),
+            idempotency_key=_stable_tip_idem("cmttip", tipper_id, comment_id, getattr(req, "client_request_id", None)),
         )
         pi["payment_intent_id"] = _ct.tip_payment_id
 

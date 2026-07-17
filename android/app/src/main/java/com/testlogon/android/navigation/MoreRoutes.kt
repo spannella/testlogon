@@ -112,6 +112,9 @@ object MoreRoutes {
     // AND-245: the disputes list (file a dispute from order detail; status detail).
     const val DISPUTES = DisputesListDest.ROUTE
 
+    // DISP-024: the creator inbound queue — disputes filed against my sales, to respond to.
+    const val CREATOR_DISPUTES = CreatorDisputesDest.ROUTE
+
     // AND-246: the tax-documents list (year/type + view/download PDF via Custom Tabs).
     const val TAX_DOCUMENTS = TaxDocsDest.ROUTE
 
@@ -124,6 +127,9 @@ object MoreRoutes {
     // AND-252: the creator earnings dashboard (totals + chart + breakdown). Base route (no range arg);
     // the registered composable route carries an optional `?range=` deep-link arg.
     const val EARNINGS = EarningsDest.ROUTE_BASE
+
+    // TIPX-D3/D4: ledger-backed tip insights (top supporters + received/sent history).
+    const val TIP_INSIGHTS = TipInsightsDest.ROUTE
 
     // AND-253: the per-content revenue list (sortable, cursor-paged).
     const val PER_CONTENT_REVENUE = PerContentRevenueDest.ROUTE
@@ -532,6 +538,7 @@ object MoreRoutes {
             WALLET_TRANSACTIONS,
             WALLET,
             EARNINGS,
+            TIP_INSIGHTS,
             PER_CONTENT_REVENUE,
             ENGAGEMENT,
             ANALYTICS_DASHBOARD,
@@ -568,6 +575,7 @@ object MoreRoutes {
             INVOICES,
             REFUNDS,
             DISPUTES,
+            CREATOR_DISPUTES,
             TAX_DOCUMENTS,
             TAX_FORMS_1099,
             BILLING_CONFIG,

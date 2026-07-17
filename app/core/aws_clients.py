@@ -164,3 +164,38 @@ def secretsmanager_client():
         endpoint_url=endpoint_url,
         **_local_credentials_kwargs(endpoint_url),
     )
+
+
+_DDB_TRANSACT_CLIENT = None
+
+
+def ddb_transact_client():
+    """Return a cached bare low-level DynamoDB client for transact_write_items.
+
+    Callers that build raw AttributeValue maps ({"S": ...}/{"N": ...}) must issue
+    transact_write_items through a *plain* client. The boto3 resource's
+    .meta.client carries the document transform injector, which re-serializes
+    already-serialized values -> DDB-Local rejects it with
+    ValidationException: Invalid attribute value type (every real tip 500s).
+
+    Endpoint/region/credentials are inherited from the app's live dynamodb
+    resource client, so it targets the SAME table on both DDB-Local (dev/prod-mock)
+    and real AWS with no S.dev_mode branch (matches group_treasury pattern).
+    """
+    global _DDB_TRANSACT_CLIENT
+    if _DDB_TRANSACT_CLIENT is not None:
+        return _DDB_TRANSACT_CLIENT
+    from app.core.aws import ddb as _ddb_resource
+    resource_client = _ddb_resource.meta.client
+    endpoint = resource_client.meta.endpoint_url
+    region = resource_client.meta.region_name
+    creds = resource_client._request_signer._credentials
+    kwargs = {"region_name": region, "endpoint_url": endpoint}
+    if creds is not None:
+        frozen = creds.get_frozen_credentials()
+        kwargs["aws_access_key_id"] = frozen.access_key
+        kwargs["aws_secret_access_key"] = frozen.secret_key
+        if frozen.token:
+            kwargs["aws_session_token"] = frozen.token
+    _DDB_TRANSACT_CLIENT = boto3.client("dynamodb", **kwargs)
+    return _DDB_TRANSACT_CLIENT

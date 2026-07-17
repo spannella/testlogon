@@ -442,15 +442,84 @@ def cancel_order(
 
 
 def _maybe_refund(order_id: str, *, actor: str) -> None:
-    """Best-effort refund via the canonical billing.refund_payment path."""
+    """ECOMX-12/13: reverse the REAL charge on an owner/admin cancel-refund.
+
+    For a cart order we now carry the buyer-debit ledger txn on the header
+    (``buyer_debit_txn_id``, stamped at purchase). Drive the refund through the
+    refund_requests service (create + approve) so the SAME money mechanics run
+    as an admin-approved refund: buyer credited, EVERY seller + the livecom host
+    clawed back, atomic transact. A missing buyer-debit ref is a LOGGED ERROR —
+    never a silent 200 (the A3 bug was owner-cancel no-op'ing on cart orders).
+    """
     header = get_order_header(order_id) or {}
     metadata = dict(header.get("metadata") or {})
+    buyer_debit_txn_id = (
+        header.get("buyer_debit_txn_id")
+        or header.get("buyer_debit_entry_id")
+        or metadata.get("buyer_debit_txn_id")
+    )
+    buyer_id = header.get("user_id") or metadata.get("user_id")
+
+    if buyer_debit_txn_id and buyer_id:
+        try:
+            from app.services import refund_requests as _rr
+            req = _rr.create_refund_request(
+                buyer_id,
+                str(buyer_debit_txn_id),
+                reason=f"Order {order_id} cancelled by {actor}",
+            )
+            _req_id = req.get("refund_request_id") or req.get("request_id")
+            _rr.approve_request(
+                _req_id,
+                admin_id=actor,
+                notes=f"Auto-approved on order {order_id} cancel-refund",
+            )
+            logger.info("order_cancel_refund_ok order_id=%s txn=%s", order_id, buyer_debit_txn_id)
+            # ECOMX-52 (E8): a self-cancel-refund now fires an explicit,
+            # tappable order_refunded confirmation to the buyer (previously the
+            # buyer cancelled + was refunded with ZERO notification).
+            try:
+                from app.services.alerts import write_alert
+                _rtitle = "Your order was cancelled and refunded"
+                _rres = write_alert(
+                    str(buyer_id),
+                    event="order_refunded",
+                    outcome="success",
+                    title=_rtitle,
+                    details={
+                        "alert_type": "order_refunded",
+                        "order_id": order_id,
+                        "txn_id": str(buyer_debit_txn_id),
+                    },
+                )
+                try:
+                    from app.services.push import send_push_for_alert
+                    _raid = (_rres or {}).get("alert_id", order_id) if isinstance(_rres, dict) else order_id
+                    send_push_for_alert(
+                        str(buyer_id), "order_refunded", _rtitle,
+                        "Your refund is on its way.", _raid,
+                        action_url=f"/orders?order={order_id}",
+                    )
+                except Exception:
+                    logger.exception("order_refunded push failed order_id=%s", order_id)
+            except Exception:
+                logger.exception("order_refunded alert failed order_id=%s", order_id)
+            return
+        except Exception:
+            logger.error("order_cancel_refund_failed order_id=%s txn=%s", order_id,
+                         buyer_debit_txn_id, exc_info=True)
+            return
+
+    # Legacy provider-intent path (non-cart orders that carry a payment_intent_id).
     payment_intent_id = (
         header.get("payment_intent_id")
         or metadata.get("payment_intent_id")
         or metadata.get("ledger_sk")
     )
     if not payment_intent_id:
+        logger.error(
+            "order_cancel_refund_no_ref order_id=%s (no buyer_debit_txn_id and no "
+            "payment_intent_id — refund could not be issued)", order_id)
         return
     try:
         from app.routers import billing as billing_router  # lazy import

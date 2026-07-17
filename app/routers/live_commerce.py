@@ -67,6 +67,18 @@ def list_stream_products_route(session_id: str, ctx: dict = Depends(require_ui_s
     return {"session_id": session_id, "products": lsp.list_stream_products(session_id)}
 
 
+# ─── L2: per-stream sales / commission summary (host-scoped) ────────────────────
+
+@router.get("/sessions/{session_id}/summary")
+def stream_summary_route(session_id: str, ctx: dict = Depends(require_ui_session)):
+    """ECOMX-55 (E7): the broadcaster (or admin) sees what a shopping stream
+    earned - GMV, host commission, seller net, platform fee, order count -
+    aggregated over the session's settled order settlements."""
+    _require_host(session_id, ctx)
+    from app.services.live_commerce_split import session_summary
+    return session_summary(session_id)
+
+
 # ─── L2: seller-set per-listing affiliate commission (owner-scoped) ────────────
 
 @router.post("/listings/{category_id}/{item_id}/affiliate-commission")

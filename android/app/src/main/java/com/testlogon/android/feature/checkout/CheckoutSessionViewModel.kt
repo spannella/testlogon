@@ -42,6 +42,9 @@ sealed interface CheckoutEvent {
     data object PaymentsUnavailable : CheckoutEvent
     data class PaymentFailed(val message: String) : CheckoutEvent
 
+    /** ECOMX-40 (B3) — "Place order" tapped with no shipping address selected. */
+    data object AddressRequired : CheckoutEvent
+
     /** FIX (ecom residual #1) — the purchase completed; [txnId] routes to order confirmation. */
     data class PurchaseComplete(val txnId: String?, val orderId: String) : CheckoutEvent
 }
@@ -67,6 +70,19 @@ class CheckoutSessionViewModel @Inject constructor(
     private val cartId: String? = savedState[ARG_CART_ID]
     private val totalCents: Long = savedState[ARG_TOTAL_CENTS] ?: 0L
     private val currency: String = savedState[ARG_CURRENCY] ?: "USD"
+
+    // ECOMX-40 (B3): the shipping address chosen in the address step; required before
+    // "Place order" is enabled and threaded into the charge. Persisted to SavedStateHandle
+    // so process-death restore keeps the selection.
+    private val _selectedAddressId = MutableStateFlow<String?>(savedState[KEY_ADDRESS_ID])
+    val selectedAddressId: StateFlow<String?> = _selectedAddressId.asStateFlow()
+
+    /** ECOMX-40: called by the route when the address step returns a chosen address_id. */
+    fun onAddressSelected(addressId: String?) {
+        if (addressId.isNullOrBlank() || addressId == _selectedAddressId.value) return
+        _selectedAddressId.value = addressId
+        savedState[KEY_ADDRESS_ID] = addressId
+    }
 
     private val idempotencyKey: String =
         savedState[KEY_IDEMPOTENCY] ?: UUID.randomUUID().toString()
@@ -143,11 +159,23 @@ class CheckoutSessionViewModel @Inject constructor(
             viewModelScope.launch { _events.send(CheckoutEvent.PaymentFailed(GENERIC_PAYMENT_ERROR)) }
             return
         }
+        // ECOMX-40 (B3): a shipping address is required before we can charge + ship.
+        val addressId = _selectedAddressId.value
+        if (addressId.isNullOrBlank()) {
+            viewModelScope.launch { _events.send(CheckoutEvent.AddressRequired) }
+            return
+        }
         if (_placing.value) return
         _placing.update { true }
         viewModelScope.launch {
             // ADV-405: attach the session last-click ad_click_id so checkout converts the ad (ADV-403).
-            when (val r = cartRepository.purchase(cart, idempotencyKey, adClickId = adAttribution.peek())) {
+            // ECOMX-40 (B3): pass the chosen address so the charge includes shipping+tax and the
+            // seller ships to it.
+            when (val r = cartRepository.purchase(
+                cart, idempotencyKey,
+                adClickId = adAttribution.peek(),
+                addressId = addressId,
+            )) {
                 is ApiResult.Success ->
                     _events.send(CheckoutEvent.PurchaseComplete(r.data.purchaseTxnId, r.data.orderId))
                 is ApiResult.Failure -> _events.send(CheckoutEvent.PaymentFailed(r.error.message))
@@ -162,6 +190,7 @@ class CheckoutSessionViewModel @Inject constructor(
         const val ARG_TOTAL_CENTS = "totalCents"
         const val ARG_CURRENCY = "currency"
         const val KEY_IDEMPOTENCY = "idem_key"
+        const val KEY_ADDRESS_ID = "checkout_address_id"
         private const val OFFLINE_MESSAGE = "You're offline"
         private const val GENERIC_PAYMENT_ERROR = "Payment failed"
     }

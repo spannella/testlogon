@@ -84,9 +84,20 @@ data class PurchaseDetail(
     val shipping: PurchaseShipping? = null,
     /** From metadata.cart_id; drives the separate cart-items fetch (AND-220). Null when absent. */
     val cartId: String? = null,
+    // ECOMX-42 (B2): the physical fulfilment state from the order header. `status` above is the
+    // money state; these drive the buyer-facing "Processing/Shipped/Delivered" + confirm gate.
+    val orderStatus: String? = null,
+    val fulfillmentStatus: String? = null,
 ) {
     val title: String
         get() = description?.takeIf { it.isNotBlank() } ?: "Order ${id.take(8)}"
+
+    /** ECOMX-42 (B6): the buyer may confirm delivery once shipped/out-for-delivery/delivered and
+     *  the order is not yet money-completed. */
+    val canConfirmDelivery: Boolean
+        get() = status != OrderStatus.Completed &&
+            (fulfillmentStatus in setOf("shipped", "out_for_delivery", "delivered", "partially_shipped") ||
+                orderStatus in setOf("shipped", "completed"))
 }
 
 // ---- Mappers (DTO -> domain) ----
@@ -139,4 +150,6 @@ internal fun PurchaseTransactionInfoDto.toDomain(): PurchaseDetail = PurchaseDet
     revertedAtEpochSec = revertedAt,
     shipping = shipping?.toDomain()?.takeIf { it.hasShipment },
     cartId = (metadata?.get("cart_id") as? String)?.takeIf { it.isNotBlank() },
+    orderStatus = orderStatus?.takeIf { it.isNotBlank() },
+    fulfillmentStatus = fulfillmentStatus?.takeIf { it.isNotBlank() },
 )

@@ -2451,7 +2451,7 @@ class ThreadViewModel @Inject constructor(
                                 _state.update { st ->
                                     st.copy(
                                         tipSheet = TipSheetState(),
-                                        transientMessage = "Tip reaction sent",
+                                        transientMessage = "Tip reaction sent · " + formatTipAmount(cents),
                                         messages = st.messages.map {
                                             if (it.key == messageId) it.copy(tipReactions = it.tipReactions + badge) else it
                                         },
@@ -2471,7 +2471,15 @@ class ThreadViewModel @Inject constructor(
                     )
                     when (result) {
                         is ApiResult.Success ->
-                            _state.update { it.copy(tipSheet = TipSheetState(), transientMessage = "Tip sent") }
+                            // TIPX-B2 (F6) — surface the charged amount in the confirmation (the DM tip
+                            // sheet is a transient snackbar, not an in-sheet receipt) so the tipper sees
+                            // exactly how much was charged.
+                            _state.update {
+                                it.copy(
+                                    tipSheet = TipSheetState(),
+                                    transientMessage = "Tip sent · " + formatTipAmount(cents),
+                                )
+                            }
                         else ->
                             _state.update {
                                 it.copy(tipSheet = it.tipSheet.copy(submitting = false, amountError = "Couldn't send tip — try again"))
@@ -3057,6 +3065,9 @@ internal fun buildDemoEncryptionEnvelope(plaintext: String): com.testlogon.andro
  * TIP-203 - union the server-hydrated tip-reaction badges with the optimistic overlay, de-duped by
  * tip_payment_id so a badge does not double after the next refetch hydrates it. Pure / JVM-testable.
  */
+/** TIPX-B2 (F6) — format tip cents as a "$X.XX" amount for the DM tip confirmation. Pure/testable. */
+internal fun formatTipAmount(cents: Long): String = "$" + "%.2f".format(cents / 100.0)
+
 internal fun mergeTipReactions(
     hydrated: List<com.testlogon.android.data.messaging.TipReaction>,
     overlay: List<com.testlogon.android.data.messaging.TipReaction>?,

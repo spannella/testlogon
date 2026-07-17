@@ -1557,9 +1557,27 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI_TRACKING", "partition_key": "tracking_number_norm"},
             ],
         ),
+        # ECOMX-E0/E4: per-seller ship groups (was prod-only). PK seller_id /
+        # SK ship_group_id; GSI_ORDER (partition order_id) for the per-order view.
         TableDef(
+            _resolve_table_name(S.seller_ship_groups_table_name, "seller_ship_groups"),
+            "seller_id",
+            "ship_group_id",
+            gsi=[
+                {"index_name": "GSI_ORDER", "partition_key": "order_id"},
+            ],
+        ),
+        TableDef(
+            # DISP E3: the PaymentIncident store queries three GSIs (matches
+            # scripts/migrations/20260324_payment_incidents_schema.py). The dev
+            # clone was created without them; provision here for dev/prod parity.
             _resolve_table_name(S.payment_incidents_table_name, "payment_incidents"),
             "incident_id",
+            gsi=[
+                {"index_name": "ByProviderIncidentUpdatedAt", "partition_key": "provider_incident_key", "sort_key": "updated_at"},
+                {"index_name": "ByCustomerUpdatedAt", "partition_key": "customer_id", "sort_key": "updated_at"},
+                {"index_name": "ByResponseDueAt", "partition_key": "response_due_scope", "sort_key": "response_due_at"},
+            ],
         ),
         TableDef(
             _resolve_table_name(S.payments_table_name, "payments"),

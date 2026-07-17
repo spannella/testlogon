@@ -101,4 +101,9 @@ data class PurchaseTransactionInfoDto(
     @Json(name = "receipt_path") val receiptPath: String? = null,
     // epoch SECONDS.
     @Json(name = "receipt_generated_at") val receiptGeneratedAt: Long? = null,
+    // ECOMX-42 (B2): the physical fulfilment state from the order-lifecycle header
+    // (distinct from `status` = money PENDING/COMPLETED). Drives the realistic
+    // "Processing / Shipped / Delivered" order status + the confirm-delivery gate.
+    @Json(name = "order_status") val orderStatus: String? = null,
+    @Json(name = "fulfillment_status") val fulfillmentStatus: String? = null,
 )

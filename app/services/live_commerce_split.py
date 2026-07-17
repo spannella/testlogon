@@ -40,8 +40,16 @@ def _order_pk(order_id: str) -> str:
     return f"ORDER#{order_id}"
 
 
-def _credit(user_id: str, amount_cents: int, reason: str, meta: Dict[str, Any]) -> str:
-    """Write a type:'credit' ledger entry (surfaces in earnings/payouts). Returns sk."""
+def _credit(user_id: str, amount_cents: int, reason: str, meta: Dict[str, Any],
+            *, idem_suffix: str = "") -> str:
+    """Write a type:'credit' ledger entry (surfaces in earnings/payouts). Returns sk.
+
+    ECOMX-16 (A7/A8): when ``idem_suffix`` is supplied the credit is written with
+    a DETERMINISTIC sk (LEDGER#<order>#<suffix>) under an attribute_not_exists
+    condition, so a crash-and-replay of settle_stream_order re-drives the same
+    credit exactly once (no double-credit). Without a suffix it keeps the legacy
+    auto-id behaviour.
+    """
     if amount_cents <= 0 or not user_id:
         return ""
     sk, credit_item = new_ledger_entry(
@@ -53,6 +61,20 @@ def _credit(user_id: str, amount_cents: int, reason: str, meta: Dict[str, Any]) 
         reason=reason,
         meta=meta,
     )
+    if idem_suffix:
+        det_sk = f"LEDGER#{idem_suffix}"
+        credit_item["sk"] = det_sk
+        credit_item["entry_id"] = idem_suffix
+        try:
+            T.billing.put_item(
+                Item=credit_item,
+                ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+            )
+        except ClientError as exc:
+            if exc.response["Error"].get("Code") == "ConditionalCheckFailedException":
+                return det_sk  # already written by a prior (crashed) attempt
+            raise
+        return det_sk
     T.billing.put_item(Item=credit_item)
     return sk
 
@@ -61,17 +83,33 @@ def _platform_fee_record(order_id: str, session_id: str, amount_cents: int, meta
     if amount_cents <= 0:
         return
     ts = now_ts()
+    # ECOMX-16 (A7): DETERMINISTIC sk (no ts) + attribute_not_exists so a
+    # crash-replay of settle_stream_order re-records the platform fee exactly
+    # once. content_type distinguishes shop vs livecom fee rows for the same order.
+    _ct = str((meta or {}).get("content_type") or "livecom")
+    # Deterministic sk keyed on the fields that make a fee row unique for the
+    # order: product_id (livecom, per pinned product) OR seller_id (shop, one
+    # fee row per seller). Falls back to content_type so a bare call is stable.
+    _disc = str((meta or {}).get("product_id") or (meta or {}).get("seller_id") or _ct)
+    _sk = f"{_ct.upper()}FEE#{order_id}#{_disc}"
     try:
-        T.ad_billing.put_item(Item={
-            "pk": "PLATFORM#revenue",
-            "sk": f"LIVECOM#{ts}#{order_id}#{meta.get('product_id','')}",
-            "entry_type": "livecom_platform_fee",
-            "amount_cents": int(amount_cents),
-            "state": "settled",
-            "reason": "Live-stream commerce platform fee",
-            "meta": {**meta, "order_id": order_id, "session_id": session_id},
-            "created_at": ts,
-        })
+        T.ad_billing.put_item(
+            Item={
+                "pk": "PLATFORM#revenue",
+                "sk": _sk,
+                "entry_type": f"{_ct}_platform_fee",
+                "amount_cents": int(amount_cents),
+                "state": "settled",
+                "reason": "Live-stream commerce platform fee",
+                "meta": {**meta, "order_id": order_id, "session_id": session_id},
+                "created_at": ts,
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except ClientError as exc:
+        if exc.response["Error"].get("Code") == "ConditionalCheckFailedException":
+            return  # already recorded by a prior attempt
+        logger.warning("livecom_platform_fee_record_failed order=%s", order_id)
     except Exception:
         logger.warning("livecom_platform_fee_record_failed order=%s", order_id)
 
@@ -103,7 +141,12 @@ def settle_stream_order(
     if not order_id or not session_id or not host_id:
         return {"ok": False, "reason": "missing_attribution"}
 
-    # 1. Idempotency claim (atomic). If the marker already exists -> already settled.
+    # 1. Idempotency claim (atomic). ECOMX-16 (A7/A8): the replay short-circuit
+    #    gates on status=="settled" (the TERMINAL marker written AFTER all
+    #    credits), NOT on mere marker existence. A crash between the "settling"
+    #    claim and the terminal marker leaves status=="settling"; the replay then
+    #    FALLS THROUGH and re-drives the (now-deterministic, attribute_not_exists
+    #    guarded) credits so the seller/host are never stranded un-paid.
     ts = now_ts()
     try:
         T.live_stream_products.put_item(
@@ -124,11 +167,16 @@ def settle_stream_order(
             existing = T.live_stream_products.get_item(
                 Key={"session_id": _order_pk(order_id), "SK": "SETTLEMENT"}
             ).get("Item", {})
-            logger.info("livecom.settle idempotent no-op order=%s", order_id)
-            return {"ok": True, "idempotent": True, **{k: existing.get(k) for k in
-                    ("host_commission_total_cents", "seller_net_total_cents",
-                     "platform_fee_total_cents", "pool_total_cents", "gross_total_cents")}}
-        raise
+            if str(existing.get("status") or "") == "settled":
+                logger.info("livecom.settle idempotent no-op (settled) order=%s", order_id)
+                return {"ok": True, "idempotent": True, **{k: existing.get(k) for k in
+                        ("host_commission_total_cents", "seller_net_total_cents",
+                         "platform_fee_total_cents", "pool_total_cents", "gross_total_cents")}}
+            # Marker exists but is NOT terminal -> a prior attempt crashed
+            # mid-settle. Re-drive the credits (each idempotent) and finalize.
+            logger.warning("livecom.settle re-driving un-finalized marker order=%s", order_id)
+        else:
+            raise
 
     # 2. Per-item split. Pro-rate each line against the paid total (mirrors the
     #    legacy per-creator seller-credit proration).
@@ -156,7 +204,8 @@ def settle_stream_order(
             if seller_id and seller_id != buyer_sub:
                 _credit(seller_id, gross, "Shop sale",
                         {"content_type": "shop", "order_id": order_id, "cart_id": cart_id,
-                         "buyer_id": buyer_sub, "purchase_txn_id": txn_id, "product_id": product_id})
+                         "buyer_id": buyer_sub, "purchase_txn_id": txn_id, "product_id": product_id},
+                        idem_suffix=f"{order_id}#{product_id}#unpinned")
             gross_total += gross
             lines.append({"product_id": product_id, "unpinned": True, "gross_cents": gross})
             continue
@@ -182,10 +231,12 @@ def settle_stream_order(
             seller_net = seller_pool - host_commission
             hc_sk = _credit(host_id, host_commission,
                             "Live-stream affiliate commission",
-                            {**base_meta, "role": "host_commission", "affiliate_commission_bps": aff_bps})
+                            {**base_meta, "role": "host_commission", "affiliate_commission_bps": aff_bps},
+                            idem_suffix=f"{order_id}#{product_id}#host_commission")
             sn_sk = _credit(seller_id, seller_net,
                             "Live-stream affiliate sale (net)",
-                            {**base_meta, "role": "seller_net", "affiliate_commission_bps": aff_bps})
+                            {**base_meta, "role": "seller_net", "affiliate_commission_bps": aff_bps},
+                            idem_suffix=f"{order_id}#{product_id}#seller_net")
             assert host_commission + seller_net == seller_pool, "affiliate split != pool"
             lines.append({**base_meta, "affiliate_commission_bps": aff_bps,
                           "host_commission_cents": host_commission, "seller_net_cents": seller_net,
@@ -195,7 +246,8 @@ def settle_stream_order(
         else:
             # OWN product: host (== seller) keeps the whole pool, no extra split.
             sn_sk = _credit(seller_id, seller_pool, "Live-stream sale",
-                            {**base_meta, "role": "seller_own"})
+                            {**base_meta, "role": "seller_own"},
+                            idem_suffix=f"{order_id}#{product_id}#seller_own")
             lines.append({**base_meta, "host_commission_cents": 0,
                           "seller_net_cents": seller_pool, "seller_credit_sk": sn_sk})
             seller_net_total += seller_pool
@@ -238,3 +290,54 @@ def settle_stream_order(
                 order_id, host_commission_total, seller_net_total, platform_fee_total,
                 pool_total, gross_total)
     return summary
+
+
+def session_summary(broadcast_session_id: str) -> dict:
+    """ECOMX-55 (E7): per-stream live-commerce sales/commission summary.
+
+    Aggregates every settled order-settlement marker for a broadcast session
+    (GMV, host commission, seller net, platform fee, order count). There is no
+    GSI on broadcast_session_id, so we bounded-scan the settlement markers
+    (SK == "SETTLEMENT") filtered to this session — the same access pattern the
+    orphan-sweep uses. Only terminal (status == "settled") markers count so an
+    in-flight settle never inflates the summary.
+    """
+    from boto3.dynamodb.conditions import Attr
+
+    gmv = 0
+    host_commission = 0
+    seller_net = 0
+    platform_fee = 0
+    pool = 0
+    order_count = 0
+    start_key = None
+    filt = (
+        Attr("SK").eq("SETTLEMENT")
+        & Attr("broadcast_session_id").eq(str(broadcast_session_id))
+        & Attr("status").eq("settled")
+    )
+    while True:
+        kwargs = {"FilterExpression": filt, "Limit": 500}
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = T.live_stream_products.scan(**kwargs)
+        for m in resp.get("Items", []):
+            order_count += 1
+            gmv += int(m.get("gross_total_cents", 0) or 0)
+            host_commission += int(m.get("host_commission_total_cents", 0) or 0)
+            seller_net += int(m.get("seller_net_total_cents", 0) or 0)
+            platform_fee += int(m.get("platform_fee_total_cents", 0) or 0)
+            pool += int(m.get("pool_total_cents", 0) or 0)
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+
+    return {
+        "broadcast_session_id": str(broadcast_session_id),
+        "order_count": order_count,
+        "gmv_cents": gmv,
+        "host_commission_cents": host_commission,
+        "seller_net_cents": seller_net,
+        "platform_fee_cents": platform_fee,
+        "pool_cents": pool,
+    }

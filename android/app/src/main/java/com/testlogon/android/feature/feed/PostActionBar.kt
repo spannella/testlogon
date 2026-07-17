@@ -81,6 +81,8 @@ object PostActionTestTags {
     // TIP-204 - money-reaction (tip) affordances.
     const val TIP_REACT = "tip_react_post_open"
     const val TIP_REACT_CHIPS = "tip_react_post_chips"
+    // TIPX-C1 - running direct-tip total badge.
+    const val TIP_TOTAL = "post_tip_total"
 }
 
 /** TIP-204 - the money-reaction glyph used for the post tip-react affordance + chip. */
@@ -130,6 +132,8 @@ fun PostActionBar(
     // TIP-204 - money-REACTION: tip option in the reaction picker + money-reaction chips on the post.
     tipReactions: List<com.testlogon.android.data.feed.TipReactionBadge> = emptyList(),
     onTipReact: (String) -> Unit = {},
+    // TIPX-C1 - running total (cents) of DIRECT tips on this post; when > 0 a "Tipped $X" badge renders.
+    tipTotalCents: Int = 0,
 ) {
     var reactionPickerOpen by remember { mutableStateOf(false) }
     // SOCIAL-002 — the quote-repost composer dialog (opened from the repost menu's "Quote repost").
@@ -182,6 +186,11 @@ fun PostActionBar(
         // TIP-204 - money-reaction (tip) chips on the post, distinct from the free emoji chips.
         if (tipReactions.isNotEmpty()) {
             PostTipReactionChips(tipReactions = tipReactions)
+        }
+        // TIPX-C1 - the running DIRECT-tip total, shown to BOTH parties so a tip completes
+        // charge -> credit -> render (mirrors the comment "Tipped $X" badge).
+        if (tipTotalCents > 0) {
+            PostTipTotalBadge(tipTotalCents = tipTotalCents)
         }
     }
     // SOCIAL-002 — quote-repost composer (≤500 chars). Confirm reposts with the trimmed commentary.
@@ -354,6 +363,17 @@ private fun PostEmojiPicker(
             modifier = Modifier.testTag(PostActionTestTags.TIP_REACT),
         )
     }
+}
+
+/** TIPX-C1 - the post's running DIRECT-tip total, "Tipped $X", shown to both the author and viewers. */
+@Composable
+private fun PostTipTotalBadge(tipTotalCents: Int, modifier: Modifier = Modifier) {
+    Text(
+        text = "Tipped $" + String.format(java.util.Locale.US, "%.2f", tipTotalCents / 100.0),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = modifier.padding(start = 8.dp, top = 2.dp, bottom = 4.dp).testTag(PostActionTestTags.TIP_TOTAL),
+    )
 }
 
 /** TIP-204 - under-post MONEY-reaction chip row (tip reactions); glyph + amount, non-toggling. */

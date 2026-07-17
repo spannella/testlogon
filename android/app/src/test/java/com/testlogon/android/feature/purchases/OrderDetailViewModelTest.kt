@@ -57,6 +57,7 @@ class OrderDetailViewModelTest {
         purchasesRepository = purchases,
         cartRepository = cart,
         trackingRepository = tracking,
+        entitlementsRepository = FakeOrderEntitlementsRepository(),
         savedState = SavedStateHandle(mapOf(OrderDetailViewModel.ARG_TXN_ID to txnId)),
     )
 
@@ -180,4 +181,18 @@ private class FakeTrackingRepository(
         calls++
         return result
     }
+}
+
+
+/** ECOMX-43 (B5) — empty entitlements fake for the order-detail tests. */
+private class FakeOrderEntitlementsRepository :
+    com.testlogon.android.data.entitlements.OrderEntitlementsRepository {
+    override suspend fun library() =
+        com.testlogon.android.core.model.ApiResult.Success(
+            emptyList<com.testlogon.android.data.entitlements.LibraryEntitlement>(),
+        )
+    override suspend fun libraryForOrder(orderId: String) =
+        com.testlogon.android.core.model.ApiResult.Success(
+            emptyList<com.testlogon.android.data.entitlements.LibraryEntitlement>(),
+        )
 }

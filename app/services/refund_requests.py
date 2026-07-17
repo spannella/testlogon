@@ -90,6 +90,27 @@ def create_refund_request(
     if now_ts() - entry_ts > window_seconds:
         raise HTTPException(400, f"Transaction is outside the refund window ({S.refund_request_window_days} days)")
 
+    # ── ECOMX-16 (A9): close the refund window once the order has SHIPPED. A
+    # cart buyer-debit carries the order_id in meta; if any ship-group of that
+    # order has reached packed/shipped/completed the buyer must use the RETURN
+    # flow, not a straight refund (otherwise they get product AND money back).
+    _order_id = str((ledger_entry.get("meta") or {}).get("order_id") or "")
+    if _order_id:
+        try:
+            from app.services.order_store import get_order_header as _goh
+            _hdr = _goh(_order_id) or {}
+            _lc = str(_hdr.get("lifecycle_status") or "")
+            if _lc in ("packed", "shipped", "completed"):
+                raise HTTPException(
+                    400,
+                    {"code": "refund_window_closed",
+                     "message": f"Order has shipped (status={_lc}); use the return flow."},
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # order lookup best-effort; never block a legit refund on a lookup glitch
+
     # 3. Determine amount
     # ECOM fix: cart-purchase buyer ledger debits are stored with a NEGATIVE
     # amount_cents (signed debit), so use abs() to derive the refundable amount;
@@ -216,8 +237,15 @@ def approve_request(
     notes: Optional[str] = None,
     override_amount_cents: Optional[int] = None,
     request_obj: Any = None,
+    clawback_only: bool = False,
 ) -> Dict[str, Any]:
-    """Approve a refund request. Calls the existing Stripe refund flow."""
+    """Approve a refund request. Calls the existing Stripe refund flow.
+
+    DISP-033 (chargeback fork): when ``clawback_only`` is set the buyer
+    ``refund_credit`` ledger entry AND the buyer balance credit-back are
+    SUPPRESSED — the processor already returned the buyer's money on a
+    chargeback. The per-party seller/host clawbacks (``refund_debit``) still fire
+    so the marketplace still gives the money back."""
     item = get_request(request_id)
     if not item:
         raise HTTPException(404, "Refund request not found")
@@ -236,24 +264,63 @@ def approve_request(
     # Create a credit ledger entry for the buyer
     pk = user_pk(user_id)
 
-    # GAP-0132: For marketplace transactions (tip/unlock), the original purchase
-    # wrote a paired debit (buyer) + credit (seller). Refunding only credits the
-    # buyer; without a matching seller debit the ledger no longer balances and the
-    # seller keeps the funds (double-enrichment). Recover the seller from the
-    # original buyer-debit ledger entry's meta so we can reverse their credit too.
-    seller_user_id: Optional[str] = None
+    # GAP-0132 / ECOMX-13: For marketplace transactions (tip/unlock/shop/livecom)
+    # the original purchase wrote a buyer debit + one-or-more seller/host credits.
+    # Refunding only credits the buyer; without matching seller/host DEBITS the
+    # ledger no longer balances and the recipients keep the funds
+    # (double-enrichment). Recover the buyer-debit meta so we can reverse EVERY
+    # credited party — the single recipient (tip/unlock), ALL sellers of a
+    # multi-seller cart, AND the livecom host commission.
+    debit_meta: Dict[str, Any] = {}
     if transaction_entry_id:
         for entry in T.billing.query(
             KeyConditionExpression="pk = :pk",
             ExpressionAttributeValues={":pk": pk},
         ).get("Items", []):
             if str(entry.get("sk", "")).startswith("LEDGER#") and entry.get("entry_id") == transaction_entry_id:
-                meta = entry.get("meta") or {}
-                candidate = meta.get("recipient_user_id")
-                # Only a real peer recipient (not a self-transaction) is reversible.
-                if candidate and candidate != user_id:
-                    seller_user_id = candidate
+                debit_meta = dict(entry.get("meta") or {})
                 break
+
+    # Assemble the set of parties to claw back. recipient_user_id keeps the legacy
+    # single-recipient path (tip/unlock); refund_seller_ids + refund_host_id add
+    # the shop/livecom multi-party clawback.
+    order_id_ref = str(debit_meta.get("order_id") or "")
+    party_ids: List[str] = []
+    for cand in (
+        [debit_meta.get("recipient_user_id")]
+        + list(debit_meta.get("refund_seller_ids") or [])
+        + [debit_meta.get("refund_host_id")]
+    ):
+        if cand and cand != user_id and cand not in party_ids:
+            party_ids.append(cand)
+
+    # For each party, claw back the ACTUAL net cents they were credited for THIS
+    # order (net-of-platform-fee, host commission, etc.) — never the gross buyer
+    # amount, which would over-claw. Sum every settled *credit* entry for the
+    # order on that party's ledger.
+    def _party_credit_cents(party_id: str) -> int:
+        if not order_id_ref:
+            return amount  # no order linkage (legacy tip/unlock) -> full amount
+        total = 0
+        for e in T.billing.query(
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={":pk": user_pk(party_id)},
+        ).get("Items", []):
+            if not str(e.get("sk", "")).startswith("LEDGER#"):
+                continue
+            m = e.get("meta") or {}
+            if str(m.get("order_id") or "") != order_id_ref:
+                continue
+            # new_ledger_entry persists the entry type under "type" (not
+            # "entry_type"). Only reverse the original seller/host CREDIT, never
+            # a prior refund_debit / other row for the same order.
+            if str(e.get("type") or "") != "credit":
+                continue
+            try:
+                total += int(e.get("amount_cents") or 0)
+            except (TypeError, ValueError):
+                continue
+        return total
 
     led_sk, led_item = new_ledger_entry(
         key_name="pk",
@@ -266,57 +333,91 @@ def approve_request(
             "refund_request_id": request_id,
             "admin_notes": notes or "",
             "original_entry_id": transaction_entry_id,
+            "order_id": order_id_ref,
         },
     )
 
-    # GAP-0132: write the buyer credit and (when this is a marketplace
-    # transaction with an identifiable seller) the matching seller debit so the
-    # ledger can never be left half-reversed.
-    if seller_user_id:
-        seller_pk = user_pk(seller_user_id)
-        _, seller_debit_item = new_ledger_entry(
+    # Build one debit per credited party (reversing their exact net), then commit
+    # the buyer credit + all party debits ATOMICALLY. ECOMX-16 (A8/A9): route the
+    # transact through ddb_transact_client() with NATIVE AttributeValue items —
+    # the resource client's document transform re-serializes pre-serialized maps
+    # and 500s on DDB-Local (the tip-transact bug). On a transact failure we fall
+    # back to sequential puts guarded so a partial write can't leave the ledger
+    # half-reversed (compensating deletes on any exception mid-sequence).
+    party_debits: List[Dict[str, Any]] = []
+    for party_id in party_ids:
+        claw = _party_credit_cents(party_id)
+        if claw <= 0:
+            continue
+        _, party_debit_item = new_ledger_entry(
             key_name="pk",
-            key_value=seller_pk,
+            key_value=user_pk(party_id),
             entry_type="refund_debit",
-            amount_cents=amount,
+            amount_cents=claw,
             state="settled",
             reason="Refund clawback",
             meta={
                 "refund_request_id": request_id,
                 "buyer_user_id": user_id,
                 "original_entry_id": transaction_entry_id,
+                "order_id": order_id_ref,
+                "clawed_cents": claw,
             },
         )
-        # Prefer an atomic two-item transaction so the buyer credit and seller
-        # debit either both land or neither does. Fall back to sequential puts
-        # if the transactional API is unavailable in the current environment;
-        # behaviour is identical on real DynamoDB (dev/prod parity, SECOPS-007).
-        try:
-            T.billing.meta.client.transact_write_items(
-                TransactItems=[
-                    {"Put": {"TableName": T.billing.name, "Item": _serialize_item(led_item)}},
-                    {"Put": {"TableName": T.billing.name, "Item": _serialize_item(seller_debit_item)}},
-                ]
+        party_debits.append({"party_id": party_id, "claw": claw, "item": party_debit_item})
+
+    if party_debits:
+        # DISP-033: drop the buyer credit leg on a chargeback (clawback_only).
+        transact_items = ([] if clawback_only else
+                          [{"Put": {"TableName": T.billing.name, "Item": _serialize_item(led_item)}}])
+        for pd in party_debits:
+            transact_items.append(
+                {"Put": {"TableName": T.billing.name, "Item": _serialize_item(pd["item"])}}
             )
-        except (ClientError, TypeError):
-            ddb_put(T.billing, led_item)
-            ddb_put(T.billing, seller_debit_item)
-        # Reverse the seller's earned credit on their balance row.
-        apply_balance_delta(T.billing, seller_pk, {"owed_settled_cents": -amount}, currency=currency)
-        logger.info(
-            "refund_seller_debit_written request_id=%s seller_user_id=%s amount_cents=%s",
-            request_id, seller_user_id, amount,
-        )
-    else:
+        committed_atomic = False
+        try:
+            from app.core.aws_clients import ddb_transact_client
+            ddb_transact_client().transact_write_items(TransactItems=transact_items)
+            committed_atomic = True
+        except Exception:
+            logger.warning("refund transact fell back to sequential request_id=%s", request_id, exc_info=True)
+        if not committed_atomic:
+            _written: List[Dict[str, Any]] = []
+            try:
+                if not clawback_only:
+                    ddb_put(T.billing, led_item)
+                    _written.append(led_item)
+                for pd in party_debits:
+                    ddb_put(T.billing, pd["item"])
+                    _written.append(pd["item"])
+            except Exception:
+                # Compensating deletes so a partial sequence cannot leave the
+                # ledger half-reversed (buyer credited but a party un-clawed).
+                for w in _written:
+                    try:
+                        T.billing.delete_item(Key={"pk": w["pk"], "sk": w["sk"]})
+                    except Exception:
+                        logger.exception("compensating delete failed request_id=%s", request_id)
+                raise HTTPException(500, "Refund clawback failed atomically")
+        # Reverse each party's earned credit on their balance row.
+        for pd in party_debits:
+            apply_balance_delta(T.billing, user_pk(pd["party_id"]), {"owed_settled_cents": -pd["claw"]}, currency=currency)
+            logger.info(
+                "refund_party_clawback request_id=%s party=%s clawed_cents=%s",
+                request_id, pd["party_id"], pd["claw"],
+            )
+    elif not clawback_only:
         ddb_put(T.billing, led_item)
         logger.info(
-            "refund_seller_not_found request_id=%s transaction_entry_id=%s "
-            "(no seller debit written; non-marketplace transaction)",
+            "refund_no_party request_id=%s transaction_entry_id=%s "
+            "(no party debit written; non-marketplace or unattributed transaction)",
             request_id, transaction_entry_id,
         )
 
-    # Apply balance delta (credit back)
-    apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=currency)
+    # Apply balance delta (credit back). DISP-033: suppressed on a chargeback
+    # (clawback_only) — the processor already returned the buyer's money.
+    if not clawback_only:
+        apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=currency)
 
     # Update refund request status
     T.refund_requests.update_item(
@@ -333,14 +434,21 @@ def approve_request(
         },
     )
 
-    # Send alert to customer
-    write_alert(
+    # Send alert to customer (ECOMX-52: also fire a tappable push).
+    _atitle = f"Your refund of ${amount / 100:.2f} has been approved"
+    _ares = write_alert(
         user_id,
         event="refund_approved",
         outcome="success",
-        title=f"Your refund of ${amount / 100:.2f} has been approved",
-        details={"refund_request_id": request_id, "amount_cents": amount},
+        title=_atitle,
+        details={"alert_type": "refund_approved", "refund_request_id": request_id, "amount_cents": amount},
     )
+    try:
+        from app.services.push import send_push_for_alert
+        _aaid = (_ares or {}).get("alert_id", request_id) if isinstance(_ares, dict) else request_id
+        send_push_for_alert(user_id, "refund_approved", _atitle, "Tap to view your refund.", _aaid, action_url="/purchases")
+    except Exception:
+        logger.exception("refund_approved push failed request_id=%s", request_id)
 
     # Audit event
     audit_event(
@@ -353,6 +461,18 @@ def approve_request(
         amount_cents=amount,
         admin_notes=notes or "",
     )
+
+    # ECOMX-22: return flow. If this refund is against an order that already
+    # SHIPPED (or completed), the header can't just cancel — it must move to
+    # `returned` and the inventory must be restocked. mark_returned no-ops on a
+    # pre-ship order (that path stays a cancel). Best-effort; never fails the
+    # refund that already committed above.
+    if order_id_ref:
+        try:
+            from app.services import order_fulfillment_bridge as _bridge
+            _bridge.mark_returned(order_id_ref, actor=f"refund:{admin_id}")
+        except Exception:
+            logger.exception("refund return-flow bridge failed order=%s", order_id_ref)
 
     item["status"] = "approved"
     item["admin_user_id"] = admin_id
@@ -391,13 +511,20 @@ def reject_request(
         },
     )
 
-    write_alert(
+    _dtitle = "Your refund request was denied"
+    _dres = write_alert(
         user_id,
         event="refund_denied",
         outcome="info",
-        title="Your refund request was denied",
-        details={"refund_request_id": request_id, "admin_notes": notes},
+        title=_dtitle,
+        details={"alert_type": "refund_denied", "refund_request_id": request_id, "admin_notes": notes},
     )
+    try:
+        from app.services.push import send_push_for_alert
+        _daid = (_dres or {}).get("alert_id", request_id) if isinstance(_dres, dict) else request_id
+        send_push_for_alert(user_id, "refund_denied", _dtitle, "Tap for details.", _daid, action_url="/purchases")
+    except Exception:
+        logger.exception("refund_denied push failed request_id=%s", request_id)
 
     audit_event(
         "refund_request_denied",

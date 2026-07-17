@@ -112,6 +112,10 @@ data class CartPurchaseInDto(
     // the stream/host and the backend (purchase_cart -> settle_stream_order) fires the commission split.
     @Json(name = "broadcast_session_id") val broadcastSessionId: String? = null,
     @Json(name = "host_id") val hostId: String? = null,
+    // ECOMX-40 (B3): the shipping address chosen in the checkout address step, and the
+    // optional shipping method. The backend keys shipping + tax + the seller ship_to off it.
+    @Json(name = "address_id") val addressId: String? = null,
+    @Json(name = "shipping_method") val shippingMethod: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -125,4 +129,8 @@ data class CartPurchaseOutDto(
     @Json(name = "original_total_cents") val originalTotalCents: Long? = null,
     @Json(name = "discount_cents") val discountCents: Long? = null,
     @Json(name = "promo_code_id") val promoCodeId: String? = null,
+    // ECOMX-40 (B3): the shipping/tax breakdown so the confirmation can show the true total.
+    @Json(name = "merchandise_cents") val merchandiseCents: Long? = null,
+    @Json(name = "shipping_cents") val shippingCents: Long? = null,
+    @Json(name = "tax_cents") val taxCents: Long? = null,
 )

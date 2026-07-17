@@ -85,6 +85,11 @@ fun AlertsRoute(
     onOpenSubscription: (String, String) -> Unit = { _, _ -> },  // SUB-E5 route(A1): (event, actionUrl)
     // PAY-51: tapping a payout alert opens that payout statement/detail (by payout_id from action_url).
     onOpenPayout: (String) -> Unit = {},
+    // TIPX-E2: tapping a tip alert deep-links to the tipped content / tip history.
+    onOpenPost: (String) -> Unit = {},
+    onOpenThread: (String) -> Unit = {},
+    onOpenVideo: (String) -> Unit = {},
+    onOpenTips: () -> Unit = {},
     viewModel: AlertsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -118,6 +123,10 @@ fun AlertsRoute(
         onOpenTracking = onOpenTracking,
         onOpenSubscription = onOpenSubscription,  // SUB-E5 route(A2)
         onOpenPayout = onOpenPayout,  // PAY-51
+        onOpenPost = onOpenPost,        // TIPX-E2
+        onOpenThread = onOpenThread,    // TIPX-E2
+        onOpenVideo = onOpenVideo,      // TIPX-E2
+        onOpenTips = onOpenTips,        // TIPX-E2
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -225,6 +234,50 @@ internal fun payoutIdFromActionUrl(actionUrl: String?): String? {
         .takeIf { it.isNotBlank() }
 }
 
+/**
+ * TIPX-E2 (N1/N2/N3) — tip notification events. EVERY surface routes through the backend
+ * `notify_tip` choke point, emitting a `tip_received` (recipient) / `tip_sent` (tipper) /
+ * `tip_reversed` / `tip_refunded` alert plus the legacy `post_tip` / `message_tip` social types.
+ * All of them carry a relative `action_url` to the tipped content; tapping the row deep-links there.
+ */
+private val TIP_ALERT_EVENTS: Set<String> = setOf(
+    "tip_received", "tip_sent", "tip_reversed", "tip_refunded",
+    "post_tip", "message_tip",
+)
+
+internal fun isTipAlert(event: String?): Boolean =
+    event != null && event.trim().lowercase() in TIP_ALERT_EVENTS
+
+/** A resolved deep-link target parsed from a tip alert's action_url. */
+sealed interface TipNavTarget {
+    data class Post(val postId: String) : TipNavTarget
+    data class Thread(val conversationId: String) : TipNavTarget
+    data class Video(val videoId: String) : TipNavTarget
+    /** reversal / refund receipts (and any unrecognised path) -> the tip history screen. */
+    data object Tips : TipNavTarget
+}
+
+/**
+ * Maps a tip alert's relative action_url to a [TipNavTarget]:
+ *   /feed/posts/{id}         -> Post
+ *   /messaging/thread/{id}   -> Thread
+ *   /videos/{id}             -> Video
+ *   /wallet/tips (or other)  -> Tips
+ */
+internal fun tipTargetFromActionUrl(actionUrl: String?): TipNavTarget {
+    val path = (actionUrl ?: "").substringBefore('?').trim()
+    fun seg(marker: String): String? {
+        val i = path.indexOf(marker)
+        if (i < 0) return null
+        return path.substring(i + marker.length).trim('/').substringBefore('/')
+            .let { android.net.Uri.decode(it) }.takeIf { it.isNotBlank() }
+    }
+    seg("/feed/posts/")?.let { return TipNavTarget.Post(it) }
+    seg("/messaging/thread/")?.let { return TipNavTarget.Thread(it) }
+    seg("/videos/")?.let { return TipNavTarget.Video(it) }
+    return TipNavTarget.Tips
+}
+
 /** Parses the ship_group id from a buyer shipment alert action_url query. */
 internal fun shipGroupFromActionUrl(actionUrl: String?): String? {
     val url = actionUrl ?: return null
@@ -256,6 +309,10 @@ fun AlertsScreen(
     onOpenTracking: (String) -> Unit = {},
     onOpenSubscription: (String, String) -> Unit = { _, _ -> },  // SUB-E5 route(A3): (event, actionUrl)
     onOpenPayout: (String) -> Unit = {},  // PAY-51: (payoutId)
+    onOpenPost: (String) -> Unit = {},    // TIPX-E2: (postId)
+    onOpenThread: (String) -> Unit = {},  // TIPX-E2: (conversationId)
+    onOpenVideo: (String) -> Unit = {},   // TIPX-E2: (videoId)
+    onOpenTips: () -> Unit = {},          // TIPX-E2: tip history
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -378,6 +435,16 @@ fun AlertsScreen(
                                         // PAY-51: a payout alert deep-links to that payout's statement.
                                         if (isPayoutAlert(alert.event)) {
                                             payoutIdFromActionUrl(alert.actionUrl)?.let(onOpenPayout)
+                                        }
+                                        // TIPX-E2 (N3): a tip alert deep-links to the tipped
+                                        // post / thread / video (or tip history for reversals).
+                                        if (isTipAlert(alert.event)) {
+                                            when (val t = tipTargetFromActionUrl(alert.actionUrl)) {
+                                                is TipNavTarget.Post -> onOpenPost(t.postId)
+                                                is TipNavTarget.Thread -> onOpenThread(t.conversationId)
+                                                is TipNavTarget.Video -> onOpenVideo(t.videoId)
+                                                TipNavTarget.Tips -> onOpenTips()
+                                            }
                                         }
                                     },
                                 )

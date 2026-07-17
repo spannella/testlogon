@@ -6,6 +6,7 @@ import { PushDevices } from "./PushDevices";
 import { ActivityFeed } from "./ActivityFeed";
 import { MentionsFeed } from "./MentionsFeed";
 import { TipsFeed } from "./TipsFeed";
+import { TipsSentFeed } from "./TipsSentFeed";
 
 export default function AlertsPage() {
   return (
@@ -32,7 +33,10 @@ export default function AlertsPage() {
           <MentionsFeed />
         </TabsContent>
         <TabsContent value="tips">
-          <TipsFeed />
+          <div className="space-y-6">
+            <TipsFeed />
+            <TipsSentFeed />
+          </div>
         </TabsContent>
         <TabsContent value="security">
           <AlertCenter />

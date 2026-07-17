@@ -35,6 +35,7 @@ from fastapi import HTTPException
 
 from app.core.settings import S
 from app.core.tables import T, _to_decimal
+from app.core.aws_clients import ddb_transact_client
 from app.core.time import now_ts
 from app.services.billing_config import split_fee
 from app.services.billing_shared import ddb_get, ddb_put, ddb_query_pk, user_pk
@@ -54,7 +55,7 @@ _SERIALIZER = TypeSerializer()
 # The set of content types `write_tip_ledger` accepts today (tip_ledger.py:51).
 # Kept in lock-step with the ledger so charge_tip never accepts a type the ledger
 # would reject. B2/B3 extend BOTH together (message_react/post_react/video_comment).
-TIP_CONTENT_TYPES = ("message", "post", "comment", "broadcast", "video", "message_react", "post_react", "video_comment")
+TIP_CONTENT_TYPES = ("message", "post", "comment", "broadcast", "video", "message_react", "post_react", "video_comment", "profile")
 
 
 @dataclass
@@ -189,7 +190,7 @@ def _transact_tip_ledger(
                 }
             }
         )
-    client = T.billing.meta.client
+    client = ddb_transact_client()
     try:
         client.transact_write_items(TransactItems=tx_items)
         return True
@@ -321,6 +322,32 @@ def _charge_tip_payment_intent(
     return pi.get("id")
 
 
+def _notify_tip_best_effort(entry: "TipLedgerEntry", result: "TipResult") -> None:
+    """TIPX-E1: fire the recipient alert + tipper receipt for a committed tip.
+
+    Best-effort: a notification failure must never break a charge/credit that
+    already committed. Routes EVERY surface through the one choke point so no
+    surface can be silent (comment/video/message-react/attached) or dead-link.
+    """
+    try:
+        from app.services.tip_notifications import notify_tip
+
+        notify_tip(
+            tipper_id=entry.tipper_user_id,
+            recipient_id=entry.recipient_user_id,
+            amount_cents=result.charged_cents,
+            net_cents=result.net_cents,
+            fee_cents=result.fee_cents,
+            currency=entry.currency,
+            content_type=entry.content_type,
+            content_id=entry.content_id,
+            tip_payment_id=result.tip_payment_id,
+            meta=getattr(entry, "extra_meta", None) or {},
+        )
+    except Exception:
+        logger.warning("notify_tip failed tip=%s", result.tip_payment_id, exc_info=True)
+
+
 def charge_tip(
     *,
     tipper_id: str,
@@ -406,6 +433,8 @@ def charge_tip(
             credit_entry_id=split.get("credit_entry_id", ""),
         )
         _store_idempotent_receipt(tipper_id, idempotency_key, result)
+        # TIPX-E1: single-choke-point tip notification (recipient alert + tipper receipt).
+        _notify_tip_best_effort(entry, result)
         return result
 
     # 6b. TIP-501: write the paired debit/credit + idempotency receipt ATOMICALLY.
@@ -443,6 +472,8 @@ def charge_tip(
 
     # 7. Notify the recipient's dashboard stream (best-effort).
     publish_tip_dashboard_sse(entry)
+    # TIPX-E1: single-choke-point tip notification (recipient alert + tipper receipt).
+    _notify_tip_best_effort(entry, result)
     return result
 
 
@@ -495,8 +526,15 @@ def reverse_tip(
     reason: str = "admin_reversal",
     actor: Optional[str] = None,
     meta: Optional[Dict[str, Any]] = None,
+    clawback_only: bool = False,
 ) -> ReversalResult:
     """TIP-502: idempotently reverse a tip.
+
+    DISP-033 (chargeback fork): when ``clawback_only`` is set the tipper REFUND
+    leg AND the best-effort Stripe refund are SUPPRESSED — the processor already
+    returned the money to the cardholder on a chargeback, so re-crediting the
+    tipper would double-refund. The recipient clawback + original-credit flip
+    still fire (the creator must give the money back regardless).
 
     Writes, in a single TransactWriteItems:
       * a recipient CLAWBACK ledger entry (entry_type "reversal", amount = net) --
@@ -535,6 +573,7 @@ def reverse_tip(
         "tip_payment_id": tip_payment_id,
         "reversal_of": tip_payment_id,
         "reversal_reason": reason,
+        "clawback_only": bool(clawback_only),
     }
     if actor:
         base_meta["reversal_actor"] = actor
@@ -569,10 +608,10 @@ def reverse_tip(
     }
     receipt = ReversalResult(
         tip_payment_id=tip_payment_id,
-        refunded_cents=gross_cents,
+        refunded_cents=0 if clawback_only else gross_cents,
         clawback_cents=net_cents,
         reversal_entry_id=reversal_id,
-        refund_entry_id=refund_id,
+        refund_entry_id="" if clawback_only else refund_id,
         idempotent_replay=False,
     )
     marker_item = {
@@ -584,18 +623,23 @@ def reverse_tip(
     marker_item["idempotent_replay"] = False
 
     table_name = S.billing_table_name
+    # DISP-033: on a chargeback (clawback_only) the tipper refund leg is dropped
+    # (the processor already refunded the cardholder) — clawback + marker only.
     tx_items = [
         {"Put": {"TableName": table_name, "Item": _av(clawback_item)}},
-        {"Put": {"TableName": table_name, "Item": _av(refund_item)}},
+    ]
+    if not clawback_only:
+        tx_items.append({"Put": {"TableName": table_name, "Item": _av(refund_item)}})
+    tx_items.append(
         {
             "Put": {
                 "TableName": table_name,
                 "Item": _av(marker_item),
                 "ConditionExpression": "attribute_not_exists(sk)",
             }
-        },
-    ]
-    client = T.billing.meta.client
+        }
+    )
+    client = ddb_transact_client()
     try:
         client.transact_write_items(TransactItems=tx_items)
     except ClientError as exc:
@@ -622,8 +666,10 @@ def reverse_tip(
         except Exception:
             logger.warning("original credit state flip skipped for tip=%s", tip_payment_id, exc_info=True)
 
-    # Refund the processor charge when a real PaymentIntent backed it.
-    if payment_intent_id:
+    # Refund the processor charge when a real PaymentIntent backed it. On a
+    # chargeback (clawback_only) the processor already pulled+returned the funds,
+    # so issuing a Stripe refund would double-pay the cardholder — suppress it.
+    if payment_intent_id and not clawback_only:
         try:
             from app.routers.billing import ensure_stripe_configured
             import stripe
@@ -636,4 +682,127 @@ def reverse_tip(
         except Exception:
             logger.warning("stripe refund skipped for tip=%s", tip_payment_id, exc_info=True)
 
+    # TIPX-E3 (N8): notify BOTH parties on the first reversal (best-effort).
+    try:
+        from app.services.tip_notifications import notify_tip_reversed
+
+        notify_tip_reversed(
+            tipper_id=tipper_id,
+            recipient_id=recipient_id,
+            gross_cents=gross_cents,
+            net_cents=net_cents,
+            currency=currency,
+            content_type=content_type,
+            content_id=content_id,
+            tip_payment_id=tip_payment_id,
+            reason=reason,
+        )
+    except Exception:
+        logger.warning("notify_tip_reversed failed tip=%s", tip_payment_id, exc_info=True)
+
     return receipt
+
+
+# ---------------------------------------------------------------------------
+# TIPX-A2 — reachable reversal: look up a tip by tip_payment_id and reverse it.
+# ---------------------------------------------------------------------------
+def _find_tip_debit_row(tipper_id: str, tip_payment_id: str) -> Optional[Dict[str, Any]]:
+    """Return the tipper's DEBIT ledger row for ``tip_payment_id`` (or None).
+
+    Scans the tipper's billing partition for a ``type=="debit"`` tip row whose
+    ``meta.tip_payment_id`` matches. Cheap: one partition, tip debits are sparse.
+    """
+    for row in ddb_query_pk(T.billing, user_pk(tipper_id)):
+        if row.get("type") != "debit":
+            continue
+        meta = row.get("meta") or {}
+        if meta.get("tip_payment_id") == tip_payment_id:
+            return row
+    return None
+
+
+def _find_tip_credit_row(recipient_id: str, tip_payment_id: str) -> Optional[Dict[str, Any]]:
+    """Return the recipient's CREDIT ledger row for ``tip_payment_id`` (or None)."""
+    for row in ddb_query_pk(T.billing, user_pk(recipient_id)):
+        if row.get("type") != "credit":
+            continue
+        meta = row.get("meta") or {}
+        if meta.get("tip_payment_id") == tip_payment_id:
+            return row
+    return None
+
+
+def reverse_tip_by_payment_id(
+    *,
+    tip_payment_id: str,
+    tipper_id: str,
+    recipient_id: Optional[str] = None,
+    reason: str = "admin_reversal",
+    actor: Optional[str] = None,
+    clawback_only: bool = False,
+) -> ReversalResult:
+    """TIPX-A2: reverse a tip identified only by its ``tip_payment_id``.
+
+    Resolves the original debit (and, where possible, the recipient credit) from
+    the ledger so callers -- an admin refund route or a charged-but-not-delivered
+    reconcile hook -- can undo a tip without threading every ledger field. Then
+    delegates to the idempotent ``reverse_tip`` (type != "credit", flips the
+    original credit to state="reversed", best-effort Stripe refund).
+
+    ``tipper_id`` is required (the ledger is partitioned by user). ``recipient_id``
+    is derived from the debit row's meta when omitted.
+
+    Idempotency short-circuits BEFORE the (possibly slow) ledger scan: a
+    tip that was already reversed returns its stored receipt with no re-scan.
+    """
+    if not tip_payment_id:
+        raise HTTPException(400, {"code": "missing_tip_id", "message": "tip_payment_id is required."})
+    if not tipper_id:
+        raise HTTPException(400, {"code": "missing_tipper", "message": "tipper_id is required to locate the tip."})
+
+    # Already reversed -> return the stored receipt (idempotent, no scan needed).
+    prior = _load_reversal_receipt(tipper_id, tip_payment_id)
+    if prior is not None:
+        return prior
+
+    debit = _find_tip_debit_row(tipper_id, tip_payment_id)
+    if not debit:
+        raise HTTPException(404, {"code": "tip_not_found", "message": f"No tip debit found for {tip_payment_id}."})
+    meta = debit.get("meta") or {}
+
+    gross_cents = int(debit.get("amount_cents", 0))
+    fee_cents = int(meta.get("platform_fee_cents", 0))
+    net_cents = max(0, gross_cents - fee_cents)
+    content_type = meta.get("content_type", "post")
+    content_id = meta.get("content_id", "")
+    currency = debit.get("currency", "USD")
+    payment_intent_id = meta.get("payment_intent_id") or debit.get("payment_intent_id")
+    recipient = recipient_id or meta.get("recipient_user_id", "")
+    if not recipient:
+        raise HTTPException(400, {"code": "missing_recipient", "message": "Could not resolve tip recipient."})
+
+    # Locate the recipient credit row so reverse_tip can flip it to state=reversed
+    # (clawing the net out of the recipient's spendable balance + leaderboard).
+    credit_entry_id = None
+    credit_ts = None
+    credit = _find_tip_credit_row(recipient, tip_payment_id)
+    if credit:
+        credit_entry_id = credit.get("entry_id")
+        credit_ts = int(credit.get("ts", 0)) or None
+
+    return reverse_tip(
+        tipper_id=tipper_id,
+        recipient_id=recipient,
+        gross_cents=gross_cents,
+        net_cents=net_cents,
+        tip_payment_id=tip_payment_id,
+        content_type=content_type,
+        content_id=content_id,
+        currency=currency,
+        payment_intent_id=payment_intent_id,
+        credit_entry_id=credit_entry_id,
+        credit_ts=credit_ts,
+        reason=reason,
+        actor=actor,
+        clawback_only=clawback_only,
+    )

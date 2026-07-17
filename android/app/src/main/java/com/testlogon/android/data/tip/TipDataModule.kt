@@ -17,6 +17,12 @@ object TipApiModule {
     @Singleton
     fun provideTipApi(retrofit: Retrofit): TipApi =
         retrofit.create(TipApi::class.java)
+
+    // TIPX-C2 - the standalone profile (creator) direct-tip API on the shared Retrofit.
+    @Provides
+    @Singleton
+    fun provideProfileTipApi(retrofit: Retrofit): ProfileTipApi =
+        retrofit.create(ProfileTipApi::class.java)
 }
 
 /** AND-178 — binds the tip repository to its implementation. */
@@ -27,4 +33,9 @@ abstract class TipDataModule {
     @Binds
     @Singleton
     abstract fun bindTipRepository(impl: TipRepositoryImpl): TipRepository
+
+    // TIPX-C2 - the profile (creator) direct-tip repository.
+    @Binds
+    @Singleton
+    abstract fun bindProfileTipRepository(impl: ProfileTipRepositoryImpl): ProfileTipRepository
 }

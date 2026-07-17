@@ -167,12 +167,21 @@ def test_payment_incident_accepts_customer_action_variant() -> None:
 
 
 def test_validate_incident_status_transition_rejects_invalid_hop() -> None:
+    # DISP E3 widened the table so a real Stripe charge.dispute.closed can move a
+    # live state (opened/evidence_required/response_submitted) straight to a
+    # terminal outcome. A backward hop OUT of a terminal state stays invalid.
     with pytest.raises(ValueError, match="Invalid dispute status transition"):
         validate_incident_status_transition(
             PaymentIncidentType.DISPUTE,
-            DisputeStatus.OPENED,
             DisputeStatus.WON,
+            DisputeStatus.OPENED,
         )
+
+
+def test_dispute_can_close_directly_from_opened() -> None:
+    # DISP E3: Stripe closes disputes directly (no mandatory intermediate state).
+    for terminal in (DisputeStatus.WON, DisputeStatus.LOST, DisputeStatus.ACCEPTED):
+        validate_incident_status_transition(PaymentIncidentType.DISPUTE, DisputeStatus.OPENED, terminal)
 
 
 def test_allowed_next_statuses_returns_canonical_set() -> None:

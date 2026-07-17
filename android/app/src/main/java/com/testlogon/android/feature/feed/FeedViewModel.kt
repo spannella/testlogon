@@ -125,6 +125,10 @@ class FeedViewModel @Inject constructor(
     // TIP-204 - money-reaction (tip) overlay (post id -> tip badges), applied like the reaction overlay
     // so a tip-react shows a money-reaction chip immediately (before a feed refetch).
     private val tipReactionOverrides = MutableStateFlow<Map<String, List<com.testlogon.android.data.feed.TipReactionBadge>>>(emptyMap())
+
+    // TIPX-C1 - direct-tip total overlay (post id -> new tip_total_cents), applied like the reaction
+    // overlay so the "Tipped $X" badge updates immediately after a direct tip (before a feed refetch).
+    private val tipTotalOverrides = MutableStateFlow<Map<String, Int>>(emptyMap())
     private val reactionJobs = mutableMapOf<String, Job>()
 
     // AND-176 — per-post bookmark toggle serialization (last-write-wins).
@@ -171,6 +175,11 @@ class FeedViewModel @Inject constructor(
                 else data.map { post ->
                     overrides[post.id]?.let { post.copy(repostedByMe = it.reposted, repostCount = it.repostCount) } ?: post
                 }
+            }
+            // TIPX-C1 - apply the direct-tip total overlay last so a just-sent tip shows immediately.
+            .combine(tipTotalOverrides) { data, totals ->
+                if (totals.isEmpty()) data
+                else data.map { post -> totals[post.id]?.let { post.copy(tipTotalCents = it) } ?: post }
             }
 
     /** AND-176 — reactive set of saved post ids (drives the per-post bookmark icon). */
@@ -259,6 +268,16 @@ class FeedViewModel @Inject constructor(
      */
     fun applyTipReactionBadge(postId: String, badge: com.testlogon.android.data.feed.TipReactionBadge) {
         tipReactionOverrides.update { it + (postId to (it[postId].orEmpty() + badge)) }
+    }
+
+    /**
+     * TIPX-C1 - record the server-reported new DIRECT-tip total for a post so the "Tipped $X" badge
+     * updates immediately after a tip. Only advances (max) so a stale/racing value never regresses the
+     * badge; the authoritative total lands on the next feed refetch.
+     */
+    fun applyTipTotal(postId: String, tipTotalCents: Int) {
+        if (tipTotalCents <= 0) return
+        tipTotalOverrides.update { it + (postId to maxOf(it[postId] ?: 0, tipTotalCents)) }
     }
 
     // ---- AND-175: hide / not-interested ----

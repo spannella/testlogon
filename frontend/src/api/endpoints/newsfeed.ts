@@ -98,8 +98,18 @@ export const getComments = (postId: string, cursor?: string) =>
 export const createComment = (postId: string, body: CreateCommentReq) =>
   api.post<FeedComment>(`/posts/${postId}/comments`, body);
 
-export const tipPost = (postId: string, commentId: string, amountCents: number) =>
-  api.post(`/posts/${postId}/comments/${commentId}/tip`, { amount_cents: amountCents });
+// TIPX-B4 (F9) — renamed tipPost -> tipComment (it tips a COMMENT, not the post) and now threads the
+// chosen payment_method_id so the tipper is charged on their selected card, not always the default.
+export const tipComment = (
+  postId: string,
+  commentId: string,
+  amountCents: number,
+  paymentMethodId?: string,
+) =>
+  api.post(`/posts/${postId}/comments/${commentId}/tip`, {
+    amount_cents: amountCents,
+    ...(paymentMethodId ? { payment_method_id: paymentMethodId } : {}),
+  });
 
 export const follow = (userId: string) =>
   api.post<{ ok: boolean }>("/social/refollow", { target_user_id: userId });

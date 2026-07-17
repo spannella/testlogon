@@ -168,6 +168,7 @@ fun FeedRoute(
             when (effect) {
                 is TipEffect.ShowSnackbar -> snackbarHostState.showSnackbar(effect.message)
                 is TipEffect.ReactionBadge -> viewModel.applyTipReactionBadge(effect.postId, effect.badge)
+                is TipEffect.TotalUpdated -> viewModel.applyTipTotal(effect.postId, effect.tipTotalCents)
             }
         }
     }

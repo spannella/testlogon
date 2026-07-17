@@ -1,0 +1,24 @@
+diff --git a/app/core/settings.py b/app/core/settings.py
+index 033ad81b..07aad630 100644
+--- a/app/core/settings.py
++++ b/app/core/settings.py
+@@ -2259,6 +2259,19 @@ class Settings:
+     # When OFF the webhook still parses+records state but never touches T.billing.
+     dispute_chargeback_reconcile_enabled: bool = os.environ.get("DISPUTE_CHARGEBACK_RECONCILE_ENABLED", "1") not in ("0", "false", "False")
+ 
++    # DISP E4 (DISP-040..042) — fraud/abuse wire + serial-disputer guards + cross-track link.
++    # Serial-disputer: per-payer rolling-30d dispute cap. Over-cap opens are rejected;
++    # a repeat/losing disputer is flagged and routed to manual review (never auto-refunded).
++    dispute_max_disputes_per_month: int = int(os.environ.get("DISPUTE_MAX_DISPUTES_PER_MONTH", "5"))
++    # A payer with >= this many disputes in 30d is a "serial disputer": their new
++    # disputes skip the auto-refund fast-path and always land in the admin queue.
++    dispute_serial_disputer_threshold: int = int(os.environ.get("DISPUTE_SERIAL_DISPUTER_THRESHOLD", "3"))
++    # Chargeback count at/above which the fraud wire auto-freezes the payer's
++    # financial ops (0 disables the auto-freeze; the fraud flag still fires).
++    dispute_fraud_autofreeze_chargebacks: int = int(os.environ.get("DISPUTE_FRAUD_AUTOFREEZE_CHARGEBACKS", "5"))
++    # Master flag for the DISP-040 fraud wire (record_chargeback + auto-freeze).
++    dispute_fraud_signal_enabled: bool = os.environ.get("DISPUTE_FRAUD_SIGNAL_ENABLED", "1") not in ("0", "false", "False")
++
+     # Notification Delivery Enhancements (NOTIFY-001)
+     notification_dispatch_enabled: bool = os.environ.get("NOTIFICATION_DISPATCH_ENABLED", "1") not in ("0", "false", "False")
+     notification_email_templates_enabled: bool = os.environ.get("NOTIFICATION_EMAIL_TEMPLATES_ENABLED", "1") not in ("0", "false", "False")

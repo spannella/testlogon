@@ -415,18 +415,60 @@ export interface ActivityFeedResp {
   next_cursor: string | null;
 }
 
+export interface TipSurfaceBucket {
+  count: number;
+  total_cents: number;
+}
+
+// TIPX-D1: the tips-summary is now LEDGER-backed. total_tips_cents is NET (fee
+// already deducted), covers all 8 tip surfaces, and excludes reversed tips, so
+// it reconciles to the earnings tips bucket and the leaderboard. net/source are
+// present on the ledger-backed response; by_surface carries every surface.
 export interface TipsSummary {
   total_tips_cents: number;
   tip_count: number;
+  unique_tippers?: number;
+  net?: boolean;
+  source?: string;
   top_tippers: Array<{
     user_id: string;
     display_name: string;
     total_cents: number;
+    tip_count?: number;
   }>;
   by_type: {
-    post_tip: { count: number; total_cents: number };
-    message_tip: { count: number; total_cents: number };
+    post_tip: TipSurfaceBucket;
+    message_tip: TipSurfaceBucket;
   };
+  by_surface?: Record<string, TipSurfaceBucket>;
+}
+
+// TIPX-D4: a tipper-side sent-tip receipt (one debit row = one receipt).
+export interface TipSentItem {
+  entry_id: string;
+  ts: number;
+  amount_cents: number;
+  reason: string;
+  content_type: string;
+  content_id: string;
+  counterparty_user_id: string;
+  counterparty_display_name: string;
+  platform_fee_cents: number;
+  tip_payment_id: string;
+  currency: string;
+}
+
+export interface TipsSentResp {
+  items: TipSentItem[];
+  next_cursor?: string | null;
+}
+
+export interface TipsSentSummary {
+  period: string;
+  total_sent_cents: number;
+  tip_count: number;
+  unique_recipients: number;
+  source: string;
 }
 
 // ─── Activity Feed (SOC-003) ───────────────────────────────────
@@ -735,6 +777,36 @@ export interface DisputeFileIn {
   provider?: string;
 }
 
+// DISP-022: money-safe preview of what a `refunded` resolution would do.
+export interface DisputeRailPreview {
+  charge_type?: string | null;
+  charge_ref?: string | null;
+  rail?: string | null;
+  rail_available: boolean;
+  partial_supported: boolean;
+  clawback_recipient_id?: string | null;
+  clawback_cents?: number | null;
+  gross_cents?: number | null;
+  note?: string;
+}
+
+// DISP-022: the linked processor PaymentIncident (both tracks, one charge).
+export interface DisputeLinkedIncident {
+  incident_id: string;
+  status?: string | null;
+  provider?: string | null;
+  provider_incident_id?: string | null;
+}
+
+// DISP-021: an entry in the creator/admin rebuttal thread.
+export interface DisputeResponseEntry {
+  author?: string;
+  role?: string;
+  text?: string;
+  evidence_files?: string[];
+  ts?: number;
+}
+
 export interface DisputeOut {
   dispute_id: string;
   provider: string;
@@ -749,9 +821,25 @@ export interface DisputeOut {
   resolution?: string | null;
   admin_notes?: string | null;
   transaction_entry_id?: string | null;
+  // DISP-010/011/012 surfaced fields.
+  charge_type?: string | null;
+  charge_ref?: string | null;
+  recipient_id?: string | null;
+  reason_detail?: string | null;
+  respond_by?: number | null;
+  moved_cents?: number | null;
+  creator_response?: string | null;
+  linked_dispute_id?: string | null;
   created_at: number;
   updated_at?: number | null;
   deadline_at?: number | null;
+  // DISP-022 admin-view enrichment (only on the admin endpoints).
+  rail_preview?: DisputeRailPreview;
+  linked_incident?: DisputeLinkedIncident | null;
+  responses?: DisputeResponseEntry[];
+  serial_disputer?: boolean;
+  evidence_files?: string[];
+  source?: string;
 }
 
 export interface DisputeRespondIn {
@@ -759,9 +847,19 @@ export interface DisputeRespondIn {
   evidence_files?: string[];
 }
 
+// DISP-021: creator/seller rebuttal payload.
+export interface CreatorDisputeRespondIn {
+  response_text: string;
+  evidence_files?: string[];
+}
+
 export interface DisputeResolveIn {
-  resolution: "won" | "lost" | "accepted";
+  // DISP-013 user-track outcomes; legacy won|lost|accepted still accepted server-side.
+  resolution: "refunded" | "partial" | "denied" | "won" | "lost" | "accepted";
+  override_amount_cents?: number;
   notes?: string;
+  // DISP-022: required for a money-moving resolve above the dual-approval threshold.
+  second_approver_admin_user_id?: string;
 }
 
 export interface SetPriorityReq {

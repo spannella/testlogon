@@ -326,6 +326,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-252/253: creator earnings dashboard (totals + Canvas chart + breakdown) and the
         // per-content revenue list (cursor-paged, sortable).
         earningsDestinations(navController)
+        // TIPX-D3/D4: ledger-backed tip insights (top supporters + received/sent history).
+        tipInsightsDestinations(navController)
         // AND-254: creator engagement-rate analytics (server rate + trend chart + breakdown).
         engagementDestinations(navController)
         // AND-399: account-wide analytics dashboards (read) — KPI tiles + views/subscriber charts +

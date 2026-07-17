@@ -38,6 +38,14 @@ class FakePurchasesRepository(
         return detailResult
     }
 
+    // ECOMX-42 (B6): confirm-delivery; returns the configured detail result by default.
+    var confirmReceivedResult: ApiResult<PurchaseDetail> = ApiResult.Success(sampleDetail())
+    var confirmReceivedCalls = 0
+    override suspend fun confirmReceived(txnId: String): ApiResult<PurchaseDetail> {
+        confirmReceivedCalls++
+        return confirmReceivedResult
+    }
+
     companion object {
         fun sampleItem(
             id: String = "txn_1",

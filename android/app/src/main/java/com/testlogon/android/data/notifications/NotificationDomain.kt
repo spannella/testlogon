@@ -20,8 +20,14 @@ enum class NotificationType {
     UNKNOWN;
 
     companion object {
-        fun fromToken(token: String?): NotificationType =
-            entries.firstOrNull { it != UNKNOWN && it.name.equals(token, ignoreCase = true) } ?: UNKNOWN
+        fun fromToken(token: String?): NotificationType {
+            val t = token?.trim()?.lowercase() ?: return UNKNOWN
+            // TIPX-E2 (N2): every tip vocabulary (tip_received / tip_sent / post_tip /
+            // message_tip / tip_reversed / tip_refunded / tip_on_*) normalizes to TIP so
+            // the client renders + deep-links tip notifications instead of dropping to UNKNOWN.
+            if (t.startsWith("tip_") || t.endsWith("_tip")) return TIP
+            return entries.firstOrNull { it != UNKNOWN && it.name.equals(t, ignoreCase = true) } ?: UNKNOWN
+        }
     }
 }
 

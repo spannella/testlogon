@@ -275,6 +275,8 @@ fun PostItem(
                     onToggleReaction = { emoji -> onToggleReaction(post, emoji) },
                     tipReactions = post.tipReactions,
                     onTipReact = { emoji -> onTipReact(post, emoji) },
+                    // TIPX-C1 - render the post's running DIRECT-tip total to both parties.
+                    tipTotalCents = post.tipTotalCents,
                 )
             }
         }

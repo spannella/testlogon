@@ -59,17 +59,21 @@ fun NavGraphBuilder.orderReviewDestination(navController: NavHostController) {
             navArgument(OrderReviewDest.ARG_TOTAL_CENTS) { type = NavType.LongType },
             navArgument(OrderReviewDest.ARG_CURRENCY) { type = NavType.StringType },
         ),
-    ) {
+    ) { backStackEntry ->
+        // ECOMX-40 (B3): the address step writes the chosen address_id back onto THIS
+        // order-review entry's SavedStateHandle; the checkout VM reads it (below) so
+        // "Place order" is enabled + the id is threaded into the charge.
         OrderReviewRoute(
             onBack = { navController.popBackStack() },
-            // AND-227/228/229: open the redirect provider-selection screen for the session total.
-            onChoosePaymentMethod = { totalCents, currency ->
-                navController.navigate(RedirectCheckoutDest.route(totalCents, currency)) {
-                    launchSingleTop = true
-                }
+            // ECOMX-40 (B3): open the reachable shipping-address step. On apply it pops
+            // back here having stored RESULT_ADDRESS_ID on this entry's handle.
+            onSelectAddress = {
+                navController.navigate(AddressShippingDest.ROUTE) { launchSingleTop = true }
             },
-            // FIX (ecom residual #1): the reliable purchase completed -> go to the order confirmation
-            // (tracking/detail) screen, clearing the cart+checkout off the back stack.
+            selectedAddressId = backStackEntry.savedStateHandle
+                .get<String>(AddressShippingDest.RESULT_ADDRESS_ID),
+            // ECOMX-42 (B8): route confirmation off the orderId-derived txn id; the fallback
+            // (null txn) lands on the purchase-history list which always identifies the order.
             onOrderComplete = { txnId, _ ->
                 val dest = if (txnId != null) TrackingDest.build(txnId) else PurchaseHistoryDest.ROUTE
                 navController.navigate(dest) {
@@ -87,13 +91,21 @@ fun NavGraphBuilder.orderReviewDestination(navController: NavHostController) {
  */
 data object AddressShippingDest {
     const val ROUTE = "shop/address"
+    /** SavedStateHandle key the applied address_id is written back onto the OrderReview entry. */
+    const val RESULT_ADDRESS_ID = "checkout_address_id"
 }
 
 fun NavGraphBuilder.addressShippingDestination(navController: NavHostController) {
     composable(AddressShippingDest.ROUTE) {
         AddressShippingRoute(
-            // The payment step (AND-216 payment) is not wired; Applied returns to the prior screen.
-            onContinueToPayment = { navController.popBackStack() },
+            // ECOMX-40 (B3): on apply, hand the chosen address_id back to the order-review
+            // entry (previous back-stack entry) and pop, so checkout can charge with it.
+            onContinueToPayment = { addressId ->
+                navController.previousBackStackEntry
+                    ?.savedStateHandle
+                    ?.set(AddressShippingDest.RESULT_ADDRESS_ID, addressId)
+                navController.popBackStack()
+            },
             onBack = { navController.popBackStack() },
         )
     }

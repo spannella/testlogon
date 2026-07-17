@@ -6,15 +6,20 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.cart.CartItem
 import com.testlogon.android.data.cart.CartRepository
+import com.testlogon.android.data.entitlements.LibraryEntitlement
+import com.testlogon.android.data.entitlements.OrderEntitlementsRepository
 import com.testlogon.android.data.purchases.PurchaseDetail
 import com.testlogon.android.data.purchases.PurchasesRepository
 import com.testlogon.android.data.tracking.TrackingRepository
 import com.testlogon.android.feature.tracking.TrackingUiState
 import com.testlogon.android.feature.tracking.TrackingViewModel
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -32,8 +37,18 @@ sealed interface OrderDetailUiState {
         val order: PurchaseDetail,
         val items: List<CartItem>,
         val tracking: TrackingUiState,
+        // ECOMX-43 (B5): digital goods granted by this order, accessible/openable in-app.
+        val entitlements: List<LibraryEntitlement> = emptyList(),
+        // ECOMX-42 (B6): true while a "confirm delivery" call is in flight.
+        val confirming: Boolean = false,
     ) : OrderDetailUiState
     data class Error(val message: String, val retryable: Boolean) : OrderDetailUiState
+}
+
+/** ECOMX-42 (B6) — one-shot order-detail effects (snackbars). */
+sealed interface OrderDetailEvent {
+    data object DeliveryConfirmed : OrderDetailEvent
+    data class ActionFailed(val message: String) : OrderDetailEvent
 }
 
 @HiltViewModel
@@ -41,6 +56,7 @@ class OrderDetailViewModel @Inject constructor(
     private val purchasesRepository: PurchasesRepository,
     private val cartRepository: CartRepository,
     private val trackingRepository: TrackingRepository, // AND-215, reused (no duplication)
+    private val entitlementsRepository: OrderEntitlementsRepository, // ECOMX-43 (B5)
     savedState: SavedStateHandle,
 ) : ViewModel() {
 
@@ -49,6 +65,9 @@ class OrderDetailViewModel @Inject constructor(
 
     private val _state = MutableStateFlow<OrderDetailUiState>(OrderDetailUiState.Loading)
     val state: StateFlow<OrderDetailUiState> = _state.asStateFlow()
+
+    private val _events = Channel<OrderDetailEvent>(Channel.BUFFERED)
+    val events: Flow<OrderDetailEvent> = _events.receiveAsFlow()
 
     init {
         load()
@@ -66,7 +85,10 @@ class OrderDetailViewModel @Inject constructor(
                     val order = detail.data
                     val items = resolveItems(order)
                     val tracking = resolveTracking(order)
-                    _state.value = OrderDetailUiState.Content(order = order, items = items, tracking = tracking)
+                    val entitlements = resolveEntitlements(order)
+                    _state.value = OrderDetailUiState.Content(
+                        order = order, items = items, tracking = tracking, entitlements = entitlements,
+                    )
                 }
                 is ApiResult.Failure ->
                     _state.value = OrderDetailUiState.Error(
@@ -81,6 +103,42 @@ class OrderDetailViewModel @Inject constructor(
     }
 
     fun retry() = load()
+
+    /**
+     * ECOMX-42 (B6) — buyer confirms delivery. Drives the order + txn to COMPLETED, then reloads so the
+     * status flips and (if a return window applies) the surfaces update. Guarded against double-tap.
+     */
+    fun confirmReceived() {
+        val content = _state.value as? OrderDetailUiState.Content ?: return
+        if (content.confirming) return
+        _state.update { (it as? OrderDetailUiState.Content)?.copy(confirming = true) ?: it }
+        viewModelScope.launch {
+            when (val r = purchasesRepository.confirmReceived(txnId)) {
+                is ApiResult.Success -> {
+                    _events.send(OrderDetailEvent.DeliveryConfirmed)
+                    load()
+                }
+                is ApiResult.Failure -> {
+                    _state.update { (it as? OrderDetailUiState.Content)?.copy(confirming = false) ?: it }
+                    _events.send(OrderDetailEvent.ActionFailed(r.error.message))
+                }
+                is ApiResult.NetworkError -> {
+                    _state.update { (it as? OrderDetailUiState.Content)?.copy(confirming = false) ?: it }
+                    _events.send(OrderDetailEvent.ActionFailed(OFFLINE))
+                }
+            }
+        }
+    }
+
+    /** ECOMX-43 (B5) — the digital goods granted by this order (best-effort; never fails the screen).
+     *  The txn's external_ref carries the commerce order_id, which entitlements are attributed to. */
+    private suspend fun resolveEntitlements(order: PurchaseDetail): List<LibraryEntitlement> {
+        val orderId = order.externalRef?.takeIf { it.isNotBlank() } ?: return emptyList()
+        return when (val r = entitlementsRepository.libraryForOrder(orderId)) {
+            is ApiResult.Success -> r.data
+            is ApiResult.Failure, is ApiResult.NetworkError -> emptyList()
+        }
+    }
 
     /** Resolves cart line items from metadata.cart_id; empty when absent / on a cart-fetch failure. */
     private suspend fun resolveItems(order: PurchaseDetail): List<CartItem> {

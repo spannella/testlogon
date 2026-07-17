@@ -211,6 +211,10 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "GET:/ui/shoppingcart/carts/{cart_id}/abandonment-status": {"product": "shopping", "required_scopes": ["shopping:cart:write"], "entitlement_required": False},
     "GET:/ui/shoppingcart/orders/{order_id}": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
     "GET:/ui/purchase-history/transactions/{txn_id}/tracking": {"product": "shopping", "required_scopes": ["shopping:orders:read"], "entitlement_required": True},
+    # ECOMX-02 (E0): wishlist router mounted -> register its policy-guarded routes.
+    "GET:/ui/wishlist": {"product": "shopping", "required_scopes": ["shopping:catalog:read"], "entitlement_required": False},
+    "POST:/ui/wishlist": {"product": "shopping", "required_scopes": ["shopping:cart:write"], "entitlement_required": False},
+    "DELETE:/ui/wishlist/{category_id}/{item_id}": {"product": "shopping", "required_scopes": ["shopping:cart:write"], "entitlement_required": False},
     # Messager -- APIK-E2 (#118): full messaging parity. messager:manage>=write>=read.
     # read=reads/realtime/search/receipts-view; write=bootstrap+rich-sends(incl image presign)+
     # reactions+read-receipts+calls+pins/forward+privacy; manage=participant/lifecycle admin+
@@ -519,9 +523,11 @@ API_KEY_ROUTE_EXEMPTIONS: Dict[str, RouteExemption] = {
     "POST:/ui/catalog/categories/{category_id}/items/{item_id}/images/upload": {"reason": "session-auth catalog route, not in initial API-key rollout scope"},
     "POST:/ui/catalog/file-bundles": {"reason": "session-auth catalog route, not in initial API-key rollout scope"},
     "POST:/ui/catalog/items/{item_id}/reviews": {"reason": "session-auth catalog route, not in initial API-key rollout scope"},
+    "POST:/ui/catalog/items/{item_id}/reviews/{review_id}/response": {"reason": "session-auth catalog route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/cancel/request": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/cancel/respond": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/complete": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
+    "POST:/ui/purchase-history/transactions/{txn_id}/confirm-received": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/ui/purchase-history/transactions/{txn_id}/revert": {"reason": "session-auth purchase-history route, not in initial API-key rollout scope"},
     "POST:/v1/fs/admin/mounts/{mount_id}/disable": {"reason": "session-auth file manager route, not in initial API-key rollout scope"},
     "POST:/v1/fs/admin/mounts/{mount_id}/reconcile-disable": {"reason": "session-auth file manager route, not in initial API-key rollout scope"},

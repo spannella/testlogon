@@ -1,6 +1,7 @@
 package com.testlogon.android.data.purchases
 
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -35,6 +36,15 @@ interface PurchasesApi {
 
     @GET("ui/purchase-history/transactions/{txnId}")
     suspend fun getTransaction(
+        @Path("txnId") txnId: String,
+    ): PurchaseTransactionInfoDto
+
+    /**
+     * ECOMX-42 (B6) — the buyer confirms delivery of their order. Drives the order + txn to
+     * COMPLETED. Owner-scoped (the txn PK is the caller). Returns the refreshed txn info.
+     */
+    @POST("ui/purchase-history/transactions/{txnId}/confirm-received")
+    suspend fun confirmReceived(
         @Path("txnId") txnId: String,
     ): PurchaseTransactionInfoDto
 

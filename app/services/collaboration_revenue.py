@@ -367,6 +367,7 @@ def execute_content_split(
         currency=currency,
         content_type=resolved_type,
         content_id=content_id,
+        source=source,
     )
 
     distributions: List[Dict[str, Any]] = []

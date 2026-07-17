@@ -69,6 +69,8 @@ data class PostDto(
     @Json(name = "my_reactions") val myReactions: List<String>? = null,
     // TIP-204 - money-reaction (tip) badges surfaced by the backend feed/post serializer.
     @Json(name = "tip_reactions") val tipReactions: List<TipReactionBadgeDto>? = null,
+    // TIPX-C1 - running total of DIRECT (non-reaction) tips on this post; rendered as a badge.
+    @Json(name = "tip_total_cents") val tipTotalCents: Int = 0,
     // --- flat lock / paywall fields (mirror FeedPost) ---
     @Json(name = "locked") val locked: Boolean = false,
     @Json(name = "unlocked") val unlocked: Boolean = false,

@@ -61,6 +61,7 @@ fun PublicProfileDataDto.toDomain(): PublicProfile = PublicProfile(
     hasSubscriptionPlans = hasSubscriptionPlans,
     createdAtEpochSeconds = createdAt?.takeIf { it > 0 },
     discoverability = discoverability.normalizeOrNull(),
+    tipTotalCents = tipTotalCents,
 )
 
 /** Domain patch -> wire request. Pure. */

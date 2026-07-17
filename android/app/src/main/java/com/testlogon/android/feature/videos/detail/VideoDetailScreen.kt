@@ -111,6 +111,8 @@ fun VideoDetailRoute(
     onBack: () -> Unit,
     onOpenVideo: (videoId: String) -> Unit,
     onCtaNavigate: (CtaDestination) -> Unit = {},
+    // TIPX-B3 (F3) — navigate to add-card when an empty-wallet tipper wants to tip a video comment.
+    onAddCard: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: VideoDetailViewModel = hiltViewModel(),
     rentalViewModel: VodRentalViewModel = hiltViewModel(),
@@ -243,6 +245,7 @@ fun VideoDetailRoute(
         onTip = { state.detail?.id?.let { tipViewModel.open(it) } },
         onOpenVideo = onOpenVideo,
         onReport = { state.detail?.id?.let { reportTarget = ReportTarget.Content(it, "video") } },
+        onAddCard = onAddCard,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -291,6 +294,8 @@ fun VideoDetailScreen(
     onToggleReaction: (emoji: String) -> Unit = {},
     onTip: () -> Unit = {},
     onReport: () -> Unit = {},
+    // TIPX-B3 (F3) — navigate to add-card from the video-comment tip sheet's empty-wallet state.
+    onAddCard: () -> Unit = {},
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     monetizationContent: @Composable () -> Unit = {},
 ) {
@@ -333,6 +338,7 @@ fun VideoDetailScreen(
                     onTip = onTip,
                     onReport = onReport,
                     onOpenVideo = onOpenVideo,
+                    onAddCard = onAddCard,
                 )
             }
         }
@@ -349,6 +355,8 @@ private fun DetailContent(
     onTip: () -> Unit,
     onReport: () -> Unit = {},
     onOpenVideo: (videoId: String) -> Unit,
+    // TIPX-B3 (F3) — thread add-card navigation down to the comments section's tip sheet.
+    onAddCard: () -> Unit = {},
 ) {
     val detail = state.detail ?: return
     val context = LocalContext.current
@@ -482,7 +490,7 @@ private fun DetailContent(
                 RelatedRail(items = state.related, onOpenVideo = onOpenVideo)
             }
 
-            VideoCommentsSection()
+            VideoCommentsSection(onAddCard = onAddCard)
         }
     }
 }

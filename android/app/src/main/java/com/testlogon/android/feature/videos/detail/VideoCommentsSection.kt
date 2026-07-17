@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddReaction
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Paid
@@ -28,7 +29,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -49,6 +49,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -106,7 +107,18 @@ class VideoCommentsViewModel @Inject constructor(
         val tipTarget: VideoComment? = null,
         val tipSubmitting: Boolean = false,
         val tipError: String? = null,
-    )
+        // TIPX-B2/B3 (F2/F5/F6) — shared-composer tip fields: chosen amount, custom text, visibility,
+        // an in-sheet confirmed receipt amount, and the empty-wallet add-card state.
+        val tipSelectedCents: Int? = null,
+        val tipCustomText: String = "",
+        val tipVisibility: com.testlogon.android.feature.common.tip.TipVisibility =
+            com.testlogon.android.feature.common.tip.TipVisibility.Default,
+        val tipConfirmedCents: Int? = null,
+        val tipNoCard: Boolean = false,
+    ) {
+        val tipEffectiveCents: Int? get() = tipSelectedCents
+        val tipCanSend: Boolean get() = (tipEffectiveCents ?: 0) in 100..5_000_000
+    }
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
@@ -218,32 +230,71 @@ class VideoCommentsViewModel @Inject constructor(
     val tipPresets: List<Int> = listOf(100, 500, 1000)
 
     fun openTip(comment: VideoComment) {
-        _state.update { it.copy(tipTarget = comment, tipSubmitting = false, tipError = null) }
+        _state.update {
+            it.copy(
+                tipTarget = comment, tipSubmitting = false, tipError = null,
+                tipSelectedCents = null, tipCustomText = "",
+                tipVisibility = com.testlogon.android.feature.common.tip.TipVisibility.Default,
+                tipConfirmedCents = null, tipNoCard = false,
+            )
+        }
     }
 
     fun dismissTip() {
-        _state.update { it.copy(tipTarget = null, tipSubmitting = false, tipError = null) }
+        if (_state.value.tipSubmitting) return
+        _state.update { it.copy(tipTarget = null, tipSubmitting = false, tipError = null, tipNoCard = false, tipConfirmedCents = null) }
     }
 
-    fun confirmTip(amountCents: Int) {
-        val target = _state.value.tipTarget ?: return
-        if (_state.value.tipSubmitting) return
+    fun selectTipPreset(cents: Int) {
+        _state.update { it.copy(tipSelectedCents = cents, tipCustomText = "", tipError = null) }
+    }
+
+    fun setTipCustomAmount(text: String) {
+        _state.update {
+            it.copy(
+                tipCustomText = text,
+                tipSelectedCents = com.testlogon.android.feature.feed.parseDollarsToCents(text),
+                tipError = null,
+            )
+        }
+    }
+
+    fun setTipVisibility(v: com.testlogon.android.feature.common.tip.TipVisibility) {
+        _state.update { it.copy(tipVisibility = v) }
+    }
+
+    /** TIPX-B2 — explicit Send; NEVER optimistic. Empty wallet -> in-flow add-card (TIPX-B3). */
+    fun sendTip() {
+        val s = _state.value
+        val target = s.tipTarget ?: return
+        val cents = s.tipEffectiveCents ?: return
+        if (!s.tipCanSend || s.tipSubmitting) return
         _state.update { it.copy(tipSubmitting = true, tipError = null) }
         viewModelScope.launch {
-            // Resolve a PM via the shared billing seam (debug => blank id -> backend tip-default; release => unavailable).
-            val pmId: String? = when (val auth = billing.authorize(amountCents.toLong(), "USD")) {
+            val pmId: String? = when (val auth = billing.authorize(cents.toLong(), "USD")) {
                 is BillingResult.Authorized -> auth.paymentMethodId
-                BillingResult.NotConfigured -> { failTip("Payments are unavailable right now."); return@launch }
+                BillingResult.NotConfigured -> {
+                    _state.update { it.copy(tipSubmitting = false, tipNoCard = true) }
+                    return@launch
+                }
                 BillingResult.Cancelled -> { _state.update { it.copy(tipSubmitting = false) }; return@launch }
                 is BillingResult.Declined -> { failTip(auth.reason); return@launch }
                 is BillingResult.Failed -> { failTip("Couldn't send tip. Try again."); return@launch }
             }
-            when (val r = repository.tipComment(videoId, target.id, amountCents, pmId)) {
-                is ApiResult.Success -> { _state.update { it.copy(tipTarget = null, tipSubmitting = false) }; load() }
+            when (val r = repository.tipComment(videoId, target.id, cents, pmId)) {
+                is ApiResult.Success -> {
+                    _state.update { it.copy(tipSubmitting = false, tipConfirmedCents = cents) }
+                    load()
+                }
                 is ApiResult.Failure -> failTip(r.error.message)
                 is ApiResult.NetworkError -> failTip("You're offline. Try again.")
             }
         }
+    }
+
+    /** TIPX-B3 — resume the composer (clearing the add-card state) after returning from add-card. */
+    fun resumeTipAfterAddCard() {
+        if (_state.value.tipNoCard) _state.update { it.copy(tipNoCard = false) }
     }
 
     private fun failTip(message: String) {
@@ -254,12 +305,24 @@ class VideoCommentsViewModel @Inject constructor(
 @Composable
 fun VideoCommentsSection(
     modifier: Modifier = Modifier,
+    // TIPX-B3 (F3) — navigate to add-card when an empty-wallet tipper wants to tip a video comment.
+    onAddCard: () -> Unit = {},
     viewModel: VideoCommentsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val names by viewModel.authorNames.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
+
+    // TIPX-B3 (F3) — resume the tip composer on return from add-card (ON_RESUME clears NoCard).
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.resumeTipAfterAddCard()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     // MOD-C2 - video comment report target (reported as video_comment by its id).
     var reportTarget by remember { mutableStateOf<ReportTarget?>(null) }
 
@@ -401,14 +464,18 @@ fun VideoCommentsSection(
             }
         }
 
-        // TIP-305 — the video-comment tip sheet (opens when a comment's Tip button is tapped).
+        // TIP-305 / TIPX-B2 — the video-comment tip sheet (shared composer: presets + custom + explicit
+        // Send + confirmed receipt + in-flow add-card).
         if (state.tipTarget != null) {
             VideoCommentTipSheet(
+                state = state,
                 presets = viewModel.tipPresets,
-                submitting = state.tipSubmitting,
-                error = state.tipError,
-                onConfirm = viewModel::confirmTip,
+                onSelectPreset = viewModel::selectTipPreset,
+                onCustomAmount = viewModel::setTipCustomAmount,
+                onVisibility = viewModel::setTipVisibility,
+                onSend = viewModel::sendTip,
                 onDismiss = viewModel::dismissTip,
+                onAddCard = onAddCard,
             )
         }
     }
@@ -566,9 +633,11 @@ private fun CommentRow(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            // TIP-305 — tip this comment's author. Hidden on your OWN comment (canDelete == mine) so you
-            // never self-tip (the backend also rejects a self-tip with 400 cannot_tip_self).
-            if (!comment.canDelete) {
+            // TIP-305 — tip this comment's author. Hidden on your OWN comment so you never self-tip
+            // (the backend also rejects a self-tip with 400 cannot_tip_self).
+            // TIPX-B4 (F7) — gate on real authorship (isOwnAuthor), not the canDelete permission proxy,
+            // so a moderator/admin who can delete others' comments still sees the Tip button.
+            if (!comment.isOwnAuthor) {
                 IconButton(
                     onClick = { viewModel.openTip(comment) },
                     modifier = Modifier.size(32.dp).testTag("tip_video_comment_open"),
@@ -599,38 +668,100 @@ private fun CommentRow(
     }
 }
 
-/** TIP-305 — preset-amount tip bottom sheet for a VIDEO comment (mirrors the feed comment tip sheet). */
+/**
+ * TIP-305 / TIPX-B2/B3/B4 — VIDEO-comment tip bottom sheet backed by the shared [TipComposerContent]:
+ * presets + custom amount + public/private visibility + explicit Send (no one-tap charge) + inline
+ * error + an in-sheet amount RECEIPT (with Done) + an in-flow add-card path on an empty wallet.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VideoCommentTipSheet(
+    state: VideoCommentsViewModel.State,
     presets: List<Int>,
-    submitting: Boolean,
-    error: String?,
-    onConfirm: (Int) -> Unit,
+    onSelectPreset: (Int) -> Unit,
+    onCustomAmount: (String) -> Unit,
+    onVisibility: (com.testlogon.android.feature.common.tip.TipVisibility) -> Unit,
+    onSend: () -> Unit,
     onDismiss: () -> Unit,
+    onAddCard: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+    val submitting = state.tipSubmitting
+    ModalBottomSheet(
+        onDismissRequest = { if (!submitting) onDismiss() },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
         Column(
-            Modifier.fillMaxWidth().padding(16.dp).testTag("tip_video_comment_sheet"),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp).testTag("tip_video_comment_sheet"),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("Send a tip", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                presets.forEach { cents ->
-                    OutlinedButton(
-                        onClick = { onConfirm(cents) },
-                        enabled = !submitting,
-                        modifier = Modifier.testTag("tip_video_comment_sheet_$cents"),
+            Text(
+                stringResource(com.testlogon.android.R.string.tip_sheet_title),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            when {
+                state.tipConfirmedCents != null -> {
+                    val amount = "$" + "%.2f".format(state.tipConfirmedCents / 100.0)
+                    val label = if (state.tipVisibility.isPrivate) {
+                        stringResource(com.testlogon.android.R.string.tip_sent_private) + " · " + amount
+                    } else {
+                        stringResource(com.testlogon.android.R.string.tip_sent) + " · " + amount
+                    }
+                    Column(
+                        Modifier.fillMaxWidth().testTag("tip_video_comment_confirmed"),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text("$" + "%.2f".format(cents / 100.0))
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(40.dp),
+                        )
+                        Text(label, style = MaterialTheme.typography.titleMedium)
+                        androidx.compose.material3.Button(
+                            onClick = onDismiss,
+                            modifier = Modifier.fillMaxWidth().testTag("tip_video_comment_done"),
+                        ) { Text(stringResource(com.testlogon.android.R.string.tip_done)) }
                     }
                 }
+                state.tipNoCard -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            stringResource(com.testlogon.android.R.string.tip_no_card_body),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        androidx.compose.material3.Button(
+                            onClick = onAddCard,
+                            modifier = Modifier.fillMaxWidth().testTag("tip_video_comment_add_card"),
+                        ) { Text(stringResource(com.testlogon.android.R.string.tip_add_card)) }
+                    }
+                }
+                submitting ->
+                    androidx.compose.material3.Button(
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth().testTag("tip_video_comment_send"),
+                    ) { CircularProgressIndicator(modifier = Modifier.size(20.dp)) }
+                else ->
+                    com.testlogon.android.feature.common.tip.TipComposerContent(
+                        presetsCents = presets.map(Int::toLong),
+                        selectedCents = state.tipSelectedCents?.toLong(),
+                        customText = state.tipCustomText,
+                        canSend = state.tipCanSend,
+                        inFlight = false,
+                        onSelectPreset = { onSelectPreset(it.toInt()) },
+                        onCustomAmount = onCustomAmount,
+                        onSend = onSend,
+                        error = state.tipError,
+                        visibility = state.tipVisibility,
+                        onVisibility = onVisibility,
+                        presetTag = { "tip_video_comment_sheet_${it.toInt()}" },
+                        customTag = "tip_video_comment_custom",
+                        sendTag = "tip_video_comment_send",
+                    )
             }
-            if (submitting) CircularProgressIndicator(modifier = Modifier.size(24.dp))
-            if (error != null) {
-                Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            }
-            Box(Modifier.fillMaxWidth().size(16.dp))
         }
     }
 }

@@ -131,6 +131,7 @@ class Tables:
     orders: Any
     order_items: Any
     shipment_tracking: Any
+    seller_ship_groups: Any  # ECOMX-E0/E4: per-seller ship groups (was prod-only)
     live_stream_products: Any
     payments: Any
     entitlements: Any
@@ -526,6 +527,7 @@ T = Tables(
     orders=_safe_table(S.orders_table_name),
     order_items=_safe_table(S.order_items_table_name),
     shipment_tracking=_safe_table(S.shipment_tracking_table_name),
+    seller_ship_groups=_safe_table(S.seller_ship_groups_table_name),  # ECOMX-E0/E4
     live_stream_products=_safe_table(S.live_stream_products_table_name),
     payments=_safe_table(S.payments_table_name),
     entitlements=_safe_table(S.entitlements_table_name),

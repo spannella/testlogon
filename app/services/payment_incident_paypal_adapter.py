@@ -80,6 +80,14 @@ class PayPalPaymentIncidentAdapter(PaymentIncidentProviderAdapter):
                         "payment_reference": resource.get("transaction_info", {}).get("transaction_id") or dispute_id,
                         "amount": str((resource.get("dispute_amount") or {}).get("value") or "0"),
                         "currency": str((resource.get("dispute_amount") or {}).get("currency_code") or "usd"),
+                        # DISP-030 (mirror): PayPal holds the funds on CREATED and
+                        # restores them only on a seller-favor RESOLVED; there is no
+                        # separate funds_withdrawn/reinstated event, so we derive the
+                        # funds-movement signal from the dispute lifecycle here.
+                        "funds_moved": event_type == "CUSTOMER.DISPUTE.CREATED",
+                        "funds_restored": False,
+                        "due_by": resource.get("seller_response_due_date"),
+                        "charge_meta": resource.get("custom") or resource.get("metadata") or {},
                     },
                 )
             ]

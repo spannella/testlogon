@@ -642,69 +642,43 @@ async def get_tips_summary(
     period: str = Query(default="30d"),
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
-    """Get tip earnings summary for the current user."""
-    user_sub = ctx["user_sub"]
-    ts = now_ts()
+    """Ledger-backed tips-received summary for the current user (TIPX-D1).
 
+    Retires the old alert-stream total (GROSS, post_tip+message_tip only, capped
+    at the last 1000 alerts, mislabeled "Total Earned").  This now reads the
+    billing LEDGER via tips_measurement so total_tips_cents is NET, covers all
+    8 tip surfaces, excludes reversed tips, and RECONCILES to the earnings tips
+    bucket and the leaderboard for the same creator/period.
+
+    The response keeps the legacy keys the web TipsFeed reads
+    (total_tips_cents -- now NET, tip_count, top_tippers,
+    by_type.post_tip/by_type.message_tip) and adds net: true,
+    source: "ledger", and a full-surface by_surface breakdown.
+    """
+    from app.services.tips_measurement import get_tips_received_summary
+
+    user_sub = ctx["user_sub"]
     if period not in ("7d", "30d", "all"):
         period = "30d"
 
-    period_seconds = {"7d": 7 * 86400, "30d": 30 * 86400, "all": 10 * 365 * 86400}
-    cutoff_ts = ts - period_seconds.get(period, 30 * 86400)
+    summary = get_tips_received_summary(user_sub, period)
+    by_surface = summary.get("by_type", {})
 
-    tip_types = {"post_tip", "message_tip"}
-
-    # Query all alerts; filter for tips client-side
-    resp = T.alerts.query(
-        KeyConditionExpression=Key("user_sub").eq(user_sub),
-        ScanIndexForward=False,
-        Limit=1000,
-    )
-
-    total_tips_cents = 0
-    tip_count = 0
-    tipper_totals: Dict[str, Dict[str, Any]] = {}
-    by_type: Dict[str, Dict[str, int]] = {
-        "post_tip": {"count": 0, "total_cents": 0},
-        "message_tip": {"count": 0, "total_cents": 0},
+    # Legacy 2-bucket shape the current web TipsFeed renders (post/message), now NET.
+    legacy_by_type = {
+        "post_tip": by_surface.get("post", {"count": 0, "total_cents": 0}),
+        "message_tip": by_surface.get("message", {"count": 0, "total_cents": 0}),
     }
 
-    for item in resp.get("Items", []):
-        event = item.get("event", "")
-        if event not in tip_types:
-            continue
-        item_ts = int(item.get("ts", 0))
-        if item_ts < cutoff_ts:
-            continue
-
-        details = item.get("details", {})
-        amount = int(details.get("amount_cents", 0))
-        actor_id = str(details.get("actor_user_id", ""))
-        actor_name = str(details.get("actor_display_name", "Unknown"))
-
-        total_tips_cents += amount
-        tip_count += 1
-
-        if event in by_type:
-            by_type[event]["count"] += 1
-            by_type[event]["total_cents"] += amount
-
-        if actor_id:
-            if actor_id not in tipper_totals:
-                tipper_totals[actor_id] = {"display_name": actor_name, "total_cents": 0}
-            tipper_totals[actor_id]["total_cents"] += amount
-
-    top_tippers = sorted(
-        [{"user_id": uid, **data} for uid, data in tipper_totals.items()],
-        key=lambda x: x["total_cents"],
-        reverse=True,
-    )[:10]
-
     return {
-        "total_tips_cents": total_tips_cents,
-        "tip_count": tip_count,
-        "top_tippers": top_tippers,
-        "by_type": by_type,
+        "total_tips_cents": summary.get("total_net_cents", 0),
+        "tip_count": summary.get("tip_count", 0),
+        "top_tippers": summary.get("top_tippers", []),
+        "by_type": legacy_by_type,
+        "by_surface": by_surface,
+        "unique_tippers": summary.get("unique_tippers", 0),
+        "net": True,
+        "source": "ledger",
     }
 
 

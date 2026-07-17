@@ -48,6 +48,9 @@ data class FeedPost(
     val reactions: List<ReactionTally> = emptyList(),
     /** TIP-204 - money-reaction (tip) badges on this post; distinct from [reactions]. Overlay-supplied. */
     val tipReactions: List<TipReactionBadge> = emptyList(),
+    /** TIPX-C1 - running total (cents) of DIRECT tips on this post; rendered as a "Tipped $X" badge to
+     *  both parties. Bumped optimistically by the direct-tip overlay, authoritative on the next refetch. */
+    val tipTotalCents: Int = 0,
     /** Never null at domain level; derived from the flat lock fields. */
     val paywall: Paywall,
     /** AND-179 — embedded poll, or null when the post carries no poll_data. */
@@ -211,6 +214,7 @@ internal fun PostDto.toDomain(): FeedPost {
         tipReactions = tipReactions.orEmpty().map {
             TipReactionBadge(it.tipperId, it.emoji?.ifBlank { "\uD83D\uDCB0" } ?: "\uD83D\uDCB0", it.amountCents)
         },
+        tipTotalCents = tipTotalCents,
         paywall = paywall,
         // Polls are content, not protected media: only surface when the post is not locked.
         poll = if (locked) null else toPoll(),

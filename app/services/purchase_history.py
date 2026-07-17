@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -12,6 +13,8 @@ from app.core.time import now_ts
 from app.services.profile import get_profile
 from app.services.billing_shared import new_ledger_entry, ddb_put, user_pk
 from app.services.carrier_tracking import build_tracking_url, detect_carrier
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_profile(user_sub: str) -> Dict[str, Any]:
@@ -250,6 +253,7 @@ def record_cart_purchase(
     currency: str,
     items: List[Dict[str, Any]],
     buyer: Optional[Dict[str, Any]],
+    refund_meta: Optional[Dict[str, Any]] = None,
 ) -> str:
     txn_id = uuid4().hex
     created_at = now_ts()
@@ -262,8 +266,10 @@ def record_cart_purchase(
         "buyer_profile": buyer,
         "created_at": created_at,
         "updated_at": created_at,
-        "completed_at": created_at,
-        "status": "COMPLETED",
+        # ECOMX-42 (B2): a fresh physical order is PENDING (processing), NOT
+        # COMPLETED at t=0. completed_at is stamped only when fulfilment reaches
+        # delivered (bridge complete_txn_on_delivery / buyer confirm-received).
+        "status": "PENDING",
         "amount": str(amount),
         "currency": currency,
         "merchant_id": "shopping_cart",
@@ -291,6 +297,13 @@ def record_cart_purchase(
 
     # Write a billing ledger entry so the purchase appears in the billing ledger
     try:
+        # ECOMX-12/13: fold in the reversible-refund attribution
+        # (recipient_user_id / refund_seller_ids / refund_host_id) so
+        # refund_requests.approve_request can claw back EVERY seller + the
+        # livecom host from this buyer-debit entry.
+        _debit_meta = {"cart_id": cart_id, "order_id": order_id, "txn_id": txn_id}
+        if refund_meta:
+            _debit_meta.update({k: v for k, v in refund_meta.items() if v is not None})
         led_sk, led_item = new_ledger_entry(
             key_name="pk",
             key_value=user_pk(user_sub),
@@ -298,7 +311,7 @@ def record_cart_purchase(
             amount_cents=-total_cents,
             state="settled",
             reason=f"Cart purchase – order {order_id}",
-            meta={"cart_id": cart_id, "order_id": order_id, "txn_id": txn_id},
+            meta=_debit_meta,
         )
         # ECOM: expose the buyer purchase-debit under the txn_id the client holds
         # so an order-detail "Request a refund" (which passes the txn_id) resolves
@@ -359,6 +372,32 @@ def record_billing_transaction(
     return txn_id
 
 
+def has_purchased_item(user_sub: str, item_id: str) -> bool:
+    """ECOMX-53: verified-purchase check for the review gate.
+
+    True iff *user_sub* has at least one shop purchase_transactions row whose
+    order line-items include *item_id* AND whose money status is PENDING or
+    COMPLETED (both are post-charge states after ECOMX-10 — a FAILED/declined
+    checkout never writes a completed txn, so a non-purchaser cannot review).
+    Digital/self orders are COMPLETED at t=0; physical orders are PENDING until
+    delivery — both mean the buyer actually paid for the item.
+    """
+    if not user_sub or not item_id:
+        return False
+    resp = T.purchase_transactions.query(
+        KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
+        ExpressionAttributeValues={":u": user_sub, ":p": "TXN#"},
+    )
+    for txn in resp.get("Items", []):
+        if str(txn.get("status") or "").upper() not in ("PENDING", "COMPLETED"):
+            continue
+        md = txn.get("metadata") or {}
+        for li in (md.get("items") or []):
+            if str(li.get("item_id") or "") == str(item_id):
+                return True
+    return False
+
+
 def list_transactions(user_sub: str, limit: int, status: Optional[str]) -> List[Dict[str, Any]]:
     resp = T.purchase_transactions.query(
         KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
@@ -385,6 +424,32 @@ def search_transactions(user_sub: str, query: str, limit: int) -> List[Dict[str,
     return [_item_to_summary(item) for item in matches[:limit]]
 
 
+def confirm_received(user_sub: str, txn_id: str) -> Dict[str, Any]:
+    """ECOMX-42 (B6): buyer-driven "I received it". Forces the order's ship groups
+    to delivered (order_fulfillment_bridge.confirm_delivery), which reconciles the
+    header to ``completed`` and flips this txn PENDING -> COMPLETED. Owner-scoped
+    (the caller can only confirm their own txn). Idempotent + returns the refreshed
+    transaction info (now COMPLETED / delivered)."""
+    item = _fetch_txn(user_sub, txn_id)
+    if not item:
+        raise HTTPException(404, "Transaction not found")
+    order_id = str(((item.get("metadata") or {}).get("order_id")) or item.get("external_ref") or "")
+    if order_id:
+        try:
+            from app.services import order_fulfillment_bridge as _bridge
+            _bridge.confirm_delivery(order_id, actor=user_sub)
+        except Exception:
+            logger.exception("confirm_received bridge failed txn=%s order=%s", txn_id, order_id)
+    # Fallback: if there were no ship groups at all, complete the txn directly.
+    fresh = _fetch_txn(user_sub, txn_id)
+    if fresh and str(fresh.get("status") or "") == "PENDING":
+        try:
+            mark_completed(user_sub, txn_id, item.get("external_ref") or "", "Buyer confirmed receipt")
+        except Exception:
+            logger.exception("confirm_received mark_completed failed txn=%s", txn_id)
+    return get_transaction_info(user_sub, txn_id)
+
+
 def get_transaction_info(user_sub: str, txn_id: str) -> Dict[str, Any]:
     item = _fetch_txn(user_sub, txn_id)
     if not item:
@@ -396,6 +461,19 @@ def get_transaction_info(user_sub: str, txn_id: str) -> Dict[str, Any]:
         tracking_number = info["shipping"].get("tracking_number")
         if carrier and tracking_number:
             info["shipping"]["tracking_url"] = build_tracking_url(carrier, tracking_number)
+    # ECOMX-42 (B2): surface the physical fulfilment state from the order header
+    # so the buyer app shows a realistic status ("Processing"/"Shipped"/
+    # "Delivered") distinct from the money status (PENDING/COMPLETED). Best-effort.
+    try:
+        _order_id = str(((item.get("metadata") or {}).get("order_id")) or item.get("external_ref") or "")
+        if _order_id:
+            from app.services import order_lifecycle as _ol
+            _hdr = _ol.get_order_header(_order_id)
+            if _hdr:
+                info["order_status"] = _hdr.get("lifecycle_status")
+                info["fulfillment_status"] = _hdr.get("fulfillment_status")
+    except Exception:
+        pass
     return info
 
 

@@ -18,6 +18,7 @@ import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.data.messaging.GifResult
 import com.testlogon.android.data.messaging.MessagingRepository
 import com.testlogon.android.data.messaging.StickerUi
+import com.testlogon.android.feature.common.tip.TipVisibility
 import com.testlogon.android.navigation.PostDetailDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -84,12 +85,53 @@ data class CommentMediaPickerState(
     val error: String? = null,
 )
 
-/** AND-174 (comment tipping) — tip sheet state; non-null [target] = open. */
-data class CommentTipState(
-    val target: Comment? = null,
-    val submitting: Boolean = false,
-    val presetsCents: List<Int> = listOf(100, 500, 1000),
-)
+/**
+ * TIPX-B2 (F2/F5/F6) — comment tip sheet state machine. Replaces the old preset-only, one-tap-charges
+ * sheet with the shared composer flow: Entry (presets + custom amount + visibility + explicit Send) ->
+ * Submitting -> Confirmed (in-sheet amount receipt) | NoCard (in-flow add-card, TIPX-B3/F3). Never
+ * optimistic: Confirmed appears only after the repository returns Success.
+ */
+sealed interface CommentTipState {
+    /** The comment being tipped, or null when hidden. Drives whether the sheet is shown. */
+    val target: Comment? get() = null
+
+    data object Hidden : CommentTipState
+
+    data class Entry(
+        override val target: Comment,
+        val presetsCents: List<Int> = listOf(100, 500, 1000),
+        val selectedCents: Int? = null,
+        val customAmountText: String = "",
+        val visibility: TipVisibility = TipVisibility.Default,
+        val error: String? = null,
+        val minCents: Int = 100,
+        val maxCents: Int = 5_000_000,
+    ) : CommentTipState {
+        /** Preset or parsed custom amount. */
+        val effectiveCents: Int? get() = selectedCents
+        val canSend: Boolean
+            get() {
+                val c = effectiveCents ?: return false
+                return c in minCents..maxCents
+            }
+    }
+
+    data class Submitting(override val target: Comment, val amountCents: Int) : CommentTipState
+
+    data class Confirmed(
+        override val target: Comment,
+        val amountCents: Int,
+        val visibility: TipVisibility,
+    ) : CommentTipState
+
+    /** TIPX-B3 (F3) — empty wallet: the tipper can add a card in-flow and return to [Entry]. */
+    data class NoCard(
+        override val target: Comment,
+        val selectedCents: Int?,
+        val customAmountText: String,
+        val visibility: TipVisibility,
+    ) : CommentTipState
+}
 
 @HiltViewModel
 class CommentsViewModel @Inject constructor(
@@ -176,7 +218,7 @@ class CommentsViewModel @Inject constructor(
     private val _picker = MutableStateFlow(CommentMediaPickerState())
     val picker: StateFlow<CommentMediaPickerState> = _picker.asStateFlow()
 
-    private val _tip = MutableStateFlow(CommentTipState())
+    private val _tip = MutableStateFlow<CommentTipState>(CommentTipState.Hidden)
     val tip: StateFlow<CommentTipState> = _tip.asStateFlow()
 
     fun openMediaPicker() {
@@ -291,41 +333,84 @@ class CommentsViewModel @Inject constructor(
 
     fun openTip(comment: Comment) {
         if (comment.pending || comment.failed) return
-        _tip.update { it.copy(target = comment) }
+        _tip.value = CommentTipState.Entry(target = comment)
     }
 
     fun dismissTip() {
-        _tip.update { CommentTipState() }
+        // Blocked while Submitting (money-moving) so a dismiss can't race a charge.
+        if (_tip.value is CommentTipState.Submitting) return
+        _tip.value = CommentTipState.Hidden
     }
 
-    fun confirmTip(amountCents: Int) {
-        val target = _tip.value.target ?: return
-        if (_tip.value.submitting) return
-        _tip.update { it.copy(submitting = true) }
+    /** TIPX-B2 — select a preset amount (clears custom text). */
+    fun selectTipPreset(cents: Int) {
+        val entry = _tip.value as? CommentTipState.Entry ?: return
+        _tip.value = entry.copy(selectedCents = cents, customAmountText = "", error = null)
+    }
+
+    /** TIPX-B2 — type a custom dollar amount. */
+    fun setTipCustomAmount(text: String) {
+        val entry = _tip.value as? CommentTipState.Entry ?: return
+        _tip.value = entry.copy(customAmountText = text, selectedCents = parseDollarsToCents(text), error = null)
+    }
+
+    /** TIPX-B2 (F5) — toggle public/private visibility. */
+    fun setTipVisibility(visibility: TipVisibility) {
+        val entry = _tip.value as? CommentTipState.Entry ?: return
+        _tip.value = entry.copy(visibility = visibility)
+    }
+
+    /**
+     * TIPX-B2 — explicit Send. Charges via the shared billing seam; NEVER optimistic. On an empty
+     * wallet (NotConfigured) routes to the in-flow add-card state (TIPX-B3/F3) rather than dead-ending.
+     */
+    fun sendTip() {
+        val entry = _tip.value as? CommentTipState.Entry ?: return
+        val cents = entry.effectiveCents ?: return
+        if (!entry.canSend) return
+        val target = entry.target
+        val visibility = entry.visibility
+        _tip.value = CommentTipState.Submitting(target, cents)
         viewModelScope.launch {
-            // TIP-301 — resolve a payment_method_id via the shared billing seam (debug => blank id so the
-            // dev tip path completes + backend falls back to tip-default; release => payments unavailable).
-            val pmId: String? = when (val auth = billing.authorize(amountCents.toLong(), CURRENCY_USD)) {
+            val pmId: String? = when (val auth = billing.authorize(cents.toLong(), CURRENCY_USD)) {
                 is BillingResult.Authorized -> auth.paymentMethodId
-                BillingResult.NotConfigured -> { failTip(ERR_PAYMENTS_UNAVAILABLE); return@launch }
-                BillingResult.Cancelled -> { _tip.update { it.copy(submitting = false) }; return@launch }
-                is BillingResult.Declined -> { failTip(auth.reason); return@launch }
-                is BillingResult.Failed -> { failTip(ERR_GENERIC); return@launch }
+                // TIPX-B3 (F3) — empty wallet: offer add-card in-flow instead of a dead-end snackbar.
+                BillingResult.NotConfigured -> {
+                    _tip.value = CommentTipState.NoCard(target, entry.selectedCents, entry.customAmountText, visibility)
+                    return@launch
+                }
+                BillingResult.Cancelled -> { _tip.value = entry; return@launch }
+                is BillingResult.Declined -> { failTip(entry, auth.reason); return@launch }
+                is BillingResult.Failed -> { failTip(entry, ERR_GENERIC); return@launch }
             }
-            when (val r = repository.tipComment(postId, target.id, amountCents, pmId)) {
+            when (val r = repository.tipComment(postId, target.id, cents, pmId)) {
                 is ApiResult.Success -> {
-                    _tip.update { CommentTipState() }
+                    _tip.value = CommentTipState.Confirmed(target, cents, visibility)
                     _refreshSignal.value = _refreshSignal.value + 1L
                 }
-                is ApiResult.Failure -> failTip(r.error.message)
-                is ApiResult.NetworkError -> failTip(OFFLINE_MESSAGE)
+                is ApiResult.Failure -> failTip(entry, r.error.message)
+                is ApiResult.NetworkError -> failTip(entry, OFFLINE_MESSAGE)
             }
         }
     }
 
-    private fun failTip(message: String) {
-        _tip.update { it.copy(submitting = false) }
-        _effects.trySend(CommentsEffect.ShowError(message))
+    /**
+     * TIPX-B3 (F3) — re-open the composer (Entry) after the tipper returns from add-card, preserving
+     * the amount + visibility they had chosen so they can send without re-picking.
+     */
+    fun resumeTipAfterAddCard() {
+        val nc = _tip.value as? CommentTipState.NoCard ?: return
+        _tip.value = CommentTipState.Entry(
+            target = nc.target,
+            selectedCents = nc.selectedCents,
+            customAmountText = nc.customAmountText,
+            visibility = nc.visibility,
+        )
+    }
+
+    private fun failTip(entry: CommentTipState.Entry, message: String) {
+        // Return to Entry with an inline error (no snackbar loss) so the tipper can retry in-sheet.
+        _tip.value = entry.copy(error = message)
     }
 
     // ---- Comment-CARRYING tip (TIP-302): attach a tip to the comment being written ----

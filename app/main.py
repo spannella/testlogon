@@ -22,6 +22,9 @@ from app.routers.api_keys import router as api_keys_router
 from app.routers.api_usage import router as api_usage_router
 from app.routers.alerts import router as alerts_router
 from app.routers.shipment_tracking import router as shipment_tracking_router  # ECOM D4
+from app.routers.seller_ship_groups import router as seller_ship_groups_router  # ECOM-SELLER (E0 reconcile)
+from app.routers.seller_ship_groups import analytics_router as seller_analytics_router  # ECOMX-51 (E5)
+from app.routers.wishlist import router as wishlist_router  # ECOM E5 (E0 reconcile)
 from app.routers.account import router as account_router
 from app.routers.push import router as push_router
 from app.routers.recovery import router as recovery_router
@@ -177,6 +180,7 @@ from app.routers.vod_bridge import router as vod_bridge_router
 from app.routers.creator_earnings import router as creator_earnings_router
 from app.routers.tip_leaderboard import router as tip_leaderboard_router
 from app.routers.tip_leaderboard import internal_router as tip_leaderboard_internal_router
+from app.routers.tips_measurement import router as tips_measurement_router
 from app.routers.creator_analytics import router as creator_analytics_router
 from app.routers.creator_analytics import public_router as creator_analytics_public_router
 from app.routers.creator_analytics import internal_router as creator_analytics_internal_router
@@ -185,6 +189,7 @@ from app.routers.per_content_revenue import per_content_revenue_router
 from app.routers.creator_dashboard import router as creator_dashboard_router
 from app.routers.creator_payouts import router as creator_payouts_router
 from app.routers.admin_payouts import router as admin_payouts_router
+from app.routers.admin_tip_reversal import router as admin_tip_reversal_router  # TIPX-A2
 from app.routers.billing_config import billing_config_router
 from app.routers.admin_rate_limits import router as admin_rate_limits_router
 from app.routers.privacy import router as privacy_router, admin_router as admin_privacy_router
@@ -688,6 +693,9 @@ def create_app() -> FastAPI:
     app.include_router(api_usage_router)
     app.include_router(alerts_router)
     app.include_router(shipment_tracking_router)  # ECOM D4 shipment tracking
+    app.include_router(seller_ship_groups_router)  # ECOM-SELLER seller sales/fulfilment (E0)
+    app.include_router(seller_analytics_router)  # ECOMX-51 seller sales analytics (E5)
+    app.include_router(wishlist_router)  # ECOM E5 wishlist (E0)
     app.include_router(account_router)
     app.include_router(push_router)
     app.include_router(recovery_router)
@@ -826,6 +834,8 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_kyc_residency_expiry_task)
     from app.services.carrier_tracking_poller import start_carrier_polling_task
     app.add_event_handler("startup", start_carrier_polling_task)
+    from app.services.shipment_tracking_runner import start_shipment_progression_task  # ECOMX-30
+    app.add_event_handler("startup", start_shipment_progression_task)
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
@@ -936,6 +946,7 @@ def create_app() -> FastAPI:
     app.include_router(creator_earnings_router)
     app.include_router(tip_leaderboard_router)
     app.include_router(tip_leaderboard_internal_router)
+    app.include_router(tips_measurement_router)  # TIPX-D measurement
     app.include_router(creator_analytics_router)
     app.include_router(creator_analytics_public_router)
     app.include_router(creator_analytics_internal_router)
@@ -945,6 +956,7 @@ def create_app() -> FastAPI:
     from app.routers.live_commerce import router as live_commerce_router  # LIVECOM
     app.include_router(live_commerce_router)
     app.include_router(admin_payouts_router)
+    app.include_router(admin_tip_reversal_router)  # TIPX-A2
     app.include_router(payd_admin_router)  # PAY-D runner trigger
     app.include_router(payd_webhook_router)  # PAY-D provider webhook
     app.include_router(billing_config_router)

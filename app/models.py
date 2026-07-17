@@ -486,6 +486,10 @@ class PurchaseTransactionInfo(PurchaseTransactionSummary):
     metadata: Optional[Dict[str, Any]] = None
     receipt_path: Optional[str] = None
     receipt_generated_at: Optional[int] = None
+    # ECOMX-42 (B2): the physical fulfilment state from the order-lifecycle header
+    # (distinct from `status`, which is the money state PENDING/COMPLETED).
+    order_status: Optional[str] = None
+    fulfillment_status: Optional[str] = None
 
 
 class PurchaseTransactionCreated(BaseModel):
@@ -712,7 +716,15 @@ class CatalogReviewCreateIn(BaseModel):
     rating: int = Field(ge=1, le=5)
     title: Optional[str] = None
     body: Optional[str] = None
+    # ECOMX-53: reviewer display name is caller-supplied ONLY as a label; the
+    # authoritative author identity is forced from the session user_sub server
+    # side (see add_review). A spoofed ``reviewer`` can no longer impersonate.
     reviewer: Optional[str] = None
+
+
+class CatalogReviewSellerResponseIn(BaseModel):
+    # ECOMX-53 (E10): a seller/owner public reply to a review.
+    response: str = Field(min_length=1, max_length=2000)
 
 
 class CatalogReviewOut(BaseModel):
@@ -723,6 +735,10 @@ class CatalogReviewOut(BaseModel):
     body: Optional[str] = None
     reviewer: Optional[str] = None
     created_at: str
+    # ECOMX-53: verified-purchase badge + optional seller response.
+    verified_purchase: bool = False
+    seller_response: Optional[str] = None
+    seller_response_at: Optional[str] = None
 
 
 class CatalogReviewListOut(CatalogPageOut):
@@ -1000,6 +1016,12 @@ class ShoppingCartTotalOut(BaseModel):
 class CartPurchaseIn(BaseModel):
     promo_code: Optional[str] = None
     promo_code_id: Optional[str] = None
+    # ECOMX-40 (B3): shipping address selected in the checkout address step; the
+    # order's ship_to + shipping/tax computation key off it. Digital-only carts
+    # may omit it (no shipping/tax collected).
+    address_id: Optional[str] = None
+    # ECOMX-40: chosen shipping method code (from the rate estimate); optional.
+    shipping_method: Optional[str] = None
     # ADV-403: optional last-click CPA attribution handle carried from an ad CTA.
     ad_click_id: Optional[str] = None
     # LIVECOM L3: in-stream purchase attribution (broadcast session + host).
@@ -1019,6 +1041,10 @@ class ShoppingCartPurchaseOut(BaseModel):
     discount_cents: Optional[int] = None
     promo_code_id: Optional[str] = None
     promo_discount_type: Optional[str] = None
+    # ECOMX-40 (B3): shipping + tax breakdown so the app can show the true total.
+    merchandise_cents: Optional[int] = None
+    shipping_cents: Optional[int] = None
+    tax_cents: Optional[int] = None
 
 
 class WorkingHoursWindow(BaseModel):
@@ -1652,11 +1678,24 @@ class AdminRefundDenyIn(BaseModel):
 # ── Billing Disputes / Chargebacks (BILLING-001) ─────────────────────────────
 
 class DisputeFileIn(BaseModel):
-    """Customer-initiated dispute (e.g. a chargeback claim) for a transaction."""
+    """Customer-initiated dispute (e.g. a chargeback claim) for a transaction.
+
+    DISP-010: ``reason`` is now the canonical enum
+    (not_received|not_as_described|unauthorized|duplicate|quality); ``charge_type``
+    + ``charge_ref`` (or ``transaction_entry_id`` for auto-detection) locate the
+    underlying charge for the reversal-rail dispatcher; ``reason_detail`` carries
+    the free-text the old ``reason`` field used to.
+    """
     transaction_entry_id: Optional[str] = Field(default=None, max_length=200)
     amount_cents: int = Field(ge=1)
     currency: str = "USD"
-    reason: str = Field(min_length=10, max_length=2000)
+    # accept the enum OR a legacy free-text reason (>=1 char); gating happens in
+    # dispute_lifecycle.validate_reason once the charge_type is known.
+    reason: str = Field(min_length=1, max_length=2000)
+    reason_detail: Optional[str] = Field(default=None, max_length=2000)
+    charge_type: Optional[str] = Field(default=None, max_length=40)
+    charge_ref: Optional[str] = Field(default=None, max_length=200)
+    recipient_id: Optional[str] = Field(default=None, max_length=200)
     provider: str = Field(default="manual", max_length=40)
 
 
@@ -1685,8 +1724,21 @@ class DisputeRespondIn(BaseModel):
 
 
 class DisputeResolveIn(BaseModel):
-    resolution: str = Field(pattern="^(won|lost|accepted)$")
+    # DISP-013: user-track outcomes drive the reversal dispatcher; legacy
+    # won|lost|accepted still accepted + mapped for the old admin path.
+    resolution: str = Field(pattern="^(refunded|partial|denied|won|lost|accepted)$")
+    override_amount_cents: Optional[int] = Field(default=None, ge=1)
     notes: Optional[str] = Field(default=None, max_length=2000)
+    # DISP-022: a money-moving resolve above the dual-approval threshold requires
+    # a second, distinct PAYMENT_DISPUTES admin id (validated server-side; a
+    # fabricated/self/non-scoped id is rejected).
+    second_approver_admin_user_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CreatorDisputeRespondIn(BaseModel):
+    """DISP-021: the creator/seller rebuts a dispute within the response window."""
+    response_text: str = Field(min_length=1, max_length=5000)
+    evidence_files: Optional[List[str]] = None
 
 
 # ---- FIN-017: Bulk Payout & Refund Tools ----
@@ -2637,6 +2689,10 @@ class EarningsBreakdown(BaseModel):
     tips: int = 0
     unlocks: int = 0
     vod_purchases: int = 0
+    # ECOMX-50: shop + live-commerce revenue as distinct earnings buckets
+    # (previously collapsed into "other").
+    shop_sales: int = 0
+    live_commerce: int = 0
     other: int = 0
 
 

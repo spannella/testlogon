@@ -59,7 +59,9 @@ def aggregate_tips_for_creator(creator_id: str, period: str) -> List[Dict[str, A
     else:
         key_cond = Key("pk").eq(pk) & Key("sk").begins_with("LEDGER#")
 
-    filter_expr = Attr("type").eq("credit") & Attr("reason").begins_with("Tip")
+    # TIPX-A6/D2: exclude reversed credits so a refunded tip drops from the
+    # leaderboard (reverse_tip flips the original credit to state="reversed").
+    filter_expr = Attr("type").eq("credit") & Attr("reason").begins_with("Tip") & Attr("state").ne("reversed")
 
     # Aggregate by tipper
     tipper_totals: Dict[str, Dict[str, Any]] = defaultdict(

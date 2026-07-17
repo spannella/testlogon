@@ -164,6 +164,66 @@ async def get_order_history(
     return order_lifecycle.list_status_history(order_id)
 
 
+@router.post("/admin/reconcile-stuck")
+async def reconcile_stuck_orders_endpoint(
+    request: Request,
+    limit: int = Query(default=200, ge=1, le=1000),
+    user: AuthenticatedUser = Depends(require_admin_or_root_csrf),
+) -> Dict[str, Any]:
+    """ECOMX-24: admin-triggered orphan/stuck-order self-heal sweep. Promotes a
+    `created` header that already carries a captured buyer-debit txn (crash mid
+    purchase) to `approved` + populates its ship groups, then reconciles any
+    order whose header lags its ship groups. Idempotent; schedulable."""
+    _require_enabled()
+    from app.services import order_fulfillment_bridge as _bridge
+
+    return _bridge.reconcile_stuck_orders(limit=limit)
+
+
+@router.get("/{order_id}/tracking")
+async def get_order_tracking_endpoint(
+    order_id: str,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+) -> Dict[str, Any]:
+    """ECOMX-23: the ONE canonical buyer order-tracking read. Aggregates ALL of
+    the order's seller ship-group tracking records so the buyer's tracking
+    populates off the ORDER (not the never-populated txn shipping key), and the
+    header, ship groups and tracking can never contradict."""
+    _require_enabled()
+    from app.services import order_lifecycle
+    from app.services import order_fulfillment_bridge as _bridge
+
+    header = order_lifecycle.get_order_header(order_id)
+    if header is None:
+        raise HTTPException(404, {"code": "order_not_found"})
+    role = normalize_role(ctx.get("role"))
+    is_admin = role in (Role.ADMIN, Role.ROOT)
+    _require_order_owner_or_admin(header, ctx)
+    buyer_scope = None if is_admin else ctx.get("user_sub")
+    return _bridge.order_tracking(order_id, buyer_sub=buyer_scope)
+
+
+@router.post("/{order_id}/confirm-delivery", response_model=OrderLifecycleOut)
+async def confirm_delivery_endpoint(
+    order_id: str,
+    request: Request,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+) -> OrderLifecycleOut:
+    """ECOMX-21: buyer "Confirm delivery" affordance — marks every ship group
+    delivered and advances the header aggregate to completed. Owner-or-admin;
+    idempotent."""
+    _require_enabled()
+    from app.services import order_lifecycle
+    from app.services import order_fulfillment_bridge as _bridge
+
+    header = order_lifecycle.get_order_header(order_id)
+    if header is None:
+        raise HTTPException(404, {"code": "order_not_found"})
+    _require_order_owner_or_admin(header, ctx)
+    _bridge.confirm_delivery(order_id, actor=ctx["user_sub"])
+    return order_lifecycle.get_order_lifecycle(order_id)
+
+
 @router.post("/{order_id}/cancel", response_model=OrderLifecycleOut)
 async def cancel_order_endpoint(
     order_id: str,

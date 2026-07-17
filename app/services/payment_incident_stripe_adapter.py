@@ -43,7 +43,8 @@ class StripePaymentIncidentAdapter(PaymentIncidentProviderAdapter):
         event_id = str(event.get("id") or "")
         obj = (event.get("data") or {}).get("object") or {}
 
-        if event_type in {"charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed"}:
+        if event_type in {"charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed",
+                          "charge.dispute.funds_withdrawn", "charge.dispute.funds_reinstated"}:
             dispute_id = str(obj.get("id") or "")
             target_status = _map_dispute_status(event_type, str(obj.get("status") or ""))
             if not dispute_id or not target_status:
@@ -60,6 +61,16 @@ class StripePaymentIncidentAdapter(PaymentIncidentProviderAdapter):
                         "payment_reference": obj.get("charge"),
                         "amount": str(obj.get("amount") or "0"),
                         "currency": str(obj.get("currency") or "usd"),
+                        # DISP-030: surface the funds-movement signal (Stripe pulls the
+                        # funds on created/funds_withdrawn, restores on funds_reinstated).
+                        "funds_moved": event_type in {"charge.dispute.created", "charge.dispute.funds_withdrawn"},
+                        "funds_restored": event_type == "charge.dispute.funds_reinstated",
+                        # DISP-032: the response deadline Stripe hands us (evidence_details.due_by).
+                        "due_by": ((obj.get("evidence_details") or {}) or {}).get("due_by"),
+                        # DISP-031/033/034: the internal-charge coordinates the reconciler drives
+                        # the ledger rail off of. Real-when-keyed we set these in dispute.metadata
+                        # at charge time; the mock webhook carries them the same way.
+                        "charge_meta": obj.get("metadata") or {},
                     },
                 )
             ]
@@ -165,6 +176,15 @@ class StripePaymentIncidentAdapter(PaymentIncidentProviderAdapter):
 def _map_dispute_status(event_type: str, provider_status: str) -> str:
     status = provider_status.strip().lower()
     if event_type == "charge.dispute.created":
+        return "opened"
+    # DISP-030: funds_withdrawn -> opened (Stripe has now actually pulled the
+    # contested funds; the reconciler treats it as the hold trigger, idempotent
+    # with created). funds_reinstated -> opened as well (funds restored mid-life;
+    # the terminal won/lost still comes on dispute.closed) — payload.funds_restored
+    # carries the distinction for audit.
+    if event_type == "charge.dispute.funds_withdrawn":
+        return "opened"
+    if event_type == "charge.dispute.funds_reinstated":
         return "opened"
     if event_type == "charge.dispute.updated":
         if status in {"needs_response", "warning_needs_response", "warning_under_review"}:

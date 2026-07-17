@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { tipPostDirect, tipPost } from "@/api/endpoints/newsfeed";
+import { tipPostDirect, tipComment } from "@/api/endpoints/newsfeed";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import type { PaymentMethod } from "@/api/types";
 
@@ -36,12 +36,13 @@ export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: T
 
   const isCommentTip = Boolean(commentId);
 
-  // Payment methods — only needed for post tips
+  // TIPX-B4 (F9) — payment methods are needed for BOTH post AND comment tips now, so the tipper can
+  // pick a card and the comment tip honors it (previously comment tips silently used the default).
   const { data: paymentMethods = [] } = useQuery<PaymentMethod[]>({
     queryKey: ["billing", "payment-methods"],
     queryFn: getPaymentMethods,
     staleTime: 5 * 60 * 1000,
-    enabled: open && !isCommentTip,
+    enabled: open,
   });
 
   // Compute effective PM: selected or default
@@ -65,7 +66,8 @@ export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: T
   });
 
   const commentTipMutation = useMutation({
-    mutationFn: () => tipPost(postId, commentId!, amountCents),
+    mutationFn: () =>
+      tipComment(postId, commentId!, amountCents, effectivePm?.payment_method_id),
     onSuccess: () => {
       toast.success(`Tip of $${(amountCents / 100).toFixed(2)} sent!`);
       void queryClient.invalidateQueries({ queryKey: ["comments", postId] });
@@ -99,8 +101,8 @@ export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: T
     }
   };
 
-  // For post tips, PM is required if PMs are available
-  const pmRequired = !isCommentTip && paymentMethods.length > 0;
+  // TIPX-B4 (F9) — a saved PM is required (and selectable) for BOTH post and comment tips now.
+  const pmRequired = paymentMethods.length > 0;
   const canSubmit =
     amountCents > 0 &&
     !mutation.isPending &&
@@ -159,8 +161,8 @@ export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: T
           </div>
         </div>
 
-        {/* Payment method selector — post tips only */}
-        {!isCommentTip && paymentMethods.length > 0 && (
+        {/* TIPX-B4 (F9) — payment method selector for post AND comment tips. */}
+        {paymentMethods.length > 0 && (
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-muted-foreground">Payment method</label>
             <div className="space-y-1.5">
@@ -192,7 +194,7 @@ export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: T
           </div>
         )}
 
-        {!isCommentTip && paymentMethods.length === 0 && (
+        {paymentMethods.length === 0 && (
           <p className="text-xs text-muted-foreground">
             Add a payment method in Billing to send tips.
           </p>

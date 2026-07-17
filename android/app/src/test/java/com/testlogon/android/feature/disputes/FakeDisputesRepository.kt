@@ -2,6 +2,8 @@ package com.testlogon.android.feature.disputes
 
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.disputes.CreatorRespondInput
+import com.testlogon.android.data.disputes.CreatorRespondResult
 import com.testlogon.android.data.disputes.Dispute
 import com.testlogon.android.data.disputes.DisputeMoney
 import com.testlogon.android.data.disputes.DisputeStatus
@@ -10,17 +12,22 @@ import com.testlogon.android.data.disputes.FileDisputeInput
 import kotlinx.coroutines.CompletableDeferred
 
 /**
- * AND-245 — a configurable [DisputesRepository] test double. Sample builders are NOT named like an
- * interface member (per the test-helper gotcha): [sampleDispute].
+ * AND-245 + DISP-024 — a configurable [DisputesRepository] test double. Sample builders are NOT named
+ * like an interface member (per the test-helper gotcha): [sampleDispute].
  */
 class FakeDisputesRepository : DisputesRepository {
 
     var listResult: ApiResult<List<Dispute>> = ApiResult.Success(emptyList())
     var detailResult: ApiResult<Dispute> = ApiResult.Success(sampleDispute())
     var fileResult: ApiResult<Dispute> = ApiResult.Success(sampleDispute())
+    var creatorListResult: ApiResult<List<Dispute>> = ApiResult.Success(emptyList())
+    var creatorRespondResult: ApiResult<CreatorRespondResult> =
+        ApiResult.Success(CreatorRespondResult(true, "dp_1", DisputeStatus.UNDER_REVIEW, "ok"))
 
     var fileGate: CompletableDeferred<Unit>? = null
     var fileCalls = 0
+        private set
+    var creatorRespondCalls = 0
         private set
 
     override suspend fun listDisputes(limit: Int): ApiResult<List<Dispute>> = listResult
@@ -31,6 +38,13 @@ class FakeDisputesRepository : DisputesRepository {
         fileCalls++
         fileGate?.await()
         return fileResult
+    }
+
+    override suspend fun listCreatorDisputes(limit: Int): ApiResult<List<Dispute>> = creatorListResult
+
+    override suspend fun creatorRespond(input: CreatorRespondInput): ApiResult<CreatorRespondResult> {
+        creatorRespondCalls++
+        return creatorRespondResult
     }
 }
 
