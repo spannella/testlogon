@@ -1042,7 +1042,7 @@ def _find_charge_entry(account_id: str, entry_id: str) -> Optional[dict]:
 
 def reverse_ad_charge(
     *, account_id: str, entry_id: str, reason: str = "admin_reversal",
-    actor: str = "", entry: Optional[dict] = None,
+    actor: str = "", entry: Optional[dict] = None, clawback_only: bool = False,
 ) -> dict:
     """ADV-502: idempotently reverse a settled ad charge.
 
@@ -1094,7 +1094,9 @@ def reverse_ad_charge(
         return {
             "ok": True, "reversed": True, "entry_id": entry_id,
             "reversal_entry_id": reversal_entry_id, "account_id": account_id,
-            "campaign_id": campaign_id, "refunded_cents": amount_cents,
+            "campaign_id": campaign_id,
+            "refunded_cents": 0 if clawback_only else amount_cents,
+            "clawback_only": bool(clawback_only),
             "creator_clawback_cents": member_clawback if creator_id else 0,
             "platform_reversal_cents": platform_share,
             "treasury_debit_cents": treasury_debited,
@@ -1140,13 +1142,23 @@ def reverse_ad_charge(
         raise
 
     # 2. Refund the advertiser balance + back the charge out of lifetime spend.
+    #    DISP-033: on a chargeback (clawback_only) the processor already returned
+    #    the advertiser's money externally — re-crediting the internal ad balance
+    #    would double-refund, so only back the lifetime-spend counter out.
     try:
-        T.ad_accounts.update_item(
-            Key={"pk": f"ACCT#{account_id}", "sk": "META"},
-            UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt, "
-                             "lifetime_spend_cents = if_not_exists(lifetime_spend_cents, :z) - :amt",
-            ExpressionAttributeValues={":z": 0, ":amt": amount_cents},
-        )
+        if clawback_only:
+            T.ad_accounts.update_item(
+                Key={"pk": f"ACCT#{account_id}", "sk": "META"},
+                UpdateExpression="SET lifetime_spend_cents = if_not_exists(lifetime_spend_cents, :z) - :amt",
+                ExpressionAttributeValues={":z": 0, ":amt": amount_cents},
+            )
+        else:
+            T.ad_accounts.update_item(
+                Key={"pk": f"ACCT#{account_id}", "sk": "META"},
+                UpdateExpression="SET balance_cents = if_not_exists(balance_cents, :z) + :amt, "
+                                 "lifetime_spend_cents = if_not_exists(lifetime_spend_cents, :z) - :amt",
+                ExpressionAttributeValues={":z": 0, ":amt": amount_cents},
+            )
     except ClientError:
         try:
             T.ad_billing.delete_item(

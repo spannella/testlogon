@@ -237,8 +237,15 @@ def approve_request(
     notes: Optional[str] = None,
     override_amount_cents: Optional[int] = None,
     request_obj: Any = None,
+    clawback_only: bool = False,
 ) -> Dict[str, Any]:
-    """Approve a refund request. Calls the existing Stripe refund flow."""
+    """Approve a refund request. Calls the existing Stripe refund flow.
+
+    DISP-033 (chargeback fork): when ``clawback_only`` is set the buyer
+    ``refund_credit`` ledger entry AND the buyer balance credit-back are
+    SUPPRESSED — the processor already returned the buyer's money on a
+    chargeback. The per-party seller/host clawbacks (``refund_debit``) still fire
+    so the marketplace still gives the money back."""
     item = get_request(request_id)
     if not item:
         raise HTTPException(404, "Refund request not found")
@@ -360,7 +367,9 @@ def approve_request(
         party_debits.append({"party_id": party_id, "claw": claw, "item": party_debit_item})
 
     if party_debits:
-        transact_items = [{"Put": {"TableName": T.billing.name, "Item": _serialize_item(led_item)}}]
+        # DISP-033: drop the buyer credit leg on a chargeback (clawback_only).
+        transact_items = ([] if clawback_only else
+                          [{"Put": {"TableName": T.billing.name, "Item": _serialize_item(led_item)}}])
         for pd in party_debits:
             transact_items.append(
                 {"Put": {"TableName": T.billing.name, "Item": _serialize_item(pd["item"])}}
@@ -375,8 +384,9 @@ def approve_request(
         if not committed_atomic:
             _written: List[Dict[str, Any]] = []
             try:
-                ddb_put(T.billing, led_item)
-                _written.append(led_item)
+                if not clawback_only:
+                    ddb_put(T.billing, led_item)
+                    _written.append(led_item)
                 for pd in party_debits:
                     ddb_put(T.billing, pd["item"])
                     _written.append(pd["item"])
@@ -396,7 +406,7 @@ def approve_request(
                 "refund_party_clawback request_id=%s party=%s clawed_cents=%s",
                 request_id, pd["party_id"], pd["claw"],
             )
-    else:
+    elif not clawback_only:
         ddb_put(T.billing, led_item)
         logger.info(
             "refund_no_party request_id=%s transaction_entry_id=%s "
@@ -404,8 +414,10 @@ def approve_request(
             request_id, transaction_entry_id,
         )
 
-    # Apply balance delta (credit back)
-    apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=currency)
+    # Apply balance delta (credit back). DISP-033: suppressed on a chargeback
+    # (clawback_only) — the processor already returned the buyer's money.
+    if not clawback_only:
+        apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=currency)
 
     # Update refund request status
     T.refund_requests.update_item(

@@ -917,6 +917,7 @@ def _reverse_subscription_charge(
     reason: str,
     payer_id: Optional[str] = None,
     actor: Optional[str] = None,
+    clawback_only: bool = False,
 ) -> Dict[str, Any]:
     """SUB-E2 PART 2 (SUB-25): idempotently refund the payer the prorated unused
     portion of the current cycle AND claw back the creator's prorated NET credit --
@@ -975,6 +976,7 @@ def _reverse_subscription_charge(
         "reversal_reason": reason,
         "refund_fraction": round(frac, 6),
         "period_end": period_end,
+        "clawback_only": bool(clawback_only),
     }
     if actor:
         base_meta["reversal_actor"] = actor
@@ -982,8 +984,9 @@ def _reverse_subscription_charge(
     receipt = {
         "subscription_id": subscription_id,
         "marker_key": marker_key,
-        "refunded_cents": refund_gross,
+        "refunded_cents": 0 if clawback_only else refund_gross,
         "clawback_cents": clawback_net,
+        "clawback_only": bool(clawback_only),
         "refund_entry_id": refund_id,
         "reversal_entry_id": reversal_id,
         "reason": reason,
@@ -1003,8 +1006,9 @@ def _reverse_subscription_charge(
             return {**winner, "idempotent_replay": True}
         raise
 
-    # Payer REFUND entry (type != credit).
-    if refund_gross > 0:
+    # Payer REFUND entry (type != credit). DISP-033: suppressed on a chargeback
+    # (clawback_only) — the processor already returned the payer's money.
+    if refund_gross > 0 and not clawback_only:
         T.billing.put_item(Item={
             "pk": user_pk(payer),
             "sk": f"LEDGER#{ts}#{refund_id}",
@@ -1067,7 +1071,7 @@ def _reverse_subscription_charge(
     except Exception:
         logger.warning("mark_invoice_refunded skipped sub=%s", subscription_id, exc_info=True)
     pi_id = _latest_paid_invoice_pi(subscription_id) or sub.get("payment_intent_id")
-    if pi_id and refund_gross > 0 and getattr(S, "stripe_secret_key", ""):
+    if pi_id and refund_gross > 0 and not clawback_only and getattr(S, "stripe_secret_key", ""):
         try:
             from app.routers.billing import ensure_stripe_configured
             import stripe

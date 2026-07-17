@@ -526,8 +526,15 @@ def reverse_tip(
     reason: str = "admin_reversal",
     actor: Optional[str] = None,
     meta: Optional[Dict[str, Any]] = None,
+    clawback_only: bool = False,
 ) -> ReversalResult:
     """TIP-502: idempotently reverse a tip.
+
+    DISP-033 (chargeback fork): when ``clawback_only`` is set the tipper REFUND
+    leg AND the best-effort Stripe refund are SUPPRESSED — the processor already
+    returned the money to the cardholder on a chargeback, so re-crediting the
+    tipper would double-refund. The recipient clawback + original-credit flip
+    still fire (the creator must give the money back regardless).
 
     Writes, in a single TransactWriteItems:
       * a recipient CLAWBACK ledger entry (entry_type "reversal", amount = net) --
@@ -566,6 +573,7 @@ def reverse_tip(
         "tip_payment_id": tip_payment_id,
         "reversal_of": tip_payment_id,
         "reversal_reason": reason,
+        "clawback_only": bool(clawback_only),
     }
     if actor:
         base_meta["reversal_actor"] = actor
@@ -600,10 +608,10 @@ def reverse_tip(
     }
     receipt = ReversalResult(
         tip_payment_id=tip_payment_id,
-        refunded_cents=gross_cents,
+        refunded_cents=0 if clawback_only else gross_cents,
         clawback_cents=net_cents,
         reversal_entry_id=reversal_id,
-        refund_entry_id=refund_id,
+        refund_entry_id="" if clawback_only else refund_id,
         idempotent_replay=False,
     )
     marker_item = {
@@ -615,17 +623,22 @@ def reverse_tip(
     marker_item["idempotent_replay"] = False
 
     table_name = S.billing_table_name
+    # DISP-033: on a chargeback (clawback_only) the tipper refund leg is dropped
+    # (the processor already refunded the cardholder) — clawback + marker only.
     tx_items = [
         {"Put": {"TableName": table_name, "Item": _av(clawback_item)}},
-        {"Put": {"TableName": table_name, "Item": _av(refund_item)}},
+    ]
+    if not clawback_only:
+        tx_items.append({"Put": {"TableName": table_name, "Item": _av(refund_item)}})
+    tx_items.append(
         {
             "Put": {
                 "TableName": table_name,
                 "Item": _av(marker_item),
                 "ConditionExpression": "attribute_not_exists(sk)",
             }
-        },
-    ]
+        }
+    )
     client = ddb_transact_client()
     try:
         client.transact_write_items(TransactItems=tx_items)
@@ -653,8 +666,10 @@ def reverse_tip(
         except Exception:
             logger.warning("original credit state flip skipped for tip=%s", tip_payment_id, exc_info=True)
 
-    # Refund the processor charge when a real PaymentIntent backed it.
-    if payment_intent_id:
+    # Refund the processor charge when a real PaymentIntent backed it. On a
+    # chargeback (clawback_only) the processor already pulled+returned the funds,
+    # so issuing a Stripe refund would double-pay the cardholder — suppress it.
+    if payment_intent_id and not clawback_only:
         try:
             from app.routers.billing import ensure_stripe_configured
             import stripe
@@ -724,6 +739,7 @@ def reverse_tip_by_payment_id(
     recipient_id: Optional[str] = None,
     reason: str = "admin_reversal",
     actor: Optional[str] = None,
+    clawback_only: bool = False,
 ) -> ReversalResult:
     """TIPX-A2: reverse a tip identified only by its ``tip_payment_id``.
 
@@ -788,4 +804,5 @@ def reverse_tip_by_payment_id(
         credit_ts=credit_ts,
         reason=reason,
         actor=actor,
+        clawback_only=clawback_only,
     )

@@ -85,6 +85,7 @@ from app.services.payment_incident_ccbill_adapter import CCBillPaymentIncidentAd
 from app.services.payment_incident_transitions import PaymentIncidentTransitionService, PaymentIncidentTransitionError
 from app.services.payment_incidents_domain import PaymentIncidentType
 from app.services.payment_incidents_store import DynamoPaymentIncidentRepository
+from app.services import dispute_chargeback as _disp_cb  # DISP E3 processor reconciler
 from app.services.payment_incident_ticket_sync import ensure_incident_ticket_link, evaluate_ticket_trigger, sync_ticket_from_incident
 from app.services.payment_failure_alerts import dispatch_auto_payment_failure_alert, clear_auto_payment_failure_alerts
 from app.services.payment_incident_metrics import (
@@ -1968,6 +1969,19 @@ async def stripe_payment_incidents_webhook(req: Request) -> Dict[str, Any]:
         existing = repo.list_incidents_by_case(provider="stripe", case_id=event.incident_id, limit=1)
         if existing:
             incident = existing[0]
+            # DISP E3: backfill charge_meta/due_by if a later event carries richer data.
+            _cm = event.payload.get("charge_meta")
+            if _cm and not incident.get("charge_meta"):
+                try:
+                    repo.incidents_table.update_item(
+                        Key={"incident_id": incident["incident_id"]},
+                        UpdateExpression="SET charge_meta = :cm, due_by = :db",
+                        ExpressionAttributeValues={":cm": _cm, ":db": event.payload.get("due_by")},
+                    )
+                    incident["charge_meta"] = _cm
+                    incident["due_by"] = event.payload.get("due_by")
+                except Exception:
+                    logger.warning("charge_meta backfill skipped incident=%s", incident.get("incident_id"))
         else:
             incident = repo.put_incident(
                 {
@@ -1987,6 +2001,10 @@ async def stripe_payment_incidents_webhook(req: Request) -> Dict[str, Any]:
                     "customer_action_type": event.payload.get("customer_action_type"),
                     "response_due_at": event.payload.get("response_due_at"),
                     "raw_payload_ref": f"stripe_event:{event.provider_event_id}",
+                    # DISP E3: carry the internal-charge coordinates + deadline the
+                    # chargeback reconciler drives the ledger rail off of.
+                    "charge_meta": event.payload.get("charge_meta") or {},
+                    "due_by": event.payload.get("due_by"),
                 }
             )
             record_incident_created(incident=incident)
@@ -2019,6 +2037,19 @@ async def stripe_payment_incidents_webhook(req: Request) -> Dict[str, Any]:
             sync_ticket_from_incident(repo, incident=result.incident)
             dispatch_auto_payment_failure_alert(repo, incident=result.incident)
             clear_auto_payment_failure_alerts(repo, incident=result.incident)
+            # DISP E3 (DISP-031/035): drive the ledger money layer off the LIVE
+            # transition — hold on open, clawback+fee on lost/accepted, release on
+            # won. Best-effort + idempotent; never fails the webhook ack.
+            try:
+                _disp_cb.on_incident_transition(
+                    result.incident,
+                    target_status=event.target_status,
+                    source_event_type=event.payload.get("source_event_type", ""),
+                    actor="stripe_webhook",
+                )
+            except Exception:
+                logger.exception("dispute chargeback reconciler hook failed incident=%s",
+                                 result.incident.get("incident_id"))
 
     if processed > 0 or deduped > 0:
         _mark_payment_incident_webhook_replay(provider="stripe", cache_key=replay_cache_key)

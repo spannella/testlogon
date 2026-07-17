@@ -51,6 +51,13 @@ class CCBillPaymentIncidentAdapter(PaymentIncidentProviderAdapter):
                         "payment_reference": str(transaction.get("transactionId") or dispute_id),
                         "amount": str(transaction.get("amount") or event.get("amount") or "0"),
                         "currency": str(transaction.get("currency") or event.get("currency") or "usd"),
+                        # DISP-030 (mirror): a CCBill Chargeback pulls the funds
+                        # immediately; there is no funds_reinstated event (a reversal
+                        # comes as a separate credit), so funds_moved on open.
+                        "funds_moved": True,
+                        "funds_restored": False,
+                        "due_by": event.get("responseDueBy") or transaction.get("responseDueBy"),
+                        "charge_meta": event.get("metadata") or transaction.get("metadata") or {},
                     },
                 )
             ]

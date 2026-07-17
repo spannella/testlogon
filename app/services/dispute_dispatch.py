@@ -315,21 +315,18 @@ def _rail_tip(params: Dict[str, Any], *, override_amount_cents: Optional[int],
     if override_amount_cents is not None:
         raise HTTPException(400, {"code": "partial_unsupported",
                                   "message": "Partial reversal is not supported for tip/message charges in v1."})
-    if clawback_only:
-        # E3 chargeback fork lands the clawback-only variant; E0 dispatches the
-        # full (buyer-refunding) rail only.
-        raise HTTPException(501, {"code": "clawback_only_unsupported",
-                                  "message": "tip clawback-only fork lands in E3 (DISP-033)."})
     from app.services.tips import reverse_tip_by_payment_id
     payer = params.get("payer_id")
     if not payer:
         raise HTTPException(400, {"code": "missing_payer", "message": "payer_id (tipper) is required to reverse a tip."})
+    # DISP-033: clawback_only threads through to suppress the tipper-refund + Stripe legs.
     res = reverse_tip_by_payment_id(
         tip_payment_id=params["tip_payment_id"],
         tipper_id=payer,
         recipient_id=params.get("recipient_id"),
         reason=reason,
         actor=actor,
+        clawback_only=clawback_only,
     )
     # ReversalResult dataclass -> dict
     from dataclasses import asdict, is_dataclass
@@ -338,9 +335,6 @@ def _rail_tip(params: Dict[str, Any], *, override_amount_cents: Optional[int],
 
 def _rail_subscription(params: Dict[str, Any], *, override_amount_cents: Optional[int],
                        clawback_only: bool, reason: str, actor: Optional[str]) -> Dict[str, Any]:
-    if clawback_only:
-        raise HTTPException(501, {"code": "clawback_only_unsupported",
-                                  "message": "subscription clawback-only fork lands in E3 (DISP-033)."})
     from app.routers.subscription_server import _reverse_subscription_charge, ddb_get_item, pk_subscription, normalize_subscription
     sub = params.get("subscription")
     if not sub:
@@ -359,7 +353,9 @@ def _rail_subscription(params: Dict[str, Any], *, override_amount_cents: Optiona
             frac = max(0.0, min(1.0, (override_amount_cents / gross) if gross else 0.0))
         except Exception:
             frac = 1.0
-    return _reverse_subscription_charge(sub, now=now_ts(), refund_fraction=frac, reason=reason, actor=actor)
+    # DISP-033: clawback_only suppresses the payer-refund + Stripe legs.
+    return _reverse_subscription_charge(sub, now=now_ts(), refund_fraction=frac, reason=reason,
+                                        actor=actor, clawback_only=clawback_only)
 
 
 def _rail_ad(params: Dict[str, Any], *, override_amount_cents: Optional[int],
@@ -367,22 +363,18 @@ def _rail_ad(params: Dict[str, Any], *, override_amount_cents: Optional[int],
     if override_amount_cents is not None:
         raise HTTPException(400, {"code": "partial_unsupported",
                                   "message": "Partial reversal is not supported for ad charges in v1."})
-    if clawback_only:
-        raise HTTPException(501, {"code": "clawback_only_unsupported",
-                                  "message": "ad clawback-only fork lands in E3 (DISP-033)."})
     from app.services.ad_billing import reverse_ad_charge
     account_id = params.get("ad_account_id")
     entry_id = params.get("ad_entry_id") or params.get("charge_ref")
     if not account_id:
         raise HTTPException(400, {"code": "missing_ad_account", "message": "ad_account_id is required to reverse an ad charge."})
-    return reverse_ad_charge(account_id=account_id, entry_id=entry_id, reason=reason, actor=actor or "")
+    # DISP-033: clawback_only skips the advertiser-balance refund leg.
+    return reverse_ad_charge(account_id=account_id, entry_id=entry_id, reason=reason,
+                             actor=actor or "", clawback_only=clawback_only)
 
 
 def _rail_ecom(params: Dict[str, Any], *, override_amount_cents: Optional[int],
                clawback_only: bool, reason: str, actor: Optional[str]) -> Dict[str, Any]:
-    if clawback_only:
-        raise HTTPException(501, {"code": "clawback_only_unsupported",
-                                  "message": "ecom chargeback fork lands in E3 (DISP-033)."})
     from app.services import refund_requests
     payer = params.get("payer_id")
     entry_id = params.get("transaction_entry_id") or params.get("charge_ref")
@@ -398,11 +390,14 @@ def _rail_ecom(params: Dict[str, Any], *, override_amount_cents: Optional[int],
     )
     # the refund-request item keys its id as ``refund_request_id`` (pk REFUND#{id}).
     req_id = req.get("refund_request_id") or req.get("request_id")
+    # DISP-033: clawback_only suppresses the buyer credit-back leg (processor
+    # already refunded the buyer) while keeping the multi-party seller/host clawback.
     receipt = refund_requests.approve_request(
         req_id,
         actor or "dispute_dispatch",
         notes=reason,
         override_amount_cents=override_amount_cents,
+        clawback_only=clawback_only,
     )
     out = dict(receipt) if isinstance(receipt, dict) else {"receipt": receipt}
     out.setdefault("refund_request_id", req_id)

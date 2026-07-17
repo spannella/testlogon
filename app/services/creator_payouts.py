@@ -131,6 +131,7 @@ def get_available_balance(user_id: str) -> dict:
     filter_expr = (
         Attr("type").eq("credit")
         & Attr("state").ne("reversed")
+        & Attr("state").ne("held")
         & Attr("amount_cents").gt(0)
     )
 

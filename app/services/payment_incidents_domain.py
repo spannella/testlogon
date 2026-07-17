@@ -48,16 +48,22 @@ class PaymentFailureStatus(str, Enum):
 IncidentStatus = DisputeStatus | PaymentFailureStatus
 
 
+# DISP E3: a real Stripe ``charge.dispute.closed`` can arrive directly from ANY
+# live state (opened / evidence_required / response_submitted) -- the network
+# does not require our intermediate under_review. So every live state may reach a
+# terminal {won, lost, accepted}. Still forward-only (terminals stay terminal).
+_TERMINAL_OUTCOMES = frozenset({DisputeStatus.WON, DisputeStatus.LOST, DisputeStatus.ACCEPTED})
 _VALID_DISPUTE_TRANSITIONS: Final[Mapping[DisputeStatus, FrozenSet[DisputeStatus]]] = {
-    DisputeStatus.OPENED: frozenset({DisputeStatus.EVIDENCE_REQUIRED, DisputeStatus.RESPONSE_SUBMITTED, DisputeStatus.CANCELED}),
+    DisputeStatus.OPENED: frozenset({DisputeStatus.EVIDENCE_REQUIRED, DisputeStatus.RESPONSE_SUBMITTED,
+                                     DisputeStatus.UNDER_REVIEW, DisputeStatus.CANCELED}) | _TERMINAL_OUTCOMES,
     DisputeStatus.EVIDENCE_REQUIRED: frozenset(
         {
             DisputeStatus.RESPONSE_SUBMITTED,
+            DisputeStatus.UNDER_REVIEW,
             DisputeStatus.CANCELED,
-            DisputeStatus.ACCEPTED,
         }
-    ),
-    DisputeStatus.RESPONSE_SUBMITTED: frozenset({DisputeStatus.UNDER_REVIEW, DisputeStatus.CANCELED}),
+    ) | _TERMINAL_OUTCOMES,
+    DisputeStatus.RESPONSE_SUBMITTED: frozenset({DisputeStatus.UNDER_REVIEW, DisputeStatus.CANCELED}) | _TERMINAL_OUTCOMES,
     DisputeStatus.UNDER_REVIEW: frozenset({DisputeStatus.WON, DisputeStatus.LOST, DisputeStatus.ACCEPTED}),
     DisputeStatus.WON: frozenset(),
     DisputeStatus.LOST: frozenset(),

@@ -132,11 +132,14 @@ def test_invalid_transition_raises_stable_error_code() -> None:
     repo = _Repo()
     service = PaymentIncidentTransitionService(repository=repo)
 
+    # DISP E3 widened opened->{won,lost,accepted} (real Stripe closes directly),
+    # so a backward hop OUT of a terminal is now the canonical invalid case.
+    repo.incidents["inc_1"]["status"] = "won"
     try:
         service.apply_provider_transition(
             incident_id="inc_1",
             incident_type=PaymentIncidentType.DISPUTE,
-            target_status="won",
+            target_status="opened",
             provider="stripe",
             provider_event_id="evt_bad",
             source_event_type="charge.dispute.updated",

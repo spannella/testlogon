@@ -2249,6 +2249,15 @@ class Settings:
     billing_disputes_default_deadline_days: int = int(os.environ.get("BILLING_DISPUTES_DEADLINE_DAYS", "14"))
     dispute_response_window_days: int = int(os.environ.get("DISPUTE_RESPONSE_WINDOW_DAYS", "7"))
     dispute_auto_refund_threshold_cents: int = int(os.environ.get("DISPUTE_AUTO_REFUND_THRESHOLD_CENTS", "0"))
+    # DISP E3 (DISP-034) — processor chargeback fee. Flat default fee applied on a
+    # LOST/ACCEPTED chargeback (Stripe charges $15 today) when the real
+    # balance_transactions fee is unavailable (unkeyed/mock). Policy flag decides
+    # who absorbs it: creator_eats (debit the creator ledger) vs platform_eats.
+    dispute_chargeback_fee_cents: int = int(os.environ.get("DISPUTE_CHARGEBACK_FEE_CENTS", "1500"))
+    dispute_chargeback_fee_policy: str = os.environ.get("DISPUTE_CHARGEBACK_FEE_POLICY", "creator_eats")
+    # DISP E3 (DISP-030..035) — master flag for the processor chargeback reconciler.
+    # When OFF the webhook still parses+records state but never touches T.billing.
+    dispute_chargeback_reconcile_enabled: bool = os.environ.get("DISPUTE_CHARGEBACK_RECONCILE_ENABLED", "1") not in ("0", "false", "False")
 
     # Notification Delivery Enhancements (NOTIFY-001)
     notification_dispatch_enabled: bool = os.environ.get("NOTIFICATION_DISPATCH_ENABLED", "1") not in ("0", "false", "False")

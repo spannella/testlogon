@@ -1568,8 +1568,16 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            # DISP E3: the PaymentIncident store queries three GSIs (matches
+            # scripts/migrations/20260324_payment_incidents_schema.py). The dev
+            # clone was created without them; provision here for dev/prod parity.
             _resolve_table_name(S.payment_incidents_table_name, "payment_incidents"),
             "incident_id",
+            gsi=[
+                {"index_name": "ByProviderIncidentUpdatedAt", "partition_key": "provider_incident_key", "sort_key": "updated_at"},
+                {"index_name": "ByCustomerUpdatedAt", "partition_key": "customer_id", "sort_key": "updated_at"},
+                {"index_name": "ByResponseDueAt", "partition_key": "response_due_scope", "sort_key": "response_due_at"},
+            ],
         ),
         TableDef(
             _resolve_table_name(S.payments_table_name, "payments"),
