@@ -48,7 +48,20 @@ export default defineConfig({
   // The prod FastAPI serves the built SPA from the app/static StaticFiles
   // mount ("/static") and returns index.html at "/". Assets must therefore be
   // referenced under /static/ so they resolve when the shell is served from /.
-  base: "/static/",
+  //
+  // E2E HARNESS FIX: the Playwright suite (and the prod client router) navigate
+  // to BARE app routes (http://localhost:3000/shop, /billing, /analytics, ...).
+  // Under base "/static/" the dev server's baseMiddleware rejects those paths
+  // with a plaintext 404 ("did you mean /static/shop"), and even if index.html
+  // were served, <BrowserRouter basename={import.meta.env.BASE_URL}> would be
+  // pinned to "/static/" and fail to match the bare path -> blank #root ->
+  // ~410 specs fail with "heading not found". Setting E2E_BASE_ROOT=1 serves
+  // the dev SPA at "/" (so BASE_URL==="/", router basename "/", assets under
+  // "/"), which is exactly how prod/CI serve the shell (FastAPI returns
+  // index.html at "/"). Prod BUILD + normal dev are untouched: without the env
+  // var the base stays "/static/" so the built bundle still resolves under the
+  // backend /static mount.
+  base: process.env.E2E_BASE_ROOT === "1" ? "/" : "/static/",
   plugins: [crawlerMetaInjectPlugin(), react(), tailwindcss()],
   resolve: {
     alias: {

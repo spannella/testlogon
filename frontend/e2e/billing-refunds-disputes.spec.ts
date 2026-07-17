@@ -23,6 +23,7 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { retryOn429 } from "./helpers/retry";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -194,11 +195,13 @@ test.afterAll(async () => {
 
 test.describe("93 — Customer dispute API", () => {
   test("93.1 files a dispute referencing a transaction (201)", async () => {
-    const resp = await apiPost(alicePage, "alice", "/ui/billing/disputes", {
-      transaction_entry_id: ENTRY_ID,
-      amount_cents: 2500,
-      reason: "I never received the product I was charged for.",
-    });
+    const resp = await retryOn429(() =>
+      apiPost(alicePage, "alice", "/ui/billing/disputes", {
+        transaction_entry_id: ENTRY_ID,
+        amount_cents: 2500,
+        reason: "I never received the product I was charged for.",
+      }),
+    );
     expect(resp.status()).toBe(201);
     const body = await resp.json();
     expect(body.dispute_id).toBeTruthy();
@@ -208,10 +211,12 @@ test.describe("93 — Customer dispute API", () => {
   });
 
   test("93.2 files a dispute without a transaction (201)", async () => {
-    const resp = await apiPost(alicePage, "alice", "/ui/billing/disputes", {
-      amount_cents: 1000,
-      reason: "Unrecognized charge on my statement.",
-    });
+    const resp = await retryOn429(() =>
+      apiPost(alicePage, "alice", "/ui/billing/disputes", {
+        amount_cents: 1000,
+        reason: "Unrecognized charge on my statement.",
+      }),
+    );
     expect(resp.status()).toBe(201);
     const body = await resp.json();
     expect(body.status).toBe("open");
