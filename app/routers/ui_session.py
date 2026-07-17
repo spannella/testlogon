@@ -5,7 +5,18 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from boto3.dynamodb.conditions import Key
 
-from app.auth.deps import get_authenticated_user_sub, resolve_dev_or_authenticated_user_sub
+from app.auth.deps import (
+    AuthenticatedUser,
+    get_authenticated_user,
+    get_authenticated_user_sub,
+    resolve_dev_or_authenticated_user_sub,
+)
+from app.auth.roles import (
+    AdminProfile,
+    normalize_admin_profile,
+    normalize_role,
+    role_allows_admin_features,
+)
 from app.models import UiSessionFinalizeReq, UiSessionStartReq, UiSessionStartResp
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
@@ -220,9 +231,48 @@ async def ui_session_finalize(
     audit_event("ui_session_finalize", user_sub, req, outcome="pending", challenge_id=body.challenge_id, passed=chal.get("passed", {}))
     return {"status": "pending", "required_factors": chal.get("required_factors", []), "passed": chal.get("passed", {})}
 
+def _resolve_admin_profile(user_sub: str, auth_user: "AuthenticatedUser | None") -> AdminProfile:
+    """Authoritative admin-profile (scopes) for the caller.
+
+    The users table row is the source of truth for scoped-admin assignment
+    (admin_roles writes ``admin_profile`` there). The dev cookie-login path does
+    not embed admin_profile in the access-token claims, so reading the table
+    keeps scope-gated nav correct in dev AND prod. Falls back to the claim-derived
+    profile on the AuthenticatedUser, then to a general profile.
+    """
+    try:
+        item = T.users.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+        if item.get("admin_profile") is not None:
+            return normalize_admin_profile(item.get("admin_profile"))
+    except Exception:
+        pass
+    if auth_user is not None:
+        return normalize_admin_profile(getattr(auth_user, "admin_profile", None))
+    return AdminProfile()
+
+
 @router.get("/me")
-async def ui_me(req: Request, ctx: Dict[str, str] = Depends(require_ui_session)):
-    return {"user_sub": ctx["user_sub"], "session_id": ctx["session_id"], "ip": client_ip_from_request(req)}
+async def ui_me(
+    req: Request,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    user_sub = ctx["user_sub"]
+    # Resolve role the same way server-side enforcement does: prefer the session
+    # context role (already normalized in require_ui_session), fall back to the
+    # authenticated-user role.
+    role = normalize_role(ctx.get("role") or getattr(auth_user, "role", None))
+    is_admin = role_allows_admin_features(role)
+    body: Dict[str, Any] = {
+        "user_sub": user_sub,
+        "session_id": ctx["session_id"],
+        "ip": client_ip_from_request(req),
+        "role": role.value,
+        "is_admin": is_admin,
+    }
+    if is_admin:
+        body["admin_profile"] = _resolve_admin_profile(user_sub, auth_user).to_dict()
+    return body
 
 @router.get("/sessions")
 async def ui_sessions(ctx: Dict[str, str] = Depends(require_ui_session)):

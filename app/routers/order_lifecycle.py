@@ -68,15 +68,12 @@ async def list_orders_endpoint(
         target_user = ctx.get("user_sub")
 
     if not target_user and not status:
-        # Non-admin with no derivable user (shouldn't happen) or admin asking for
-        # an unscoped listing → require at least one scope.
-        if not is_admin:
-            target_user = ctx.get("user_sub")
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "scope_required", "message": "Pass user_id or status"},
-            )
+        # No explicit scope supplied. For BOTH non-admins and admins, default to
+        # the caller's own orders (the SPA Orders page lists "your orders" and
+        # calls GET /ui/orders?limit=50 with no filters). Previously an admin with
+        # no user_id/status got a 400 scope_required, which surfaced in the SPA as
+        # a raw "Bad Request". Admins can still pass ?user_id=/?status= to widen.
+        target_user = ctx.get("user_sub")
 
     headers, next_cursor = order_store.list_orders(
         user_id=target_user,

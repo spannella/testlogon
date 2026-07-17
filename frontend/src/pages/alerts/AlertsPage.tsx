@@ -17,15 +17,21 @@ export default function AlertsPage() {
       />
 
       <Tabs defaultValue="activity">
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="activity">Activity</TabsTrigger>
-          <TabsTrigger value="mentions">Mentions</TabsTrigger>
-          <TabsTrigger value="tips">Tips & Earnings</TabsTrigger>
-          <TabsTrigger value="security">Security</TabsTrigger>
-          <TabsTrigger value="all">All</TabsTrigger>
-          <TabsTrigger value="preferences">Preferences</TabsTrigger>
-          <TabsTrigger value="push">Push Devices</TabsTrigger>
-        </TabsList>
+        {/* Horizontally scrollable tab row: on narrow (mobile) widths the 7 tabs
+            no longer wrap onto a second row (which overlapped the first list
+            item because the base TabsList is fixed-height h-9). -mx/px keeps the
+            scroll edges flush with the page gutter. */}
+        <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+          <TabsList className="w-max max-w-none justify-start">
+            <TabsTrigger value="activity">Activity</TabsTrigger>
+            <TabsTrigger value="mentions">Mentions</TabsTrigger>
+            <TabsTrigger value="tips">Tips & Earnings</TabsTrigger>
+            <TabsTrigger value="security">Security</TabsTrigger>
+            <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="preferences">Preferences</TabsTrigger>
+            <TabsTrigger value="push">Push Devices</TabsTrigger>
+          </TabsList>
+        </div>
         <TabsContent value="activity">
           <ActivityFeed />
         </TabsContent>

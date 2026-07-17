@@ -1,0 +1,69 @@
+--- app/routers/ui_session.py.bak_webfix2_1784314517	2026-07-17 18:55:17.087246045 +0000
++++ app/routers/ui_session.py	2026-07-17 18:55:17.098619956 +0000
+@@ -6,6 +6,7 @@
+ from boto3.dynamodb.conditions import Key
+ 
+ from app.auth.deps import get_authenticated_user_sub, resolve_dev_or_authenticated_user_sub
++from app.auth.roles import AdminProfile, normalize_admin_profile
+ from app.models import UiSessionFinalizeReq, UiSessionStartReq, UiSessionStartResp
+ from app.core.normalize import client_ip_from_request
+ from app.core.settings import S
+@@ -208,6 +209,29 @@
+     audit_event("ui_session_finalize", user_sub, req, outcome="pending", challenge_id=body.challenge_id, passed=chal.get("passed", {}))
+     return {"status": "pending", "required_factors": chal.get("required_factors", []), "passed": chal.get("passed", {})}
+ 
++def _resolve_admin_profile_for_me(user_sub: str, auth_user) -> "AdminProfile":
++    """Authoritative admin-profile (scopes) for the caller (WEBFIX BUG2).
++
++    The users table row is the source of truth for scoped-admin assignment
++    (admin_roles writes ``admin_profile`` there). The cookie-login path does not
++    embed admin_profile in the access-token claims, so reading the table keeps
++    scope-gated nav (ModerationBoard/DMCA/video-review) correct. Falls back to
++    the claim-derived profile on the AuthenticatedUser, then a general profile.
++    """
++    try:
++        item = T.users.get_item(Key={"user_sub": user_sub}).get("Item") or {}
++        if item.get("admin_profile") is not None:
++            return normalize_admin_profile(item.get("admin_profile"))
++    except Exception:
++        pass
++    try:
++        if auth_user is not None:
++            return normalize_admin_profile(getattr(auth_user, "admin_profile", None))
++    except Exception:
++        pass
++    return AdminProfile()
++
++
+ @router.get("/me")
+ async def ui_me(req: Request, ctx: Dict[str, str] = Depends(require_ui_session)):
+     # B7-SUPPORT: surface the caller's role + is_admin so cookie-session clients
+@@ -216,6 +240,7 @@
+     # surface. Best-effort: a lookup failure degrades to a normal user (role="user").
+     role_value = "user"
+     is_admin = False
++    _au = None
+     try:
+         from app.auth.deps import get_authenticated_user as _gau
+         from app.auth.roles import Role as _Role
+@@ -225,13 +250,19 @@
+     except Exception:
+         role_value = "user"
+         is_admin = False
+-    return {
++        _au = None
++    body = {
+         "user_sub": ctx["user_sub"],
+         "session_id": ctx["session_id"],
+         "ip": client_ip_from_request(req),
+         "role": role_value,
+         "is_admin": is_admin,
+     }
++    # WEBFIX BUG2: include admin_profile (scopes) so the SPA can render
++    # scope-gated admin nav (moderation/DMCA) for scoped admins.
++    if is_admin:
++        body["admin_profile"] = _resolve_admin_profile_for_me(ctx["user_sub"], _au).to_dict()
++    return body
+ 
+ @router.get("/sessions")
+ async def ui_sessions(ctx: Dict[str, str] = Depends(require_ui_session)):
