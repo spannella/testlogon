@@ -35,9 +35,14 @@ import {
 } from "@/api/endpoints/orderLifecycle";
 import { OrderStatusBadge } from "./OrderStatusBadge";
 
-function fmtTs(ts?: number | null): string {
-  if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString();
+function fmtTs(ts?: string | number | null): string {
+  if (ts === null || ts === undefined || ts === "") return "—";
+  // GET /ui/orders returns created_at/updated_at as ISO 8601 strings
+  // (backend OrderListItem.created_at: str). A bare number is treated as
+  // legacy Unix epoch seconds.
+  const d = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
 }
 
 export default function OrdersPage() {

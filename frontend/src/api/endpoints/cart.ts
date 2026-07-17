@@ -43,11 +43,20 @@ export const getCartTotal = (cartId: string) =>
 export const purchaseCart = (
   cartId: string,
   body?: { promo_code?: string; promo_code_id?: string },
-) =>
-  api.post<CartPurchase>(
-    `/ui/shoppingcart/carts/${cartId}/purchase`,
-    body ?? {},
-  );
+) => {
+  // The purchase endpoint requires an X-Idempotency-Key header (backend returns
+  // 400 idempotency_key_required without it). Generate one per attempt so retries
+  // after a hard failure get a fresh key while a single click is idempotent.
+  const idempotencyKey =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `cart-${cartId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return api<CartPurchase>(`/ui/shoppingcart/carts/${cartId}/purchase`, {
+    method: "POST",
+    body: JSON.stringify(body ?? {}),
+    headers: { "X-Idempotency-Key": idempotencyKey },
+  });
+};
 
 export const deleteCart = (cartId: string) =>
   api.del<OkResp>(`/ui/shoppingcart/carts/${cartId}`);

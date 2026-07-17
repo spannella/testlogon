@@ -140,8 +140,8 @@ export interface OrderListItem {
   user_id: string;
   status: string;
   lifecycle_status: OrderLifecycleStatus | null;
-  created_at: number; // Unix seconds
-  updated_at: number; // Unix seconds
+  created_at: string; // ISO 8601 string (backend OrderListItem.created_at: str)
+  updated_at: string; // ISO 8601 string
   source_system: string;
   correlation_id: string;
   amount_cents: number;

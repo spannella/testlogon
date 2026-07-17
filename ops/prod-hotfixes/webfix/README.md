@@ -83,3 +83,37 @@ Canonical scopes (`AdminScope`): `auth_support`, `billing_support`,
 Use `content_moderation` (+ `content_moderation_senior` for the senior-only
 final-call / DMCA actions) to drive ModerationBoard / DMCA / video-review.
 `/ui/me` now echoes this profile back so the SPA unhides the moderation nav.
+
+## BUG (deep-pass v2) — admin dispute rail-preview leaks a raw error dict
+`app/services/billing_disputes.py` — `_rail_preview`.
+
+Found driving the SEEDED admin Payment Dispute Queue on the A15 phone. When
+`DD.resolve_charge` cannot classify a charge it raises
+`HTTPException(400, {"code": ..., "message": ...})` — a **dict** detail. The
+`except HTTPException` did `str(exc.detail)`, stringifying the whole dict, so the
+admin queue rendered a raw Python-repr note like
+`{'code': 'unknown_charge_type', 'message': "Unknown charge_type 'shop_order'."}`
+in the Refund-preview block (`d.rail_preview.note`, AdminDisputeQueuePage:226).
+
+Fix: if `detail` is a dict, surface only `message` (fallback `code`); otherwise the
+plain string. The admin now sees `Unknown charge_type 'shop_order'.`. Money-safe:
+preview only, never moves money. (Repro trigger `charge_type='shop_order'` was a
+seed artifact — the canonical shop-order charge_type is `ecom`; but ANY
+unresolvable charge leaked the dict, so the fix is charge-type-agnostic.)
+
+**PROD mirror: OWED.** This session had no SSM/PROD access; patch folded here +
+applied to the dev `:8000` uvicorn and re-verified on-phone (note now reads
+"Unknown charge_type 'shop_order'."). Apply to PROD via the same anchor.
+
+## Frontend bugs (deep-pass v2 — plain `frontend/` edits, no patch files)
+- **Orders list "Invalid Date":** `OrdersPage.tsx` `fmtTs` did `new Date(ts*1000)`
+  (epoch-seconds) but `GET /ui/orders` returns ISO strings (backend
+  `OrderListItem.created_at: str`). Also fixed the wrong `created_at: number` type
+  in `orderLifecycle.ts`. `fmtTs` now parses ISO strings (numbers still epoch-s).
+- **Creator Tips-received "$NaN":** `tips.ts` `getTipsReceivedSummary` called
+  `/ui/tips/received` (raw `total_net_cents`/`by_type` shape) but TipsFeed reads
+  `total_tips_cents`/`by_surface`. Repointed to `/ui/alerts/tips-summary` (the
+  ledger-backed endpoint that returns the TipsSummary shape).
+- **Checkout "Purchase Failed":** `cart.ts` `purchaseCart` never sent the required
+  `X-Idempotency-Key` header → backend 400 `idempotency_key_required` on every
+  order. Now generates a per-attempt UUID key (crypto.randomUUID fallback).

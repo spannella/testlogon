@@ -1,0 +1,20 @@
+diff --git a/app/services/billing_disputes.py b/app/services/billing_disputes.py
+index a67a77eb..fcfe4e9c 100644
+--- a/app/services/billing_disputes.py
++++ b/app/services/billing_disputes.py
+@@ -715,7 +715,14 @@ def _rail_preview(item: Dict[str, Any]) -> Dict[str, Any]:
+         if params.get("gross_cents") is not None:
+             preview["gross_cents"] = int(params.get("gross_cents") or 0)
+     except HTTPException as exc:
+-        preview["note"] = str(getattr(exc, "detail", "") or "charge not resolvable")
++        # detail may be a structured dict ({"code","message"}) or a plain string;
++        # surface only the human message so the admin UI never shows a raw
++        # Python-repr dict like {'code': 'unknown_charge_type', 'message': ...}.
++        detail = getattr(exc, "detail", "") or ""
++        if isinstance(detail, dict):
++            preview["note"] = str(detail.get("message") or detail.get("code") or "charge not resolvable")
++        else:
++            preview["note"] = str(detail) or "charge not resolvable"
+     except Exception:
+         logger.warning("_rail_preview: resolve_charge failed for %s", item.get("dispute_id"), exc_info=True)
+         preview["note"] = "charge lookup failed"
