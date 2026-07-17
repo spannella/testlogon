@@ -77,9 +77,21 @@ def file_dispute(
     transaction_entry_id: Optional[str] = None,
     provider: str = "manual",
     provider_dispute_id: Optional[str] = None,
+    source: str = "user",
+    charge_type: str = "",
+    charge_ref: str = "",
+    linked_dispute_id: str = "",
     request_obj: Any = None,
 ) -> Dict[str, Any]:
-    """File a new dispute. Returns the created item dict."""
+    """File a new dispute. Returns the created item dict.
+
+    DISP-001: the unified dispute record spans both origins via ``source`` in
+    {user, processor}. ``charge_type`` (tip|message|subscription|ad|ecom|vod) +
+    ``charge_ref`` locate the underlying charge for the reversal-rail dispatcher;
+    ``rail_marker``/``resolution`` are stamped on resolution; ``linked_dispute_id``
+    cross-links a user<->processor dispute on the same charge. Existing stub rows
+    default ``source=user`` and empty charge_* (no behavior change).
+    """
     if not S.billing_disputes_enabled:
         raise HTTPException(404, "Billing disputes are not enabled")
 
@@ -128,6 +140,14 @@ def file_dispute(
         "resolution": "",
         "admin_notes": "",
         "transaction_entry_id": transaction_entry_id or "",
+        # DISP-001: unified dispute record fields (source discriminator + charge
+        # linkage + resolution/rail markers). source_scope backs a BySource GSI.
+        "source": source or "user",
+        "source_scope": f"SOURCE#{source or 'user'}",
+        "charge_type": charge_type or "",
+        "charge_ref": charge_ref or transaction_entry_id or "",
+        "linked_dispute_id": linked_dispute_id or "",
+        "rail_marker": "",
         "created_at": ts,
         "updated_at": ts,
         "deadline_at": deadline,
