@@ -1840,6 +1840,7 @@
 
     <!-- AND-245: disputes -->
     <string name="more_entry_disputes">Disputes</string>
+    <string name="more_entry_creator_disputes">Disputes to respond to</string>
     <string name="disputes_title">Disputes</string>
     <string name="disputes_loading">Loading disputes…</string>
     <string name="disputes_empty">No disputes</string>
@@ -1849,6 +1850,20 @@
     <string name="disputes_status_under_review">Under review</string>
     <string name="disputes_status_resolved">Resolved</string>
     <string name="disputes_status_unknown">Status unknown</string>
+    <string name="disputes_status_needs_response">Needs response</string>
+    <string name="disputes_status_escalated">Escalated</string>
+    <string name="disputes_status_withdrawn">Withdrawn</string>
+    <string name="creator_disputes_title">Disputes to respond to</string>
+    <string name="creator_disputes_empty_title">No disputes</string>
+    <string name="creator_disputes_empty_body">You have no open disputes against your sales.</string>
+    <string name="creator_disputes_respond">Respond</string>
+    <string name="creator_disputes_respond_title">Respond to dispute</string>
+    <string name="creator_disputes_respond_hint">Provide delivery proof, receipts, or context showing the charge was legitimate.</string>
+    <string name="creator_disputes_respond_submit">Submit response</string>
+    <string name="creator_disputes_response_submitted">Your response was submitted</string>
+    <string name="creator_disputes_your_response">Your response</string>
+    <string name="creator_disputes_awaiting_review">Awaiting admin review.</string>
+    <string name="creator_disputes_window_closed">Response window closed</string>
     <string name="disputes_detail_title">Dispute</string>
     <string name="disputes_detail_opened_on">Opened on %1$s</string>
     <string name="disputes_detail_evidence_due">Evidence due by %1$s</string>

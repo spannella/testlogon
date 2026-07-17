@@ -11,6 +11,7 @@ import com.testlogon.android.feature.disputes.DisputeDetailViewModel
 import com.testlogon.android.feature.disputes.DisputeFileRoute
 import com.testlogon.android.feature.disputes.DisputeFileViewModel
 import com.testlogon.android.feature.disputes.DisputesListRoute
+import com.testlogon.android.feature.disputes.CreatorDisputesRoute
 
 /** AND-245 — the disputes list route (reached from billing / the More hub). */
 data object DisputesListDest {
@@ -31,6 +32,11 @@ data object DisputeDetailDest {
     const val ROUTE = "billing/disputes/{$ARG_DISPUTE_ID}"
 
     fun build(disputeId: String): String = "billing/disputes/${Uri.encode(disputeId)}"
+}
+
+/** DISP-024 — the creator inbound "Respond to dispute" queue route. */
+data object CreatorDisputesDest {
+    const val ROUTE = "creator/disputes"
 }
 
 /** AND-245 — registers the disputes list + file + detail destinations. */
@@ -64,5 +70,8 @@ fun NavGraphBuilder.disputesDestinations(navController: NavHostController) {
         arguments = listOf(navArgument(DisputeDetailDest.ARG_DISPUTE_ID) { type = NavType.StringType }),
     ) {
         DisputeDetailRoute(onBack = { navController.popBackStack() })
+    }
+    composable(CreatorDisputesDest.ROUTE) {
+        CreatorDisputesRoute(onBack = { navController.popBackStack() })
     }
 }

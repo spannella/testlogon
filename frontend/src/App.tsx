@@ -158,6 +158,7 @@ const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePa
 const BulkPayoutConsole = lazy(() => import("@/pages/admin/BulkPayoutConsole"));
 const DisputesPage = lazy(() => import("@/pages/billing/DisputesPage"));
 const AdminDisputeQueuePage = lazy(() => import("@/pages/admin/AdminDisputeQueuePage"));
+const CreatorDisputesPage = lazy(() => import("@/pages/creator/CreatorDisputesPage"));
 const AppealsPage = lazy(() => import("@/pages/appeals/AppealsPage"));
 const AppealReviewQueuePage = lazy(() => import("@/pages/admin/AppealReviewQueuePage"));
 const FraudReviewQueuePage = lazy(() => import("@/pages/admin/fraud/FraudReviewQueuePage"));
@@ -681,6 +682,7 @@ export default function App() {
           <Route path="billing/tax-documents" element={<TaxDocumentsPage />} />
           <Route path="billing/tax-forms" element={<TaxForm1099Page />} />
           <Route path="billing/disputes" element={<DisputesPage />} />
+          <Route path="creator/disputes" element={<CreatorDisputesPage />} />
           <Route path="ads/billing" element={<AdBillingPage />} />
           <Route path="ads/dashboard" element={<AdvertiserDashboard />} />
           <Route path="ads/campaigns" element={<CampaignList />} />

@@ -1729,6 +1729,16 @@ class DisputeResolveIn(BaseModel):
     resolution: str = Field(pattern="^(refunded|partial|denied|won|lost|accepted)$")
     override_amount_cents: Optional[int] = Field(default=None, ge=1)
     notes: Optional[str] = Field(default=None, max_length=2000)
+    # DISP-022: a money-moving resolve above the dual-approval threshold requires
+    # a second, distinct PAYMENT_DISPUTES admin id (validated server-side; a
+    # fabricated/self/non-scoped id is rejected).
+    second_approver_admin_user_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CreatorDisputeRespondIn(BaseModel):
+    """DISP-021: the creator/seller rebuts a dispute within the response window."""
+    response_text: str = Field(min_length=1, max_length=5000)
+    evidence_files: Optional[List[str]] = None
 
 
 # ---- FIN-017: Bulk Payout & Refund Tools ----

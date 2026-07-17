@@ -35,7 +35,10 @@ fun formatDisputeDate(epochSeconds: Long?, locale: Locale = Locale.getDefault())
 /** Stable string-resource id for a dispute status label (text, never color-only). */
 fun disputeStatusLabelRes(status: DisputeStatus): Int = when (status) {
     DisputeStatus.OPEN -> R.string.disputes_status_open
+    DisputeStatus.NEEDS_RESPONSE -> R.string.disputes_status_needs_response
     DisputeStatus.UNDER_REVIEW -> R.string.disputes_status_under_review
+    DisputeStatus.ESCALATED -> R.string.disputes_status_escalated
     DisputeStatus.RESOLVED -> R.string.disputes_status_resolved
+    DisputeStatus.WITHDRAWN -> R.string.disputes_status_withdrawn
     DisputeStatus.UNKNOWN -> R.string.disputes_status_unknown
 }

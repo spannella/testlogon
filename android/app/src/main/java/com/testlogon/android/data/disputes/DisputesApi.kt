@@ -9,27 +9,23 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
- * AND-245 — Retrofit interface + Moshi DTOs for the real billing-disputes surface (extends the AND-223
- * billing surface). Distinct from the admin/collab dispute endpoints.
+ * AND-245 + DISP-021/023 — Retrofit interface + Moshi DTOs for the real billing-disputes surface.
  *
- * VERIFIED against reference/openapi.index.txt + reference/src/api/types.ts:
- *  - GET  ui/billing/disputes                op=list_my_disputes_...   resp=200 ({items:[...]})
- *      (openapi.index.txt L1177; params=limit,user_sub,X-SESSION-ID,X-IMPERSONATION-TOKEN — NO cursor)
- *  - POST ui/billing/disputes                op=file_billing_dispute_... req=DisputeFileIn resp=201 (DisputeOut)
- *      (openapi.index.txt L1178)
- *  - GET  ui/billing/disputes/{dispute_id}   op=get_my_dispute_...     resp=200 (DisputeOut)
- *      (openapi.index.txt L1179)
+ * Payer endpoints (AND-245 / DISP-020):
+ *  - GET  ui/billing/disputes                op=list_my_disputes       resp=200 ({items:[...]})
+ *  - POST ui/billing/disputes                op=file_billing_dispute   req=DisputeFileIn resp=201 (DisputeOut)
+ *  - GET  ui/billing/disputes/{dispute_id}   op=get_my_dispute         resp=200 (DisputeOut)
  *
- * DisputeFileIn (types.ts L721): { transaction_entry_id? , amount_cents (req), currency?, reason (req),
- * provider? }. DisputeOut (types.ts L729): required dispute_id/provider/amount_cents/currency/reason/
- * status/evidence_submitted/created_at; the rest optional/nullable. Money is integer cents; timestamps
- * epoch SECONDS. NOTE: the AND-245 spec scopes itself read-only, but the orchestrator prompt requires a
- * "open a dispute" POST flow, so the file-dispute POST is included here (it is a real, declared endpoint).
- * Session cookies + Authorization Bearer + X-CSRF-Token are attached by core-network interceptors.
+ * Creator endpoints (DISP-021 / DISP-024):
+ *  - GET  ui/creator/disputes                op=list_my_creator_disputes resp=200 ({items:[...]})
+ *  - POST ui/creator/disputes/{id}/respond   op=respond_to_dispute_as_creator req=CreatorDisputeRespondIn resp=200
+ *
+ * Money is integer cents; timestamps epoch SECONDS. Session cookies + Authorization Bearer + X-CSRF-Token
+ * are attached by core-network interceptors.
  */
 interface DisputesApi {
 
-    /** List my disputes (bounded by `limit`, no cursor). Idempotent GET. */
+    /** List my (payer) disputes (bounded by `limit`, no cursor). Idempotent GET. */
     @GET("ui/billing/disputes")
     suspend fun listDisputes(@Query("limit") limit: Int = DEFAULT_LIMIT): DisputeListDto
 
@@ -41,22 +37,37 @@ interface DisputesApi {
     @GET("ui/billing/disputes/{disputeId}")
     suspend fun getDispute(@Path("disputeId") disputeId: String): DisputeDto
 
+    /** DISP-021: my inbound queue — disputes filed against me as creator/seller. Idempotent GET. */
+    @GET("ui/creator/disputes")
+    suspend fun listCreatorDisputes(@Query("limit") limit: Int = DEFAULT_LIMIT): DisputeListDto
+
+    /** DISP-021: a single dispute I am the counterparty on. Idempotent GET. */
+    @GET("ui/creator/disputes/{disputeId}")
+    suspend fun getCreatorDispute(@Path("disputeId") disputeId: String): DisputeDto
+
+    /** DISP-021: submit my rebuttal within the response window (200). Non-idempotent. */
+    @POST("ui/creator/disputes/{disputeId}/respond")
+    suspend fun creatorRespond(
+        @Path("disputeId") disputeId: String,
+        @Body body: CreatorDisputeRespondReqDto,
+    ): CreatorDisputeRespondResultDto
+
     companion object {
         const val DEFAULT_LIMIT = 50
     }
 }
 
-// ---- DTOs (AND-245) ----
+// ---- DTOs ----
 
-/** List envelope `{ items: [...] }` (no next_cursor — verified AND-245 §4.1). */
+/** List envelope `{ items: [...] }` (no next_cursor). */
 @JsonClass(generateAdapter = true)
 data class DisputeListDto(
     @Json(name = "items") val items: List<DisputeDto> = emptyList(),
 )
 
 /**
- * DisputeFileIn (types.ts L721). amount_cents + reason are required; currency/provider default
- * server-side; transaction_entry_id is optional (the txn the dispute is filed against).
+ * DisputeFileIn. amount_cents + reason are required; the rest default server-side.
+ * charge_type/charge_ref/recipient_id locate the charge for the reversal rail (DISP-010).
  */
 @JsonClass(generateAdapter = true)
 data class DisputeFileInDto(
@@ -64,10 +75,17 @@ data class DisputeFileInDto(
     @Json(name = "amount_cents") val amountCents: Long,
     @Json(name = "currency") val currency: String? = null,
     @Json(name = "reason") val reason: String,
+    @Json(name = "reason_detail") val reasonDetail: String? = null,
+    @Json(name = "charge_type") val chargeType: String? = null,
+    @Json(name = "charge_ref") val chargeRef: String? = null,
+    @Json(name = "recipient_id") val recipientId: String? = null,
     @Json(name = "provider") val provider: String? = null,
 )
 
-/** DisputeOut (types.ts L729). admin_notes/user_id are internal and not surfaced to the user. */
+/**
+ * DisputeOut. admin_notes/user_id are internal and not surfaced to end users. DISP-010/011/012
+ * add charge_type/recipient/respond_by/moved_cents/creator_response.
+ */
 @JsonClass(generateAdapter = true)
 data class DisputeDto(
     @Json(name = "dispute_id") val disputeId: String,
@@ -83,7 +101,30 @@ data class DisputeDto(
     @Json(name = "resolution") val resolution: String? = null,
     @Json(name = "admin_notes") val adminNotes: String? = null,
     @Json(name = "transaction_entry_id") val transactionEntryId: String? = null,
+    @Json(name = "charge_type") val chargeType: String? = null,
+    @Json(name = "charge_ref") val chargeRef: String? = null,
+    @Json(name = "recipient_id") val recipientId: String? = null,
+    @Json(name = "reason_detail") val reasonDetail: String? = null,
+    @Json(name = "respond_by") val respondBy: Long? = null,
+    @Json(name = "moved_cents") val movedCents: Long? = null,
+    @Json(name = "creator_response") val creatorResponse: String? = null,
     @Json(name = "created_at") val createdAt: Long = 0,
     @Json(name = "updated_at") val updatedAt: Long? = null,
     @Json(name = "deadline_at") val deadlineAt: Long? = null,
+)
+
+/** CreatorDisputeRespondIn (DISP-021). */
+@JsonClass(generateAdapter = true)
+data class CreatorDisputeRespondReqDto(
+    @Json(name = "response_text") val responseText: String,
+    @Json(name = "evidence_files") val evidenceFiles: List<String>? = null,
+)
+
+/** Response of POST /ui/creator/disputes/{id}/respond. */
+@JsonClass(generateAdapter = true)
+data class CreatorDisputeRespondResultDto(
+    @Json(name = "ok") val ok: Boolean = false,
+    @Json(name = "dispute_id") val disputeId: String = "",
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "creator_response") val creatorResponse: String? = null,
 )

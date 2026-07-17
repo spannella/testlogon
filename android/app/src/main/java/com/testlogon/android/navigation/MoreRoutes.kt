@@ -112,6 +112,9 @@ object MoreRoutes {
     // AND-245: the disputes list (file a dispute from order detail; status detail).
     const val DISPUTES = DisputesListDest.ROUTE
 
+    // DISP-024: the creator inbound queue — disputes filed against my sales, to respond to.
+    const val CREATOR_DISPUTES = CreatorDisputesDest.ROUTE
+
     // AND-246: the tax-documents list (year/type + view/download PDF via Custom Tabs).
     const val TAX_DOCUMENTS = TaxDocsDest.ROUTE
 
@@ -572,6 +575,7 @@ object MoreRoutes {
             INVOICES,
             REFUNDS,
             DISPUTES,
+            CREATOR_DISPUTES,
             TAX_DOCUMENTS,
             TAX_FORMS_1099,
             BILLING_CONFIG,

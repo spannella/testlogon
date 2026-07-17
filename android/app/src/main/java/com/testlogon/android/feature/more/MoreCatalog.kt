@@ -1148,6 +1148,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "creator_disputes",
+            labelRes = R.string.more_entry_creator_disputes,
+            icon = Icons.Outlined.Gavel,
+            route = MoreRoutes.CREATOR_DISPUTES,
+            hub = MoreHub.WALLET,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "tax_documents",
             labelRes = R.string.more_entry_tax_documents,
             icon = Icons.Outlined.Description,

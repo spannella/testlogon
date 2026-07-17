@@ -2249,6 +2249,11 @@ class Settings:
     billing_disputes_default_deadline_days: int = int(os.environ.get("BILLING_DISPUTES_DEADLINE_DAYS", "14"))
     dispute_response_window_days: int = int(os.environ.get("DISPUTE_RESPONSE_WINDOW_DAYS", "7"))
     dispute_auto_refund_threshold_cents: int = int(os.environ.get("DISPUTE_AUTO_REFUND_THRESHOLD_CENTS", "0"))
+    # DISP-022: a resolve that MOVES money (refunded/partial) above this
+    # threshold requires real, non-self-attested dual approval (a second
+    # PAYMENT_DISPUTES admin), mirroring the moderation permanent-ban gate.
+    dispute_dual_approval_threshold_cents: int = int(os.environ.get("DISPUTE_DUAL_APPROVAL_THRESHOLD_CENTS", "5000"))
+    dispute_dual_approval_enabled: bool = os.environ.get("DISPUTE_DUAL_APPROVAL_ENABLED", "1") not in ("0", "false", "False")
     # DISP E3 (DISP-034) — processor chargeback fee. Flat default fee applied on a
     # LOST/ACCEPTED chargeback (Stripe charges $15 today) when the real
     # balance_transactions fee is unavailable (unkeyed/mock). Policy flag decides
