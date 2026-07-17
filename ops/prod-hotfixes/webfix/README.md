@@ -101,9 +101,20 @@ preview only, never moves money. (Repro trigger `charge_type='shop_order'` was a
 seed artifact — the canonical shop-order charge_type is `ecom`; but ANY
 unresolvable charge leaked the dict, so the fix is charge-type-agnostic.)
 
-**PROD mirror: OWED.** This session had no SSM/PROD access; patch folded here +
-applied to the dev `:8000` uvicorn and re-verified on-phone (note now reads
-"Unknown charge_type 'shop_order'."). Apply to PROD via the same anchor.
+**PROD mirror: APPLIED 2026-07-17.** Mirrored to PROD (`i-08f937fc705ebea75`,
+`/home/ubuntu/testlogon/app/services/billing_disputes.py`) via SSM. PROD was the
+PRE-FIX version (`str(getattr(exc, "detail", "") or ...)`); the SAME content-
+anchored edit (anchor = the `except HTTPException as exc:` / `preview["note"] =
+str(getattr(exc, ...))` / `except Exception:` block) was applied in place (not a
+whole-file overwrite). Backup `billing_disputes.py.bak_railpreview_20260717_221159`.
+`py_compile` OK, `pkill -f "uvicorn app.main"` (SSM-root) -> `restart_backend.sh`
+(as ubuntu), openapi 200. Verified: dict-detail branch surfaces the human message
+only (no raw dict). The `_rail_preview` region is now byte-identical dev==prod
+(sha256 8c2316eb...). Folded patch + dev commit 6e819509 unchanged.
+
+(Original owed note: this fix was found + folded in a prior session that had no
+SSM/PROD access; it was applied to the dev `:8000` uvicorn and re-verified on-
+phone then. PROD mirror completed 2026-07-17.)
 
 ## Frontend bugs (deep-pass v2 — plain `frontend/` edits, no patch files)
 - **Orders list "Invalid Date":** `OrdersPage.tsx` `fmtTs` did `new Date(ts*1000)`
