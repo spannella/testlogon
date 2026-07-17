@@ -377,6 +377,49 @@ def build_chargeback_fee_item(incident: Dict[str, Any], charge: Dict[str, Any], 
     }
 
 
+def _fee_marker_sk(incident_id: str) -> str:
+    return f"CHARGEBACK_FEE#{incident_id}"
+
+
+def _write_chargeback_fee(incident: Dict[str, Any], charge: Dict[str, Any], *, ts: int) -> int:
+    """DISP-034: write the chargeback_fee ledger row ATOMICALLY with a
+    ``CHARGEBACK_FEE#{incident}`` idempotency marker (single TransactWrite on the
+    fee bearer's partition), so a redelivery/race never double-charges the fee.
+    Returns the fee cents written (0 if none / already written)."""
+    fee_item = build_chargeback_fee_item(incident, charge, ts=ts)
+    if fee_item is None:
+        return 0
+    incident_id = str(incident.get("incident_id") or "")
+    bearer_pk = fee_item["pk"]  # same partition the fee row lands on
+    marker_sk = _fee_marker_sk(incident_id)
+    marker = {
+        "pk": bearer_pk, "sk": marker_sk,
+        "incident_id": incident_id, "fee_cents": int(fee_item["amount_cents"]),
+        "fee_entry_id": fee_item["entry_id"], "created_at": ts,
+    }
+    table_name = S.billing_table_name
+    from app.core.aws_clients import ddb_transact_client
+    from boto3.dynamodb.types import TypeSerializer
+    _ser = TypeSerializer()
+
+    def _av(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: _ser.serialize(v) for k, v in d.items()}
+
+    try:
+        ddb_transact_client().transact_write_items(TransactItems=[
+            {"Put": {"TableName": table_name, "Item": _av(fee_item)}},
+            {"Put": {"TableName": table_name, "Item": _av(marker),
+                     "ConditionExpression": "attribute_not_exists(sk)"}},
+        ])
+        return int(fee_item["amount_cents"])
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "TransactionCanceledException":
+            # marker already claimed -> fee already written; no double-charge.
+            return 0
+        logger.warning("chargeback fee transact failed incident=%s", incident_id, exc_info=True)
+        return 0
+
+
 # =====================================================================
 # DISP-035 -- LOST / WON / ACCEPTED reconciler
 # =====================================================================
@@ -510,13 +553,7 @@ def _reconcile_lost(incident: Dict[str, Any], charge: Dict[str, Any], payer_anch
             if row and str(row.get("state")) == "held":
                 _set_credit_state(row, "reversed", expect_state="held")
 
-        fee_item = build_chargeback_fee_item(incident, charge, ts=ts)
-        if fee_item is not None:
-            try:
-                T.billing.put_item(Item=fee_item)
-                fee_written = int(fee_item["amount_cents"])
-            except Exception:
-                logger.warning("chargeback fee write failed incident=%s", incident_id, exc_info=True)
+        fee_written = _write_chargeback_fee(incident, charge, ts=ts)
 
     receipt = {
         "incident_id": incident_id, "outcome": outcome,
