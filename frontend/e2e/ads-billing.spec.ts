@@ -275,10 +275,13 @@ test.describe("369 — Deposit API", () => {
   });
 
   test("369.4 Multiple deposits accumulate", async () => {
+    // ADV3-1: a PUBLIC deposit MUST be backed by a real charge — a missing
+    // payment_method_id is a hard 400 (payment_method_required). Supply a PM (as
+    // 369.1 does). Also note the minimum deposit is now $50, so 5000 is the floor.
     const resp = await apiPost(
       alicePage,
       `/ui/ads/accounts/${accountId}/deposit`,
-      { amount_cents: 5000 },
+      { amount_cents: 5000, payment_method_id: "pm_test_002" },
     );
     expect(resp.status()).toBe(200);
     const data = await resp.json();
