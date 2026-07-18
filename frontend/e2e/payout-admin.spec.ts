@@ -27,6 +27,18 @@ const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 // Seed a settled (past-hold) billing credit so Alice has payout balance, and
 // clear any leftover per-user payout sentinel (GAP-0309) so /payouts/request
 // can mint a fresh requested payout for admin-queue tests.
+/**
+ * PAY-20/21 + PAY-12: satisfy the verified-before-any-payout gate (APPROVED KYC +
+ * certified W-9 + a VERIFIED default payout method) so `POST /ui/payouts/request`
+ * is not 403 kyc_required / 400 method_not_verified. Shared with creator-payouts.
+ */
+function seedPayoutGate(userSub: string): void {
+  execSync(`${PYTHON} ${REPO_ROOT}/e2e_payout_gate_seed.py ${userSub}`, {
+    cwd: REPO_ROOT,
+    timeout: 30_000,
+  });
+}
+
 function seedAliceBalanceForPayout(): void {
   const userSub = "e2e_alice@test.local";
   execSync(
@@ -248,6 +260,8 @@ test.describe("Section 221: Admin Queue tab", () => {
     // Seed a requested payout for Alice so the queue is non-empty. Needs
     // balance + a valid amount (>= $10 minimum); seed a settled credit first.
     seedAliceBalanceForPayout();
+    // PAY-20/21 + PAY-12: satisfy the KYC/W-9/verified-method gate.
+    seedPayoutGate("e2e_alice@test.local");
 
     // IMPORTANT: the payout request must be issued as ALICE. `page.request`
     // carries the page's browser-context cookies, so issuing it from the admin
@@ -255,8 +269,9 @@ test.describe("Section 221: Admin Queue tab", () => {
     // mismatch (403) and no payout is created. Use a dedicated Alice page so the
     // request is genuinely authenticated as Alice and lands in the queue.
     const alicePage = await newIdentityPage(browser, ALICE_KEY);
+    // Must be >= the effective $25 minimum (billing_config min_payout_cents override).
     const reqResp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 2000,
+      amount_cents: 3000,
       method: "bank_transfer",
       notes: `admin-test ${TS}`,
     });
