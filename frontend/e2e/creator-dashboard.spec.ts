@@ -105,7 +105,7 @@ def convert(obj):
         return [convert(i) for i in obj]
     return obj
 
-ddb = boto3.resource("dynamodb", region_name="us-east-1", endpoint_url="${DDB_ENDPOINT}")
+ddb = boto3.resource("dynamodb", region_name="us-east-1", endpoint_url="${DDB_ENDPOINT}", aws_access_key_id="test", aws_secret_access_key="test")
 table = ddb.Table("${tableName}")
 item = json.loads(sys.argv[1])
 table.put_item(Item=convert(item))
@@ -120,7 +120,7 @@ print("OK")
 function ddbDelete(tableName: string, key: Record<string, string>) {
   const script = `
 import boto3, json, sys
-ddb = boto3.resource("dynamodb", region_name="us-east-1", endpoint_url="${DDB_ENDPOINT}")
+ddb = boto3.resource("dynamodb", region_name="us-east-1", endpoint_url="${DDB_ENDPOINT}", aws_access_key_id="test", aws_secret_access_key="test")
 table = ddb.Table("${tableName}")
 table.delete_item(Key=json.loads(sys.argv[1]))
 print("OK")
