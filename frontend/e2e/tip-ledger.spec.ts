@@ -326,11 +326,16 @@ test.describe("85. Tip Ledger -- Messages", () => {
     expect(Number(credit!.amount_cents)).toBe(expectedNet(200, credit!));
   });
 
-  test("Tip without payment_method_id still writes ledger entries", async () => {
-    // Alice sends message with attached tip, no PM
+  test("Tip with an explicit payment_method_id records it in ledger meta", async () => {
+    // MON-002 real-charge refactor: a tip carrying an explicit tip_payment_method_id
+    // charges THAT method and records it on the debit meta (meta.payment_method_id).
+    // (The old "no PM -> no meta.payment_method_id" contract no longer holds: when
+    // no PM is passed the charge falls back to the tipper's DEFAULT PM — asserted in
+    // the next test — so the honest assertion here is that the explicit PM is kept.)
+    const noPmMsgId = `tl-explicit-pm-${TS}`;
     const resp = await apiPost(alicePage, ALICE_ID,
       `/messaging/conversations/${dmConvoId}/messages`,
-      { text: `tl-no-pm-${TS}`, tip_amount_cents: 50 },
+      { text: noPmMsgId, tip_amount_cents: 50, tip_payment_method_id: PM_ID },
     );
     expect(resp.ok()).toBe(true);
     const body = await resp.json() as { message_id: string };
@@ -341,15 +346,44 @@ test.describe("85. Tip Ledger -- Messages", () => {
              e.meta?.content_id === body.message_id,
     );
     expect(debit).toBeDefined();
-    // No payment_method_id in meta
-    expect(debit!.meta.payment_method_id).toBeUndefined();
+    expect(debit!.meta.payment_method_id).toBe(PM_ID);
   });
 
-  test("Ledger entry meta contains conversation_id and content_type=message", async () => {
+  test("Attached tip with no explicit PM falls back to the default PM", async () => {
+    // MON-002: with a default PM on file (seeded in beforeAll) an attached tip that
+    // omits tip_payment_method_id charges the DEFAULT method, and the resolved PM id
+    // is stamped on the debit meta — the current real-charge behavior.
+    const resp = await apiPost(alicePage, ALICE_ID,
+      `/messaging/conversations/${dmConvoId}/messages`,
+      { text: `tl-default-pm-${TS}`, tip_amount_cents: 60 },
+    );
+    expect(resp.ok()).toBe(true);
+    const body = await resp.json() as { message_id: string };
+
     const aliceLedger = queryLedger(ALICE_ID);
     const debit = aliceLedger.find(
       (e) => e.reason === "Tip: message" && e.type === "debit" &&
-             e.meta?.content_id === attachedTipMsgId,
+             e.meta?.content_id === body.message_id,
+    );
+    expect(debit).toBeDefined();
+    // Fell back to Alice's default (the beforeAll-seeded PM_ID).
+    expect(debit!.meta.payment_method_id).toBe(PM_ID);
+  });
+
+  test("Ledger entry meta contains conversation_id and content_type=message", async () => {
+    // Self-contained: send a fresh attached tip and assert its debit meta shape
+    // (was fragile when it depended on a message id set by an earlier test).
+    const resp = await apiPost(alicePage, ALICE_ID,
+      `/messaging/conversations/${dmConvoId}/messages`,
+      { text: `tl-meta-${TS}`, tip_amount_cents: 100, tip_payment_method_id: PM_ID },
+    );
+    expect(resp.ok()).toBe(true);
+    const msgId = ((await resp.json()) as { message_id: string }).message_id;
+
+    const aliceLedger = queryLedger(ALICE_ID);
+    const debit = aliceLedger.find(
+      (e) => e.reason === "Tip: message" && e.type === "debit" &&
+             e.meta?.content_id === msgId,
     );
     expect(debit).toBeDefined();
     expect(debit!.meta.conversation_id).toBe(dmConvoId);
@@ -360,16 +394,23 @@ test.describe("85. Tip Ledger -- Messages", () => {
   });
 
   test("Debit and credit entries have matching amount and currency", async () => {
+    // Self-contained: send a fresh attached tip, then match the paired debit/credit.
+    const resp = await apiPost(alicePage, ALICE_ID,
+      `/messaging/conversations/${dmConvoId}/messages`,
+      { text: `tl-match-${TS}`, tip_amount_cents: 120, tip_payment_method_id: PM_ID },
+    );
+    expect(resp.ok()).toBe(true);
+    const msgId = ((await resp.json()) as { message_id: string }).message_id;
+
     const aliceLedger = queryLedger(ALICE_ID);
     const bobLedger = queryLedger(BOB_ID);
-
     const debit = aliceLedger.find(
       (e) => e.reason === "Tip: message" && e.type === "debit" &&
-             e.meta?.content_id === attachedTipMsgId,
+             e.meta?.content_id === msgId,
     );
     const credit = bobLedger.find(
       (e) => e.reason === "Tip: message" && e.type === "credit" &&
-             e.meta?.content_id === attachedTipMsgId,
+             e.meta?.content_id === msgId,
     );
     expect(debit).toBeDefined();
     expect(credit).toBeDefined();
