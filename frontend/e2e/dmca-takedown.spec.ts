@@ -14,6 +14,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -79,6 +80,21 @@ async function newIdentityPage(browser: Browser, sessionKey: string): Promise<Pa
   return page;
 }
 
+/**
+ * Test isolation (MOD/DMCA): this spec accumulates upheld DMCA claims against Bob
+ * and, once the strike threshold is crossed, the policy engine bans Bob in
+ * account_state — which then 403s every subsequent POST /posts as Bob (in this
+ * file AND in later specs like post-hide). Reset Bob to a clean slate up front:
+ * clear the account_state ban + purge prior claims so the strike count restarts
+ * from 0. Idempotent; delegates to the shared e2e_moderation_reset.py.
+ */
+function resetModerationState(userSub: string): void {
+  execSync(`${PYTHON} ${REPO_ROOT}/e2e_moderation_reset.py ${userSub}`, {
+    cwd: REPO_ROOT,
+    timeout: 30_000,
+  });
+}
+
 async function apiPost(page: Page, sessionKey: string, path: string, body: object) {
   const sessions = getSessions();
   return page.request.post(`${API}${path}`, {
@@ -134,6 +150,9 @@ test.describe("95 · DMCA Claim Submission API", () => {
   let postId: string;
 
   test.beforeAll(async ({ browser }) => {
+    // Clear any leaked ban + accumulated strikes so Bob can post (test isolation).
+    resetModerationState(BOB_SUB);
+
     alicePage = await newIdentityPage(browser, ALICE_KEY);
     bobPage   = await newIdentityPage(browser, BOB_KEY);
 
@@ -213,6 +232,9 @@ test.describe("96 · DMCA Counter-Notice API", () => {
   let claimId: string;
 
   test.beforeAll(async ({ browser }) => {
+    // Test isolation: clear leaked ban + accumulated strikes so Bob can post.
+    resetModerationState(BOB_SUB);
+
     alicePage = await newIdentityPage(browser, ALICE_KEY);
     bobPage   = await newIdentityPage(browser, BOB_KEY);
 
@@ -330,6 +352,9 @@ test.describe("97 · Admin DMCA Dashboard API", () => {
   let claimId: string;
 
   test.beforeAll(async ({ browser }) => {
+    // Test isolation: clear leaked ban + accumulated strikes so Bob can post.
+    resetModerationState(BOB_SUB);
+
     rootPage  = await newIdentityPage(browser, ROOT_KEY);
     alicePage = await newIdentityPage(browser, ALICE_KEY);
     bobPage   = await newIdentityPage(browser, BOB_KEY);
@@ -435,6 +460,9 @@ test.describe("98 · Repeat Infringer Policy", () => {
   let rootPage: Page;
 
   test.beforeAll(async ({ browser }) => {
+    // Test isolation: clear leaked ban + accumulated strikes so Bob can post.
+    resetModerationState(BOB_SUB);
+
     alicePage = await newIdentityPage(browser, ALICE_KEY);
     bobPage   = await newIdentityPage(browser, BOB_KEY);
     rootPage  = await newIdentityPage(browser, ROOT_KEY);
