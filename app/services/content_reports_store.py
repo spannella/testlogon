@@ -4,27 +4,27 @@ import time
 import uuid
 from typing import Any, Iterable
 
-import boto3
-
-from app.core.settings import S
-
-
-def _make_ddb_client():
-    return boto3.client(
-        "dynamodb",
-        endpoint_url=S.ddb_endpoint_url or None,
-        region_name=S.aws_region or "us-east-1",
-    )
-
-
-_ddb_client = None
+from app.core.settings import S  # noqa: F401  (kept for callers/back-compat)
 
 
 def _get_ddb_client():
-    global _ddb_client
-    if _ddb_client is None:
-        _ddb_client = _make_ddb_client()
-    return _ddb_client
+    """Low-level DynamoDB client for transact_write_items.
+
+    Use the canonical ``aws_clients.ddb_transact_client()``, which inherits the
+    endpoint / region / FROZEN CREDENTIALS from the app's live dynamodb resource.
+    The previous bespoke ``boto3.client(endpoint_url=S.ddb_endpoint_url, ...)`` set
+    NO explicit credentials, so under DDB-Local (which is NOT run with -sharedDb
+    here) the transact landed in a DIFFERENT (access_key, region) table namespace
+    than every resource-based read/query in the same request — so the item existed
+    for reads but transact_write_items raised ResourceNotFoundException
+    ("Cannot do operations on a non-existent table"), surfacing as a spurious 422
+    "invalid report payload" on every moderation report create. Delegating to the
+    shared transact client keeps writes in the SAME namespace as reads on both
+    DDB-Local and real AWS.
+    """
+    from app.core.aws_clients import ddb_transact_client
+
+    return ddb_transact_client()
 
 
 def create_content_report(
