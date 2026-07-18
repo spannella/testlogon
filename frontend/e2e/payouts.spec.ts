@@ -275,6 +275,19 @@ function resetAndSeed(userSub: string): void {
   seedOldCredits(userSub, 2, 5000); // +$100 settled, past-hold
 }
 
+/**
+ * PAY-20/21: satisfy the verified-before-any-payout gate (APPROVED KYC case +
+ * certified W-9). Without this, POST /ui/payouts/request is 403 kyc_required.
+ * Delegates to the shared e2e_payout_gate_seed.py (same helper the
+ * creator-payouts / payout-admin specs use).
+ */
+function seedPayoutGate(userSub: string): void {
+  execSync(`${PYTHON} ${REPO_ROOT}/e2e_payout_gate_seed.py ${userSub}`, {
+    cwd: REPO_ROOT,
+    timeout: 30_000,
+  });
+}
+
 // =============================================================================
 // Test setup
 // =============================================================================
@@ -284,6 +297,10 @@ let rootPage: Page;
 
 test.beforeAll(async ({ browser }) => {
   ensurePayoutsTable();
+
+  // PAY-20/21: satisfy the KYC/W-9 payout gate so requests are not 403'd.
+  seedPayoutGate(ALICE_ID);
+
   cleanupActivePayouts(ALICE_ID);
 
   // Seed billing ledger credits for Alice (5 entries x 5000 cents = $250)
@@ -321,7 +338,7 @@ test.describe("115 - Payout Balance + Request API", () => {
     resetAndSeed(ALICE_ID);
 
     const resp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
-      amount_cents: 2000,
+      amount_cents: 3000,
       method: "bank_transfer",
       notes: `E2E payout ${TS}`,
     });
@@ -329,14 +346,14 @@ test.describe("115 - Payout Balance + Request API", () => {
     const data = await resp.json();
     expect(data.ok).toBe(true);
     expect(data.payout_id).toBeTruthy();
-    expect(data.amount_cents).toBe(2000);
+    expect(data.amount_cents).toBe(3000);
     expect(data.status).toBe("requested");
   });
 
   test("115.3 duplicate payout request returns 409", async () => {
     // There should be an active payout from 115.2
     const resp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
-      amount_cents: 1000,
+      amount_cents: 3000,
       method: "bank_transfer",
     });
     expect(resp.status()).toBe(409);
@@ -415,7 +432,7 @@ test.describe("116 - Admin Payout Workflow API", () => {
     // Create another payout to reject
     resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
-      amount_cents: 2000,
+      amount_cents: 3000,
       method: "paypal",
     });
     expect(createResp.status()).toBe(201);
@@ -451,7 +468,7 @@ test.describe("117 - Payout State Transitions", () => {
   test("117.1 cancel payout changes status to cancelled", async () => {
     resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
-      amount_cents: 1500,
+      amount_cents: 3000,
       method: "bank_transfer",
     });
     expect(createResp.status()).toBe(201);
@@ -467,7 +484,7 @@ test.describe("117 - Payout State Transitions", () => {
   test("117.2 cannot approve a cancelled payout", async () => {
     resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
-      amount_cents: 1500,
+      amount_cents: 3000,
       method: "bank_transfer",
     });
     expect(createResp.status()).toBe(201);
@@ -484,7 +501,7 @@ test.describe("117 - Payout State Transitions", () => {
   test("117.3 cannot cancel a completed payout", async () => {
     resetAndSeed(ALICE_ID);
     const createResp = await apiPost(alicePage, "alice", "/ui/payouts/request", {
-      amount_cents: 1500,
+      amount_cents: 3000,
       method: "bank_transfer",
     });
     expect(createResp.status()).toBe(201);
