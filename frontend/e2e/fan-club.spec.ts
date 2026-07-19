@@ -98,7 +98,7 @@ if env.exists():
         if line and not line.startswith('#') and '=' in line:
             k, v = line.split('=', 1)
             os.environ.setdefault(k.strip(), v.strip())
-ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('AWS_ENDPOINT_URL','http://localhost:4566'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 tbl = ddb.Table('billing')
 pk = 'USER#${userSub}'
 pm_id = '${pmId}'
