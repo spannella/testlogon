@@ -390,8 +390,15 @@ test.describe("110. Font Size", () => {
   test("110.3 Persists after reload", async () => {
     await page.reload({ waitUntil: "load" });
     await expect(page.getByText("Customization").first()).toBeVisible({ timeout: 10_000 });
-    const fontSize = await page.evaluate(() => document.documentElement.style.fontSize);
-    expect(fontSize).toBe("18px");
+    // ThemeProvider applies the inline font-size in a useEffect that runs AFTER
+    // the store rehydrates (localStorage) and loadServerPreferences() settles, so
+    // poll rather than snapshot immediately post-reload.
+    await expect
+      .poll(
+        async () => page.evaluate(() => document.documentElement.style.fontSize),
+        { timeout: 8000 },
+      )
+      .toBe("18px");
   });
 
   test("110.4 Small (14px) is smaller than default", async () => {
