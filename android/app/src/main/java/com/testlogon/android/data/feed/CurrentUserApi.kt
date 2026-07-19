@@ -5,6 +5,7 @@ import com.squareup.moshi.JsonClass
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
@@ -36,6 +37,10 @@ class CurrentUserRepository @Inject constructor(
     private val api: CurrentUserApi,
     private val errorParser: ApiErrorParser,
 ) {
+    // No @IoDispatcher qualifier exists in this project; settable so JVM unit tests can inject a test
+    // dispatcher (the default Dispatchers.IO escapes runTest's scheduler and can resume after teardown).
+    var io: CoroutineDispatcher = Dispatchers.IO
+
     @Volatile
     private var cached: String? = null
 
@@ -54,7 +59,7 @@ class CurrentUserRepository @Inject constructor(
     }
 
     /** The signed-in user's `user_sub`, cached after the first successful lookup. */
-    suspend fun currentUserSub(): ApiResult<String> = withContext(Dispatchers.IO) {
+    suspend fun currentUserSub(): ApiResult<String> = withContext(io) {
         cached?.let { return@withContext ApiResult.Success(it) }
         try {
             val sub = api.me().userSub?.takeIf { it.isNotBlank() }
@@ -81,7 +86,7 @@ class CurrentUserRepository @Inject constructor(
      * branch the USER help experience vs the ADMIN helpdesk/moderation queue. On any failure this returns a
      * Failure so the caller can degrade to the (safe) USER view.
      */
-    suspend fun isAdmin(): ApiResult<Boolean> = withContext(Dispatchers.IO) {
+    suspend fun isAdmin(): ApiResult<Boolean> = withContext(io) {
         cachedAdmin?.let { return@withContext ApiResult.Success(it) }
         try {
             val me = api.me()

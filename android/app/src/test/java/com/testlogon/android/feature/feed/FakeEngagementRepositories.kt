@@ -480,4 +480,8 @@ fun fakeCurrentUserRepository(sub: String? = "me") =
         errorParser = com.testlogon.android.core.network.error.ApiErrorParser(
             com.squareup.moshi.Moshi.Builder().build(),
         ),
-    )
+    ).apply {
+        // Run the internal withContext inline on the test thread; the real Dispatchers.IO escapes
+        // runTest's scheduler and can resume after teardown -> CoroutinesInternalError (flaky).
+        io = kotlinx.coroutines.Dispatchers.Unconfined
+    }

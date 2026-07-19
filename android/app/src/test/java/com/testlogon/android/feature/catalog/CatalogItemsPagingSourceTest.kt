@@ -215,7 +215,7 @@ fun fakeCatalogCurrentUserRepository(sub: String? = "me") =
         errorParser = com.testlogon.android.core.network.error.ApiErrorParser(
             com.squareup.moshi.Moshi.Builder().build(),
         ),
-    )
+    ).apply { io = kotlinx.coroutines.Dispatchers.Unconfined }
 
 /** P2 — no-op [AdTrackRepository] for the catalog VMs (shop-ad beacons are best-effort). */
 class FakeCatalogAdTrackRepository : com.testlogon.android.data.ads.AdTrackRepository {

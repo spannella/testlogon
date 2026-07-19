@@ -101,16 +101,21 @@ class FeedInteractionViewModelTest {
     }
 
     @Test
-    fun ensurePollState_alreadyVoted_seedsResults_noNetwork() = runTest {
+    fun ensurePollState_alreadyVoted_openPoll_seedsIdle_stillInteractive_noNetwork() = runTest {
+        // Write-in / multi-select program (AND-179): an OPEN poll stays INTERACTIVE (Idle) even after the
+        // viewer already voted, so multi-select keeps toggling and single questions can change their vote.
+        // (A CLOSED poll opens read-only Results — covered by ensurePollState_closedPoll_seedsResults.)
         val polls = FakePollRepository()
         val vm = vm(feedRepo(pollPost("p1", voted = true)), polls = polls)
         vm.ensurePollState(pollPost("p1", voted = true))
-        assertTrue(vm.pollUiStates.value["p1"] is PollCardState.Results)
+        assertTrue(vm.pollUiStates.value["p1"] is PollCardState.Idle)
         assertTrue(polls.voteCalls.isEmpty())
     }
 
     @Test
-    fun onPollOptionSelected_success_movesToResultsWithMergedCounts() = runTest {
+    fun onPollOptionSelected_success_staysInteractive_withMergedCounts() = runTest {
+        // On a successful vote the OPEN poll stays Idle (interactive) with the server-merged counts + my
+        // vote applied — it no longer collapses to a read-only Results card.
         val polls = FakePollRepository(voteResult = { _, q, o ->
             ApiResult.Success(PollVoteResult(q, mapOf("o1" to 1, "o2" to 3), totalVotes = 4, myVoteOptionIds = listOf(o)))
         })
@@ -119,8 +124,8 @@ class FeedInteractionViewModelTest {
         vm.onPollOptionSelected("p1", "q1", "o2")
         advanceUntilIdle()
         val s = vm.pollUiStates.value["p1"]
-        assertTrue(s is PollCardState.Results)
-        val q = (s as PollCardState.Results).poll.questions.single()
+        assertTrue(s is PollCardState.Idle)
+        val q = (s as PollCardState.Idle).poll.questions.single()
         assertTrue(q.isOptionSelected("o2"))
         assertEquals(4, s.poll.totalVotes)
     }
