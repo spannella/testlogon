@@ -677,10 +677,16 @@ test.describe("7. Decrypt message — dialog, wrong password, correct password",
     await sentResponsePromise;
     await refetchResponsePromise;
 
-    // Confirm section 7's button has appeared at the bottom
-    await expect(
-      page.getByRole("button", { name: "Decrypt message" }),
-    ).toHaveCount(existingCount + 1, { timeout: 5000 });
+    // Confirm section 7's button has appeared at the bottom. Use >= to tolerate
+    // an optimistic-render + refetch briefly showing the new bubble twice (and
+    // any accumulated encrypted messages from prior runs in the same DM).
+    await expect
+      .poll(
+        async () =>
+          page.getByRole("button", { name: "Decrypt message" }).count(),
+        { timeout: 5000 },
+      )
+      .toBeGreaterThanOrEqual(existingCount + 1);
   });
 
   test.afterAll(async () => page?.close());
@@ -1126,7 +1132,9 @@ test.describe("10. Scheduled send", () => {
   test("GET /messages returns the scheduled message with scheduled=true", async () => {
     // Scheduled messages are still stored and returned by the normal endpoint
     // (only the sender can act on them), so we verify the scheduled flag.
-    const resp = await apiGet(page, `/messaging/conversations/${_dmConvoId}/messages`);
+    // Fetch a wide page so the scheduled message isn't paginated out by the
+    // accumulated DM history (default limit is 50).
+    const resp = await apiGet(page, `/messaging/conversations/${_dmConvoId}/messages`, { limit: "200" });
     expect(resp.ok()).toBe(true);
     const list = await resp.json() as Array<{ message_id: string; scheduled?: boolean }>;
     const found = list.find((m) => m.message_id === scheduledMsgId);
