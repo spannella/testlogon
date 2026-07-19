@@ -20,6 +20,7 @@
  * VideoDetailPage can render it.  All tests share one seeded video_id.
  */
 
+import { tmpdir } from "os";
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as fs from "fs";
@@ -92,7 +93,7 @@ function apiPatch(page: Page, path: string, body: object, identity = "alice") {
 
 async function uploadTestImage(page: Page, identity = "alice"): Promise<string> {
   const session = getAdminSessions()[identity];
-  const pngPath = `/tmp/e2e_vid_${Date.now()}.png`;
+  const pngPath = `${tmpdir()}/e2e_vid_${Date.now()}.png`;
   execSync(
     `${PYTHON} -c "
 import struct, zlib
@@ -741,7 +742,7 @@ test.describe("8. VideoDetailPage UI affordances", () => {
   });
 
   test("uploading an image shows video-comment-image-preview", async ({ browser }) => {
-    const pngPath = `/tmp/vid_ui_prev_${Date.now()}.png`;
+    const pngPath = `${tmpdir()}/vid_ui_prev_${Date.now()}.png`;
     execSync(
       `${PYTHON} -c "
 import struct, zlib
@@ -774,7 +775,7 @@ write_png('${pngPath}')
   });
 
   test("submitting image comment renders video-comment-image", async ({ browser }) => {
-    const pngPath = `/tmp/vid_img_sub_${Date.now()}.png`;
+    const pngPath = `${tmpdir()}/vid_img_sub_${Date.now()}.png`;
     execSync(
       `${PYTHON} -c "
 import struct, zlib
