@@ -64,9 +64,14 @@ class FakePurchasesRepository(
             id: String = "txn_1",
             shipping: com.testlogon.android.data.purchases.PurchaseShipping? = null,
             cartId: String? = null,
+            // ECOMX selldash-E3: the E1 order-header fulfilment/order status. With no shipping
+            // sub-object these drive the tracking gate (hasShipmentEvidence).
+            fulfillmentStatus: String? = null,
+            orderStatus: String? = null,
+            status: OrderStatus = OrderStatus.Completed,
         ) = PurchaseDetail(
             id = id,
-            status = OrderStatus.Completed,
+            status = status,
             money = Money(BigDecimal("49.57"), "USD"),
             createdAtEpochSec = 1748451851,
             updatedAtEpochSec = 1748455000,
@@ -75,6 +80,8 @@ class FakePurchasesRepository(
             description = "Widget Pro",
             shipping = shipping,
             cartId = cartId,
+            fulfillmentStatus = fulfillmentStatus,
+            orderStatus = orderStatus,
         )
     }
 }

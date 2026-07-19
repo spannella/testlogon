@@ -98,6 +98,22 @@ data class PurchaseDetail(
         get() = status != OrderStatus.Completed &&
             (fulfillmentStatus in setOf("shipped", "out_for_delivery", "delivered", "partially_shipped") ||
                 orderStatus in setOf("shipped", "completed"))
+
+    /**
+     * ECOMX selldash-E3 — true when this order has a real shipment to track. The txn-detail `shipping`
+     * sub-object is the LEGACY SHP shape and is never populated by the seller-ship (ship-group) flow, so
+     * [PurchaseShipping.hasShipment] alone is always false for real orders. The authoritative signal is
+     * the order-lifecycle header state ([fulfillmentStatus]/[orderStatus]), which E1 surfaces. When this
+     * is true the detail VM GETs `.../tracking` (the E1/ECOMX-E3 endpoint that aggregates the buyer's own
+     * ship-group tracking) so the buyer sees the real carrier/number/status the seller entered — WITHOUT
+     * needing the ship_group_id. Money-only txns (no fulfilment) stay NotShipped and skip the call.
+     */
+    val hasShipmentEvidence: Boolean
+        get() = shipping?.hasShipment == true ||
+            fulfillmentStatus in setOf(
+                "shipped", "partially_shipped", "out_for_delivery", "delivered",
+            ) ||
+            orderStatus in setOf("shipped", "delivered", "completed")
 }
 
 // ---- Mappers (DTO -> domain) ----

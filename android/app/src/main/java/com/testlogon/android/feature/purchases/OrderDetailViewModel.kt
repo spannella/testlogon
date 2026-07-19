@@ -151,12 +151,17 @@ class OrderDetailViewModel @Inject constructor(
     }
 
     /**
-     * Resolves the embedded AND-215 tracking state. When the transaction has no shipping at all, there
-     * is nothing to track -> NotShipped. Otherwise GET tracking and reduce via the AND-215 pure reducer
-     * so the embedded TrackingSection renders identically to the standalone route.
+     * Resolves the embedded AND-215 tracking state. When the order shows no shipment at all there is
+     * nothing to track -> NotShipped. Otherwise GET tracking and reduce via the AND-215 pure reducer so
+     * the embedded TrackingSection renders identically to the standalone route.
+     *
+     * ECOMX selldash-E3: the gate now keys off [PurchaseDetail.hasShipmentEvidence] (the E1 order-header
+     * fulfilment/order status), NOT the always-empty legacy `shipping` sub-object. The `.../tracking`
+     * endpoint (E1 / ECOMX-E3) aggregates the buyer's OWN ship-group tracking, so once the order shipped
+     * the buyer sees the real carrier/number/status/timeline the seller entered — without a ship_group_id.
      */
     private suspend fun resolveTracking(order: PurchaseDetail): TrackingUiState {
-        if (order.shipping?.hasShipment != true) return TrackingUiState.NotShipped
+        if (!order.hasShipmentEvidence) return TrackingUiState.NotShipped
         return TrackingViewModel.reduce(trackingRepository.tracking(txnId))
     }
 
