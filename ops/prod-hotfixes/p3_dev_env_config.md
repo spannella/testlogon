@@ -12,6 +12,7 @@ green. They are NOT product bugs — the app correctly refuses when unconfigured
 - WS_TOKEN_SECRET=<>=32-char secret>               # else /ui/ws_token 500 RuntimeError('WS_TOKEN_SECRET not set')
 - FILEMGR_S3_MOUNTS_ENABLED=true                    # else GET /v1/fs/mounts (S3 handler) 404 'not found'
 - FILEMGR_S3_MOUNTS_WRITE_ENABLED=true
+- FILEMGR_GOOGLE_DRIVE_MOUNTS_ENABLED=true         # google-drive-mount file listing (google-drive-mock 73.x)
 
 (The CI parity flag file scripts/ci-e2e-feature-flags.env sets
 FILEMGR_SFTP_MOUNTS_ENABLED=true but NOT the table-name / credentials-table /
