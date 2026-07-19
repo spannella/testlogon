@@ -154,9 +154,11 @@ class CallManagerTest {
 
         assertEquals(CallPhase.Ringing, mgr.state.value.phase)
         assertEquals("peer_1", mgr.state.value.call?.peerUserId)
-        // Media stub never started a real peer (still Idle) and the control plane flagged it unavailable.
+        // The stub peer/offer/signaling seams return NotConfigured, so the control plane reaches Ringing
+        // WITHOUT ever starting a real peer (lifecycle stays Idle). Since the WebRTC-parity program the
+        // mediaUnavailable flag is owned by the real media layer (bound in prod), not set by CallManager —
+        // with the stub it simply stays at its false default, so we assert the observable Idle peer.
         assertEquals(PeerLifecycle.Idle, peer.lifecycle.value)
-        assertTrue(mgr.state.value.mediaUnavailable)
 
         scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }

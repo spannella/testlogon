@@ -131,8 +131,10 @@ class OutgoingCallViewModelTest {
 
         val state = viewModel.uiState.value
         assertEquals("Alex", state.peerName)
+        // The eager placeCall reaches RINGING via the control plane. Since the WebRTC-parity program the
+        // mediaUnavailable flag is owned by the real media layer (bound in prod); with the stub media seam
+        // it stays false, so the assertion here is on the observable RINGING phase, not the flag.
         assertEquals(CallUiPhase.RINGING, state.phase)
-        assertTrue(state.mediaUnavailable)
 
         job.cancel()
         scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()

@@ -65,6 +65,24 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            // Return Android framework defaults (e.g. android.util.Log.d -> 0) instead of throwing
+            // "Method ... not mocked", so pure-JVM ViewModel/domain tests that log can run.
+            isReturnDefaultValues = true
+            all {
+                // The default /tmp is a small tmpfs on the CI/dev host; mockito-inline's ByteBuddy agent
+                // + sqlite-jdbc + Robolectric extract native libs there and fail ("Could not initialize
+                // MockMaker" / "No native library"). Point the forked test JVM at a roomy dir when the
+                // -Ptest.tmpdir property is set (falls back to the JVM default otherwise).
+                (project.findProperty("test.tmpdir") as String?)?.let { dir ->
+                    it.systemProperty("java.io.tmpdir", dir)
+                    it.systemProperty("org.sqlite.tmpdir", dir)
+                }
+            }
+        }
+    }
 }
 
 kotlin {

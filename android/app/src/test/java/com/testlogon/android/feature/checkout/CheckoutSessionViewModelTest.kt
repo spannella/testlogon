@@ -116,9 +116,11 @@ class CheckoutSessionViewModelTest {
     fun placeOrder_completesPurchase_viaReliableCartEndpoint() = runTest {
         // FIX (ecom residual #1): "Place order" now completes via cartRepository.purchase and emits
         // PurchaseComplete with the purchase txn id (routed to order confirmation by the nav layer).
+        // ECOMX-40 (B3): a shipping address must be selected first or the VM gates on AddressRequired.
         val checkout = FakeCheckoutRepository().apply { result = ApiResult.Success(session()) }
         val model = vm(checkout)
         advanceUntilIdle()
+        model.onAddressSelected("addr_1")
 
         val events = mutableListOf<CheckoutEvent>()
         val job = launch { model.events.collect { events += it } }
@@ -130,6 +132,24 @@ class CheckoutSessionViewModelTest {
         assertTrue(evt is CheckoutEvent.PurchaseComplete)
         assertEquals("txn_paid", (evt as CheckoutEvent.PurchaseComplete).txnId)
         assertEquals(1, checkout.createCalls) // only the session-creation call; no billing-stub charge
+        job.cancel()
+    }
+
+    @Test
+    fun placeOrder_withoutAddress_gatesOnAddressRequired_noPurchase() = runTest {
+        // ECOMX-40 (B3): placing an order with no shipping address selected must NOT charge — it emits
+        // AddressRequired so the UI routes to the address step.
+        val checkout = FakeCheckoutRepository().apply { result = ApiResult.Success(session()) }
+        val model = vm(checkout)
+        advanceUntilIdle()
+
+        val events = mutableListOf<CheckoutEvent>()
+        val job = launch { model.events.collect { events += it } }
+
+        model.placeOrder()
+        advanceUntilIdle()
+
+        assertTrue(events.single() is CheckoutEvent.AddressRequired)
         job.cancel()
     }
 }
@@ -168,7 +188,32 @@ private class FakeCartRepoForCheckout : CartRepository {
     override suspend fun removeLine(sku: String): ApiResult<FullCart> =
         ApiResult.Success(FullCart.empty("cart_1"))
     override suspend fun clearCart(): ApiResult<OkRespDto> = ApiResult.Success(OkRespDto(ok = true))
-    // purchase()/buyNowInStream() have interface default bodies (real endpoints); the checkout-creation
-    // flow under test never calls them, so the fake inherits the defaults rather than re-declaring the
-    // grown (adClickId/broadcastSessionId/hostId) signature.
+
+    // "Place order" completes via cartRepository.purchase (ecom residual #1); the signature grew
+    // adClickId / broadcastSessionId / hostId / addressId / shippingMethod. Return the paid txn so the
+    // VM emits PurchaseComplete("txn_paid").
+    var lastPurchase: Pair<String, String>? = null
+    override suspend fun purchase(
+        cartId: String,
+        idempotencyKey: String,
+        promoCode: String?,
+        promoCodeId: String?,
+        adClickId: String?,
+        broadcastSessionId: String?,
+        hostId: String?,
+        addressId: String?,
+        shippingMethod: String?,
+    ): ApiResult<com.testlogon.android.data.cart.CartPurchaseResult> {
+        lastPurchase = cartId to idempotencyKey
+        return ApiResult.Success(
+            com.testlogon.android.data.cart.CartPurchaseResult(
+                cartId = cartId,
+                orderId = "ord_paid",
+                purchaseTxnId = "txn_paid",
+                purchasedTotalCents = 4498,
+                currency = "USD",
+                discountCents = 0,
+            ),
+        )
+    }
 }
