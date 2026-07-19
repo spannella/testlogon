@@ -875,8 +875,10 @@ class MessagingRepositoryTest {
         val r = repo().sendCountdown("c1", "cid1", CountdownDraft(title = "Launch", targetEpochSeconds = 1780000000))
 
         assertTrue(r is ApiResult.Success)
-        val media = (r as ApiResult.Success).data.media as MessageMedia.Countdown
-        assertEquals(1780000000L, media.targetEpochSeconds)
+        // The countdown moved off .media onto the transient .countdown field (MessageCountdown); the
+        // standalone MessageMedia.Countdown is legacy, so .media is None now.
+        val countdown = (r as ApiResult.Success).data.countdown!!
+        assertEquals(1780000000L, countdown.targetEpochSeconds)
         assertEquals("Launch", api.sendCountdownCalls.single().second.title)
         assertNull(outboxDao.findById("cid1")) // reconciled
         assertEquals("msg_cd", messageDao.findById("msg_cd")?.messageId)
@@ -1155,7 +1157,8 @@ class MessagingRepositoryTest {
         val result = repo().searchInConversation("conv_1", "  deploy  ")
         assertTrue(result is ApiResult.Success)
         val matches = (result as ApiResult.Success).data
-        assertEquals(listOf("m1", "m1", "m2"), matches.map { it.messageId })
+        // AND-151: sorted MOST-RECENT first (created_at DESCENDING) — m2 (200) leads, then m1's (100) two.
+        assertEquals(listOf("m2", "m1", "m1"), matches.map { it.messageId })
         val (id, q, limit) = api.searchInConversationCalls.single()
         assertEquals("conv_1", id)
         assertEquals("deploy", q) // trimmed

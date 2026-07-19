@@ -19,10 +19,12 @@ class PaidMessageMapperTest {
         val msg = dto("countdown") {
             copy(countdownTitle = "Launch", targetDatetime = 1780000000, associatedEventType = "custom")
         }.toDomain()
-        val media = msg.media as MessageMedia.Countdown
-        assertEquals("Launch", media.title)
-        assertEquals(1780000000L, media.targetEpochSeconds)
-        assertEquals(AssociatedEventType.CUSTOM, media.associatedEventType)
+        // The countdown now maps onto the transient .countdown field (MessageCountdown), not the legacy
+        // standalone MessageMedia.Countdown (so .media is None). associated_event_type is no longer part of
+        // the countdown domain — the raw-token mapping is covered by the toAssociatedEventType() test below.
+        val countdown = msg.countdown!!
+        assertEquals("Launch", countdown.title)
+        assertEquals(1780000000L, countdown.targetEpochSeconds)
     }
 
     @Test

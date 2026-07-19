@@ -27,15 +27,16 @@ class MessageSearchTest {
     }
 
     @Test
-    fun flatten_sortsByCreatedAtThenIdThenOccurrence() {
+    fun flatten_sortsByCreatedAtDescending_thenOccurrence() {
         val dtos = listOf(
             msg("m2", "deploy", createdAt = 200),
             msg("m1", "deploy and deploy", createdAt = 100),
         )
         val matches = dtos.toSearchMatches("deploy")
-        // m1 (older) first, both occurrences, then m2.
-        assertEquals(listOf("m1", "m1", "m2"), matches.map { it.messageId })
-        assertEquals(listOf(0, 1, 0), matches.map { it.occurrenceIndex })
+        // AND-151: MOST-RECENT first (created_at DESCENDING), then per-message occurrenceIndex. So m2
+        // (newer, 200) leads, then m1's (older, 100) two occurrences in order.
+        assertEquals(listOf("m2", "m1", "m1"), matches.map { it.messageId })
+        assertEquals(listOf(0, 0, 1), matches.map { it.occurrenceIndex })
     }
 
     @Test

@@ -1,5 +1,7 @@
 package com.testlogon.android.data.messaging.group
 
+import com.testlogon.android.testutil.testMoshi
+
 import com.squareup.moshi.Moshi
 import com.testlogon.android.core.data.messaging.ConversationDao
 import com.testlogon.android.core.data.messaging.ConversationEntity
@@ -34,7 +36,7 @@ class GroupRepositoryContractTest {
     @get:Rule
     val backend = MockBackendRule()
 
-    private val moshi: Moshi = Moshi.Builder().build()
+    private val moshi: Moshi = testMoshi()
     private val conversationDao = FakeConversationDao()
     private val participantDao = FakeParticipantDao()
     private val auth = FakeAuthStateStore()
@@ -99,10 +101,10 @@ class GroupRepositoryContractTest {
         backend.enqueue(
             Fixtures.okBody(
                 """
-                {"participants":[
+                [
                   {"user_id":"usr_self","role":"admin","status":"active","joined_at":1,"display_name":"Me"},
                   {"user_id":"u2","role":"member","status":"active","joined_at":2,"display_name":"Bri"}
-                ]}
+                ]
                 """.trimIndent(),
             ),
         )
@@ -127,9 +129,9 @@ class GroupRepositoryContractTest {
         // Follow-up refresh: prefer /participants GET.
         backend.enqueue(
             Fixtures.okBody(
-                """{"participants":[{"user_id":"usr_self","role":"admin","status":"active"},
+                """[{"user_id":"usr_self","role":"admin","status":"active"},
                    {"user_id":"u7","role":"member","status":"active"},
-                   {"user_id":"u8","role":"member","status":"active"}]}""",
+                   {"user_id":"u8","role":"member","status":"active"}]""",
             ),
         )
         val result = repo().addParticipants("conv_1", listOf("u7", "u8"))

@@ -42,16 +42,22 @@ class PaymentRedirectRepositoryTest {
     }
 
     @Test
-    fun createRedirectSession_withStub_isNotConfigured_andNeverHitsNetwork() = runTest {
+    fun createRedirectSession_withStub_debugBypass_authorizesBlankPm_andReachesServer() = runTest {
+        // The StubBillingAuthorizer now ships a DEV/DEMO bypass: in DEBUG builds (unit tests run debug) it
+        // authorizes with a BLANK payment_method_id so on-device redirect checkouts work without a real
+        // vendor. So createRedirectSession is NO LONGER short-circuited to NotConfigured — it authorizes
+        // and POSTs to the backend (which mints the hosted session). Release builds keep NotConfigured.
+        backend.enqueue(
+            Fixtures.okBody("""{"session_id":"cs_test_1","url":"https://checkout.example/c/pay/cs_test_1"}"""),
+        )
         val result = repo(StubBillingAuthorizer()).createRedirectSession(
-            provider = RedirectProvider.PAYPAL,
+            provider = RedirectProvider.CHECKOUT,
             amountCents = 500,
             currency = "usd",
             description = "demo",
         )
-        assertEquals(RedirectSessionResult.NotConfigured, result)
-        // GATE PROOF: no live session created -> not a single request reached the backend.
-        assertEquals(0, backend.requestCount)
+        assertTrue(result is RedirectSessionResult.Created)
+        assertEquals(1, backend.requestCount)
     }
 
     @Test

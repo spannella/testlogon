@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import okhttp3.mockwebserver.MockResponse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -39,19 +40,16 @@ class AttachmentDownloaderTest {
 
     @Test
     fun policyNone_grantThenGetBytes_noConsume() = runTest {
-        backend.enqueue(
-            Fixtures.okBody("""{"grant_token":"g1","expires_at":99,"conversation_id":"c1","message_id":"m1"}"""),
-        )
         backend.enqueue(MockResponse().setResponseCode(200).setBody("hello-file-bytes"))
 
         val emissions = downloader.download("c1", "m1", "report.pdf", "none").toList()
 
-        // grant POST then bytes GET — NO consume POST for policy "none".
-        val grantReq = backend.takeRequest()
-        assertEquals("/messaging/conversations/c1/messages/m1/attachment/grant", grantReq.requestUrl?.encodedPath)
+        // AND-132: a NON-once (policy "none") file downloads DIRECTLY — no grant POST (the once-media
+        // grant endpoint 422s for it) and no consume. Just the bytes GET, with no grant_token query.
+        assertEquals(1, backend.requestCount)
         val getReq = backend.takeRequest()
         assertEquals("/messaging/conversations/c1/messages/m1/attachment", getReq.requestUrl?.encodedPath)
-        assertEquals("g1", getReq.requestUrl?.queryParameter("grant_token"))
+        assertNull(getReq.requestUrl?.queryParameter("grant_token"))
 
         val done = emissions.last()
         assertTrue(done is DownloadProgress.Done)
@@ -67,21 +65,23 @@ class AttachmentDownloaderTest {
         backend.enqueue(
             Fixtures.okBody("""{"grant_token":"g2","expires_at":99,"conversation_id":"c1","message_id":"m2"}"""),
         )
+        backend.enqueue(MockResponse().setResponseCode(200).setBody("once-bytes"))
         backend.enqueue(
             Fixtures.okBody(
                 """{"ok":true,"conversation_id":"c1","message_id":"m2","consumption_state":"consumed",
                     "consumed_at":1,"consumption_attempt_id":"a"}""",
             ),
         )
-        backend.enqueue(MockResponse().setResponseCode(200).setBody("once-bytes"))
 
         val emissions = downloader.download("c1", "m2", "secret.pdf", "view_once").toList()
 
+        // AND-132: grant -> bytes GET -> consume. Consumption is recorded AFTER the bytes are safely
+        // saved (consuming before the GET would 409 the byte fetch), so the byte GET precedes consume.
         assertEquals("/messaging/conversations/c1/messages/m2/attachment/grant", backend.takeRequest().requestUrl?.encodedPath)
+        assertEquals("/messaging/conversations/c1/messages/m2/attachment", backend.takeRequest().requestUrl?.encodedPath)
         val consumeReq = backend.takeRequest()
         assertEquals("/messaging/conversations/c1/messages/m2/attachment/consume", consumeReq.requestUrl?.encodedPath)
         assertEquals("g2", consumeReq.requestUrl?.queryParameter("grant_token"))
-        assertEquals("/messaging/conversations/c1/messages/m2/attachment", backend.takeRequest().requestUrl?.encodedPath)
 
         assertTrue(emissions.last() is DownloadProgress.Done)
     }
