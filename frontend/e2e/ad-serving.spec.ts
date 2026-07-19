@@ -108,6 +108,36 @@ let creativeId2: string;
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 
+function purgeAdAccounts(ownerSub: string): void {
+  execSync(
+    `${REPO_ROOT}/.venv/bin/python3 -c "
+import boto3, os
+from pathlib import Path
+env = Path('${REPO_ROOT}/.env.local')
+if env.exists():
+    for line in env.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+tbl = ddb.Table(os.environ.get('DDB_AD_ACCOUNTS','AdAccounts'))
+from boto3.dynamodb.conditions import Key
+owner = '${ownerSub}'
+try:
+    resp = tbl.query(IndexName='ByOwner', KeyConditionExpression=Key('owner_sub').eq(owner))
+    items = resp.get('Items', [])
+except Exception:
+    items = [i for i in tbl.scan().get('Items', []) if i.get('owner_sub') == owner]
+for it in items:
+    if it.get('sk') == 'META':
+        tbl.delete_item(Key={'pk': it['pk'], 'sk': it['sk']})
+print('purged', len(items))
+"`,
+    { cwd: REPO_ROOT, timeout: 15_000 },
+  );
+}
+
 test.describe("Ad Serving Engine (ADS-004)", () => {
   let alicePage: Page;
   let bobPage: Page;
@@ -115,6 +145,9 @@ test.describe("Ad Serving Engine (ADS-004)", () => {
 
   test.beforeAll(async ({ browser }) => {
     const sessions = getSessions();
+    // Purge Alice's accumulated ad accounts so the per-user 5-account limit
+    // (ADS-001) is not hit on repeat runs (account create otherwise 422s).
+    purgeAdAccounts(getSessions()[ALICE_ID].user_sub);
 
     // Create pages for each user
     const aliceCtx = await browser.newContext();
