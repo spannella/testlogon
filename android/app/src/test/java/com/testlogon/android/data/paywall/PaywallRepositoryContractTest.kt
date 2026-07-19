@@ -28,9 +28,10 @@ private class FakeAuthorizedBilling(private val pmId: String = "pm_test") : Bill
 /**
  * AND-177 — contract + entitlement-flow tests for [PaywallRepositoryImpl].
  *
- * Covers: the STOP-AND-FLAG stubbed-billing path (NotConfigured -> PaymentsUnavailable, NO HTTP call),
- * the happy unlock path through a wired (fake) authorizer (POST body + entitlement cache + idempotency
- * key), already-entitled short-circuit, 409 -> AlreadyEntitled, and per-user cache isolation.
+ * Covers: the DEBUG on-device bypass (StubBillingAuthorizer authorizes a BLANK payment_method_id in
+ * debug builds so pay-to-unlock reaches the server and mock-charges without a real vendor), the happy
+ * unlock path through a wired (fake) authorizer (POST body + entitlement cache + idempotency key),
+ * already-entitled short-circuit, 409 -> AlreadyEntitled, and per-user cache isolation.
  */
 class PaywallRepositoryContractTest {
 
@@ -55,13 +56,25 @@ class PaywallRepositoryContractTest {
         ) to dao
     }
 
+    // DEBUG on-device bypass contract (the billing debug-bypass shipped program): under a debug build
+    // (testDebugUnitTest IS a debug build) StubBillingAuthorizer authorizes a BLANK payment_method_id,
+    // so pay-to-unlock reaches /posts/unlock and the backend dev path mock-completes the charge. It no
+    // longer short-circuits to PaymentsUnavailable (that is now the RELEASE-only path). Verified against
+    // StubBillingAuthorizer.authorize() BuildConfig.DEBUG branch in main src.
     @Test
-    fun unlock_withStubBilling_returnsPaymentsUnavailable_andNeverCallsServer() = runTest {
+    fun unlock_withStubBilling_inDebug_reachesServer_withBlankPaymentMethod() = runTest {
+        backend.enqueue(Fixtures.okBody("""{"post_id":"post_1","payment_intent":{"status":"succeeded"}}"""))
         val (r, dao) = repo(StubBillingAuthorizer())
         val outcome = r.unlock("post_1")
-        assertEquals(UnlockOutcome.PaymentsUnavailable, outcome)
-        assertEquals(0, backend.requestCount) // STOP-AND-FLAG: no /posts/unlock call, no charge
-        assertTrue(dao.snapshot().isEmpty())
+
+        assertTrue(outcome is UnlockOutcome.Success)
+        assertEquals(1, backend.requestCount) // DEBUG bypass: DOES hit /posts/unlock (mock charge)
+        val req = backend.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/posts/unlock", req.requestUrl?.encodedPath)
+        assertEquals("", req.bodyJson()["payment_method_id"]) // blank pm id = dev bypass marker
+        assertTrue(r.isEntitled("post_1").first())
+        assertEquals("user_a", dao.snapshot().first().userSub)
     }
 
     @Test

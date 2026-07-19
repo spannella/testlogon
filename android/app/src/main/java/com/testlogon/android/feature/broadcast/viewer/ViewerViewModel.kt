@@ -75,6 +75,12 @@ class ViewerViewModel @Inject constructor(
     /** Guards against a refresh storm (FR-6/§7). */
     private var refreshing: Boolean = false
 
+    // TEST SEAM (unit tests only): the ad-break poll is an unbounded while(isActive){ delay(...) }
+    // loop that is correct in production (cancelled in onCleared) but makes runTest.advanceUntilIdle()
+    // walk virtual time forever. Unit tests reaching a LIVE Ready state set this false to disarm the
+    // poll so the initial-load assertions can drain. Defaults true -> production behaviour is unchanged.
+    internal var adBreakPollEnabled: Boolean = true
+
     init {
         observePresenceCount()
         start()
@@ -282,6 +288,7 @@ class ViewerViewModel @Inject constructor(
      * break it serves + interrupts. Cancelled in [onCleared]; stopped while a mid-roll shows, re-armed on resume.
      */
     private fun startAdBreakPoll() {
+        if (!adBreakPollEnabled) return
         adBreakPollJob?.cancel()
         adBreakPollJob = viewModelScope.launch {
             while (isActive) {

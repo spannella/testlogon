@@ -153,7 +153,7 @@ class ViewerViewModelTest {
         val controller = mock(VideoPlayerController::class.java)
         val factory = mock(VideoPlayerFactory::class.java)
         `when`(factory.create()).thenReturn(controller)
-        return ViewerViewModel(
+        val vm = ViewerViewModel(
             savedStateHandle = SavedStateHandle(mapOf(ViewerViewModel.ARG_SESSION_ID to "s1")),
             repo = repo,
             adRepo = noAdRepo,
@@ -176,6 +176,11 @@ class ViewerViewModelTest {
                 com.testlogon.android.data.ads.AdClickAttributionStore(),
             ),
         )
+        // Disarm the unbounded ad-break poll loop so runTest.advanceUntilIdle() can drain
+        // (product loop is correct + onCleared-cancelled; only its infinite virtual-time walk
+        // is hostile to advanceUntilIdle). All assertions below still exercise real behaviour.
+        vm.adBreakPollEnabled = false
+        return vm
     }
 
     @Test
