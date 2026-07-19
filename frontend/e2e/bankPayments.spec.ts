@@ -774,10 +774,12 @@ test.describe("Section 208 — FX Rates UI (PAY-004)", () => {
     await alicePage.locator("[data-testid='fx-from']").fill("usd");
     await alicePage.locator("[data-testid='fx-to']").fill("eur");
     await alicePage.locator("[data-testid='fx-convert-btn']").click();
-    // Either shows result or error (rate not found)
+    // Either shows result or error (rate not found). Bump the settle timeout:
+    // this is the last UI section and the convert GET can be slow when the dev
+    // backend is under load; the assertion itself already accepts either state.
     await expect(
       alicePage.locator("[data-testid='fx-result'], [data-testid='fx-convert-error']")
-    ).toBeVisible({ timeout: 5000 });
+    ).toBeVisible({ timeout: 15000 });
   });
 
   test("208.5 — Unknown pair lookup shows error message", async () => {
@@ -790,6 +792,6 @@ test.describe("Section 208 — FX Rates UI (PAY-004)", () => {
     await alicePage.locator("[data-testid='fx-lookup-source']").fill("xyz");
     await alicePage.locator("[data-testid='fx-lookup-target']").fill("abc");
     await alicePage.locator("[data-testid='fx-lookup-btn']").click();
-    await expect(alicePage.locator("[data-testid='fx-lookup-error']")).toBeVisible({ timeout: 5000 });
+    await expect(alicePage.locator("[data-testid='fx-lookup-error']")).toBeVisible({ timeout: 15000 });
   });
 });
