@@ -10,6 +10,8 @@ green. They are NOT product bugs — the app correctly refuses when unconfigured
 - FILEMGR_SFTP_CREDENTIALS_KMS_KEY_ID=<moto KMS key id>
 - PLAYBACK_ENTITLEMENT_SECRET=<>=32-char secret>   # else /v1/playback/entitlements/issue + /posts/{id}/video/entitlement 400/500 'secret_not_configured'
 - WS_TOKEN_SECRET=<>=32-char secret>               # else /ui/ws_token 500 RuntimeError('WS_TOKEN_SECRET not set')
+- FILEMGR_S3_MOUNTS_ENABLED=true                    # else GET /v1/fs/mounts (S3 handler) 404 'not found'
+- FILEMGR_S3_MOUNTS_WRITE_ENABLED=true
 
 (The CI parity flag file scripts/ci-e2e-feature-flags.env sets
 FILEMGR_SFTP_MOUNTS_ENABLED=true but NOT the table-name / credentials-table /
