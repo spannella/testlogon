@@ -49,7 +49,13 @@ class ProductDetailViewModelTest {
     private fun vm(
         catalog: FakeCatalogRepository,
         cart: FakeCartRepository = FakeCartRepository(),
-    ) = ProductDetailViewModel(catalog, cart, savedState())
+    ) = ProductDetailViewModel(
+        catalog,
+        cart,
+        FakeWishlistRepository(),
+        fakeCatalogCurrentUserRepository(),
+        savedState(),
+    )
 
     @Test
     fun load_success_isReady() = runTest {
