@@ -392,12 +392,17 @@ test.describe("Section 75: RentLedgerPage UI", () => {
 
   test("75.2 Period selector visible when feature enabled", async () => {
     await page.goto(`${BASE}/property/rent`, { waitUntil: "domcontentloaded" });
-    // If not-enabled state, the select won't be visible — that's acceptable
-    const notEnabled = await page.getByText("Rent Ledger is not enabled").isVisible();
-    if (!notEnabled) {
-      // Summary cards should appear
-      await expect(page.getByText("Charged")).toBeVisible({ timeout: 5_000 });
-    }
+    // Wait for the page to reach a settled state: either the not-enabled card
+    // or the loaded Rent Ledger. The summary query is retry:false, so under the
+    // dev-backend busy-loop a transient 401 can briefly leave a bare header;
+    // wait on the settled markers (not a racy isVisible snapshot).
+    const notEnabled = page.getByText("Rent Ledger is not enabled");
+    const charged = page.getByText("Charged");
+    await expect(notEnabled.or(charged).first()).toBeVisible({ timeout: 15_000 });
+    if (await notEnabled.isVisible()) return; // feature off — acceptable
+    // Feature on: the summary (proven by the /ui/rent/summary API tests) renders
+    // the Charged card.
+    await expect(charged).toBeVisible({ timeout: 10_000 });
   });
 
   test("75.3 Aging View link navigates to /property/rent/aging", async () => {
@@ -517,9 +522,13 @@ test.describe("Section 77: RentAgingPage UI", () => {
 
   test("77.2 Back link navigates to /property/rent", async () => {
     await page.goto(`${BASE}/property/rent/aging`, { waitUntil: "domcontentloaded" });
+    // Wait for the aging page to settle (heading or not-enabled) before probing
+    // the back link, so we do not snapshot isVisible() mid-load.
+    const heading = page.getByText("Rent Aging View");
+    const notEnabled = page.getByText("Rent Ledger is not enabled");
+    await expect(heading.or(notEnabled).first()).toBeVisible({ timeout: 15_000 });
     const backLink = page.getByRole("link", { name: /Back to Rent Ledger/i });
-    const isVisible = await backLink.isVisible();
-    if (isVisible) {
+    if (await backLink.isVisible()) {
       await backLink.click();
       await expect(page).toHaveURL(/\/property\/rent$/);
     }
@@ -527,10 +536,10 @@ test.describe("Section 77: RentAgingPage UI", () => {
 
   test("77.3 Period selector shown when feature enabled", async () => {
     await page.goto(`${BASE}/property/rent/aging`, { waitUntil: "domcontentloaded" });
-    const notEnabled = await page.getByText("Rent Ledger is not enabled").isVisible();
-    if (!notEnabled) {
-      // Period selector should be present
-      await expect(page.getByText("Total Outstanding")).toBeVisible({ timeout: 5_000 });
-    }
+    const notEnabled = page.getByText("Rent Ledger is not enabled");
+    const outstanding = page.getByText("Total Outstanding");
+    await expect(notEnabled.or(outstanding).first()).toBeVisible({ timeout: 15_000 });
+    if (await notEnabled.isVisible()) return; // feature off — acceptable
+    await expect(outstanding).toBeVisible({ timeout: 10_000 });
   });
 });
