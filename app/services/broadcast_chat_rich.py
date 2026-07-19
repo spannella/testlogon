@@ -274,11 +274,7 @@ def _write_chat_billing(
     from boto3.dynamodb.types import TypeSerializer
     from botocore.exceptions import ClientError
 
-    from app.core.aws_clients import (
-        _aws_region,
-        _ddb_endpoint_url,
-        _local_credentials_kwargs,
-    )
+    from app.core.aws_clients import ddb_transact_client
     from app.core.settings import S
 
     ts = now_ts()
@@ -321,13 +317,12 @@ def _write_chat_billing(
         "meta": meta,
     }
 
-    endpoint_url = _ddb_endpoint_url()
-    client = boto3.client(
-        "dynamodb",
-        region_name=_aws_region(),
-        endpoint_url=endpoint_url,
-        **_local_credentials_kwargs(endpoint_url),
-    )
+    # SECOPS/parity fix: use the shared transact client, which inherits the
+    # SAME endpoint/region/creds as the app dynamodb resource (where the
+    # billing table lives). Building a client off _ddb_endpoint_url() pointed
+    # writes at DDB_ENDPOINT_URL, which in the dev split-brain setup (main
+    # tables on AWS_ENDPOINT_URL) has no billing table -> ResourceNotFound 500.
+    client = ddb_transact_client()
     serializer = TypeSerializer()
     table_name = S.billing_table_name
 

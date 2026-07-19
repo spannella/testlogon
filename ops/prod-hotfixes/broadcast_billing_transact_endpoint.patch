@@ -1,0 +1,133 @@
+diff --git a/app/services/broadcast_chat_rich.py b/app/services/broadcast_chat_rich.py
+index fe86ce37..594c1a86 100644
+--- a/app/services/broadcast_chat_rich.py
++++ b/app/services/broadcast_chat_rich.py
+@@ -274,11 +274,7 @@ def _write_chat_billing(
+     from boto3.dynamodb.types import TypeSerializer
+     from botocore.exceptions import ClientError
+ 
+-    from app.core.aws_clients import (
+-        _aws_region,
+-        _ddb_endpoint_url,
+-        _local_credentials_kwargs,
+-    )
++    from app.core.aws_clients import ddb_transact_client
+     from app.core.settings import S
+ 
+     ts = now_ts()
+@@ -321,13 +317,12 @@ def _write_chat_billing(
+         "meta": meta,
+     }
+ 
+-    endpoint_url = _ddb_endpoint_url()
+-    client = boto3.client(
+-        "dynamodb",
+-        region_name=_aws_region(),
+-        endpoint_url=endpoint_url,
+-        **_local_credentials_kwargs(endpoint_url),
+-    )
++    # SECOPS/parity fix: use the shared transact client, which inherits the
++    # SAME endpoint/region/creds as the app dynamodb resource (where the
++    # billing table lives). Building a client off _ddb_endpoint_url() pointed
++    # writes at DDB_ENDPOINT_URL, which in the dev split-brain setup (main
++    # tables on AWS_ENDPOINT_URL) has no billing table -> ResourceNotFound 500.
++    client = ddb_transact_client()
+     serializer = TypeSerializer()
+     table_name = S.billing_table_name
+ 
+diff --git a/app/services/broadcast_lottery.py b/app/services/broadcast_lottery.py
+index 8a7afdb0..206eb978 100644
+--- a/app/services/broadcast_lottery.py
++++ b/app/services/broadcast_lottery.py
+@@ -527,19 +527,14 @@ def _charge_entry_fee(
+     from boto3.dynamodb.types import TypeSerializer
+     from botocore.exceptions import ClientError
+ 
+-    from app.core.aws_clients import (
+-        _aws_region,
+-        _ddb_endpoint_url,
+-        _local_credentials_kwargs,
+-    )
+-
+-    endpoint_url = _ddb_endpoint_url()
+-    client = boto3.client(
+-        "dynamodb",
+-        region_name=_aws_region(),
+-        endpoint_url=endpoint_url,
+-        **_local_credentials_kwargs(endpoint_url),
+-    )
++    from app.core.aws_clients import ddb_transact_client
++
++    # SECOPS/parity fix: use the shared transact client, which inherits the
++    # SAME endpoint/region/creds as the app dynamodb resource (where the
++    # billing table lives). Building a client off _ddb_endpoint_url() pointed
++    # writes at DDB_ENDPOINT_URL, which in the dev split-brain setup (main
++    # tables on AWS_ENDPOINT_URL) has no billing table -> ResourceNotFound 500.
++    client = ddb_transact_client()
+ 
+     debit_entry_id = uuid.uuid4().hex
+     credit_entry_id = uuid.uuid4().hex
+diff --git a/app/services/broadcast_private.py b/app/services/broadcast_private.py
+index eb77e54b..9f3ccca2 100644
+--- a/app/services/broadcast_private.py
++++ b/app/services/broadcast_private.py
+@@ -349,20 +349,15 @@ def _write_private_billing(
+     from boto3.dynamodb.types import TypeSerializer
+     from botocore.exceptions import ClientError
+ 
+-    from app.core.aws_clients import (
+-        _aws_region,
+-        _ddb_endpoint_url,
+-        _local_credentials_kwargs,
+-    )
++    from app.core.aws_clients import ddb_transact_client
+     from app.core.settings import S
+ 
+-    endpoint_url = _ddb_endpoint_url()
+-    client = boto3.client(
+-        "dynamodb",
+-        region_name=_aws_region(),
+-        endpoint_url=endpoint_url,
+-        **_local_credentials_kwargs(endpoint_url),
+-    )
++    # SECOPS/parity fix: use the shared transact client, which inherits the
++    # SAME endpoint/region/creds as the app dynamodb resource (where the
++    # billing table lives). Building a client off _ddb_endpoint_url() pointed
++    # writes at DDB_ENDPOINT_URL, which in the dev split-brain setup (main
++    # tables on AWS_ENDPOINT_URL) has no billing table -> ResourceNotFound 500.
++    client = ddb_transact_client()
+ 
+     ts = now_ts()
+     debit_id = uuid.uuid4().hex
+diff --git a/app/services/broadcast_private_chat.py b/app/services/broadcast_private_chat.py
+index f5e149c6..d7a01213 100644
+--- a/app/services/broadcast_private_chat.py
++++ b/app/services/broadcast_private_chat.py
+@@ -630,20 +630,15 @@ def _write_private_chat_billing(
+     from boto3.dynamodb.types import TypeSerializer
+     from botocore.exceptions import ClientError
+ 
+-    from app.core.aws_clients import (
+-        _aws_region,
+-        _ddb_endpoint_url,
+-        _local_credentials_kwargs,
+-    )
++    from app.core.aws_clients import ddb_transact_client
+     from app.core.settings import S
+ 
+-    endpoint_url = _ddb_endpoint_url()
+-    client = boto3.client(
+-        "dynamodb",
+-        region_name=_aws_region(),
+-        endpoint_url=endpoint_url,
+-        **_local_credentials_kwargs(endpoint_url),
+-    )
++    # SECOPS/parity fix: use the shared transact client, which inherits the
++    # SAME endpoint/region/creds as the app dynamodb resource (where the
++    # billing table lives). Building a client off _ddb_endpoint_url() pointed
++    # writes at DDB_ENDPOINT_URL, which in the dev split-brain setup (main
++    # tables on AWS_ENDPOINT_URL) has no billing table -> ResourceNotFound 500.
++    client = ddb_transact_client()
+ 
+     ts = now_ts()
+     debit_id = uuid.uuid4().hex
