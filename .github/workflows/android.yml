@@ -1,20 +1,20 @@
 # AND-008 / AND-050 / AND-051 — Android CI.
 #
-# IMPORTANT: GitHub only discovers workflows under the REPO ROOT `.github/workflows/`.
-# This file is committed here under the staging tree as `_github/workflows/android.yml`;
-# move it to the repo-root `.github/workflows/android.yml` when wiring up the real repo.
-# All Gradle steps run with `android/` as the working directory.
+# Runs on the real branches (main + android-impl). All Gradle steps run with
+# `android/` as the working directory. The unit-test task uses a roomy workspace
+# tmpdir so KSP/Robolectric/sqlite-jdbc/mockito-inline native-lib extraction avoids
+# the small-/tmp "No native library" gotcha on constrained CI runners.
 
 name: Android CI
 
 on:
   push:
-    branches: [android-port]
+    branches: [main, android-impl]
     paths:
       - "android/**"
       - ".github/workflows/android.yml"
   pull_request:
-    branches: [android-port]
+    branches: [main, android-impl]
     paths:
       - "android/**"
       - ".github/workflows/android.yml"
@@ -57,10 +57,20 @@ jobs:
       - name: Set up Gradle (with cache)
         uses: gradle/actions/setup-gradle@v4
         with:
-          cache-read-only: ${{ github.ref != 'refs/heads/android-port' }}
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Build + unit test
-        run: ./gradlew assembleDebug testDebugUnitTest --stacktrace --no-daemon
+      - name: Prepare roomy tmpdir (native-lib extraction safety)
+        run: mkdir -p "${GITHUB_WORKSPACE}/.gradle_tmp"
+        working-directory: .
+
+      - name: Assemble debug (main source set gate)
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: JVM unit tests (:app:testDebugUnitTest)
+        run: >-
+          ./gradlew :app:testDebugUnitTest --continue --no-daemon --stacktrace
+          -Ptest.tmpdir="${GITHUB_WORKSPACE}/.gradle_tmp"
+          -Dorg.gradle.jvmargs="-Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp -Dorg.sqlite.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
 
       - name: Upload unit-test reports
         if: ${{ always() }}
@@ -83,6 +93,10 @@ jobs:
   # AND-051 — instrumented tests on a headless emulator.
   instrumented-tests:
     name: Instrumented tests (emulator)
+    # Heavy (~45 min emulator). Runs on manual dispatch or pushes to the real
+    # branches, NOT on every PR — keeps PR feedback fast. Promote to always-on
+    # once it has soaked.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: build-and-unit-test
@@ -111,7 +125,7 @@ jobs:
       - name: Set up Gradle (with cache)
         uses: gradle/actions/setup-gradle@v4
         with:
-          cache-read-only: ${{ github.ref != 'refs/heads/android-port' }}
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # KVM is required for hardware-accelerated x86_64 emulation on Linux runners.
       - name: Enable KVM
