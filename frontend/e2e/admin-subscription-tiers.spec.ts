@@ -246,7 +246,13 @@ test.describe("547. Subscription tier CRUD API", () => {
   test("preview respects display order (Platinum first)", async () => {
     const r = await apiGet(rootPage, `${BASE}/preview`);
     const data = await r.json();
-    expect(data.tiers[0].name).toBe(`E2E_Platinum_${TS}`);
+    // The dev creator accumulates tiers across runs; scope to THIS run's tiers
+    // (name suffixed with _${TS}) and assert Platinum (display_order 0) leads.
+    const mine = (data.tiers as Array<{ name: string }>).filter((t) =>
+      t.name.endsWith(`_${TS}`),
+    );
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine[0].name).toBe(`E2E_Platinum_${TS}`);
   });
 
   // ─── 550. Analytics ───────────────────────────────────────────────────────

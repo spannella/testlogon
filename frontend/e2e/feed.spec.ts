@@ -896,11 +896,16 @@ test.describe("9. Post tips, reactions, and comment tips", () => {
       amount_cents: unknown;
       type: string;
     }>;
+    // Bob accumulates post-tip debits across runs with varying amounts; assert
+    // THIS run's tip produced a debit of exactly TIP_AMOUNT_CENTS rather than
+    // reading the first-found entry (which may be a prior run's amount).
     const tipEntry = ledger.find(
-      (e) => (e.reason === "Tip: post" || e.reason === "Post tip") && e.type === "debit",
+      (e) =>
+        (e.reason === "Tip: post" || e.reason === "Post tip") &&
+        e.type === "debit" &&
+        Number(e.amount_cents) === TIP_AMOUNT_CENTS,
     );
-    expect(tipEntry).toBeDefined();
-    expect(Number(tipEntry!.amount_cents)).toBe(TIP_AMOUNT_CENTS);
+    expect(tipEntry, `no post-tip debit of ${TIP_AMOUNT_CENTS}c in ledger`).toBeDefined();
   });
 
   test("POST /posts/:id/tip with invalid PM returns 400", async () => {
