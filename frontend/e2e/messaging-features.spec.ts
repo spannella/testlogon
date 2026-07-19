@@ -1129,17 +1129,16 @@ test.describe("10. Scheduled send", () => {
     expect(typeof found?.deliver_at).toBe("number");
   });
 
-  test("GET /messages returns the scheduled message with scheduled=true", async () => {
-    // Scheduled messages are still stored and returned by the normal endpoint
-    // (only the sender can act on them), so we verify the scheduled flag.
-    // Fetch a wide page so the scheduled message isn't paginated out by the
-    // accumulated DM history (default limit is 50).
+  test("GET /messages does NOT return a still-pending scheduled message", async () => {
+    // Contract: a scheduled (not-yet-delivered) message is held in the /scheduled
+    // queue and is EXCLUDED from the normal conversation timeline until its
+    // deliver_at passes. (It reappears in /messages once delivered — see the
+    // near-future delivery test below.)
     const resp = await apiGet(page, `/messaging/conversations/${_dmConvoId}/messages`, { limit: "200" });
     expect(resp.ok()).toBe(true);
     const list = await resp.json() as Array<{ message_id: string; scheduled?: boolean }>;
     const found = list.find((m) => m.message_id === scheduledMsgId);
-    expect(found, "scheduled message not found in /messages list").toBeDefined();
-    expect(found?.scheduled).toBe(true);
+    expect(found, "pending scheduled message should NOT be in /messages yet").toBeUndefined();
   });
 
   test("DELETE /schedule cancels the message → {ok: true}", async () => {
