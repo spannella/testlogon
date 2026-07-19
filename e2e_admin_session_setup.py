@@ -163,7 +163,20 @@ def ensure_profile(user_sub: str, display_name: str) -> None:
     except ClientError as exc:
         code = exc.response["Error"]["Code"]
         if code == "ConditionalCheckFailedException":
-            return  # already present — leave existing profile untouched
+            # Row already exists. Older rows may lack display_name (None), which
+            # breaks UI specs that locate a conversation by the seeded name.
+            # Backfill display_name when it is missing or differs.
+            try:
+                existing = profile_tbl.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+                if existing.get("display_name") != display_name:
+                    profile_tbl.update_item(
+                        Key={"user_sub": user_sub},
+                        UpdateExpression="SET display_name = :dn",
+                        ExpressionAttributeValues={":dn": display_name},
+                    )
+            except ClientError:
+                pass
+            return
         if code == "ResourceNotFoundException":
             # Profiles table missing in this environment — nothing to seed.
             return
