@@ -14,7 +14,11 @@ latest_ts, so once events group, the emitted order no longer matches latest_ts.
 Sort the group keys by groups[key].latest_ts descending before slicing to limit
 and building result_items. See activity_feed_latest_ts_sort.patch.
 
-## Prod-mirror status: PENDING (running-server-affecting)
+## Prod-mirror status: PROD: APPLIED 2026-07-19
+> PROD: APPLIED 2026-07-19 (SSM). Pre-fix prod emitted `group_order[:limit]` (first-seen), NOT divergent.
+> Added latest_ts-desc sort into `ordered_keys`. bak: `app/routers/alerts.py.bak_fs_activity_feed_latest_ts_sort_20260719045927`.
+> Verify: sort of out-of-order groups yields [300,250,200,100] desc. dev==prod.
+
 User-facing ordering bug on the live activity feed; apply on prod via SSM +
 restart uvicorn.
 

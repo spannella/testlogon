@@ -36,7 +36,13 @@ dynamodb resource — the SAME place the billing table lives and where all other
 billing transacts write. One-line swap + import in each of the four services.
 See broadcast_billing_transact_endpoint.patch (string-anchored).
 
-## Prod-mirror status
+## Prod-mirror status: PROD: APPLIED 2026-07-19
+> PROD: APPLIED 2026-07-19 (SSM). Pre-fix prod UN-patched (all 4 services hand-rolled the
+> client off `_ddb_endpoint_url()`), NOT divergent. Swapped to `ddb_transact_client()` in
+> broadcast_chat_rich/lottery/private/private_chat. baks: `app/services/broadcast_*.py.bak_fs_broadcast_billing_transact_endpoint_20260719045927`.
+> Verify: import resolves; each writer now calls ddb_transact_client(), no live `_ddb_endpoint_url()`
+> assignment remains. dev==prod.
+
 LOW priority for prod (prod is single-endpoint so writes already land), but apply
 for correctness/consistency so paid-broadcast billing uses the one blessed transact
 client. Patch applies to /home/ubuntu/testlogon via SSM; restart uvicorn.

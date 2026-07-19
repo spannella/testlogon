@@ -18,7 +18,11 @@ Coerce created_at/updated_at to str in _to_post_out before constructing the mode
 (handles both str and numeric stored values). See
 delegate_feed_timestamp_coercion.patch.
 
-## Prod-mirror status: PENDING (running-server-affecting)
+## Prod-mirror status: PROD: APPLIED 2026-07-19
+> PROD: APPLIED 2026-07-19 (SSM). Pre-fix prod had bare `DelegatedPostOut(**d)` in _to_post_out, NOT divergent.
+> Added str-coercion of created_at/updated_at. bak: `app/routers/delegate_feed.py.bak_fs_delegate_feed_timestamp_coercion_20260719045927`.
+> Verify: _to_post_out with Decimal/int timestamps coerces to str (was ValidationError 500). dev==prod.
+
 Any creator with a numeric-timestamp post row hits this 500 in prod. Apply via SSM
 + restart uvicorn; verify GET .../posts returns 200.
 

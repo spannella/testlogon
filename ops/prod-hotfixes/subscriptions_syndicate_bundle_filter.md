@@ -33,7 +33,13 @@ Exclude `plan_type == syndicate_bundle` rows in both `list_subscriptions` and
 filter; creator subscriptions are unaffected. See
 `subscriptions_syndicate_bundle_filter.patch` (string-anchored, applies cleanly).
 
-## Prod-mirror status: PENDING (running-server-affecting)
+## Prod-mirror status: PROD: APPLIED 2026-07-19
+> PROD: APPLIED 2026-07-19 (SSM, i-08f937fc705ebea75). Pre-fix prod was UN-patched
+> (single-line `subs=[...]`, no plan_type filter), NOT divergent. Anchored edit applied
+> to both list endpoints. bak: `app/routers/subscription_server.py.bak_fs_subscriptions_syndicate_bundle_filter_20260719045927`.
+> Verify: live `GET /api/subscriptions` (X-User-Id) 200; in-process list_subscriptions with a
+> syndicate_bundle row -> 200, bundle row excluded (was ResponseValidationError 500). dev==prod.
+
 Prod uses a single shared real-DynamoDB table, so any prod user with a syndicate
 bundle subscription hits this 500 on their subscriptions page. The dev host (.249)
 has no aws/SSM plugin; apply the .patch on prod (`/home/ubuntu/testlogon`) via SSM

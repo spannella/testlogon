@@ -21,7 +21,12 @@ impersonation rows, safety-capped at 100 pages) so all impersonation records in
 the requested window are collected regardless of how many unrelated sessions
 exist. See impersonation_audit_pagination.patch.
 
-## Prod-mirror status: PENDING (running-server-affecting, compliance)
+## Prod-mirror status: PROD: APPLIED 2026-07-19 (compliance)
+> PROD: APPLIED 2026-07-19 (SSM). Pre-fix prod had the single capped `Limit=500` read, NOT divergent.
+> Replaced with the ExclusiveStartKey pagination loop. bak: `app/routers/admin_impersonation.py.bak_fs_impersonation_audit_pagination_20260719045927`.
+> Verify: in-process audit with 600 noise login rows preceding the impersonation row -> returns items=1,
+> finds IMP1 (was empty). dev==prod.
+
 Apply on prod (/home/ubuntu/testlogon) via SSM, restart uvicorn, verify a fresh
 impersonation-start appears in GET /admin/impersonation/audit.
 
