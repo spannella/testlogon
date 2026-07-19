@@ -37,6 +37,12 @@ class BillingConfigViewModelTest {
             calls++
             return result
         }
+        // ADMIN — config audit trail + reset; not exercised by these tests.
+        var auditResult: ApiResult<List<com.testlogon.android.data.billing.BillingConfigAuditEntry>> =
+            ApiResult.Success(emptyList())
+        override suspend fun getAudit(): ApiResult<List<com.testlogon.android.data.billing.BillingConfigAuditEntry>> =
+            auditResult
+        override suspend fun resetAll(): ApiResult<AdminBillingConfig> = result
     }
 
     private fun sampleBillingConfig() = AdminBillingConfig(

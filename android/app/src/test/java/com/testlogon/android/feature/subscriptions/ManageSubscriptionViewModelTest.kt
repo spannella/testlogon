@@ -37,6 +37,7 @@ class ManageSubscriptionViewModelTest {
 
     private fun vm(repo: TestSubscriptionsRepository) =
         ManageSubscriptionViewModel(
+            savedStateHandle = androidx.lifecycle.SavedStateHandle(),
             repository = repo,
             billingAuthorizer = fakeAuthorizer,
             errorMapper = BillingErrorMapper(),

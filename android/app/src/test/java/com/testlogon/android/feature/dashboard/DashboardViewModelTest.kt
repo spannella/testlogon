@@ -38,6 +38,24 @@ class DashboardViewModelTest {
         warnings = emptyList(),
     )
 
+    /** P2 — profile repo the dashboard VM gained (used only for the header display name/photo). */
+    private class FakeProfileRepo : com.testlogon.android.data.profile.ProfileRepository {
+        override suspend fun getOwnProfile(forceRefresh: Boolean) =
+            ApiResult.Failure(ApiError(status = 0, message = "stub"))
+        override fun cachedOwnProfile(): com.testlogon.android.core.model.profile.Profile? = null
+        override suspend fun getPublicProfile(identifier: String) =
+            com.testlogon.android.data.profile.ProfileResult.NotFound
+        override suspend fun updateProfile(patch: com.testlogon.android.core.model.profile.ProfilePatch) =
+            ApiResult.Failure(ApiError(status = 0, message = "stub"))
+        override suspend fun uploadPhoto(
+            kind: com.testlogon.android.data.profile.MediaKind,
+            upload: com.testlogon.android.data.profile.ProfileMediaUploader.PreparedUpload,
+        ) = ApiResult.Failure(ApiError(status = 0, message = "stub"))
+    }
+
+    private fun DashboardViewModel(repo: DashboardRepository) =
+        com.testlogon.android.feature.dashboard.DashboardViewModel(repo, FakeProfileRepo())
+
     private class FakeRepo : DashboardRepository {
         var result: ApiResult<Dashboard> = ApiResult.Success(
             Dashboard(1, EarningsBreakdown(0, 0, 0, 0, 0), 0, 0, 0, emptyList(), emptyList(), emptyList(), "USD", null, emptyList()),

@@ -60,7 +60,13 @@ class CheckoutSessionViewModelTest {
         checkout: FakeCheckoutRepository,
         billing: BillingAuthorizer = StubBillingAuthorizer(),
         saved: SavedStateHandle = savedState(),
-    ) = CheckoutSessionViewModel(checkout, FakeCartRepoForCheckout(), billing, saved)
+    ) = CheckoutSessionViewModel(
+        checkout,
+        FakeCartRepoForCheckout(),
+        com.testlogon.android.data.ads.AdClickAttributionStore(),
+        billing,
+        saved,
+    )
 
     @Test
     fun emptyCart_guards_noSessionCreated() = runTest {
@@ -162,19 +168,7 @@ private class FakeCartRepoForCheckout : CartRepository {
     override suspend fun removeLine(sku: String): ApiResult<FullCart> =
         ApiResult.Success(FullCart.empty("cart_1"))
     override suspend fun clearCart(): ApiResult<OkRespDto> = ApiResult.Success(OkRespDto(ok = true))
-    override suspend fun purchase(
-        cartId: String,
-        idempotencyKey: String,
-        promoCode: String?,
-        promoCodeId: String?,
-    ): ApiResult<com.testlogon.android.data.cart.CartPurchaseResult> = ApiResult.Success(
-        com.testlogon.android.data.cart.CartPurchaseResult(
-            cartId = cartId,
-            orderId = "ord_paid",
-            purchaseTxnId = "txn_paid",
-            purchasedTotalCents = 4498,
-            currency = "USD",
-            discountCents = 0,
-        ),
-    )
+    // purchase()/buyNowInStream() have interface default bodies (real endpoints); the checkout-creation
+    // flow under test never calls them, so the fake inherits the defaults rather than re-declaring the
+    // grown (adClickId/broadcastSessionId/hostId) signature.
 }

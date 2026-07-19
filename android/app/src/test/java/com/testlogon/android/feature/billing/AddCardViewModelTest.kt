@@ -170,6 +170,8 @@ private class FakeAddRepo : BillingRepository {
     override suspend fun setDefaultPaymentMethod(id: String): ApiResult<List<PaymentMethod>> = ApiResult.Success(emptyList())
     override suspend fun removePaymentMethod(id: String): ApiResult<List<PaymentMethod>> = ApiResult.Success(emptyList())
     override suspend fun getConfig() = throw NotImplementedError()
+    override suspend fun getTipDefaultPaymentMethodId(): ApiResult<String?> = ApiResult.Success(null)
+    override suspend fun setTipDefaultPaymentMethod(id: String): ApiResult<List<PaymentMethod>> = ApiResult.Success(emptyList())
     override suspend fun getSettings() = throw NotImplementedError()
     override suspend fun getBalance() = throw NotImplementedError()
     override suspend fun getSubscriptions(limit: Int) = throw NotImplementedError()

@@ -237,6 +237,8 @@ private class FakeSubscriptionsRepository : SubscriptionsRepository {
     var subscribeCalls = 0
 
     override suspend fun getCreatorTiers(creatorId: String) = tiers
+    /** SUBX — the signed-in creator's own tiers; defaults to the same [tiers] fixture. */
+    override suspend fun getMyTiers() = tiers
     override suspend fun getMySubscriptions() = mySubs
     override suspend fun getSubscriptionSummary(subscriptionId: String): ApiResult<CreatorSubscriptionSummary> =
         ApiResult.Success(
@@ -277,4 +279,20 @@ private class FakeSubscriptionsRepository : SubscriptionsRepository {
         body: com.testlogon.android.data.subscriptions.GiftSubscriptionReqDto,
     ): ApiResult<CreatorSubscription> =
         ApiResult.Failure(ApiError(status = 500, message = "should not be called"))
+
+    // SUBX — creator tier-management + subscriber-management surface. Not exercised by the Tiers VM
+    // read-path tests; each fails loudly if a test unexpectedly reaches it (no faked success).
+    private fun <T> notCalled(): ApiResult<T> = ApiResult.Failure(ApiError(status = 500, message = "should not be called"))
+    override suspend fun createTier(body: com.testlogon.android.data.subscriptions.PlanWriteReqDto) = notCalled<SubscriptionTier>()
+    override suspend fun updateTier(planId: String, body: com.testlogon.android.data.subscriptions.PlanWriteReqDto) = notCalled<SubscriptionTier>()
+    override suspend fun archiveTier(planId: String) = notCalled<SubscriptionTier>()
+    override suspend fun reorderTiers(planIds: List<String>) = notCalled<List<SubscriptionTier>>()
+    override suspend fun refundSubscriber(subscriptionId: String, fraction: Double?, reason: String?) =
+        notCalled<com.testlogon.android.data.subscriptions.SubscriptionRefundResult>()
+    override suspend fun retryPayment(subscriptionId: String, body: com.testlogon.android.data.subscriptions.RetryPaymentReqDto) = notCalled<CreatorSubscription>()
+    override suspend fun getMySubscribers(status: String?, planId: String?, limit: Int?, cursor: String?) =
+        notCalled<com.testlogon.android.data.subscriptions.CreatorSubscriberPage>()
+    override suspend fun getMyAnalytics(periodDays: Int?) = notCalled<com.testlogon.android.data.subscriptions.SubscriptionAnalytics>()
+    override suspend fun removeSubscriber(subscriptionId: String, reason: String?) = notCalled<CreatorSubscription>()
+    override suspend fun stopSubscriberRenewal(subscriptionId: String, reason: String?) = notCalled<CreatorSubscription>()
 }

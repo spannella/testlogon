@@ -50,6 +50,7 @@ class SubscribeViewModelTest {
     ) = SubscribeViewModel(
         savedStateHandle = args(),
         repository = repo,
+        adAttribution = com.testlogon.android.data.ads.AdClickAttributionStore(),
         billingAuthorizer = authorizer,
         featureFlags = object : SubscriptionFeatureFlags { override val checkoutEnabled = checkoutEnabled },
         errorMapper = BillingErrorMapper(),
