@@ -1,6 +1,14 @@
 /**
  * E2E tests for Google Drive mount integration through the mock backend.
  *
+ * QUARANTINE (fullstack-e2e): runs NON-BLOCKING in the 9-spec CI job — these
+ * sections 73/74 are flaky only under full-suite shared-process load (DDB-seeded
+ * fs_mount + in-memory Drive mock race; a different subset of seeded-file read
+ * tests fails each run). They pass deterministically standalone (10/10) and paired
+ * with google-calendar-mock (23/23), so this spec is still run on its own path
+ * trigger; it is just excluded from the blocking aggregate. Fix = make the mock
+ * mount lookup deterministic under concurrent load, then re-add to the gated list.
+ *
  * Section 73 — Google Drive Mock Integration (5 tests)
  * Section 74 — Google Drive Mount File Operations (5 tests)
  *
