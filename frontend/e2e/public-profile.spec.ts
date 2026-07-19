@@ -275,7 +275,17 @@ for line in env.read_text().splitlines():
 ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
 tbl = ddb.Table('subscriptions')
 
-plan_id = 'plan_e2e_' + uuid.uuid4().hex[:8]
+# Purge previously-accumulated 'E2E Gold Plan' rows for this creator so
+# exactly ONE plan card renders (older runs used random plan_ids).
+from boto3.dynamodb.conditions import Key as _Key
+_existing = tbl.query(KeyConditionExpression=_Key('pk').eq('CREATOR#${ALICE_SUB}') & _Key('sk').begins_with('PLAN#')).get('Items', [])
+for _it in _existing:
+    if _it.get('name') == 'E2E Gold Plan':
+        tbl.delete_item(Key={'pk': _it['pk'], 'sk': _it['sk']})
+
+# Stable id so re-runs UPSERT the same plan (fixed name 'E2E Gold Plan'
+# otherwise accumulates duplicate cards -> strict-mode violation).
+plan_id = 'plan_e2e_gold_fixed'
 tbl.put_item(Item={
     'pk': 'CREATOR#${ALICE_SUB}',
     'sk': f'PLAN#{plan_id}',

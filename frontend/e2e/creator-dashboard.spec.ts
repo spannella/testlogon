@@ -462,7 +462,7 @@ test.describe("116 . Dashboard UI", () => {
     await page.goto(`${BASE}/creator-dashboard`, { waitUntil: "domcontentloaded" });
 
     // Wait for the page to load
-    await expect(page.getByText("Creator Dashboard")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Creator Dashboard" })).toBeVisible({ timeout: 10_000 });
 
     // KPI cards should be visible
     await expect(page.getByText("Today's Earnings")).toBeVisible();
@@ -479,7 +479,7 @@ test.describe("116 . Dashboard UI", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/creator-dashboard`, { waitUntil: "domcontentloaded" });
 
-    await expect(page.getByText("Creator Dashboard")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Creator Dashboard" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("button", { name: "New Post" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Go Live" })).toBeVisible();
 
@@ -492,7 +492,7 @@ test.describe("116 . Dashboard UI", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/creator-dashboard`, { waitUntil: "domcontentloaded" });
 
-    await expect(page.getByText("Creator Dashboard")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Creator Dashboard" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Top Content")).toBeVisible();
 
     await ctx.close();
@@ -504,7 +504,7 @@ test.describe("116 . Dashboard UI", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/creator-dashboard`, { waitUntil: "domcontentloaded" });
 
-    await expect(page.getByText("Creator Dashboard")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Creator Dashboard" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Earnings Breakdown")).toBeVisible();
 
     await ctx.close();
@@ -543,7 +543,7 @@ test.describe("116 . Dashboard UI", () => {
     });
 
     await page.goto(`${BASE}/creator-dashboard`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByText("Creator Dashboard")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Creator Dashboard" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Some data sources are currently unavailable")).toBeVisible();
 
     await ctx.close();
@@ -557,7 +557,7 @@ test.describe("116 . Dashboard UI", () => {
 
     // Navigate by URL
     await page.goto(`${BASE}/creator-dashboard`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByText("Creator Dashboard")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Creator Dashboard" })).toBeVisible({ timeout: 10_000 });
     expect(page.url()).toContain("/creator-dashboard");
 
     await ctx.close();
@@ -597,7 +597,7 @@ test.describe("117 . Milestone Settings", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/creator-dashboard`, { waitUntil: "domcontentloaded" });
 
-    await expect(page.getByText("Creator Dashboard")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Creator Dashboard" })).toBeVisible({ timeout: 10_000 });
 
     // Wait for milestones section to appear (needs time for the milestones query)
     const settingsBtn = page.getByLabel("Milestone Settings");
@@ -616,7 +616,7 @@ test.describe("117 . Milestone Settings", () => {
     await injectAuth(page, ALICE_ID);
     await page.goto(`${BASE}/creator-dashboard`, { waitUntil: "domcontentloaded" });
 
-    await expect(page.getByText("Creator Dashboard")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Creator Dashboard" })).toBeVisible({ timeout: 10_000 });
 
     const settingsBtn = page.getByLabel("Milestone Settings");
     await expect(settingsBtn).toBeVisible({ timeout: 5_000 });
