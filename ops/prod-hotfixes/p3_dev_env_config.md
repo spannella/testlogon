@@ -13,6 +13,13 @@ green. They are NOT product bugs — the app correctly refuses when unconfigured
 - FILEMGR_S3_MOUNTS_ENABLED=true                    # else GET /v1/fs/mounts (S3 handler) 404 'not found'
 - FILEMGR_S3_MOUNTS_WRITE_ENABLED=true
 - FILEMGR_GOOGLE_DRIVE_MOUNTS_ENABLED=true         # google-drive-mount file listing (google-drive-mock 73.x)
+  # ^ REQUIRES the 4 Google OAuth vars below, else uvicorn STARTUP fails
+  #   (validate_google_drive_mount_oauth_configuration). Dummy values are fine —
+  #   google-drive-mock uses the /mock/google-drive/* API, not the real OAuth flow.
+- GOOGLE_OAUTH_CLIENT_ID=<dummy>
+- GOOGLE_OAUTH_CLIENT_SECRET=<dummy>
+- GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3000/oauth/google/callback
+- GOOGLE_OAUTH_REDIRECT_URI_ALLOWLIST=http://localhost:3000/oauth/google/callback
 
 (The CI parity flag file scripts/ci-e2e-feature-flags.env sets
 FILEMGR_SFTP_MOUNTS_ENABLED=true but NOT the table-name / credentials-table /
