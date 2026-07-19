@@ -268,6 +268,8 @@ const KycMetricsDashboard = lazy(() => import("@/pages/admin/KycMetricsDashboard
 const CatalogDepthPage = lazy(() => import("@/pages/catalogDepth/CatalogDepthPage"));
 const OrdersPage = lazy(() => import("@/pages/orders/OrdersPage"));
 const OrderDetailPage = lazy(() => import("@/pages/orders/OrderDetailPage"));
+const SellerSalesPage = lazy(() => import("@/pages/seller/SellerSalesPage"));
+const SellerSaleDetailPage = lazy(() => import("@/pages/seller/SellerSaleDetailPage"));
 const PosTerminalPage = lazy(() => import("@/pages/pos/PosTerminalPage"));
 const PosReportsPage = lazy(() => import("@/pages/pos/PosReportsPage"));
 const BomEditorPage = lazy(() => import("@/pages/manufacturing/BomEditorPage"));
@@ -510,6 +512,8 @@ export default function App() {
           {/* OFBiz frontend batch 1 */}
           <Route path="orders" element={<OrdersPage />} />
           <Route path="orders/:orderId" element={<OrderDetailPage />} />
+          <Route path="seller/sales" element={<SellerSalesPage />} />
+          <Route path="seller/sales/:shipGroupId" element={<SellerSaleDetailPage />} />
           <Route path="ofbiz/catalog-depth" element={<CatalogDepthPage />} />
           <Route path="ofbiz/pos" element={<PosTerminalPage />} />
           <Route path="ofbiz/pos/reports" element={<PosReportsPage />} />

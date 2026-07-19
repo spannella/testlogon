@@ -340,6 +340,7 @@ e2e/search-files.spec.ts
 e2e/search-messaging.spec.ts
 e2e/security-groups.spec.ts
 e2e/seller-buyer-tracking.spec.ts
+e2e/seller-sales-dashboard.spec.ts
 e2e/seo-meta.spec.ts
 e2e/seo-metadata.spec.ts
 e2e/shipping.spec.ts

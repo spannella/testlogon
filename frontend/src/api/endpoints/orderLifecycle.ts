@@ -81,6 +81,29 @@ export interface ShipGroup {
 }
 
 /** Mirror of app.models.OrderLifecycleOut. */
+/**
+ * ECOMX-E1: compact inline shipment surfaced on the buyer ORDER list/detail.
+ * Joined from the seller ship-group(s) via the order_fulfillment_bridge so the
+ * buyer sees the real carrier / tracking# / status the seller entered WITHOUT
+ * needing the ship_group_id. Mirror of app.models.OrderShipmentOut.
+ */
+export interface OrderShipmentLastEvent {
+  status?: string;
+  description?: string;
+  ts?: number;
+  [k: string]: unknown;
+}
+
+export interface OrderShipment {
+  ship_group_id: string;
+  carrier: string;
+  tracking_number: string;
+  tracking_url: string;
+  status: string;
+  last_event: OrderShipmentLastEvent | null;
+  updated_at: number;
+}
+
 export interface OrderLifecycle {
   order_id: string;
   status: string; // legacy mirror status
@@ -108,6 +131,13 @@ export interface OrderLifecycle {
 
   // Joined order items
   line_items: OrderLineItem[] | null;
+
+  // ECOMX-E1: buyer-visible inline shipments (carrier/number/status/last-event)
+  // joined from the seller ship groups. null = not populated.
+  shipments: OrderShipment[] | null;
+  // Derived aggregate over the ship groups (e.g. shipped / partially_shipped /
+  // delivered). null when there is nothing shipped yet.
+  fulfillment_status: string | null;
 }
 
 /** Mirror of app.models.OrderTransitionResult. */
@@ -147,6 +177,10 @@ export interface OrderListItem {
   amount_cents: number;
   currency: string;
   line_item_count: number;
+
+  // ECOMX-E1: buyer-visible inline shipments on the LIST row (no id needed).
+  shipments?: OrderShipment[];
+  fulfillment_status?: string | null;
 }
 
 export interface OrderListOut {
