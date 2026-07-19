@@ -129,7 +129,11 @@ class FakePayoutSetupRepository : PayoutSetupRepository {
 
     // ---- PAY-13: routable payout-method doubles ----
 
-    var methodsResult: ApiResult<List<PayoutMethod>> = ApiResult.Success(emptyList())
+    // PAY-52: default to ONE verified destination so the withdraw form auto-selects it and submit() is
+    // not (correctly) blocked on a missing payout method. Tests that exercise the empty/unverified paths
+    // override this.
+    var methodsResult: ApiResult<List<PayoutMethod>> =
+        ApiResult.Success(listOf(sampleMethod(status = PayoutMethodStatus.VERIFIED, isDefault = true)))
     var addMethodResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod())
     var verifyResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod(status = PayoutMethodStatus.VERIFIED))
     var setDefaultResult: ApiResult<PayoutMethod> = ApiResult.Success(sampleMethod(isDefault = true))
