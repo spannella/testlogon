@@ -63,6 +63,7 @@ class FakePayoutsRepository : PayoutsRepository {
     override suspend fun requestPayout(
         amountCents: Long,
         method: String,
+        methodId: String?,
         notes: String,
         currency: String,
     ): ApiResult<PayoutCreateResult> {
@@ -71,12 +72,22 @@ class FakePayoutsRepository : PayoutsRepository {
     }
 
     override suspend fun cancelPayout(payoutId: String): ApiResult<PayoutActionResult> = cancelResult
+
+    // PAY-50/51 additions (wallet summary + payout detail). Programmable; default not-configured.
+    var walletResult: ApiResult<com.testlogon.android.data.payouts.WalletSummary> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var payoutDetailResult: ApiResult<com.testlogon.android.data.payouts.PayoutDetail> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+
+    override suspend fun getWallet() = walletResult
+    override suspend fun getPayoutDetail(payoutId: String) = payoutDetailResult
 }
 
 /**
  * AND-259 — a [PayoutSetupRepository] double that records whether the backend payout was reached. The
- * default [requestOutcome] is [PayoutRequestOutcome.NotConfigured] to mirror the BillingAuthorizer stub
- * (no real payout executed).
+ * default [requestOutcome] is [PayoutRequestOutcome.Error] (unset). PAY-52 removed the former
+ * BillingAuthorizer NotConfigured short-circuit; requestPayout now hits the real gate-enforced backend,
+ * so the outcome is Created on success or Error otherwise. A test opting into the payout path programs it.
  */
 class FakePayoutSetupRepository : PayoutSetupRepository {
 
@@ -84,7 +95,8 @@ class FakePayoutSetupRepository : PayoutSetupRepository {
         PayoutSetupData(balance = sampleBalance(), recentPayouts = emptyList(), tierStatus = sampleTierStatus(eligible = true)),
     )
     var refreshResult: ApiResult<TierStatus> = ApiResult.Success(sampleTierStatus(eligible = true))
-    var requestOutcome: PayoutRequestOutcome = PayoutRequestOutcome.NotConfigured
+    var requestOutcome: PayoutRequestOutcome =
+        PayoutRequestOutcome.Error(ApiResult.Failure(ApiError(status = 500, message = "not configured")))
 
     var requestPayoutCalls = 0
         private set

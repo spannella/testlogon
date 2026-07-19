@@ -88,6 +88,58 @@ class TestSubscriptionsRepository : SubscriptionsRepository {
         giftCalls++
         return giftResult
     }
+
+    // ---- SUBX-40/43 + SUB-E4 additions (creator tier authoring, subscriber mgmt, analytics) ----
+    // Programmable results; default to a "not configured" failure so a test opting into these
+    // surfaces must set them explicitly (mirrors the pre-existing style above).
+    var creatorTiersResult: ApiResult<List<SubscriptionTier>> = ApiResult.Success(emptyList())
+    var myTiersResult: ApiResult<List<SubscriptionTier>> = ApiResult.Success(emptyList())
+    var createTierResult: ApiResult<SubscriptionTier> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var updateTierResult: ApiResult<SubscriptionTier> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var archiveTierResult: ApiResult<SubscriptionTier> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var reorderTiersResult: ApiResult<List<SubscriptionTier>> = ApiResult.Success(emptyList())
+    var refundSubscriberResult: ApiResult<SubscriptionRefundResult> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var retryPaymentResult: ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var mySubscribersResult: ApiResult<CreatorSubscriberPage> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var myAnalyticsResult: ApiResult<SubscriptionAnalytics> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var removeSubscriberResult: ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var stopSubscriberRenewalResult: ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+
+    override suspend fun getMyTiers() = myTiersResult
+    override suspend fun createTier(body: PlanWriteReqDto) = createTierResult
+    override suspend fun updateTier(planId: String, body: PlanWriteReqDto) = updateTierResult
+    override suspend fun archiveTier(planId: String) = archiveTierResult
+    override suspend fun reorderTiers(planIds: List<String>) = reorderTiersResult
+    override suspend fun refundSubscriber(
+        subscriptionId: String,
+        fraction: Double?,
+        reason: String?,
+    ) = refundSubscriberResult
+
+    override suspend fun retryPayment(
+        subscriptionId: String,
+        body: RetryPaymentReqDto,
+    ) = retryPaymentResult
+
+    override suspend fun getMySubscribers(
+        status: String?,
+        planId: String?,
+        limit: Int?,
+        cursor: String?,
+    ) = mySubscribersResult
+
+    override suspend fun getMyAnalytics(periodDays: Int?) = myAnalyticsResult
+    override suspend fun removeSubscriber(subscriptionId: String, reason: String?) = removeSubscriberResult
+    override suspend fun stopSubscriberRenewal(subscriptionId: String, reason: String?) = stopSubscriberRenewalResult
 }
 
 /** Sample [CreatorSubscription] builder (NOT named like an interface member). */

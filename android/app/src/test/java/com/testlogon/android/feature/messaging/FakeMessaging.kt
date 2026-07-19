@@ -111,6 +111,13 @@ class FakeMessagingRepository : MessagingRepository {
         lockDescription: String?,
         sendAtEpochSeconds: Long?,
         expiresInSeconds: Long?,
+        countdownTargetEpochSeconds: Long?,
+        countdownTitle: String?,
+        countdownRevealText: String?,
+        countdownRevealImage: com.testlogon.android.data.messaging.LotteryImageRef?,
+        tipAmountCents: Long?,
+        tipPaymentMethodId: String?,
+        tipRecipientId: String?,
     ): ApiResult<Message> {
         return when (val result = sendResult) {
             is ApiResult.Success -> {
@@ -649,6 +656,8 @@ class FakeMessagingRepository : MessagingRepository {
         localFilePath: String,
         durationSeconds: Double,
         waveform: List<Float>,
+        consumptionPolicy: String,
+        sendAtEpochSeconds: Long?,
     ): ApiResult<Message> {
         voiceSendCalls += Triple(conversationId, clientId, localFilePath)
         return when (val result = voiceSendResult) {
@@ -801,7 +810,59 @@ class FakeMessagingRepository : MessagingRepository {
         maxSelections: Int?,
         closesAt: Long?,
         text: String?,
+        allowWriteIn: Boolean,
     ): ApiResult<Unit> = ApiResult.Success(Unit)
+
+    // MSG program additions (view-once media consumption, mixed gallery, encrypted image fetch,
+    // tip-reactions, lottery-option media upload). Programmable; sensible defaults.
+    val consumeOnceMediaCalls = mutableListOf<Triple<String, String, String>>()
+    val mixedGalleryCalls = mutableListOf<String>()
+    val tipReactCalls = mutableListOf<Pair<String, String>>()
+    var tipReactResult: ApiResult<com.testlogon.android.data.messaging.TipReactReceipt> =
+        ApiResult.Success(
+            com.testlogon.android.data.messaging.TipReactReceipt(
+                tipPaymentId = "tp_1",
+                chargedCents = 0L,
+                netCents = 0L,
+                recipientId = null,
+                emoji = null,
+            ),
+        )
+
+    override suspend fun consumeOnceMedia(conversationId: String, messageId: String, trigger: String) {
+        consumeOnceMediaCalls += Triple(conversationId, messageId, trigger)
+    }
+
+    override suspend fun sendMixedGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        media: List<com.testlogon.android.data.messaging.MediaItem>,
+        caption: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> {
+        mixedGalleryCalls += clientId
+        return sendResult
+    }
+
+    override suspend fun fetchEncryptedImageBytes(url: String): ByteArray? = null
+
+    override suspend fun tipReactMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        emoji: String?,
+        paymentMethodId: String?,
+    ): ApiResult<com.testlogon.android.data.messaging.TipReactReceipt> {
+        tipReactCalls += conversationId to messageId
+        return tipReactResult
+    }
+
+    override suspend fun uploadLotteryOptionMedia(
+        conversationId: String,
+        localUri: String,
+        isVideo: Boolean,
+    ): String? = null
 
     override suspend fun refreshMeetingPoll(
         conversationId: String,

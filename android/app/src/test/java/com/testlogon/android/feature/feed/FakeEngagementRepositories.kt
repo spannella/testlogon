@@ -154,6 +154,48 @@ class FakePollRepository(
         removeCalls += postId to questionId
         return voteResult(postId, questionId, "")
     }
+
+    // Write-in program (poll write-in options + paginated results). Programmable; default success.
+    val writeInCalls = mutableListOf<Triple<String, String, String>>()
+    var writeInResult: (postId: String, questionId: String, text: String) -> ApiResult<com.testlogon.android.data.feed.PollWriteInResponseDto> =
+        { _, questionId, text ->
+            ApiResult.Success(
+                com.testlogon.android.data.feed.PollWriteInResponseDto(
+                    questionId = questionId,
+                    created = true,
+                    text = text,
+                ),
+            )
+        }
+    var pollResultsResult: ApiResult<com.testlogon.android.data.feed.PollResultsPage> =
+        ApiResult.Success(
+            com.testlogon.android.data.feed.PollResultsPage(
+                questionId = "",
+                options = emptyList(),
+                counts = emptyMap(),
+                totalOptions = 0,
+                hasMore = false,
+                nextOffset = null,
+                totalVotes = 0,
+                myVoteOptionIds = emptyList(),
+            ),
+        )
+
+    override suspend fun writeIn(
+        postId: String,
+        questionId: String,
+        text: String,
+    ): ApiResult<com.testlogon.android.data.feed.PollWriteInResponseDto> {
+        writeInCalls += Triple(postId, questionId, text)
+        return writeInResult(postId, questionId, text)
+    }
+
+    override suspend fun pollResults(
+        postId: String,
+        questionId: String,
+        offset: Int,
+        topN: Int,
+    ): ApiResult<com.testlogon.android.data.feed.PollResultsPage> = pollResultsResult
 }
 
 /**
