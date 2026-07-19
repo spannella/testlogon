@@ -1,0 +1,195 @@
+name: Web E2E (vertical + money gate)
+
+# Honest green-baseline gate for the full Playwright web suite.
+#
+# Runs the 420 specs verified green-for-the-right-reason by the P1-P4 e2e
+# green-up (frontend/e2e/ci-gate-green.txt). Stands up the same local dev
+# stack as fullstack-e2e.yml (DynamoDB Local + moto + backend + Vite), applies
+# the full 95-flag CI feature-flag parity env, runs the broad seed scripts,
+# then executes the gate list in <=10-spec shards with --workers=1 and a
+# backend-only restart between shards (the dev uvicorn busy-loops under
+# sustained load; per-shard restart is the proven mitigation from the green-up).
+#
+# SAFETY / TRIGGERS:
+#   * workflow_dispatch  -> always available, runs the full gate. Primary entry.
+#   * pull_request (app/** + frontend/e2e/** + src) -> OPT-IN: the heavy gate
+#     job only runs when the PR carries the `run-web-e2e` label (see the `if:`
+#     guard). This broadens the trigger so contract regressions CAN gate PRs
+#     without forcing a ~60-min job onto every PR or destabilising the existing
+#     fullstack-e2e job. Drop the label guard (set `if: true`) to promote it to
+#     an always-on required check once it has soaked.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "app/**"
+      - "frontend/e2e/**"
+      - "frontend/src/**"
+      - "scripts/ci-e2e-feature-flags.env"
+      - "scripts/seed_demo_data.py"
+      - "scripts/local-ddb-seed.py"
+      - "scripts/local-ddb-init.py"
+      - ".github/workflows/web-e2e.yml"
+
+concurrency:
+  group: web-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-e2e:
+    # OPT-IN on PRs: only run when explicitly requested via the label, so this
+    # heavy gate never silently breaks unrelated PRs. Always runs on manual
+    # dispatch. Remove this guard (set to `if: true`) to make it a hard gate.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-web-e2e')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Serve the SPA at "/" so bare app-route navigations resolve (P1 harness fix),
+    # mirroring how prod serves index.html at "/". Read by frontend/vite.config.ts.
+    env:
+      E2E_BASE_ROOT: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20 (repo targets 20; runner default 22 breaks native deps)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps (deterministic)
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install just (avoids setup_ubuntu's just.systems curl, which 403s in CI)
+        uses: extractions/setup-just@v2
+
+      - name: Bootstrap dev host (Java, venv+deps, moto, Playwright, .env.local)
+        run: bash scripts/setup_ubuntu.sh
+
+      - name: Put project venv on PATH
+        run: echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Enable the full 95-flag E2E feature-flag parity env (before stack boot)
+        run: |
+          cat scripts/ci-e2e-feature-flags.env >> .env.local
+          # Secrets/handles that the green-up added to the DEV host's .env.local
+          # but that are NOT in .env.local.example (what setup_ubuntu.sh seeds CI
+          # from) and NOT in the flags env. Without these the playback-entitlement,
+          # WS-token, TURN, and SFTP-mount specs 500 in CI. API_KEY_PEPPER is left
+          # to setup_ubuntu.sh (it auto-generates one). Values are non-secret e2e
+          # fixtures (local moto/DDB-Local only), safe to commit.
+          {
+            echo "PLAYBACK_ENTITLEMENT_SECRET=e2e-playback-entitlement-secret-32chars-min"
+            echo "WS_TOKEN_SECRET=e2e-ws-token-secret-32-characters-minimum"
+            echo "MESSAGING_WEBRTC_TURN_SECRET=tlturnsecret123"
+            echo "FILEMGR_SFTP_CREDENTIALS_KMS_KEY_ID=9ec9cebc-b6f2-47f4-8bac-f1cf17ee1e2e"
+            echo "FILEMGR_SFTP_CREDENTIALS_TABLE_NAME=filemgr_sftp_credentials"
+            echo "FILEMGR_SFTP_MOUNTS_TABLE_NAME=filemgr_sftp_mounts"
+          } >> .env.local
+          {
+            echo "VITE_CALL_RECORDING_ENABLED=true"
+            echo "VITE_CANONICAL_PROFILE_NAVIGATION_ENABLED=true"
+            echo "VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true"
+          } >> frontend/.env.local
+
+      - name: Start dev stack + seed E2E sessions
+        run: just up
+
+      - name: Wait for backend + frontend to be ready
+        run: |
+          ok=0
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8000/health >/dev/null \
+               && curl -sf http://localhost:3000/ >/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::stack did not come up"; scripts/dev.sh status || true
+            echo "----- backend.log -----"; tail -n 150 .logs/dev/backend.log 2>/dev/null || true
+            exit 1
+          fi
+          echo "stack is up"
+
+      - name: Broad seed (hotels/ERP/property/CRM/ATS/ads/newsfeed/shop + payout gate + moderation reset)
+        run: |
+          set -x
+          # Seed scripts pass explicit test/test creds via the app clients; the
+          # DDB-Local instance partitions by (access_key,region) without -sharedDb,
+          # so a credential-less client would land in the wrong namespace.
+          python3 scripts/local-ddb-init.py || true
+          python3 scripts/local-ddb-seed.py || true
+          python3 scripts/seed_demo_data.py || true
+          python3 e2e_payout_gate_seed.py || true
+          python3 e2e_moderation_reset.py || true
+
+      # QUARANTINED RESIDUALS (7 of 427 spec files) — deliberately NOT in
+      # e2e/ci-gate-green.txt so a known-flaky spec can never redden the gate.
+      # These fail for environmental/timing reasons, not web-contract breakage:
+      #   1. messaging-features.spec.ts — scheduled-send waits ~480s for the real
+      #        deliver_at tick; non-deterministic under CI clock, flaps.
+      #   2. messaging-group.spec.ts    — group-tip recipient + presign-upload
+      #        ordering races when the shard is CPU-starved (TIP-105).
+      #   3. feed.spec.ts               — accumulation-sensitive: asserts on feed
+      #        counts that drift as other specs post; passes solo, flaps in suite.
+      #   4. fan-club.spec.ts           — depends on real-charge PM seed landing on
+      #        the 8001 billing endpoint; seed timing-dependent.
+      #   5. ad-serving.spec.ts         — per-user 5-ad-account cap; leftover ad
+      #        accounts from prior runs push it over the limit intermittently.
+      #   6. pwa-optimistic-ui.spec.ts  — service-worker/optimistic-cache timing is
+      #        headless-flaky (offline-queue replay race).
+      #   7. theme-customization.spec.ts— font-size assertion depends on post-reload
+      #        hydration timing; flaps even after the 110.3 poll fix.
+      # Re-audit periodically; graduate any that stabilise into ci-gate-green.txt.
+      - name: Run the gate specs in <=10-spec shards, --workers=1, restart backend between shards
+        working-directory: frontend
+        run: |
+          set -uo pipefail
+          LIST=e2e/ci-gate-green.txt
+          mapfile -t SPECS < <(grep -vE '^\s*(#|$)' "$LIST")
+          echo "gate spec count: ${#SPECS[@]}"
+          SHARD=10
+          fail=0
+          total=${#SPECS[@]}
+          for ((i=0; i<total; i+=SHARD)); do
+            chunk=("${SPECS[@]:i:SHARD}")
+            echo "::group::shard $((i/SHARD)) — specs ${i}..$((i+${#chunk[@]}-1))"
+            # Backend-ONLY restart before each shard (busy-loop mitigation). We do
+            # NOT `dev.sh restart` — that clean-wipes DDB/moto and drops the seed.
+            # Kill just the uvicorn/backend process and relaunch it against the
+            # still-running DDB-Local + moto, preserving all seeded state.
+            if [ "$i" -ne 0 ]; then
+              pkill -9 -f 'uvicorn app.main' 2>/dev/null || true
+              pkill -9 -f 'run_local_mock_backend' 2>/dev/null || true
+              sleep 2
+              ( cd .. && nohup scripts/run_local_mock_backend.sh >> .logs/dev/backend.log 2>&1 & )
+              for j in $(seq 1 45); do
+                curl -sf http://localhost:8000/health >/dev/null && break; sleep 2
+              done
+            fi
+            # --timeout=600000 (10 min/test) overrides playwright.config's 30s cap
+            # so the async-delivery specs (messaging scheduled-send waits ~480s for
+            # the deliver_at tick, media-playback entitlement polls) don't false-fail
+            # under the serialized --workers=1 run. Cheap for the fast majority
+            # (a test only consumes wall-clock it actually needs).
+            PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 \
+              npx playwright test "${chunk[@]}" \
+              --workers=1 --timeout=600000 --reporter=line --output=test-results \
+              || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      - name: Upload logs + traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-debug
+          path: |
+            .logs/
+            frontend/test-results/
+            frontend/playwright-report/
+          if-no-files-found: ignore
