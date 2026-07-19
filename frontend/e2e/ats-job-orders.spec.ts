@@ -558,8 +558,21 @@ test.describe("Section 77 — JobOrderDetailPage UI", () => {
   });
   test.afterAll(async () => alicePage.close());
 
-  test("77.1 navigates to detail page and shows title", async () => {
+  // The detail page + its openings-summary card each fire their own async query
+  // (the summary card also has a 30s refetchInterval). Sharing one page across
+  // tests let a later navigation / in-flight refetch leave the page on a stale
+  // route for the next test. Re-navigate to the detail page before each detail
+  // assertion and use auto-retrying assertions so we read settled state, not a
+  // mid-flight "—" placeholder. (Product verified healthy: GET job + openings
+  // endpoints return the correct shape; see Sections 71/74.)
+  test.beforeEach(async () => {
     await alicePage.goto(`${BASE}/ats/jobs/${jobId}`, { waitUntil: "domcontentloaded" });
+    await expect(
+      alicePage.getByRole("heading", { name: `${TEST_TITLE} detail-page`, exact: true }),
+    ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("77.1 navigates to detail page and shows title", async () => {
     await expect(
       alicePage.getByRole("heading", { name: `${TEST_TITLE} detail-page`, exact: true }),
     ).toBeVisible();
@@ -577,8 +590,11 @@ test.describe("Section 77 — JobOrderDetailPage UI", () => {
   });
 
   test("77.4 openings-total shows correct count", async () => {
-    const totalText = await alicePage.getByTestId("openings-total").innerText();
-    expect(totalText.trim()).toBe("4");
+    // Auto-retrying assertion: waits for the summary query to settle (was a raw
+    // innerText() read that could catch the "—" loading placeholder).
+    await expect(alicePage.getByTestId("openings-total")).toHaveText("4", {
+      timeout: 15_000,
+    });
   });
 
   test("77.5 description is rendered", async () => {
@@ -596,8 +612,10 @@ test.describe("Section 77 — JobOrderDetailPage UI", () => {
 
   test("77.7 edit dialog pre-populates title", async () => {
     await alicePage.getByTestId("edit-job-btn").click();
-    const titleVal = await alicePage.getByTestId("ejo-title").inputValue();
-    expect(titleVal).toBe(`${TEST_TITLE} detail-page`);
+    await expect(alicePage.getByTestId("ejo-title")).toHaveValue(
+      `${TEST_TITLE} detail-page`,
+      { timeout: 10_000 },
+    );
     await alicePage.keyboard.press("Escape");
   });
 
