@@ -48,7 +48,7 @@ class BulkPayoutsDomainTest {
         assertEquals("po_5501", item.refId)
         assertEquals(4500L, item.amount.cents)
         assertEquals("USD", item.amount.currency)
-        assertEquals(PayoutStatus.COMPLETED, item.status) // "paid" -> COMPLETED (reuses AND-258 mapping)
+        assertEquals(PayoutStatus.PAID, item.status) // "paid" -> PAID (payout program split PAID/COMPLETED)
         assertEquals("creator_88", item.recipient)
     }
 

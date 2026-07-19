@@ -55,8 +55,9 @@ class PayoutsDomainTest {
         assertEquals(PayoutStatus.APPROVED, PayoutStatus.from("approved"))
         assertEquals(PayoutStatus.PROCESSING, PayoutStatus.from("processing"))
         assertEquals(PayoutStatus.COMPLETED, PayoutStatus.from("completed"))
-        assertEquals(PayoutStatus.COMPLETED, PayoutStatus.from("paid"))
-        assertEquals(PayoutStatus.COMPLETED, PayoutStatus.from("succeeded"))
+        // PAY: the program split PAID (rail settled) from COMPLETED — "paid"/"succeeded" -> PAID now.
+        assertEquals(PayoutStatus.PAID, PayoutStatus.from("paid"))
+        assertEquals(PayoutStatus.PAID, PayoutStatus.from("succeeded"))
         assertEquals(PayoutStatus.REJECTED, PayoutStatus.from("rejected"))
         assertEquals(PayoutStatus.CANCELLED, PayoutStatus.from("cancelled"))
         assertEquals(PayoutStatus.CANCELLED, PayoutStatus.from("canceled"))
