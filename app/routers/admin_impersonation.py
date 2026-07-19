@@ -207,14 +207,30 @@ def impersonation_audit(
     offset = int(c.get("offset", 0) or 0)
     capped = max(1, min(limit, 200))
 
-    items: list[Dict[str, Any]] = []
-    if actor_sub:
-        r = T.sessions.query(KeyConditionExpression=Key("user_sub").eq(actor_sub), Limit=500)
-        candidates = r.get("Items", [])
-    else:
-        r = T.sessions.scan(Limit=500)
-        candidates = r.get("Items", [])
+    # Paginate fully: impersonation rows live in the shared sessions table
+    # alongside (potentially thousands of) regular login sessions, so a single
+    # capped page can miss them entirely (audit log appears empty). Walk all
+    # pages, keeping only impersonation rows, until exhausted or a safety cap.
+    candidates: list[Dict[str, Any]] = []
+    _last_key = None
+    _pages = 0
+    while True:
+        if actor_sub:
+            _kw: Dict[str, Any] = {"KeyConditionExpression": Key("user_sub").eq(actor_sub)}
+        else:
+            _kw = {}
+        if _last_key:
+            _kw["ExclusiveStartKey"] = _last_key
+        r = T.sessions.query(**_kw) if actor_sub else T.sessions.scan(**_kw)
+        for _it in r.get("Items", []):
+            if _it.get("purpose") == "impersonation":
+                candidates.append(_it)
+        _last_key = r.get("LastEvaluatedKey")
+        _pages += 1
+        if not _last_key or _pages >= 100:
+            break
 
+    items: list[Dict[str, Any]] = []
     for it in candidates:
         if it.get("purpose") != "impersonation":
             continue
