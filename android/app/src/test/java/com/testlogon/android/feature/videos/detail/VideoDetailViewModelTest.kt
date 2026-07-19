@@ -32,10 +32,35 @@ class VideoDetailViewModelTest {
     private val provider = VideoControllerProvider { controller }
     private val authState = com.testlogon.android.feature.videos.FakeAuthStateProvider(authenticated = true)
 
+    private val adTrackerForCta = object : com.testlogon.android.data.ads.AdTrackRepository {
+        override suspend fun track(
+            event: com.testlogon.android.data.ads.AdEvent,
+            ad: com.testlogon.android.data.feed.SponsoredInfo,
+        ) = com.testlogon.android.core.model.ApiResult.Success(Unit)
+        override suspend fun clickCta(
+            adClickId: String,
+            action: com.testlogon.android.data.ads.CtaAction,
+        ) = com.testlogon.android.core.model.ApiResult.Success(Unit)
+    }
+    private val adAttributionForCta = com.testlogon.android.data.ads.AdClickAttributionStore()
+
+    /** VOD ad-supported repo; not exercised by the detail-load tests (defaults to no ad session). */
+    private val vodAdRepo = object : com.testlogon.android.data.vod.adsupported.VodAdSupportedRepository {
+        override suspend fun getSession(videoId: String) =
+            com.testlogon.android.core.model.ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "no ad session"))
+        override suspend fun start(videoId: String, resumePositionSeconds: Int) =
+            com.testlogon.android.core.model.ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "no ad session"))
+        override suspend fun reportBreak(videoId: String, breakId: String, eventType: String) =
+            com.testlogon.android.core.model.ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "no ad session"))
+    }
+
     private fun vm(id: String = "vid_1") = VideoDetailViewModel(
         repository = repo,
         controllerProvider = provider,
         authStateProvider = authState,
+        authStateStore = com.testlogon.android.data.auth.FakeAuthStateStore(),
+        vodAdRepo = vodAdRepo,
+        adCtaClicker = com.testlogon.android.data.ads.AdCtaClicker(adTrackerForCta, adAttributionForCta),
         savedStateHandle = SavedStateHandle(mapOf(VideoDetailViewModel.ARG_VIDEO_ID to id)),
     )
 

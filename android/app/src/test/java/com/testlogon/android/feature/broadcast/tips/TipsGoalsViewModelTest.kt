@@ -63,14 +63,26 @@ class TipsGoalsViewModelTest {
         override fun chatEvents(sessionId: String): Flow<ChatStreamSignal> = emptyFlow()
         override suspend fun loadHistory(sessionId: String, limit: Int): ApiResult<List<ChatMessage>> =
             ApiResult.Success(emptyList())
-        override suspend fun send(sessionId: String, text: String): ApiResult<ChatMessage> =
-            error("unused")
+        override suspend fun send(
+            sessionId: String,
+            text: String?,
+            options: com.testlogon.android.data.broadcast.chat.ChatComposeOptions,
+            imageUrl: String?,
+            videoUrl: String?,
+            thumbnailUrl: String?,
+        ): ApiResult<ChatMessage> = error("unused")
         override suspend fun reactToMessage(
             sessionId: String,
             messageId: String,
             emoji: String,
             action: String,
         ): ApiResult<Map<String, Int>> = ApiResult.Success(emptyMap())
+        override suspend fun unlock(sessionId: String, messageId: String, paymentMethodId: String): ApiResult<ChatMessage?> =
+            ApiResult.Success(null)
+        override suspend fun consumeView(sessionId: String, messageId: String): ApiResult<Unit> = ApiResult.Success(Unit)
+        override suspend fun uploadImage(localUri: String): ApiResult<String> = ApiResult.Success("")
+        override suspend fun uploadVideo(localUri: String): ApiResult<com.testlogon.android.data.broadcast.chat.BroadcastVideoUpload> =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "not exercised"))
         override fun selfId(): String? = "self"
     }
 

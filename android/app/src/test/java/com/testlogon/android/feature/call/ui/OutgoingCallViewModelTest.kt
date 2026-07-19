@@ -110,7 +110,13 @@ class OutgoingCallViewModelTest {
             capabilities = TelecomCapabilities(telecomManager = null),
             registry = ConnectionRegistry(),
         )
-        return OutgoingCallViewModel(manager, authorizer, telecom, saved)
+        return OutgoingCallViewModel(
+            manager,
+            authorizer,
+            telecom,
+            com.testlogon.android.feature.messaging.fakeDisplayNameResolver(),
+            saved,
+        )
     }
 
     @Test

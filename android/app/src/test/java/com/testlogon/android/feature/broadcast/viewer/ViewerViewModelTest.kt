@@ -59,7 +59,12 @@ class ViewerViewModelTest {
             event: String,
             adClickId: String,
             viewTimeMs: Int,
+            slotType: String,
         ): ApiResult<Unit> = ApiResult.Success(Unit)
+        override suspend fun adBreakState(sessionId: String): ApiResult<com.testlogon.android.data.broadcast.BroadcastAdBreakState> =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "not exercised"))
+        override suspend fun serveMidRoll(sessionId: String): ApiResult<com.testlogon.android.data.broadcast.BroadcastMidRollServe> =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "not exercised"))
     }
 
     private fun session(status: BroadcastSessionStatus) = BroadcastSession(
@@ -157,6 +162,19 @@ class ViewerViewModelTest {
             presence = presence,
             viewerCountRepo = viewerCountRepo,
             clock = fixedClock,
+            adCtaClicker = com.testlogon.android.data.ads.AdCtaClicker(
+                object : com.testlogon.android.data.ads.AdTrackRepository {
+                    override suspend fun track(
+                        event: com.testlogon.android.data.ads.AdEvent,
+                        ad: com.testlogon.android.data.feed.SponsoredInfo,
+                    ) = ApiResult.Success(Unit)
+                    override suspend fun clickCta(
+                        adClickId: String,
+                        action: com.testlogon.android.data.ads.CtaAction,
+                    ) = ApiResult.Success(Unit)
+                },
+                com.testlogon.android.data.ads.AdClickAttributionStore(),
+            ),
         )
     }
 

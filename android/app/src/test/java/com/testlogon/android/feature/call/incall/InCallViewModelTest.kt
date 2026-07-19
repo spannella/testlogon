@@ -90,7 +90,15 @@ class InCallViewModelTest {
     )
 
     private fun vm(callManager: CallManager): InCallViewModel =
-        InCallViewModel(callManager, CallStatsSampler(), recordingController(), com.testlogon.android.data.webrtc.CallMediaHolder(), SavedStateHandle(), com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer)
+        InCallViewModel(
+            callManager,
+            CallStatsSampler(),
+            recordingController(),
+            com.testlogon.android.data.webrtc.CallMediaHolder(),
+            com.testlogon.android.core.data.cache.Clock { 0L },
+            SavedStateHandle(),
+            com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer,
+        )
 
     /**
      * AND-302 — a [RecordingController] backed by a no-op repo + the FLAGGED stub capturer + an in-memory
@@ -120,7 +128,10 @@ class InCallViewModelTest {
             },
             capturer = com.testlogon.android.data.call.recording.StubRecordingCapturer(),
             pendingDao = FakePendingRecordingDao(),
-            storageClient = com.testlogon.android.data.upload.StorageUploadClient(okhttp3.OkHttpClient()),
+            storageClient = com.testlogon.android.data.upload.StorageUploadClient(
+                okhttp3.OkHttpClient(),
+                org.mockito.Mockito.mock(com.testlogon.android.core.network.SettingsStore::class.java),
+            ),
             clock = Clock { 0L },
             scope = CoroutineScope(UnconfinedTestDispatcher()),
         )

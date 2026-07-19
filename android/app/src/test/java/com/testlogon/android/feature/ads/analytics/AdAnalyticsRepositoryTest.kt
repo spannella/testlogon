@@ -108,6 +108,17 @@ class AdAnalyticsRepositoryTest {
             lastBreakdownDimension = dimension
             return breakdownResult
         }
+
+        // ADV-107/108/109/501 — create/mutate/ROAS endpoints; not exercised by the analytics-read tests.
+        override suspend fun createAdsAccount(body: com.testlogon.android.core.network.ads.AdAccountCreateIn) = error("unused")
+        override suspend fun createCampaign(accountId: String, body: com.testlogon.android.core.network.ads.AdCampaignCreateIn) = error("unused")
+        override suspend fun submitCampaign(accountId: String, campaignId: String) = error("unused")
+        override suspend fun getCampaign(accountId: String, campaignId: String) = error("unused")
+        override suspend fun updateCampaign(accountId: String, campaignId: String, body: com.testlogon.android.core.network.ads.AdCampaignUpdateIn) = error("unused")
+        override suspend fun createCreative(campaignId: String, body: com.testlogon.android.core.network.ads.AdCreativeCreateIn) = error("unused")
+        override suspend fun uploadCreativeAsset(campaignId: String, creativeId: String, file: okhttp3.MultipartBody.Part, assetType: okhttp3.RequestBody) = error("unused")
+        override suspend fun submitCreative(campaignId: String, creativeId: String) = error("unused")
+        override suspend fun getRoas(accountId: String, campaignId: String?, days: Int) = error("unused")
     }
 
     private fun repo(api: AdsAccountsApi): AdAnalyticsRepositoryImpl =

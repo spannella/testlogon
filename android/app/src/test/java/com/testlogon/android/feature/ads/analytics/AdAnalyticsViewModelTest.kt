@@ -72,6 +72,11 @@ class AdAnalyticsViewModelTest {
             dimension: BreakdownDimension,
             range: DateRange,
         ): ApiResult<List<AdBreakdownEntry>> = breakdownOutcome
+
+        // ADV — ROAS report; not exercised by these summary/timeseries/breakdown VM tests.
+        var roasOutcome: ApiResult<com.testlogon.android.core.model.ads.AdRoasReport> =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "not exercised"))
+        override suspend fun getRoas(accountId: String, days: Int) = roasOutcome
     }
 
     /** Fake accounts repo: only [listAccounts] is exercised (sample-id resolution); the rest are unused. */

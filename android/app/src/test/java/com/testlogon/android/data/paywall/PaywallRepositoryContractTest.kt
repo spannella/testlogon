@@ -45,7 +45,14 @@ class PaywallRepositoryContractTest {
         dao: FakeEntitlementDao = FakeEntitlementDao(),
     ): Pair<PaywallRepositoryImpl, FakeEntitlementDao> {
         val api = backend.retrofit(moshi).create(PaywallApi::class.java)
-        return PaywallRepositoryImpl(api, billing, dao, auth, ApiErrorParser(moshi)) to dao
+        return PaywallRepositoryImpl(
+            api,
+            billing,
+            com.testlogon.android.data.ads.AdClickAttributionStore(),
+            dao,
+            auth,
+            ApiErrorParser(moshi),
+        ) to dao
     }
 
     @Test
