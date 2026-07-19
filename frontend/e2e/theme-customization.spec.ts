@@ -364,9 +364,20 @@ test.describe("110. Font Size", () => {
 
   test("110.1 Large sets html fontSize to 18px", async () => {
     const largeBtn = page.locator("button[aria-pressed]", { hasText: "Large" }).first();
+    // Wait for the debounced (500ms) server sync PATCH so the SERVER also has
+    // font_size=large. Otherwise 110.3's reload runs loadServerPreferences, which
+    // overrides the rehydrated localStorage value back to the (stale) server
+    // default -> 16px. (Server is the source of truth on hydration.)
+    const syncDone = page.waitForResponse(
+      (r) =>
+        r.url().includes("/settings/preferences") &&
+        r.request().method() === "PATCH",
+      { timeout: 10_000 },
+    );
     await largeBtn.click();
     const fontSize = await page.evaluate(() => document.documentElement.style.fontSize);
     expect(fontSize).toBe("18px");
+    await syncDone.catch(() => {});
   });
 
   test("110.2 Font size reflected in computed style", async () => {
