@@ -375,6 +375,91 @@ class FakeProfileRepository : com.testlogon.android.data.profile.ProfileReposito
 fun fakeDisplayNameResolver() =
     com.testlogon.android.data.profile.DisplayNameResolver(FakeProfileRepository())
 
+/**
+ * P2 — fake [com.testlogon.android.data.feed.RepostRepository]. Records calls; returns a configurable
+ * repost_count (default 1). Feed VM tests that don't exercise repost just take the default success.
+ */
+class FakeRepostRepository(
+    var repostResult: ApiResult<Int?> = ApiResult.Success(1),
+    var undoResult: ApiResult<Int?> = ApiResult.Success(0),
+) : com.testlogon.android.data.feed.RepostRepository {
+    val repostCalls = mutableListOf<Pair<String, String?>>()
+    val undoCalls = mutableListOf<String>()
+    override suspend fun repost(postId: String, quote: String?): ApiResult<Int?> {
+        repostCalls += postId to quote
+        return repostResult
+    }
+    override suspend fun undo(postId: String): ApiResult<Int?> {
+        undoCalls += postId
+        return undoResult
+    }
+}
+
+/** P2 — no-op [com.testlogon.android.data.ads.AdTrackRepository]; ad beacons are best-effort. */
+class FakeAdTrackRepository : com.testlogon.android.data.ads.AdTrackRepository {
+    val trackCalls = mutableListOf<com.testlogon.android.data.ads.AdEvent>()
+    val ctaCalls = mutableListOf<Pair<String, com.testlogon.android.data.ads.CtaAction>>()
+    override suspend fun track(
+        event: com.testlogon.android.data.ads.AdEvent,
+        ad: com.testlogon.android.data.feed.SponsoredInfo,
+    ): ApiResult<Unit> {
+        trackCalls += event
+        return ApiResult.Success(Unit)
+    }
+    override suspend fun clickCta(
+        adClickId: String,
+        action: com.testlogon.android.data.ads.CtaAction,
+    ): ApiResult<Unit> {
+        ctaCalls += adClickId to action
+        return ApiResult.Success(Unit)
+    }
+}
+
+/** P2 — no-op [SponsoredPostRepository]; the feed only fires best-effort impression/click beacons. */
+class FakeSponsoredPostRepository : com.testlogon.android.feature.sponsoredpost.data.SponsoredPostRepository {
+    override suspend fun createProposal(req: com.testlogon.android.core.network.sponsoredpost.SponsoredPostProposalReq) =
+        ApiResult.Failure(ApiError(status = 0, message = "stub"))
+    override suspend fun inbox() = ApiResult.Success(emptyList<com.testlogon.android.feature.sponsoredpost.data.SponsoredPostProposal>())
+    override suspend fun outbox() = ApiResult.Success(emptyList<com.testlogon.android.feature.sponsoredpost.data.SponsoredPostProposal>())
+    override suspend fun approve(proposalId: String) = ApiResult.Failure(ApiError(status = 0, message = "stub"))
+    override suspend fun reject(proposalId: String, reason: String) = ApiResult.Failure(ApiError(status = 0, message = "stub"))
+    override suspend fun placement(postId: String) = ApiResult.Failure(ApiError(status = 0, message = "stub"))
+    override suspend fun fireImpression(postId: String) {}
+    override suspend fun fireClick(postId: String) {}
+}
+
+/**
+ * P2 — shared [FeedViewModel] factory. The five repos the feed tests actually vary are named params; the
+ * ad/repost/refresh/current-user deps the shipped ads + repost programs added default to honest no-op
+ * fakes so a test only wires what it asserts on.
+ */
+fun feedViewModel(
+    repository: FakeFeedRepository,
+    engagement: FakeEngagementRepository = FakeEngagementRepository(),
+    actions: FakePostActionsRepository = FakePostActionsRepository(),
+    bookmarks: FakeFeedBookmarkRepository = FakeFeedBookmarkRepository(),
+    polls: FakePollRepository = FakePollRepository(),
+    reposts: FakeRepostRepository = FakeRepostRepository(),
+): FeedViewModel {
+    val adTracker = FakeAdTrackRepository()
+    val adAttribution = com.testlogon.android.data.ads.AdClickAttributionStore()
+    return FeedViewModel(
+        repository = repository,
+        engagement = engagement,
+        actions = actions,
+        reposts = reposts,
+        bookmarks = bookmarks,
+        polls = polls,
+        displayNames = fakeDisplayNameResolver(),
+        currentUser = fakeCurrentUserRepository(),
+        feedRefreshBus = com.testlogon.android.data.feed.FeedRefreshBus(),
+        adTracker = adTracker,
+        adAttribution = adAttribution,
+        adCtaClicker = com.testlogon.android.data.ads.AdCtaClicker(adTracker, adAttribution),
+        sponsoredPostRepo = FakeSponsoredPostRepository(),
+    )
+}
+
 /** #24 — no-op [com.testlogon.android.data.feed.CommentImageUploader] for the comments VM test. */
 class FakeCommentImageUploader(
     var result: ApiResult<String> = ApiResult.Success("/uploads/object?s3_key=test"),

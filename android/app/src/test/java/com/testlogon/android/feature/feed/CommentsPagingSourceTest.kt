@@ -2,7 +2,6 @@ package com.testlogon.android.feature.feed
 
 import androidx.paging.PagingSource
 import com.testlogon.android.core.model.ApiResult
-import com.testlogon.android.data.feed.Comment
 import com.testlogon.android.data.feed.CommentPage
 import com.testlogon.android.data.feed.CommentsRepository
 import kotlinx.coroutines.test.runTest
@@ -14,29 +13,18 @@ import org.junit.Test
 /** AND-174 — [CommentsPagingSource] load + end-of-pagination + error tests. */
 class CommentsPagingSourceTest {
 
+    /**
+     * P2 — thin repo over the shared [FakeCommentsRepository] whose getComments returns a single canned
+     * result (success page or failure), so the paging source's load/end/error branches can be exercised
+     * without re-declaring the whole (grown) CommentsRepository surface.
+     */
     private class StubRepo(
         private val result: ApiResult<CommentPage>,
-    ) : CommentsRepository {
-        override val repliesSupported = false
+    ) : CommentsRepository by FakeCommentsRepository() {
         override suspend fun getComments(postId: String, cursor: String?, limit: Int) = result
-        override suspend fun addComment(postId: String, body: String, parentId: String?) =
-            ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
-        override suspend fun deleteComment(postId: String, commentId: String) =
-            ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
-        override suspend fun addGifComment(postId: String, gifUrl: String, altText: String?, parentId: String?) =
-            ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
-        override suspend fun addStickerComment(postId: String, stickerId: String, collectionId: String, stickerUrl: String, altText: String?, parentId: String?) =
-            ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
-        override suspend fun tipComment(postId: String, commentId: String, amountCents: Int) =
-            ApiResult.Success(Unit)
-        override suspend fun editComment(postId: String, commentId: String, body: String) =
-            ApiResult.Failure(com.testlogon.android.core.model.ApiError(0, "x"))
     }
 
-    private fun comment(id: String) = Comment(
-        id = id, postId = "p1", parentId = null, authorId = "u", body = "b",
-        createdAtEpochSeconds = 1L, updatedAtEpochSeconds = null, localKey = id,
-    )
+    private fun comment(id: String) = FakeCommentsRepository.comment(id = id, postId = "p1")
 
     @Test
     fun load_success_returnsPage_withNextKey() = runTest {
