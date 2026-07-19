@@ -983,8 +983,9 @@ test.describe("108 — Activity Feed UI", () => {
     await page.getByRole("tab", { name: "Tips & Earnings" }).click();
     await page.waitForTimeout(1000);
 
-    // Should show total earned and tip count
-    await expect(page.getByText("Total Earned")).toBeVisible({ timeout: 5000 });
+    // Should show the net-earnings label + tip count. (TIPX-D1 renamed the total
+    // from 'Total Earned' to the honest 'Net tips received' — net of platform fee.)
+    await expect(page.getByText("Net tips received")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText("Tips Received")).toBeVisible({ timeout: 5000 });
 
     await page.close();
