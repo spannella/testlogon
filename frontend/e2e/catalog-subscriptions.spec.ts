@@ -743,7 +743,7 @@ test.describe("Section 63: Shop UI", () => {
     await expect(alicePage.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
 
     // Fill in category name
-    await alicePage.locator("#cat-name").fill(`UI Cat ${TS}`);
+    await alicePage.locator("#cat-name").fill(`!e2e-uicat ${TS}`);
 
     // Click the "Create" button inside the dialog
     await alicePage.getByRole("dialog").getByRole("button", { name: /^create$/i }).click();
@@ -756,7 +756,7 @@ test.describe("Section 63: Shop UI", () => {
     test.setTimeout(15_000);
     // After dialog closes and categories re-query, the new category button is visible
     await expect(
-      alicePage.getByRole("button", { name: `UI Cat ${TS}` }),
+      alicePage.getByRole("button", { name: `!e2e-uicat ${TS}` }),
     ).toBeVisible({ timeout: 8_000 });
   });
 });

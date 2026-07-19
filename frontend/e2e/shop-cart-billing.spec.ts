@@ -152,7 +152,7 @@ test.describe("2. Shop — catalog browse with test data", () => {
   let page: Page;
   let categoryId: string;
   let itemId: string;
-  const CAT_NAME = "E2E Test Category";
+  const CAT_NAME = `!e2e-cart ${Date.now()}`;
   const ITEM_NAME = "E2E Widget Pro";
 
   test.beforeAll(async ({ browser }) => {
