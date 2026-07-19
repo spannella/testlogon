@@ -74,7 +74,7 @@ class BulkPayoutsRepositoryContractTest {
         val batch = (result as ApiResult.Success).data
         assertEquals(1, batch.items.size)
         assertEquals("po_5501", batch.items[0].refId)
-        assertEquals(PayoutStatus.COMPLETED, batch.items[0].status)
+        assertEquals(PayoutStatus.PAID, batch.items[0].status) // "paid" -> PAID (payout program split PAID/COMPLETED)
 
         val req = backend.takeRequest()
         assertEquals("GET", req.method)

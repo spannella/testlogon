@@ -1,5 +1,7 @@
 package com.testlogon.android.data.messaging.helpdesk
 
+import com.testlogon.android.testutil.testMoshi
+
 import com.squareup.moshi.Moshi
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
@@ -24,7 +26,7 @@ class HelpdeskRepositoryContractTest {
     @get:Rule
     val backend = MockBackendRule()
 
-    private val moshi: Moshi = Moshi.Builder().build()
+    private val moshi: Moshi = testMoshi()
     private val auth = FakeAuthStateStore().apply { runBlocking { setAuthenticated("usr_me") } }
 
     private fun repo(): HelpdeskRepositoryImpl {

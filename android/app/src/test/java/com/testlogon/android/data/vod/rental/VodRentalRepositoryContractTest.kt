@@ -40,10 +40,23 @@ class VodRentalRepositoryContractTest {
     }
 
     @Test
-    fun rent_withStubBilling_returnsPaymentsUnavailable_andNeverCallsServer() = runTest {
+    fun rent_withStubBilling_debugBypass_authorizesBlankPm_andReachesServer() = runTest {
+        // The StubBillingAuthorizer now ships a DEV/DEMO bypass: in DEBUG builds (unit tests run debug) it
+        // authorizes with a BLANK payment_method_id so on-device VOD rentals work without a real vendor.
+        // So rent is NO LONGER short-circuited to PaymentsUnavailable — it authorizes and POSTs start +
+        // refreshes access (the backend dev path mock-completes a blank-pm charge).
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"video_id":"v1","rental_id":"r1","tier":"rental","already_active":false,
+                   "started":true,"expires_at":1749200000,"views_remaining":-1,"amount_cents":399,
+                   "duration_hours":48}""".trimIndent(),
+            ),
+        )
+        backend.enqueue(Fixtures.okBody("""{"active":true,"tier":"rental","expires_at":1749200000,"views_remaining":-1}"""))
+
         val outcome = repo(StubBillingAuthorizer()).rent("v1", "rental", durationHours = 48)
-        assertEquals(RentOutcome.PaymentsUnavailable, outcome)
-        assertEquals(0, backend.requestCount) // STOP-AND-FLAG: no start call, no charge
+        assertTrue(outcome is RentOutcome.Active)
+        assertEquals(2, backend.requestCount) // start + access refresh both reached the server
     }
 
     @Test

@@ -47,7 +47,12 @@ class DelegateRepositoriesTest {
         scope: CoroutineScope,
     ): Fixtures {
         val delegationRepository = DelegationRepositoryImpl(delegatesApi, store, errorParser)
-        val provider = DelegationContextProvider(delegationRepository, store, scope)
+        val provider = DelegationContextProvider(
+            delegationRepository,
+            store,
+            com.testlogon.android.core.network.delegates.DelegateRoutingStore(),
+            scope,
+        )
         return Fixtures(
             store = store,
             delegatesApi = delegatesApi,

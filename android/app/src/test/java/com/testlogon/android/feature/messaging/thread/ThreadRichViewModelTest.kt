@@ -42,10 +42,8 @@ class ThreadRichViewModelTest {
         repo.historyResult = ApiResult.Success(emptyList())
         val handle = SavedStateHandle(mapOf(ThreadViewModel.ARG_CONVERSATION_ID to "c1"))
         val context = org.mockito.Mockito.mock(android.content.Context::class.java)
-        return ThreadViewModel(
+        return com.testlogon.android.feature.messaging.newThreadViewModel(
             handle, repo, auth, stream, context,
-            com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory(context),
-            com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
             billing,
             com.testlogon.android.feature.messaging.FakeDraftRepository(),
             com.testlogon.android.feature.messaging.FakeTypingRepository(),
@@ -440,7 +438,7 @@ class ThreadRichViewModelTest {
         assertEquals(1, repo.tipCalls.size)
         assertEquals(500L, repo.tipCalls.single().amountCents)
         assertNull(v.state.value.tipSheet.messageId) // sheet closed
-        assertEquals("Tip sent", v.state.value.transientMessage)
+        assertTrue(v.state.value.transientMessage?.startsWith("Tip sent") == true) // now "Tip sent · $5.00"
     }
 
     @Test

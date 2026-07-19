@@ -1,0 +1,142 @@
+name: Android Unit — money/ecom core gate
+
+# Honest green-baseline gate for the TestLogon Android JVM unit-test suite,
+# SCOPED to the money / dispute / ecom / core packages.
+#
+# BACKGROUND: the whole :app unit-test source set was dead (did not compile)
+# because every shipped program used assembleDebug + on-device as the gate and
+# let the unit tests drift. The P1-P3 green-up recompiled and greened it. This
+# workflow keeps the highest-value slice (anything that charges, refunds, gates
+# entitlement, or moves an order) from silently rotting again.
+#
+# SAFETY / TRIGGERS (mirrors the web-e2e.yml opt-in-then-promote pattern):
+#   * workflow_dispatch -> always available, runs the scoped gate. Primary entry.
+#   * pull_request touching android/** -> OPT-IN: the job body only runs when the
+#     PR carries the `run-android-unit` label (see the `if:` guard). This lets
+#     app-logic regressions gate PRs without forcing the JVM test task onto every
+#     unrelated PR while it soaks. Drop the guard (set `if: true`) to promote it
+#     to an always-on required check once it has proven stable.
+#
+# The full 641-file suite runs in android.yml (build-and-unit-test job) on
+# pushes/PRs to the real branches; this file is the fast, targeted money gate.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-unit-money.yml"
+
+concurrency:
+  group: android-unit-money-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  money-unit:
+    name: Android unit tests (money/ecom/dispute/core)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-android-unit')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Write placeholder google-services.json (build-input only; real file is gitignored)
+        run: |
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "testlogon-ci-placeholder",
+              "storage_bucket": "testlogon-ci-placeholder.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.testlogon.android"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  { "current_key": "AIzaCIplaceholderCIplaceholderCIplaceholder" }
+                ],
+                "services": {
+                  "appinvite_service": { "other_platform_oauth_client": [] }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
+
+      # A roomy tmpdir for KSP / Robolectric / sqlite-jdbc + mockito-inline
+      # ByteBuddy. On a small /tmp tmpfs these extract 0-byte native .so files
+      # ("No native library") — the documented build-host gotcha. GitHub runners
+      # have a roomy /tmp, but we wire an explicit workspace tmpdir so the task is
+      # portable and self-hosted-runner safe.
+      - name: Prepare roomy tmpdir
+        run: mkdir -p "${GITHUB_WORKSPACE}/.gradle_tmp"
+        working-directory: .
+
+      - name: Run scoped money/ecom/dispute/core unit tests
+        run: >-
+          ./gradlew :app:testDebugUnitTest --continue --no-daemon --stacktrace
+          -Ptest.tmpdir="${GITHUB_WORKSPACE}/.gradle_tmp"
+          -Dorg.gradle.jvmargs="-Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp -Dorg.sqlite.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
+          --tests "com.testlogon.android.data.billing.*"
+          --tests "com.testlogon.android.data.catalog.*"
+          --tests "com.testlogon.android.data.checkout.*"
+          --tests "com.testlogon.android.data.disputes.*"
+          --tests "com.testlogon.android.data.payments.*"
+          --tests "com.testlogon.android.data.payouts.*"
+          --tests "com.testlogon.android.data.paywall.*"
+          --tests "com.testlogon.android.data.subscriptions.*"
+          --tests "com.testlogon.android.data.tip.*"
+          --tests "com.testlogon.android.data.tipinsights.*"
+          --tests "com.testlogon.android.data.broadcast.tips.*"
+          --tests "com.testlogon.android.feature.billing.*"
+          --tests "com.testlogon.android.feature.catalog.*"
+          --tests "com.testlogon.android.feature.checkout.*"
+          --tests "com.testlogon.android.feature.disputes.*"
+          --tests "com.testlogon.android.feature.payments.*"
+          --tests "com.testlogon.android.feature.payouts.*"
+          --tests "com.testlogon.android.feature.subscriptions.*"
+          --tests "com.testlogon.android.feature.adsbilling.*"
+          --tests "com.testlogon.android.feature.broadcast.tips.*"
+          --tests "com.testlogon.android.feature.call.billing.*"
+
+      - name: Upload unit-test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-money-unit-reports
+          path: |
+            android/app/build/reports/tests/
+            android/app/build/test-results/
+          retention-days: 7

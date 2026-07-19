@@ -10,16 +10,24 @@ class SettingsHubViewModelTest {
     @Test
     fun catalog_hasSectionsInFixedOrder() {
         val keys = SettingsHubViewModel.buildCatalog().map { it.key }
+        // Current shipped order. Sections beyond the original 8 were added by later
+        // shipped programs: PUSH_EVENTS (push/realtime event prefs), EMOJIS (custom
+        // reaction set), GEO (location/geo controls), CALL_RATE (pay-per-minute call
+        // pricing). Kept in canonical hub order; update alongside buildCatalog().
         assertEquals(
             listOf(
                 SettingsSectionKey.ACCOUNT,
                 SettingsSectionKey.SECURITY,
                 SettingsSectionKey.NOTIFICATIONS,
+                SettingsSectionKey.PUSH_EVENTS,
                 SettingsSectionKey.ALERTS, // AND-088 — email/SMS alert-target management
                 SettingsSectionKey.MEDIA,
                 SettingsSectionKey.APPEARANCE,
                 SettingsSectionKey.LANGUAGE, // AND-114 — in-app locale picker
                 SettingsSectionKey.PRIVACY,
+                SettingsSectionKey.EMOJIS,
+                SettingsSectionKey.GEO,
+                SettingsSectionKey.CALL_RATE,
             ),
             keys,
         )

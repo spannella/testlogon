@@ -255,6 +255,11 @@ class FakeBillingRepository : BillingRepository {
     override suspend fun getConfig(): ApiResult<BillingConfig> =
         ApiResult.Success(BillingConfig(publishableKey = null, currency = "USD"))
 
+    // TIP — the tip-default payment method id; not exercised here, defaults to none on file.
+    var tipDefaultPaymentMethodId: ApiResult<String?> = ApiResult.Success(null)
+    override suspend fun getTipDefaultPaymentMethodId(): ApiResult<String?> = tipDefaultPaymentMethodId
+    override suspend fun setTipDefaultPaymentMethod(id: String): ApiResult<List<PaymentMethod>> = methods
+
     override suspend fun getSettings(): ApiResult<BillingSettings> =
         ApiResult.Success(BillingSettings(false, "USD", null, null))
 

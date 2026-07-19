@@ -59,7 +59,12 @@ class ViewerViewModelTest {
             event: String,
             adClickId: String,
             viewTimeMs: Int,
+            slotType: String,
         ): ApiResult<Unit> = ApiResult.Success(Unit)
+        override suspend fun adBreakState(sessionId: String): ApiResult<com.testlogon.android.data.broadcast.BroadcastAdBreakState> =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "not exercised"))
+        override suspend fun serveMidRoll(sessionId: String): ApiResult<com.testlogon.android.data.broadcast.BroadcastMidRollServe> =
+            ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 0, message = "not exercised"))
     }
 
     private fun session(status: BroadcastSessionStatus) = BroadcastSession(
@@ -148,7 +153,7 @@ class ViewerViewModelTest {
         val controller = mock(VideoPlayerController::class.java)
         val factory = mock(VideoPlayerFactory::class.java)
         `when`(factory.create()).thenReturn(controller)
-        return ViewerViewModel(
+        val vm = ViewerViewModel(
             savedStateHandle = SavedStateHandle(mapOf(ViewerViewModel.ARG_SESSION_ID to "s1")),
             repo = repo,
             adRepo = noAdRepo,
@@ -157,7 +162,25 @@ class ViewerViewModelTest {
             presence = presence,
             viewerCountRepo = viewerCountRepo,
             clock = fixedClock,
+            adCtaClicker = com.testlogon.android.data.ads.AdCtaClicker(
+                object : com.testlogon.android.data.ads.AdTrackRepository {
+                    override suspend fun track(
+                        event: com.testlogon.android.data.ads.AdEvent,
+                        ad: com.testlogon.android.data.feed.SponsoredInfo,
+                    ) = ApiResult.Success(Unit)
+                    override suspend fun clickCta(
+                        adClickId: String,
+                        action: com.testlogon.android.data.ads.CtaAction,
+                    ) = ApiResult.Success(Unit)
+                },
+                com.testlogon.android.data.ads.AdClickAttributionStore(),
+            ),
         )
+        // Disarm the unbounded ad-break poll loop so runTest.advanceUntilIdle() can drain
+        // (product loop is correct + onCleared-cancelled; only its infinite virtual-time walk
+        // is hostile to advanceUntilIdle). All assertions below still exercise real behaviour.
+        vm.adBreakPollEnabled = false
+        return vm
     }
 
     @Test

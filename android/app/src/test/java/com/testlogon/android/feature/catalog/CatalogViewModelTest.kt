@@ -28,7 +28,14 @@ class CatalogViewModelTest {
     private fun category(id: String) = CatalogCategory(categoryId = id, name = "n-$id", createdAt = "t")
 
     private fun vm(repo: FakeCatalogRepository, saved: SavedStateHandle = SavedStateHandle()) =
-        CatalogViewModel(repo, saved)
+        CatalogViewModel(
+            repo,
+            FakeWishlistRepository(),
+            FakeShopAdsRepository(),
+            FakeCatalogAdTrackRepository(),
+            com.testlogon.android.data.ads.AdClickAttributionStore(),
+            saved,
+        )
 
     @Test
     fun load_defaultSelectsFirstCategory() = runTest {

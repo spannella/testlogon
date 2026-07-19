@@ -69,4 +69,52 @@ class FakeSubscriptionsRepository(
 
     override suspend fun resume(subscriptionId: String, body: ResumeSubscriptionReqDto): ApiResult<CreatorSubscription> =
         error("not used")
+
+    // SUBX-40/43 + SUB-E4 interface growth — not exercised by the fan-club active-tier join.
+    override suspend fun changePlan(
+        subscriptionId: String,
+        body: com.testlogon.android.data.subscriptions.ChangePlanReqDto,
+    ): ApiResult<CreatorSubscription> = error("not used")
+
+    override suspend fun gift(
+        planId: String,
+        body: com.testlogon.android.data.subscriptions.GiftSubscriptionReqDto,
+    ): ApiResult<CreatorSubscription> = error("not used")
+
+    override suspend fun getMyTiers(): ApiResult<List<SubscriptionTier>> = error("not used")
+    override suspend fun createTier(
+        body: com.testlogon.android.data.subscriptions.PlanWriteReqDto,
+    ): ApiResult<SubscriptionTier> = error("not used")
+    override suspend fun updateTier(
+        planId: String,
+        body: com.testlogon.android.data.subscriptions.PlanWriteReqDto,
+    ): ApiResult<SubscriptionTier> = error("not used")
+    override suspend fun archiveTier(planId: String): ApiResult<SubscriptionTier> = error("not used")
+    override suspend fun reorderTiers(planIds: List<String>): ApiResult<List<SubscriptionTier>> = error("not used")
+    override suspend fun refundSubscriber(
+        subscriptionId: String,
+        fraction: Double?,
+        reason: String?,
+    ): ApiResult<com.testlogon.android.data.subscriptions.SubscriptionRefundResult> = error("not used")
+    override suspend fun retryPayment(
+        subscriptionId: String,
+        body: com.testlogon.android.data.subscriptions.RetryPaymentReqDto,
+    ): ApiResult<CreatorSubscription> = error("not used")
+    override suspend fun getMySubscribers(
+        status: String?,
+        planId: String?,
+        limit: Int?,
+        cursor: String?,
+    ): ApiResult<com.testlogon.android.data.subscriptions.CreatorSubscriberPage> = error("not used")
+    override suspend fun getMyAnalytics(
+        periodDays: Int?,
+    ): ApiResult<com.testlogon.android.data.subscriptions.SubscriptionAnalytics> = error("not used")
+    override suspend fun removeSubscriber(
+        subscriptionId: String,
+        reason: String?,
+    ): ApiResult<CreatorSubscription> = error("not used")
+    override suspend fun stopSubscriberRenewal(
+        subscriptionId: String,
+        reason: String?,
+    ): ApiResult<CreatorSubscription> = error("not used")
 }

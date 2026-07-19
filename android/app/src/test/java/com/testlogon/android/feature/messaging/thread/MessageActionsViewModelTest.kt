@@ -45,10 +45,8 @@ class MessageActionsViewModelTest {
         repo.historyResult = ApiResult.Success(emptyList())
         val handle = SavedStateHandle(mapOf(ThreadViewModel.ARG_CONVERSATION_ID to "c1"))
         val context = org.mockito.Mockito.mock(android.content.Context::class.java)
-        return ThreadViewModel(
+        return com.testlogon.android.feature.messaging.newThreadViewModel(
             handle, repo, auth, stream, context,
-            com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory(context),
-            com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
             FakeBillingAuthorizer(),
             drafts,
             com.testlogon.android.feature.messaging.FakeTypingRepository(),

@@ -21,10 +21,22 @@ private class FakeTipRepository(
 ) : TipRepository {
     val calls = mutableListOf<Pair<String, Int>>()
     var gate: CompletableDeferred<Unit>? = null
+    var reactOutcome: com.testlogon.android.data.tip.TipReactOutcome =
+        com.testlogon.android.data.tip.TipReactOutcome.Failure("not exercised")
+    val reactCalls = mutableListOf<Triple<String, Int, String>>()
     override suspend fun tip(postId: String, amountCents: Int): TipOutcome {
         calls += postId to amountCents
         gate?.await()
         return outcome
+    }
+    override suspend fun tipReact(
+        postId: String,
+        amountCents: Int,
+        emoji: String,
+    ): com.testlogon.android.data.tip.TipReactOutcome {
+        reactCalls += Triple(postId, amountCents, emoji)
+        gate?.await()
+        return reactOutcome
     }
     override fun config(): TipConfig = TipConfig()
 }

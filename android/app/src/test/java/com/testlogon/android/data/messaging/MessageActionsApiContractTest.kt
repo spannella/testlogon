@@ -1,5 +1,7 @@
 package com.testlogon.android.data.messaging
 
+import com.testlogon.android.testutil.testMoshi
+
 import com.squareup.moshi.Moshi
 import com.testlogon.android.core.testing.net.Fixtures
 import com.testlogon.android.core.testing.net.MockBackendRule
@@ -19,7 +21,7 @@ class MessageActionsApiContractTest {
     @get:Rule
     val backend = MockBackendRule()
 
-    private val moshi: Moshi = Moshi.Builder().build()
+    private val moshi: Moshi = testMoshi()
     private fun api(): MessagingApi = backend.retrofit(moshi).create(MessagingApi::class.java)
 
     @Test

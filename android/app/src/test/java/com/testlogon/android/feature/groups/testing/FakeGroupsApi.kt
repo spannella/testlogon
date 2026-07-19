@@ -8,6 +8,12 @@ import com.testlogon.android.core.network.groups.GroupCreateCampaignIn
 import com.testlogon.android.core.network.groups.GroupCreateIn
 import com.testlogon.android.core.network.groups.GroupCreateFundraiserIn
 import com.testlogon.android.core.network.groups.GroupFundraiserDto
+import com.testlogon.android.core.network.groups.GroupCommentCreateIn
+import com.testlogon.android.core.network.groups.GroupCommentDto
+import com.testlogon.android.core.network.groups.GroupCommentListResponse
+import com.testlogon.android.core.network.groups.GroupFeedPostDto
+import com.testlogon.android.core.network.groups.GroupFeedResponse
+import com.testlogon.android.core.network.groups.GroupPostCreateIn
 import com.testlogon.android.core.network.groups.GroupFundraiserListResponse
 import com.testlogon.android.core.network.groups.GroupInviteIn
 import com.testlogon.android.core.network.groups.GroupListResponse
@@ -42,6 +48,10 @@ class FakeGroupsApi(
     var campaignsEnvelope: GroupCampaignListResponse = GroupCampaignListResponse(),
     var campaignDetail: GroupCampaignDto = GroupCampaignDto(campaignId = "cmp_1", name = "C"),
     var campaignStats: GroupCampaignStatsDto = GroupCampaignStatsDto(campaignId = "cmp_1"),
+    var feedEnvelope: GroupFeedResponse = GroupFeedResponse(),
+    var feedPostDetail: GroupFeedPostDto = GroupFeedPostDto(postId = "gp_1"),
+    var commentsEnvelope: GroupCommentListResponse = GroupCommentListResponse(),
+    var commentDetail: GroupCommentDto = GroupCommentDto(commentId = "gc_1", userId = "usr_1"),
     var throwHttp: Int? = null,
 ) : GroupsApi {
 
@@ -66,6 +76,52 @@ class FakeGroupsApi(
     }
 
     private fun emptyOk(): Response<Unit> = Response.success(Unit)
+
+    // B-GRPFULL: group feed posts + comments (added by the group-feed program).
+    val createGroupPostBodies = mutableListOf<Pair<String, GroupPostCreateIn>>()
+    val addGroupCommentBodies = mutableListOf<Triple<String, String, GroupCommentCreateIn>>()
+    val deleteGroupCommentCalls = mutableListOf<Triple<String, String, String>>()
+
+    override suspend fun createGroupPost(groupId: String, body: GroupPostCreateIn): GroupFeedPostDto {
+        createGroupPostBodies += groupId to body
+        maybeThrow()
+        return feedPostDetail
+    }
+
+    override suspend fun getGroupFeed(groupId: String, cursor: String?, limit: Int): GroupFeedResponse {
+        maybeThrow()
+        return feedEnvelope
+    }
+
+    override suspend fun addGroupComment(
+        groupId: String,
+        postId: String,
+        body: GroupCommentCreateIn,
+    ): GroupCommentDto {
+        addGroupCommentBodies += Triple(groupId, postId, body)
+        maybeThrow()
+        return commentDetail
+    }
+
+    override suspend fun getGroupComments(
+        groupId: String,
+        postId: String,
+        cursor: String?,
+        limit: Int,
+    ): GroupCommentListResponse {
+        maybeThrow()
+        return commentsEnvelope
+    }
+
+    override suspend fun deleteGroupComment(
+        groupId: String,
+        postId: String,
+        commentId: String,
+    ): Response<Unit> {
+        deleteGroupCommentCalls += Triple(groupId, postId, commentId)
+        maybeThrow()
+        return emptyOk()
+    }
 
     override suspend fun listMyGroups(): GroupListResponse {
         maybeThrow()

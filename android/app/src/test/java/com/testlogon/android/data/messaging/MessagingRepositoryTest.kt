@@ -171,6 +171,20 @@ class MessagingRepositoryTest {
             createImageCalls += id to body
             return requireNotNull(createImageResult)
         }
+        var createGalleryCalls = mutableListOf<Pair<String, CreateGalleryMessageReq>>()
+        var createGalleryResult: MessageDto? = null
+        override suspend fun createGalleryMessage(id: String, body: CreateGalleryMessageReq): MessageDto {
+            createGalleryCalls += id to body
+            return requireNotNull(createGalleryResult)
+        }
+
+        // P2 — poll / scheduled-message / tip-react endpoints added by later programs; not exercised
+        // by this repo test, so unused stubs (kept honest: they error rather than fake a result).
+        override suspend fun createPollMessage(id: String, body: CreatePollMessageReq): MessageDto = error("unused")
+        override suspend fun listScheduledMessages(id: String): List<MessageDto> = error("unused")
+        override suspend fun rescheduleMessage(id: String, messageId: String, body: RescheduleMessageReq): MessageDto = error("unused")
+        override suspend fun cancelScheduledMessage(id: String, messageId: String): okhttp3.ResponseBody = error("unused")
+        override suspend fun tipReactMessage(id: String, messageId: String, body: TipReactReq): TipReactOutDto = error("unused")
         override suspend fun createVideoShareMessage(id: String, body: CreateVideoShareReq): MessageDto {
             createVideoShareCalls += id to body
             createVideoShareThrows?.let { throw it }
@@ -210,7 +224,7 @@ class MessagingRepositoryTest {
         override suspend fun downloadAttachment(
             id: String,
             messageId: String,
-            grantToken: String,
+            grantToken: String?,
         ): okhttp3.ResponseBody = error("unused")
         override suspend fun presignVoice(id: String, body: PresignVoiceReq): PresignVoiceResp {
             return requireNotNull(presignVoiceResult)
@@ -537,6 +551,7 @@ class MessagingRepositoryTest {
         meetingPollDao = meetingPollDao,
         errorParser = ApiErrorParser(Moshi.Builder().build()),
         authStateStore = auth,
+        appContext = org.mockito.Mockito.mock(android.content.Context::class.java),
         uploader = uploader,
         imageProcessor = imageProcessor,
         uriMetadata = uriMetadata,
@@ -860,8 +875,10 @@ class MessagingRepositoryTest {
         val r = repo().sendCountdown("c1", "cid1", CountdownDraft(title = "Launch", targetEpochSeconds = 1780000000))
 
         assertTrue(r is ApiResult.Success)
-        val media = (r as ApiResult.Success).data.media as MessageMedia.Countdown
-        assertEquals(1780000000L, media.targetEpochSeconds)
+        // The countdown moved off .media onto the transient .countdown field (MessageCountdown); the
+        // standalone MessageMedia.Countdown is legacy, so .media is None now.
+        val countdown = (r as ApiResult.Success).data.countdown!!
+        assertEquals(1780000000L, countdown.targetEpochSeconds)
         assertEquals("Launch", api.sendCountdownCalls.single().second.title)
         assertNull(outboxDao.findById("cid1")) // reconciled
         assertEquals("msg_cd", messageDao.findById("msg_cd")?.messageId)
@@ -1140,7 +1157,8 @@ class MessagingRepositoryTest {
         val result = repo().searchInConversation("conv_1", "  deploy  ")
         assertTrue(result is ApiResult.Success)
         val matches = (result as ApiResult.Success).data
-        assertEquals(listOf("m1", "m1", "m2"), matches.map { it.messageId })
+        // AND-151: sorted MOST-RECENT first (created_at DESCENDING) — m2 (200) leads, then m1's (100) two.
+        assertEquals(listOf("m2", "m1", "m1"), matches.map { it.messageId })
         val (id, q, limit) = api.searchInConversationCalls.single()
         assertEquals("conv_1", id)
         assertEquals("deploy", q) // trimmed

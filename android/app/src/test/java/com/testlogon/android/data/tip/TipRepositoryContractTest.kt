@@ -40,10 +40,17 @@ class TipRepositoryContractTest {
     }
 
     @Test
-    fun tip_withStubBilling_returnsPaymentsUnavailable_noHttp() = runTest {
+    fun tip_withStubBilling_debugBypass_authorizesBlankPm_andReachesServer() = runTest {
+        // The StubBillingAuthorizer now ships a DEV/DEMO bypass: in DEBUG builds (unit tests run debug) it
+        // authorizes with a BLANK payment_method_id so on-device tips work without a real vendor. So the
+        // tip is NO LONGER short-circuited to PaymentsUnavailable — it authorizes and POSTs to the server
+        // (the backend dev path mock-completes a blank-pm charge). Release builds still return NotConfigured.
+        backend.enqueue(Fixtures.okBody("""{"ok":true,"tip_total_cents":1000}"""))
         val outcome = repo(StubBillingAuthorizer()).tip("post_1", 1000)
-        assertEquals(TipOutcome.PaymentsUnavailable, outcome)
-        assertEquals(0, backend.requestCount) // STOP-AND-FLAG: no /tip call, no charge
+        assertTrue(outcome is TipOutcome.Success)
+        assertEquals(1, backend.requestCount)
+        val body = backend.takeRequest().bodyJson()
+        assertEquals("", body["payment_method_id"]) // blank pm = the debug-bypass marker
     }
 
     @Test

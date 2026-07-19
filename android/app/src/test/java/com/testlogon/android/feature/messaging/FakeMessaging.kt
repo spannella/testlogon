@@ -111,6 +111,13 @@ class FakeMessagingRepository : MessagingRepository {
         lockDescription: String?,
         sendAtEpochSeconds: Long?,
         expiresInSeconds: Long?,
+        countdownTargetEpochSeconds: Long?,
+        countdownTitle: String?,
+        countdownRevealText: String?,
+        countdownRevealImage: com.testlogon.android.data.messaging.LotteryImageRef?,
+        tipAmountCents: Long?,
+        tipPaymentMethodId: String?,
+        tipRecipientId: String?,
     ): ApiResult<Message> {
         return when (val result = sendResult) {
             is ApiResult.Success -> {
@@ -649,6 +656,8 @@ class FakeMessagingRepository : MessagingRepository {
         localFilePath: String,
         durationSeconds: Double,
         waveform: List<Float>,
+        consumptionPolicy: String,
+        sendAtEpochSeconds: Long?,
     ): ApiResult<Message> {
         voiceSendCalls += Triple(conversationId, clientId, localFilePath)
         return when (val result = voiceSendResult) {
@@ -801,7 +810,59 @@ class FakeMessagingRepository : MessagingRepository {
         maxSelections: Int?,
         closesAt: Long?,
         text: String?,
+        allowWriteIn: Boolean,
     ): ApiResult<Unit> = ApiResult.Success(Unit)
+
+    // MSG program additions (view-once media consumption, mixed gallery, encrypted image fetch,
+    // tip-reactions, lottery-option media upload). Programmable; sensible defaults.
+    val consumeOnceMediaCalls = mutableListOf<Triple<String, String, String>>()
+    val mixedGalleryCalls = mutableListOf<String>()
+    val tipReactCalls = mutableListOf<Pair<String, String>>()
+    var tipReactResult: ApiResult<com.testlogon.android.data.messaging.TipReactReceipt> =
+        ApiResult.Success(
+            com.testlogon.android.data.messaging.TipReactReceipt(
+                tipPaymentId = "tp_1",
+                chargedCents = 0L,
+                netCents = 0L,
+                recipientId = null,
+                emoji = null,
+            ),
+        )
+
+    override suspend fun consumeOnceMedia(conversationId: String, messageId: String, trigger: String) {
+        consumeOnceMediaCalls += Triple(conversationId, messageId, trigger)
+    }
+
+    override suspend fun sendMixedGalleryOutbox(
+        conversationId: String,
+        clientId: String,
+        media: List<com.testlogon.android.data.messaging.MediaItem>,
+        caption: String?,
+        expiresInSeconds: Long?,
+        sendAtEpochSeconds: Long?,
+    ): ApiResult<Message> {
+        mixedGalleryCalls += clientId
+        return sendResult
+    }
+
+    override suspend fun fetchEncryptedImageBytes(url: String): ByteArray? = null
+
+    override suspend fun tipReactMessage(
+        conversationId: String,
+        messageId: String,
+        amountCents: Long,
+        emoji: String?,
+        paymentMethodId: String?,
+    ): ApiResult<com.testlogon.android.data.messaging.TipReactReceipt> {
+        tipReactCalls += conversationId to messageId
+        return tipReactResult
+    }
+
+    override suspend fun uploadLotteryOptionMedia(
+        conversationId: String,
+        localUri: String,
+        isVideo: Boolean,
+    ): String? = null
 
     override suspend fun refreshMeetingPoll(
         conversationId: String,
@@ -1145,3 +1206,83 @@ class FakeMessagingEventStream : MessagingEventStream {
 
     suspend fun send(event: MessagingStreamEvent) = channel.send(event)
 }
+
+// ---- P2 shared helpers for deps the later programs added to ThreadViewModel / syndicate VM ----
+
+/** Real [ApiErrorParser] over a bare Moshi. Used to decode 402 tip_required bodies etc. in tests. */
+fun fakeApiErrorParser() =
+    com.testlogon.android.core.network.error.ApiErrorParser(
+        com.squareup.moshi.Moshi.Builder().build(),
+    )
+
+/** Real [DisplayNameResolver] over a stub profile repo, so `.names` is a real (empty) StateFlow. */
+fun fakeDisplayNameResolver() =
+    com.testlogon.android.data.profile.DisplayNameResolver(FakeProfileRepositoryForNames())
+
+private class FakeProfileRepositoryForNames : com.testlogon.android.data.profile.ProfileRepository {
+    override suspend fun getOwnProfile(forceRefresh: Boolean) =
+        ApiResult.Failure(ApiError(status = 0, message = "stub"))
+    override fun cachedOwnProfile(): com.testlogon.android.core.model.profile.Profile? = null
+    override suspend fun getPublicProfile(identifier: String) =
+        com.testlogon.android.data.profile.ProfileResult.NotFound
+    override suspend fun updateProfile(patch: com.testlogon.android.core.model.profile.ProfilePatch) =
+        ApiResult.Failure(ApiError(status = 0, message = "stub"))
+    override suspend fun uploadPhoto(
+        kind: com.testlogon.android.data.profile.MediaKind,
+        upload: com.testlogon.android.data.profile.ProfileMediaUploader.PreparedUpload,
+    ) = ApiResult.Failure(ApiError(status = 0, message = "stub"))
+}
+
+/**
+ * Real [ArbitraryPollRepository] over an [ArbitraryPollApi] that fails loudly. These VM tests predate
+ * (and never exercise) the arbitrary-poll surface; if a future test does drive it, it fails visibly
+ * rather than silently passing — no faked green.
+ */
+fun fakeArbitraryPollRepository() =
+    com.testlogon.android.data.poll.ArbitraryPollRepository(
+        api = object : com.testlogon.android.data.poll.ArbitraryPollApi {
+            override suspend fun get(pollId: String) = notExercised()
+            override suspend fun vote(pollId: String, body: com.testlogon.android.data.poll.ArbitraryPollVoteReq) = notExercised()
+            override suspend fun writeIn(pollId: String, body: com.testlogon.android.data.poll.ArbitraryPollWriteInReq) = notExercised()
+            override suspend fun results(pollId: String, questionId: String?, topN: Int?, offset: Int) = notExercisedResults()
+            override suspend fun unvote(pollId: String, questionId: String?) = notExercised()
+            override suspend fun close(pollId: String) = notExercised()
+            private fun notExercised(): Nothing =
+                throw UnsupportedOperationException("arbitrary poll not exercised by this test")
+            private fun notExercisedResults(): Nothing =
+                throw UnsupportedOperationException("arbitrary poll results not exercised by this test")
+        },
+        errorParser = fakeApiErrorParser(),
+    )
+
+/**
+ * P2 — shared [ThreadViewModel] factory. Wires the delegate-routing / arbitrary-poll / display-name /
+ * api-error deps the delegate-complete + arbitrary-poll + TIP-405 programs added, so each thread test
+ * only supplies the pieces it actually varies (repo / auth / stream / billing / draft / typing).
+ */
+fun newThreadViewModel(
+    handle: androidx.lifecycle.SavedStateHandle,
+    repository: MessagingRepository,
+    authStateStore: com.testlogon.android.data.auth.AuthStateStore,
+    eventStream: MessagingEventStream,
+    context: android.content.Context,
+    billing: com.testlogon.android.data.messaging.BillingAuthorizer,
+    draftRepository: com.testlogon.android.data.messaging.DraftRepository = FakeDraftRepository(),
+    typingRepository: com.testlogon.android.data.messaging.typing.TypingRepository = FakeTypingRepository(),
+): com.testlogon.android.feature.messaging.thread.ThreadViewModel =
+    com.testlogon.android.feature.messaging.thread.ThreadViewModel(
+        handle,
+        repository,
+        authStateStore,
+        com.testlogon.android.core.network.delegates.DelegateRoutingStore(),
+        eventStream,
+        context,
+        com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory(context),
+        com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
+        billing,
+        fakeArbitraryPollRepository(),
+        draftRepository,
+        typingRepository,
+        fakeDisplayNameResolver(),
+        fakeApiErrorParser(),
+    )

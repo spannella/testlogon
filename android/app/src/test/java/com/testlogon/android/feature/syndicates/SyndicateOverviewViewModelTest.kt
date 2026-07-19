@@ -30,6 +30,20 @@ class SyndicateOverviewViewModelTest {
 
     private fun vm(repo: FakeSyndicateRepo, syndicateId: String = "syn_1") = SyndicateOverviewViewModel(
         repository = repo,
+        imageUploader = com.testlogon.android.feature.feed.FakeCommentImageUploader(),
+        arbitraryPollRepository = com.testlogon.android.feature.messaging.fakeArbitraryPollRepository(),
+        adTracker = object : com.testlogon.android.data.ads.AdTrackRepository {
+            override suspend fun track(
+                event: com.testlogon.android.data.ads.AdEvent,
+                ad: com.testlogon.android.data.feed.SponsoredInfo,
+            ) = com.testlogon.android.core.model.ApiResult.Success(Unit)
+            override suspend fun clickCta(
+                adClickId: String,
+                action: com.testlogon.android.data.ads.CtaAction,
+            ) = com.testlogon.android.core.model.ApiResult.Success(Unit)
+        },
+        adAttribution = com.testlogon.android.data.ads.AdClickAttributionStore(),
+        authStateStore = com.testlogon.android.data.auth.FakeAuthStateStore(),
         savedState = SavedStateHandle(mapOf(SyndicateOverviewViewModel.ARG_SYNDICATE_ID to syndicateId)),
     )
 

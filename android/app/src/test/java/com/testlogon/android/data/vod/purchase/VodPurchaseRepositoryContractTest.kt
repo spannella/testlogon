@@ -61,12 +61,23 @@ class VodPurchaseRepositoryContractTest {
     }
 
     @Test
-    fun purchase_withStubBilling_paymentsUnavailable_noHttp() = runTest {
+    fun purchase_withStubBilling_debugBypass_authorizesBlankPm_andReachesServer() = runTest {
+        // The StubBillingAuthorizer now ships a DEV/DEMO bypass: in DEBUG builds (unit tests run debug) it
+        // authorizes with a BLANK payment_method_id so on-device VOD purchases work without a real vendor.
+        // So purchase is NO LONGER short-circuited to PaymentsUnavailable — it authorizes and POSTs to the
+        // server (the backend dev path mock-completes a blank-pm charge), unlocking the entitlement.
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"video_id":"v1","already_owned":false,"granted_at":1749120000,
+                   "grant_type":"purchase","amount_cents":1499,"purchase_type":"permanent",
+                   "views_remaining":-1,"expires_at":null}""".trimIndent(),
+            ),
+        )
         val (r, dao) = repo(StubBillingAuthorizer())
         val outcome = r.purchase("v1", "permanent")
-        assertEquals(PurchaseOutcome.PaymentsUnavailable, outcome)
-        assertEquals(0, backend.requestCount)
-        assertTrue(dao.snapshot().isEmpty())
+        assertTrue(outcome is PurchaseOutcome.Unlocked)
+        assertEquals(1, backend.requestCount)
+        assertTrue(dao.snapshot().any { it.postId == "v1" })
     }
 
     @Test

@@ -105,6 +105,38 @@ class FakeCatalogRepository : CatalogRepository {
         return searchPages[cursor] ?: ApiResult.Success(CatalogItemPage(emptyList(), nextToken = null))
     }
 
+    var reviewsResult: ApiResult<com.testlogon.android.data.catalog.CatalogReviewPage> =
+        ApiResult.Success(com.testlogon.android.data.catalog.CatalogReviewPage(emptyList(), nextToken = null))
+    val addReviewCalls = mutableListOf<Triple<String, Int, String?>>()
+    var addReviewResult: ApiResult<com.testlogon.android.data.catalog.CatalogReview>? = null
+    var deleteReviewResult: ApiResult<Unit> = ApiResult.Success(Unit)
+
+    override suspend fun reviews(itemId: String, cursor: String?): ApiResult<com.testlogon.android.data.catalog.CatalogReviewPage> =
+        reviewsResult
+
+    override suspend fun addReview(
+        itemId: String,
+        rating: Int,
+        title: String?,
+        body: String?,
+        reviewer: String?,
+    ): ApiResult<com.testlogon.android.data.catalog.CatalogReview> {
+        addReviewCalls += Triple(itemId, rating, title)
+        return addReviewResult ?: ApiResult.Success(
+            com.testlogon.android.data.catalog.CatalogReview(
+                reviewId = "rev_${addReviewCalls.size}",
+                itemId = itemId,
+                rating = rating,
+                title = title.orEmpty(),
+                body = body.orEmpty(),
+                reviewer = reviewer.orEmpty(),
+                createdAt = "t",
+            ),
+        )
+    }
+
+    override suspend fun deleteReview(itemId: String, reviewId: String): ApiResult<Unit> = deleteReviewResult
+
     override suspend fun getItem(categoryId: String, itemId: String): ApiResult<CatalogItem> {
         getItemResult?.let { return it }
         // Mirror the impl's list-then-find over the seeded itemPages.
@@ -129,4 +161,70 @@ class FakeCatalogRepository : CatalogRepository {
             }
         }
     }
+}
+
+/**
+ * P2 — [WishlistRepository] double. Backs saved/items with in-memory StateFlows; add/remove/toggle
+ * mutate them. Default: empty. The shop program added this dep to Catalog/ProductDetail VMs.
+ */
+class FakeWishlistRepository : com.testlogon.android.data.wishlist.WishlistRepository {
+    private val _saved = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+    override val saved: kotlinx.coroutines.flow.StateFlow<Set<String>> = _saved
+    private val _items = kotlinx.coroutines.flow.MutableStateFlow<List<com.testlogon.android.data.wishlist.WishlistItem>>(emptyList())
+    override val items: kotlinx.coroutines.flow.StateFlow<List<com.testlogon.android.data.wishlist.WishlistItem>> = _items
+    override suspend fun ensureLoaded(): ApiResult<Unit> = ApiResult.Success(Unit)
+    override suspend fun refresh(): ApiResult<List<com.testlogon.android.data.wishlist.WishlistItem>> = ApiResult.Success(_items.value)
+    override suspend fun add(categoryId: String, itemId: String): ApiResult<Unit> {
+        _saved.value = _saved.value + itemId
+        return ApiResult.Success(Unit)
+    }
+    override suspend fun remove(categoryId: String, itemId: String): ApiResult<Unit> {
+        _saved.value = _saved.value - itemId
+        return ApiResult.Success(Unit)
+    }
+    override suspend fun toggle(categoryId: String, itemId: String): ApiResult<Unit> {
+        _saved.value = if (itemId in _saved.value) _saved.value - itemId else _saved.value + itemId
+        return ApiResult.Success(Unit)
+    }
+}
+
+/** P2 — no-op [ShopAdsRepository]: serve returns no sponsored units; boost is not exercised. */
+class FakeShopAdsRepository : com.testlogon.android.data.shopads.ShopAdsRepository {
+    var served: List<com.testlogon.android.data.shopads.SponsoredProduct> = emptyList()
+    override suspend fun serveShopSponsored(
+        surface: String,
+        query: String,
+        categoryId: String,
+        limit: Int,
+    ): List<com.testlogon.android.data.shopads.SponsoredProduct> = served
+    override suspend fun boostListing(
+        itemId: String,
+        categoryId: String,
+        budgetCents: Int,
+        bidCpcCents: Int,
+    ): ApiResult<com.testlogon.android.data.shopads.BoostResult> =
+        ApiResult.Failure(ApiError(status = 0, message = "not exercised"))
+}
+
+/** P2 — real [CurrentUserRepository] over a canned user_sub, for the catalog VMs. */
+fun fakeCatalogCurrentUserRepository(sub: String? = "me") =
+    com.testlogon.android.data.feed.CurrentUserRepository(
+        api = object : com.testlogon.android.data.feed.CurrentUserApi {
+            override suspend fun me() = com.testlogon.android.data.feed.CurrentUserDto(userSub = sub)
+        },
+        errorParser = com.testlogon.android.core.network.error.ApiErrorParser(
+            com.squareup.moshi.Moshi.Builder().build(),
+        ),
+    ).apply { io = kotlinx.coroutines.Dispatchers.Unconfined }
+
+/** P2 — no-op [AdTrackRepository] for the catalog VMs (shop-ad beacons are best-effort). */
+class FakeCatalogAdTrackRepository : com.testlogon.android.data.ads.AdTrackRepository {
+    override suspend fun track(
+        event: com.testlogon.android.data.ads.AdEvent,
+        ad: com.testlogon.android.data.feed.SponsoredInfo,
+    ): ApiResult<Unit> = ApiResult.Success(Unit)
+    override suspend fun clickCta(
+        adClickId: String,
+        action: com.testlogon.android.data.ads.CtaAction,
+    ): ApiResult<Unit> = ApiResult.Success(Unit)
 }

@@ -55,7 +55,9 @@ class BookmarksRepositoryContractTest {
         assertEquals("Sunset Studio", page.items[0].title) // from content_preview
         assertEquals("https://x/t.jpg", page.items[0].thumbnailUrl)
         assertEquals("post/post_1", page.items[0].key)
-        assertNull(page.items[1].title) // missing preview -> null, no crash
+        // Video with no content_preview degrades gracefully to the content_id as the title (P0-consumer
+        // bookmarks: label falls back to the id rather than showing a blank row).
+        assertEquals("vid_2", page.items[1].title)
         assertNull(page.items[1].savedAtIso)
 
         val req = backend.takeRequest()

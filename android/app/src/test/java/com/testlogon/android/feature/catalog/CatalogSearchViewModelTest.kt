@@ -31,7 +31,13 @@ class CatalogSearchViewModelTest {
     )
 
     private fun vm(repo: FakeCatalogRepository, saved: SavedStateHandle = SavedStateHandle()) =
-        CatalogSearchViewModel(repo, saved)
+        CatalogSearchViewModel(
+            repo,
+            FakeShopAdsRepository(),
+            FakeCatalogAdTrackRepository(),
+            com.testlogon.android.data.ads.AdClickAttributionStore(),
+            saved,
+        )
 
     @Test
     fun onQueryChange_updatesQuery_andPersists() = runTest {

@@ -7,8 +7,9 @@ import org.junit.Test
 /**
  * AND-006 — verifies the compile-time backend base URL constant.
  *
- * No product flavors are used; the single [BuildConfig.API_BASE_URL] points at the dev host and
- * MUST end with '/' so Retrofit composes relative paths correctly.
+ * No product flavors are used; the single [BuildConfig.API_BASE_URL] MUST end with '/' so Retrofit
+ * composes relative paths correctly. The app now ships against the managed HTTPS API host (the flaky
+ * plaintext dev IP was retired), so the exact-host check tracks the current production endpoint.
  */
 class BuildConfigTest {
 
@@ -20,7 +21,7 @@ class BuildConfigTest {
     }
 
     @Test
-    fun apiBaseUrl_pointsAtDevHost() {
-        assertEquals("http://18.222.237.167:8000/", BuildConfig.API_BASE_URL)
+    fun apiBaseUrl_pointsAtManagedHttpsHost() {
+        assertEquals("https://tl-api.bitbazaar.cc/", BuildConfig.API_BASE_URL)
     }
 }

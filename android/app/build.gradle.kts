@@ -65,10 +65,45 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            // Return Android framework defaults (e.g. android.util.Log.d -> 0) instead of throwing
+            // "Method ... not mocked", so pure-JVM ViewModel/domain tests that log can run.
+            isReturnDefaultValues = true
+            all {
+                // The default /tmp is a small tmpfs on the CI/dev host; mockito-inline's ByteBuddy agent
+                // + sqlite-jdbc + Robolectric extract native libs there and fail ("Could not initialize
+                // MockMaker" / "No native library"). Point the forked test JVM at a roomy dir when the
+                // -Ptest.tmpdir property is set (falls back to the JVM default otherwise).
+                (project.findProperty("test.tmpdir") as String?)?.let { dir ->
+                    it.systemProperty("java.io.tmpdir", dir)
+                    it.systemProperty("org.sqlite.tmpdir", dir)
+                }
+            }
+        }
+    }
 }
 
 kotlin {
     jvmToolchain(17)
+}
+
+// UNIT-TEST internal visibility fix: AGP 8.7 puts the app main classes on the unit-test
+// compile classpath as `bundleDebugClassesToCompileJar/classes.jar`, but the Kotlin
+// `-Xfriend-paths` only lists the raw kotlin-classes dir. Kotlin resolves main symbols from
+// the JAR (on the classpath), and since the JAR is NOT in the friend set, every `internal`
+// main declaration is hidden from the test source set -> ~350 spurious "Unresolved reference"
+// compile errors (mappers/toDomain/helpers). Add the app-classes JAR to the friend paths so
+// the unit-test compilation is a genuine friend of the main module.
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    if (name == "compileDebugUnitTestKotlin" || name == "compileReleaseUnitTestKotlin") {
+        val variant = if (name.contains("Release")) "release" else "debug"
+        val appJar = layout.buildDirectory.file(
+            "intermediates/compile_app_classes_jar/" + variant + "/bundle" + variant.replaceFirstChar { it.uppercase() } + "ClassesToCompileJar/classes.jar"
+        )
+        friendPaths.from(appJar)
+    }
 }
 
 dependencies {

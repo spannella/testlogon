@@ -53,7 +53,7 @@ class AdSupportedPlayerViewModelTest {
     )
 
     private fun preRoll() = AdBreak(
-        "br_pre", VodAdSupportedApi.SLOT_PRE_ROLL, 0L, 15_000L, "c", "u", "video", 5_000L, 0, false,
+        "br_pre", VodAdSupportedApi.SLOT_PRE_ROLL, 0L, 15_000L, "c", "u", "video", 5_000L, 0, completed = false,
     )
 
     @Test
@@ -118,7 +118,7 @@ class AdSupportedPlayerViewModelTest {
 
     @Test
     fun seekRequested_acrossUnwatchedMid_blocksAndEntersAd() = runTest {
-        val mid = AdBreak("br_mid", VodAdSupportedApi.SLOT_MID_ROLL, 900_000L, 30_000L, "c", "u", "video", 5_000L, 1, false)
+        val mid = AdBreak("br_mid", VodAdSupportedApi.SLOT_MID_ROLL, 900_000L, 30_000L, "c", "u", "video", 5_000L, 1, completed = false)
         repo.startResult = ApiResult.Success(session(adsFree = true, breaks = listOf(mid)))
         val vm = vm()
         advanceUntilIdle()

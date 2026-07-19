@@ -1,5 +1,7 @@
 package com.testlogon.android.data.stories
 
+import com.testlogon.android.testutil.testMoshi
+
 import com.squareup.moshi.Moshi
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
@@ -24,7 +26,7 @@ class StoryReplyRepositoryContractTest {
     @get:Rule
     val backend = MockBackendRule()
 
-    private val moshi: Moshi = Moshi.Builder().build()
+    private val moshi: Moshi = testMoshi()
 
     private fun repo(): StoryReplyRepositoryImpl {
         val api = backend.retrofit(moshi).create(MessagingApi::class.java)
