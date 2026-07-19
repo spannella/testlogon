@@ -108,14 +108,18 @@ class PayoutSetupViewModelTest {
     }
 
     @Test
-    fun submit_notConfigured_surfacesUnavailable_noPayoutCreated() = runTest {
+    fun submit_backendGateRejects_surfacesError_noPayoutCreated() = runTest {
+        // PAY-52: the client short-circuit is gone; a payout that the server gate rejects comes back as
+        // PayoutRequestOutcome.Error and the VM must surface it WITHOUT a created id.
         val repo = FakePayoutSetupRepository().apply {
             setupResult = ApiResult.Success(
                 com.testlogon.android.data.payouts.PayoutSetupData(
                     balance = sampleBalance(), recentPayouts = emptyList(), tierStatus = sampleTierStatus(eligible = true),
                 ),
             )
-            requestOutcome = PayoutRequestOutcome.NotConfigured
+            requestOutcome = PayoutRequestOutcome.Error(
+                ApiResult.Failure(com.testlogon.android.core.model.ApiError(status = 403, message = "kyc_required")),
+            )
         }
         val viewModel = vm(repo)
         advanceUntilIdle()
@@ -124,10 +128,8 @@ class PayoutSetupViewModelTest {
         advanceUntilIdle()
         val state = viewModel.state.value
         assertNull("no payout was created", state.lastCreatedPayoutId)
-        assertTrue("an error/unavailable message is surfaced", state.error != null)
+        assertTrue("an error message is surfaced", state.error != null)
         assertFalse(state.isSubmitting)
-        // The setup repo was asked (the gate lives inside it) but the stub never reached the backend —
-        // proven in PayoutSetupRepositoryTest; here we assert the VM surfaces it without a created id.
         assertEquals(1, repo.requestPayoutCalls)
     }
 
