@@ -163,15 +163,29 @@ def ensure_profile(user_sub: str, display_name: str) -> None:
     except ClientError as exc:
         code = exc.response["Error"]["Code"]
         if code == "ConditionalCheckFailedException":
-            # Row already exists. Older rows may lack display_name (None), which
+            # Row already exists. The messaging conversation list resolves peer
+            # names via profile.get_profile_identity -> get_profile, which reads
+            # the NESTED item["profile"]["display_name"] map (NOT the top-level
+            # display_name). Older rows may have a stale/None nested name, which
             # breaks UI specs that locate a conversation by the seeded name.
-            # Backfill display_name when it is missing or differs.
+            # Backfill BOTH the top-level and the nested profile.display_name.
             try:
                 existing = profile_tbl.get_item(Key={"user_sub": user_sub}).get("Item") or {}
-                if existing.get("display_name") != display_name:
+                nested = (existing.get("profile") or {}).get("display_name")
+                if existing.get("display_name") != display_name or nested != display_name:
                     profile_tbl.update_item(
                         Key={"user_sub": user_sub},
-                        UpdateExpression="SET display_name = :dn",
+                        UpdateExpression=(
+                            "SET display_name = :dn, "
+                            "#p = if_not_exists(#p, :empty)"
+                        ),
+                        ExpressionAttributeNames={"#p": "profile"},
+                        ExpressionAttributeValues={":dn": display_name, ":empty": {}},
+                    )
+                    profile_tbl.update_item(
+                        Key={"user_sub": user_sub},
+                        UpdateExpression="SET #p.#dn = :dn",
+                        ExpressionAttributeNames={"#p": "profile", "#dn": "display_name"},
                         ExpressionAttributeValues={":dn": display_name},
                     )
             except ClientError:
