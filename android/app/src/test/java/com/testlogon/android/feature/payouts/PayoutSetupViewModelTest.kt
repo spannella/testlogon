@@ -159,23 +159,40 @@ class PayoutSetupViewModelTest {
     }
 
     @Test
-    fun onReturnedFromKyc_evaluates_unlocksWhenTierRises() = runTest {
+    fun onReturnedFromKyc_reResolvesWithdrawGate_unlocksWhenKycApproves() = runTest {
+        // PAY-22/52: onReturnedFromKyc re-resolves the pre-withdrawal KYC+W-9 WITHDRAW gate (the tier-based
+        // PayoutGate is a load-time signal). Start with an unapproved KYC case (gate blocked), then on the
+        // KYC return the case flips approved -> the withdraw gate becomes Allowed (canWithdraw).
         val repo = FakePayoutSetupRepository().apply {
             setupResult = ApiResult.Success(
                 com.testlogon.android.data.payouts.PayoutSetupData(
                     balance = sampleBalance(),
                     recentPayouts = emptyList(),
-                    tierStatus = sampleTierStatus(current = 0, required = 1, eligible = false, unmet = listOf("gov_id")),
+                    tierStatus = sampleTierStatus(current = 1, required = 1, eligible = true),
                 ),
             )
-            refreshResult = ApiResult.Success(sampleTierStatus(current = 1, required = 1, eligible = true))
+            withdrawGateResult = ApiResult.Success(
+                com.testlogon.android.data.payouts.WithdrawGateInputs(
+                    kycApproved = false,
+                    kycStatus = com.testlogon.android.core.model.kyc.KycCaseStatus.SUBMITTED,
+                    taxInfo = sampleTaxInfo(),
+                ),
+            )
         }
         val viewModel = vm(repo)
         advanceUntilIdle()
-        assertTrue(viewModel.state.value.gate is PayoutGate.Blocked)
+        assertFalse(viewModel.state.value.withdrawGate.canWithdraw)
+        // KYC now approved on return -> the re-resolved withdraw gate opens.
+        repo.withdrawGateResult = ApiResult.Success(
+            com.testlogon.android.data.payouts.WithdrawGateInputs(
+                kycApproved = true,
+                kycStatus = com.testlogon.android.core.model.kyc.KycCaseStatus.APPROVED,
+                taxInfo = sampleTaxInfo(),
+            ),
+        )
         viewModel.onReturnedFromKyc()
         advanceUntilIdle()
-        assertEquals(PayoutGate.Allowed, viewModel.state.value.gate)
+        assertTrue(viewModel.state.value.withdrawGate.canWithdraw)
         assertFalse(viewModel.state.value.evaluating)
     }
 

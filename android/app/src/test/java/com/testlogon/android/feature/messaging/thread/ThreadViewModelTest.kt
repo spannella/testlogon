@@ -216,7 +216,11 @@ class ThreadViewModelTest {
                 media = com.testlogon.android.data.messaging.MessageMedia.Image(url = "https://s/x.jpg"),
             ),
         )
+        // #25/#28: onImagePicked now STAGES the image (merge-able selection); the send happens on onSend().
         vm.onImagePicked(uri)
+        advanceUntilIdle()
+        assertEquals(1, vm.state.value.composer.stagedMedia.size)
+        vm.onSend()
         advanceUntilIdle()
         assertEquals(1, repo.imageSendCalls.size)
         assertEquals("content://pick/1", repo.imageSendCalls.single().third)
@@ -232,7 +236,8 @@ class ThreadViewModelTest {
         val uri = org.mockito.Mockito.mock(android.net.Uri::class.java)
         org.mockito.Mockito.`when`(uri.toString()).thenReturn("content://pick/2")
         repo.imageSendResult = ApiResult.NetworkError(IOException("offline"), isTimeout = false)
-        vm.onImagePicked(uri)
+        vm.onImagePicked(uri) // stages
+        vm.onSend()           // sends the staged image
         advanceUntilIdle()
         assertEquals(SendStatus.FAILED, vm.state.value.messages.single().sendStatus)
     }

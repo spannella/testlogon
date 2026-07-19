@@ -438,7 +438,7 @@ class ThreadRichViewModelTest {
         assertEquals(1, repo.tipCalls.size)
         assertEquals(500L, repo.tipCalls.single().amountCents)
         assertNull(v.state.value.tipSheet.messageId) // sheet closed
-        assertEquals("Tip sent", v.state.value.transientMessage)
+        assertTrue(v.state.value.transientMessage?.startsWith("Tip sent") == true) // now "Tip sent · $5.00"
     }
 
     @Test
