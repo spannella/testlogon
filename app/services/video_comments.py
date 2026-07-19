@@ -369,7 +369,7 @@ def list_comments(
     return {"comments": comments, "cursor": new_cursor}
 
 
-def get_comment(*, video_id: str, comment_id: str) -> Optional[Dict[str, Any]]:
+def get_comment(video_id: str, comment_id: str) -> Optional[Dict[str, Any]]:  # noqa: F811 (see module note)
     """Fetch a single comment's raw item by id (the SK embeds a timestamp so a
     direct GetItem is impossible; page the partition like delete_comment).
     Returns None if not found."""
