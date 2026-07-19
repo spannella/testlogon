@@ -65,6 +65,36 @@ jobs:
       - name: Set up Gradle (with cache)
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Write placeholder google-services.json (build-input only; real file is gitignored)
+        run: |
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "testlogon-ci-placeholder",
+              "storage_bucket": "testlogon-ci-placeholder.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.testlogon.android"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  { "current_key": "AIzaCIplaceholderCIplaceholderCIplaceholder" }
+                ],
+                "services": {
+                  "appinvite_service": { "other_platform_oauth_client": [] }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
+
       # A roomy tmpdir for KSP / Robolectric / sqlite-jdbc + mockito-inline
       # ByteBuddy. On a small /tmp tmpfs these extract 0-byte native .so files
       # ("No native library") — the documented build-host gotcha. GitHub runners

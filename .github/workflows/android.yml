@@ -59,6 +59,36 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
+      - name: Write placeholder google-services.json (build-input only; real file is gitignored)
+        run: |
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "testlogon-ci-placeholder",
+              "storage_bucket": "testlogon-ci-placeholder.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.testlogon.android"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  { "current_key": "AIzaCIplaceholderCIplaceholderCIplaceholder" }
+                ],
+                "services": {
+                  "appinvite_service": { "other_platform_oauth_client": [] }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
+
       - name: Prepare roomy tmpdir (native-lib extraction safety)
         run: mkdir -p "${GITHUB_WORKSPACE}/.gradle_tmp"
         working-directory: .
@@ -126,6 +156,36 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Write placeholder google-services.json (build-input only; real file is gitignored)
+        run: |
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "testlogon-ci-placeholder",
+              "storage_bucket": "testlogon-ci-placeholder.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.testlogon.android"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  { "current_key": "AIzaCIplaceholderCIplaceholderCIplaceholder" }
+                ],
+                "services": {
+                  "appinvite_service": { "other_platform_oauth_client": [] }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
 
       # KVM is required for hardware-accelerated x86_64 emulation on Linux runners.
       - name: Enable KVM
