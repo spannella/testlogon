@@ -21,9 +21,11 @@ TS = int(time.time())
 
 
 def _load_root_session():
+    import os
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     raw = subprocess.check_output(
-        ["python3", "/home/ubuntu/testlogon/e2e_admin_session_setup.py"],
-        cwd="/home/ubuntu/testlogon", timeout=60,
+        ["python3", os.path.join(_repo, "e2e_admin_session_setup.py")],
+        cwd=_repo, timeout=60,
     ).decode()
     sess = json.loads(raw[raw.index("{"):])
     s = sess["root"]

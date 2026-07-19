@@ -345,15 +345,21 @@ test.describe("Section 366: Mid-Roll Ad Break API", () => {
     expect(resp.status()).toBe(400);
   });
 
-  test("366.6 total_ad_breaks increments", async () => {
+  test("366.6 total_ad_breaks increments (and enforces the min-interval cooldown)", async () => {
     const sid = await createSession(rootPage, { mid_roll_ad_break_duration_seconds: 15 });
     await startSession(rootPage, sid);
-    await apiPost(rootPage, ROOT_ID, `/broadcast/sessions/${sid}/ad-break`);
+    // First break increments the counter.
+    const b1 = await apiPost(rootPage, ROOT_ID, `/broadcast/sessions/${sid}/ad-break`);
+    expect(b1.status()).toBe(200);
     await apiPost(rootPage, ROOT_ID, `/broadcast/sessions/${sid}/ad-break/end`);
-    await apiPost(rootPage, ROOT_ID, `/broadcast/sessions/${sid}/ad-break`);
-    await apiPost(rootPage, ROOT_ID, `/broadcast/sessions/${sid}/ad-break/end`);
+    // A second break immediately after is rejected by the min-interval cooldown
+    // (AD_BREAK_TOO_SOON) rather than incrementing again.
+    const b2 = await apiPost(rootPage, ROOT_ID, `/broadcast/sessions/${sid}/ad-break`);
+    expect(b2.status()).toBe(429);
+    const b2body = await b2.json();
+    expect(b2body.detail.code).toBe("AD_BREAK_TOO_SOON");
     const cfg = await (await apiGet(rootPage, `/broadcast/sessions/${sid}/ad-config`)).json();
-    expect(cfg.total_ad_breaks).toBe(2);
+    expect(cfg.total_ad_breaks).toBe(1);
   });
 });
 

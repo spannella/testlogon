@@ -85,6 +85,31 @@ async function newIdentityPage(browser: Browser, userId: string): Promise<Page> 
   return page;
 }
 
+// Real-charge subscribe needs a default PM on file (else 402 no_payment_method).
+function seedDefaultPaymentMethod(userSub: string, pmId: string): void {
+  execSync(
+    `${REPO_ROOT}/.venv/bin/python3 -c "
+import boto3, os, time
+from pathlib import Path
+env = Path('${REPO_ROOT}/.env.local')
+if env.exists():
+    for line in env.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+tbl = ddb.Table('billing')
+pk = 'USER#${userSub}'
+pm_id = '${pmId}'
+tbl.put_item(Item={'pk': pk, 'sk': 'PM#' + pm_id, 'payment_method_id': pm_id, 'provider': 'stripe', 'provider_method_id': pm_id, 'method_type': 'card', 'label': 'Test Card ****4242', 'brand': 'visa', 'last4': '4242', 'exp_month': 12, 'exp_year': 2099, 'is_default': True, 'priority': 0, 'created_at': int(time.time())})
+tbl.put_item(Item={'pk': pk, 'sk': 'BILLING', 'autopay_enabled': True, 'currency': 'usd', 'default_payment_method_id': pm_id})
+print('seeded')
+"`,
+    { cwd: REPO_ROOT, timeout: 10_000 },
+  );
+}
+
 // ─── Fan Club API helpers (cookie session + CSRF) ─────────────────────────────
 
 function csrfHeaders(userId: string) {
@@ -166,6 +191,10 @@ test.describe("Fan Club", () => {
     alicePage = await newIdentityPage(browser, ALICE_ID);
     bobPage = await newIdentityPage(browser, BOB_ID);
     charliePage = await newIdentityPage(browser, CHARLIE_ID);
+
+    // Fund Bob + Charlie with a default PM (real-charge subscribe).
+    seedDefaultPaymentMethod(getSessions()[BOB_ID].user_sub, `pm_fanclub_bob_${TS}`);
+    seedDefaultPaymentMethod(getSessions()[CHARLIE_ID].user_sub, `pm_fanclub_charlie_${TS}`);
 
     // Create subscription plans for Alice via subscription server API
     const basicPlanResp = await subPost(alicePage, ALICE_ID, `/api/creators/${ALICE_ID}/plans`, {

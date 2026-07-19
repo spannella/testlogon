@@ -330,7 +330,7 @@ test.describe("206 -- Priority classification", () => {
     });
 
     // Fetch alerts and check priority
-    const resp = await apiGet(page, "/ui/alerts?limit=50");
+    const resp = await apiGet(page, "/ui/alerts?limit=1000");
     const data = await resp.json();
     expect(data.alerts.length).toBeGreaterThan(0);
     const alert = data.alerts.find(
@@ -352,7 +352,7 @@ test.describe("206 -- Priority classification", () => {
       details: { alert_type: "new_follower" },
     });
 
-    const resp = await apiGet(page, "/ui/alerts?limit=5");
+    const resp = await apiGet(page, "/ui/alerts?limit=100");
     const data = await resp.json();
     const alert = data.alerts.find(
       (a: { title: string }) => a.title === "New follower",
@@ -373,7 +373,7 @@ test.describe("206 -- Priority classification", () => {
       details: { alert_type: "ticket_created" },
     });
 
-    const resp = await apiGet(page, "/ui/alerts?limit=5");
+    const resp = await apiGet(page, "/ui/alerts?limit=100");
     const data = await resp.json();
     const alert = data.alerts.find(
       (a: { title: string }) => a.title === "Ticket created",
@@ -393,7 +393,7 @@ test.describe("206 -- Priority classification", () => {
       title: "Unknown event",
     });
 
-    const resp = await apiGet(page, "/ui/alerts?limit=5");
+    const resp = await apiGet(page, "/ui/alerts?limit=100");
     const data = await resp.json();
     const alert = data.alerts.find(
       (a: { title: string }) => a.title === "Unknown event",
@@ -724,17 +724,17 @@ test.describe("208 -- Notification Bell UI", () => {
     await bell.click();
     await page.waitForTimeout(1000);
 
-    // Click "Mark all read" if visible
+    // Click "Mark all read" (must be present since we seeded 2 unread alerts).
     const markAllBtn = page.getByRole("button", { name: /Mark all read/i });
-    if (await markAllBtn.isVisible()) {
-      await markAllBtn.click();
-      await page.waitForTimeout(1000);
-    }
+    await expect(markAllBtn).toBeVisible({ timeout: 5000 });
+    await markAllBtn.click();
 
-    // Verify the unread count via API is now 0
-    const resp = await apiGet(page, "/ui/alerts/unread-count");
-    const data = await resp.json();
-    expect(data.count).toBe(0);
+    // The unread count should settle to 0 once the mark-all mutation completes.
+    // Poll rather than snapshot to avoid racing the mutation/refetch.
+    await expect.poll(
+      async () => (await (await apiGet(page, "/ui/alerts/unread-count")).json()).count,
+      { timeout: 8000 },
+    ).toBe(0);
     await ctx.close();
   });
 });

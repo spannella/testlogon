@@ -24,8 +24,16 @@ class TrackingMapperTest {
             estimatedDelivery = "2026-06-09T00:00:00Z",
             deliveredAt = null,
             carrierEvents = listOf(
-                CarrierEventDto("2026-06-06T14:22:00Z", "Departed facility", "Columbus, OH, US"),
-                CarrierEventDto("2026-06-07T08:00:00Z", "Arrived hub", "Dayton, OH, US"),
+                CarrierEventDto(
+                    timestamp = "2026-06-06T14:22:00Z",
+                    description = "Departed facility",
+                    location = "Columbus, OH, US",
+                ),
+                CarrierEventDto(
+                    timestamp = "2026-06-07T08:00:00Z",
+                    description = "Arrived hub",
+                    location = "Dayton, OH, US",
+                ),
             ),
             lastCarrierCheck = 1749218400,
         )
@@ -91,5 +99,26 @@ class TrackingMapperTest {
     fun isoParse_handlesZSuffix() {
         val ms = parseIsoToEpochMs("2026-06-09T00:00:00Z")
         assertTrue(ms != null && ms > 0L)
+    }
+
+    @Test
+    fun shipGroupEvent_usesEpochSecondsTs_forTimestamp() {
+        // ECOMX selldash-E3: ship-group events (from the E1/ECOMX-E3 tracking join) carry `ts`
+        // (epoch SECONDS) + a per-event `status`, NOT the legacy ISO `timestamp`. The mapper must
+        // convert `ts` -> millis so the timeline orders/renders correctly.
+        val dto = CarrierTrackingViewDto(
+            txnId = "txn_sg",
+            carrier = "ups",
+            trackingNumber = "1Z999AA1",
+            status = "label_created",
+            carrierEvents = listOf(
+                CarrierEventDto(ts = 1784446124, description = "Shipping label created", status = "label_created"),
+            ),
+        )
+        val shipment = requireNotNull(dto.toDomain().shipment)
+        assertEquals(ShipmentStatus.LABEL_CREATED, shipment.status)
+        assertEquals(1, shipment.events.size)
+        assertEquals(1784446124L * 1000L, shipment.events[0].timestampEpochMs)
+        assertEquals("Shipping label created", shipment.events[0].description)
     }
 }

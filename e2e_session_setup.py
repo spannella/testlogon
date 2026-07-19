@@ -16,11 +16,25 @@ if not env_file.exists():
 if not env_file.exists():
     env_file = Path(__file__).parent / ".env"
 if env_file.exists():
+    # Match shell `set -a && . .env.local` semantics: within the file, the LAST
+    # assignment for a key wins (not the first), a real pre-existing env var still
+    # wins over the file, and an empty value never clobbers a non-empty one. The old
+    # `setdefault` first-wins logic locked in a placeholder `UI_ACCESS_TOKEN_SECRET=`
+    # line so the seeder signed ui_access_token cookies with an empty secret while the
+    # backend verified with the real (later-line) secret -> cookie-auth specs 401'd.
+    _preexisting_env = dict(os.environ)
+    _file_vals = {}
     for line in env_file.read_text().splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+            k, v = k.strip(), v.strip()
+            if v == "" and _file_vals.get(k):
+                continue  # do not let a later empty value wipe a non-empty one
+            _file_vals[k] = v  # last non-empty assignment wins
+    for k, v in _file_vals.items():
+        if k not in _preexisting_env:  # a real env var still wins over the file
+            os.environ[k] = v
 
 import boto3
 import jwt

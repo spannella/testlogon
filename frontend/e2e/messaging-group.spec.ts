@@ -786,6 +786,8 @@ test.describe("7. Tips on messages in groups", () => {
       text: `Tipped msg ${Date.now()}`,
       tip_amount_cents: 100,
       tip_payment_method_id: PM_ID,
+      // TIP-105: a group attached tip must name a distinct participant recipient.
+      tip_recipient_id: getSessions()[BOB_ID].user_sub,
     });
     expect(resp.status()).toBe(200);
     const msg = await resp.json() as { tip_amount_cents: number };
@@ -1182,7 +1184,8 @@ test.describe("12. Gallery messages in groups", () => {
     const { upload_url, bucket, key } = await presignResp.json() as {
       upload_url: string; bucket: string; key: string;
     };
-    const put = await page.request.put(`http://localhost:8000${upload_url}`, {
+    // upload_url is already absolute (public_base_url-prefixed); use it directly.
+    const put = await page.request.put(upload_url, {
       data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), // minimal valid JPEG
       headers: { "Content-Type": contentType },
     });
@@ -1345,6 +1348,8 @@ test.describe("12. Gallery messages in groups", () => {
           locked_images: [],
           tip_amount_cents: 100,
           tip_payment_method_id: PM_ID_ALICE,
+          // TIP-105: a group attached tip must name a distinct participant recipient.
+          tip_recipient_id: getSessions()[BOB_ID].user_sub,
         },
         headers: { "x-csrf-token": getSessions()[ALICE_ID].csrf_token },
       },

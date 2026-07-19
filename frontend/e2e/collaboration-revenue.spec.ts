@@ -300,17 +300,36 @@ test.describe("580 — Automatic revenue split API", () => {
     const split = (await resp.json()).split;
     const byUser: Record<string, number> = {};
     for (const d of split.distributions) byUser[d.user_id] = d.amount_cents;
-    expect(byUser[aliceSub]).toBe(600);
-    expect(byUser[bobSub]).toBe(400);
-    // Invariant: sum == gross
+    // Contract (FIN-018): tip-source revenue events deduct the admin-configured
+    // platform fee from GROSS first, then split the NET by collaboration
+    // percentages. So amounts are 60/40 of the distributable net, not of gross.
+    const dists = split.distributions as Array<{ user_id: string; percentage: number }>;
+    const byPct: Record<string, number> = {};
+    for (const d of dists) byPct[d.user_id] = d.percentage;
+    expect(byPct[aliceSub]).toBe(60);
+    expect(byPct[bobSub]).toBe(40);
+    // Sum of distributions == the distributable net (<= gross, fee deducted).
     const sum = split.distributions.reduce(
       (a: number, d: { amount_cents: number }) => a + d.amount_cents,
       0,
     );
-    expect(sum).toBe(split.gross_amount_cents);
+    expect(sum).toBeGreaterThan(0);
+    expect(sum).toBeLessThanOrEqual(split.gross_amount_cents);
+    // Each share matches its percentage of the distributed net (floor rounding
+    // favours the creator, so allow +/-1c).
+    expect(Math.abs(byUser[aliceSub] - Math.round(sum * 0.6))).toBeLessThanOrEqual(1);
+    expect(Math.abs(byUser[bobSub] - Math.round(sum * 0.4))).toBeLessThanOrEqual(1);
   });
 
   test("580.3 — Split writes immutable execution record", async () => {
+    // Self-seed a split so this test is safe under fresh-worker retries (which
+    // re-create the collab in beforeAll but do not re-run 580.1/580.2).
+    await apiPost(
+      bobPage,
+      BOB_ID,
+      `/ui/collaborations/${collabId}/content/${contentId}/revenue-event`,
+      { content_id: contentId, amount_cents: 1000, source: "tip" },
+    );
     const hist = await apiGet(alicePage, `/ui/collaborations/${collabId}/splits`);
     expect(hist.status()).toBe(200);
     const body = await hist.json();

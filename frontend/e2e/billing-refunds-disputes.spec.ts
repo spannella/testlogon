@@ -23,6 +23,7 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { retryOn429 } from "./helpers/retry";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -146,6 +147,32 @@ except ddb_client.exceptions.ResourceInUseException:
   );
 }
 
+/**
+ * Purge every dispute this user has filed so the DISP-041 rolling-30d cap
+ * (S.dispute_max_disputes_per_month, default 5) is reset before the spec files
+ * new disputes. Without this, an accumulated 5+ disputes in the last 30 days
+ * causes every `POST /ui/billing/disputes` to 429 (`dispute_rate_limited`),
+ * which is a fixture-hygiene problem, not a product bug. Mirrors
+ * creator-payouts.cleanupActivePayouts. Deletes the META rows via the
+ * ByUserCreatedAt GSI.
+ */
+function purgeUserDisputes(userSub: string): void {
+  execSync(
+    `python3 -c "${DDB_PY_PRELUDE}
+from boto3.dynamodb.conditions import Key
+t = ddb.Table('BillingDisputes')
+resp = t.query(IndexName='ByUserCreatedAt',
+               KeyConditionExpression=Key('user_scope').eq('USER#${userSub}'))
+n = 0
+for it in resp.get('Items', []):
+    t.delete_item(Key={'pk': it['pk'], 'sk': it['sk']})
+    n += 1
+print(json.dumps({'purged': n}))
+"`,
+    { cwd: REPO_ROOT, timeout: 15_000 },
+  );
+}
+
 function seedLedgerEntry(entryId: string, amountCents: number): void {
   const ts = Math.floor(Date.now() / 1000);
   execSync(
@@ -180,6 +207,9 @@ const ENTRY_ID = `le_disp_${TS}`;
 
 test.beforeAll(async ({ browser }) => {
   ensureBillingDisputesTable();
+  // DISP-041: reset Alice's rolling-30d dispute count so the filings below are
+  // not rejected with 429 (dispute_rate_limited) under suite accumulation.
+  purgeUserDisputes(ALICE_ID);
   seedLedgerEntry(ENTRY_ID, 2500);
   alicePage = await newIdentityPage(browser, "alice");
   rootPage = await newIdentityPage(browser, "root");
@@ -194,11 +224,13 @@ test.afterAll(async () => {
 
 test.describe("93 — Customer dispute API", () => {
   test("93.1 files a dispute referencing a transaction (201)", async () => {
-    const resp = await apiPost(alicePage, "alice", "/ui/billing/disputes", {
-      transaction_entry_id: ENTRY_ID,
-      amount_cents: 2500,
-      reason: "I never received the product I was charged for.",
-    });
+    const resp = await retryOn429(() =>
+      apiPost(alicePage, "alice", "/ui/billing/disputes", {
+        transaction_entry_id: ENTRY_ID,
+        amount_cents: 2500,
+        reason: "I never received the product I was charged for.",
+      }),
+    );
     expect(resp.status()).toBe(201);
     const body = await resp.json();
     expect(body.dispute_id).toBeTruthy();
@@ -208,10 +240,12 @@ test.describe("93 — Customer dispute API", () => {
   });
 
   test("93.2 files a dispute without a transaction (201)", async () => {
-    const resp = await apiPost(alicePage, "alice", "/ui/billing/disputes", {
-      amount_cents: 1000,
-      reason: "Unrecognized charge on my statement.",
-    });
+    const resp = await retryOn429(() =>
+      apiPost(alicePage, "alice", "/ui/billing/disputes", {
+        amount_cents: 1000,
+        reason: "Unrecognized charge on my statement.",
+      }),
+    );
     expect(resp.status()).toBe(201);
     const body = await resp.json();
     expect(body.status).toBe("open");
@@ -233,10 +267,14 @@ test.describe("93 — Customer dispute API", () => {
     expect(body.reason).toContain("never received");
   });
 
-  test("93.5 rejects a too-short reason (422)", async () => {
+  test("93.5 rejects a non-positive amount (422)", async () => {
+    // DISP-010: the reason field now accepts any >=1-char string (the canonical
+    // reason ENUM lives in `reason`, free text in `reason_detail`), so the old
+    // "reason too short" 422 no longer fires. The current input-validation
+    // rejection is a non-positive amount (DisputeFileIn.amount_cents ge=1).
     const resp = await apiPost(alicePage, "alice", "/ui/billing/disputes", {
-      amount_cents: 500,
-      reason: "no",
+      amount_cents: 0,
+      reason: "Attempting to dispute a zero-dollar charge.",
     });
     expect(resp.status()).toBe(422);
   });
@@ -264,22 +302,54 @@ test.describe("94 — Admin dispute resolution API", () => {
     expect(body.status).toBe("under_review");
   });
 
-  test("94.3 admin resolves the dispute (won)", async () => {
+  test("94.3 admin resolves the dispute (denied — no money move)", async () => {
+    // DISP-013: the unified resolve vocabulary is refunded|partial|denied (legacy
+    // won|lost|accepted are accepted + MAPPED: won -> denied). `denied` is the
+    // terminal outcome that moves NO money, so it does not require a classified
+    // charge or dual-approval — the correct outcome for this unclassified,
+    // reason-only dispute.
     const resp = await apiPost(rootPage, "root", `/ui/admin/disputes/${disputeId}/resolve`, {
-      resolution: "won",
-      notes: "Evidence accepted by provider.",
+      resolution: "denied",
+      notes: "Charge upheld; evidence sufficient.",
     });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
     expect(body.status).toBe("resolved");
-    expect(body.resolution).toBe("won");
+    expect(body.resolution).toBe("denied");
+    expect(body.moved_cents).toBe(0);
   });
 
-  test("94.4 resolving an already-resolved dispute fails (400)", async () => {
+  test("94.4 resolving an already-resolved dispute fails (409 dispute_terminal)", async () => {
+    // DISP-005: a second resolve on a terminal (resolved/withdrawn) dispute is
+    // rejected with 409 `dispute_terminal` (was 400 under the old open->won store).
     const resp = await apiPost(rootPage, "root", `/ui/admin/disputes/${disputeId}/resolve`, {
-      resolution: "lost",
+      resolution: "denied",
     });
-    expect(resp.status()).toBe(400);
+    expect(resp.status()).toBe(409);
+    const body = await resp.json();
+    expect(body.detail?.code).toBe("dispute_terminal");
+  });
+
+  test("94.5 refunding an unclassified dispute is refused (422 unclassified_charge)", async () => {
+    // DISP-013 money-safety guard: `refunded`/`partial` REALLY drive the reversal
+    // rail, so a dispute with no charge_type/charge_ref cannot be refunded — the
+    // backend refuses with 422 rather than silently claim a refund happened. File
+    // a fresh reason-only dispute (unclassified) and attempt a refund on it.
+    const fileResp = await retryOn429(() =>
+      apiPost(alicePage, "alice", "/ui/billing/disputes", {
+        amount_cents: 800,
+        reason: "Charge I do not recognize and want refunded.",
+      }),
+    );
+    expect(fileResp.status()).toBe(201);
+    const filed = await fileResp.json();
+
+    const resp = await apiPost(rootPage, "root", `/ui/admin/disputes/${filed.dispute_id}/resolve`, {
+      resolution: "refunded",
+    });
+    expect(resp.status()).toBe(422);
+    const body = await resp.json();
+    expect(body.detail?.code).toBe("unclassified_charge");
   });
 });
 
@@ -318,7 +388,9 @@ test.describe("96 — Dispute UI", () => {
   });
 
   test("96.2 admin dispute queue page loads with heading", async () => {
+    // DISP-022: the admin queue page heading is now "Payment Dispute Queue"
+    // (AdminDisputeQueuePage PageHeader → <h1>), was "Dispute Queue".
     await rootPage.goto("http://localhost:3000/admin/disputes", { waitUntil: "domcontentloaded" });
-    await expect(rootPage.getByRole("heading", { name: "Dispute Queue", exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(rootPage.getByRole("heading", { name: "Payment Dispute Queue", exact: true })).toBeVisible({ timeout: 15_000 });
   });
 });

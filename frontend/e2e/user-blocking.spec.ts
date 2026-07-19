@@ -404,6 +404,9 @@ test.describe("5 — Blocked Users UI", () => {
   });
 
   test("5.3 Unblock from list works and shows empty state", async () => {
+    // Self-seed the block so this test is safe under fresh-worker retries (which
+    // do not re-run 5.2). Idempotent: block returns ok even if already blocked.
+    await apiPost(page, "/ui/social/block", { target_user_id: BOB_ID });
     // Ensure we're on the blocked page and Bob is in the list
     await page.goto(`${BASE}/settings/blocked`, { waitUntil: "load" });
     await expect(page.getByRole("button", { name: "Unblock" })).toBeVisible({ timeout: 5_000 });

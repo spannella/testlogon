@@ -14,6 +14,7 @@
  *   Backend running on port 8000, Vite dev servers on port 3000 (main) and 3001 (devtools)
  */
 
+import { tmpdir } from "os";
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync, appendFileSync } from "fs";
@@ -72,7 +73,7 @@ async function injectAuth(page: Page, userId: string) {
 
 /** Run a Python script via a temp file (avoids shell-escaping issues). */
 function runPython(script: string): void {
-  const tmp = `/tmp/e2e-mfa-${randomBytes(4).toString("hex")}.py`;
+  const tmp = `${tmpdir()}/e2e-mfa-${randomBytes(4).toString("hex")}.py`;
   writeFileSync(tmp, script);
   try {
     execSync(`python3 ${tmp}`, { cwd: REPO, timeout: 15_000, stdio: "pipe" });

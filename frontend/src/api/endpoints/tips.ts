@@ -12,8 +12,12 @@ import type { TipsSummary, TipsSentResp, TipsSentSummary } from "@/api/types";
 
 export type TipPeriod = "7d" | "30d" | "all";
 
+// Reads GET /ui/alerts/tips-summary — the ledger-backed summary that returns the
+// TipsSummary shape the TipsFeed renders (total_tips_cents [NET], by_surface,
+// unique_tippers, top_tippers). The raw /ui/tips/received projection uses
+// total_net_cents/by_type field names and would render $NaN here.
 export const getTipsReceivedSummary = (period: TipPeriod = "30d") =>
-  api.get<TipsSummary>("/ui/tips/received", { period });
+  api.get<TipsSummary>("/ui/alerts/tips-summary", { period });
 
 export const getTipsSent = (opts?: { limit?: number; cursor?: string; period?: TipPeriod }) => {
   const params: Record<string, string> = {};

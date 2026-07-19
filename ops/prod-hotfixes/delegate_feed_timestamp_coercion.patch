@@ -1,0 +1,19 @@
+diff --git a/app/routers/delegate_feed.py b/app/routers/delegate_feed.py
+index f78f1566..85c8199c 100644
+--- a/app/routers/delegate_feed.py
++++ b/app/routers/delegate_feed.py
+@@ -33,6 +33,14 @@ router = APIRouter(prefix="/ui/newsfeed/delegate", tags=["newsfeed-delegation"])
+ 
+ 
+ def _to_post_out(d: dict) -> DelegatedPostOut:
++    # created_at/updated_at are typed str on DelegatedPostOut but some writers
++    # persist them as numeric (Decimal) epochs; coerce so a single legacy row
++    # doesn't 500 the whole list via ResponseValidationError.
++    d = dict(d)
++    for _k in ("created_at", "updated_at"):
++        _v = d.get(_k)
++        if _v is not None and not isinstance(_v, str):
++            d[_k] = str(int(_v)) if isinstance(_v, (int, float)) or hasattr(_v, "__int__") else str(_v)
+     return DelegatedPostOut(**d)
+ 
+ 

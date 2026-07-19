@@ -47,11 +47,22 @@ data class CarrierTrackingViewDto(
     @Json(name = "last_carrier_check") val lastCarrierCheck: Long? = null,
 )
 
-/** One carrier event (schema CarrierEvent). NOTE: there is no per-event `status` field in the contract. */
+/**
+ * One carrier event (schema CarrierEvent).
+ *
+ * ECOMX selldash-E3: the E1/ECOMX-E3 tracking endpoint aggregates SHIP-GROUP events, emitted as
+ * `{description, source, ts (epoch SECONDS), status}` — NOT the legacy `{timestamp (ISO), location}`
+ * shape. Both are accepted here (all optional) so the timeline renders regardless of source; the domain
+ * mapper prefers `ts` when present and falls back to the ISO `timestamp`.
+ */
 @JsonClass(generateAdapter = true)
 data class CarrierEventDto(
-    // ISO-8601 string; nullable per contract.
+    // ISO-8601 string; nullable per contract (legacy carrier-poll events).
     @Json(name = "timestamp") val timestamp: String? = null,
+    // epoch SECONDS; ship-group events (seller_ship / runner progression) use this.
+    @Json(name = "ts") val ts: Long? = null,
     @Json(name = "description") val description: String? = null,
     @Json(name = "location") val location: String? = null,
+    // Present on ship-group events (label_created / in_transit / ...); absent on legacy carrier events.
+    @Json(name = "status") val status: String? = null,
 )

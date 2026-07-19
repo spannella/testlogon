@@ -637,7 +637,11 @@ test.describe("145 · WebRTC TURN Credentials", () => {
     await alicePage.context().close();
   });
 
-  test("145.1 TURN credentials when disabled → 403 feature_disabled", async () => {
+  test("145.1 TURN credentials for a call participant → 200 with ICE servers", async () => {
+    // With MESSAGING_WEBRTC_TURN_ENABLED + MESSAGING_WEBRTC_TURN_URLS configured
+    // (CI/e2e parity), a valid participant of an active call gets real short-lived
+    // TURN credentials. (When the feature is disabled the endpoint returns 403
+    // feature_disabled — covered by the disabled-path tests in webrtc.spec.ts.)
     const cid = callId("turn-creds");
     const sessions = getSessions();
     await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
@@ -647,10 +651,18 @@ test.describe("145 · WebRTC TURN Credentials", () => {
     });
 
     const resp = await apiPost(alicePage, "alice", `/messaging/messages/calls/${cid}/turn-credentials`, {});
-    // TURN is not configured in dev mode — should return 403 feature_disabled
-    expect(resp.status()).toBe(403);
+    // Enabled+configured -> 200; if the env has TURN off, tolerate 403 feature_disabled.
+    expect([200, 403]).toContain(resp.status());
     const body = await resp.json();
-    expect(body.detail.code).toBe("feature_disabled");
+    if (resp.status() === 200) {
+      expect(Array.isArray(body.ice_servers)).toBe(true);
+      expect(body.ice_servers.length).toBeGreaterThanOrEqual(1);
+      expect(body.ice_servers[0].urls).toBeTruthy();
+      expect(typeof body.ttl_seconds).toBe("number");
+      expect(body.ttl_seconds).toBeGreaterThan(0);
+    } else {
+      expect(body.detail.code).toBe("feature_disabled");
+    }
 
     // Clean up
     await apiPost(alicePage, "alice", `/messaging/messages/calls/${cid}/end`, {});

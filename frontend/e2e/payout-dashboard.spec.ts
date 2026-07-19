@@ -256,6 +256,17 @@ function resetAndSeed(userSub: string): void {
   seedOldCredits(userSub, 2, 5000, "Tip: message"); // +$100 settled, past-hold
 }
 
+/**
+ * PAY-20/21: satisfy the verified-before-any-payout gate (APPROVED KYC + W-9).
+ * Without this, POST /ui/payouts/request is 403 kyc_required. Shared helper.
+ */
+function seedPayoutGate(userSub: string): void {
+  execSync(`${PYTHON} ${REPO_ROOT}/e2e_payout_gate_seed.py ${userSub}`, {
+    cwd: REPO_ROOT,
+    timeout: 30_000,
+  });
+}
+
 // =============================================================================
 // Test setup
 // =============================================================================
@@ -265,6 +276,10 @@ let bobPage: Page;
 
 test.beforeAll(async ({ browser }) => {
   ensurePayoutsTable();
+
+  // PAY-20/21: satisfy the KYC/W-9 payout gate so requests are not 403'd.
+  seedPayoutGate(ALICE_SUB);
+
   cleanupActivePayouts(ALICE_SUB);
 
   // Seed billing credits for Alice (tips)
@@ -339,7 +354,7 @@ test.describe("211 · Payout Request", () => {
   test("211.1 Submit valid payout request via API", async () => {
     resetAndSeed(ALICE_SUB);
     const resp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 2000,
+      amount_cents: 3000,
       method: "bank_transfer",
       notes: `Dashboard test ${TS}`,
     });
@@ -353,7 +368,7 @@ test.describe("211 · Payout Request", () => {
   test("211.2 Duplicate request returns 409", async () => {
     // There should still be an active payout from 211.1
     const resp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 1000,
+      amount_cents: 3000,
       method: "bank_transfer",
     });
     expect(resp.status()).toBe(409);
@@ -378,7 +393,7 @@ test.describe("211 · Payout Request", () => {
     await expect(alicePage.locator('[data-testid="available-balance"]')).not.toHaveText("...");
 
     // Fill in payout form
-    await alicePage.fill("#payout-amount", "20.00");
+    await alicePage.fill("#payout-amount", "30.00");
     // Method defaults to bank_transfer, leave as-is
 
     // Click submit
@@ -437,7 +452,7 @@ test.describe("212 · Payout History", () => {
 
     // Create a fresh payout to cancel
     const createResp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 1500,
+      amount_cents: 3000,
       method: "bank_transfer",
     });
     expect(createResp.status()).toBe(201);

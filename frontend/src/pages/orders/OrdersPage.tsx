@@ -35,9 +35,14 @@ import {
 } from "@/api/endpoints/orderLifecycle";
 import { OrderStatusBadge } from "./OrderStatusBadge";
 
-function fmtTs(ts?: number | null): string {
-  if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString();
+function fmtTs(ts?: string | number | null): string {
+  if (ts === null || ts === undefined || ts === "") return "—";
+  // GET /ui/orders returns created_at/updated_at as ISO 8601 strings
+  // (backend OrderListItem.created_at: str). A bare number is treated as
+  // legacy Unix epoch seconds.
+  const d = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
 }
 
 export default function OrdersPage() {
@@ -164,13 +169,24 @@ export default function OrdersPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {ordersQuery.isError && !featureDisabled && (
-              <p className="text-sm text-destructive">
-                {ordersQuery.error?.message || "Unable to load orders."}
-              </p>
-            )}
-
-            {ordersQuery.isLoading ? (
+            {ordersQuery.isError && !featureDisabled ? (
+              <div className="py-10 text-center">
+                <Package className="mx-auto mb-3 h-8 w-8 text-muted-foreground opacity-40" />
+                <p className="text-sm font-medium">Couldn't load your orders</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {ordersQuery.error?.message || "Something went wrong. Please try again."}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-4"
+                  disabled={ordersQuery.isFetching}
+                  onClick={() => ordersQuery.refetch()}
+                >
+                  Try again
+                </Button>
+              </div>
+            ) : ordersQuery.isLoading ? (
               <div className="space-y-2">
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-10 w-full" />

@@ -85,7 +85,9 @@ internal fun parseIsoToEpochMs(iso: String?): Long? {
 }
 
 internal fun CarrierEventDto.toDomain(): TrackingEvent = TrackingEvent(
-    timestampEpochMs = parseIsoToEpochMs(timestamp) ?: 0L,
+    // ECOMX selldash-E3: ship-group events carry `ts` (epoch SECONDS); legacy carrier events carry the
+    // ISO `timestamp`. Prefer ts (-> millis) and fall back to the parsed ISO string; 0 when neither.
+    timestampEpochMs = ts?.let { it * 1000L } ?: parseIsoToEpochMs(timestamp) ?: 0L,
     description = description?.takeIf { it.isNotBlank() } ?: "",
     location = location?.takeIf { it.isNotBlank() },
 )

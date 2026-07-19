@@ -154,6 +154,40 @@ async function subPatch(page: Page, userId: string, path: string, body: object) 
   });
 }
 
+// ─── Payment-method seed (real-charge subscribe) ──────────────────────────────
+const PYTHON = REPO_ROOT + "/.venv/bin/python3";
+
+/**
+ * Seed a DEFAULT payment method for a subscriber. The subscription refactor made
+ * `POST /api/plans/{id}/subscribe` REALLY charge (resolve_subscription_payment_method
+ * -> 402 no_payment_method when the subscriber has no PM on file), so a non-trial
+ * subscribe must have a default PM first. Mirrors tip-ledger.injectPaymentMethod
+ * (billing PM# row + BILLING row with default_payment_method_id).
+ */
+function seedDefaultPaymentMethod(userSub: string, pmId: string): void {
+  execSync(
+    `${PYTHON} -c "
+import boto3, os, time
+from pathlib import Path
+env = Path('${REPO_ROOT}/.env.local')
+if env.exists():
+    for line in env.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+tbl = ddb.Table('billing')
+pk = 'USER#${userSub}'
+pm_id = '${pmId}'
+tbl.put_item(Item={'pk': pk, 'sk': 'PM#' + pm_id, 'payment_method_id': pm_id, 'provider': 'stripe', 'provider_method_id': pm_id, 'method_type': 'card', 'label': 'Test Card ****4242', 'brand': 'visa', 'last4': '4242', 'exp_month': 12, 'exp_year': 2099, 'is_default': True, 'priority': 0, 'created_at': int(time.time())})
+tbl.put_item(Item={'pk': pk, 'sk': 'BILLING', 'autopay_enabled': True, 'currency': 'usd', 'default_payment_method_id': pm_id})
+print('seeded')
+"`,
+    { cwd: REPO_ROOT, timeout: 10_000 },
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Section 59: Catalog CRUD (API)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -395,6 +429,9 @@ test.describe("Section 61: Subscribe & lifecycle (API)", () => {
     alicePage = await newIdentityPage(browser, ALICE_ID);
     bobPage   = await newIdentityPage(browser, BOB_ID);
 
+    // Real-charge subscribe: Bob needs a default PM on file (else 402 no_payment_method).
+    seedDefaultPaymentMethod(BOB_ID, `pm_sub61_${TS}`);
+
     // Alice creates a fresh plan for lifecycle tests
     const planResp = await subPost(alicePage, ALICE_ID, `/api/creators/${ALICE_ID}/plans`, {
       name: `E2E Lifecycle Plan ${TS}`,
@@ -405,6 +442,25 @@ test.describe("Section 61: Subscribe & lifecycle (API)", () => {
     });
     if (!planResp.ok()) throw new Error(`Failed to create plan: ${await planResp.text()}`);
     plan61Id = (await planResp.json() as { plan_id: string }).plan_id;
+
+    // Subscribe is idempotent per (subscriber, creator): if Bob already has an
+    // active subscription to Alice from a prior run, subscribing again returns
+    // the OLD subscription (old plan_id / price). Cancel any existing Alice
+    // subscriptions immediately so the fresh subscribe binds to plan61Id.
+    const existing = await subGet(bobPage, BOB_ID, "/api/subscriptions");
+    if (existing.ok()) {
+      const rows = (await existing.json()) as Array<{
+        subscription_id: string; creator_id: string; status: string;
+      }>;
+      for (const row of rows) {
+        if (row.creator_id === ALICE_ID && row.status !== "cancelled") {
+          await subPost(bobPage, BOB_ID, `/api/subscriptions/${row.subscription_id}/cancel`, {
+            cancel_at_period_end: false,
+            refund: false,
+          });
+        }
+      }
+    }
 
     // Bob subscribes
     const subResp = await subPost(bobPage, BOB_ID, `/api/plans/${plan61Id}/subscribe`, {
@@ -512,6 +568,9 @@ test.describe("Section 62: Subscription-gated catalog access (API)", () => {
     alicePage   = await newIdentityPage(browser, ALICE_ID);
     bobPage     = await newIdentityPage(browser, BOB_ID);
     charliePage = await newIdentityPage(browser, CHARLIE_ID);
+
+    // Real-charge subscribe (62.3): Bob needs a default PM on file.
+    seedDefaultPaymentMethod(BOB_ID, `pm_sub62_${TS}`);
 
     // ── Cleanup: cancel any lingering active subscriptions Bob has to Alice ──
     // (from previous test runs or from section 61's plan creation)
@@ -703,7 +762,7 @@ test.describe("Section 63: Shop UI", () => {
     await expect(alicePage.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
 
     // Fill in category name
-    await alicePage.locator("#cat-name").fill(`UI Cat ${TS}`);
+    await alicePage.locator("#cat-name").fill(`!e2e-uicat ${TS}`);
 
     // Click the "Create" button inside the dialog
     await alicePage.getByRole("dialog").getByRole("button", { name: /^create$/i }).click();
@@ -716,7 +775,7 @@ test.describe("Section 63: Shop UI", () => {
     test.setTimeout(15_000);
     // After dialog closes and categories re-query, the new category button is visible
     await expect(
-      alicePage.getByRole("button", { name: `UI Cat ${TS}` }),
+      alicePage.getByRole("button", { name: `!e2e-uicat ${TS}` }),
     ).toBeVisible({ timeout: 8_000 });
   });
 });

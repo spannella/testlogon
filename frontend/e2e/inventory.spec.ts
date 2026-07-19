@@ -477,7 +477,7 @@ test.describe("4 — ItemEditor UI", () => {
 
     // Create a category and an item with stock for the UI tests
     const catResp = await catPost(alicePage, ALICE_ID, "/ui/catalog/categories", {
-      name: `ui_cat_${TS}`,
+      name: `!e2e-inv ${TS}`,
     });
     const catBody = await catResp.json();
     uiCatId = catBody.category_id;
@@ -511,7 +511,7 @@ test.describe("4 — ItemEditor UI", () => {
     await expect(alicePage.getByRole("tab", { name: "Manage" })).toBeVisible({ timeout: 10_000 });
     await alicePage.getByRole("tab", { name: "Manage" }).click();
     // Select our test category
-    await alicePage.getByRole("button", { name: `ui_cat_${TS}` }).click();
+    await alicePage.getByRole("button", { name: `!e2e-inv ${TS}` }).click();
     // Wait for items to load
     await alicePage.waitForTimeout(500);
     // Click "Add Item" button
@@ -527,7 +527,7 @@ test.describe("4 — ItemEditor UI", () => {
     await alicePage.goto(`${BASE}/shop`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByRole("tab", { name: "Manage" })).toBeVisible({ timeout: 10_000 });
     await alicePage.getByRole("tab", { name: "Manage" }).click();
-    await alicePage.getByRole("button", { name: `ui_cat_${TS}` }).click();
+    await alicePage.getByRole("button", { name: `!e2e-inv ${TS}` }).click();
     await alicePage.waitForTimeout(500);
 
     // Find the stocked item card and click its edit button
@@ -550,7 +550,7 @@ test.describe("4 — ItemEditor UI", () => {
     await alicePage.goto(`${BASE}/shop`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByRole("tab", { name: "Manage" })).toBeVisible({ timeout: 10_000 });
     await alicePage.getByRole("tab", { name: "Manage" }).click();
-    await alicePage.getByRole("button", { name: `ui_cat_${TS}` }).click();
+    await alicePage.getByRole("button", { name: `!e2e-inv ${TS}` }).click();
     await alicePage.waitForTimeout(500);
 
     // Look for "In Stock" badge
@@ -562,7 +562,7 @@ test.describe("4 — ItemEditor UI", () => {
     await alicePage.goto(`${BASE}/shop`, { waitUntil: "domcontentloaded" });
     await expect(alicePage.getByRole("tab", { name: "Manage" })).toBeVisible({ timeout: 10_000 });
     await alicePage.getByRole("tab", { name: "Manage" }).click();
-    await alicePage.getByRole("button", { name: `ui_cat_${TS}` }).click();
+    await alicePage.getByRole("button", { name: `!e2e-inv ${TS}` }).click();
     await alicePage.waitForTimeout(500);
 
     const oosBadge = alicePage.locator("[data-testid='stock-badge']").filter({ hasText: /Out of Stock/ });

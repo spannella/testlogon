@@ -15,6 +15,7 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
+import { tmpdir } from "os";
 import * as path from "path";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -107,7 +108,7 @@ function seedRollupRow(
   dateStr: string,
   data: Record<string, unknown>,
 ): void {
-  const tmpFile = `/tmp/analytics_depth_seed_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
+  const tmpFile = `${tmpdir()}/analytics_depth_seed_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
     execSync(
@@ -150,7 +151,7 @@ function seedVideoMetadata(
   ownerUserId: string,
   data: Record<string, unknown>,
 ): void {
-  const tmpFile = `/tmp/analytics_depth_video_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
+  const tmpFile = `${tmpdir()}/analytics_depth_video_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
     execSync(
@@ -191,7 +192,7 @@ function seedPost(
   data?: Record<string, unknown>,
 ): void {
   const extraData = data ? JSON.stringify(data) : "{}";
-  const tmpFile = `/tmp/analytics_depth_post_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
+  const tmpFile = `${tmpdir()}/analytics_depth_post_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, extraData);
   try {
     execSync(

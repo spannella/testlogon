@@ -34,16 +34,21 @@ _TABLE = None
 
 
 def _tbl():
+    # Use the shared, explicitly-credentialed DDB resource (aws_access_key_id="test").
+    # A bare boto3.resource("dynamodb") without explicit creds falls back to the
+    # botocore credential chain (env -> ~/.aws/credentials). Under DynamoDB Local
+    # run WITHOUT -sharedDb, tables partition by (access_key, region); a stray
+    # ~/.aws/credentials would land this handle in a namespace where
+    # app_single_table does not exist -> ResourceNotFoundException / 500. Every
+    # other single-table caller already goes through app.core.aws_clients, so
+    # align referrals with it (fixes referrals create/list/dashboard 500s in e2e).
     global _TABLE
     if _TABLE is None:
         import os
-        endpoint = os.getenv("DDB_ENDPOINT_URL") or os.getenv("AWS_ENDPOINT_URL") or ""
-        kwargs: dict[str, str] = {"region_name": S.aws_region or "us-east-1"}
-        if endpoint:
-            kwargs["endpoint_url"] = endpoint
-        _TABLE = boto3.resource("dynamodb", **kwargs).Table(
-            os.getenv("APP_TABLE", "app_single_table"),
-        )
+        # Reuse the SAME import-time-resolved DDB resource every other single-table
+        # service uses (app.core.aws.ddb -> ddb_resource() with explicit local creds).
+        from app.core.aws import ddb
+        _TABLE = ddb.Table(os.getenv("APP_TABLE", "app_single_table"))
     return _TABLE
 
 

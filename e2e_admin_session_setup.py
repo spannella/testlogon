@@ -34,11 +34,28 @@ env_file = Path(__file__).parent / "app" / ".env"
 if not env_file.exists():
     env_file = Path(__file__).parent / ".env.local"
 if env_file.exists():
+    # Match shell `set -a && . .env.local` semantics: within the file, the LAST
+    # assignment for a key wins (not the first). A real pre-existing environment
+    # variable still takes precedence over the file. Empty values never clobber a
+    # non-empty one. This matters because .env.local can legitimately contain a
+    # placeholder line (e.g. `UI_ACCESS_TOKEN_SECRET=`) that a later line fills in;
+    # the old `setdefault` first-wins logic locked in the empty placeholder, so the
+    # seeder signed ui_access_token cookies with an empty secret while the backend
+    # (shell-sourced, last-wins) verified with the real secret -> every cookie-auth
+    # spec 401'd with "Missing bearer token".
+    _preexisting_env = dict(os.environ)
+    _file_vals = {}
     for line in env_file.read_text().splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+            k, v = k.strip(), v.strip()
+            if v == "" and _file_vals.get(k):
+                continue  # do not let a later empty value wipe a non-empty one
+            _file_vals[k] = v  # last non-empty assignment wins
+    for k, v in _file_vals.items():
+        if k not in _preexisting_env:  # a real env var still wins over the file
+            os.environ[k] = v
 
 import boto3
 import jwt
@@ -146,7 +163,34 @@ def ensure_profile(user_sub: str, display_name: str) -> None:
     except ClientError as exc:
         code = exc.response["Error"]["Code"]
         if code == "ConditionalCheckFailedException":
-            return  # already present — leave existing profile untouched
+            # Row already exists. The messaging conversation list resolves peer
+            # names via profile.get_profile_identity -> get_profile, which reads
+            # the NESTED item["profile"]["display_name"] map (NOT the top-level
+            # display_name). Older rows may have a stale/None nested name, which
+            # breaks UI specs that locate a conversation by the seeded name.
+            # Backfill BOTH the top-level and the nested profile.display_name.
+            try:
+                existing = profile_tbl.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+                nested = (existing.get("profile") or {}).get("display_name")
+                if existing.get("display_name") != display_name or nested != display_name:
+                    profile_tbl.update_item(
+                        Key={"user_sub": user_sub},
+                        UpdateExpression=(
+                            "SET display_name = :dn, "
+                            "#p = if_not_exists(#p, :empty)"
+                        ),
+                        ExpressionAttributeNames={"#p": "profile"},
+                        ExpressionAttributeValues={":dn": display_name, ":empty": {}},
+                    )
+                    profile_tbl.update_item(
+                        Key={"user_sub": user_sub},
+                        UpdateExpression="SET #p.#dn = :dn",
+                        ExpressionAttributeNames={"#p": "profile", "#dn": "display_name"},
+                        ExpressionAttributeValues={":dn": display_name},
+                    )
+            except ClientError:
+                pass
+            return
         if code == "ResourceNotFoundException":
             # Profiles table missing in this environment — nothing to seed.
             return

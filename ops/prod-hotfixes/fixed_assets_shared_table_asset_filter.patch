@@ -1,0 +1,36 @@
+diff --git a/app/services/fixed_assets.py b/app/services/fixed_assets.py
+index 6e8b9a5d..442dcee6 100644
+--- a/app/services/fixed_assets.py
++++ b/app/services/fixed_assets.py
+@@ -746,19 +746,30 @@ def list_work_orders(
+         )
+         resp = T.maintenance_orders.query(**kwargs)
+     elif wo_status is not None:
++        # The maintenance_orders table is shared with the property-maintenance
++        # feature (pk=PROPERTY#...); scope the GSI query to asset work orders
++        # (pk begins with ASSET#) so we never parse a property WO as an asset WO.
+         kwargs["IndexName"] = "GSI_WO_STATUS"
+         kwargs["KeyConditionExpression"] = Key("wo_status").eq(wo_status)
++        kwargs["FilterExpression"] = Attr("pk").begins_with("ASSET#")
+         resp = T.maintenance_orders.query(**kwargs)
+     elif assignee_sub is not None:
+         kwargs["IndexName"] = "GSI_WO_ASSIGNEE"
+         kwargs["KeyConditionExpression"] = Key("assignee_sub").eq(assignee_sub)
++        kwargs["FilterExpression"] = Attr("pk").begins_with("ASSET#")
+         resp = T.maintenance_orders.query(**kwargs)
+     else:
++        kwargs["FilterExpression"] = Attr("pk").begins_with("ASSET#")
+         resp = T.maintenance_orders.scan(**kwargs)
+ 
+     items = resp.get("Items", [])
+     lek = resp.get("LastEvaluatedKey")
+-    return [_item_to_work_order(i) for i in items], encode_cursor(lek) if lek else None
++    # Defensive: only map rows that are actually asset work orders. The shared
++    # table also stores property-maintenance orders (pk=PROPERTY#..., no
++    # asset_id); the FilterExpression already excludes them, but guard here too
++    # so a legacy/unfiltered row can never 500 the global queue.
++    asset_items = [i for i in items if str(i.get("pk", "")).startswith("ASSET#")]
++    return [_item_to_work_order(i) for i in asset_items], encode_cursor(lek) if lek else None
+ 
+ 
+ def transition_work_order(

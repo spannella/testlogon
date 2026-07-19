@@ -18,6 +18,7 @@
  *   POST /ui/analytics/refresh
  */
 
+import { tmpdir } from "os";
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
@@ -108,7 +109,7 @@ function seedRollupRow(
   dateStr: string,
   data: Record<string, unknown>,
 ): void {
-  const tmpFile = `/tmp/analytics_seed_${Date.now()}.json`;
+  const tmpFile = `${tmpdir()}/analytics_seed_${Date.now()}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
     execSync(
@@ -149,7 +150,7 @@ function seedSummarySentinel(
   userSub: string,
   data: Record<string, unknown>,
 ): void {
-  const tmpFile = `/tmp/analytics_summary_${Date.now()}.json`;
+  const tmpFile = `${tmpdir()}/analytics_summary_${Date.now()}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
     execSync(

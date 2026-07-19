@@ -45,14 +45,15 @@ class OrderEntitlementsRepositoryImpl @Inject constructor(
     private val io: CoroutineDispatcher = Dispatchers.IO
 
     override suspend fun library(): ApiResult<List<LibraryEntitlement>> = withContext(io) {
-        call { api.listEntitlements() }.map { rows: List<EntitlementDto> ->
+        // ECOMX selldash-E3: the endpoint returns `{items:[...]}`; unwrap (null -> empty).
+        call { api.listEntitlements().items.orEmpty() }.map { rows: List<EntitlementDto> ->
             rows.mapNotNull { dto -> dto.toDomain() }
         }
     }
 
     override suspend fun libraryForOrder(orderId: String): ApiResult<List<LibraryEntitlement>> =
         withContext(io) {
-            call { api.listEntitlements() }.map { rows: List<EntitlementDto> ->
+            call { api.listEntitlements().items.orEmpty() }.map { rows: List<EntitlementDto> ->
                 rows.mapNotNull { dto -> dto.toDomain() }.filter { e -> e.orderId == orderId }
             }
         }
@@ -78,5 +79,9 @@ class OrderEntitlementsRepositoryImpl @Inject constructor(
         ApiResult.Failure(ApiError(status = e.code(), message = e.message().ifBlank { "Request failed" }))
     } catch (e: IOException) {
         ApiResult.NetworkError(e, isTimeout = false)
+    } catch (e: com.squareup.moshi.JsonDataException) {
+        // ECOMX selldash-E3: a prod-divergent body must NOT crash the caller (OrderDetail treats
+        // entitlements as best-effort). Degrade to an empty library instead of an uncaught throw.
+        ApiResult.Failure(ApiError(status = 0, message = e.message ?: "Malformed response"))
     }
 }

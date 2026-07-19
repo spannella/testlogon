@@ -300,6 +300,24 @@ test.describe("772. KYC Partner API — document upload", () => {
   });
 
   test("772.3 application status includes uploaded document", async ({ request }) => {
+    // Ensure the id_front document exists independent of 772.1 surviving a
+    // retry: on a fresh-worker retry the describe beforeAll re-creates a NEW
+    // application, but 772.1 (the upload) is not re-run, so guard by uploading
+    // here idempotently (same Idempotency-Key as 772.1 -> dedup, no duplicate).
+    await request.post(
+      `${API}/api/v1/kyc/applications/${applicationId}/documents`,
+      {
+        headers: { "X-API-Key": aliceKey, "Idempotency-Key": `idem-doc-772-3-${TS}` },
+        multipart: {
+          document_type: "id_front",
+          file: {
+            name: "id_front.pdf",
+            mimeType: "application/pdf",
+            buffer: Buffer.from("%PDF-1.4 fake id document"),
+          },
+        },
+      },
+    );
     const resp = await keyGet(request, aliceKey, `/api/v1/kyc/applications/${applicationId}`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();

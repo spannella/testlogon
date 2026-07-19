@@ -47,6 +47,7 @@ import {
   type OrderLifecycle,
   type OrderLifecycleStatus,
 } from "@/api/endpoints/orderLifecycle";
+import { OrderShipmentTracking } from "@/components/shared/ShipmentTracking";
 import { OrderStatusBadge } from "./OrderStatusBadge";
 
 function fmtTs(ts?: number | null): string {
@@ -359,6 +360,25 @@ export default function OrderDetailPage() {
                 ))}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ECOMX-E1/E2: buyer-visible shipment tracking (carrier/number/status) */}
+      {order.shipments && order.shipments.some((s) => s.carrier || s.tracking_number || s.status) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Truck className="h-4 w-4" />
+              Tracking
+            </CardTitle>
+            <CardDescription>Where your order is right now.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OrderShipmentTracking
+              shipments={order.shipments}
+              fulfillmentStatus={order.fulfillment_status}
+            />
           </CardContent>
         </Card>
       )}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   getAnalyticsSummary,
@@ -6,6 +6,7 @@ import {
   getAnalyticsBreakdown,
   getAdRoasReport,
   exportAnalyticsCsv,
+  listMyAdAccounts,
 } from "@/api/endpoints/ads";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -73,10 +74,27 @@ function KpiCard({
 
 export default function AdAnalyticsDashboard() {
   const [days, setDays] = useState("30");
-  const [accountId] = useState(() => {
+  // Account selection: seed from ?account_id= if present, otherwise the in-page
+  // picker (below) defaults to the first advertiser account so the dashboard is
+  // usable straight from nav without a manual URL param.
+  const [accountId, setAccountId] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     return params.get("account_id") || "";
   });
+
+  const accountsQ = useQuery({
+    queryKey: ["ad-analytics", "accounts"],
+    queryFn: () => listMyAdAccounts(),
+    staleTime: 60_000,
+  });
+  const accounts = accountsQ.data ?? [];
+
+  // Auto-select the first account once accounts load and nothing is selected yet.
+  useEffect(() => {
+    if (!accountId && accounts.length > 0) {
+      setAccountId(accounts[0]!.account_id);
+    }
+  }, [accountId, accounts]);
 
   const daysNum = parseInt(days, 10);
 
@@ -120,13 +138,26 @@ export default function AdAnalyticsDashboard() {
     window.open(url, "_blank");
   };
 
+  // No account resolved yet: while accounts load, show a spinner-ish message;
+  // if the user genuinely has no advertiser accounts, guide them to create one.
   if (!accountId) {
     return (
       <div className="p-6" data-testid="ad-analytics-dashboard">
-        <h1 className="text-2xl font-bold">Ad Analytics Dashboard</h1>
-        <p className="text-muted-foreground mt-4">
-          No account selected. Pass <code>?account_id=...</code> in the URL.
-        </p>
+        <div className="flex items-center gap-2">
+          <BarChart3 className="h-6 w-6" />
+          <h1 className="text-2xl font-bold">Ad Analytics Dashboard</h1>
+        </div>
+        {accountsQ.isLoading ? (
+          <p className="text-muted-foreground mt-4">Loading your advertiser accounts…</p>
+        ) : accountsQ.isError ? (
+          <p className="text-muted-foreground mt-4">
+            Couldn&apos;t load your advertiser accounts. Please try again.
+          </p>
+        ) : (
+          <p className="text-muted-foreground mt-4" data-testid="no-accounts">
+            You don&apos;t have any advertiser accounts yet. Create one to see analytics.
+          </p>
+        )}
       </div>
     );
   }
@@ -139,7 +170,21 @@ export default function AdAnalyticsDashboard() {
           <BarChart3 className="h-6 w-6" />
           <h1 className="text-2xl font-bold">Ad Analytics Dashboard</h1>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {accounts.length > 0 && (
+            <Select value={accountId} onValueChange={setAccountId}>
+              <SelectTrigger className="w-[220px]" data-testid="account-select">
+                <SelectValue placeholder="Select account" />
+              </SelectTrigger>
+              <SelectContent>
+                {accounts.map((a) => (
+                  <SelectItem key={a.account_id} value={a.account_id}>
+                    {a.company_name || a.account_id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select value={days} onValueChange={setDays}>
             <SelectTrigger className="w-[160px]" data-testid="date-range-select">
               <SelectValue />

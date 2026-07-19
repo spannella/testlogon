@@ -1096,7 +1096,7 @@ test.describe("24. Scheduled encrypted messages — text and image", () => {
     };
 
     // 2. Upload fake encrypted bytes to the mock S3 endpoint
-    const putResp = await page.request.put(`http://localhost:8000${upload_url}`, {
+    const putResp = await page.request.put(upload_url, {
       data:    Buffer.alloc(64), // 64 zero bytes simulating encrypted image data
       headers: { "Content-Type": "application/octet-stream" },
     });
@@ -1210,7 +1210,7 @@ test.describe("25. Scheduled messages — expiry timer and view-once", () => {
       upload_url: string; bucket: string; key: string;
     };
     // Upload
-    await page.request.put(`http://localhost:8000${upload_url}`, {
+    await page.request.put(upload_url, {
       data: Buffer.alloc(32), headers: { "Content-Type": "image/png" },
     });
 
@@ -1300,6 +1300,9 @@ test.describe("25. Scheduled messages — expiry timer and view-once", () => {
 
 test.describe("26. Tipped messages — encryption, view-once, scheduled, expiry", () => {
   let page: Page;
+  // Real-charge tips require a real default PM on file (else 400 payment method
+  // not found). Seed one for alice in beforeAll and use it below.
+  const SEC26_PM = `e2e-pm-tip-sec26-${Date.now()}`;
 
   const SALT_B64       = Buffer.alloc(16).toString("base64");
   const IV_B64         = Buffer.alloc(12).toString("base64");
@@ -1312,6 +1315,7 @@ test.describe("26. Tipped messages — encryption, view-once, scheduled, expiry"
   test.beforeAll(async ({ browser }) => {
     page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
+    injectPaymentMethod(getSessions()[ALICE_ID].user_sub, SEC26_PM);
     await getOrCreateDm(page);
   });
 
@@ -1324,7 +1328,7 @@ test.describe("26. Tipped messages — encryption, view-once, scheduled, expiry"
     const r = await page.request.post(
       `${API}/messaging/conversations/${_dmConvoId}/messages`,
       {
-        data: { text: `tip-immediate-${Date.now()}`, tip_amount_cents: 150, tip_payment_method_id: "pm_test" },
+        data: { text: `tip-immediate-${Date.now()}`, tip_amount_cents: 150, tip_payment_method_id: SEC26_PM },
         headers: { "x-csrf-token": session.csrf_token },
       },
     );
@@ -1343,7 +1347,7 @@ test.describe("26. Tipped messages — encryption, view-once, scheduled, expiry"
     const r = await page.request.post(
       `${API}/messaging/conversations/${_dmConvoId}/messages`,
       {
-        data: { text: `tip-sched-${Date.now()}`, send_at: deliverAt, tip_amount_cents: 200, tip_payment_method_id: "pm_test" },
+        data: { text: `tip-sched-${Date.now()}`, send_at: deliverAt, tip_amount_cents: 200, tip_payment_method_id: SEC26_PM },
         headers: { "x-csrf-token": session.csrf_token },
       },
     );
@@ -1375,7 +1379,7 @@ test.describe("26. Tipped messages — encryption, view-once, scheduled, expiry"
     const r = await page.request.post(
       `${API}/messaging/conversations/${_dmConvoId}/messages`,
       {
-        data: { send_at: deliverAt, tip_amount_cents: 300, tip_payment_method_id: "pm_test", encryption: textEnvelope },
+        data: { send_at: deliverAt, tip_amount_cents: 300, tip_payment_method_id: SEC26_PM, encryption: textEnvelope },
         headers: { "x-csrf-token": session.csrf_token },
       },
     );
@@ -1641,7 +1645,7 @@ test.describe("28. Gallery messages — free + locked images with blurred previe
       upload_url: string; bucket: string; key: string;
     };
     // Upload 4 bytes of fake JPEG data
-    const putResp = await page.request.put(`http://localhost:8000${upload_url}`, {
+    const putResp = await page.request.put(upload_url, {
       data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), // minimal JPEG header
       headers: { "Content-Type": contentType },
     });

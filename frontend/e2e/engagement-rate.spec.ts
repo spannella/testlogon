@@ -17,6 +17,7 @@
  * Auth: cookie-based session for Alice (creator) with CSRF.
  */
 
+import { tmpdir } from "os";
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
@@ -102,7 +103,7 @@ function seedEngagementRow(
   dateStr: string,
   data: Record<string, number>,
 ): void {
-  const tmpFile = `/tmp/eng_seed_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
+  const tmpFile = `${tmpdir()}/eng_seed_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
     execSync(

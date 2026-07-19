@@ -202,6 +202,56 @@ for i in range(7):
         "computed_at": ${Math.floor(TS / 1000)},
     })
 
+# ─── ADV3-8: the analytics summary + ROAS are now sourced from the ad_billing
+# LEDGER (ad_roas.ledger_metrics), NOT AdAnalyticsRollups. Seed matching ledger
+# rows so get_summary returns the same impressions/clicks the rollups above hold.
+# ledger_metrics reads AdBilling rows keyed pk=ACCT#{id}, sk begins_with LEDGER#,
+# counting one impression/click/conversion per entry_type row, filtered by
+# campaign_id + created_at window. Current 7d: 700 impressions / 35 clicks;
+# previous 7d (days 8..14): 560 impressions / 28 clicks. Spend rides on the click
+# rows (10c each) so spend_change_pct is a real, non-degenerate number.
+import uuid, time as _time
+ad_billing = ddb.Table("AdBilling")
+_now_ts = int(_time.time())
+
+def _seed_ledger(day_offset_start, day_offset_end, impr_per_day, click_per_day):
+    with ad_billing.batch_writer() as bw:
+        for day in range(day_offset_start, day_offset_end):
+            # Offset in SECONDS from now (not calendar noon) so every row sits
+            # strictly inside its window regardless of wall-clock time of day:
+            # get_summary current = [now-7d, now); previous = [now-14d, now-7d).
+            # day 0 -> ~12h ago (safely < now and >= now-7d); day 13 -> ~13.5d ago.
+            row_ts = _now_ts - day * 86400 - 43200
+            for _ in range(impr_per_day):
+                eid = uuid.uuid4().hex
+                bw.put_item(Item={
+                    "pk": "ACCT#${ACCOUNT_ID}",
+                    "sk": f"LEDGER#{row_ts}#{eid}",
+                    "entry_id": eid,
+                    "account_id": "${ACCOUNT_ID}",
+                    "campaign_id": "${CAMPAIGN_ID}",
+                    "entry_type": "impression_charge",
+                    "amount_cents": 0,
+                    "created_at": row_ts,
+                })
+            for _ in range(click_per_day):
+                eid = uuid.uuid4().hex
+                bw.put_item(Item={
+                    "pk": "ACCT#${ACCOUNT_ID}",
+                    "sk": f"LEDGER#{row_ts}#{eid}",
+                    "entry_id": eid,
+                    "account_id": "${ACCOUNT_ID}",
+                    "campaign_id": "${CAMPAIGN_ID}",
+                    "entry_type": "click_charge",
+                    "amount_cents": 10,
+                    "created_at": row_ts,
+                })
+
+# Current window: days 0..6 (last 7 days) -> 700 impressions, 35 clicks.
+_seed_ledger(0, 7, 100, 5)
+# Previous window: days 7..13 -> 560 impressions, 28 clicks.
+_seed_ledger(7, 14, 80, 4)
+
 print("SEED_OK")
 `;
   const result = execSync(`python3 -`, {

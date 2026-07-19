@@ -12,6 +12,7 @@
  *     - non-image kind=text with image_url rejected (422)
  */
 
+import { tmpdir } from "os";
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as fs from "fs";
@@ -96,7 +97,7 @@ function apiDelete(page: Page, path: string, identity = "alice") {
 async function uploadTestImage(page: Page, identity = "alice"): Promise<string> {
   const session = getAdminSessions()[identity];
   // Create a minimal 1x1 PNG in /tmp
-  const pngPath = `/tmp/e2e_test_${Date.now()}.png`;
+  const pngPath = `${tmpdir()}/e2e_test_${Date.now()}.png`;
   execSync(
     `${PYTHON} -c "
 import struct, zlib
@@ -530,7 +531,7 @@ test.describe("4. Image comment UI", () => {
 
   test("selecting an image shows comment-image-preview", async ({ browser }) => {
     // Create a small PNG for the file chooser
-    const pngPath = `/tmp/ui_comment_${Date.now()}.png`;
+    const pngPath = `${tmpdir()}/ui_comment_${Date.now()}.png`;
     execSync(
       `${PYTHON} -c "
 import struct, zlib
@@ -567,7 +568,7 @@ write_png('${pngPath}')
   test("submitting image comment renders <img data-testid='comment-image'>", async ({
     browser,
   }) => {
-    const pngPath = `/tmp/ui_img_submit_${Date.now()}.png`;
+    const pngPath = `${tmpdir()}/ui_img_submit_${Date.now()}.png`;
     execSync(
       `${PYTHON} -c "
 import struct, zlib

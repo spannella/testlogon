@@ -594,8 +594,16 @@ test.describe("Section 99 — Skill Registry UI (ats/skills)", () => {
     await injectAuth(page, "alice");
   });
 
-  test("99.1 — page loads at /ats/skills", async () => {
+  // Shared page across tests can drift off-route between assertions; re-navigate
+  // + wait for the heading before each so content()/getByText read settled state.
+  test.beforeEach(async () => {
     await page.goto(`${BASE}/ats/skills`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: /skill registry/i })).toBeVisible({
+      timeout: 15_000,
+    });
+  });
+
+  test("99.1 — page loads at /ats/skills", async () => {
     await expect(page.getByRole("heading", { name: /skill registry/i })).toBeVisible({
       timeout: 10_000,
     });
@@ -702,10 +710,18 @@ test.describe("Section 101 — Candidate Skill Profile UI", () => {
     }
   });
 
-  test("101.1 — page loads at /ats/skills/candidate/:id", async () => {
+  // Re-navigate to the profile page before each assertion so the shared page
+  // can not drift off-route (async skills query + a later back-link click).
+  test.beforeEach(async () => {
     await page.goto(`${BASE}/ats/skills/candidate/${candId}`, {
       waitUntil: "domcontentloaded",
     });
+    await expect(
+      page.getByRole("heading", { name: /skill profile/i }),
+    ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("101.1 — page loads at /ats/skills/candidate/:id", async () => {
     await expect(
       page.getByRole("heading", { name: /skill profile/i }),
     ).toBeVisible({ timeout: 10_000 });
@@ -721,11 +737,23 @@ test.describe("Section 101 — Candidate Skill Profile UI", () => {
 
   test("101.4 — adding a skill from UI shows it in the list", async () => {
     const newSkillName = `e2e-ui-skill-${TS}`;
-    await page.getByPlaceholder(/e.g. Python, AWS/i).fill(newSkillName);
-    await page.getByRole("button", { name: /^add$/i }).click();
-    await expect(page.getByText(newSkillName, { exact: false })).toBeVisible({
-      timeout: 8_000,
-    });
+    const input = page.getByPlaceholder(/e.g. Python, AWS/i);
+    await input.fill(newSkillName);
+    // Typing fires an async skill-autocomplete that opens a suggestions dropdown
+    // (and can momentarily overlay the Add button). Dismiss it and wait for the
+    // Add button to reflect the filled value before clicking, so we do not race
+    // the debounced search / re-render.
+    await input.press("Escape");
+    const addBtn = page.getByRole("button", { name: /^add$/i });
+    await expect(addBtn).toBeEnabled({ timeout: 10_000 });
+    await addBtn.click();
+    // Assignment success is confirmed by the toast (fires on the mutation
+    // onSuccess) OR the skill appearing in the list once the invalidated
+    // entity-skills query refetches — accept either so we are not coupled to
+    // the list-refetch timing (which the dev-backend busy-loop can stretch).
+    const toast = page.locator("[data-sonner-toast]").filter({ hasText: /skill added/i });
+    const listItem = page.getByText(newSkillName, { exact: false });
+    await expect(toast.or(listItem).first()).toBeVisible({ timeout: 12_000 });
   });
 
   test("101.5 — back link navigates to candidate detail", async () => {

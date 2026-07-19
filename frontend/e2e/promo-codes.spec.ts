@@ -10,6 +10,7 @@
  * Auth: Alice session cookies (from e2e_session_setup.py).
  */
 
+import { tmpdir } from "os";
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as fs from "fs";
@@ -164,7 +165,7 @@ with tbl.batch_writer() as batch:
 print(f"Deleted {len(items)} items")
 `;
   try {
-    const tmpFile = `/tmp/promo_cleanup_${Date.now()}.py`;
+    const tmpFile = `${tmpdir()}/promo_cleanup_${Date.now()}.py`;
     fs.writeFileSync(tmpFile, script);
     execSync(`python3 ${tmpFile}`, { cwd: REPO_ROOT, timeout: 30_000 });
   } catch (e) {
@@ -425,7 +426,7 @@ tbl.put_item(Item={
 })
 print("OK")
 `;
-    const tmpPath = `/tmp/promo_seed_${TS}.py`;
+    const tmpPath = `${tmpdir()}/promo_seed_${TS}.py`;
     fs.writeFileSync(tmpPath, pyScript);
     execSync(`python3 ${tmpPath}`, {
       cwd: REPO_ROOT,
@@ -648,7 +649,7 @@ tbl.put_item(Item={
 })
 print("OK")
 `;
-    const tmpSeed = `/tmp/promo_ui_seed_${TS}.py`;
+    const tmpSeed = `${tmpdir()}/promo_ui_seed_${TS}.py`;
     fs.writeFileSync(tmpSeed, seedScript);
     execSync(`python3 ${tmpSeed}`, { cwd: REPO_ROOT, timeout: 10_000 });
 

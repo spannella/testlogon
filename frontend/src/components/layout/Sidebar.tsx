@@ -159,6 +159,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Tax Documents", i18nKey: "nav.taxDocuments", path: "/billing/tax-documents", icon: <Receipt className="h-5 w-5" /> },
       { label: "Tax Forms (1099)", i18nKey: "nav.taxForms1099", path: "/billing/tax-forms", icon: <Receipt className="h-5 w-5" /> },
       { label: "Orders", i18nKey: "nav.orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "Seller Dashboard", i18nKey: "nav.sellerDashboard", path: "/seller/sales", icon: <Package className="h-5 w-5" /> },
       { label: "My Rentals", i18nKey: "nav.vodRentals", path: "/vod/rentals", icon: <Video className="h-5 w-5" /> },
       { label: "Subscriptions", i18nKey: "nav.subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },
       { label: "Tier Manager", i18nKey: "nav.tierManager", path: "/subscriptions/manage", icon: <Layers className="h-5 w-5" /> },

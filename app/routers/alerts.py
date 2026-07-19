@@ -621,9 +621,17 @@ async def get_activity_feed(
             group["unread"] = True
         group["alert_ids"].append(item["alert_id"])
 
-    # Build response with formatted titles
+    # Build response with formatted titles. Order groups by their latest_ts desc
+    # (group_order preserves first-seen order, which is NOT guaranteed to match
+    # latest_ts once grouping collapses multiple events -> the feed could return
+    # out-of-order items).
+    ordered_keys = sorted(
+        group_order,
+        key=lambda k: int(groups[k].get("latest_ts", 0)),
+        reverse=True,
+    )
     result_items = []
-    for key in group_order[:limit]:
+    for key in ordered_keys[:limit]:
         group = groups[key]
         # Only format title for grouped items (not standalone)
         if not key.startswith("standalone:"):

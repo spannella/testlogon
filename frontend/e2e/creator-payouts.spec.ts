@@ -248,6 +248,26 @@ except Exception:
 }
 
 /**
+ * PAY-20/21: satisfy the verified-before-any-payout gate (APPROVED KYC case +
+ * certified W-9). Without this, `POST /ui/payouts/request` is 403 kyc_required.
+ * Delegates to the shared e2e_payout_gate_seed.py (creates the kyc_cases/tax_info
+ * DDB-Local tables if missing, then seeds an approved case + certified W-9 via the
+ * real app services so the gate resolvers see exactly what they read at runtime).
+ */
+function seedPayoutGate(userSub: string): void {
+  execSync(`${PYTHON} ${REPO_ROOT}/e2e_payout_gate_seed.py ${userSub}`, {
+    cwd: REPO_ROOT,
+    timeout: 30_000,
+  });
+}
+
+// The effective minimum payout is the admin-configured billing_config override
+// (min_payout_cents), which is $25 in this environment — higher than the $10
+// S.payout_minimum_cents the /balance endpoint reports. Request comfortably above
+// it so a config bump does not reintroduce a min-amount 400.
+const REQUEST_CENTS = 3000;
+
+/**
  * Reset Alice's payout state for a deterministic request: cancel all active
  * payouts + drop the sentinel, then top up settled balance so the next request
  * has funds. Survives full-suite accumulation regardless of prior pending state.
@@ -268,6 +288,9 @@ let seededTotalCents: number;
 test.beforeAll(async ({ browser }) => {
   // Ensure table exists
   ensurePayoutsTable();
+
+  // PAY-20/21: satisfy the KYC/W-9 payout gate so requests below are not 403'd.
+  seedPayoutGate(ALICE_SUB);
 
   // Clean up any active payouts from prior runs
   cleanupActivePayouts(ALICE_SUB);
@@ -328,7 +351,7 @@ test.describe("108 · Payout Request API", () => {
     resetAndSeed(ALICE_SUB);
 
     const resp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 2000,
+      amount_cents: REQUEST_CENTS,
       method: "bank_transfer",
       notes: `E2E payout test ${TS}`,
     });
@@ -336,14 +359,16 @@ test.describe("108 · Payout Request API", () => {
     const data = await resp.json();
     expect(data.ok).toBe(true);
     expect(data.status).toBe("requested");
-    expect(data.amount_cents).toBe(2000);
+    expect(data.amount_cents).toBe(REQUEST_CENTS);
     expect(data.payout_id).toBeTruthy();
     createdPayoutId = data.payout_id;
   });
 
   test("108.2 Duplicate payout returns 409", async () => {
+    // Must be >= the effective minimum ($25); otherwise the min-amount check (which
+    // runs before the duplicate-slot check) would 400 instead of the 409 under test.
     const resp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 1000,
+      amount_cents: REQUEST_CENTS,
       method: "bank_transfer",
     });
     expect(resp.status()).toBe(409);
@@ -371,7 +396,7 @@ test.describe("108 · Payout Request API", () => {
     // Create a fresh payout to cancel
     resetAndSeed(ALICE_SUB);
     const createResp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 1500,
+      amount_cents: REQUEST_CENTS,
       method: "bank_transfer",
     });
     expect(createResp.status()).toBe(201);
@@ -440,7 +465,7 @@ test.describe("109 · Admin Payout API", () => {
     // Create another payout to reject
     resetAndSeed(ALICE_SUB);
     const createResp = await apiPost(alicePage, ALICE_KEY, "/ui/payouts/request", {
-      amount_cents: 2000,
+      amount_cents: REQUEST_CENTS,
       method: "bank_transfer",
     });
     expect(createResp.status()).toBe(201);

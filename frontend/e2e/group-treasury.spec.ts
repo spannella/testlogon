@@ -584,7 +584,7 @@ from boto3.dynamodb.conditions import Key
 resp = billing.query(
     KeyConditionExpression=Key('pk').eq('USER#` + aliceSub + `') & Key('sk').begins_with('LEDGER#'),
     ScanIndexForward=False,
-    Limit=10,
+    Limit=200,
 )
 items = resp.get('Items', [])
 refunds = [i for i in items if i.get('type') == 'dissolution_refund']

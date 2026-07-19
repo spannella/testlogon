@@ -97,6 +97,24 @@ class OrderDetailViewModelTest {
     }
 
     @Test
+    fun shippedByHeader_noLegacyShipping_stillFetchesTracking() = runTest {
+        // ECOMX selldash-E3: real seller-ship orders have `shipping = null` on the txn detail; the
+        // E1 order-header `fulfillment_status = "shipped"` is the authoritative signal. The gate must
+        // GET .../tracking (which aggregates the buyer's ship-group tracking) and render Ready.
+        val purchases = FakePurchasesRepository(
+            detailResult = ApiResult.Success(
+                FakePurchasesRepository.sampleDetail(shipping = null, fulfillmentStatus = "shipped"),
+            ),
+        )
+        val tracking = FakeTrackingRepository(ApiResult.Success(CarrierTracking("txn_1", shipment())))
+        val model = vm(purchases, tracking = tracking)
+        advanceUntilIdle()
+        val state = model.state.value as OrderDetailUiState.Content
+        assertTrue(state.tracking is TrackingUiState.Ready)
+        assertEquals(1, tracking.calls) // tracking GET happens off the header status, not legacy shipping
+    }
+
+    @Test
     fun trackingFailure_isIsolated_orderStillContent() = runTest {
         val purchases = FakePurchasesRepository(
             detailResult = ApiResult.Success(FakePurchasesRepository.sampleDetail(shipping = shipping())),
