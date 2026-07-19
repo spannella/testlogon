@@ -443,6 +443,25 @@ test.describe("Section 61: Subscribe & lifecycle (API)", () => {
     if (!planResp.ok()) throw new Error(`Failed to create plan: ${await planResp.text()}`);
     plan61Id = (await planResp.json() as { plan_id: string }).plan_id;
 
+    // Subscribe is idempotent per (subscriber, creator): if Bob already has an
+    // active subscription to Alice from a prior run, subscribing again returns
+    // the OLD subscription (old plan_id / price). Cancel any existing Alice
+    // subscriptions immediately so the fresh subscribe binds to plan61Id.
+    const existing = await subGet(bobPage, BOB_ID, "/api/subscriptions");
+    if (existing.ok()) {
+      const rows = (await existing.json()) as Array<{
+        subscription_id: string; creator_id: string; status: string;
+      }>;
+      for (const row of rows) {
+        if (row.creator_id === ALICE_ID && row.status !== "cancelled") {
+          await subPost(bobPage, BOB_ID, `/api/subscriptions/${row.subscription_id}/cancel`, {
+            cancel_at_period_end: false,
+            refund: false,
+          });
+        }
+      }
+    }
+
     // Bob subscribes
     const subResp = await subPost(bobPage, BOB_ID, `/api/plans/${plan61Id}/subscribe`, {
       subscriber_id: BOB_ID,
