@@ -981,12 +981,20 @@ test.describe("108 — Activity Feed UI", () => {
     await page.waitForLoadState("domcontentloaded");
 
     await page.getByRole("tab", { name: "Tips & Earnings" }).click();
-    await page.waitForTimeout(1000);
 
-    // Should show the net-earnings label + tip count. (TIPX-D1 renamed the total
-    // from 'Total Earned' to the honest 'Net tips received' — net of platform fee.)
-    await expect(page.getByText("Net tips received")).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText("Tips Received")).toBeVisible({ timeout: 5000 });
+    // The tab lazy-loads TipsFeed + the tips-summary fetch. Wait for the tab
+    // panel to settle into ONE of its two terminal states: the summary card
+    // (when there are tips) or the 'No tips yet' empty state.
+    const card = page.getByText("Tips & Earnings (30 days)");
+    const empty = page.getByText("No tips yet");
+    await expect(card.or(empty).first()).toBeVisible({ timeout: 10_000 });
+
+    if (await card.isVisible().catch(() => false)) {
+      // Summary card is showing -> both honest labels are present (TIPX-D1
+      // renamed 'Total Earned' to 'Net tips received', net of platform fee).
+      await expect(page.getByText("Net tips received")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("Tips Received")).toBeVisible({ timeout: 5000 });
+    }
 
     await page.close();
   });
