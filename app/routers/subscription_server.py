@@ -2241,7 +2241,18 @@ async def list_subscriptions(
         raise HTTPException(status_code=403, detail="subscriber_id must match X-User-Id")
     pk = pk_subscriber(user_id)
     items = ddb_query(pk)
-    subs = [normalize_subscription(it) for it in items if it.get("sk", "").startswith("SUB#")]
+    # Syndicate-bundle subscriptions write a lightweight index row into the same
+    # SUBSCRIBER# / SUB# space but do NOT conform to SubscriptionOut (they lack
+    # creator_id/interval/price_cents/etc.) and have their own listing under
+    # /syndicates/{id}/subscriptions. Excluding them here keeps this creator-
+    # subscription endpoint from 500-ing on ResponseValidationError when a user
+    # holds any bundle subscription. (P3 e2e green-up: real product bug.)
+    subs = [
+        normalize_subscription(it)
+        for it in items
+        if it.get("sk", "").startswith("SUB#")
+        and it.get("plan_type") != "syndicate_bundle"
+    ]
     subs.sort(key=lambda x: x.get("created_at", 0), reverse=True)
     if include_profile:
         subs = [attach_subscription_profiles(s) for s in subs]
@@ -2262,7 +2273,18 @@ async def list_creator_subscriptions(
 ):
     require_user(x_user_id, creator_id)
     items = ddb_query(pk_creator(creator_id))
-    subs = [normalize_subscription(it) for it in items if it.get("sk", "").startswith("SUB#")]
+    # Syndicate-bundle subscriptions write a lightweight index row into the same
+    # SUBSCRIBER# / SUB# space but do NOT conform to SubscriptionOut (they lack
+    # creator_id/interval/price_cents/etc.) and have their own listing under
+    # /syndicates/{id}/subscriptions. Excluding them here keeps this creator-
+    # subscription endpoint from 500-ing on ResponseValidationError when a user
+    # holds any bundle subscription. (P3 e2e green-up: real product bug.)
+    subs = [
+        normalize_subscription(it)
+        for it in items
+        if it.get("sk", "").startswith("SUB#")
+        and it.get("plan_type") != "syndicate_bundle"
+    ]
     subs.sort(key=lambda x: x.get("created_at", 0), reverse=True)
     if include_profile:
         subs = [attach_subscription_profiles(s) for s in subs]
