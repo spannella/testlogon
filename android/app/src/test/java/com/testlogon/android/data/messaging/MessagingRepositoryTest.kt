@@ -171,6 +171,20 @@ class MessagingRepositoryTest {
             createImageCalls += id to body
             return requireNotNull(createImageResult)
         }
+        var createGalleryCalls = mutableListOf<Pair<String, CreateGalleryMessageReq>>()
+        var createGalleryResult: MessageDto? = null
+        override suspend fun createGalleryMessage(id: String, body: CreateGalleryMessageReq): MessageDto {
+            createGalleryCalls += id to body
+            return requireNotNull(createGalleryResult)
+        }
+
+        // P2 — poll / scheduled-message / tip-react endpoints added by later programs; not exercised
+        // by this repo test, so unused stubs (kept honest: they error rather than fake a result).
+        override suspend fun createPollMessage(id: String, body: CreatePollMessageReq): MessageDto = error("unused")
+        override suspend fun listScheduledMessages(id: String): List<MessageDto> = error("unused")
+        override suspend fun rescheduleMessage(id: String, messageId: String, body: RescheduleMessageReq): MessageDto = error("unused")
+        override suspend fun cancelScheduledMessage(id: String, messageId: String): okhttp3.ResponseBody = error("unused")
+        override suspend fun tipReactMessage(id: String, messageId: String, body: TipReactReq): TipReactOutDto = error("unused")
         override suspend fun createVideoShareMessage(id: String, body: CreateVideoShareReq): MessageDto {
             createVideoShareCalls += id to body
             createVideoShareThrows?.let { throw it }
@@ -210,7 +224,7 @@ class MessagingRepositoryTest {
         override suspend fun downloadAttachment(
             id: String,
             messageId: String,
-            grantToken: String,
+            grantToken: String?,
         ): okhttp3.ResponseBody = error("unused")
         override suspend fun presignVoice(id: String, body: PresignVoiceReq): PresignVoiceResp {
             return requireNotNull(presignVoiceResult)
@@ -537,6 +551,7 @@ class MessagingRepositoryTest {
         meetingPollDao = meetingPollDao,
         errorParser = ApiErrorParser(Moshi.Builder().build()),
         authStateStore = auth,
+        appContext = org.mockito.Mockito.mock(android.content.Context::class.java),
         uploader = uploader,
         imageProcessor = imageProcessor,
         uriMetadata = uriMetadata,

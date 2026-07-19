@@ -40,10 +40,8 @@ class ThreadViewModelTest {
         // Voice factories hold only an (unused-in-these-tests) Context; recorder/player are created
         // lazily and never constructed by non-voice tests, so a mock Context is sufficient.
         val context = org.mockito.Mockito.mock(android.content.Context::class.java)
-        return ThreadViewModel(
+        return com.testlogon.android.feature.messaging.newThreadViewModel(
             handle, repo, auth, stream, context,
-            com.testlogon.android.feature.messaging.voice.VoiceRecorderFactory(context),
-            com.testlogon.android.feature.messaging.voice.VoicePlayerFactory(context),
             com.testlogon.android.feature.messaging.FakeBillingAuthorizer(),
             com.testlogon.android.feature.messaging.FakeDraftRepository(),
             typingRepo,
