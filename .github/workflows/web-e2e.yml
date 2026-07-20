@@ -117,15 +117,17 @@ jobs:
       - name: Broad seed (hotels/ERP/property/CRM/ATS/ads/newsfeed/shop + payout gate + moderation reset)
         run: |
           set -x
-          # Seed scripts pass explicit test/test creds via the app clients; the
-          # DDB-Local instance partitions by (access_key,region) without -sharedDb,
-          # so a credential-less client would land in the wrong namespace.
-          # These scripts do `from app...` at import; run them with the repo root
-          # on PYTHONPATH exactly like scripts/dev.sh does (REPO_ROOT). Bare
-          # python3 here dies 'No module named app' and silently drops the seed.
+          # These supplementary seeds do `from app...` at import, so put the repo
+          # root on PYTHONPATH exactly like scripts/dev.sh does (REPO_ROOT); bare
+          # python3 otherwise dies 'No module named app'.
           export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH:-}"
-          python3 scripts/local-ddb-init.py || true
-          python3 scripts/local-ddb-seed.py || true
+          # NOTE: local-ddb-init.py + local-ddb-seed.py are intentionally NOT
+          # re-run here. `just up` (scripts/dev.sh start) already runs
+          # local-ddb-init.py once (guarded by its bootstrap marker) and reports
+          # 'DynamoDB table bootstrap complete'. Re-running create_table against
+          # the already-created tables makes DDB-Local return InternalFailure and
+          # burns ~9min in the retry loop (observed run 29710799849). The extra
+          # local-ddb-seed only writes a throwaway dev-user the gate never reads.
           python3 scripts/seed_demo_data.py || true
           python3 e2e_payout_gate_seed.py || true
           python3 e2e_moderation_reset.py || true
