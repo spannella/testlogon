@@ -12,12 +12,20 @@ name: Web E2E (vertical + money gate)
 #
 # SAFETY / TRIGGERS:
 #   * workflow_dispatch  -> always available, runs the full gate. Primary entry.
-#   * pull_request (app/** + frontend/e2e/** + src) -> OPT-IN: the heavy gate
-#     job only runs when the PR carries the `run-web-e2e` label (see the `if:`
-#     guard). This broadens the trigger so contract regressions CAN gate PRs
-#     without forcing a ~60-min job onto every PR or destabilising the existing
-#     fullstack-e2e job. Drop the label guard (set `if: true`) to promote it to
-#     an always-on required check once it has soaked.
+#   * pull_request (app/** + frontend/e2e/** + src) -> OPT-IN (run-web-e2e label).
+#
+# P3 DECISION (2026-07-20): DELIBERATELY KEPT label-gated + dispatch, NOT promoted
+# to always-run/required. The P2 soak (5 real CI runs) hugely stabilised this gate
+# — fixed the seed PYTHONPATH, timeout, redundant ddb-init, and the messaging
+# single-worker backend-wedge (SHARD 10->7), and quarantined the deterministic
+# cross-spec shared-DDB collisions — but an irreducible ~1% SHIFTING flake floor
+# remains (best run 29734184730 = 3 failed / 406; different ~3-8 specs each run).
+# Per the governance rules, a REQUIRED check must be reliably green or it blocks
+# EVERY merge, and an always-run ~150-min job with a shifting red would train
+# reviewers to ignore it. So this stays informational/opt-in until per-spec DB
+# isolation (or a multi-worker-safe backend) makes it deterministic, at which
+# point drop the `if:` guard + add it to the required set. Money + android gates
+# were promoted in P3; this one was not. See ops/ci-branch-protection.md.
 on:
   workflow_dispatch:
   pull_request:
@@ -44,7 +52,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       contains(github.event.pull_request.labels.*.name, 'run-web-e2e')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 210
     # Serve the SPA at "/" so bare app-route navigations resolve (P1 harness fix),
     # mirroring how prod serves index.html at "/". Read by frontend/vite.config.ts.
     env:
@@ -117,15 +125,35 @@ jobs:
       - name: Broad seed (hotels/ERP/property/CRM/ATS/ads/newsfeed/shop + payout gate + moderation reset)
         run: |
           set -x
-          # Seed scripts pass explicit test/test creds via the app clients; the
-          # DDB-Local instance partitions by (access_key,region) without -sharedDb,
-          # so a credential-less client would land in the wrong namespace.
-          python3 scripts/local-ddb-init.py || true
-          python3 scripts/local-ddb-seed.py || true
+          # These supplementary seeds do `from app...` at import, so put the repo
+          # root on PYTHONPATH exactly like scripts/dev.sh does (REPO_ROOT); bare
+          # python3 otherwise dies 'No module named app'.
+          export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH:-}"
+          # NOTE: local-ddb-init.py + local-ddb-seed.py are intentionally NOT
+          # re-run here. `just up` (scripts/dev.sh start) already runs
+          # local-ddb-init.py once (guarded by its bootstrap marker) and reports
+          # 'DynamoDB table bootstrap complete'. Re-running create_table against
+          # the already-created tables makes DDB-Local return InternalFailure and
+          # burns ~9min in the retry loop (observed run 29710799849). The extra
+          # local-ddb-seed only writes a throwaway dev-user the gate never reads.
           python3 scripts/seed_demo_data.py || true
           python3 e2e_payout_gate_seed.py || true
           python3 e2e_moderation_reset.py || true
 
+      # P2 SOAK CONCLUSION (2026-07-20, runs 29708462337/29710799849/29716640564/
+      # 29723697025/29734184730): fixed the CI-only seed PYTHONPATH, raised the
+      # timeout, removed a redundant 9-min ddb-init re-run, and tuned SHARD 10->7
+      # which eliminated the messaging.spec.ts single-worker-uvicorn backend-wedge
+      # (a 17-test 10s-POST-timeout cluster). ci-gate-green.txt additionally
+      # quarantines 16 specs (see the #QUARANTINE lines) that fail on cross-spec
+      # shared-DDB state collisions (DDB-Local -sharedDb = one namespace, no
+      # per-spec isolation). After all that the gate reached 3 failed / 406 on the
+      # best run — a small, SHIFTING ~1% flake floor remains (different ~3-8 specs
+      # each run: residual micro-wedges + UI/seed timing races). THEREFORE this gate
+      # is NOT reliably-100%-green and MUST stay non-required (label-gated +
+      # dispatch) until per-spec DB isolation or a multi-worker-safe backend lands.
+      # See .github/BRANCH_PROTECTION.md.
+      #
       # QUARANTINED RESIDUALS (7 of 427 spec files) — deliberately NOT in
       # e2e/ci-gate-green.txt so a known-flaky spec can never redden the gate.
       # These fail for environmental/timing reasons, not web-contract breakage:
@@ -151,7 +179,17 @@ jobs:
           LIST=e2e/ci-gate-green.txt
           mapfile -t SPECS < <(grep -vE '^\s*(#|$)' "$LIST")
           echo "gate spec count: ${#SPECS[@]}"
-          SHARD=10
+          # SHARD=7 (was 10): the dev uvicorn single worker busy-loops/wedges under
+          # sustained load and only recovers on the per-shard restart. Run 29716640564
+          # (SHARD=10) showed the API-heavy messaging.spec.ts region wedge the backend
+          # mid-shard -> 39x POST 10s-timeouts + collateral (all TimeoutError, 0
+          # assertion failures). SHARD=5 (run 29723697025) FIXED the messaging wedge
+          # (that 17-test cluster went green) but the extra restarts blew the 180min
+          # cap at shard 73/82. SHARD=7 is the compromise: small enough to bound a
+          # wedge + drop messaging into a freshly-restarted shard, ~30% fewer restarts
+          # than 5 so the suite finishes. NOT a multi-worker fix (some mocks, e.g. the
+          # google-drive mount store, keep in-process state that multi-worker breaks).
+          SHARD=7
           fail=0
           total=${#SPECS[@]}
           for ((i=0; i<total; i+=SHARD)); do

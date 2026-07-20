@@ -9,13 +9,14 @@ name: Android Unit — money/ecom core gate
 # workflow keeps the highest-value slice (anything that charges, refunds, gates
 # entitlement, or moves an order) from silently rotting again.
 #
-# SAFETY / TRIGGERS (mirrors the web-e2e.yml opt-in-then-promote pattern):
+# SAFETY / TRIGGERS:
 #   * workflow_dispatch -> always available, runs the scoped gate. Primary entry.
-#   * pull_request touching android/** -> OPT-IN: the job body only runs when the
-#     PR carries the `run-android-unit` label (see the `if:` guard). This lets
-#     app-logic regressions gate PRs without forcing the JVM test task onto every
-#     unrelated PR while it soaks. Drop the guard (set `if: true`) to promote it
-#     to an always-on required check once it has proven stable.
+#   * pull_request touching android/** -> ALWAYS-RUN (P3, 2026-07-20): the label
+#     opt-in guard was REMOVED after the P2 soak proved this gate reliably green
+#     (4/4 CI runs, deterministic 433 tests / 0 fail: 29708461150, 29708530861,
+#     29710811003, 29734828584). It now runs on every PR touching android/** and
+#     is a REQUIRED status check on main (see .github/BRANCH_PROTECTION.md /
+#     ops/ci-branch-protection.md). Fast (~10min) + deterministic.
 #
 # The full 641-file suite runs in android.yml (build-and-unit-test job) on
 # pushes/PRs to the real branches; this file is the fast, targeted money gate.
@@ -36,9 +37,6 @@ permissions:
 jobs:
   money-unit:
     name: Android unit tests (money/ecom/dispute/core)
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'run-android-unit')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
