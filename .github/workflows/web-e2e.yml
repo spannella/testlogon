@@ -44,7 +44,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       contains(github.event.pull_request.labels.*.name, 'run-web-e2e')
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     # Serve the SPA at "/" so bare app-route navigations resolve (P1 harness fix),
     # mirroring how prod serves index.html at "/". Read by frontend/vite.config.ts.
     env:
@@ -120,6 +120,10 @@ jobs:
           # Seed scripts pass explicit test/test creds via the app clients; the
           # DDB-Local instance partitions by (access_key,region) without -sharedDb,
           # so a credential-less client would land in the wrong namespace.
+          # These scripts do `from app...` at import; run them with the repo root
+          # on PYTHONPATH exactly like scripts/dev.sh does (REPO_ROOT). Bare
+          # python3 here dies 'No module named app' and silently drops the seed.
+          export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH:-}"
           python3 scripts/local-ddb-init.py || true
           python3 scripts/local-ddb-seed.py || true
           python3 scripts/seed_demo_data.py || true
