@@ -132,6 +132,20 @@ jobs:
           python3 e2e_payout_gate_seed.py || true
           python3 e2e_moderation_reset.py || true
 
+      # P2 SOAK CONCLUSION (2026-07-20, runs 29708462337/29710799849/29716640564/
+      # 29723697025/29734184730): fixed the CI-only seed PYTHONPATH, raised the
+      # timeout, removed a redundant 9-min ddb-init re-run, and tuned SHARD 10->7
+      # which eliminated the messaging.spec.ts single-worker-uvicorn backend-wedge
+      # (a 17-test 10s-POST-timeout cluster). ci-gate-green.txt additionally
+      # quarantines 16 specs (see the #QUARANTINE lines) that fail on cross-spec
+      # shared-DDB state collisions (DDB-Local -sharedDb = one namespace, no
+      # per-spec isolation). After all that the gate reached 3 failed / 406 on the
+      # best run — a small, SHIFTING ~1% flake floor remains (different ~3-8 specs
+      # each run: residual micro-wedges + UI/seed timing races). THEREFORE this gate
+      # is NOT reliably-100%-green and MUST stay non-required (label-gated +
+      # dispatch) until per-spec DB isolation or a multi-worker-safe backend lands.
+      # See .github/BRANCH_PROTECTION.md.
+      #
       # QUARANTINED RESIDUALS (7 of 427 spec files) — deliberately NOT in
       # e2e/ci-gate-green.txt so a known-flaky spec can never redden the gate.
       # These fail for environmental/timing reasons, not web-contract breakage:
