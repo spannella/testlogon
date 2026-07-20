@@ -12,12 +12,20 @@ name: Web E2E (vertical + money gate)
 #
 # SAFETY / TRIGGERS:
 #   * workflow_dispatch  -> always available, runs the full gate. Primary entry.
-#   * pull_request (app/** + frontend/e2e/** + src) -> OPT-IN: the heavy gate
-#     job only runs when the PR carries the `run-web-e2e` label (see the `if:`
-#     guard). This broadens the trigger so contract regressions CAN gate PRs
-#     without forcing a ~60-min job onto every PR or destabilising the existing
-#     fullstack-e2e job. Drop the label guard (set `if: true`) to promote it to
-#     an always-on required check once it has soaked.
+#   * pull_request (app/** + frontend/e2e/** + src) -> OPT-IN (run-web-e2e label).
+#
+# P3 DECISION (2026-07-20): DELIBERATELY KEPT label-gated + dispatch, NOT promoted
+# to always-run/required. The P2 soak (5 real CI runs) hugely stabilised this gate
+# — fixed the seed PYTHONPATH, timeout, redundant ddb-init, and the messaging
+# single-worker backend-wedge (SHARD 10->7), and quarantined the deterministic
+# cross-spec shared-DDB collisions — but an irreducible ~1% SHIFTING flake floor
+# remains (best run 29734184730 = 3 failed / 406; different ~3-8 specs each run).
+# Per the governance rules, a REQUIRED check must be reliably green or it blocks
+# EVERY merge, and an always-run ~150-min job with a shifting red would train
+# reviewers to ignore it. So this stays informational/opt-in until per-spec DB
+# isolation (or a multi-worker-safe backend) makes it deterministic, at which
+# point drop the `if:` guard + add it to the required set. Money + android gates
+# were promoted in P3; this one was not. See ops/ci-branch-protection.md.
 on:
   workflow_dispatch:
   pull_request:
