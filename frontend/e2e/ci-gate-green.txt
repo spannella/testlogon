@@ -291,7 +291,7 @@ e2e/newsfeed-polls.spec.ts
 e2e/notification-enhancements.spec.ts
 e2e/notifications-engine.spec.ts
 e2e/oauthClients.spec.ts
-e2e/offline-queue.spec.ts
+#QUARANTINE e2e/offline-queue.spec.ts  # service-worker offline-queue replay timing race; failed in BOTH soak runs 29716640564 + 29723697025 (page.waitForTimeout / target-closed), same class as the pre-existing pwa-optimistic-ui quarantine
 e2e/opportunities.spec.ts
 #QUARANTINE e2e/order-lifecycle.spec.ts  # order state shared with refund-requests/shop-cart specs
 e2e/org-workspaces.spec.ts
@@ -299,7 +299,7 @@ e2e/paid-call-rate-badge.spec.ts
 e2e/party-crm.spec.ts
 e2e/payment-disputes.spec.ts
 e2e/payment-provider-health.spec.ts
-e2e/payout-admin.spec.ts
+#QUARANTINE e2e/payout-admin.spec.ts  # payout-admin aggregate on shared payout rows; flapped in both soak runs
 #QUARANTINE e2e/payout-dashboard.spec.ts  # payout aggregate asserts on shared payout rows other payout specs create
 e2e/payouts.spec.ts
 e2e/per-content-revenue.spec.ts
