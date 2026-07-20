@@ -157,7 +157,16 @@ jobs:
           LIST=e2e/ci-gate-green.txt
           mapfile -t SPECS < <(grep -vE '^\s*(#|$)' "$LIST")
           echo "gate spec count: ${#SPECS[@]}"
-          SHARD=10
+          # SHARD=5 (was 10): the dev uvicorn single worker busy-loops/wedges under
+          # sustained load and only recovers on the per-shard restart. Run 29716640564
+          # showed the API-heavy messaging.spec.ts region (shards 26-28 at SHARD=10)
+          # wedge the backend mid-shard -> 39x POST 10s-timeouts + collateral on
+          # offline-queue/misc-endpoints/payout-admin (all TimeoutError, 0 assertion
+          # failures). Halving the shard doubles restart frequency, isolates the heavy
+          # messaging spec into a freshly-restarted small shard, and bounds any wedge
+          # blast radius to <=5 specs. NOT a multi-worker fix (some mocks, e.g. the
+          # google-drive mount store, keep in-process state that multi-worker breaks).
+          SHARD=5
           fail=0
           total=${#SPECS[@]}
           for ((i=0; i<total; i+=SHARD)); do
