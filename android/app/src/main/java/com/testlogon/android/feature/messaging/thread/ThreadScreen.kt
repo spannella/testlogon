@@ -148,6 +148,7 @@ import com.testlogon.android.feature.messaging.voice.RecordingOverlay
 import com.testlogon.android.feature.messaging.voice.VoiceMessageBubble
 import com.testlogon.android.feature.messaging.voice.VoicePreviewCard
 import com.testlogon.android.feature.messaging.voice.VoiceTestTags
+import androidx.compose.material.icons.filled.Person
 import kotlinx.coroutines.launch
 
 /** Stable testTags for the thread screen (AND-123 / AND-124). */
@@ -192,6 +193,7 @@ object ThreadTestTags {
 fun ThreadRoute(
     onBack: () -> Unit,
     onPlaceCall: (String) -> Unit = {},
+    onViewContact: (userId: String) -> Unit = {},
     modifier: Modifier = Modifier,
     onOpenGroupDetails: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel(),
@@ -343,6 +345,7 @@ fun ThreadRoute(
         typingUsers = typingUsers,
         onBack = onBack,
         onPlaceCall = onPlaceCall,
+        onViewContact = onViewContact,
         onOpenGroupDetails = onOpenGroupDetails,
         onRetry = viewModel::retry,
         onDraftChange = viewModel::onDraftChange,
@@ -1051,6 +1054,7 @@ fun ThreadScreen(
     onOpenSearch: () -> Unit = {},
     onOpenScheduled: () -> Unit = {},
     onPlaceCall: (String) -> Unit = {},
+    onViewContact: (userId: String) -> Unit = {},
     searchBar: @Composable () -> Unit = {},
     // FULL-PARITY (delegate) — an optional banner slot rendered directly under the top app bar. The
     // ThreadRoute passes the "Managing @creator" DelegationBannerHost here so the reused thread makes it
@@ -1188,6 +1192,15 @@ fun ThreadScreen(
                                     )
                                 },
                                 modifier = Modifier.testTag("thread_call_video"),
+                            )
+                        }
+                        // Feature 1 — jump from a conversation to the peer's contact card.
+                        if (state.isDm) state.peerUserSub?.let { peer ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("View contact") },
+                                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
+                                onClick = { menuOpen = false; onViewContact(peer) },
+                                modifier = Modifier.testTag("thread_view_contact"),
                             )
                         }
                         // P0-BLOCK: block / unblock the DM peer (1:1 only, resolved peer).

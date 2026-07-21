@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Contacts
 import androidx.compose.material3.Badge
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -79,6 +80,7 @@ fun ConversationListRoute(
     modifier: Modifier = Modifier,
     onOpenSearch: () -> Unit = {},
     onNewGroup: () -> Unit = {},
+    onOpenContacts: () -> Unit = {},
     viewModel: ConversationListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -100,6 +102,7 @@ fun ConversationListRoute(
         onOpenConversation = onOpenConversation,
         onOpenSearch = onOpenSearch,
         onNewGroup = onNewGroup,
+        onOpenContacts = onOpenContacts,
         onBack = onBack,
         modifier = modifier,
     )
@@ -117,6 +120,7 @@ fun ConversationListScreen(
     modifier: Modifier = Modifier,
     onOpenSearch: () -> Unit = {},
     onNewGroup: () -> Unit = {},
+    onOpenContacts: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(ConversationListTestTags.SCREEN),
@@ -143,6 +147,16 @@ fun ConversationListScreen(
                     }
                 },
                 actions = {
+                    // Feature 1 — jump to the Contacts hub (address book + suggestions).
+                    IconButton(
+                        onClick = onOpenContacts,
+                        modifier = Modifier.testTag("conv_list_contacts"),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Contacts,
+                            contentDescription = "Contacts",
+                        )
+                    }
                     // AND-152 — open global (cross-conversation) message search.
                     IconButton(
                         onClick = onOpenSearch,
