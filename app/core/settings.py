@@ -2342,6 +2342,17 @@ class Settings:
     group_call_sfu_endpoint: str = os.environ.get("GROUP_CALL_SFU_ENDPOINT", "")
     group_call_dev_mesh_max_participants: int = int(os.environ.get("GROUP_CALL_DEV_MESH_MAX_PARTICIPANTS", "4"))
 
+    # LiveKit (shared with audio rooms) — group video calls can route
+    # through the existing LiveKit SFU (selective forwarding + simulcast).
+    # When these are set (and group_call_sfu_provider=livekit) the group-call
+    # signaling advertises the LiveKit SFU and mints per-participant join
+    # tokens; unset => honest mesh fallback. See useGroupCall.ts.
+    livekit_url: str = os.environ.get("LIVEKIT_URL", "")
+    livekit_api_key: str = os.environ.get("LIVEKIT_API_KEY", "")
+    livekit_api_secret: str = os.environ.get("LIVEKIT_API_SECRET", "")
+    livekit_control_url: str = os.environ.get("LIVEKIT_CONTROL_URL", "http://127.0.0.1:7880")
+    group_call_sfu_provider: str = os.environ.get("GROUP_CALL_SFU_PROVIDER", "livekit")
+
     # Collaboration Requests (CREATOR-001)
     collaborations_enabled: bool = os.environ.get("COLLABORATIONS_ENABLED", "1") not in ("0", "false", "False")
     collaboration_agreements_table_name: str = os.environ.get("DDB_COLLABORATION_AGREEMENTS", "collaboration_agreements")

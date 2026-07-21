@@ -12,6 +12,7 @@ import type {
   GroupCallHistoryOut,
   GroupCallSignalOut,
   GroupCallMediaUpdateOut,
+  GroupCallLiveKitToken,
 } from "../types";
 
 const BASE = "/ui/calls/group";
@@ -64,4 +65,15 @@ export async function updateGroupCallMedia(
   params: { audio?: boolean; video?: boolean; screen?: boolean },
 ): Promise<GroupCallMediaUpdateOut> {
   return api.patch<GroupCallMediaUpdateOut>(`${BASE}/${callId}/media`, params);
+}
+
+/**
+ * Fetch a LiveKit SFU join token for a group call. Only valid when the join
+ * response advertised sfu_provider==="livekit". Returns 503 when LiveKit is not
+ * configured server-side (caller should fall back to mesh).
+ */
+export async function getGroupCallLiveKitToken(
+  callId: string,
+): Promise<GroupCallLiveKitToken> {
+  return api.get<GroupCallLiveKitToken>(`${BASE}/${callId}/livekit-token`);
 }

@@ -13,9 +13,14 @@
  *  - MESH: one RTCPeerConnection per remote participant. The numerically/lex
  *    lower user_id is the offerer (deterministic glare avoidance); SDP + ICE
  *    are exchanged via `sendGroupCallSignal` and the SSE relay.
- *  - SFU: a single upstream RTCPeerConnection to the SFU. The offer is sent to
- *    the SFU and downstream tracks arrive on the same connection. Full
- *    simulcast/track-routing is a larger effort — see TODO(GAP-0017-sfu).
+ *  - SFU (LiveKit): when the join response advertises sfu_provider="livekit",
+ *    the platform's existing LiveKit SFU (shared with audio rooms) handles
+ *    selective forwarding + simulcast. This hook fetches a LiveKit join token
+ *    and exposes it (livekit) so the call surface can connect with the
+ *    LiveKit client SDK. NOTE: the browser LiveKit SDK (livekit-client) is not
+ *    yet a web dependency, so web media over LiveKit is SEAM-NOT-LIVE — the
+ *    token + URL are real; the connect step is the remaining wiring. We do NOT
+ *    fake mesh-as-SFU. See sfuStatus below and GAP-0017-sfu.
  *  - Exposes `mode`, the local stream, and remote streams keyed by user_id so
  *    GroupCallOverlay can render real media.
  *
@@ -32,14 +37,12 @@ import {
   endGroupCall,
   updateGroupCallMedia,
   sendGroupCallSignal,
+  getGroupCallLiveKitToken,
 } from "@/api/endpoints/groupCalls";
 import { acquireLocalMedia } from "@/lib/webrtc";
 import type { GroupCallOut, GroupCallParticipant } from "@/api/types";
 
 export type GroupCallMode = "mesh" | "sfu";
-
-/** Sentinel target id for the single SFU upstream peer connection. */
-const SFU_PEER_ID = "__sfu__";
 
 interface UseGroupCallOptions {
   callId: string;
@@ -55,6 +58,21 @@ export interface UseGroupCallReturn {
   inCall: boolean;
   /** Resolved topology from the join response; null until joined. */
   mode: GroupCallMode | null;
+  /** SFU provider when mode==="sfu" (e.g. "livekit"); null for mesh. */
+  sfuProvider: string | null;
+  /**
+   * LiveKit connection material when sfu_provider==="livekit" and a token was
+   * minted. url+token+room are REAL; a call surface with the livekit-client
+   * SDK can connect. null when not applicable or the token fetch failed.
+   */
+  livekit: { url: string; token: string; room: string } | null;
+  /**
+   * SFU media status. "na" (mesh path), "connecting" (fetching token),
+   * "seam" (token minted but browser media connect is not wired — needs the
+   * livekit-client SDK), "unavailable" (LiveKit not configured/failed → the
+   * server returned mesh or 503).
+   */
+  sfuStatus: "na" | "connecting" | "seam" | "unavailable";
   isCreator: boolean;
   participants: GroupCallParticipant[];
   activeParticipants: GroupCallParticipant[];
@@ -97,6 +115,11 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
   const [iceServers, setIceServers] = React.useState<RTCIceServer[]>([]);
   const [localStream, setLocalStream] = React.useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = React.useState<Record<string, MediaStream>>({});
+  const [sfuProvider, setSfuProvider] = React.useState<string | null>(null);
+  const [livekit, setLivekit] = React.useState<{ url: string; token: string; room: string } | null>(null);
+  const [sfuStatus, setSfuStatus] = React.useState<
+    "na" | "connecting" | "seam" | "unavailable"
+  >("na");
 
   // Stable callback ref so effects don't re-run when the caller passes a new fn.
   const onEndedRef = React.useRef(onEnded);
@@ -239,6 +262,9 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
     }
     setLocalStream(null);
     setRemoteStreams({});
+    setLivekit(null);
+    setSfuStatus("na");
+    setSfuProvider(null);
   }, []);
 
   // ── Join (reads mode + ICE servers from the response) ──────────────
@@ -247,9 +273,35 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
     onSuccess: async (resp) => {
       const resolvedMode = toGroupCallMode(resp.mode ?? resp.signaling?.mode);
       const resolvedIce = toIceServers(resp.signaling?.ice_servers);
+      const provider = resp.signaling?.sfu_provider ?? null;
       setMode(resolvedMode);
       setIceServers(resolvedIce);
+      setSfuProvider(provider);
       setInCall(true);
+
+      // SFU via LiveKit: fetch a real join token. The token + URL are honest
+      // (server mints against the shared LiveKit deployment). We do NOT open a
+      // hand-rolled peer pretending to be an SFU.
+      if (resolvedMode === "sfu" && provider === "livekit") {
+        setSfuStatus("connecting");
+        try {
+          const tok = await getGroupCallLiveKitToken(callId);
+          if (tok?.token && tok?.url) {
+            setLivekit({ url: tok.url, token: tok.token, room: tok.room_name });
+            // Token minted, but connecting the browser media engine needs the
+            // livekit-client SDK (not yet a web dependency). SEAM-NOT-LIVE.
+            setSfuStatus("seam");
+          } else {
+            setSfuStatus("unavailable");
+          }
+        } catch {
+          // 503 LIVEKIT_NOT_CONFIGURED / SDK unavailable, or transient error.
+          setLivekit(null);
+          setSfuStatus("unavailable");
+        }
+      } else {
+        setSfuStatus("na");
+      }
 
       // Acquire local media once. Failures (no camera, denied permission) are
       // non-fatal — the call still proceeds receive-only.
@@ -319,23 +371,19 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
     if (!inCall || mode === null) return;
 
     if (mode === "sfu") {
-      // Single upstream connection to the SFU. Create once.
-      // TODO(GAP-0017-sfu): full SFU media (downstream track routing per
-      // participant, simulcast layers) requires server-side SFU support. For
-      // now we establish the single upstream peer so the join response actually
-      // drives a connection.
-      if (!peersRef.current.has(SFU_PEER_ID)) {
-        const pc = createPeer(SFU_PEER_ID);
-        (async () => {
-          try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            signal(SFU_PEER_ID, "webrtc.offer", { sdp: offer.sdp, type: offer.type });
-          } catch {
-            /* offer creation failed — connection-state handler will clean up */
-          }
-        })();
-      }
+      // SFU (LiveKit) path. Media is handled by the LiveKit SFU (real
+      // selective forwarding + simulcast), NOT by hand-rolled peer
+      // connections. The LiveKit join token + URL are fetched at join time
+      // and exposed via `livekit` / `sfuStatus`; the call surface connects
+      // with the livekit-client SDK.
+      //
+      // We deliberately do NOT open an RTCPeerConnection here: signaling a
+      // raw offer to a non-existent per-call SFU (the previous stub) connects
+      // to nothing and would be a fake SFU. When livekit-client is added as a
+      // web dependency, the connect happens in the surface component using
+      // `livekit.{url,token,room}`. Until then this is SEAM-NOT-LIVE for web
+      // media (Android already connects to the same LiveKit deployment for
+      // audio rooms via the livekit-android SDK).
       return;
     }
 
@@ -365,7 +413,6 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
 
     // Close connections to peers who have left.
     for (const peerId of Array.from(peersRef.current.keys())) {
-      if (peerId === SFU_PEER_ID) continue;
       if (!otherIds.has(peerId)) closePeer(peerId);
     }
   }, [inCall, mode, activeParticipants, userId, createPeer, closePeer, signal]);
@@ -385,8 +432,10 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
       const eventType = String(detail.event_type ?? detail.type ?? "");
       const payload = (detail.payload ?? {}) as Record<string, unknown>;
 
-      // For SFU mode, all inbound signals route through the single SFU peer.
-      const peerKey = mode === "sfu" ? SFU_PEER_ID : senderId;
+      // Mesh-only signaling. (SFU/LiveKit media does not use this relay — it
+      // is handled by the LiveKit SDK against the LiveKit server.)
+      if (mode === "sfu") return;
+      const peerKey = senderId;
       let pc = peersRef.current.get(peerKey);
 
       try {
@@ -401,7 +450,7 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
           );
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          signal(peerKey === SFU_PEER_ID ? SFU_PEER_ID : senderId, "webrtc.answer", {
+          signal(senderId, "webrtc.answer", {
             sdp: answer.sdp,
             type: answer.type,
           });
@@ -451,6 +500,9 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
     callData,
     inCall,
     mode,
+    sfuProvider,
+    livekit,
+    sfuStatus,
     isCreator,
     participants,
     activeParticipants,
