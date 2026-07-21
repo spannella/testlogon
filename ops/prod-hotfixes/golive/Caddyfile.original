@@ -1,0 +1,7 @@
+tl-api.bitbazaar.cc {
+    reverse_proxy localhost:8000
+}
+
+tl.bitbazaar.cc {
+    reverse_proxy localhost:3000
+}

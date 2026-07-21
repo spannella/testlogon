@@ -105,3 +105,15 @@ Throughout the AFTER runs `ss -lunp` showed exactly **ONE** livekit udp socket (
 saturating range. **New ceiling: >320 participants with server headroom to spare; the bound is
 now CPU (single 4-vCPU node) + the single-host load-generator, NOT UDP ports.** For
 thousands-of-listeners, scale the node vertically or go multi-node + Redis.
+
+## SG keep-open vs. restrict analysis (P5-2, 2026-07-21)
+
+The full per-port keep-open-vs-restrict rationale for **all** ingress on
+`sg-00ab51618117e537d` (LiveKit 7880/7881/udp-7882 + coturn + MediaMTX + API/SPA/SSH) — with
+the exact reversible `aws ec2` revoke/authorize commands — now lives in
+**`ops/ci-security-groups.md`**. Summary for LiveKit: `udp/7882` (media mux) and `tcp/7881`
+(TCP fallback) MUST stay world-open (WebRTC clients from arbitrary IPs); `tcp/7880` carries
+client signaling **and** the RoomService admin API on one port, so it cannot be CIDR-restricted
+without breaking audio-room join — the fix is wss-fronting + splitting the admin API, not an SG
+change. **No LiveKit SG rule was auto-restricted** (would risk live audio rooms); all restricts
+are documented for the owner to apply.
