@@ -1267,6 +1267,20 @@ def create_app() -> FastAPI:
     if getattr(_S, "open_bank_project_enabled", False) and getattr(_S, "entitlement_requests_enabled", False):
         from app.routers.entitlement_requests import router as entitlement_requests_router
         app.include_router(entitlement_requests_router)
+    # ── ERP finance admin surfaces (P1): mount the previously-unmounted GL /
+    # AR / pricing-rule services over an operator/admin (require_admin_or_root)
+    # surface. Each is flag-gated to its own ERP flag; the services themselves
+    # also re-check the flag. Role-based auth (no api-key policy dep) so no
+    # scope-registry entry is required and boot never RuntimeErrors.
+    if getattr(_S, "gl_double_entry_enabled", False):
+        from app.routers.erp_gl import router as erp_gl_router
+        app.include_router(erp_gl_router)
+    if getattr(_S, "ar_ap_subledgers_enabled", False):
+        from app.routers.erp_ar import router as erp_ar_router
+        app.include_router(erp_ar_router)
+    if getattr(_S, "pricing_rules_enabled", False):
+        from app.routers.erp_pricing import router as erp_pricing_router
+        app.include_router(erp_pricing_router)
     # PMD cluster — Property Management Dashboard (flag: PROPERTY_DASHBOARD_ENABLED)
     from app.routers.rent_policy import rent_policy_router
     app.include_router(rent_policy_router)
