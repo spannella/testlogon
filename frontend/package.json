@@ -55,6 +55,7 @@
     "i18next-browser-languagedetector": "^8.2.1",
     "i18next-http-backend": "^4.0.0",
     "leaflet": "^1.9.4",
+    "livekit-client": "2.15.16",
     "lucide-react": "^0.468.0",
     "mammoth": "^1.11.0",
     "react": "^18.3.1",
