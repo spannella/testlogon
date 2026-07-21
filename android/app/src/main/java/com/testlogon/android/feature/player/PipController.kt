@@ -158,6 +158,7 @@ class ActivityPipController(private val activity: Activity) : PipController {
         activeAspectW = aspectWidth
         activeAspectH = aspectHeight
         videoActive = true
+        refreshAutoEnterParams()
         return enterPip(aspectWidth, aspectHeight)
     }
 
@@ -180,6 +181,8 @@ class ActivityPipController(private val activity: Activity) : PipController {
                 activePlayerState.value = null
             }
         }
+        // Arm/disarm API 31+ auto-enter to match the current playing state (no-op below S).
+        refreshAutoEnterParams()
     }
 
     /**
@@ -209,16 +212,41 @@ class ActivityPipController(private val activity: Activity) : PipController {
     }
 
     private fun buildParams(aspectWidth: Int, aspectHeight: Int): PictureInPictureParams {
-        // Android rejects aspect ratios outside ~[1:2.39, 2.39:1]; clamp to a safe landscape default.
-        val w = aspectWidth.coerceAtLeast(1)
-        val h = aspectHeight.coerceAtLeast(1)
-        val ratio = w.toFloat() / h.toFloat()
-        val safe = when {
-            ratio > 2.39f -> Rational(239, 100)
-            ratio < 1f / 2.39f -> Rational(100, 239)
-            else -> Rational(w, h)
+        // Prefer the active player's REAL reported video size so the floating window matches the actual
+        // stream (live HLS broadcast, VOD, inline clip); fall back to the caller-supplied aspect. Clamp
+        // to the Android-permitted ~[1:2.39, 2.39:1] window. All pure -> PipParamsLogic (JVM-tested).
+        val size = runCatching { activePlayerState.value?.videoSize }.getOrNull()
+        val (num, den) = PipParamsLogic.resolveAspect(
+            videoWidth = size?.width ?: 0,
+            videoHeight = size?.height ?: 0,
+            fallbackW = aspectWidth,
+            fallbackH = aspectHeight,
+        )
+        val builder = PictureInPictureParams.Builder().setAspectRatio(Rational(num, den))
+        // AND-287 — API 31+ (S) auto-enter + seamless resize for a smoother, tap-free float on Home.
+        // On 26-30 we keep the onUserLeaveHint manual-enter fallback (see MainActivity.onUserLeaveHint).
+        if (PipParamsLogic.supportsAutoEnter(Build.VERSION.SDK_INT) &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        ) {
+            builder.setAutoEnterEnabled(videoActive)
+            builder.setSeamlessResizeEnabled(true)
         }
-        return PictureInPictureParams.Builder().setAspectRatio(safe).build()
+        return builder.build()
+    }
+
+    /**
+     * AND-287 — proactively push the current [PictureInPictureParams] to the system so API 31+
+     * setAutoEnterEnabled is armed (or disarmed) as the active video / aspect changes, without waiting
+     * for an explicit enterPip call. No-op below S (manual onUserLeaveHint path) or when PiP is
+     * unsupported. Best-effort; never throws into the caller.
+     */
+    fun refreshAutoEnterParams() {
+        if (!isPipSupported) return
+        if (!PipParamsLogic.supportsAutoEnter(Build.VERSION.SDK_INT)) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        runCatching {
+            activity.setPictureInPictureParams(buildParams(activeAspectW, activeAspectH))
+        }
     }
 }
 
