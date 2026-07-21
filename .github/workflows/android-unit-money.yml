@@ -13,10 +13,13 @@ name: Android Unit — money/ecom core gate
 #   * workflow_dispatch -> always available, runs the scoped gate. Primary entry.
 #   * pull_request touching android/** -> ALWAYS-RUN (P3, 2026-07-20): the label
 #     opt-in guard was REMOVED after the P2 soak proved this gate reliably green
-#     (4/4 CI runs, deterministic 433 tests / 0 fail: 29708461150, 29708530861,
-#     29710811003, 29734828584). It now runs on every PR touching android/** and
-#     is a REQUIRED status check on main (see .github/BRANCH_PROTECTION.md /
-#     ops/ci-branch-protection.md). Fast (~10min) + deterministic.
+#     (4/4 CI runs, 433 tests / 0 fail: 29708461150, 29708530861, 29710811003,
+#     29734828584). It now runs on every PR touching android/** and is a REQUIRED
+#     status check on main (see .github/BRANCH_PROTECTION.md /
+#     ops/ci-branch-protection.md). Fast (~10min).
+#     NOTE (2026-07-21): a heap-pressure-driven K2 codegen OOM later reddened it
+#     intermittently (see the HEAP HARDENING block on the run step); fixed at the
+#     DTO root + with explicit compiler/build heap.
 #
 # The full 641-file suite runs in android.yml (build-and-unit-test job) on
 # pushes/PRs to the real branches; this file is the fast, targeted money gate.
@@ -102,11 +105,36 @@ jobs:
         run: mkdir -p "${GITHUB_WORKSPACE}/.gradle_tmp"
         working-directory: .
 
+      # HEAP HARDENING (2026-07-21): the money-unit gate went intermittently RED with a
+      # Kotlin 2.0.21 K2 JVM-backend crash — "Couldn't transform method node: equals" on
+      # JobHealthEntryDto — whose root cause is `java.lang.OutOfMemoryError: GC overhead
+      # limit exceeded` inside the codegen optimizer (TemporaryVariablesEliminationTransformer),
+      # NOT a malformed DTO. It was flaky (soaked 4/4 green before) because it is heap-pressure
+      # dependent. Two contributors, both fixed here:
+      #   1. The `-Dorg.gradle.jvmargs` override below silently DROPPED the `-Xmx8g` that
+      #      gradle.properties sets, so the Gradle build JVM ran at the JVM default max heap.
+      #      We now carry an explicit `-Xmx6g` (roomy on the 7GB/16GB ubuntu-latest runner,
+      #      leaving headroom for the forked Kotlin daemon + test workers).
+      #   2. The Kotlin *compiler daemon* (spawned via CompileServiceImpl/GradleKotlinCompiler
+      #      WorkAction even under Gradle --no-daemon) has its OWN heap governed by
+      #      `kotlin.daemon.jvmargs`, which was never set -> tiny default heap -> the codegen
+      #      optimizer GC-thrashed. This is where the OOM actually lands (the DTO equals() was
+      #      just the first victim; with `data` dropped it re-surfaced on ApiResult.flatMap
+      #      inlining at -Xmx4g). A full single-shot clean :app compile needs ~6-8g of Kotlin
+      #      daemon heap (locally 8g compiles clean, 5g OOMs, 4g OOM'd in CI on ApiResult
+      #      inlining), so we give the Kotlin daemon -Xmx7g plus -XX:-UseGCOverheadLimit so a
+      #      momentary GC-heavy stretch can't trip the premature "GC overhead limit exceeded"
+      #      abort. The ubuntu-latest runner has ~16GB, so 7g (daemon) + 4g (build JVM) leaves
+      #      headroom for the post-compile test-fork JVM.
+      # The DTO itself was also fixed at the root (dropped `data` so no giant equals() is
+      # generated; JSON contract unchanged). Either fix alone greens the gate; both together
+      # make it robustly green. Keep both.
       - name: Run scoped money/ecom/dispute/core unit tests
         run: >-
           ./gradlew :app:testDebugUnitTest --continue --no-daemon --stacktrace
           -Ptest.tmpdir="${GITHUB_WORKSPACE}/.gradle_tmp"
-          -Dorg.gradle.jvmargs="-Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp -Dorg.sqlite.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
+          -Pkotlin.daemon.jvmargs="-Xmx7g -XX:+UseParallelGC -XX:-UseGCOverheadLimit -Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
+          -Dorg.gradle.jvmargs="-Xmx4g -Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp -Dorg.sqlite.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
           --tests "com.testlogon.android.data.billing.*"
           --tests "com.testlogon.android.data.catalog.*"
           --tests "com.testlogon.android.data.checkout.*"

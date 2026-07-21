@@ -56,7 +56,14 @@ data class JobHealthDto(
  * `last_status` feed an alert body; `last_finished_at` is the relative timestamp source.
  */
 @JsonClass(generateAdapter = true)
-data class JobHealthEntryDto(
+// NOTE: intentionally NOT a `data` class. This DTO is a deserialize-only wire bag consumed field-by-field
+// by AdminMappers (no value-equality / copy() / destructuring is used anywhere). Its 12-property compiler-
+// generated equals() was tripping a Kotlin 2.0.21 K2 JVM-backend optimizer OOM
+// (TemporaryVariablesEliminationTransformer -> "Couldn't transform method node: equals") under heap
+// pressure, intermittently reddening the money-unit CI gate. Dropping `data` removes that generated method
+// while keeping the primary constructor + @Json names identical, so the Moshi adapter/JSON contract is
+// unchanged. See android-unit-money.yml (CI also hardened with proper compiler heap).
+class JobHealthEntryDto(
     @Json(name = "name") val name: String,
     @Json(name = "label") val label: String = "",
     @Json(name = "description") val description: String = "",
