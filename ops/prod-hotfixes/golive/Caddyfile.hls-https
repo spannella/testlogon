@@ -1,0 +1,22 @@
+tl-api.bitbazaar.cc {
+	# HLS live playback (MediaMTX :8888) fronted over HTTPS.
+	# handle_path strips the /hls-live prefix so MediaMTX sees its
+	# native session-rooted paths, e.g. /hls-live/<sid>/index.m3u8
+	# -> proxied to localhost:8888/<sid>/index.m3u8.
+	# MediaMTX emits a root-absolute cookieCheck redirect that drops
+	# the prefix; rewrite the Location header back under /hls-live so
+	# the player round-trip stays on this route (not the API).
+	handle_path /hls-live/* {
+		reverse_proxy localhost:8888 {
+			header_down Location "^/(.*)$" "/hls-live/${1}"
+		}
+	}
+	# Everything else -> API backend (unchanged).
+	handle {
+		reverse_proxy localhost:8000
+	}
+}
+
+tl.bitbazaar.cc {
+	reverse_proxy localhost:3000
+}

@@ -55,6 +55,8 @@ object WatchPartyDetailTestTags {
     const val SESSION_EXPIRED = "watch_party_detail_session_expired"
     const val JOIN = "watch_party_detail_join"
     const val LEAVE = "watch_party_detail_leave"
+    const val SYNC_CARD = "watch_party_detail_sync_card"
+    const val SYNC_STATUS = "watch_party_detail_sync_status"
 }
 
 /** Route-level party detail entry. */
@@ -155,6 +157,7 @@ fun WatchPartyDetailScreen(
                             party = party,
                             participants = state.activeParticipants,
                             isMutating = state.isMutating,
+                            playbackSync = state.playbackSync,
                             onJoin = onJoin,
                             onLeave = onLeave,
                         )
@@ -169,6 +172,7 @@ private fun DetailContent(
     party: WatchParty,
     participants: List<WatchPartyParticipant>,
     isMutating: Boolean,
+    playbackSync: WatchPartyDetailUiState.PlaybackSyncState?,
     onJoin: () -> Unit,
     onLeave: () -> Unit,
 ) {
@@ -202,20 +206,36 @@ private fun DetailContent(
             }
         }
 
-        // Honest "no live sync" note (realtime playback intentionally out of scope for v1).
-        Card(modifier = Modifier.fillMaxWidth()) {
+        // Live playback sync (ENGAGE-004): the host-authoritative state reconciled from the realtime
+        // event stream (/messaging/events/poll). Falls back to a "waiting for host" note until the
+        // first frame arrives. The extrapolated position advances while the host is playing.
+        Card(modifier = Modifier.fillMaxWidth().testTag(WatchPartyDetailTestTags.SYNC_CARD)) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.watch_parties_detail_sync_unavailable_title),
+                    text = stringResource(R.string.watch_parties_detail_sync_live_title),
                     style = MaterialTheme.typography.titleSmall,
                 )
+                val nowSeconds = System.currentTimeMillis() / 1000L
+                val syncBody = when {
+                    playbackSync == null ->
+                        stringResource(R.string.watch_parties_detail_sync_waiting)
+                    playbackSync.isPlaying -> stringResource(
+                        R.string.watch_parties_detail_sync_playing,
+                        formatClock(playbackSync.targetPositionSeconds(nowSeconds)),
+                    )
+                    else -> stringResource(
+                        R.string.watch_parties_detail_sync_paused,
+                        formatClock(playbackSync.positionSeconds),
+                    )
+                }
                 Text(
-                    text = stringResource(R.string.watch_parties_detail_sync_unavailable_body),
+                    text = syncBody,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag(WatchPartyDetailTestTags.SYNC_STATUS),
                 )
             }
         }
@@ -342,3 +362,12 @@ private fun roleLabel(role: ParticipantRole): String = stringResource(
         ParticipantRole.MEMBER -> R.string.watch_parties_role_member
     },
 )
+
+/** Format a position in seconds as mm:ss (or h:mm:ss past an hour) for the live-sync status line. */
+private fun formatClock(seconds: Double): String {
+    val total = seconds.toLong().coerceAtLeast(0L)
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val sec = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+}

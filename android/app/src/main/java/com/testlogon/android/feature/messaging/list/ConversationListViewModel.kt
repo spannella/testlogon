@@ -130,6 +130,7 @@ class ConversationListViewModel @Inject constructor(
                         is MessagingEvent.Typing,
                         is MessagingEvent.MessageViewed,
                         is MessagingEvent.CallSignal,
+                        is MessagingEvent.PlaybackSync,
                         -> Unit
                     }
                 }

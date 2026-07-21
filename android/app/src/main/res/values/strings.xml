@@ -4519,6 +4519,10 @@
     <string name="watch_parties_refresh_failed_stale">Could not refresh. Showing the last known list.</string>
     <string name="watch_parties_detail_sync_unavailable_title">Live sync not available</string>
     <string name="watch_parties_detail_sync_unavailable_body">Real-time playback sync is not available in the app yet. You can still join, leave, and see who is here.</string>
+    <string name="watch_parties_detail_sync_live_title">Live with the host</string>
+    <string name="watch_parties_detail_sync_waiting">Connected. Waiting for the host to start playback…</string>
+    <string name="watch_parties_detail_sync_playing">Playing • %1$s</string>
+    <string name="watch_parties_detail_sync_paused">Paused • %1$s</string>
     <string name="watch_parties_detail_participants_label">Participants</string>
     <string name="watch_parties_detail_invite_label">Invite code</string>
     <string name="watch_parties_detail_created_label">Created</string>

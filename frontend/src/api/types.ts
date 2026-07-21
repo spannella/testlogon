@@ -4429,6 +4429,20 @@ export interface GroupCallParticipant {
 export interface GroupCallSignalingInfo {
   mode: string;
   ice_servers: Array<Record<string, string>>;
+  /** SFU provider when mode==="sfu". "livekit" => connect with LiveKit SDK. */
+  sfu_provider?: string | null;
+  /** LiveKit server URL to connect to (when sfu_provider==="livekit"). */
+  livekit_url?: string | null;
+  /** LiveKit room name for this call. */
+  room_name?: string | null;
+}
+
+export interface GroupCallLiveKitToken {
+  token: string;
+  url: string;
+  room_name: string;
+  identity: string;
+  provider: string;
 }
 
 export interface GroupCallOut {

@@ -8,6 +8,9 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.watchparties.WatchParty
 import com.testlogon.android.data.watchparties.WatchPartiesRepository
 import com.testlogon.android.data.watchparties.WatchPartyParticipant
+import com.testlogon.android.data.messaging.realtime.MessagingEvent
+import com.testlogon.android.data.messaging.realtime.MessagingEventStream
+import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -30,6 +33,7 @@ import javax.inject.Inject
 @HiltViewModel
 class WatchPartyDetailViewModel @Inject constructor(
     private val repository: WatchPartiesRepository,
+    private val eventStream: MessagingEventStream,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -45,6 +49,7 @@ class WatchPartyDetailViewModel @Inject constructor(
 
     init {
         load()
+        observePlaybackSync()
     }
 
     fun onRetry() = load()
@@ -151,6 +156,36 @@ class WatchPartyDetailViewModel @Inject constructor(
                 isMutating = false,
                 errorMessage = message,
             )
+        }
+    }
+
+    /**
+     * Subscribe to the SHARED realtime event stream and reconcile host-authoritative playback for
+     * THIS party. Collecting is lifecycle-bound to [viewModelScope]; the shared upstream (one SSE +
+     * one events/poll worker) is torn down shortly after the last collector goes away. Only
+     * PlaybackSync frames for [partyId] are applied - all other events (messages/calls/presence) are
+     * ignored here. The reconciliation math (extrapolation + drift tolerance) lives in
+     * [WatchPartyDetailUiState.PlaybackSyncState] so it stays JVM-unit-testable.
+     */
+    private fun observePlaybackSync() {
+        viewModelScope.launch {
+            eventStream.events().collect { emission ->
+                if (emission !is MessagingStreamEvent.Event) return@collect
+                val ev = emission.event
+                if (ev !is MessagingEvent.PlaybackSync || ev.partyId != partyId) return@collect
+                _uiState.update {
+                    it.copy(
+                        playbackSync = WatchPartyDetailUiState.PlaybackSyncState(
+                            isPlaying = ev.status == "playing",
+                            positionSeconds = ev.positionSeconds,
+                            positionUpdatedAtEpochSeconds = ev.positionUpdatedAtEpochSeconds,
+                            controlledBy = ev.controlledBy,
+                            lastAction = ev.action,
+                            serverTimeEpochSeconds = ev.serverTimeEpochSeconds,
+                        ),
+                    )
+                }
+            }
         }
     }
 

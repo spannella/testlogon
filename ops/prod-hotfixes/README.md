@@ -351,3 +351,60 @@ generous multiple of `messaging_webrtc_call_ringing_timeout_seconds` (≈3×, fl
 never a live ring. Age-only, no per-event DDB read; web-safe (web uses `/events/stream`, additive filter).
 The robust core fix is client-side (app drops stale/expired invites before ringing); this is defense-in-depth
 + payload hygiene. Prod backup: `app/routers/messaging.py.bak_ghostcall_1783300848`.
+
+
+## HLS live playback over HTTPS — Caddy `/hls-live` route (P5-1, APPLIED 2026-07-21)
+
+**Problem (recorded in "Batch"/golive notes):** the release-build HLS live-playback URL was
+cleartext `http://tl-api.bitbazaar.cc:8888` (direct to MediaMTX). Fine for the debug APK
+(`usesCleartextTraffic=true`) but not for a release build. Needed HTTPS.
+
+**Applied (reversible):** added an HLS route to the **existing** Caddy vhost (Caddy v2.11.4 was
+already fronting `tl-api.bitbazaar.cc`→:8000 and `tl.bitbazaar.cc`→:3000). No new subdomain (the
+`media/hls.bitbazaar.cc` names don't resolve — a new vhost would fail ACME). Route:
+
+```
+tl-api.bitbazaar.cc {
+    handle_path /hls-live/* {
+        reverse_proxy localhost:8888 {
+            # MediaMTX emits a root-absolute cookieCheck 302 that drops the
+            # /hls-live prefix; rewrite Location back under the prefix so the
+            # player round-trip stays on this route (not the API).
+            header_down Location "^/(.*)$" "/hls-live/${1}"
+        }
+    }
+    handle { reverse_proxy localhost:8000 }   # everything else -> API (unchanged)
+}
+```
+
+The full applied file is saved at `ops/prod-hotfixes/golive/Caddyfile.hls-https` (and the
+pre-change original at `Caddyfile.original`). Applied via `caddy validate` → `caddy reload`
+(admin API on :2019, zero-downtime; the systemd unit runs `caddy run` with no `ExecReload`, so
+`systemctl reload` does NOT work — use `caddy reload`).
+
+**Verified over real HTTPS (2026-07-21):**
+- `https://tl-api.bitbazaar.cc/hls-live/<sid>/index.m3u8` → `HTTP/2 302`, `server: mediamtx`,
+  `location: /hls-live/<sid>/index.m3u8?cookieCheck=1` (prefix preserved by the rewrite).
+- Segment path `.../hls-live/<sid>/segment0.mp4` → `server: mediamtx` (reaches MediaMTX over TLS).
+- Cookie round-trip stays under `/hls-live` (1 redirect, ends on the HLS route, not the API).
+- Valid Let's Encrypt cert `CN=tl-api.bitbazaar.cc` (through Sep 2026).
+- `https://tl-api.bitbazaar.cc/openapi.json` still 200 (API unaffected).
+
+**Owner action still required (NOT applied — say so plainly):**
+1. **Flip the release base URL.** Prod `.env.local` still has
+   `BROADCAST_LOCAL_CACHE_PUBLIC_BASE_URL=http://tl-api.bitbazaar.cc:8888`. Moving it to
+   `https://tl-api.bitbazaar.cc/hls-live` was **NOT applied** because (a) it would change the
+   URL the currently-QA-verified debug APK uses (risking a working demo), and (b) there is a
+   pre-existing path-shape mismatch to reconcile first: `broadcast_playback.mint_local_playback_url`
+   emits `{base}/hls/{key}/master.m3u8`, but MediaMTX serves `/{key}/index.m3u8`. With no live
+   broadcast to test on this host (this ffmpeg build lacks the `whip` muxer and rtsp/srt are
+   disabled in MediaMTX), an end-to-end player fetch of a **real** stream could not be verified
+   from the repo host — so flipping the base is left for the owner to do against a live stream +
+   on-device player. The Caddy route is proven to reach MediaMTX over TLS; the base-URL flip +
+   path reconciliation is the remaining, owner-verifiable step.
+2. Once the release build uses `/hls-live`, the world-open cleartext `tcp/8888` SG rule can be
+   revoked (see `ops/ci-security-groups.md` §4).
+
+**Reverse the route (if ever needed):** restore `ops/prod-hotfixes/golive/Caddyfile.original`
+to `/etc/caddy/Caddyfile` and `sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`.
+On-box timestamped backups also exist as `/etc/caddy/Caddyfile.bak_hls_<ts>`.

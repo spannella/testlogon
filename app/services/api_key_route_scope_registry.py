@@ -331,6 +331,7 @@ API_KEY_ROUTE_SCOPE_REGISTRY: Dict[str, RouteScopePolicy] = {
     "GET:/ui/calls/group/history/{conversation_id}": {"product": "groups", "required_scopes": ["groups:read"], "entitlement_required": True},
     "GET:/ui/calls/group/{call_id}": {"product": "groups", "required_scopes": ["groups:read"], "entitlement_required": True},
     "GET:/ui/calls/group/{call_id}/participants": {"product": "groups", "required_scopes": ["groups:read"], "entitlement_required": True},
+    "GET:/ui/calls/group/{call_id}/livekit-token": {"product": "groups", "required_scopes": ["groups:read"], "entitlement_required": True},
     "GET:/ui/groups": {"product": "groups", "required_scopes": ["groups:read"], "entitlement_required": True},
     "GET:/ui/groups/discover": {"product": "groups", "required_scopes": ["groups:read"], "entitlement_required": True},
     "GET:/ui/groups/fundraising/{group_id}/campaigns": {"product": "groups", "required_scopes": ["groups:read"], "entitlement_required": True},

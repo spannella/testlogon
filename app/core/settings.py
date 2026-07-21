@@ -1271,6 +1271,17 @@ class Settings:
     easypost_api_key: str = os.environ.get("EASYPOST_API_KEY", "")
     easypost_webhook_secret: str = os.environ.get("EASYPOST_WEBHOOK_SECRET", "")
     easypost_api_base: str = os.environ.get("EASYPOST_API_BASE", "https://api.easypost.com/v2")
+    # NCMEC / CyberTipline mandated-reporting seam (P4). Config-gated like the
+    # EasyPost seam: when ncmec_reporting_enabled AND api_base AND api_key are
+    # all set the real CyberTipline submission endpoint is POSTed; otherwise the
+    # mandated report is persisted as PENDING (honest-mock-that-records, never
+    # dropped) for the ops runbook to file. Real endpoint/creds + legal sign-off
+    # are the go-live step (see app/services/ncmec_client.py).
+    ncmec_reporting_enabled: bool = os.environ.get("NCMEC_REPORTING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    ncmec_api_base: str = os.environ.get("NCMEC_API_BASE", "")
+    ncmec_api_key: str = os.environ.get("NCMEC_API_KEY", "")
+    ncmec_org_id: str = os.environ.get("NCMEC_ORG_ID", "")
+    ncmec_report_timeout_seconds: int = int(os.environ.get("NCMEC_REPORT_TIMEOUT_SECONDS", "20"))
     payments_table_name: str = os.environ.get("PAYMENTS_TABLE_NAME", "payments")
     entitlements_table_name: str = os.environ.get("ENTITLEMENTS_TABLE_NAME", "entitlements")
     entitlement_usage_events_table_name: str = os.environ.get("ENTITLEMENT_USAGE_EVENTS_TABLE_NAME", "entitlement_usage_events")
@@ -2341,6 +2352,17 @@ class Settings:
     group_call_max_duration_seconds: int = int(os.environ.get("GROUP_CALL_MAX_DURATION_SECONDS", "14400"))
     group_call_sfu_endpoint: str = os.environ.get("GROUP_CALL_SFU_ENDPOINT", "")
     group_call_dev_mesh_max_participants: int = int(os.environ.get("GROUP_CALL_DEV_MESH_MAX_PARTICIPANTS", "4"))
+
+    # LiveKit (shared with audio rooms) — group video calls can route
+    # through the existing LiveKit SFU (selective forwarding + simulcast).
+    # When these are set (and group_call_sfu_provider=livekit) the group-call
+    # signaling advertises the LiveKit SFU and mints per-participant join
+    # tokens; unset => honest mesh fallback. See useGroupCall.ts.
+    livekit_url: str = os.environ.get("LIVEKIT_URL", "")
+    livekit_api_key: str = os.environ.get("LIVEKIT_API_KEY", "")
+    livekit_api_secret: str = os.environ.get("LIVEKIT_API_SECRET", "")
+    livekit_control_url: str = os.environ.get("LIVEKIT_CONTROL_URL", "http://127.0.0.1:7880")
+    group_call_sfu_provider: str = os.environ.get("GROUP_CALL_SFU_PROVIDER", "livekit")
 
     # Collaboration Requests (CREATOR-001)
     collaborations_enabled: bool = os.environ.get("COLLABORATIONS_ENABLED", "1") not in ("0", "false", "False")

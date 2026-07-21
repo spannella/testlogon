@@ -3748,6 +3748,14 @@ class GroupCallCreateIn(BaseModel):
 class GroupCallSignalingInfo(BaseModel):
     mode: str = "mesh"
     ice_servers: list[dict] = []
+    # SFU provider seam. When the platform's LiveKit SFU (shared with audio
+    # rooms) is configured, mode=="sfu" and sfu_provider=="livekit": clients
+    # fetch a join token from /ui/calls/group/{call_id}/livekit-token and
+    # connect to livekit_url with the LiveKit client SDK (real selective
+    # forwarding + simulcast). Empty/None => hand-rolled mesh transport.
+    sfu_provider: Optional[str] = None
+    livekit_url: Optional[str] = None
+    room_name: Optional[str] = None
 
 
 class GroupCallOut(BaseModel):
