@@ -158,6 +158,14 @@ const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePa
 const BulkPayoutConsole = lazy(() => import("@/pages/admin/BulkPayoutConsole"));
 const DisputesPage = lazy(() => import("@/pages/billing/DisputesPage"));
 const AdminDisputeQueuePage = lazy(() => import("@/pages/admin/AdminDisputeQueuePage"));
+const GLChartPage = lazy(() => import("@/pages/admin/GLChartPage"));
+const GLJournalPage = lazy(() => import("@/pages/admin/GLJournalPage"));
+const ARSubledgerPage = lazy(() => import("@/pages/admin/ARSubledgerPage"));
+const PricingRulesPage = lazy(() => import("@/pages/admin/PricingRulesPage"));
+const EntitlementRequestQueuePage = lazy(() => import("@/pages/admin/EntitlementRequestQueuePage"));
+const UsageMeteringPage = lazy(() => import("@/pages/admin/UsageMeteringPage"));
+const EntitlementsAdminPage = lazy(() => import("@/pages/admin/EntitlementsAdminPage"));
+const TipReversalPage = lazy(() => import("@/pages/admin/TipReversalPage"));
 const CreatorDisputesPage = lazy(() => import("@/pages/creator/CreatorDisputesPage"));
 const AppealsPage = lazy(() => import("@/pages/appeals/AppealsPage"));
 const AppealReviewQueuePage = lazy(() => import("@/pages/admin/AppealReviewQueuePage"));
@@ -821,6 +829,14 @@ export default function App() {
           <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
           <Route path="admin/bulk-payouts" element={<BulkPayoutConsole />} />
           <Route path="admin/disputes" element={<AdminDisputeQueuePage />} />
+          <Route path="admin/gl/accounts" element={<GLChartPage />} />
+          <Route path="admin/gl/journal" element={<GLJournalPage />} />
+          <Route path="admin/ar-subledger" element={<ARSubledgerPage />} />
+          <Route path="admin/pricing-rules" element={<PricingRulesPage />} />
+          <Route path="admin/entitlement-requests" element={<EntitlementRequestQueuePage />} />
+          <Route path="admin/usage-metering" element={<UsageMeteringPage />} />
+          <Route path="admin/entitlements" element={<EntitlementsAdminPage />} />
+          <Route path="admin/tip-reversal" element={<TipReversalPage />} />
           <Route path="admin/appeals" element={<AppealReviewQueuePage />} />
           <Route path="admin/fraud" element={<FraudReviewQueuePage />} />
           <Route path="admin/kyc-workload" element={<KycWorkloadPage />} />
