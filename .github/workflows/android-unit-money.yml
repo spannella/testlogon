@@ -115,10 +115,17 @@ jobs:
       #      gradle.properties sets, so the Gradle build JVM ran at the JVM default max heap.
       #      We now carry an explicit `-Xmx6g` (roomy on the 7GB/16GB ubuntu-latest runner,
       #      leaving headroom for the forked Kotlin daemon + test workers).
-      #   2. The Kotlin *compiler daemon* (spawned via CompileServiceImpl even under Gradle
-      #      --no-daemon) has its OWN heap governed by `kotlin.daemon.jvmargs`, which was
-      #      never set -> tiny default heap -> the equals() optimizer GC-thrashed. We now
-      #      give it `-Xmx4g`.
+      #   2. The Kotlin *compiler daemon* (spawned via CompileServiceImpl/GradleKotlinCompiler
+      #      WorkAction even under Gradle --no-daemon) has its OWN heap governed by
+      #      `kotlin.daemon.jvmargs`, which was never set -> tiny default heap -> the codegen
+      #      optimizer GC-thrashed. This is where the OOM actually lands (the DTO equals() was
+      #      just the first victim; with `data` dropped it re-surfaced on ApiResult.flatMap
+      #      inlining at -Xmx4g). A full single-shot clean :app compile needs ~6-8g of Kotlin
+      #      daemon heap (locally 8g compiles clean, 5g OOMs, 4g OOM'd in CI on ApiResult
+      #      inlining), so we give the Kotlin daemon -Xmx7g plus -XX:-UseGCOverheadLimit so a
+      #      momentary GC-heavy stretch can't trip the premature "GC overhead limit exceeded"
+      #      abort. The ubuntu-latest runner has ~16GB, so 7g (daemon) + 4g (build JVM) leaves
+      #      headroom for the post-compile test-fork JVM.
       # The DTO itself was also fixed at the root (dropped `data` so no giant equals() is
       # generated; JSON contract unchanged). Either fix alone greens the gate; both together
       # make it robustly green. Keep both.
@@ -126,8 +133,8 @@ jobs:
         run: >-
           ./gradlew :app:testDebugUnitTest --continue --no-daemon --stacktrace
           -Ptest.tmpdir="${GITHUB_WORKSPACE}/.gradle_tmp"
-          -Pkotlin.daemon.jvmargs="-Xmx4g -Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
-          -Dorg.gradle.jvmargs="-Xmx6g -Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp -Dorg.sqlite.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
+          -Pkotlin.daemon.jvmargs="-Xmx7g -XX:+UseParallelGC -XX:-UseGCOverheadLimit -Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
+          -Dorg.gradle.jvmargs="-Xmx4g -Djava.io.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp -Dorg.sqlite.tmpdir=${GITHUB_WORKSPACE}/.gradle_tmp"
           --tests "com.testlogon.android.data.billing.*"
           --tests "com.testlogon.android.data.catalog.*"
           --tests "com.testlogon.android.data.checkout.*"
