@@ -1271,6 +1271,17 @@ class Settings:
     easypost_api_key: str = os.environ.get("EASYPOST_API_KEY", "")
     easypost_webhook_secret: str = os.environ.get("EASYPOST_WEBHOOK_SECRET", "")
     easypost_api_base: str = os.environ.get("EASYPOST_API_BASE", "https://api.easypost.com/v2")
+    # NCMEC / CyberTipline mandated-reporting seam (P4). Config-gated like the
+    # EasyPost seam: when ncmec_reporting_enabled AND api_base AND api_key are
+    # all set the real CyberTipline submission endpoint is POSTed; otherwise the
+    # mandated report is persisted as PENDING (honest-mock-that-records, never
+    # dropped) for the ops runbook to file. Real endpoint/creds + legal sign-off
+    # are the go-live step (see app/services/ncmec_client.py).
+    ncmec_reporting_enabled: bool = os.environ.get("NCMEC_REPORTING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    ncmec_api_base: str = os.environ.get("NCMEC_API_BASE", "")
+    ncmec_api_key: str = os.environ.get("NCMEC_API_KEY", "")
+    ncmec_org_id: str = os.environ.get("NCMEC_ORG_ID", "")
+    ncmec_report_timeout_seconds: int = int(os.environ.get("NCMEC_REPORT_TIMEOUT_SECONDS", "20"))
     payments_table_name: str = os.environ.get("PAYMENTS_TABLE_NAME", "payments")
     entitlements_table_name: str = os.environ.get("ENTITLEMENTS_TABLE_NAME", "entitlements")
     entitlement_usage_events_table_name: str = os.environ.get("ENTITLEMENT_USAGE_EVENTS_TABLE_NAME", "entitlement_usage_events")

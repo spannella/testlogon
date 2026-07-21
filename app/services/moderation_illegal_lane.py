@@ -84,11 +84,145 @@ def _preserve_record(case_id: str, *, content_type: str, content_id: str, owner_
     return preserve_id
 
 
-def _mandated_report_event(case_id: str, *, content_type: str, content_id: str, owner_user_id: str, categories: List[str], ts: int) -> str:
-    """Fire the mandated-reporting hook. STUB: writes an auditable event + logs a
-    CRITICAL line for the ops runbook to pick up and file with NCMEC / the
-    relevant hotline. Real integration replaces the body of this function."""
+def _submission_record_exists(case_id: str) -> Optional[Dict[str, Any]]:
+    """Return the existing mandated-report SUBMISSION record for a case, if any.
+
+    Idempotency guard: the submission is keyed on (case_id) via a stable sort
+    key so the same incident is NEVER double-reported on a replayed escalate."""
+    try:
+        got = ddb.Table(APP_TABLE).get_item(
+            Key={"pk": f"MANDATEDREPORT#{case_id}", "sk": "SUBMISSION"}
+        )
+        return got.get("Item")
+    except Exception:
+        logger.exception("illegal_lane: submission-record read failed for %s", case_id)
+        return None
+
+
+def _mandated_report_event(
+    case_id: str,
+    *,
+    content_type: str,
+    content_id: str,
+    owner_user_id: str,
+    categories: List[str],
+    ts: int,
+    preserve_id: str = "",
+    reporter_user_id: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    """File the mandated report through the NCMEC/CyberTipline submission SEAM.
+
+    Real record-keeping (safety/legal-critical — nothing is ever silently lost):
+
+      1. IDEMPOTENT: a single SUBMISSION record per case (pk=MANDATEDREPORT#<id>,
+         sk=SUBMISSION). If one already exists AND is terminal-good
+         (``submitted``) or still ``pending``/``failed`` we do NOT re-transmit on
+         replay; a ``failed``/``pending`` record is retry-eligible only via the
+         explicit ops runner, not by re-escalation.
+      2. Reserves the record as ``pending`` FIRST (so intent survives a crash
+         mid-submit), then calls the seam.
+      3. When the seam is keyed (``ncmec_client.is_enabled()``) the payload is
+         POSTed to the configured CyberTipline endpoint and the record is updated
+         to ``submitted`` (+ external_ref) or ``failed`` (retry-safe).
+      4. When the seam is OFF/unkeyed the record stays ``pending`` — the report is
+         PRESERVED and queued, exactly like every other honest-mock vendor seam.
+      5. The legacy auditable EVENT row + the CRITICAL ops-runbook log line are
+         BOTH still written, unchanged, so existing tooling keeps working.
+    """
+    from app.services import ncmec_client
+
     report_event_id = f"mandrpt_{case_id}"
+    cats = sorted(set(categories or []))
+    cats_str = ",".join(cats)
+
+    # --- 0. Idempotency: never double-report a case already on record. --------
+    existing = _submission_record_exists(case_id)
+    if existing:
+        prior_status = str(existing.get("status") or "")
+        logger.info(
+            "illegal_lane: mandated report already recorded for %s (status=%s) — not re-transmitting",
+            case_id, prior_status,
+        )
+        # Still emit the CRITICAL runbook line so a replay is visible, but do not
+        # re-POST or overwrite the external reference.
+        logger.critical(
+            "MANDATED_REPORT_ON_RECORD case_id=%s content=%s#%s categories=%s status=%s ref=%s",
+            case_id, content_type, content_id, cats_str, prior_status,
+            existing.get("external_ref") or "",
+        )
+        return str(existing.get("report_event_id") or report_event_id)
+
+    # --- 1. Reserve the SUBMISSION record as pending (crash-safe intent). ------
+    #     Conditional put -> if two escalations race, exactly one reserves it.
+    reserved = False
+    try:
+        ddb.Table(APP_TABLE).put_item(
+            Item={
+                "pk": f"MANDATEDREPORT#{case_id}",
+                "sk": "SUBMISSION",
+                "entity_type": "mandated_report_submission",
+                "report_event_id": report_event_id,
+                "case_id": case_id,
+                "content_type": content_type,
+                "content_id": content_id,
+                "owner_user_id": owner_user_id or "",
+                "categories": cats_str,
+                "preserve_id": preserve_id or "",
+                "first_reporter_user_id": reporter_user_id or "",
+                "channel": "ncmec",
+                "status": "pending",
+                "delivered": False,
+                "external_ref": "",
+                "attempts": 0,
+                "created_at": ts,
+                "updated_at": ts,
+            },
+            ConditionExpression="attribute_not_exists(pk)",
+        )
+        reserved = True
+    except Exception as exc:  # noqa: BLE001
+        if "ConditionalCheckFailed" in str(type(exc).__name__) or "ConditionalCheckFailed" in str(exc):
+            # Lost the race — another escalation reserved it. Do NOT transmit.
+            logger.info("illegal_lane: submission reserve lost race for %s — not re-transmitting", case_id)
+            existing = _submission_record_exists(case_id) or {}
+            return str(existing.get("report_event_id") or report_event_id)
+        logger.exception("illegal_lane: submission reserve failed for %s", case_id)
+        # Fall through: still attempt the audit row + log so nothing is lost.
+
+    # --- 2. Build the payload + call the seam (never raises). ------------------
+    payload = ncmec_client.build_report_payload(
+        case_id=case_id, content_type=content_type, content_id=content_id,
+        owner_user_id=owner_user_id or "", categories=cats, ts=ts,
+        preserve_id=preserve_id or "", reporter_user_id=reporter_user_id or "",
+        metadata=metadata or {},
+    )
+    result = ncmec_client.submit_report(payload)
+    status = str(result.get("status") or ("pending" if not result.get("delivered") else "submitted"))
+    delivered = bool(result.get("delivered"))
+    external_ref = str(result.get("external_ref") or "")
+
+    # --- 3. Persist the outcome on the reserved record. -----------------------
+    if reserved:
+        try:
+            ddb.Table(APP_TABLE).update_item(
+                Key={"pk": f"MANDATEDREPORT#{case_id}", "sk": "SUBMISSION"},
+                UpdateExpression=(
+                    "SET #st = :st, delivered = :d, external_ref = :ref, "
+                    "last_error = :err, attempts = attempts + :one, updated_at = :ts, "
+                    "enabled = :en"
+                ),
+                ExpressionAttributeNames={"#st": "status"},
+                ExpressionAttributeValues={
+                    ":st": status, ":d": delivered, ":ref": external_ref,
+                    ":err": str(result.get("error") or ""), ":one": 1, ":ts": ts,
+                    ":en": bool(ncmec_client.is_enabled()),
+                },
+            )
+        except Exception:
+            logger.exception("illegal_lane: submission outcome write failed for %s", case_id)
+
+    # --- 4. Legacy auditable EVENT row (unchanged tooling contract). ----------
     try:
         ddb.Table(APP_TABLE).put_item(
             Item={
@@ -100,18 +234,29 @@ def _mandated_report_event(case_id: str, *, content_type: str, content_id: str, 
                 "content_type": content_type,
                 "content_id": content_id,
                 "owner_user_id": owner_user_id or "",
-                "categories": ",".join(sorted(set(categories or []))),
-                "channel": "ncmec_stub",
-                "status": "queued",
+                "categories": cats_str,
+                "channel": "ncmec",
+                "status": status,
+                "delivered": delivered,
+                "external_ref": external_ref,
                 "created_at": ts,
             }
         )
     except Exception:
         logger.exception("illegal_lane: mandated-report event write failed for %s", case_id)
-    logger.critical(
-        "MANDATED_REPORT_REQUIRED case_id=%s content=%s#%s categories=%s — file with NCMEC/hotline per runbook",
-        case_id, content_type, content_id, ",".join(sorted(set(categories or []))),
-    )
+
+    # --- 5. CRITICAL ops-runbook line (always). -------------------------------
+    if delivered:
+        logger.critical(
+            "MANDATED_REPORT_SUBMITTED case_id=%s content=%s#%s categories=%s external_ref=%s",
+            case_id, content_type, content_id, cats_str, external_ref,
+        )
+    else:
+        logger.critical(
+            "MANDATED_REPORT_REQUIRED case_id=%s content=%s#%s categories=%s status=%s — "
+            "seam not live (NCMEC_REPORTING_ENABLED/endpoint/key); PRESERVED + queued, file per runbook",
+            case_id, content_type, content_id, cats_str, status,
+        )
     return report_event_id
 
 
@@ -177,6 +322,7 @@ def escalate(
     report_event_id = _mandated_report_event(
         case_id, content_type=content_type, content_id=content_id,
         owner_user_id=resolved_owner or "", categories=cats, ts=ts,
+        preserve_id=preserve_id, reporter_user_id=reporter_user_id, metadata=md,
     )
 
     # 4. Route the linked ticket to the LOCKED senior-only queue (critical).
