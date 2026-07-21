@@ -287,6 +287,27 @@ def control_playback(
         "controlled_by": user_sub,
     })
 
+    # Also fan the host-authoritative state out to each participant over the SHARED
+    # per-user event queue backing /messaging/events/poll (the channel the Android
+    # SseMessagingEventStream already polls). The in-process SSE above serves the web
+    # /stream endpoint; this durable, cross-worker queue serves the mobile clients.
+    try:
+        from app.services.watch_party_events import publish_playback_state
+        publish_playback_state(
+            party_id,
+            action=action,
+            status=new_status,
+            position=new_pos,
+            position_updated_at=ts,
+            controlled_by=user_sub,
+            duration_seconds=duration,
+        )
+    except Exception:  # pragma: no cover - realtime fan-out must never break control
+        import logging
+        logging.getLogger(__name__).exception(
+            "watch_party playback event fan-out failed", extra={"party_id": party_id}
+        )
+
     party["status"] = new_status
     party["position"] = new_pos
     party["position_updated_at"] = ts
