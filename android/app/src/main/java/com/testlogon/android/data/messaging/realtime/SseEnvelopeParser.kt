@@ -84,6 +84,18 @@ class SseEnvelopeParser @Inject constructor(moshi: Moshi) {
                 isTyping = data["is_typing"] as? Boolean ?: true,
                 updatedAtEpochSeconds = (data["updated_at"] as? Number)?.toLong() ?: 0L,
             )
+            // ENGAGE-004 realtime — host-authoritative watch-party playback state fanned out over
+            // the SHARED per-user event queue. Fields are FLAT on the frame (party_id/action/status/
+            // position/position_updated_at/controlled_by/server_time), mirroring message:new flattening.
+            "watch_party:playback" -> MessagingEvent.PlaybackSync(
+                partyId = data["party_id"] as? String ?: return null,
+                action = data["action"] as? String ?: "",
+                status = data["status"] as? String ?: "",
+                positionSeconds = (data["position"] as? Number)?.toDouble() ?: 0.0,
+                positionUpdatedAtEpochSeconds = (data["position_updated_at"] as? Number)?.toLong() ?: 0L,
+                controlledBy = data["controlled_by"] as? String ?: "",
+                serverTimeEpochSeconds = (data["server_time"] as? Number)?.toLong() ?: 0L,
+            )
             "" -> null
             else -> if (type.startsWith("webrtc.") || type.startsWith("call.")) {
                 @Suppress("UNCHECKED_CAST")

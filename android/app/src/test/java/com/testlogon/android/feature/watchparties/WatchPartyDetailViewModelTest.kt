@@ -9,6 +9,9 @@ import com.testlogon.android.data.watchparties.ParticipantStatus
 import com.testlogon.android.data.watchparties.WatchParty
 import com.testlogon.android.data.watchparties.WatchPartyParticipant
 import com.testlogon.android.data.watchparties.WatchPartyStatus
+import com.testlogon.android.data.messaging.realtime.MessagingEvent
+import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
+import com.testlogon.android.feature.messaging.FakeMessagingEventStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -54,13 +57,18 @@ class WatchPartyDetailViewModelTest {
     private fun handle(partyId: String = "wp_1") =
         SavedStateHandle(mapOf(WatchPartyDetailViewModel.ARG_PARTY_ID to partyId))
 
+    private val stream = FakeMessagingEventStream()
+
+    private fun vmOf(repo: WatchPartiesViewModelTest.FakeWatchPartiesRepository, partyId: String = "wp_1") =
+        WatchPartyDetailViewModel(repo, stream, handle(partyId))
+
     @Test
     fun load_success_movesToContent_withPartyAndParticipants() = runTest {
         val repo = WatchPartiesViewModelTest.FakeWatchPartiesRepository().apply {
             getResult = ApiResult.Success(party())
             participantsResult = ApiResult.Success(listOf(participant("a"), participant("b")))
         }
-        val vm = WatchPartyDetailViewModel(repo, handle())
+        val vm = vmOf(repo)
         advanceUntilIdle()
 
         assertEquals(WatchPartyDetailUiState.Phase.Content, vm.uiState.value.phase)
@@ -74,7 +82,7 @@ class WatchPartyDetailViewModelTest {
         val repo = WatchPartiesViewModelTest.FakeWatchPartiesRepository().apply {
             getResult = ApiResult.Failure(ApiError(401, "nope"))
         }
-        val vm = WatchPartyDetailViewModel(repo, handle())
+        val vm = vmOf(repo)
         advanceUntilIdle()
 
         assertEquals(WatchPartyDetailUiState.Phase.SessionExpired, vm.uiState.value.phase)
@@ -85,7 +93,7 @@ class WatchPartyDetailViewModelTest {
         val repo = WatchPartiesViewModelTest.FakeWatchPartiesRepository().apply {
             getResult = ApiResult.Failure(ApiError(500, "boom"))
         }
-        val vm = WatchPartyDetailViewModel(repo, handle())
+        val vm = vmOf(repo)
         advanceUntilIdle()
 
         assertEquals(WatchPartyDetailUiState.Phase.Error, vm.uiState.value.phase)
@@ -99,7 +107,7 @@ class WatchPartyDetailViewModelTest {
             participantsResult = ApiResult.Success(listOf(participant("a")))
             joinResult = ApiResult.Success(Unit)
         }
-        val vm = WatchPartyDetailViewModel(repo, handle("wp_join"))
+        val vm = vmOf(repo, "wp_join")
         advanceUntilIdle()
 
         val effects = mutableListOf<WatchPartyDetailEffect>()
@@ -124,7 +132,7 @@ class WatchPartyDetailViewModelTest {
             participantsResult = ApiResult.Success(emptyList())
             joinResult = ApiResult.Failure(ApiError(500, "join failed"))
         }
-        val vm = WatchPartyDetailViewModel(repo, handle())
+        val vm = vmOf(repo)
         advanceUntilIdle()
 
         val effects = mutableListOf<WatchPartyDetailEffect>()
@@ -147,7 +155,7 @@ class WatchPartyDetailViewModelTest {
             participantsResult = ApiResult.Success(emptyList())
             leaveResult = ApiResult.Success(Unit)
         }
-        val vm = WatchPartyDetailViewModel(repo, handle("wp_leave"))
+        val vm = vmOf(repo, "wp_leave")
         advanceUntilIdle()
 
         val effects = mutableListOf<WatchPartyDetailEffect>()
@@ -175,11 +183,74 @@ class WatchPartyDetailViewModelTest {
                 ),
             )
         }
-        val vm = WatchPartyDetailViewModel(repo, handle())
+        val vm = vmOf(repo)
         advanceUntilIdle()
 
         assertEquals(2, vm.uiState.value.participants.size)
         assertEquals(1, vm.uiState.value.activeParticipants.size)
         assertEquals("active", vm.uiState.value.activeParticipants.single().userSub)
+    }
+    @Test
+    fun playbackSync_hostPlayFrameForThisParty_updatesLivePlaybackState() = runTest {
+        val repo = WatchPartiesViewModelTest.FakeWatchPartiesRepository().apply {
+            getResult = ApiResult.Success(party("wp_sync"))
+            participantsResult = ApiResult.Success(listOf(participant("me")))
+        }
+        val vm = vmOf(repo, "wp_sync")
+        advanceUntilIdle()
+        assertEquals(null, vm.uiState.value.playbackSync)
+
+        stream.send(
+            MessagingStreamEvent.Event(
+                MessagingEvent.PlaybackSync(
+                    partyId = "wp_sync",
+                    action = "play",
+                    status = "playing",
+                    positionSeconds = 123.5,
+                    positionUpdatedAtEpochSeconds = 1_000L,
+                    controlledBy = "host",
+                    serverTimeEpochSeconds = 1_000L,
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        val sync = vm.uiState.value.playbackSync
+        assertNotNull(sync)
+        assertTrue(sync!!.isPlaying)
+        assertEquals(123.5, sync.positionSeconds, 0.001)
+        assertEquals("host", sync.controlledBy)
+        assertEquals("play", sync.lastAction)
+        // Extrapolation advances while playing; drift beyond tolerance triggers a re-seek.
+        assertEquals(133.5, sync.targetPositionSeconds(1_010L), 0.001)
+        assertTrue(sync.shouldReseek(localPositionSeconds = 100.0, nowEpochSeconds = 1_000L))
+        assertFalse(sync.shouldReseek(localPositionSeconds = 123.0, nowEpochSeconds = 1_000L))
+    }
+
+    @Test
+    fun playbackSync_frameForDifferentParty_isIgnored() = runTest {
+        val repo = WatchPartiesViewModelTest.FakeWatchPartiesRepository().apply {
+            getResult = ApiResult.Success(party("wp_mine"))
+            participantsResult = ApiResult.Success(emptyList())
+        }
+        val vm = vmOf(repo, "wp_mine")
+        advanceUntilIdle()
+
+        stream.send(
+            MessagingStreamEvent.Event(
+                MessagingEvent.PlaybackSync(
+                    partyId = "wp_other",
+                    action = "pause",
+                    status = "paused",
+                    positionSeconds = 42.0,
+                    positionUpdatedAtEpochSeconds = 5L,
+                    controlledBy = "host",
+                    serverTimeEpochSeconds = 5L,
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(null, vm.uiState.value.playbackSync)
     }
 }

@@ -89,6 +89,25 @@ sealed interface MessagingEvent {
         val createdAtEpochSeconds: Long? = null,
     ) : MessagingEvent
 
+    /**
+     * ENGAGE-004 realtime — host-authoritative watch-party playback state, fanned out to each
+     * participant over the SHARED per-user event queue (/messaging/events/poll). The backend writes
+     * the core fields FLAT on the frame (party_id/action/status/position/...), mirroring how it
+     * flattens message:new, so the parser reads them at the top level. Participants reconcile their
+     * local player to [positionSeconds] + [status] (with drift tolerance) on each frame.
+     *
+     * [action] ∈ "play" | "pause" | "seek"; [status] ∈ "playing" | "paused" | ...
+     */
+    data class PlaybackSync(
+        val partyId: String,
+        val action: String,
+        val status: String,
+        val positionSeconds: Double,
+        val positionUpdatedAtEpochSeconds: Long,
+        val controlledBy: String,
+        val serverTimeEpochSeconds: Long,
+    ) : MessagingEvent
+
     /** Any other event type we observe but do not act on directly (used to refresh lists). */
     data class Other(val type: String, val conversationId: String?) : MessagingEvent
 }
