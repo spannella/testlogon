@@ -3,6 +3,7 @@ package com.testlogon.android.feature.contacts
 import com.testlogon.android.MainDispatcherRule
 import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.contacts.ContactMatch
 import com.testlogon.android.data.contacts.ContactSuggestion
 import com.testlogon.android.data.contacts.ContactsRepository
 import com.testlogon.android.data.contacts.FollowRelationship
@@ -43,6 +44,9 @@ class ContactsHubViewModelTest {
             addResult ?: ApiResult.Success(
                 SavedContact(userId, "Name $userId", null, isFavorite = false, isBlocked = false),
             )
+
+        var matchResult: ApiResult<List<ContactMatch>> = ApiResult.Success(emptyList())
+        override suspend fun matchDeviceContacts(): ApiResult<List<ContactMatch>> = matchResult
 
         override suspend fun removeContact(userId: String): ApiResult<Unit> = removeResult
 

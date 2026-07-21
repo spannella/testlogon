@@ -7,6 +7,7 @@ from boto3.dynamodb.conditions import Key
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.core.settings import S as S_settings
 from app.core.tables import T
 from app.services.profile import get_profile_identity
 from app.services.sessions import require_ui_session
@@ -405,3 +406,86 @@ def contact_suggestions(ctx: Dict = Depends(require_ui_session)):
         ))
 
     return {"suggestions": cards}
+
+
+
+# ── Contacts Feature 2: privacy-safe device contact match ────────────────────
+
+class ContactMatchIn(BaseModel):
+    # Client sends ONLY hashes (sha256(salt + ":" + normalized identifier)); raw
+    # emails/phones never leave the device and are never received here.
+    email_hashes: List[str] = []
+    phone_hashes: List[str] = []
+
+
+class ContactMatchCard(BaseModel):
+    user_id: str
+    display_name: str
+    profile_photo_url: Optional[str] = None
+    # Which identifier kind matched this card, so the client can label it
+    # ("In your contacts by email/phone"). One of: email | phone.
+    matched_by: str
+
+
+@router.post("/match", response_model=Dict[str, List[ContactMatchCard]])
+def match_contacts(inp: ContactMatchIn, ctx: Dict = Depends(require_ui_session)):
+    """Match a device address book (hashed on-device) against platform users.
+
+    Body: {email_hashes: [...], phone_hashes: [...]} — hashes ONLY. Resolves each
+    hash via the ContactMatchIndex, returns public profile cards for matched
+    users, excluding self, already-saved contacts, and blocked/blocking users
+    (Phase-1 exclusion logic). Raw identifiers are NEVER persisted or logged —
+    only ephemeral hash get_item lookups happen. Own-scoped + rate-limited.
+    """
+    from app.services import blocking as _blocking
+    from app.services import contact_match as _cm
+    from app.services.rate_limit import rate_limit_contact_match
+
+    user_sub = ctx["user_sub"]
+    rate_limit_contact_match(user_sub)
+
+    cap = int(getattr(S_settings, "contact_match_max_hashes", 2000) or 2000)
+    email_hashes = _cm.clamp_hash_list(inp.email_hashes, cap=cap)
+    phone_hashes = _cm.clamp_hash_list(inp.phone_hashes, cap=cap)
+
+    # Resolve hashes -> user_ids (email preferred as the match label when both hit).
+    email_map = _cm.lookup_hashes(email_hashes)   # {hash: (user_id, kind)}
+    phone_map = _cm.lookup_hashes(phone_hashes)
+
+    matched_by: Dict[str, str] = {}
+    for _h, (uid, _kind) in phone_map.items():
+        matched_by.setdefault(uid, "phone")
+    for _h, (uid, _kind) in email_map.items():
+        matched_by[uid] = "email"  # email wins the label if both matched
+
+    # Phase-1 exclusion: self + already-saved + blocked/blocking.
+    saved = _load_saved_contact_ids(user_sub)
+    try:
+        blocked = _blocking.get_blocked_set(user_sub)
+    except Exception:
+        blocked = set()
+    try:
+        blocked_by = _blocking.get_blocked_by_set(user_sub)
+    except Exception:
+        blocked_by = set()
+    excluded = set(saved) | set(blocked) | set(blocked_by) | {user_sub}
+
+    cards: List[ContactMatchCard] = []
+    for uid, kind in matched_by.items():
+        if not uid or uid in excluded:
+            continue
+        try:
+            identity = get_profile_identity(uid)
+            display_name = identity.get("display_name") or uid
+            photo = identity.get("profile_photo_url") or None
+        except Exception:
+            display_name, photo = uid, None
+        cards.append(ContactMatchCard(
+            user_id=uid,
+            display_name=display_name,
+            profile_photo_url=photo,
+            matched_by=kind,
+        ))
+
+    cards.sort(key=lambda c: c.display_name.lower())
+    return {"matches": cards}

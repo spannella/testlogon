@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.contacts
 
+import com.testlogon.android.data.contacts.ContactMatch
 import com.testlogon.android.data.contacts.ContactSuggestion
 import com.testlogon.android.data.contacts.SavedContact
 
@@ -20,6 +21,36 @@ data class SuggestionRow(
     /** True while an add-to-contacts request for this suggestion is in flight. */
     val adding: Boolean = false,
 )
+
+/** Feature 2 — a device-address-book match row. */
+data class MatchRow(
+    val userId: String,
+    val displayName: String,
+    val photoUrl: String?,
+    /** "In your contacts by email" / "...by phone" label source. */
+    val matchedBy: String,
+    val adding: Boolean = false,
+)
+
+/**
+ * Feature 2 — the device contact-sync phase, an OVERLAY on the hub (permission gate ->
+ * hashing/matching progress -> results). Idle until the user taps "Find people you know".
+ */
+sealed interface MatchSyncState {
+    data object Idle : MatchSyncState
+
+    /** Permission denied (soft: can re-ask) or permanently denied (must go to Settings). */
+    data class PermissionNeeded(val permanentlyDenied: Boolean) : MatchSyncState
+
+    /** Reading + hashing on-device, then calling the match endpoint. */
+    data object Syncing : MatchSyncState
+
+    data class Results(val matches: List<MatchRow>) : MatchSyncState {
+        val isEmpty: Boolean get() = matches.isEmpty()
+    }
+
+    data class Failed(val message: String, val offline: Boolean) : MatchSyncState
+}
 
 /**
  * Feature 1 — Contacts hub screen state. The screen has TWO sections (saved contacts +
@@ -98,6 +129,25 @@ object ContactsHubReducer {
         contacts = (state.contacts + added.toRow()).sortedFavoritesFirst(),
         suggestions = state.suggestions.filterNot { it.userId == added.userId },
     )
+
+    // ── Feature 2: device-match reducers ────────────────────────────────────
+
+    /** Build match results, dropping anyone already saved (belt-and-braces vs the server). */
+    fun matchResults(
+        matches: List<ContactMatch>,
+        contacts: List<ContactRow>,
+    ): MatchSyncState.Results = MatchSyncState.Results(
+        matches = matches
+            .filter { m -> contacts.none { it.userId == m.userId } }
+            .map { it.toRow() },
+    )
+
+    fun markMatchAdding(state: MatchSyncState.Results, userId: String, adding: Boolean): MatchSyncState.Results =
+        state.copy(matches = state.matches.map { if (it.userId == userId) it.copy(adding = adding) else it })
+
+    /** Drop a just-added match from the results overlay. */
+    fun removeMatch(state: MatchSyncState.Results, userId: String): MatchSyncState.Results =
+        state.copy(matches = state.matches.filterNot { it.userId == userId })
 }
 
 private fun SavedContact.toRow() = ContactRow(
@@ -105,6 +155,13 @@ private fun SavedContact.toRow() = ContactRow(
     displayName = displayName,
     photoUrl = photoUrl,
     isFavorite = isFavorite,
+)
+
+private fun ContactMatch.toRow() = MatchRow(
+    userId = userId,
+    displayName = displayName,
+    photoUrl = photoUrl,
+    matchedBy = matchedBy,
 )
 
 private fun ContactSuggestion.toRow() = SuggestionRow(

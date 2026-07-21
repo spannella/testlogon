@@ -1990,6 +1990,8 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
         TableDef(os.getenv("DDB_CONTACTS_TABLE", "Contacts"), "owner_id", "contact_id"),
+        # Contacts Feature 2 — privacy-safe device-sync hash->user_id lookup index.
+        TableDef(os.getenv("DDB_CONTACT_MATCH_INDEX_TABLE", "ContactMatchIndex"), "id_hash"),
         # Sales pipeline — Opportunities (OPP-001)
         TableDef(
             _resolve_table_name(S.sales_opportunities_table_name, "sales_opportunities"),

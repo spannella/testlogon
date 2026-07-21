@@ -34,6 +34,10 @@ android {
         buildConfigField("String", "HELPDESK_GROUP_ID", "\"e2e-helpdesk\"")
         // Diagnostic: when true, forces ICE to use ONLY TURN relay candidates (skips host/srflx).
         // Defaults false (normal ICE — direct path with TURN as fallback); useful on restrictive networks.
+        // Contacts Feature 2 — the app pepper for privacy-safe contact-hash matching. MUST stay
+        // byte-identical to the backend APP_CONTACT_MATCH_SALT (app/services/contact_match.py) or
+        // client hashes stop matching server hashes. Non-secret (see that module's docstring).
+        buildConfigField("String", "CONTACT_MATCH_SALT", "\"tl_contact_match_v1\"")
         buildConfigField("boolean", "WEBRTC_FORCE_RELAY", "false")
     }
 

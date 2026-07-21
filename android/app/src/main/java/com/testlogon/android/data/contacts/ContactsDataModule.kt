@@ -22,6 +22,15 @@ object ContactsApiModule {
     @Singleton
     fun provideFollowApi(retrofit: Retrofit): FollowApi =
         retrofit.create(FollowApi::class.java)
+
+    /**
+     * Feature 2 — the on-device contact-match hasher, pinned to the compile-time
+     * CONTACT_MATCH_SALT (must stay byte-identical to the backend APP_CONTACT_MATCH_SALT).
+     */
+    @Provides
+    @Singleton
+    fun provideContactMatchHasher(): ContactMatchHasher =
+        ContactMatchHasher(com.testlogon.android.BuildConfig.CONTACT_MATCH_SALT)
 }
 
 /** Binds the contacts repository to its implementation. */
@@ -32,4 +41,8 @@ abstract class ContactsDataModule {
     @Binds
     @Singleton
     abstract fun bindContactsRepository(impl: ContactsRepositoryImpl): ContactsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindDeviceContactsReader(impl: DeviceContactsReaderImpl): DeviceContactsReader
 }

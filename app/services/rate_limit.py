@@ -224,6 +224,24 @@ def rate_limit_profile_lookup(requester_user_sub: Optional[str], ip: str) -> Non
             headers={"Retry-After": str(window_seconds)},
         )
 
+def rate_limit_contact_match(user_sub: str) -> None:
+    """Contacts Feature 2 — cap POST /ui/contacts/match per user (token bucket)."""
+    cap = max(1, int(getattr(S, "contact_match_max_per_window", 30) or 30))
+    window = max(1, int(getattr(S, "contact_match_window_seconds", 3600) or 3600))
+    sid = "rl#contact_match"
+    if not _bucket_limit(user_sub, sid, cap, window):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "contact_match_rate_limited",
+                "message": "Too many contact-match requests; try again later",
+                "limit": cap,
+                "window_seconds": window,
+            },
+            headers={"Retry-After": str(window)},
+        )
+
+
 def rate_limit_feed_query(user_sub: str, mode: str) -> None:
     cap = max(1, int(getattr(S, "newsfeed_feed_query_max_per_window", 180) or 180))
     window = max(1, int(getattr(S, "newsfeed_feed_query_window_seconds", 60) or 60))

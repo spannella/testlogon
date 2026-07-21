@@ -44,6 +44,14 @@ interface ContactsApi {
      */
     @GET("ui/contacts/suggestions")
     suspend fun suggestions(): SuggestionsListDto
+
+    /**
+     * POST /ui/contacts/match — Contacts Feature 2. Body carries ONLY hashes
+     * (sha256(salt + ":" + normalized identifier)); raw emails/phones never leave the
+     * device. Returns matched public profile cards, excluding self / already-saved / blocked.
+     */
+    @POST("ui/contacts/match")
+    suspend fun matchContacts(@Body body: ContactMatchDto): ContactMatchResultDto
 }
 
 @JsonClass(generateAdapter = true)
@@ -86,4 +94,23 @@ data class SuggestionCardDto(
     @Json(name = "hint") val hint: String = "",
     @Json(name = "mutual_count") val mutualCount: Int = 0,
     @Json(name = "source") val source: String = "",
+)
+
+@JsonClass(generateAdapter = true)
+data class ContactMatchDto(
+    @Json(name = "email_hashes") val emailHashes: List<String> = emptyList(),
+    @Json(name = "phone_hashes") val phoneHashes: List<String> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class ContactMatchResultDto(
+    @Json(name = "matches") val matches: List<ContactMatchCardDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class ContactMatchCardDto(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "display_name") val displayName: String,
+    @Json(name = "profile_photo_url") val profilePhotoUrl: String? = null,
+    @Json(name = "matched_by") val matchedBy: String = "",
 )

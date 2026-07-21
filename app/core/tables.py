@@ -98,6 +98,7 @@ class Tables:
     subscriptions: Any
     projects: Any
     contacts: Any
+    contact_match_index: Any  # Contacts Feature 2 — hash->user_id device-sync index
     sales_opportunities: Any
     sales_quotas: Any
     leads: Any  # CRM Leads (LED-001)
@@ -494,6 +495,7 @@ T = Tables(
     subscriptions=_safe_table(S.subscriptions_table_name),
     projects=_safe_table(S.projects_table_name),
     contacts=_safe_table(S.contacts_table_name),
+    contact_match_index=_safe_table(S.contact_match_index_table_name),
     sales_opportunities=_safe_table(S.sales_opportunities_table_name),
     sales_quotas=_safe_table(S.sales_quotas_table_name),
     leads=_safe_table(S.leads_table_name),  # CRM Leads (LED-001)

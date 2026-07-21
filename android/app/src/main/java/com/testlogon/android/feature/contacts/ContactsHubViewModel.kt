@@ -38,6 +38,10 @@ class ContactsHubViewModel @Inject constructor(
     private val _events = Channel<ContactsHubEvent>(Channel.BUFFERED)
     val events: Flow<ContactsHubEvent> = _events.receiveAsFlow()
 
+    // Feature 2 — the device contact-sync overlay (idle until "Find people you know").
+    private val _matchState = MutableStateFlow<MatchSyncState>(MatchSyncState.Idle)
+    val matchState: StateFlow<MatchSyncState> = _matchState.asStateFlow()
+
     init {
         refresh(initial = true)
     }
@@ -126,6 +130,69 @@ class ContactsHubViewModel @Inject constructor(
 
     fun onOpenContact(userId: String) {
         _events.trySend(ContactsHubEvent.OpenContactCard(userId))
+    }
+
+    // ── Feature 2: device contact sync ──────────────────────────────────────
+
+    /** Called after READ_CONTACTS is GRANTED: read+hash on-device, then match. */
+    fun onPermissionGranted() {
+        _matchState.value = MatchSyncState.Syncing
+        viewModelScope.launch {
+            when (val result = repository.matchDeviceContacts()) {
+                is ApiResult.Success -> {
+                    val savedContacts = (_state.value as? ContactsHubUiState.Content)?.contacts ?: emptyList()
+                    _matchState.value = ContactsHubReducer.matchResults(result.data, savedContacts)
+                }
+                is ApiResult.Failure ->
+                    _matchState.value = MatchSyncState.Failed(result.error.message, offline = false)
+                is ApiResult.NetworkError ->
+                    _matchState.value = MatchSyncState.Failed("You appear to be offline.", offline = true)
+            }
+        }
+    }
+
+    /** Called when the runtime permission request comes back DENIED. */
+    fun onPermissionDenied(permanentlyDenied: Boolean) {
+        _matchState.value = MatchSyncState.PermissionNeeded(permanentlyDenied)
+    }
+
+    /** Dismiss the sync overlay back to the hub. */
+    fun onDismissSync() {
+        _matchState.value = MatchSyncState.Idle
+    }
+
+    /** Add a matched person to contacts (optimistic; promotes into the saved list too). */
+    fun onAddMatch(userId: String) {
+        val results = _matchState.value as? MatchSyncState.Results ?: return
+        _matchState.value = ContactsHubReducer.markMatchAdding(results, userId, adding = true)
+        viewModelScope.launch {
+            when (val result = repository.addContact(userId)) {
+                is ApiResult.Success -> {
+                    (_matchState.value as? MatchSyncState.Results)?.let {
+                        _matchState.value = ContactsHubReducer.removeMatch(it, userId)
+                    }
+                    // Reflect the new contact in the underlying hub list too.
+                    (_state.value as? ContactsHubUiState.Content)?.let {
+                        _state.value = ContactsHubReducer.promoteSuggestion(it, result.data)
+                    }
+                    _events.trySend(ContactsHubEvent.ShowSnackbar("Added to contacts"))
+                }
+                is ApiResult.Failure -> {
+                    clearMatchAdding(userId)
+                    _events.trySend(ContactsHubEvent.ShowSnackbar(result.error.message))
+                }
+                is ApiResult.NetworkError -> {
+                    clearMatchAdding(userId)
+                    _events.trySend(ContactsHubEvent.ShowSnackbar("Couldn't add contact — you're offline."))
+                }
+            }
+        }
+    }
+
+    private fun clearMatchAdding(userId: String) {
+        (_matchState.value as? MatchSyncState.Results)?.let {
+            _matchState.value = ContactsHubReducer.markMatchAdding(it, userId, adding = false)
+        }
     }
 
     private fun clearAdding(userId: String) {
