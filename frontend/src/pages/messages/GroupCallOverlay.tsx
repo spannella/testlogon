@@ -199,6 +199,8 @@ function GroupCallOverlay({ callId, userId, conversationId, mode: callKind, onCl
     mode,
     isCreator,
     activeParticipants,
+    localStream,
+    remoteStreams,
     join,
     leave,
     end,
@@ -270,6 +272,17 @@ function GroupCallOverlay({ callId, userId, conversationId, mode: callKind, onCl
   const screenSharer = activeParticipants.find((p) => p.media_status.screen);
   const effectiveLayout = screenSharer ? "presentation" as const : layout;
 
+  // Resolve the MediaStream for a tile: the local publish for self, the
+  // per-participant remote stream (mesh RTCPeerConnection OR LiveKit SFU —
+  // both key streams by user_id) for everyone else. null → avatar fallback.
+  const streamFor = React.useCallback(
+    (participantUserId: string, isLocal: boolean): MediaStream | null => {
+      if (isLocal) return localStream ?? null;
+      return remoteStreams[participantUserId] ?? null;
+    },
+    [localStream, remoteStreams],
+  );
+
   // Grid column class based on participant count
   const gridCols =
     activeParticipants.length <= 2
@@ -340,6 +353,7 @@ function GroupCallOverlay({ callId, userId, conversationId, mode: callKind, onCl
                   key={p.user_id}
                   participant={p}
                   isLocal={p.user_id === userId}
+                  stream={streamFor(p.user_id, p.user_id === userId)}
                 />
               ))}
             </div>
@@ -347,7 +361,12 @@ function GroupCallOverlay({ callId, userId, conversationId, mode: callKind, onCl
         ) : effectiveLayout === "grid" || layout === "grid" ? (
           <div className={cn("grid gap-3 h-full", gridCols)}>
             {activeParticipants.map((p) => (
-              <ParticipantTile key={p.user_id} participant={p} isLocal={p.user_id === userId} />
+              <ParticipantTile
+                key={p.user_id}
+                participant={p}
+                isLocal={p.user_id === userId}
+                stream={streamFor(p.user_id, p.user_id === userId)}
+              />
             ))}
           </div>
         ) : (
@@ -358,6 +377,7 @@ function GroupCallOverlay({ callId, userId, conversationId, mode: callKind, onCl
                 <ParticipantTile
                   participant={activeParticipants[0]}
                   isLocal={activeParticipants[0].user_id === userId}
+                  stream={streamFor(activeParticipants[0].user_id, activeParticipants[0].user_id === userId)}
                   large
                 />
               </div>
@@ -367,7 +387,11 @@ function GroupCallOverlay({ callId, userId, conversationId, mode: callKind, onCl
               <div className="flex gap-2 overflow-x-auto pb-2">
                 {activeParticipants.slice(1).map((p) => (
                   <div key={p.user_id} className="w-36 shrink-0">
-                    <ParticipantTile participant={p} isLocal={p.user_id === userId} />
+                    <ParticipantTile
+                      participant={p}
+                      isLocal={p.user_id === userId}
+                      stream={streamFor(p.user_id, p.user_id === userId)}
+                    />
                   </div>
                 ))}
               </div>
@@ -451,38 +475,98 @@ function GroupCallOverlay({ callId, userId, conversationId, mode: callKind, onCl
 }
 
 
+// ─── Media renderers ──────────────────────────────────────────────
+
+/** Attach a MediaStream to a <video> element (same pattern as direct calls). */
+function TileVideo({
+  stream,
+  muted,
+  mirror,
+}: {
+  stream: MediaStream;
+  muted?: boolean;
+  mirror?: boolean;
+}) {
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  React.useEffect(() => {
+    if (!videoRef.current) return;
+    videoRef.current.srcObject = stream;
+    return () => {
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+  }, [stream]);
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted={muted}
+      className={cn("absolute inset-0 h-full w-full object-cover", mirror && "[transform:scaleX(-1)]")}
+    />
+  );
+}
+
+/** Attach a MediaStream's audio to a hidden <audio> element. */
+function TileAudio({ stream }: { stream: MediaStream }) {
+  const audioRef = React.useRef<HTMLAudioElement>(null);
+  React.useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.srcObject = stream;
+    return () => {
+      if (audioRef.current) audioRef.current.srcObject = null;
+    };
+  }, [stream]);
+  return <audio ref={audioRef} autoPlay className="hidden" />;
+}
+
 // ─── Participant Tile ─────────────────────────────────────────────
 
 interface ParticipantTileProps {
   participant: GroupCallParticipant;
   isLocal?: boolean;
   large?: boolean;
+  /** Live media for this tile (local publish or remote mesh/SFU stream). */
+  stream?: MediaStream | null;
 }
 
-function ParticipantTile({ participant, isLocal, large }: ParticipantTileProps) {
+function ParticipantTile({ participant, isLocal, large, stream }: ParticipantTileProps) {
   const name = participant.display_name || participant.user_id;
   const initials = name.slice(0, 2).toUpperCase();
+
+  // A live stream with a video track drives the real <video>. When video is
+  // off (or no track yet) we fall back to the avatar. This is the same for
+  // both media paths: mesh RTCPeerConnection streams and LiveKit SFU streams
+  // are both plain MediaStreams keyed by user_id.
+  const hasVideo =
+    !!participant.media_status.video &&
+    !!stream &&
+    stream.getVideoTracks().length > 0;
 
   return (
     <div
       className={cn(
-        "relative flex items-center justify-center rounded-lg bg-gray-800",
+        "relative flex items-center justify-center overflow-hidden rounded-lg bg-gray-800",
         large ? "min-h-[300px]" : "aspect-video min-h-[120px]",
       )}
       data-testid={`participant-tile-${participant.user_id}`}
     >
-      {/* Avatar (shown when video is off) */}
-      {!participant.media_status.video && (
+      {/* Avatar (shown when there is no live video for the tile) */}
+      {!hasVideo && (
         <Avatar className={cn("border-2 border-gray-600", large ? "h-24 w-24" : "h-16 w-16")}>
           <AvatarFallback className="bg-gray-700 text-white text-lg">{initials}</AvatarFallback>
         </Avatar>
       )}
 
-      {/* Video placeholder (would be <video> element in real impl) */}
-      {participant.media_status.video && (
-        <div className="flex items-center justify-center text-gray-500">
-          <Video className={cn(large ? "h-12 w-12" : "h-8 w-8")} />
-        </div>
+      {/* Real video (mesh or LiveKit SFU). Muted for the local tile to avoid
+          echo; the remote audio tracks in the stream still play. */}
+      {hasVideo && (
+        <TileVideo stream={stream!} muted={!!isLocal} mirror={!!isLocal} />
+      )}
+
+      {/* Remote audio: attach the stream so audio plays even when video is
+          off (avatar shown). Local audio is never played back (no echo). */}
+      {!isLocal && stream && stream.getAudioTracks().length > 0 && (
+        <TileAudio stream={stream} />
       )}
 
       {/* Name overlay */}

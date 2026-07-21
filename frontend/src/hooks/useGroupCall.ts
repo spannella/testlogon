@@ -40,6 +40,10 @@ import {
   getGroupCallLiveKitToken,
 } from "@/api/endpoints/groupCalls";
 import { acquireLocalMedia } from "@/lib/webrtc";
+import {
+  connectGroupCallLiveKit,
+  type GroupCallLiveKitSession,
+} from "@/lib/groupCallLiveKit";
 import type { GroupCallOut, GroupCallParticipant } from "@/api/types";
 
 export type GroupCallMode = "mesh" | "sfu";
@@ -68,11 +72,11 @@ export interface UseGroupCallReturn {
   livekit: { url: string; token: string; room: string } | null;
   /**
    * SFU media status. "na" (mesh path), "connecting" (fetching token),
-   * "seam" (token minted but browser media connect is not wired — needs the
-   * livekit-client SDK), "unavailable" (LiveKit not configured/failed → the
-   * server returned mesh or 503).
+   * "seam" (token minted but not yet connecting), "connected" (LiveKit Room
+   * connected — real media flowing), "unavailable" (LiveKit not configured/
+   * failed → the server returned mesh or 503).
    */
-  sfuStatus: "na" | "connecting" | "seam" | "unavailable";
+  sfuStatus: "na" | "connecting" | "connected" | "seam" | "unavailable";
   isCreator: boolean;
   participants: GroupCallParticipant[];
   activeParticipants: GroupCallParticipant[];
@@ -118,7 +122,7 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
   const [sfuProvider, setSfuProvider] = React.useState<string | null>(null);
   const [livekit, setLivekit] = React.useState<{ url: string; token: string; room: string } | null>(null);
   const [sfuStatus, setSfuStatus] = React.useState<
-    "na" | "connecting" | "seam" | "unavailable"
+    "na" | "connecting" | "connected" | "seam" | "unavailable"
   >("na");
 
   // Stable callback ref so effects don't re-run when the caller passes a new fn.
@@ -128,6 +132,15 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
   // One RTCPeerConnection per remote peer (mesh), or a single SFU peer.
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map());
   const localStreamRef = React.useRef<MediaStream | null>(null);
+  // Live LiveKit session (SFU path). null on the mesh path.
+  const livekitSessionRef = React.useRef<GroupCallLiveKitSession | null>(null);
+  // Current local media intent (audio/video on?). Seeded from callMode and
+  // kept in sync by updateMedia so a LiveKit connect publishes the right
+  // tracks and toggles route to the SFU session.
+  const mediaStateRef = React.useRef<{ audio: boolean; video: boolean }>({
+    audio: true,
+    video: callMode === "video",
+  });
 
   // ── Call-state polling ─────────────────────────────────────────────
   const { data: callData } = useQuery({
@@ -260,6 +273,11 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
       local.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
     }
+    // Disconnect the LiveKit session (SFU path) if one is live.
+    if (livekitSessionRef.current) {
+      void livekitSessionRef.current.disconnect();
+      livekitSessionRef.current = null;
+    }
     setLocalStream(null);
     setRemoteStreams({});
     setLivekit(null);
@@ -288,29 +306,64 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
           const tok = await getGroupCallLiveKitToken(callId);
           if (tok?.token && tok?.url) {
             setLivekit({ url: tok.url, token: tok.token, room: tok.room_name });
-            // Token minted, but connecting the browser media engine needs the
-            // livekit-client SDK (not yet a web dependency). SEAM-NOT-LIVE.
-            setSfuStatus("seam");
+            // Real browser media leg: connect the LiveKit Room and publish
+            // mic/camera honoring the current mute/camera state. Remote
+            // tracks arrive keyed by participant identity (== user_id) and
+            // merge into remoteStreams, reusing the mesh render contract.
+            const session = await connectGroupCallLiveKit(
+              tok.url,
+              tok.token,
+              { audio: mediaStateRef.current.audio, video: mediaStateRef.current.video },
+              {
+                onRemoteStream: (identity, stream) => {
+                  if (identity === userId) return; // never overwrite self-tile
+                  if (stream) setRemoteStream(identity, stream);
+                  else removeRemoteStream(identity);
+                },
+                onPhase: (phase) => {
+                  if (phase === "connected") setSfuStatus("connected");
+                  else if (phase === "connecting" || phase === "reconnecting")
+                    setSfuStatus("connecting");
+                  else if (phase === "failed") setSfuStatus("unavailable");
+                  // "disconnected" during an active call: leave/teardown owns
+                  // the terminal state; a transient drop is followed by
+                  // "reconnecting"/"connected" above.
+                },
+              },
+            );
+            livekitSessionRef.current = session;
+            if (import.meta.env.DEV) {
+              (window as unknown as Record<string, unknown>).__groupCallLiveKit = session;
+            }
           } else {
             setSfuStatus("unavailable");
           }
         } catch {
-          // 503 LIVEKIT_NOT_CONFIGURED / SDK unavailable, or transient error.
+          // 503 LIVEKIT_NOT_CONFIGURED / SDK unavailable / connect failed.
+          // Do NOT fabricate media: surface the honest unavailable state.
           setLivekit(null);
+          if (livekitSessionRef.current) {
+            void livekitSessionRef.current.disconnect();
+            livekitSessionRef.current = null;
+          }
           setSfuStatus("unavailable");
         }
       } else {
         setSfuStatus("na");
       }
 
-      // Acquire local media once. Failures (no camera, denied permission) are
-      // non-fatal — the call still proceeds receive-only.
-      try {
-        const stream = await acquireLocalMedia(callMode);
-        localStreamRef.current = stream;
-        setLocalStream(stream);
-      } catch {
-        localStreamRef.current = null;
+      // Acquire local media for the MESH path. On the LiveKit path the SFU
+      // session acquires + publishes its own devices, so we skip this to
+      // avoid grabbing the camera twice. Failures (no camera, denied
+      // permission) are non-fatal — the call still proceeds receive-only.
+      if (!(resolvedMode === "sfu" && provider === "livekit")) {
+        try {
+          const stream = await acquireLocalMedia(callMode);
+          localStreamRef.current = stream;
+          setLocalStream(stream);
+        } catch {
+          localStreamRef.current = null;
+        }
       }
 
       if (import.meta.env.DEV) {
@@ -343,8 +396,22 @@ export function useGroupCall(options: UseGroupCallOptions): UseGroupCallReturn {
     mutationFn: (update: { audio?: boolean; video?: boolean; screen?: boolean }) =>
       updateGroupCallMedia(callId, update),
     onSuccess: (_data, update) => {
-      // Reflect mute/unmute on the local upstream tracks so peers stop/resume
-      // receiving immediately (the REST call only updates server-side status).
+      // Track the current intent for a (re)publish / late LiveKit connect.
+      if (typeof update.audio === "boolean") mediaStateRef.current.audio = update.audio;
+      if (typeof update.video === "boolean") mediaStateRef.current.video = update.video;
+
+      // SFU (LiveKit) path: toggle publish on the live session.
+      const session = livekitSessionRef.current;
+      if (session) {
+        if (typeof update.audio === "boolean") void session.setMicrophoneEnabled(update.audio);
+        if (typeof update.video === "boolean") void session.setCameraEnabled(update.video);
+        if (typeof update.screen === "boolean") void session.setScreenShareEnabled(update.screen);
+        return;
+      }
+
+      // MESH path: reflect mute/unmute on the local upstream tracks so peers
+      // stop/resume receiving immediately (the REST call only updates
+      // server-side status).
       const local = localStreamRef.current;
       if (local) {
         if (typeof update.audio === "boolean") {
