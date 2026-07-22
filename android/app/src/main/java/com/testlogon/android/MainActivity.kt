@@ -240,10 +240,12 @@ class MainActivity : FragmentActivity() {
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        android.util.Log.d("TLPIP", "onUserLeaveHint videoActive=${pipController.videoActive} callActive=${pipController.callActive} pipSupported=${pipController.isPipSupported}")
         // Auto-enter PiP when leaving with EITHER a playing media3 video OR a connected VIDEO call
         // active (API 26-30 manual fallback; API 31+ the system auto-enters via setAutoEnterEnabled).
         if ((pipController.videoActive || pipController.callActive) && pipController.isPipSupported) {
-            pipController.enterPip()
+            val ok = pipController.enterPip()
+            android.util.Log.d("TLPIP", "onUserLeaveHint enterPip -> $ok")
         }
     }
 

@@ -556,6 +556,17 @@
             </intent-filter>
         </service>
 
+        <!-- CALL-PIP FIX: ongoing-call foreground service. Started for the full duration of an active
+             1:1 call (CallForegroundController observes CallManager) so backgrounding (Home) keeps the
+             process foreground-privileged: the WebRTC capture + heartbeat survive and the camera keeps
+             feeding the PiP float, instead of the OS throttling the network and ending the call with
+             reason "network". camera|microphone matches the media a video call holds (microphone-only is
+             requested at runtime for an audio call). -->
+        <service
+            android:name=".feature.call.service.CallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="camera|microphone" />
+
         <!-- AND-304: self-managed Telecom ConnectionService. exported=true + the
              BIND_TELECOM_CONNECTION_SERVICE permission so ONLY the OS Telecom subsystem can bind it. The
              OS instantiates it when TelecomCallController places/reports a self-managed call (API 26+); it

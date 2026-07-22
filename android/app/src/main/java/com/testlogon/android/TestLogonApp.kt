@@ -43,6 +43,11 @@ class TestLogonApp : Application(), ImageLoaderFactory {
     @Inject
     lateinit var callSignalingHub: com.testlogon.android.data.webrtc.CallSignalingHub
 
+    /** CALL-PIP FIX — keeps an ongoing-call foreground service alive for the call duration so a
+     *  backgrounded video call is not torn down (and can float in PiP with the camera still running). */
+    @Inject
+    lateinit var callForegroundController: com.testlogon.android.feature.call.service.CallForegroundController
+
     /** AND-145 — presence heartbeat + SSE presence collector wiring. */
     @Inject
     lateinit var presenceBootstrap: com.testlogon.android.data.messaging.presence.PresenceLifecycleBootstrap
@@ -91,6 +96,7 @@ class TestLogonApp : Application(), ImageLoaderFactory {
         // AND-145: start the foreground-bound presence heartbeat + SSE presence collector.
         runCatching { presenceBootstrap.start() }
         runCatching { callSignalingHub.start() }
+        runCatching { callForegroundController.start() }
 
         // AND-216: register the cart-abandonment tracker against the process lifecycle.
         runCatching { cartAbandonmentTracker.start() }

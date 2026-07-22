@@ -983,6 +983,9 @@
     <string name="call_accept_cd">Accept call from %1$s</string>
     <string name="call_decline_cd">Decline call from %1$s</string>
     <string name="call_unknown_caller">Unknown caller</string>
+    <string name="call_ongoing_title">Ongoing call</string>
+    <string name="call_ongoing">Tap to return to your call</string>
+    <string name="call_ongoing_with">In call with %1$s</string>
     <string name="call_kind_audio">Audio call</string>
     <string name="call_kind_video">Video call</string>
     <!-- AND-298 — in-call (1:1) controls + status -->
