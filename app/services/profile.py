@@ -343,6 +343,7 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
     ts = now_ts()
     address_changed = False
     discovery_changed = False
+    phone_changed = False
     for field in PROFILE_FIELDS:
         if current.get(field) != updated.get(field):
             audit_entries.append({
@@ -355,6 +356,8 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
                 address_changed = True
             if field in DISCOVERY_FIELDS:
                 discovery_changed = True
+            if field == "displayed_telephone_number":
+                phone_changed = True
 
     save_profile(user_sub, updated, audit_entries)
 
@@ -374,6 +377,16 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
     # profile update, and the import is lazy to avoid any circular-import risk.
     if discovery_changed:
         _reindex_user_for_discovery(user_sub)
+
+    # Contacts Feature 2: (re)index this user's phone hash when the displayed phone
+    # changes, so devices can privacy-safely match by phone. Best-effort — never
+    # rolls back the (already committed) profile write.
+    if phone_changed:
+        try:
+            from app.services.contact_match import index_user_phone
+            index_user_phone(user_sub, updated.get("displayed_telephone_number"))
+        except Exception:
+            pass
 
     # PTY-010: re-sync party EMAIL/PHONE contact mechs when those fields change
     # (best-effort, doubly flag-gated, never rolls back the profile write).

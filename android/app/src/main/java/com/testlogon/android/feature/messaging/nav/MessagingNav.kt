@@ -8,6 +8,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
 import com.testlogon.android.feature.messaging.contacts.ContactsRoute
+import com.testlogon.android.feature.contacts.ContactCardRoute
+import com.testlogon.android.feature.contacts.ContactCardViewModel
+import com.testlogon.android.feature.contacts.ContactsHubRoute
 import com.testlogon.android.feature.messaging.dm.StartDmRoute
 import com.testlogon.android.data.messaging.helpdesk.ClaimState
 import com.testlogon.android.feature.messaging.helpdesk.HelpdeskDashboardScreen
@@ -42,6 +45,16 @@ object MessagingRoutes {
 
     /** AND-153/AND-154 — contacts (people-search) screen; tapping a contact opens its DM thread. */
     const val CONTACTS = "messaging/contacts"
+
+    /** Feature 1 — the saved-contacts address book + "people you may know" hub. */
+    const val CONTACTS_HUB = "messaging/contacts/hub"
+
+    /** Feature 1 — the contact detail card for a single peer user id. */
+    const val ARG_CONTACT_USER_ID = ContactCardViewModel.ARG_USER_ID
+    const val CONTACT_CARD = "messaging/contacts/card/{$ARG_CONTACT_USER_ID}"
+
+    fun contactCard(userId: String): String =
+        "messaging/contacts/card/${Uri.encode(userId)}"
 
     /** AND-127 — start-DM entry: resolves a peer user id to a conversation, then opens the thread. */
     const val ARG_PEER_USER_ID = "peerUserId"
@@ -108,6 +121,9 @@ fun NavGraphBuilder.messagingGraph(navController: NavHostController) {
             onNewGroup = {
                 navController.navigate(MessagingRoutes.GROUP_CREATE) { launchSingleTop = true }
             },
+            onOpenContacts = {
+                navController.navigate(MessagingRoutes.CONTACTS_HUB) { launchSingleTop = true }
+            },
             onBack = { navController.popBackStack() },
         )
     }
@@ -127,6 +143,9 @@ fun NavGraphBuilder.messagingGraph(navController: NavHostController) {
         ThreadRoute(
             onBack = { navController.popBackStack() },
             onPlaceCall = { route -> navController.navigate(route) },
+            onViewContact = { peerUserId ->
+                navController.navigate(MessagingRoutes.contactCard(peerUserId)) { launchSingleTop = true }
+            },
             onOpenGroupDetails = {
                 if (conversationId.isNotBlank()) {
                     navController.navigate(MessagingRoutes.groupDetails(conversationId)) {
@@ -152,6 +171,35 @@ fun NavGraphBuilder.messagingGraph(navController: NavHostController) {
                 navController.navigate(MessagingRoutes.thread(conversationId)) {
                     launchSingleTop = true // FR-5: don't stack duplicate thread destinations
                 }
+            },
+            onBack = { navController.popBackStack() },
+        )
+    }
+    // Feature 1 — the saved-contacts address book + suggestions hub.
+    composable(MessagingRoutes.CONTACTS_HUB) {
+        ContactsHubRoute(
+            onOpenContactCard = { userId ->
+                navController.navigate(MessagingRoutes.contactCard(userId)) { launchSingleTop = true }
+            },
+            onBack = { navController.popBackStack() },
+        )
+    }
+    // Feature 1 — the contact detail card (message / call / follow / tip / save / profile).
+    composable(
+        route = MessagingRoutes.CONTACT_CARD,
+        arguments = listOf(
+            navArgument(MessagingRoutes.ARG_CONTACT_USER_ID) { type = NavType.StringType },
+        ),
+    ) {
+        ContactCardRoute(
+            onOpenThread = { conversationId ->
+                navController.navigate(MessagingRoutes.thread(conversationId)) { launchSingleTop = true }
+            },
+            onPlaceCall = { route -> navController.navigate(route) },
+            onOpenFullProfile = { userId ->
+                navController.navigate(
+                    com.testlogon.android.navigation.PublicProfileDest.build(userId),
+                ) { launchSingleTop = true }
             },
             onBack = { navController.popBackStack() },
         )

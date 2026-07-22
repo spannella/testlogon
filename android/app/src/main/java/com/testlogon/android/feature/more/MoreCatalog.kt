@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.AddBusiness
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Contacts
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Memory
@@ -117,6 +118,14 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_messages,
             icon = Icons.Outlined.ChatBubbleOutline,
             route = MoreRoutes.MESSAGES,
+            hub = MoreHub.INBOX,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "contacts",
+            labelRes = R.string.more_entry_contacts,
+            icon = Icons.Outlined.Contacts,
+            route = MoreRoutes.CONTACTS_HUB,
             hub = MoreHub.INBOX,
             section = MoreSection.ACCOUNT,
         ),

@@ -19,7 +19,6 @@ import com.testlogon.android.feature.call.domain.CallManager
 import com.testlogon.android.feature.call.domain.CallTiming
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
@@ -95,6 +94,13 @@ class InCallViewModelTest {
             CallStatsSampler(),
             recordingController(),
             com.testlogon.android.data.webrtc.CallMediaHolder(),
+            object : com.testlogon.android.core.webrtc.ui.CallPipSourceFactory {
+                override fun source(aspectWidth: Int, aspectHeight: Int) =
+                    com.testlogon.android.feature.player.CallPipSource(
+                        makeView = { throw UnsupportedOperationException() },
+                        releaseView = {},
+                    )
+            },
             com.testlogon.android.core.data.cache.Clock { 0L },
             SavedStateHandle(),
             com.testlogon.android.core.webrtc.ui.PlaceholderVideoRenderer,
@@ -149,36 +155,39 @@ class InCallViewModelTest {
     }
 
     @Test
-    fun connectedVideo_mapsLifecycleAndIsVideo_withDuration() = runTest {
-        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+    fun connectedVideo_mapsLifecycleAndIsVideo_withDuration() = runTest(mainDispatcher.dispatcher.scheduler) {
+        // A child of backgroundScope (so runTest cancels it before its end-of-test idle check, stopping the
+        // CallManager heartbeat while-loop + the uiState durationTicker), but UNCONFINED so the eager
+        // placeCall/onConnected + stateIn collector run inline and uiState.value is settled after runCurrent().
+        val scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
         val repo = CountingRepo()
         val callManager = manager(scope, repo)
         callManager.placeCall("conv", "peer", CallMode.VIDEO, "Alex")
         callManager.onConnected()
 
         val viewModel = vm(callManager)
-        val job = launch { viewModel.uiState.collect {} }
+        scope.launch { viewModel.uiState.collect {} }
         runCurrent()
 
         val state = viewModel.uiState.value
         assertEquals(InCallLifecycle.Connected, state.lifecycle)
         assertTrue(state.isVideoCall)
         assertTrue(state.durationLabel.isNotEmpty())
-
-        job.cancel()
-        scope.coroutineContext[Job]?.cancel()
     }
 
     @Test
-    fun endCall_isIdempotent_callsEndExactlyOnce() = runTest {
-        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+    fun endCall_isIdempotent_callsEndExactlyOnce() = runTest(mainDispatcher.dispatcher.scheduler) {
+        // A child of backgroundScope (so runTest cancels it before its end-of-test idle check, stopping the
+        // CallManager heartbeat while-loop + the uiState durationTicker), but UNCONFINED so the eager
+        // placeCall/onConnected + stateIn collector run inline and uiState.value is settled after runCurrent().
+        val scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
         val repo = CountingRepo()
         val callManager = manager(scope, repo)
         callManager.placeCall("conv", "peer", CallMode.AUDIO, "Alex")
         callManager.onConnected()
 
         val viewModel = vm(callManager)
-        val job = launch { viewModel.uiState.collect {} }
+        scope.launch { viewModel.uiState.collect {} }
         runCurrent()
 
         viewModel.onAction(InCallAction.EndCall)
@@ -186,61 +195,57 @@ class InCallViewModelTest {
         runCurrent()
 
         assertEquals(1, repo.endCount)
-
-        job.cancel()
-        scope.coroutineContext[Job]?.cancel()
     }
 
     @Test
-    fun toggleMic_flipsMicEnabled() = runTest {
-        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+    fun toggleMic_flipsMicEnabled() = runTest(mainDispatcher.dispatcher.scheduler) {
+        // A child of backgroundScope (so runTest cancels it before its end-of-test idle check, stopping the
+        // CallManager heartbeat while-loop + the uiState durationTicker), but UNCONFINED so the eager
+        // placeCall/onConnected + stateIn collector run inline and uiState.value is settled after runCurrent().
+        val scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
         val callManager = manager(scope, CountingRepo())
         callManager.placeCall("conv", "peer", CallMode.AUDIO, "Alex")
         callManager.onConnected()
 
         val viewModel = vm(callManager)
-        val job = launch { viewModel.uiState.collect {} }
+        scope.launch { viewModel.uiState.collect {} }
         runCurrent()
 
         assertTrue(viewModel.uiState.value.micEnabled)
         viewModel.onAction(InCallAction.ToggleMic)
         runCurrent()
         assertFalse(viewModel.uiState.value.micEnabled)
-
-        job.cancel()
-        scope.coroutineContext[Job]?.cancel()
     }
 
     @Test
-    fun toggleCamera_flipsInVideo_butNoOpInAudioOnly() = runTest {
-        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+    fun toggleCamera_flipsInVideo_butNoOpInAudioOnly() = runTest(mainDispatcher.dispatcher.scheduler) {
+        // A child of backgroundScope (so runTest cancels it before its end-of-test idle check, stopping the
+        // CallManager heartbeat while-loop + the uiState durationTicker), but UNCONFINED so the eager
+        // placeCall/onConnected + stateIn collector run inline and uiState.value is settled after runCurrent().
+        val scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
 
         // Video call: camera toggles.
         val videoManager = manager(scope, CountingRepo())
         videoManager.placeCall("conv", "peer", CallMode.VIDEO, "Alex")
         videoManager.onConnected()
         val videoVm = vm(videoManager)
-        val videoJob = launch { videoVm.uiState.collect {} }
+        scope.launch { videoVm.uiState.collect {} }
         runCurrent()
         assertTrue(videoVm.uiState.value.cameraEnabled)
         videoVm.onAction(InCallAction.ToggleCamera)
         runCurrent()
         assertFalse(videoVm.uiState.value.cameraEnabled)
-        videoJob.cancel()
 
         // Audio-only call (a separate manager instance, so the single-active guard does not interfere).
         val audioManager = manager(scope, CountingRepo())
         audioManager.placeCall("conv2", "peer2", CallMode.AUDIO, "Bo")
         audioManager.onConnected()
         val audioVm = vm(audioManager)
-        val audioJob = launch { audioVm.uiState.collect {} }
+        scope.launch { audioVm.uiState.collect {} }
         runCurrent()
         assertTrue(audioVm.uiState.value.cameraEnabled)
         audioVm.onAction(InCallAction.ToggleCamera)
         runCurrent()
         assertTrue(audioVm.uiState.value.cameraEnabled)
-        audioJob.cancel()
-
-        scope.coroutineContext[Job]?.cancel()
     }
 }

@@ -545,6 +545,19 @@ class Settings:
     # Contacts
     contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
 
+    # Contacts Feature 2 — privacy-safe device contact sync (hash -> user_id match index).
+    # APP_CONTACT_MATCH_SALT is a FIXED, NON-SECRET app pepper (see
+    # app/services/contact_match.py). It is shared byte-for-byte with the Android client
+    # (BuildConfig.CONTACT_MATCH_SALT); if you change it you MUST rebuild the app AND
+    # re-run the backfill, or existing hashes stop matching.
+    contact_match_salt: str = os.environ.get("APP_CONTACT_MATCH_SALT", "tl_contact_match_v1")
+    contact_match_index_table_name: str = os.environ.get("DDB_CONTACT_MATCH_INDEX_TABLE", "ContactMatchIndex")
+    # Rate limit for POST /ui/contacts/match (per-user token bucket).
+    contact_match_max_per_window: int = int(os.environ.get("CONTACT_MATCH_MAX_PER_WINDOW", "30"))
+    contact_match_window_seconds: int = int(os.environ.get("CONTACT_MATCH_WINDOW_SECONDS", "3600"))
+    # Max hashes accepted per field per request (email_hashes / phone_hashes).
+    contact_match_max_hashes: int = int(os.environ.get("CONTACT_MATCH_MAX_HASHES", "2000"))
+
     # Sales pipeline (OPP-001)
     sales_pipeline_enabled: bool = os.environ.get(
         "SALES_PIPELINE_ENABLED", "false"

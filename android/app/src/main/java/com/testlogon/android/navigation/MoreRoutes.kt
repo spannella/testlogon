@@ -25,6 +25,9 @@ object MoreRoutes {
     // AND-120..124: the messaging conversation list (inbox), first M3 two-user feature.
     val MESSAGES: String get() = MessagingRoutes.LIST
 
+    // Feature 1 — the saved-contacts address book + "people you may know" hub.
+    val CONTACTS_HUB: String get() = MessagingRoutes.CONTACTS_HUB
+
     // AND-160: mass messages (broadcast campaigns). Screen self-gates on the mass-send capability.
     val MASS_MESSAGES: String get() = MessagingRoutes.MASS_MESSAGES
 
@@ -504,6 +507,7 @@ object MoreRoutes {
         get() = setOf(
             PROFILE,
             MESSAGES,
+            CONTACTS_HUB,
             MASS_MESSAGES,
             CALL_HISTORY,
             BROADCASTS,

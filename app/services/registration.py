@@ -145,6 +145,16 @@ def create_user_record(
         requested_by=user_sub,
         ttl_epoch=pending_ttl if verification_required else None,
     )
+
+    # Contacts Feature 2 — index this user's email hash so devices can privacy-safely
+    # match their address book to this account. user_sub IS the normalized email.
+    # Best-effort: an index failure must never fail registration.
+    try:
+        from app.services.contact_match import index_user_email
+        index_user_email(user_sub)
+    except Exception:
+        pass
+
     return {"user_sub": user_sub}
 
 

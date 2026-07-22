@@ -3,10 +3,12 @@ package com.testlogon.android.feature.player
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.Context
+import android.content.Intent
 import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Rational
+import android.view.View
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.media3.common.Player
@@ -28,6 +30,27 @@ import androidx.media3.common.Player
  * Activity's onUserLeaveHint can AUTO-enter PiP (the recommended UX) when the user presses Home while
  * a video is up. A player marks itself active via [setVideoActive] while it is on-screen/playing.
  */
+/**
+ * CALL-PiP — descriptor for rendering a LIVE video call in the Picture-in-Picture window. Unlike the
+ * media3 branch (which hands the controller a [Player] and lets a PlayerView render it), a call renders
+ * native WebRTC frames, so the controller is given:
+ *  - [makeView]: a factory that builds the call's render [View] (a LiveKit SurfaceViewRenderer bound to
+ *    the remote participant's VideoTrack). Invoked by the Activity when it enters PiP and swaps content
+ *    to the call surface; the returned View is added to the PiP window. The factory owns init()/bind.
+ *  - [releaseView]: releases exactly the View produced by [makeView] (remove the track sink + SurfaceView
+ *    release) so returning to full screen / config-change / end does not leak the renderer or black-frame.
+ *  - [aspectWidth]/[aspectHeight]: the call video aspect for the PiP params (clamped by PipParamsLogic).
+ *
+ * The factory indirection keeps org.webrtc / LiveKit types OUT of this SDK-free controller: the call
+ * feature supplies the concrete SurfaceViewRenderer wiring.
+ */
+data class CallPipSource(
+    val makeView: (Context) -> View,
+    val releaseView: (View) -> Unit,
+    val aspectWidth: Int = 16,
+    val aspectHeight: Int = 9,
+)
+
 interface PipController {
 
     /** True if this device/OS supports PiP at all (API 26+ and FEATURE_PICTURE_IN_PICTURE). */
@@ -70,6 +93,30 @@ interface PipController {
      * elsewhere (e.g. the VOD detail controller) never call this, so the controller never releases them.
      */
     fun deferPipRelease(player: Player)
+
+    /**
+     * CALL-PiP — register the ACTIVE VIDEO CALL as the current PiP source. When set, PiP collapses the
+     * Activity to a live WebRTC [android.view.View] (a SurfaceViewRenderer bound to the remote track)
+     * instead of a media3 PlayerView. [source] carries a renderer-view factory + the remote-track binder
+     * + the call aspect; pass null to UNREGISTER the call (on end / audio-only / leaving the call screen).
+     * A registered call takes precedence over any media3 player for source selection. Guarded on
+     * video-call-connected by the caller (audio-only calls never register — nothing to show).
+     */
+    fun setCallSource(source: CallPipSource?)
+
+    /**
+     * CALL-PiP — mark whether the active call is currently PiP-eligible (a CONNECTED VIDEO call). When
+     * true, the Activity may auto-enter PiP on user-leave (Home) exactly like [setVideoActive] does for
+     * media3. False on audio-only / not-yet-connected / ended.
+     */
+    fun setCallActive(active: Boolean)
+
+    /**
+     * CALL-PiP — request the hosting Activity LEAVE Picture-in-Picture and return to full screen. Used
+     * when a call ends while floating in PiP so the user is not stranded with a dead/last-frame window.
+     * No-op when not in PiP / unsupported. Best-effort.
+     */
+    fun exitPip()
 }
 
 /**
@@ -83,6 +130,9 @@ object NoOpPipController : PipController {
     override fun setVideoActive(active: Boolean, player: Player?, aspectWidth: Int, aspectHeight: Int) { /* no-op */ }
     override fun isPipRetained(player: Player): Boolean = false
     override fun deferPipRelease(player: Player) { /* no-op */ }
+    override fun setCallSource(source: CallPipSource?) { /* no-op */ }
+    override fun setCallActive(active: Boolean) { /* no-op */ }
+    override fun exitPip() { /* no-op */ }
 }
 
 /** CompositionLocal carrying the active [PipController] (provided by MainActivity). */
@@ -132,6 +182,18 @@ class ActivityPipController(private val activity: Activity) : PipController {
     var activeAspectH: Int = 9
         private set
 
+    /**
+     * CALL-PiP — the active video call's PiP descriptor (or null). Observable so the PiP-mode composable
+     * recomposes to (un)mount the call render surface when a call registers/ends. Read by MainActivity
+     * while in PiP to build the SurfaceViewRenderer branch.
+     */
+    val callSourceState = mutableStateOf<CallPipSource?>(null)
+
+    /** CALL-PiP — true when a CONNECTED VIDEO call is registered (arms call auto-enter). */
+    @Volatile
+    var callActive: Boolean = false
+        private set
+
     override val isPipSupported: Boolean
         get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             activity.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
@@ -158,6 +220,7 @@ class ActivityPipController(private val activity: Activity) : PipController {
         activeAspectW = aspectWidth
         activeAspectH = aspectHeight
         videoActive = true
+        refreshAutoEnterParams()
         return enterPip(aspectWidth, aspectHeight)
     }
 
@@ -178,6 +241,42 @@ class ActivityPipController(private val activity: Activity) : PipController {
             // different player that became active in between).
             if (player == null || activePlayerState.value === player) {
                 activePlayerState.value = null
+            }
+        }
+        // Arm/disarm API 31+ auto-enter to match the current playing state (no-op below S).
+        refreshAutoEnterParams()
+    }
+
+    override fun setCallSource(source: CallPipSource?) {
+        callSourceState.value = source
+        if (source != null) {
+            activeAspectW = source.aspectWidth
+            activeAspectH = source.aspectHeight
+        }
+        refreshAutoEnterParams()
+    }
+
+    override fun setCallActive(active: Boolean) {
+        callActive = active
+        if (!active) {
+            // Leaving eligibility (call ended / audio-only / left the screen): drop the render source so a
+            // subsequent forced PiP does not show a stale call surface. Never clears mid-PiP-entry latch
+            // used by the media3 path (call source is independent of pipPlayerState).
+            if (!enteringPip) callSourceState.value = null
+        }
+        refreshAutoEnterParams()
+    }
+
+    override fun exitPip() {
+        if (!isPipSupported) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        // Standard way to leave PiP programmatically: bring the Activity's own task back to the front via
+        // a singleTask launch intent. The system collapses the PiP window and restores full-screen.
+        runCatching {
+            val intent = activity.packageManager.getLaunchIntentForPackage(activity.packageName)
+            if (intent != null) {
+                intent.flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK
+                activity.startActivity(intent)
             }
         }
     }
@@ -209,16 +308,47 @@ class ActivityPipController(private val activity: Activity) : PipController {
     }
 
     private fun buildParams(aspectWidth: Int, aspectHeight: Int): PictureInPictureParams {
-        // Android rejects aspect ratios outside ~[1:2.39, 2.39:1]; clamp to a safe landscape default.
-        val w = aspectWidth.coerceAtLeast(1)
-        val h = aspectHeight.coerceAtLeast(1)
-        val ratio = w.toFloat() / h.toFloat()
-        val safe = when {
-            ratio > 2.39f -> Rational(239, 100)
-            ratio < 1f / 2.39f -> Rational(100, 239)
-            else -> Rational(w, h)
+        // Prefer the active player's REAL reported video size so the floating window matches the actual
+        // stream (live HLS broadcast, VOD, inline clip); fall back to the caller-supplied aspect. Clamp
+        // to the Android-permitted ~[1:2.39, 2.39:1] window. All pure -> PipParamsLogic (JVM-tested).
+        val call = callSourceState.value
+        val size = runCatching { activePlayerState.value?.videoSize }.getOrNull()
+        val (num, den) = if (call != null) {
+            // CALL-PiP — a live call has no media3 videoSize; use the call's reported aspect (clamped).
+            PipParamsLogic.resolveAspect(0, 0, call.aspectWidth, call.aspectHeight)
+        } else {
+            PipParamsLogic.resolveAspect(
+                videoWidth = size?.width ?: 0,
+                videoHeight = size?.height ?: 0,
+                fallbackW = aspectWidth,
+                fallbackH = aspectHeight,
+            )
         }
-        return PictureInPictureParams.Builder().setAspectRatio(safe).build()
+        val builder = PictureInPictureParams.Builder().setAspectRatio(Rational(num, den))
+        // AND-287 — API 31+ (S) auto-enter + seamless resize for a smoother, tap-free float on Home.
+        // On 26-30 we keep the onUserLeaveHint manual-enter fallback (see MainActivity.onUserLeaveHint).
+        if (PipParamsLogic.supportsAutoEnter(Build.VERSION.SDK_INT) &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        ) {
+            builder.setAutoEnterEnabled(videoActive || callActive)
+            builder.setSeamlessResizeEnabled(true)
+        }
+        return builder.build()
+    }
+
+    /**
+     * AND-287 — proactively push the current [PictureInPictureParams] to the system so API 31+
+     * setAutoEnterEnabled is armed (or disarmed) as the active video / aspect changes, without waiting
+     * for an explicit enterPip call. No-op below S (manual onUserLeaveHint path) or when PiP is
+     * unsupported. Best-effort; never throws into the caller.
+     */
+    fun refreshAutoEnterParams() {
+        if (!isPipSupported) return
+        if (!PipParamsLogic.supportsAutoEnter(Build.VERSION.SDK_INT)) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        runCatching {
+            activity.setPictureInPictureParams(buildParams(activeAspectW, activeAspectH))
+        }
     }
 }
 
