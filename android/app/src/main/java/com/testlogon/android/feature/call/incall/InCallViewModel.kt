@@ -48,6 +48,7 @@ class InCallViewModel @Inject constructor(
     private val statsSampler: CallStatsSampler,
     private val recordingController: RecordingController,
     private val callMediaHolder: com.testlogon.android.data.webrtc.CallMediaHolder,
+    private val callPipSourceFactory: com.testlogon.android.core.webrtc.ui.CallPipSourceFactory,
     private val clock: com.testlogon.android.core.data.cache.Clock,
     private val savedState: SavedStateHandle,
     // The real native-WebRTC renderer (RealVideoRenderer) bound in WebRtcApiModule; the screen passes it
@@ -203,6 +204,16 @@ class InCallViewModel @Inject constructor(
     }
 
     private fun isVideoCall(): Boolean = callManager.state.value.call?.mode == CallMode.VIDEO
+
+    /**
+     * CALL-PiP — build the [com.testlogon.android.feature.player.CallPipSource] for the active video call.
+     * The renderer factory (in [callPipRenderer]) hosts a SurfaceViewRenderer bound to the live remote
+     * track; the ConnectionService owns audio + the peer connection, so this View is a pure display sink.
+     * Registered by the in-call screen while the call is a CONNECTED VIDEO call. 16:9 default aspect (a
+     * real negotiated size can be threaded through once the remote track reports one).
+     */
+    fun buildCallPipSource(): com.testlogon.android.feature.player.CallPipSource =
+        callPipSourceFactory.source()
 
     private fun hasMultipleCameras(): Boolean = true
 

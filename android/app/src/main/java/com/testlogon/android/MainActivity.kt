@@ -38,6 +38,7 @@ import com.testlogon.android.testseam.TestHooks
 import androidx.compose.runtime.mutableStateOf
 import com.testlogon.android.feature.player.ActivityPipController
 import com.testlogon.android.feature.player.LocalPipController
+import com.testlogon.android.feature.player.PipSourceLogic
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.graphics.Color
@@ -165,8 +166,27 @@ class MainActivity : FragmentActivity() {
                     // the floating window shows the VIDEO (not the messaging thread / news feed behind
                     // an inline player). This mirrors the VOD detail player, whose PlayerView already
                     // fills the window. Outside PiP we render the normal app shell.
+                    // CALL-PiP — pick the PiP SOURCE: a live video call (native WebRTC SurfaceViewRenderer)
+                    // takes precedence over a media3 player, else the media3 player branch (unchanged), else
+                    // the normal app shell. Selection is the pure PipSourceLogic so it is unit-tested.
                     val activePlayer = pipController.pipPlayerState.value
-                    if (inPipMode.value && activePlayer != null) {
+                    val callSource = pipController.callSourceState.value
+                    val source = PipSourceLogic.selectSource(
+                        callActive = callSource != null,
+                        media3Active = activePlayer != null,
+                    )
+                    if (inPipMode.value && source == PipSourceLogic.PipSourceKind.CALL && callSource != null) {
+                        // CALL branch: collapse to the remote participant's live WebRTC surface. The
+                        // ConnectionService keeps audio + the peer connection alive; this View is only a
+                        // display sink, built by the call feature's factory and released cleanly on swap-out.
+                        Box(Modifier.fillMaxSize().background(Color.Black)) {
+                            AndroidView(
+                                modifier = Modifier.fillMaxSize(),
+                                factory = { ctx -> callSource.makeView(ctx) },
+                                onRelease = { view -> callSource.releaseView(view) },
+                            )
+                        }
+                    } else if (inPipMode.value && source == PipSourceLogic.PipSourceKind.MEDIA3 && activePlayer != null) {
                         Box(Modifier.fillMaxSize().background(Color.Black)) {
                             AndroidView(
                                 modifier = Modifier.fillMaxSize(),
@@ -220,7 +240,9 @@ class MainActivity : FragmentActivity() {
      */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (pipController.videoActive && pipController.isPipSupported) {
+        // Auto-enter PiP when leaving with EITHER a playing media3 video OR a connected VIDEO call
+        // active (API 26-30 manual fallback; API 31+ the system auto-enters via setAutoEnterEnabled).
+        if ((pipController.videoActive || pipController.callActive) && pipController.isPipSupported) {
             pipController.enterPip()
         }
     }

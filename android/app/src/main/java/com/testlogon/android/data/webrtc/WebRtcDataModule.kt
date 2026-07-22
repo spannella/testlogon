@@ -54,6 +54,13 @@ object WebRtcApiModule {
 @InstallIn(SingletonComponent::class)
 abstract class WebRtcDataModule {
 
+    /** CALL-PiP — the live-call PiP source factory is the real [CallPipRenderer]. */
+    @Binds
+    abstract fun bindCallPipSourceFactory(
+        impl: com.testlogon.android.core.webrtc.ui.CallPipRenderer,
+    ): com.testlogon.android.core.webrtc.ui.CallPipSourceFactory
+
+
     // ── Implementable (real backend endpoints) ──────────────────────────────────────────────────
 
     @Binds

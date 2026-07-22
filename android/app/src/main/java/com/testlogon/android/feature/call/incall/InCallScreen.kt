@@ -45,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +82,8 @@ import com.testlogon.android.feature.messaging.thread.ThreadRoute
 import com.testlogon.android.feature.messaging.thread.ThreadViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.feature.player.LocalPipController
+import com.testlogon.android.feature.player.PipSourceLogic
 import com.testlogon.android.core.webrtc.ui.LocalVideoPreview
 import com.testlogon.android.core.webrtc.ui.RemoteVideoView
 import com.testlogon.android.core.webrtc.ui.VideoRenderer
@@ -111,8 +114,38 @@ fun InCallRoute(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val recording by viewModel.recordingState.collectAsStateWithLifecycle()
     val chatState by chatViewModel.state.collectAsStateWithLifecycle()
+    // CALL-PiP — resolved up front so the terminal effect can also leave PiP on end.
+    val pipController = LocalPipController.current
     LaunchedEffect(viewModel) {
-        viewModel.callEnded.collect { onCallEnded() }
+        viewModel.callEnded.collect {
+            // If the call ends while floating in PiP, leave PiP so the user returns to the app cleanly.
+            pipController.exitPip()
+            onCallEnded()
+        }
+    }
+
+    // CALL-PiP — register the ACTIVE VIDEO CALL as the PiP source so leaving the app (Home) floats the
+    // live remote video FaceTime-style. Guarded on a CONNECTED VIDEO call (audio-only / not-yet-connected
+    // never register — nothing to show, so PiP stays a no-op and the call keeps running in the
+    // ConnectionService). The source is unregistered when the call ends or the screen leaves composition.
+    val callPipEligible = PipSourceLogic.isCallPipEligible(
+        isVideoCall = state.isVideoCall,
+        isConnected = state.lifecycle == InCallLifecycle.Connected,
+    )
+    DisposableEffect(callPipEligible) {
+        if (callPipEligible) {
+            pipController.setCallSource(viewModel.buildCallPipSource())
+            pipController.setCallActive(true)
+        } else {
+            pipController.setCallActive(false)
+            pipController.setCallSource(null)
+        }
+        onDispose {
+            // Leaving the in-call screen (nav pop / process teardown) must always drop the call source so
+            // a later media3 PiP is not shadowed by a stale call surface.
+            pipController.setCallActive(false)
+            pipController.setCallSource(null)
+        }
     }
 
     // AND-302: RECORD_AUDIO is requested just-in-time on the requester side; only kick off the record
