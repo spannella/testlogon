@@ -17,6 +17,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedVideo, cppSeedPaymentMethod } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -82,6 +83,19 @@ function seedVideo(opts: {
   thumbnailUrl?: string;
   durationSeconds?: number;
 }): void {
+  if (usingCpp()) {
+    cppSeedVideo({
+      videoId: opts.videoId,
+      ownerSub: opts.ownerUserId,
+      title: opts.title,
+      status: opts.status,
+      visibility: opts.visibility,
+      hlsManifestUrl: opts.hlsManifestUrl,
+      thumbnailUrl: opts.thumbnailUrl,
+      durationSeconds: opts.durationSeconds,
+    });
+    return;
+  }
   const status = opts.status ?? "published";
   const visibility = opts.visibility ?? "public";
   const createdAt = Math.floor(Date.now() / 1000);
@@ -153,6 +167,10 @@ print('ok')
 }
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')

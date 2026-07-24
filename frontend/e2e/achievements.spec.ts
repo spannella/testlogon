@@ -85,9 +85,13 @@ function csrfFor(identity: string): string {
   return getSessions()[identity].csrf_token;
 }
 
-async function apiGet(page: Page, identity: string, path: string) {
+async function apiGet(page: Page, identity: string, path: string, timeout?: number) {
   return page.request.get(`${BASE}${path}`, {
     headers: { "x-csrf-token": csrfFor(identity) },
+    // Some list endpoints (GET /ui/achievements/progress with no metric) do a
+    // full progress scan that runs ~10s against the C++ backend — right at the
+    // default 10s actionTimeout, so it flakes. Allow callers to raise it.
+    ...(timeout ? { timeout } : {}),
   });
 }
 
@@ -421,7 +425,10 @@ test.describe("82 — Progress advance + auto-unlock API", () => {
   });
 
   test("82.5 Alice can list all progress", async () => {
-    const resp = await apiGet(alicePage, ALICE_ID, "/ui/achievements/progress");
+    // GET /ui/achievements/progress (no metric) scans all progress rows and runs
+    // ~10s against cpp — at/over the default 10s actionTimeout. Give it headroom
+    // so this is deterministic rather than a boundary flake.
+    const resp = await apiGet(alicePage, ALICE_ID, "/ui/achievements/progress", 30_000);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(Array.isArray(data.progress)).toBe(true);

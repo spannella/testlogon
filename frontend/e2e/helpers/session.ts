@@ -18,7 +18,8 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import type { Page } from "@playwright/test";
+import type { Page, APIRequestContext } from "@playwright/test";
+import { request as pwRequest } from "@playwright/test";
 
 // Repo root, derived from the Playwright run cwd (always frontend/) so the
 // session seeders resolve in CI (/home/runner/...) and any host, not just the
@@ -67,6 +68,9 @@ const CPP_IDENTITY: Record<string, { email: string; file: string }> = {
   admin: { email: "e2e_admin@test.local", file: "admin" },
   root: { email: "e2e_admin@test.local", file: "admin" },
   charlie_admin: { email: "e2e_admin@test.local", file: "admin" },
+  // charlie is a distinct cpp fixture (role=admin, separate sub) used by the
+  // catalog/subscription scoping tests as a non-subscriber / isolated creator.
+  charlie: { email: "e2e_charlie@test.local", file: "charlie" },
 };
 
 /** Synchronous real cpp login via curl (loadSessions is sync/execSync-based). */
@@ -164,6 +168,13 @@ function loadCppSessions(): Record<string, SessionData> {
   for (const [key, { email }] of Object.entries(CPP_IDENTITY)) {
     if (out[key] && !out[email]) out[email] = out[key];
   }
+  // Sub-keyed aliases: cpp is SUB-based, so specs that use resolveIdentityId()
+  // to swap email→sub for URL paths / assertions then still need getSessions()
+  // to resolve that same value back to a session. Register each identity under
+  // its user_sub too so `getSessions()[<sub>]` works uniformly.
+  for (const sess of Object.values({ ...out })) {
+    if (sess.user_sub && !out[sess.user_sub]) out[sess.user_sub] = sess;
+  }
   if (Object.keys(out).length === 0) {
     throw new Error(
       "loadSessions(cpp): every fixture login + fallback failed. Is cpp reachable at " +
@@ -223,4 +234,73 @@ export function getSession(pageOrKey: Page | string): SessionData {
   const s = _pageSession.get(pageOrKey);
   if (!s) throw new Error("getSession(page): call injectAuth(page, key) before getSession(page)");
   return s;
+}
+
+// ── cpp identity + CSRF + unauth helpers (auth-harness track) ────────────────
+
+/**
+ * True when the suite targets the C++ backend (E2E_USE_CPP=1, or a non-Python
+ * E2E_API_BASE). Exported so specs can gate cpp-only behavior (sub-vs-email
+ * identity, cookie+CSRF auth) without duplicating the detection logic. The
+ * default Python path always returns false, leaving those specs unchanged.
+ */
+export function isCpp(): boolean {
+  return usingCpp();
+}
+
+/**
+ * Resolve an identity key/email to the id the backend actually reports.
+ *
+ * The Python backend keys creators/subscribers by their EMAIL, so specs were
+ * written to assert `creator_id === "e2e_alice@test.local"` and to send
+ * `X-User-Id: <email>`. The cpp backend is SUB-based: it stores and returns the
+ * JWT `sub` (e.g. alice -> "7QXYV1Ot5A2VOph9"), never the email. When targeting
+ * cpp we therefore map the identity to its real logged-in sub (from the live
+ * session), preserving the test's intent ("the creator is alice") while
+ * comparing against what cpp genuinely returns. On the Python path the email is
+ * returned verbatim, so existing runs are byte-for-byte unchanged.
+ */
+export function resolveIdentityId(keyOrEmail: string): string {
+  if (!usingCpp()) return keyOrEmail;
+  const sessions = loadSessions();
+  const sess = sessions[keyOrEmail];
+  if (sess?.user_sub) return sess.user_sub;
+  // keyOrEmail may be a short key (e.g. "alice") whose session is registered
+  // only under the email alias, or vice-versa. Fall back to a scan by matching
+  // the CPP_IDENTITY email for the given short key.
+  const ident = CPP_IDENTITY[keyOrEmail as keyof typeof CPP_IDENTITY];
+  if (ident) {
+    const viaEmail = sessions[ident.email];
+    if (viaEmail?.user_sub) return viaEmail.user_sub;
+  }
+  return keyOrEmail;
+}
+
+/** Return the ui_csrf token for an identity key/email (from its live session). */
+export function csrfFor(keyOrEmail: string): string {
+  const sess = loadSessions()[keyOrEmail];
+  return sess?.csrf_token ?? "";
+}
+
+/**
+ * Create a genuinely UNAUTHENTICATED APIRequestContext.
+ *
+ * In the cpp Playwright project every test inherits `storageState: admin` at
+ * the project level, so the built-in `request` fixture is silently admin-
+ * authenticated — which makes "unauthenticated -> 401/403" assertions observe a
+ * 200 and fail spuriously. This context is constructed with NO storageState and
+ * NO cookies, so cpp's correct 401/403 is actually exercised. `ignoreHTTPSErrors`
+ * mirrors the project config so the self-signed cpp cert is accepted when a spec
+ * points straight at :8443. Caller must `await ctx.dispose()`.
+ */
+export async function unauthContext(baseURL?: string): Promise<APIRequestContext> {
+  return pwRequest.newContext({
+    baseURL: baseURL ?? process.env.E2E_API_BASE ?? undefined,
+    ignoreHTTPSErrors: true,
+    // Force an explicitly EMPTY jar. Omitting storageState is not always enough:
+    // if the config's project-level storageState leaks in, cpp sees a session
+    // cookie and returns 403 (missing-CSRF) instead of the intended 401. An
+    // explicit empty state guarantees a truly anonymous request.
+    storageState: { cookies: [], origins: [] },
+  });
 }
