@@ -350,5 +350,7 @@ class AuthRepositoryImpl @Inject constructor(
         is ApiResult.NetworkError -> this
     }
 
-    private fun MeResp.toDomain() = User(userSub = userSub, sessionId = sessionId, ip = ip)
+    // cpp GET /ui/me omits `ip` (MeResp.ip is now nullable, A1b DTO-drift fix); the domain User.ip
+    // is non-null, so coalesce a missing/unknown IP to "". Python still supplies the real value.
+    private fun MeResp.toDomain() = User(userSub = userSub, sessionId = sessionId, ip = ip ?: "")
 }

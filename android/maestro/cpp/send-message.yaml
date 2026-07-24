@@ -1,0 +1,88 @@
+# Maestro black-box flow: sign in against cpp, open the Inbox, open the first
+# existing conversation and send a message through the REAL thread composer.
+# Best-effort — if the seeded account has no conversation yet, the flow still
+# proves we reached the Inbox (conv_list_screen) authenticated.
+#
+# Backend: cpp messaging send route; thread input testTag thread_input, send
+# button thread_send. CSRF auto-attached from the ui_csrf cookie.
+#
+# FLAG_SECURE note: rely on view-tree assertions (testTag), not screenshots.
+#
+# Run: maestro --device <serial> test maestro/cpp/send-message.yaml
+#      (see login.yaml header for the required env: PATH / TERM / JAVA_TOOL_OPTIONS)
+appId: com.testlogon.android
+---
+- stopApp
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: "login_screen"
+
+# Point at cpp.
+- tapOn:
+    id: "login_server_url"
+- assertVisible:
+    id: "server_url_screen"
+- tapOn:
+    id: "server_url_input"
+- tapOn:
+    point: "94%,22%"     # cursor to END of the pre-filled default URL (see login.yaml note)
+- eraseText:
+    charactersToErase: 80
+- inputText: "https://192.168.0.82:8443"
+- tapOn:
+    id: "server_url_save"
+- assertVisible:
+    text: ".*Current: https://192.168.0.82:8443.*"
+- tapOn:
+    id: "server_url_back"
+
+# Sign in as bob.
+- tapOn:
+    id: "login_email"
+- inputText: "e2e_bob@test.local"
+- tapOn:
+    id: "login_password"
+- inputText: "Passw0rd!123"
+- hideKeyboard
+- tapOn:
+    id: "login_submit"
+- extendedWaitUntil:
+    visible:
+      id: "tab_home"
+    timeout: 20000
+
+# --- Open the Inbox -------------------------------------------------------
+- tapOn:
+    id: "tab_inbox"
+- extendedWaitUntil:
+    visible:
+      id: "conv_list_screen"
+    timeout: 20000
+
+# --- If a conversation exists, open it and send a message -----------------
+# conv_row is the tappable conversation row. Guarded so the flow does not fail
+# the whole run when the account has no threads yet.
+- runFlow:
+    when:
+      visible:
+        id: "conv_row"
+    commands:
+      - tapOn:
+          id: "conv_row"
+          index: 0
+      - extendedWaitUntil:
+          visible:
+            id: "thread_screen"
+          timeout: 15000
+      - tapOn:
+          id: "thread_input"
+      - inputText: "e2e cpp maestro msg ${maestroTimestamp}"
+      - hideKeyboard
+      - tapOn:
+          id: "thread_send"
+      # Our just-sent bubble renders as an own-message in the thread.
+      - extendedWaitUntil:
+          visible:
+            id: "thread_message_own"
+          timeout: 15000
