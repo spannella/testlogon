@@ -42,6 +42,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -49,7 +51,6 @@ import * as path from "path";
 // (/home/runner/...) and on any host, not just the dev box.
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const BASE   = "http://localhost:3000";
-const API    = "http://localhost:8000";
 const PYTHON = `${REPO_ROOT}/.venv/bin/python3`;
 
 const ALICE_ID = "e2e_alice@test.local";
@@ -85,11 +86,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      `python3 ${REPO_ROOT}/e2e_session_setup.py`,
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -116,14 +113,14 @@ type Browser = import("@playwright/test").Browser;
 async function apiPost(req: APIRequestContext, path: string, body: object, userId: string) {
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
   });
 }
 
 /** GET as any user with dev-mode Bearer token (messaging endpoints only). */
 async function apiGet(req: APIRequestContext, path: string, userId: string) {
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
   });
 }
 

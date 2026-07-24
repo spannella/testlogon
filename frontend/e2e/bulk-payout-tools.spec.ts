@@ -19,6 +19,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { execFileSync } from "child_process";
+import { loadSessions } from "./helpers/session";
 
 // ESM-safe __dirname (this spec runs under Playwright's ESM loader).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,13 +43,7 @@ interface SessionRec {
 // into the ui_session/ui_csrf/ui_access_token shape this spec expects.
 let SESSIONS: Record<string, SessionRec> = {};
 try {
-  const raw = JSON.parse(
-    execFileSync("python3", [REPO_ROOT + "/e2e_admin_session_setup.py"], {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-      encoding: "utf-8",
-    }),
-  ) as Record<string, { csrf_token: string; cookies: Array<{ name: string; value: string }> }>;
+  const raw = loadSessions() as Record<string, { csrf_token: string; cookies: Array<{ name: string; value: string }> }>;
   for (const key of Object.keys(raw)) {
     const s = raw[key];
     const ck: Record<string, string> = {};

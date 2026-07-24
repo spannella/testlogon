@@ -19,6 +19,8 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // Load backend env (.env.local) so child python processes get the real
@@ -44,7 +46,6 @@ function backendEnv(): NodeJS.ProcessEnv {
 }
 const PYENV = backendEnv();
 
-const API = "http://localhost:8000";
 const BASE = "/v1/admin/fraud";
 // UI base: override with FRAUD_UI_BASE when the worktree dev server runs on a
 // non-default port (the shared Vite on :3000 may belong to another worktree).
@@ -70,11 +71,7 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }

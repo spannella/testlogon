@@ -16,7 +16,6 @@ import { test, expect, type Page } from "@playwright/test";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const TS = Date.now();
 
 interface SessionData {
@@ -36,13 +35,10 @@ interface SessionData {
 // short name (alice/bob/root) to stdout.
 import { execSync as _execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
-const sessions = JSON.parse(
-  _execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-    cwd: REPO_ROOT,
-    timeout: 30_000,
-  }).toString(),
-) as Record<string, SessionData>;
+const sessions = loadSessions() as Record<string, SessionData>;
 
 const alice = sessions.alice as SessionData;
 const bob = sessions.bob as SessionData;

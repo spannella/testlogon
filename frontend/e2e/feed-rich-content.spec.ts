@@ -4,9 +4,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 
@@ -31,8 +32,7 @@ function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const repoRoot = process.cwd().includes("/frontend") ? path.resolve(process.cwd(), "..") : process.cwd();
     const setupScript = path.join(repoRoot, "e2e_session_setup.py");
-    const raw = execSync(`python3 ${setupScript}`, { cwd: repoRoot, timeout: 30_000 }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }

@@ -19,6 +19,7 @@ import { execSync } from "child_process";
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const GOOGLE_PREFIX = "/ui/calendar/integrations/google";
@@ -43,11 +44,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 e2e_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }

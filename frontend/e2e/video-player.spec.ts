@@ -58,11 +58,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -85,6 +81,7 @@ async function injectAuth(page: Page, userId: string) {
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
 function ddbPut(tableName: string, item: Record<string, unknown>) {

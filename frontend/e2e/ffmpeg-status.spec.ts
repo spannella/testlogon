@@ -11,8 +11,8 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { API } from "./cpp.config";
 
-const API = "http://localhost:8000";
 
 test.describe("Section 117: FFmpeg Health Check", () => {
   test("117.1 GET /internal/ffmpeg-status returns 200", async ({ request }) => {

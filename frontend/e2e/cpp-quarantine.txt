@@ -1,0 +1,85 @@
+# cpp quarantine (W3-full, 2026-07-23) — spec -> category -> reason. Verified vs LIVE cpp :8443.
+# Categories: cpp_route_missing | flag_disabled | seed_gap | behavioral_diff | python_only
+# 61-spec stratified sample: 359 pass / 666 fail / 21 skip / 268 did-not-run. 2 spec-green (addresses, appeals).
+
+# ---- cpp_route_missing (route 404 in cpp; dominant Received:404) ----
+admin-roles.spec.ts -> cpp_route_missing -> 26x 404: /admin/roles /api/admin/roles /roles all 404 in cpp (RBAC router unported)
+ads-accounts-campaigns.spec.ts -> cpp_route_missing -> 15x 404 on ads account/campaign routes
+ads-analytics.spec.ts -> cpp_route_missing -> 14x 404 on ads analytics routes
+vod-purchase.spec.ts -> cpp_route_missing -> 13x 404 on vod purchase routes
+tax-form-1099.spec.ts -> cpp_route_missing -> 13x 404 on 1099 tax-doc routes
+vod-purchase-tiers.spec.ts -> cpp_route_missing -> 10x 404 on vod tier routes
+broadcast.spec.ts -> cpp_route_missing -> 11x 404 (+5x 401) broadcast routes unported/auth
+repost.spec.ts -> cpp_route_missing -> 10x 404 on repost routes
+ads-billing.spec.ts -> cpp_route_missing -> 8x 404 on ads billing routes
+syndicate-feed.spec.ts -> cpp_route_missing -> 8x 404 on syndicate feed routes
+order-lifecycle.spec.ts -> cpp_route_missing -> 8x 404 on order lifecycle routes
+video-comments.spec.ts -> cpp_route_missing -> 8x 404 on video comment routes
+payment-disputes.spec.ts -> cpp_route_missing -> 7x 404 on dispute routes
+kyc.spec.ts -> cpp_route_missing -> 7x 404 (+6x 400) kyc routes/seed
+video-listing.spec.ts -> cpp_route_missing -> 3x 404 on video listing routes
+group-feed.spec.ts -> cpp_route_missing -> 1x 404 group feed route
+moderation-reports.spec.ts -> cpp_route_missing -> 2x 404 moderation report routes
+subscription-gated-vod.spec.ts -> cpp_route_missing -> 1x 404 gated-vod route
+
+# ---- behavioral_diff (cpp needs X-User-Id / cookie-sub, rejects Bearer-email; or status/shape differs) ----
+alerts.spec.ts -> behavioral_diff -> 16x 401: cpp rejects Bearer-email, wants cookie-sub / X-User-Id
+billing-refunds-disputes.spec.ts -> behavioral_diff -> 8x 401 (+4x 404) billing auth header
+admin-subscription-tiers.spec.ts -> behavioral_diff -> 8x 401: /api/billing/subscriptions needs X-User-Id (confirmed 401->200 w/ header)
+search-messaging.spec.ts -> behavioral_diff -> 7x 401: cpp resolves participants by sub not email
+tip-leaderboard.spec.ts -> behavioral_diff -> 5x 401 tip auth header
+account-deletion.spec.ts -> behavioral_diff -> 5x 401 (+2x 404) deletion auth
+affiliate-links.spec.ts -> behavioral_diff -> 3x 401 (+4x 404) affiliate auth/routes
+auth-mfa-devtools.spec.ts -> behavioral_diff -> 3x 401 mfa devtools header
+ad-serving.spec.ts -> behavioral_diff -> 2x 401 ad-serve auth
+voice-messages.spec.ts -> behavioral_diff -> 1x 401 (+1x 404) voice msg auth
+admin-moderation.spec.ts -> behavioral_diff -> UI/state assert differs vs Python
+
+# ---- seed_gap (POST W3.x LEVER-1 SEEDING, 2026-07-23) ----
+# e2e/seed_fixtures/run_all.py now composes identity.py + money.py + feed-social.py
+# on top of seed_cpp.py, holding domain fixtures in cpp's OWN tlc_* tables keyed by
+# SUB. Re-ran EXACTLY the 30 seed_gap specs vs live cpp (full run: 219 pass / 361 fail
+# / 21 skip / 150 did-not-run of 751). Authoritative self-contained re-run of the 19
+# MODULE-COVERED specs (JSON reporter): 136 pass / 224 fail / 39 skip. Baseline: these
+# specs were ~all-failing (empty-UI locator timeouts). NONE are 100% spec-green yet:
+# each has residual fails that RECLASSIFY off seed_gap (cpp behavior/route, not seed).
+# Format: spec -> NEW-category -> before(~0 pass) -> after(pass in covered JSON run).
+#
+# [MODULE-COVERED -- seeding produced a real lift]
+feed.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 17 pass: seeded posts/comments/poll now render; residual 25 fail = feed UI/route behavioral_diff
+achievements.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 17 pass: defs seeded (idempotent 409 on re-run); residual 15 = achievement award/UI behavioral_diff
+newsfeed-polls.spec.ts -> seed_gap(NEAR-GREEN) -> 0 -> 13 pass: poll post seeded+renders; 2 residual behavioral_diff
+broadcast-tips.spec.ts -> seed_gap(NEAR-GREEN) -> 0 -> 20 pass: PM+wallet fund tips; 4 residual (2x 400) behavioral_diff
+notifications-engine.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 9 pass: sub-keyed notifs via cpp API render; 7 residual behavioral_diff
+shop-cart-billing.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 14 pass (15 skip): billing PM assists; residual cart/billing behavioral_diff+route
+kyc-admin-dashboard.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 8 pass: KYC cases (moto, sub-keyed) surface in queue/metrics; 17 residual = case-detail/decide behavioral_diff + 9x route 404
+bookmarks.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 7 pass: bookmarks non-empty; residual = GET /ui/bookmarks route HANGS (timeout) + /saved UI page gap -> reclass behavioral_diff/route
+payout-dashboard.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 6 pass: settled credit ledger seeds available balance; 12 residual behavioral_diff
+feed-video-posts.spec.ts -> seed_gap(RECLASS->route) -> 0 -> 5 pass: residual = video embed undefined + entitlement 200/403/400 mismatch -> cpp_route_missing (video subsystem partial)
+follow-system.spec.ts -> seed_gap(RECLASS->behavioral) -> 0 -> 4 pass: follow graph seeded (200 in seeder) but spec asserts exact status/count shape cpp returns differently -> behavioral_diff
+payouts.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 4 pass: credit ledger + payout method seeded; residual 400/404 = payout validation behavioral_diff
+kyc-self-service.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 3 pass: alice-owned cases (<=4, avoids cpp owner-list hang) render on /kyc/status; residual behavioral_diff
+bankPayments.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 3 pass (20 skip): PM row seeded; residual = counterparty CRUD behavioral_diff/route
+billing-wallet.spec.ts -> seed_gap(RECLASS->behavioral) -> 0 -> 2 pass: WALLET row seeded but cpp reads balance=0 (reads a diff key/shape) + GET /ui/billing/ledger route HANGS -> behavioral_diff/deeper-seed
+tip-ledger.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 1 pass: PM+wallet seeded; residual = tip debit/credit ledger reason-format behavioral_diff
+payout-admin.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 1 pass: credit ledger seeds balance; residual = payout-admin queue behavioral_diff
+post-hide.spec.ts -> seed_gap(RESIDUAL) -> 0 -> 1 pass: hidden-feed non-empty; residual = hide UI behavioral_diff
+feed-rich-content.spec.ts -> seed_gap(RECLASS->behavioral) -> 0 -> 0 pass: posts seed but cpp does not echo content_format markdown/rich + sanitize assert -> behavioral_diff (no seed can fix)
+#
+# [NO MODULE -- incidental pass from base seed only; not this phase's target]
+auth.spec.ts -> seed_gap(no-module) -> 22 pass/36 fail (full run): SPA auth-state; needs an auth/session fixture module
+messaging-features.spec.ts -> seed_gap(no-module) -> 63 pass/17 fail: mostly passing on base users; residual convo-by-sub fixtures
+messaging.spec.ts -> seed_gap(no-module) -> 5 pass/31 fail: convo/participant-by-sub fixtures unbuilt (messaging module owed)
+messaging-group.spec.ts -> seed_gap(no-module) -> 36 pass/15 fail: group-convo fixtures owed
+user-groups.spec.ts -> seed_gap(no-module) -> 9 pass/15 fail: group fixtures + invite-accept owed
+video-upload.spec.ts -> seed_gap(no-module/RECLASS->route) -> 6 pass/10 fail: presign->PUT->complete video flow route partial
+register-recovery.spec.ts -> seed_gap(no-module) -> 0 pass/3 fail: recovery-flow state fixtures owed
+broadcast-qa.spec.ts -> seed_gap(no-module) -> 33 pass/4 fail: near-green on base seed
+admin-rate-limits.spec.ts -> seed_gap(no-module) -> 24 pass/6 fail: near-green on base seed
+seller-sales-dashboard.spec.ts -> seed_gap(no-module) -> 5 pass/1 fail: seller fixtures owed
+shopping-cart.spec.ts -> seed_gap(no-module) -> 10 pass/1 fail: near-green; 1 cart-route 404
+# ---- flag_disabled (feature-flag/root-sub gated off in cpp build) ----
+# (none isolated in this sample; admin-roles is route-missing not flag)
+
+# ---- python_only ----
+# (none isolated; all failures map to the four categories above)

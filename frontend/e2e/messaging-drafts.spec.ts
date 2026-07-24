@@ -2,9 +2,10 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
 import { execSync } from "child_process";
 import { randomUUID } from "crypto";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 const CHARLIE_ID = "e2e_charlie@test.local";
@@ -116,7 +117,7 @@ test.describe("messaging drafts lifecycle", () => {
 });
 
 function bearer(userId: string) {
-  return { Authorization: `Bearer ${userId}` };
+  return { Authorization: `Bearer ${getSessions()[userId].user_sub}` };
 }
 
 async function createGroupBearer(
@@ -196,11 +197,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (_sessions) return _sessions;
-  const raw = execSync("python3 e2e_session_setup.py", {
-    cwd: REPO_ROOT,
-    timeout: 30_000,
-  }).toString();
-  _sessions = JSON.parse(raw);
+  _sessions = loadSessions();
   return _sessions!;
 }
 

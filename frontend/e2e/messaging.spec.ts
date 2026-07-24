@@ -14,12 +14,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 
@@ -47,11 +48,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 }
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -114,14 +111,14 @@ async function openConv(page: Page, convId: string) {
 async function apiPost(page: Page, path: string, body: object, userId = ALICE_ID) {
   const resp = await page.request.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
   });
   return resp;
 }
 
 async function apiGet(page: Page, path: string, userId = ALICE_ID) {
   const resp = await page.request.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
   });
   return resp;
 }
@@ -137,9 +134,9 @@ function getTestConvId(): string {
   if (!_testConvId) {
     const raw = execSync(
       `curl -s -X POST ${API}/messaging/conversations ` +
-      `-H 'Authorization: Bearer ${ALICE_ID}' ` +
+      `-H 'Authorization: Bearer ${getSessions()[ALICE_ID].user_sub}' ` +
       `-H 'Content-Type: application/json' ` +
-      `-d '{"type":"dm","participant_ids":["${BOB_ID}"]}'`
+      `-d '{"type":"dm","participant_ids":["${getSessions()[BOB_ID].user_sub}"]}'`
     ).toString();
     _testConvId = JSON.parse(raw).conversation_id;
     if (!_testConvId) throw new Error("Failed to create test conversation: " + raw);
@@ -152,7 +149,7 @@ function getTestMsgId(): string {
     const cid = getTestConvId();
     const raw = execSync(
       `curl -s -X POST ${API}/messaging/conversations/${cid}/messages ` +
-      `-H 'Authorization: Bearer ${ALICE_ID}' ` +
+      `-H 'Authorization: Bearer ${getSessions()[ALICE_ID].user_sub}' ` +
       `-H 'Content-Type: application/json' ` +
       `-d '{"text":"E2E test message"}'`
     ).toString();
@@ -408,7 +405,7 @@ test.describe("4. Message operations (API)", () => {
       `${API}/messaging/conversations/${cid}/messages/${mid}`,
       {
         data: { text: "Edited text" },
-        headers: { Authorization: `Bearer ${ALICE_ID}` },
+        headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` },
       }
     );
     expect(resp.ok()).toBe(true);
@@ -451,7 +448,7 @@ test.describe("4. Message operations (API)", () => {
     const created = await createResp.json();
     const deleteResp = await page.request.delete(
       `${API}/messaging/conversations/${cid}/messages/${created.message_id}`,
-      { headers: { Authorization: `Bearer ${ALICE_ID}` } }
+      { headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` } }
     );
     expect(deleteResp.ok()).toBe(true);
   });
@@ -641,7 +638,7 @@ test.describe("7. Scheduled messages", () => {
     const msg = await createResp.json();
     const cancelResp = await page.request.delete(
       `${API}/messaging/conversations/${cid}/messages/${msg.message_id}/schedule`,
-      { headers: { Authorization: `Bearer ${ALICE_ID}` } }
+      { headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` } }
     );
     expect(cancelResp.ok()).toBe(true);
   });
@@ -764,7 +761,7 @@ test.describe("9. Gallery and attachments", () => {
       `${API}/messaging/conversations/${cid}/gallery`,
       {
         params: { type: "image", limit: "10" },
-        headers: { Authorization: `Bearer ${ALICE_ID}` },
+        headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` },
       }
     );
     expect(resp.ok()).toBe(true);
@@ -819,7 +816,7 @@ test.describe("10. Presence and typing", () => {
   test("User search works", async () => {
     const resp = await page.request.get(`${API}/messaging/contacts/search`, {
       params: { q: "bob" },
-      headers: { Authorization: `Bearer ${ALICE_ID}` },
+      headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` },
     });
     expect(resp.ok()).toBe(true);
     const results = await resp.json();

@@ -7,6 +7,7 @@ import { test, expect, request as playwrightRequest } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:8000";
@@ -18,12 +19,7 @@ const BOB = "e2e_bob@test.local"; // feed viewer / non-owner
 // these endpoints require real cookie sessions. Load them fresh (keyed by short
 // name) and alias by user_sub so email ids resolve too.
 interface Sess { csrf_token: string; cookies: Array<{ name: string; value: string }>; user_sub: string }
-const _sessions: Record<string, Sess> = JSON.parse(
-  execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-    cwd: REPO_ROOT,
-    timeout: 30_000,
-  }).toString(),
-);
+const _sessions: Record<string, Sess> = loadSessions();
 for (const k of Object.keys(_sessions)) {
   const s = _sessions[k];
   if (s?.user_sub && !_sessions[s.user_sub]) _sessions[s.user_sub] = s;

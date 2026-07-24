@@ -8,8 +8,8 @@
 // expired-by-duration / cancelled-with-refund) is exercised deterministically
 // at the service layer (app/services/content_boost.py) via an injectable `now`.
 import { test, expect } from "@playwright/test";
+import { API } from "./cpp.config";
 
-const API = "http://localhost:8000";
 const BASE = `${API}/ui/ads/boost`;
 
 test.describe("Content Boost (ADS-012)", () => {
