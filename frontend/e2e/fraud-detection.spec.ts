@@ -20,7 +20,7 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // Load backend env (.env.local) so child python processes get the real
@@ -50,7 +50,7 @@ const BASE = "/v1/admin/fraud";
 // UI base: override with FRAUD_UI_BASE when the worktree dev server runs on a
 // non-default port (the shared Vite on :3000 may belong to another worktree).
 const UI_BASE = process.env.FRAUD_UI_BASE || "";
-const ALICE_ID = "e2e_alice@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 
 // Unique per-run user ids to avoid cross-run interference.
 const TS = Date.now();

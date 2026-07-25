@@ -22,12 +22,13 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { cppSeedKycCase } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const ROOT_SUB = "root.admin@testdev.local";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────
@@ -85,6 +86,13 @@ function seedKycCase(
   userSub: string,
   files: Array<{ type: string; path: string; size?: number; mime_type?: string }>,
 ): void {
+  // TRACK harness-seed: under cpp the inline :8001 python seeder below never
+  // reaches the C++ backend (it reads tlc_kyc_cases in its own moto). userSub
+  // is already the cpp SUB here (resolveIdentityId). Seed the equivalent row.
+  if (isCpp()) {
+    cppSeedKycCase(caseId, userSub, files);
+    return;
+  }
   const payload = JSON.stringify({ case_id: caseId, user_sub: userSub, files });
   execSync(
     `python3 -c "

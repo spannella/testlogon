@@ -22,7 +22,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ---------------------------------------------------------------------------
@@ -30,8 +30,8 @@ const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..")
 // ---------------------------------------------------------------------------
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 const TURN_PATH = (callId: string) =>
   `/messaging/messages/calls/${callId}/turn-credentials`;

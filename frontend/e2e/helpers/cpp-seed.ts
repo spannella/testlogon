@@ -122,3 +122,86 @@ export function cppSeedSubscriberCount(
 export function cppSeedWallet(userSub: string, cents = 100_000): void {
   runCppShim("seed_wallet.py", { user_sub: userSub, cents });
 }
+
+// ── ads-analytics fixture (TRACK: harness-seed) ──────────────────────────────
+export interface CppAdAnalyticsOpts {
+  accountId: string;
+  campaignId: string;
+  ownerSub: string; // cpp SUB (owner_sub) — NOT an email
+  withLedger?: boolean; // seed tlc_ad_billing LEDGER rows (summary/ROAS source)
+  withHourly?: boolean; // seed 3 hourly rollups for today
+}
+
+/**
+ * Seed an advertiser account + 7d/prev-7d daily rollups (+ optional hourly +
+ * billing ledger) into cpp's tlc_ad_accounts / tlc_ad_analytics_rollups /
+ * tlc_ad_billing. Mirrors the inline :8001 python seeder in ads-analytics.spec
+ * so /ui/ads/analytics/{breakdown,summary,timeseries,export} render non-empty
+ * under cpp. owner_sub MUST be the cpp SUB (ba_require_account_owner matches
+ * account.owner_sub == u.sub).
+ */
+export function cppSeedAdAnalytics(opts: CppAdAnalyticsOpts): void {
+  runCppShim("seed_ad_analytics.py", {
+    account_id: opts.accountId,
+    campaign_id: opts.campaignId,
+    owner_sub: opts.ownerSub,
+    with_ledger: opts.withLedger ?? true,
+    with_hourly: opts.withHourly ?? true,
+  });
+}
+
+// ── per-content-revenue fixture (TRACK: harness-seed) ────────────────────────
+export interface CppContentRevEntry {
+  content_id: string;
+  content_type: string;
+  reason: string; // 'unlock' -> unlocks_cents, 'tip' -> tips_cents, ...
+  amount_cents: number;
+  day_offset?: number;
+}
+
+/**
+ * Seed 'credit' LEDGER rows into cpp's tlc_billing (pk=USER#<sub>) so
+ * GET /ui/analytics/content-revenue attributes per-content revenue. Mirrors the
+ * inline :8001 python seeder in per-content-revenue.spec.ts. user_sub MUST be
+ * the cpp SUB (bilt_accumulate queries pk=USER#<sub>).
+ */
+export function cppSeedContentRevenue(
+  userSub: string,
+  entries: CppContentRevEntry[],
+  testRun = '',
+): void {
+  runCppShim('seed_content_revenue.py', {
+    user_sub: userSub,
+    test_run: testRun,
+    entries,
+  });
+}
+
+
+// ── kyc-case fixture (TRACK: harness-seed) ───────────────────────────────────
+export interface CppKycFile {
+  type: string; // "selfie" | "id_front" | ...
+  path?: string;
+  size?: number;
+  mime_type?: string;
+}
+
+/**
+ * Seed one KYC case (pk=KYC#<caseId>, sk=META, files array) into cpp's
+ * tlc_kyc_cases so POST /v1/kyc/cases/{id}/compare-face (b11_case_get +
+ * cc_face_anti_spoof) finds it. Mirrors seedKycCase() in
+ * kyc-facial-comparison.spec.ts. userSub MUST be the cpp SUB (owner check).
+ */
+export function cppSeedKycCase(
+  caseId: string,
+  userSub: string,
+  files: CppKycFile[],
+  status = "draft",
+): void {
+  runCppShim("seed_kyc_case.py", {
+    case_id: caseId,
+    user_sub: userSub,
+    status,
+    files,
+  });
+}

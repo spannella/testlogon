@@ -21,13 +21,13 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 
 // The mock Google user sub is "primary" so that connection_id becomes
 // "google-primary" which matches GOOGLE_CALENDAR_CONNECTION_DEFAULT_ID.
