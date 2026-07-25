@@ -60,13 +60,31 @@ function usingCpp(): boolean {
 const CPP_API = process.env.E2E_API_BASE ?? "https://192.168.0.82:8443";
 const CPP_PASSWORD = process.env.E2E_PASSWORD ?? "Passw0rd!123";
 const CPP_COOKIE_DOMAIN = process.env.E2E_COOKIE_DOMAIN ?? "localhost";
+// Specs reach cpp two ways: some hit the API base host DIRECTLY (e.g.
+// admin-roles -> https://192.168.0.82:8443) while others go through the vite
+// dev server at http://localhost:3000 which PROXIES /calendar,/mock,... to cpp
+// (changeOrigin). A cookie is only sent if its domain matches the REQUEST host,
+// so inject each session cookie under BOTH the API host and localhost.
+function _cppApiHost(): string {
+  try { return new URL(CPP_API).hostname || "localhost"; } catch { return "localhost"; }
+}
+const CPP_COOKIE_DOMAINS: string[] = Array.from(
+  new Set([CPP_COOKIE_DOMAIN, _cppApiHost(), "localhost"]),
+);
 
 /** identity key -> {cpp email, F2 fallback file}. */
 const CPP_IDENTITY: Record<string, { email: string; file: string }> = {
   bob: { email: "e2e_bob@test.local", file: "bob" },
   alice: { email: "e2e_alice@test.local", file: "alice" },
   admin: { email: "e2e_admin@test.local", file: "admin" },
-  root: { email: "e2e_admin@test.local", file: "admin" },
+  // ROOT is a DISTINCT cpp identity: its sub is the fixed literal
+  // "root.admin@testdev.local" (seed_cpp.py direct-writes the row with that PK)
+  // so the admin-roles / admin-compute / admin-rate-limits specs' hardcoded
+  // ROOT_SUB matches the live audit-key + actor_sub. It is role=root ONLY when
+  // cpp runs with ROOT_USER_SUB=root.admin@testdev.local. Distinct from
+  // charlie_admin (below), which stays the general-admin e2e_admin account so
+  // the require_root-vs-require_admin boundary tests exercise a real 403.
+  root: { email: "root.admin@testdev.local", file: "root" },
   charlie_admin: { email: "e2e_admin@test.local", file: "admin" },
   // charlie is a distinct cpp fixture (role=admin, separate sub) used by the
   // catalog/subscription scoping tests as a non-subscriber / isolated creator.
@@ -101,25 +119,26 @@ function cppLoginSync(email: string): SessionData | null {
       /* leave sub empty */
     }
     const now = Math.floor(Date.now() / 1000);
-    const mk = (name: string, value: string, httpOnly: boolean) => ({
-      name,
-      value,
-      domain: CPP_COOKIE_DOMAIN,
-      path: "/",
-      httpOnly,
-      secure: false,
-      sameSite: "Lax" as const,
-      expires: now + 86400,
-    });
+    const mk = (name: string, value: string, httpOnly: boolean) =>
+      CPP_COOKIE_DOMAINS.map((domain) => ({
+        name,
+        value,
+        domain,
+        path: "/",
+        httpOnly,
+        secure: false,
+        sameSite: "Lax" as const,
+        expires: now + 86400,
+      }));
     return {
       user_sub: sub,
       session_id: sid,
       csrf_token: csrf,
       access_token: at,
       cookies: [
-        mk("ui_session", sid, true),
-        mk("ui_access_token", at, true),
-        mk("ui_csrf", csrf, false),
+        ...mk("ui_session", sid, true),
+        ...mk("ui_access_token", at, true),
+        ...mk("ui_csrf", csrf, false),
       ],
     };
   } catch {
@@ -135,7 +154,7 @@ function cppFallbackSession(file: string): SessionData | null {
     const ss = JSON.parse(fs.readFileSync(p, "utf8")) as {
       cookies: SessionData["cookies"];
     };
-    const cookies = ss.cookies.map((c) => ({ ...c, domain: CPP_COOKIE_DOMAIN }));
+    const cookies = ss.cookies.flatMap((c) => CPP_COOKIE_DOMAINS.map((domain) => ({ ...c, domain })));
     const at = cookies.find((c) => c.name === "ui_access_token")?.value ?? "";
     const sid = cookies.find((c) => c.name === "ui_session")?.value ?? "";
     const csrf = cookies.find((c) => c.name === "ui_csrf")?.value ?? "";

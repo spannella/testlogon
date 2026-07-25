@@ -205,3 +205,15 @@ export function cppSeedKycCase(
     files,
   });
 }
+
+// ── role-reset shim (TRACK: harness-reset) ───────────────────────────────────
+/**
+ * Reset ONE user's role back to a plain "user" (REMOVE admin_profile) in cpp's
+ * OWN tlc_users (moto :5005), PK user_sub. Mirrors admin-roles.spec.ts's
+ * resetBobToUser() cleanup — but that helper writes to the Python DDB-Local at
+ * :8001, which cpp never reads, so under E2E_USE_CPP the reset must route here.
+ * userSub MUST be the cpp SUB (resolveIdentityId under cpp). Idempotent.
+ */
+export function cppResetUserRole(userSub: string, role = "user"): void {
+  runCppShim("reset_user_role.py", { user_sub: userSub, role });
+}

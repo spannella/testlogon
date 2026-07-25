@@ -24,7 +24,8 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, isCpp } from "./helpers/session";
+import { runCppShim } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -107,6 +108,13 @@ async function apiDelete(page: Page, identity: string, path: string) {
 
 /** Seed N rate-limit events directly into the rate_limit_events table. */
 function seedEvents(): void {
+  // cpp path: the Python seed targets DDB-Local :8001 / rate_limit_events,
+  // which cpp never reads. Route to the cpp moto (:5005) table
+  // tlc_rate_limit_events via the SSH shim so root/events sees the rows.
+  if (isCpp()) {
+    runCppShim("seed_rate_limit_events.py", {});
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os, time, uuid
