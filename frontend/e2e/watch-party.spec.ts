@@ -13,6 +13,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVodVideo } from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -88,6 +89,10 @@ async function apiGet(page: Page, path: string) {
 
 function seedPublishedVideo(videoId: string, ownerUserId: string, title: string, durationSeconds: number) {
   const createdAt = Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    cppSeedVodVideo({ videoId, ownerSub: ownerUserId, title, status: "published", durationSeconds });
+    return;
+  }
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')

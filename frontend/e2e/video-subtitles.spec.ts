@@ -11,6 +11,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedVodVideo, cppDeleteVodVideo } from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -108,6 +109,10 @@ const ALICE_SUB = () => getSessions()["alice"].user_sub;
 
 function seedVideo(videoId: string, ownerUserId: string): void {
   const now = Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    cppSeedVodVideo({ videoId, ownerSub: ownerUserId, title: `Subtitle Test Video ${TS}`, status: "published" });
+    return;
+  }
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')
@@ -138,6 +143,10 @@ table.put_item(Item={
 }
 
 function deleteVideo(videoId: string): void {
+  if (usingCpp()) {
+    cppDeleteVodVideo(videoId);
+    return;
+  }
   const script = `
 import sys, os
 os.environ.setdefault('DDB_ENDPOINT_URL', 'http://localhost:8001')

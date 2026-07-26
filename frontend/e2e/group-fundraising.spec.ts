@@ -21,6 +21,11 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedGroup,
+  cppReadTreasuryBalance,
+} from "./helpers/cpp-seed-messaging-crm-misc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -142,6 +147,10 @@ const GROUP_ID = `grp_fund_${TS}`;
 const ADVACCT = `adacc_${TS}`;
 
 function ensureTable() {
+  // cpp already has tlc_group_fundraising provisioned (golden schema); the
+  // Python group_fundraising_campaigns table it would create is irrelevant to
+  // the C++ backend, so skip under cpp.
+  if (usingCpp()) return;
   ddbExec(`
 existing = [t.name for t in ddb.tables.all()]
 name = 'group_fundraising_campaigns'
@@ -171,6 +180,26 @@ else:
 function seedGroup() {
   const aliceSub = subFor(ALICE_ID);
   const bobSub = subFor(BOB_ID);
+
+  // cpp path: the Python 'user_groups'/'billing' rows below are invisible to the
+  // C++ backend (it reads tlc_user_groups + tlc_billing on moto :5005). Seed the
+  // same GROUP + treasury via the cpp shim so ug_require_role passes and
+  // gtr_balance reads the funded treasury. Verified live: campaign create → 200.
+  if (usingCpp()) {
+    cppSeedGroup({
+      groupId: GROUP_ID,
+      adminSub: aliceSub,
+      name: "Fundraising Test Group",
+      description: "GROUP-003 E2E",
+      visibility: "public",
+      members: [
+        { sub: aliceSub, role: "admin", displayName: "Alice" },
+        { sub: bobSub, role: "member", displayName: "Bob" },
+      ],
+      treasuryCents: 20000,
+    });
+    return;
+  }
 
   ddbExec(`
 import time
@@ -209,6 +238,7 @@ print('seeded')
 }
 
 function getTreasuryBalance(): number {
+  if (usingCpp()) return cppReadTreasuryBalance(GROUP_ID);
   const raw = ddbExec(`
 billing = ddb.Table('billing')
 resp = billing.get_item(Key={'pk': 'GROUP#${GROUP_ID}', 'sk': 'WALLET'})
@@ -495,7 +525,18 @@ test.describe("459 — Advertising Edge Cases", () => {
 
   test.beforeAll(async ({ browser }) => {
     const aliceSub = subFor(ALICE_ID);
-    ddbExec(`
+    if (usingCpp()) {
+      // No treasuryCents => no WALLET row => empty treasury (gtr_balance $0),
+      // which is exactly what the insufficient-funds test needs.
+      cppSeedGroup({
+        groupId: POOR_GROUP,
+        adminSub: aliceSub,
+        name: "Poor Group",
+        visibility: "public",
+        members: [{ sub: aliceSub, role: "admin", displayName: "Alice" }],
+      });
+    } else {
+      ddbExec(`
 import time
 tbl = ddb.Table('user_groups')
 ts = int(time.time())
@@ -514,6 +555,7 @@ tbl.put_item(Item={
 })
 print('poor group seeded')
 `);
+    }
 
     alicePage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);

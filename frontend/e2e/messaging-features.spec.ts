@@ -32,6 +32,8 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed-messaging-crm-misc";
+import { cppSeedPaymentMethod } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -153,6 +155,14 @@ async function apiGetBearer(
  * Unlock for) become enabled without requiring a full billing flow.
  */
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  // cpp path: PM-gated UI toggles (Attach tip / Unlock for) read the caller's
+  // default payment method from cpp's tlc_billing (PM#<id> + BILLING), keyed by
+  // SUB — the Python 'billing' row below is invisible to cpp. userSub is already
+  // the cpp sub here (callers pass getSessions()[id].user_sub).
+  if (usingCpp()) {
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time

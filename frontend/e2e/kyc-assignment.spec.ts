@@ -16,7 +16,8 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const ROOT_SUB   = "root.admin@testdev.local";
@@ -86,6 +87,21 @@ function seedCase(opts: {
 }): void {
   const status = opts.status ?? "under_review";
   const intake = opts.intakeProfile ?? "basic";
+  // TRACK harness-seed (kyc): under cpp, seed cpp's tlc_kyc_cases so the
+  // status_index queue + auto-assign see this case. user_sub is a placeholder
+  // ("seed_user") in the python path; keep it for cpp (owner index unused here).
+  if (isCpp()) {
+    cppSeedKycCaseFull({
+      caseId: opts.caseId,
+      userSub: "seed_user",
+      status,
+      intakeProfile: intake,
+      assignedAdminSub: opts.assignedAdmin ?? null,
+      slaDueAt: opts.slaDueAt ?? null,
+      escalationLevel: opts.escalationLevel ?? 0,
+    });
+    return;
+  }
   // Build a Python dict literal (single-quoted) for `review` rather than embedding
   // JSON.stringify output — its double quotes collide with the double-quoted
   // `python3 -c "..."` shell wrapper and break the command.

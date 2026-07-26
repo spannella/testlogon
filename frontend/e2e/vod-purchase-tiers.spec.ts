@@ -9,7 +9,14 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedVodVideo,
+  cppDeleteVodVideo,
+  cppSeedVodEntitlement,
+  cppDeleteVodEntitlement,
+} from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -19,8 +26,8 @@ const BASE = "http://localhost:3000";
 const ALICE_KEY = "alice";
 const BOB_KEY = "bob";
 
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 
 // ── Session bootstrap ─────────────────────────────────────────────────────
 
@@ -121,6 +128,27 @@ async function seedVideo(
     downloadMp4Key?: string;
   },
 ) {
+  if (usingCpp()) {
+    cppSeedVodVideo({
+      videoId: opts.videoId,
+      ownerSub: opts.ownerId,
+      title: opts.title,
+      status: opts.status,
+      priceCents: opts.priceCents,
+      accessMode: opts.accessMode,
+      availablePurchaseTypes: opts.availablePurchaseTypes,
+      viewOncePriceCents: opts.viewOncePriceCents,
+      rentalPriceCents: opts.rentalPriceCents,
+      rentalDurationHours: opts.rentalDurationHours,
+      downloadPriceCents: opts.downloadPriceCents,
+      extra: {
+        ...(opts.allowDownload != null ? { allow_download: opts.allowDownload } : {}),
+        ...(opts.downloadMp4Status ? { download_mp4_status: opts.downloadMp4Status } : {}),
+        ...(opts.downloadMp4Key ? { download_mp4_key: opts.downloadMp4Key } : {}),
+      },
+    });
+    return;
+  }
   const item: Record<string, any> = {
     video_id: { S: opts.videoId },
     owner_user_id: { S: opts.ownerId },
@@ -154,6 +182,10 @@ async function seedVideo(
 }
 
 async function deleteVideo(page: Page, videoId: string) {
+  if (usingCpp()) {
+    cppDeleteVodVideo(videoId);
+    return;
+  }
   await ddbRequest(page, "DeleteItem", {
     TableName: "VideoMetadata",
     Key: { video_id: { S: videoId } },
@@ -161,6 +193,10 @@ async function deleteVideo(page: Page, videoId: string) {
 }
 
 async function deleteEntitlement(page: Page, userId: string, videoId: string) {
+  if (usingCpp()) {
+    cppDeleteVodEntitlement(userId, videoId);
+    return;
+  }
   await ddbRequest(page, "DeleteItem", {
     TableName: "VodEntitlements",
     Key: { pk: { S: `USER#${userId}` }, sk: { S: `VIDEO#${videoId}` } },
@@ -174,6 +210,22 @@ async function seedExpiredRental(
 ) {
   const expiredAt = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
   const createdAt = expiredAt - 172800; // 48 hours before that
+  if (usingCpp()) {
+    cppSeedVodEntitlement({
+      buyerSub: userId,
+      videoId,
+      sellerSub: ALICE_SUB,
+      purchaseType: "rental",
+      grantType: "purchase",
+      amountCents: 299,
+      viewsRemaining: -1,
+      expiresAt: expiredAt,
+      createdAt,
+      purchaseId: "vpurch_expired_test",
+      downloadAllowed: false,
+    });
+    return;
+  }
   await ddbRequest(page, "PutItem", {
     TableName: "VodEntitlements",
     Item: {

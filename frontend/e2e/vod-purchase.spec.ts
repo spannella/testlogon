@@ -8,7 +8,13 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedVodVideo,
+  cppDeleteVodVideo,
+  cppDeleteVodEntitlement,
+} from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -18,8 +24,8 @@ const BASE = "http://localhost:3000";
 const ALICE_KEY = "alice";
 const BOB_KEY = "bob";
 
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 
 // ── Session bootstrap ─────────────────────────────────────────────────────
 
@@ -108,6 +114,17 @@ async function seedVideo(page: Page, opts: {
   priceCents?: number;
   accessMode?: string;
 }) {
+  if (usingCpp()) {
+    cppSeedVodVideo({
+      videoId: opts.videoId,
+      ownerSub: opts.ownerId,
+      title: opts.title,
+      status: opts.status,
+      priceCents: opts.priceCents,
+      accessMode: opts.accessMode,
+    });
+    return;
+  }
   await ddbRequest(page, "PutItem", {
     TableName: "VideoMetadata",
     Item: {
@@ -127,6 +144,10 @@ async function seedVideo(page: Page, opts: {
 }
 
 async function deleteVideo(page: Page, videoId: string) {
+  if (usingCpp()) {
+    cppDeleteVodVideo(videoId);
+    return;
+  }
   await ddbRequest(page, "DeleteItem", {
     TableName: "VideoMetadata",
     Key: { video_id: { S: videoId } },
@@ -134,6 +155,10 @@ async function deleteVideo(page: Page, videoId: string) {
 }
 
 async function deleteEntitlement(page: Page, userId: string, videoId: string) {
+  if (usingCpp()) {
+    cppDeleteVodEntitlement(userId, videoId);
+    return;
+  }
   await ddbRequest(page, "DeleteItem", {
     TableName: "VodEntitlements",
     Key: { pk: { S: `USER#${userId}` }, sk: { S: `VIDEO#${videoId}` } },

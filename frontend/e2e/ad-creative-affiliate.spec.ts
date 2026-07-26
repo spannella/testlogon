@@ -24,6 +24,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { cppResetOwnerAdAccounts } from "./helpers/cpp-seed-commerce-billing";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE     = "http://localhost:3000";
@@ -117,6 +118,16 @@ test.beforeAll(async ({ browser }) => {
   rootPage = await newIdentityPage(browser, ROOT_ID);
   aliceId = getAdminSessions()[ALICE_ID].user_sub;
 
+  // GAP-0039 (cpp): a user may own at most 5 non-terminal ad accounts.
+  // E2E runs accumulate accounts for the cpp subs, so wipe them first or
+  // the create below 422s and breaks this beforeAll. No-op off cpp.
+  {
+    const _s = getAdminSessions();
+    cppResetOwnerAdAccounts([
+      _s[ALICE_ID]?.user_sub,
+      _s[BOB_ID]?.user_sub,
+    ]);
+  }
   // Advertiser account + approval + campaign
   const acctResp = await apiPost(alicePage, ALICE_ID, "/ui/ads/accounts", {
     company_name: `AffPromoTest_${TS}`,

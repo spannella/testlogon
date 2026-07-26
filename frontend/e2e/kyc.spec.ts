@@ -21,7 +21,8 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { cppSetKycCaseStatus, cppGetKycCaseVersion } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -164,6 +165,10 @@ print('cleaned up')
  * `under_review` for admin decision tests (no REST endpoint for this transition).
  */
 function setCaseStatusDirect(caseId: string, newStatus: string): void {
+  if (isCpp()) {
+    cppSetKycCaseStatus(caseId, newStatus);
+    return;
+  }
   execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 import time as _time
@@ -198,6 +203,7 @@ print('status updated to ${newStatus}')
  * Read the current version of a KYC case directly from DynamoDB.
  */
 function getCaseVersionDirect(caseId: string): number {
+  if (isCpp()) return cppGetKycCaseVersion(caseId);
   const out = execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 tbl = ddb.Table('kyc_cases')

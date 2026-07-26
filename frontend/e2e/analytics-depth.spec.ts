@@ -19,6 +19,8 @@ import { tmpdir } from "os";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedRollupRow, cppSeedLedgerEntry } from "./helpers/cpp-seed-generic-ddbRequest";
+import { cppSeedVideo } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -105,6 +107,10 @@ function seedRollupRow(
   dateStr: string,
   data: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    cppSeedRollupRow(userSub, dateStr, data);
+    return;
+  }
   const tmpFile = `${tmpdir()}/analytics_depth_seed_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -148,6 +154,10 @@ function seedVideoMetadata(
   ownerUserId: string,
   data: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    cppSeedVideo({ videoId, ownerSub: ownerUserId, status: (data.status as string) ?? "published", extra: data });
+    return;
+  }
   const tmpFile = `${tmpdir()}/analytics_depth_video_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -233,6 +243,10 @@ function seedBillingLedger(
   reason: string,
   amountCents: number,
 ): void {
+  if (usingCpp()) {
+    cppSeedLedgerEntry(userSub, contentId, reason, amountCents);
+    return;
+  }
   const entryId = `ledger_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   execSync(
     `${PYTHON} -c "

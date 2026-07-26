@@ -17,6 +17,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedWallet } from "./helpers/cpp-seed-messaging-crm-misc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -129,7 +130,28 @@ print(json.dumps(item, cls=Enc) if item else 'null')
   return raw === "null" ? null : JSON.parse(raw);
 }
 
+// Resolve a fixture identity (email or short key) to the cpp SUB used by the
+// C++ backend for wallet keys, escrow debits and creator_sub matching.
+function cppSub(idOrEmail: string): string {
+  return getSessions()[idOrEmail].user_sub;
+}
+
+// The deal's creator_sub. Under cpp the accept/submit-content gates compare
+// creator_sub against the caller's session SUB, so it MUST be Bob's cpp sub (the
+// email BOB_ID never matches). The Python backend resolves by the email id.
+function creatorId(): string {
+  return usingCpp() ? cppSub(BOB_ID) : BOB_ID;
+}
+
 function seedWallet(userSub: string, balanceCents: number): void {
+  // cpp path: cpp's escrow debit (spd_create_escrow_hold -> bill_wallet_delta on
+  // pk=USER#<sub>/WALLET in tlc_billing) never sees the Python 'billing' row
+  // below, and it keys by SUB not email. Fund the cpp wallet by SUB so a propose
+  // does not 402 "Insufficient wallet balance for sponsorship escrow".
+  if (usingCpp()) {
+    cppSeedWallet(cppSub(userSub), balanceCents);
+    return;
+  }
   ddbPut("billing", {
     pk: `USER#${userSub}`,
     sk: "WALLET",
@@ -171,7 +193,7 @@ async function createDeal(overrides: Record<string, unknown> = {}): Promise<stri
     "/ui/ads/sponsorships",
     {
       advertiser_account_id: accountId,
-      creator_sub: BOB_ID,
+      creator_sub: creatorId(),
       content_type: "post",
       brief: "Feature our brand new product in a dedicated post.",
       deliverables: ["1 feed post"],
@@ -257,7 +279,7 @@ test.describe("396 — Deal Proposal API", () => {
       "/ui/ads/sponsorships",
       {
         advertiser_account_id: accountId,
-        creator_sub: BOB_ID,
+        creator_sub: creatorId(),
         content_type: "post",
         brief: "Too expensive for the wallet balance available.",
         deliverables: ["1 feed post"],
@@ -276,7 +298,7 @@ test.describe("396 — Deal Proposal API", () => {
       "/ui/ads/sponsorships",
       {
         advertiser_account_id: accountId,
-        creator_sub: BOB_ID,
+        creator_sub: creatorId(),
         content_type: "invalid",
         brief: "Brief that is long enough to pass validation.",
         deliverables: ["1 feed post"],

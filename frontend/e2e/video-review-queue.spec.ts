@@ -16,6 +16,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVodVideo } from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -97,6 +98,29 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 
 function seedPendingVideos(count: number, ownerOverride?: string): string[] {
   const owner = ownerOverride || ALICE_ID;
+  if (usingCpp()) {
+    const ids: string[] = [];
+    const baseTs = Math.floor(Date.now() / 1000) - 3600;
+    for (let i = 0; i < count; i++) {
+      const vidId = "v_" + Math.random().toString(16).slice(2) + Date.now().toString(16) + i.toString(16);
+      cppSeedVodVideo({
+        videoId: vidId,
+        ownerSub: owner,
+        title: `E2E Review Video ${TS} #${i}`,
+        status: "pending_review",
+        durationSeconds: 120 + i * 10,
+        extra: {
+          created_at: baseTs + i,
+          updated_at: baseTs + i,
+          width: 1920,
+          height: 1080,
+          file_size_bytes: 5000000 + i * 100000,
+        },
+      });
+      ids.push(vidId);
+    }
+    return ids;
+  }
   const raw = execSync(
     `python3 -c "
 import boto3, os, json, uuid, time
@@ -142,6 +166,12 @@ print(json.dumps(ids))
 
 function cleanupVideos(videoIds: string[]): void {
   if (!videoIds.length) return;
+  if (usingCpp()) {
+    for (const v of videoIds) {
+      try { cppSeedVodVideo({ videoId: v, ownerSub: "deleted", status: "archived", visibility: "private" }); } catch { /* best-effort */ }
+    }
+    return;
+  }
   // Encode ids as base64 to avoid shell-quoting issues: a raw JSON array
   // (e.g. ["v_a","v_b"]) embeds double-quotes which terminate the python3 -c
   // double-quoted shell argument, corrupting json.loads() input.
@@ -177,6 +207,10 @@ for vid in ids:
 }
 
 function setVideoStatus(videoId: string, status: string): void {
+  if (usingCpp()) {
+    cppSeedVodVideo({ videoId, ownerSub: ALICE_ID, status });
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os

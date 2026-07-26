@@ -12,14 +12,24 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedProfile,
+  cppSeedPosts,
+  cppSeedFollow,
+  cppSeedSubPlan,
+  cppPurgeAuthorPosts,
+} from "./helpers/cpp-seed-profile-social";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // --- Constants ----------------------------------------------------------------
 
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+// Under cpp, identity is keyed by JWT sub (resolveIdentityId); Python path keeps
+// the email verbatim. These feed both the /u/<id> URL and the seed helpers.
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 const ALICE_KEY = "alice";
 const BOB_KEY = "bob";
 const TS = Date.now();
@@ -91,6 +101,11 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 // --- DDB seed helpers --------------------------------------------------------
 
 function ensureUsersAndProfiles(): void {
+  if (usingCpp()) {
+    cppSeedProfile({ userSub: ALICE_SUB, displayName: "Alice Test", description: "E2E test profile" });
+    cppSeedProfile({ userSub: BOB_SUB, displayName: "Bob Test", description: "E2E test profile" });
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -136,6 +151,14 @@ print('done')
 }
 
 function seedAlicePosts(count: number): string[] {
+  if (usingCpp()) {
+    return cppSeedPosts({
+      authorSub: ALICE_SUB,
+      count,
+      testRun: String(TS),
+      bodyPrefix: "E2E storefront test post",
+    });
+  }
   const raw = execSync(
     `${PYTHON} -c "
 import boto3, os, uuid, time, json
@@ -198,6 +221,11 @@ print(json.dumps(post_ids))
 }
 
 function seedSubscriptionPlan(): string {
+  if (usingCpp()) {
+    const planId = `plan_sf_${TS}`;
+    cppSeedSubPlan({ creatorSub: ALICE_SUB, planId, name: `Premium Access ${TS}`, priceCents: 999 });
+    return planId;
+  }
   const raw = execSync(
     `${PYTHON} -c "
 import boto3, os, uuid, time, json
@@ -240,6 +268,11 @@ print(plan_id)
 }
 
 function cleanupFollow(): void {
+  if (usingCpp()) {
+    cppSeedFollow(BOB_SUB, ALICE_SUB, "unfollow");
+    cppSeedFollow(ALICE_SUB, BOB_SUB, "unfollow");
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os
@@ -283,6 +316,12 @@ print('cleaned')
 }
 
 function setFollowerCount(userSub: string, count: number): void {
+  if (usingCpp()) {
+    // userSub is already the cpp sub (ALICE_SUB/BOB_SUB resolved). The nested
+    // profile.follower_count is what h_prof_public reads (via prof_merge).
+    cppSeedProfile({ userSub, followerCount: count });
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -449,6 +488,9 @@ test.describe("119 - Content Loading", () => {
 
   test("119.2 Posts tab shows empty state when no posts", async () => {
     // Clean up any Bob posts from other specs
+    if (usingCpp()) {
+      cppPurgeAuthorPosts(BOB_SUB);
+    } else {
     try {
       execSync(
         `${PYTHON} -c "
@@ -470,6 +512,7 @@ with tbl.batch_writer() as batch:
         { cwd: REPO_ROOT, timeout: 15_000 },
       );
     } catch { /* ignore */ }
+    }
 
     // Bob has no posts — view Bob's profile from Alice
     await alicePage.goto(`/u/${BOB_SUB}`);

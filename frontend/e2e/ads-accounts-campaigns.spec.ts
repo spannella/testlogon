@@ -20,6 +20,10 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppResetOwnerAdAccounts,
+} from "./helpers/cpp-seed-commerce-billing";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -163,7 +167,15 @@ test.beforeAll(async ({ browser }) => {
   // Wipe accumulated ad accounts for the test users so the 5-account cap
   // (GAP-0039) never blocks the account-creation tests below. Alice/Bob session
   // subs are the email addresses used as owner_sub on the account records.
-  ddbDeleteOwnerAccounts(["e2e_alice@test.local", "e2e_bob@test.local"]);
+  if (usingCpp()) {
+    // cpp keys ad accounts by SUB in tlc_ad_accounts (not email in the
+    // Python AdAccounts table). Wipe accumulated accounts for the cpp subs
+    // so the 5-account cap (GAP-0039) never blocks the create tests below.
+    const sess = getAdminSessions();
+    cppResetOwnerAdAccounts([sess[ALICE_ID]?.user_sub, sess[BOB_ID]?.user_sub]);
+  } else {
+    ddbDeleteOwnerAccounts(["e2e_alice@test.local", "e2e_bob@test.local"]);
+  }
 
   alicePage = await newIdentityPage(browser, ALICE_ID);
   bobPage = await newIdentityPage(browser, BOB_ID);

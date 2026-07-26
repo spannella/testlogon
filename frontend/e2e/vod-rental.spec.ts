@@ -16,7 +16,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedVodVideo,
+  cppDeleteVodRental,
+} from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -24,8 +29,8 @@ const BASE = "http://localhost:3000";
 const ALICE_KEY = "alice"; // creator / owner
 const BOB_KEY = "bob"; // renter
 
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 
 // ── Session bootstrap ─────────────────────────────────────────────────────
 
@@ -111,6 +116,19 @@ async function seedVideo(
     rentalDurationHours?: number;
   },
 ) {
+  if (usingCpp()) {
+    cppSeedVodVideo({
+      videoId: opts.videoId,
+      ownerSub: opts.ownerId,
+      title: opts.title,
+      status: opts.status,
+      availablePurchaseTypes: opts.availablePurchaseTypes,
+      viewOncePriceCents: opts.viewOncePriceCents,
+      rentalPriceCents: opts.rentalPriceCents,
+      rentalDurationHours: opts.rentalDurationHours,
+    });
+    return;
+  }
   const ts = Math.floor(Date.now() / 1000);
   const item: Record<string, any> = {
     video_id: { S: opts.videoId },
@@ -139,6 +157,10 @@ async function seedVideo(
 }
 
 async function deleteRental(page: Page, userId: string, videoId: string) {
+  if (usingCpp()) {
+    cppDeleteVodRental(userId, videoId);
+    return;
+  }
   await ddbRequest(page, "DeleteItem", {
     TableName: "VodRentals",
     Key: { pk: { S: `USER#${userId}` }, sk: { S: `VIDEO#${videoId}` } },
