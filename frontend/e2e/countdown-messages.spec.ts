@@ -28,6 +28,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -268,7 +269,7 @@ test.describe("Section 697: Countdown Message in Conversation", () => {
     await injectAuth(page, ALICE_ID);
     const resp = await apiGet(page, `/messaging/conversations/${convoId}/messages`);
     expect(resp.ok()).toBeTruthy();
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.message_id === countdownId);
     expect(found).toBeDefined();
     expect(found!.kind).toBe("countdown");
@@ -279,7 +280,7 @@ test.describe("Section 697: Countdown Message in Conversation", () => {
   test("697.2 Bob receives the countdown", async ({ request }) => {
     const resp = await apiGetBearer(request, `/messaging/conversations/${convoId}/messages`, BOB_ID);
     expect(resp.ok()).toBeTruthy();
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.message_id === countdownId);
     expect(found).toBeDefined();
     expect(found!.target_datetime).toBe(target);
@@ -475,7 +476,7 @@ test.describe("Section 700: Countdown in Group Chats", () => {
     expect(resp.status()).toBe(201);
     const created = (await resp.json()) as RawMsg;
     const bobResp = await apiGetBearer(request, `/messaging/conversations/${groupId}/messages`, BOB_ID);
-    const bobData = (await bobResp.json()) as RawMsg[];
+    const bobData = asArray<RawMsg>(await bobResp.json());
     expect(bobData.find((m) => m.message_id === created.message_id)).toBeDefined();
     await page.close();
   });
@@ -493,7 +494,7 @@ test.describe("Section 700: Countdown in Group Chats", () => {
     }
     expect(new Set(ids).size).toBe(3);
     const listResp = await apiGet(page, `/messaging/conversations/${groupId}/messages`);
-    const data = (await listResp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await listResp.json());
     for (const id of ids) {
       expect(data.find((m) => m.message_id === id)).toBeDefined();
     }

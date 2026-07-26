@@ -33,6 +33,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -296,9 +297,9 @@ test.describe("1. Group creation and participant acceptance", () => {
     expect(body.participant_count).toBe(3);
 
     // Alice (creator) is active; Bob + Charlie are pending
-    const alice   = body.participants.find((p) => p.user_id === ALICE_ID);
-    const bob     = body.participants.find((p) => p.user_id === BOB_ID);
-    const charlie = body.participants.find((p) => p.user_id === CHARLIE_ID);
+    const alice   = asArray(body.participants).find((p: any) => p.user_id === ALICE_ID);
+    const bob     = asArray(body.participants).find((p: any) => p.user_id === BOB_ID);
+    const charlie = asArray(body.participants).find((p: any) => p.user_id === CHARLIE_ID);
     expect(alice?.status).toBe("active");
     expect(bob?.status).toBe("pending");
     expect(charlie?.status).toBe("pending");

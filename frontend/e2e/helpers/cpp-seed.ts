@@ -217,3 +217,153 @@ export function cppSeedKycCase(
 export function cppResetUserRole(userSub: string, role = "user"): void {
   runCppShim("reset_user_role.py", { user_sub: userSub, role });
 }
+
+// ── payout idempotency cleanup (TRACK: seed / 409-idempotency) ───────────────
+//
+// The payout specs (payouts / creator-payouts / payout-dashboard) call an
+// inline cleanupActivePayouts() that mutates the PYTHON CreatorPayouts table on
+// DDB-Local :8001 — which cpp never reads. Under E2E_USE_CPP a prior run's
+// still-`requested` payout therefore survives, and cpp's one-active-payout
+// guard returns 409 on the next POST /ui/payouts/request. This helper cancels
+// every active payout for a user THROUGH THE CPP API (the only store cpp reads),
+// so each test starts from a clean slate. No-op unless usingCpp(). Idempotent.
+//
+// email: the cpp login email for the identity (e.g. e2e_alice@test.local).
+// apiBase: the base the specs hit — defaults to the vite proxy the suite uses.
+export function cppCancelActivePayouts(
+  email: string,
+  apiBase = process.env.E2E_API_BASE ?? "http://localhost:3000",
+): void {
+  if (!usingCpp()) return;
+  const cppDirect = process.env.E2E_CPP_LOGIN_BASE ?? "https://192.168.0.82:8443";
+  const pw = process.env.E2E_PASSWORD ?? "Passw0rd!123";
+  try {
+    // 1) real cpp login → cookies (login must hit cpp directly for Set-Cookie).
+    const loginBody = JSON.stringify({
+      challenge_context: { username: email, password: pw },
+    });
+    const hdr = execFileSync(
+      "curl",
+      ["-k", "-s", "-D", "-", "-o", "/dev/null", "-X", "POST",
+       `${cppDirect}/ui/session/start`, "-H", "Content-Type: application/json",
+       "--data-binary", "@-"],
+      { input: loginBody, timeout: 30_000, encoding: "utf8" },
+    );
+    const jar: Record<string, string> = {};
+    for (const line of hdr.split(/\r?\n/)) {
+      const m = /^set-cookie:\s*([^=]+)=([^;]+)/i.exec(line);
+      if (m) jar[m[1].trim()] = m[2].trim();
+    }
+    const sid = jar["ui_session"], at = jar["ui_access_token"], csrf = jar["ui_csrf"];
+    if (!sid || !at || !csrf) return; // login failed → leave state as-is
+    const cookie = `ui_session=${sid}; ui_access_token=${at}; ui_csrf=${csrf}`;
+    // 2) list this user's payouts.
+    const listRaw = execFileSync(
+      "curl",
+      ["-k", "-s", `${apiBase}/ui/payouts`, "-H", `Cookie: ${cookie}`],
+      { timeout: 30_000, encoding: "utf8" },
+    );
+    let payouts: Array<{ payout_id: string; status: string }> = [];
+    try {
+      const parsed = JSON.parse(listRaw);
+      payouts = Array.isArray(parsed) ? parsed : parsed?.payouts ?? [];
+    } catch {
+      return;
+    }
+    // 3) cancel every still-active payout.
+    const ACTIVE = new Set(["requested", "approved", "processing", "pending"]);
+    for (const p of payouts) {
+      if (!p?.payout_id || !ACTIVE.has(p.status)) continue;
+      try {
+        execFileSync(
+          "curl",
+          ["-k", "-s", "-o", "/dev/null", "-X", "POST",
+           `${apiBase}/ui/payouts/${p.payout_id}/cancel`,
+           "-H", `Cookie: ${cookie}`, "-H", `x-csrf-token: ${csrf}`],
+          { timeout: 20_000, encoding: "utf8" },
+        );
+      } catch {
+        /* best-effort: keep cancelling the rest */
+      }
+    }
+  } catch {
+    /* best-effort cleanup: never fail the test setup on a cleanup hiccup */
+  }
+}
+
+// ── account-deletion idempotency cleanup (TRACK: seed / 409-idempotency) ─────
+//
+// account-deletion.spec.ts's cleanupUser() deletes rows from the PYTHON
+// account_deletion_requests table on :8001, which cpp never reads. Under cpp a
+// prior run's still-`pending` deletion request survives and cpp returns 409 on
+// the next POST /request ("one pending deletion per user"). This cancels every
+// cancellable pending/processing deletion request for the user THROUGH THE CPP
+// API. No-op unless usingCpp(). Idempotent, best-effort.
+export function cppCancelActiveDeletions(
+  email: string,
+  apiBase = process.env.E2E_API_BASE ?? "http://localhost:3000",
+): void {
+  if (!usingCpp()) return;
+  const cppDirect = process.env.E2E_CPP_LOGIN_BASE ?? "https://192.168.0.82:8443";
+  const pw = process.env.E2E_PASSWORD ?? "Passw0rd!123";
+  const base = "ui/privacy/account-deletion";
+  try {
+    const loginBody = JSON.stringify({ challenge_context: { username: email, password: pw } });
+    const hdr = execFileSync(
+      "curl",
+      ["-k", "-s", "-D", "-", "-o", "/dev/null", "-X", "POST",
+       `${cppDirect}/ui/session/start`, "-H", "Content-Type: application/json",
+       "--data-binary", "@-"],
+      { input: loginBody, timeout: 30_000, encoding: "utf8" },
+    );
+    const jar: Record<string, string> = {};
+    for (const line of hdr.split(/\r?\n/)) {
+      const m = /^set-cookie:\s*([^=]+)=([^;]+)/i.exec(line);
+      if (m) jar[m[1].trim()] = m[2].trim();
+    }
+    const sid = jar["ui_session"], at = jar["ui_access_token"], csrf = jar["ui_csrf"];
+    if (!sid || !at || !csrf) return;
+    const cookie = `ui_session=${sid}; ui_access_token=${at}; ui_csrf=${csrf}`;
+    const listRaw = execFileSync(
+      "curl",
+      ["-k", "-s", `${apiBase}/${base}/requests`, "-H", `Cookie: ${cookie}`],
+      { timeout: 30_000, encoding: "utf8" },
+    );
+    let requests: Array<{ request_id: string; status: string; can_cancel?: boolean }> = [];
+    try {
+      const parsed = JSON.parse(listRaw);
+      requests = Array.isArray(parsed) ? parsed : parsed?.requests ?? [];
+    } catch {
+      return;
+    }
+    const ACTIVE = new Set(["pending", "processing", "scheduled"]);
+    for (const r of requests) {
+      if (!r?.request_id || !ACTIVE.has(r.status) || r.can_cancel === false) continue;
+      try {
+        execFileSync(
+          "curl",
+          ["-k", "-s", "-o", "/dev/null", "-X", "POST",
+           `${apiBase}/${base}/requests/${r.request_id}/cancel`,
+           "-H", `Cookie: ${cookie}`, "-H", `x-csrf-token: ${csrf}`],
+          { timeout: 20_000, encoding: "utf8" },
+        );
+      } catch { /* keep going */ }
+    }
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Delete all account-deletion + data-export rows for a user in cpp's OWN moto
+ * table (via the reset_account_deletion.py shim on .82). Clears BOTH a stale
+ * pending deletion (409 on POST /request) AND a prior export row (429 on POST
+ * /export — cpp treats a <24h export row as the rate-limit signal). Pass the
+ * cpp SUB (resolveIdentityId under cpp). No-op unless usingCpp(). Idempotent.
+ */
+export function cppResetAccountDeletion(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_account_deletion.py", { user_sub: userSub });
+  } catch {
+    /* best-effort: never fail setup on a cleanup hiccup */
+  }
+}

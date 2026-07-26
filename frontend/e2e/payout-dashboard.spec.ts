@@ -16,6 +16,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { cppCancelActivePayouts } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -136,6 +137,9 @@ print('seeded')
 }
 
 function cleanupActivePayouts(userSub: string): void {
+  // cpp path: cancel active payouts via the cpp API (Python DDB writes below
+  // never reach cpp), clearing stale one-active-payout 409s across runs.
+  cppCancelActivePayouts(userSub);
   execSync(
     `${PYTHON} -c "
 import boto3, os

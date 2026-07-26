@@ -21,6 +21,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -316,7 +317,7 @@ test.describe("437 — Treasury Disbursement & Role Gate API", () => {
     const data = await (
       await apiGet(alicePage, `/ui/syndicates/treasury/${syndicateId}/ledger`)
     ).json();
-    const debit = data.entries.find((e: any) => e.direction === "debit");
+    const debit = asArray(data.entries).find((e: any) => e.direction === "debit");
     expect(debit).toBeTruthy();
     expect(debit.amount_cents).toBe(1000);
     expect(debit.counterparty_user_id).toBe(BOB_ID);

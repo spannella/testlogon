@@ -32,6 +32,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -320,8 +321,8 @@ test.describe("Section 93 — Skill assignment (job order, RSK-001)", () => {
       skills: Array<{ name: string; required?: boolean }>;
     };
     expect(body.entity_type).toBe("job_order");
-    const hit = body.skills.find(
-      (s) => s.name === TEST_SKILL_A.toLowerCase().trim(),
+    const hit = asArray(body.skills).find(
+      (s: any) => s.name === TEST_SKILL_A.toLowerCase().trim(),
     );
     expect(hit).toBeDefined();
     expect(hit?.required).toBe(true);

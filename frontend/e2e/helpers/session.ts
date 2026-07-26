@@ -89,6 +89,14 @@ const CPP_IDENTITY: Record<string, { email: string; file: string }> = {
   // charlie is a distinct cpp fixture (role=admin, separate sub) used by the
   // catalog/subscription scoping tests as a non-subscriber / isolated creator.
   charlie: { email: "e2e_charlie@test.local", file: "charlie" },
+  // compliance_admin / charlie_scoped are ADMIN-role identities the moderation /
+  // messaging-compliance / payment-disputes specs index by name. cpp has no
+  // per-name scoped fixture, so alias them to the general e2e_admin account: the
+  // specs only need an admin-authenticated session to exercise the admin gate,
+  // and this prevents getSessions()[name] -> undefined -> ".cookies" NPEs on the
+  // cpp path (Python path unchanged; loadCppSessions is cpp-only).
+  compliance_admin: { email: "e2e_admin@test.local", file: "admin" },
+  charlie_scoped: { email: "e2e_admin@test.local", file: "admin" },
 };
 
 /** Synchronous real cpp login via curl (loadSessions is sync/execSync-based). */

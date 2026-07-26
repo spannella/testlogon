@@ -16,6 +16,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -289,7 +290,7 @@ test.describe("441 — Visibility Filtering API", () => {
 
   test("441.3 Members-only text hidden from non-members", async () => {
     const data = await (await apiGet(rootPage, `/ui/syndicates/feed/${visSyndicateId}`)).json();
-    expect(data.posts.find((p: any) => p.text.includes("vis members"))).toBeFalsy();
+    expect(asArray(data.posts).find((p: any) => p.text.includes("vis members"))).toBeFalsy();
   });
 
   test("441.4 Empty feed returns empty array", async () => {

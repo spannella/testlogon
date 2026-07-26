@@ -11,3 +11,4 @@ export {
 export type { SessionData } from "./session";
 export { retryOn429 } from "./retry";
 export type { StatusResponse, RetryOptions } from "./retry";
+export { asArray, expectArray } from "./shape";

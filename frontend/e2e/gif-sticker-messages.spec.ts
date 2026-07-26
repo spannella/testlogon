@@ -30,6 +30,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -433,7 +434,7 @@ test.describe("Section 708: GIF Message Send/Receive API", () => {
       gif_alt_text: alt,
     });
     const resp = await apiGet(page, `/messaging/conversations/${convoId}/messages`);
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.gif_alt_text === alt);
     expect(found).toBeTruthy();
     expect(found!.kind).toBe("gif");
@@ -451,7 +452,7 @@ test.describe("Section 708: GIF Message Send/Receive API", () => {
       gif_height: 300,
     });
     const resp = await apiGetBearer(request, `/messaging/conversations/${convoId}/messages`, BOB_ID);
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.gif_alt_text === alt);
     expect(found).toBeTruthy();
     expect(found!.gif_url).toContain("placeholder_5.gif");
@@ -550,7 +551,7 @@ test.describe("Section 709: Sticker Message Send/Receive API", () => {
       sticker_collection_id: TEST_COLLECTION_ID,
     });
     const resp = await apiGetBearer(request, `/messaging/conversations/${convoId}/messages`, BOB_ID);
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.kind === "sticker" && m.sticker_id === TEST_STICKER_ID);
     expect(found).toBeTruthy();
     expect(found!.sticker_url).toBeTruthy();

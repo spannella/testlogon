@@ -21,7 +21,8 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { cppCancelActiveDeletions, cppResetAccountDeletion } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BOB_ID = "e2e_bob@test.local";
@@ -66,6 +67,14 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 
 /** Remove all account-deletion rows for a user (clean slate between runs). */
 function cleanupUser(userSub: string): void {
+  // cpp path: fully reset the user's account-deletion + export rows in cpp's
+  // OWN store (the Python DDB delete below never reaches cpp). This clears a
+  // stale pending deletion (409 on /request) AND a prior <24h export row (429
+  // on /export). userSub here is the fixture EMAIL; resolveIdentityId maps it
+  // to the cpp SUB the shim keys on. cppCancelActiveDeletions is the API-only
+  // fallback for retention-held rows the shim already removes.
+  cppResetAccountDeletion(resolveIdentityId(userSub));
+  cppCancelActiveDeletions(userSub);
   execSync(
     `python3 -c "
 import boto3, os
