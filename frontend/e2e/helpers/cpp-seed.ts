@@ -108,6 +108,59 @@ export function cppSeedPaymentMethod(userSub: string, pmId: string): void {
  * pmIds = delete ALL PMs (mirrors bug-fixes-2.spec.ts cleanupAllPaymentMethods /
  * removePaymentMethod, whose Python :8001 writes never reach cpp). Best-effort.
  */
+
+// ── promo codes (tlc_promo_codes) ────────────────────────────────────────────
+
+/**
+ * Delete a creator's PROMO#* rows (META + REDEEM#*) in cpp's tlc_promo_codes.
+ * Mirrors promo-codes.spec.ts cleanupAlicePromoCodes(), whose Python :8001
+ * 'PromoCodes'/'ByCreatorCreatedAt' deletes never reach cpp. userSub MUST be the
+ * cpp SUB. Run in beforeAll so the creator is below the per-creator cap.
+ */
+export function cppResetPromoCodes(userSub: string): void {
+  runCppShim("reset_promo_codes.py", { user_sub: userSub });
+}
+
+export interface CppPromoCodeOpts {
+  userSub: string; // cpp SUB (creator_user_id)
+  code: string;
+  codeId?: string;
+  discountType?: string;
+  discountValue?: number;
+  appliesTo?: string | string[];
+  active?: boolean;
+  currentUses?: number;
+  maxUses?: number;
+  maxUsesPerUser?: number;
+  minPurchaseCents?: number;
+  freeTrialDays?: number;
+  expiresAt?: number; // epoch seconds; 0 = never
+}
+
+/**
+ * Seed ONE promo META row into cpp's tlc_promo_codes with the exact fields cpp's
+ * create handler writes. Mirrors promo-codes.spec.ts's two direct DDB seeds
+ * (B3 expired-code + D UI-seed), which otherwise write creator_scope rows into
+ * the Python :8001 'PromoCodes' store cpp never reads.
+ */
+export function cppSeedPromoCode(opts: CppPromoCodeOpts): void {
+  runCppShim("seed_promo_code.py", {
+    user_sub: opts.userSub,
+    code: opts.code,
+    ...(opts.codeId ? { code_id: opts.codeId } : {}),
+    ...(opts.discountType ? { discount_type: opts.discountType } : {}),
+    ...(opts.discountValue != null ? { discount_value: opts.discountValue } : {}),
+    ...(opts.appliesTo != null ? { applies_to: opts.appliesTo } : {}),
+    ...(opts.active != null ? { active: opts.active } : {}),
+    ...(opts.currentUses != null ? { current_uses: opts.currentUses } : {}),
+    ...(opts.maxUses != null ? { max_uses: opts.maxUses } : {}),
+    ...(opts.maxUsesPerUser != null ? { max_uses_per_user: opts.maxUsesPerUser } : {}),
+    ...(opts.minPurchaseCents != null ? { min_purchase_cents: opts.minPurchaseCents } : {}),
+    ...(opts.freeTrialDays != null ? { free_trial_days: opts.freeTrialDays } : {}),
+    ...(opts.expiresAt != null ? { expires_at: opts.expiresAt } : {}),
+  });
+}
+
 export function cppResetBillingPms(userSub: string, pmIds: string[] = []): void {
   if (!usingCpp()) return;
   try {

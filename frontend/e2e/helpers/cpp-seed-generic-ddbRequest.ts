@@ -110,6 +110,8 @@ export interface GenLedgerEntry {
   video_id?: string;
   reason: string;
   amount_cents: number;
+  type?: string; // e.g. "ad_revenue_credit" (breakdown filter)
+  ts?: number;   // epoch seconds (breakdown cutoff filter)
   meta?: Record<string, unknown>;
 }
 
@@ -136,4 +138,29 @@ export function cppSeedLedgerEntry(
   cppSeedBillingLedger([
     { user_sub: userSub, content_id: contentId, reason, amount_cents: amountCents },
   ]);
+}
+
+// ── ad transparency (tlc_billing AD_TRANSPARENCY#) ───────────────────────────
+
+export interface GenTransparencyRow {
+  user_sub: string; // email/alias -> resolved to cpp SUB
+  account_id: string;
+  company_name: string;
+  month: string; // YYYY-MM
+  impression_count: number;
+  click_count: number;
+  revenue_cents: number;
+}
+
+/**
+ * Seed AD_TRANSPARENCY# rows into cpp's tlc_billing (PK USER#<sub>,
+ * SK AD_TRANSPARENCY#<account>#<month>). Read by
+ * GET /ui/ads/content-controls/transparency. No-op-safe: only call when usingCpp().
+ */
+export function cppSeedAdTransparency(rows: GenTransparencyRow[]): void {
+  const mapped = rows.map((r) => ({
+    ...r,
+    user_sub: resolveIdentityId(r.user_sub),
+  }));
+  runCppShim("seed_generic-ddbRequest_transparency.py", { rows: mapped });
 }

@@ -17,7 +17,8 @@ import { execSync } from "child_process";
 const BASE = "http://localhost:3000";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppResetUserSyndicates } from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
@@ -101,6 +102,9 @@ let subscriptionId = "";
 
 test.describe("427 — Bundle Plan CRUD API", () => {
   test.beforeAll(async ({ browser }) => {
+    if (usingCpp()) {
+      cppResetUserSyndicates([resolveIdentityId(ALICE_ID), resolveIdentityId(BOB_ID)]);
+    }
     const context = await browser.newContext();
     const page = await context.newPage();
     await injectAuth(page, ALICE_ID);

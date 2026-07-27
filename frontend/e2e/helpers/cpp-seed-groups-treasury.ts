@@ -86,6 +86,18 @@ export function cppResetUserSyndicates(subs: string[]): void {
   runCppShim("reset_syndicates.py", { subs: clean });
 }
 
+// -- syndicate-advertising treasury (syndicate-advertising.spec.ts) -----------
+
+/** Seed a syndicate treasury BALANCE (additive) into cpp's tlc_syndicate_treasury (moto :5005). */
+export function cppSeedSyndicateTreasury(syndicateId: string, cents: number): void {
+  runCppShim("seed_syndicate_treasury.py", { syndicate_id: syndicateId, amount_cents: cents });
+}
+/** Read a syndicate treasury BALANCE (cents) from cpp's tlc_syndicate_treasury. */
+export function cppReadSyndicateTreasury(syndicateId: string): number {
+  const raw = runCppReadShim("seed_syndicate_treasury.py", { syndicate_id: syndicateId, mode: "read" });
+  return parseInt(raw, 10) || 0;
+}
+
 // -- group + treasury fixture (group-treasury.spec.ts) ------------------------
 
 export interface CppTreasuryGroupMember {

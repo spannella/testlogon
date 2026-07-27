@@ -25,6 +25,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedSyndicateTreasury, cppReadSyndicateTreasury } from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -115,6 +116,7 @@ function ddbExec(script: string): string {
 
 // Seed treasury balance directly (avoids depending on the deposit flow).
 function seedTreasury(syndId: string, cents: number) {
+  if (usingCpp()) { cppSeedSyndicateTreasury(syndId, cents); return; }
   ddbExec(`
 import time
 t = ddb.Table('syndicate_treasury')
@@ -128,6 +130,7 @@ print('treasury seeded')
 }
 
 function getTreasuryBalance(syndId: string): number {
+  if (usingCpp()) return cppReadSyndicateTreasury(syndId);
   const out = ddbExec(`
 t = ddb.Table('syndicate_treasury')
 r = t.get_item(Key={'pk': 'TREASURY#${syndId}', 'sk': 'BALANCE'}).get('Item') or {}

@@ -23,6 +23,8 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVideo } from "./helpers/cpp-seed";
+import { cppSeedBillingLedger, cppSeedAdTransparency } from "./helpers/cpp-seed-generic-ddbRequest";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -140,6 +142,14 @@ async function seedVideo(
     price_cents: { N: "0" },
     duration_seconds: { N: "900" },
   };
+  if (usingCpp()) {
+    cppSeedVideo({
+      videoId: opts.videoId, ownerSub: opts.ownerId, title: opts.title,
+      status: "published", visibility: "public",
+      extra: { access_mode: "ad_supported", price_cents: 0, duration_seconds: 900 },
+    });
+    return;
+  }
   await ddbRequest(page, "PutItem", { TableName: "VideoMetadata", Item: item });
 }
 
@@ -153,6 +163,13 @@ async function seedTransparency(
   clicks: number,
   revenueCents: number,
 ) {
+  if (usingCpp()) {
+    cppSeedAdTransparency([{
+      user_sub: creatorSub, account_id: accountId, company_name: company,
+      month, impression_count: impressions, click_count: clicks, revenue_cents: revenueCents,
+    }]);
+    return;
+  }
   await ddbRequest(page, "PutItem", {
     TableName: "billing",
     Item: {
@@ -176,6 +193,13 @@ async function seedAdRevenueLedger(
   amountCents: number,
   ts: number,
 ) {
+  if (usingCpp()) {
+    cppSeedBillingLedger([{
+      user_sub: creatorSub, video_id: videoId, reason: "Ad revenue",
+      amount_cents: amountCents, type: "ad_revenue_credit", ts,
+    }]);
+    return;
+  }
   await ddbRequest(page, "PutItem", {
     TableName: "billing",
     Item: {

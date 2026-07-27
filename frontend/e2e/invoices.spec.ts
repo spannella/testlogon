@@ -20,7 +20,8 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod, cppResetBillingPms } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -100,6 +101,7 @@ print('ok')
 }
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) { cppSeedPaymentMethod(resolveIdentityId(userSub), pmId); return; }
   execSync(`${PYTHON} -c "${pyEnvPreamble()}
 tbl = ddb.Table('billing')
 pk = 'USER#${userSub}'
@@ -110,6 +112,7 @@ print('injected')
 }
 
 function removePaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) { cppResetBillingPms(resolveIdentityId(userSub), [pmId]); return; }
   try {
     execSync(`${PYTHON} -c "${pyEnvPreamble()}
 tbl = ddb.Table('billing')
