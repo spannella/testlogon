@@ -441,10 +441,25 @@ async function runMfaSetup(args: string, browser: import("@playwright/test").Bro
   const ua = await tmpPage.evaluate(() => navigator.userAgent);
   await tmpPage.close();
 
-  const raw = execSync(
-    `python3 ${REPO_ROOT}/e2e_register_mfa_setup.py ${args}`,
-    { cwd: REPO_ROOT, env: { ...process.env, E2E_PLAYWRIGHT_UA: ua }, timeout: 30_000 },
-  ).toString();
+  // Under cpp the register API + moto DDB both live on .82 (moto binds
+  // 127.0.0.1 there), so run the seeder ON .82 over ssh (same transport as
+  // helpers/cpp-seed.ts). Python path unchanged when not usingCpp().
+  const cpp = process.env.E2E_USE_CPP === "1"
+    || (!!process.env.E2E_API_BASE && !/localhost:8000\/?$/.test(process.env.E2E_API_BASE));
+  const raw = cpp
+    ? execSync(
+        `ssh -i ${process.env.E2E_CPP_SSH_KEY ?? "/home/sean/.ssh/e2e_cpp_seed_ed25519"} `
+          + `-o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 `
+          + `sean@192.168.0.82 `
+          + `'E2E_USE_CPP=1 E2E_API_BASE=https://localhost:8443 E2E_PLAYWRIGHT_UA=${JSON.stringify(ua)} `
+          + `DDB_ENDPOINT_URL=http://localhost:5005 `
+          + `python3 ~/projects/testlogon-cpp/e2e/e2e_register_mfa_setup.py ${args}'`,
+        { timeout: 40_000 },
+      ).toString()
+    : execSync(
+        `python3 ${REPO_ROOT}/e2e_register_mfa_setup.py ${args}`,
+        { cwd: REPO_ROOT, env: { ...process.env, E2E_PLAYWRIGHT_UA: ua }, timeout: 30_000 },
+      ).toString();
   return JSON.parse(raw) as MfaSetupData;
 }
 

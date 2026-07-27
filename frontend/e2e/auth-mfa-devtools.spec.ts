@@ -21,7 +21,8 @@ import { writeFileSync, unlinkSync, appendFileSync } from "fs";
 import { randomBytes } from "crypto";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { loadSessions, resolveIdentityId, cppRegisterThrowaway } from "./helpers/session";
+import { usingCpp, cppDeleteEmailDevices, cppDeleteSmsDevices } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE     = "http://localhost:3000";
@@ -104,6 +105,7 @@ T.update_item(
 
 /** Delete all email MFA devices for a user (clean slate for enrollment tests). */
 function deleteEmailDevices(userSub: string): void {
+  if (usingCpp()) { cppDeleteEmailDevices(userSub); return; }
   runPython(`${DDB_PREAMBLE}
 T = ddb.Table('email_devices')
 resp = T.query(KeyConditionExpression=Key('user_sub').eq('${userSub}'))
@@ -114,6 +116,7 @@ for item in resp.get('Items', []):
 
 /** Delete all SMS MFA devices for a user. */
 function deleteSmsDevices(userSub: string): void {
+  if (usingCpp()) { cppDeleteSmsDevices(userSub); return; }
   runPython(`${DDB_PREAMBLE}
 T = ddb.Table('sms_devices')
 resp = T.query(KeyConditionExpression=Key('user_sub').eq('${userSub}'))
@@ -176,10 +179,17 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
   let sessionId: string;
   let enrollChallengeId = "";
   let enrolledEmailDeviceId = "";
+  // Under cpp, enroll email MFA on a THROWAWAY user (not shared e2e_alice) so a
+  // CONFIRMED factor never MFA-gates alice's later login (suite-wide poison).
+  let MFA_ID = ALICE_ID;
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     page = await browser.newPage();
-    const session = getSessions()[ALICE_ID];
+    if (usingCpp()) {
+      const tw = cppRegisterThrowaway("mfaemail");
+      if (tw) { getSessions()[tw.email] = tw.session as unknown as SessionData; MFA_ID = tw.email; }
+    }
+    const session = getSessions()[MFA_ID];
     aliceSub    = session.user_sub;
     csrf        = session.csrf_token;
     sessionId   = session.cookies.find(c => c.name === "ui_session")!.value;
@@ -191,7 +201,7 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
     // and doesn't hit the device limit.
     deleteEmailDevices(aliceSub);
 
-    await injectAuth(page, ALICE_ID);
+    await injectAuth(page, MFA_ID);
   });
 
   test.afterAll(async () => {
@@ -201,7 +211,7 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
 
   test("79.1 begin email MFA enrollment returns challenge_id and sends email to alice", async () => {
     const resp = await apiPost(page, csrf, "/ui/mfa/email/devices/begin", {
-      email: ALICE_ID,
+      email: MFA_ID,
       label: "e2e-mfa-email",
     });
     expect(resp.status()).toBe(200);
@@ -210,32 +220,32 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
     };
     expect(typeof body.challenge_id).toBe("string");
     expect(body.challenge_id.length).toBeGreaterThan(0);
-    expect(body.sent_to).toContain(ALICE_ID);
+    expect(body.sent_to).toContain(MFA_ID);
     expect(typeof body.email_device_id).toBe("string");
     enrollChallengeId    = body.challenge_id;
     enrolledEmailDeviceId = body.email_device_id;
   });
 
   test("79.2 dev tools email API shows the enrollment email with a 6-digit OTP", async () => {
-    const resp = await apiGet(page, "/internal/dev-tools/email/messages", { mailbox: ALICE_ID });
+    const resp = await apiGet(page, "/internal/dev-tools/email/messages", { mailbox: MFA_ID });
     expect(resp.status()).toBe(200);
     const body = await resp.json() as {
       messages: Array<{ mailbox: string; body_text: string; subject: string }>;
     };
-    const msg = body.messages.find(m => m.mailbox === ALICE_ID);
-    expect(msg, `no email for ${ALICE_ID} in dev tools`).toBeDefined();
+    const msg = body.messages.find(m => m.mailbox === MFA_ID);
+    expect(msg, `no email for ${MFA_ID} in dev tools`).toBeDefined();
     expect(msg!.subject).toMatch(/verification/i);
     expect(extractCode(msg!.body_text)).toMatch(/^\d{6}$/);
   });
 
   test("79.3 code from dev tools email confirms enrollment and issues recovery codes", async () => {
     // Re-fetch so we always use the most-recently sent code
-    const emailResp = await apiGet(page, "/internal/dev-tools/email/messages", { mailbox: ALICE_ID });
+    const emailResp = await apiGet(page, "/internal/dev-tools/email/messages", { mailbox: MFA_ID });
     const { messages } = await emailResp.json() as {
       messages: Array<{ mailbox: string; body_text: string; sent_at: string }>;
     };
     const latest = [...messages]
-      .filter(m => m.mailbox === ALICE_ID)
+      .filter(m => m.mailbox === MFA_ID)
       .sort((a, b) => b.sent_at.localeCompare(a.sent_at))[0];
     const code = extractCode(latest.body_text)!;
     expect(code).toMatch(/^\d{6}$/);
@@ -264,7 +274,7 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
     const device = devices.find(d => d.email_device_id === enrolledEmailDeviceId);
     expect(device, "enrolled device not found in list").toBeDefined();
     expect(device!.enabled).toBe(true);
-    expect(device!.email).toBe(ALICE_ID);
+    expect(device!.email).toBe(MFA_ID);
     expect(device!.label).toBe("e2e-mfa-email");
   });
 
@@ -280,14 +290,14 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
     expect((await beginResp.json() as { status: string }).status).toBe("sent");
 
     // Read the most-recent email for alice from the dev tools log
-    const emailResp = await apiGet(page, "/internal/dev-tools/email/messages", { mailbox: ALICE_ID });
+    const emailResp = await apiGet(page, "/internal/dev-tools/email/messages", { mailbox: MFA_ID });
     const { messages } = await emailResp.json() as {
       messages: Array<{ mailbox: string; body_text: string; sent_at: string; purpose?: string }>;
     };
     // Filter by purpose="login" so we don't accidentally pick the enrollment OTP
     // (both emails can share the same sent_at second in fast test runs).
     const latest = [...messages]
-      .filter(m => m.mailbox === ALICE_ID && m.purpose === "login")
+      .filter(m => m.mailbox === MFA_ID && m.purpose === "login")
       .sort((a, b) => b.sent_at.localeCompare(a.sent_at))[0];
     const code = extractCode(latest.body_text)!;
     expect(code).toMatch(/^\d{6}$/);
@@ -310,7 +320,7 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
     await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     // Email tab is default; mailbox list and the OTP body text should be visible
     await expect(page.getByText("All Inboxes")).toBeVisible();
-    await expect(page.getByText(ALICE_ID).first()).toBeVisible();
+    await expect(page.getByText(MFA_ID).first()).toBeVisible();
     // The reading pane shows "Your verification code is: XXXXXX"
     await expect(page.getByText(/Your verification code is: \d{6}/).first()).toBeVisible();
   });
@@ -330,10 +340,16 @@ test.describe("Section 80: SMS MFA via dev log UI", () => {
   let sessionId: string;
   let enrollChallengeId = "";
   let smsDeviceId = "";
+  // Under cpp, enroll SMS MFA on a THROWAWAY user (not shared e2e_alice).
+  let MFA_ID = ALICE_ID;
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     page = await browser.newPage();
-    const session = getSessions()[ALICE_ID];
+    if (usingCpp()) {
+      const tw = cppRegisterThrowaway("mfasms");
+      if (tw) { getSessions()[tw.email] = tw.session as unknown as SessionData; MFA_ID = tw.email; }
+    }
+    const session = getSessions()[MFA_ID];
     aliceSub  = session.user_sub;
     csrf      = session.csrf_token;
     sessionId = session.cookies.find(c => c.name === "ui_session")!.value;
@@ -344,7 +360,7 @@ test.describe("Section 80: SMS MFA via dev log UI", () => {
     // Remove any leftover SMS devices from previous runs
     deleteSmsDevices(aliceSub);
 
-    await injectAuth(page, ALICE_ID);
+    await injectAuth(page, MFA_ID);
   });
 
   test.afterAll(async () => {

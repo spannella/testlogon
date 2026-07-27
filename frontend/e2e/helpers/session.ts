@@ -96,7 +96,12 @@ const CPP_IDENTITY: Record<string, { email: string; file: string }> = {
   // and this prevents getSessions()[name] -> undefined -> ".cookies" NPEs on the
   // cpp path (Python path unchanged; loadCppSessions is cpp-only).
   compliance_admin: { email: "e2e_admin@test.local", file: "admin" },
-  charlie_scoped: { email: "e2e_admin@test.local", file: "admin" },
+  // charlie_scoped is a DEDICATED scoped-admin fixture (role=admin,
+  // admin_profile={type:"scoped",scopes:["auth_support"]}, NO billing_support)
+  // provisioned by seed_cpp.py so cpp's require_admin_scope("billing_support")
+  // gate returns a real 403 (payment-disputes 83.2). It MUST be a distinct
+  // login from the general e2e_admin/e2e_charlie admins (both hold all scopes).
+  charlie_scoped: { email: "e2e_charlie_scoped@test.local", file: "charlie_scoped" },
 };
 
 /** Synchronous real cpp login via curl (loadSessions is sync/execSync-based). */
@@ -152,6 +157,39 @@ function cppLoginSync(email: string): SessionData | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Register a fresh THROWAWAY cpp user (unique per call) and return its live
+ * SessionData. Used by destructive specs (account-deletion, MFA-enroll) so they
+ * mutate/delete a disposable account instead of the shared e2e_alice/e2e_bob
+ * fixtures — a hard-delete or leftover MFA factor then never poisons the shared
+ * cohort's login. cpp-only (returns null off the cpp path). The caller injects
+ * the result into its own getSessions() map under whatever key it used to use.
+ */
+export function cppRegisterThrowaway(
+  tag = "tw",
+): { email: string; session: SessionData } | null {
+  if (!usingCpp()) return null;
+  const rand = Math.random().toString(36).slice(2, 8);
+  const email = `e2e_${tag}_${Date.now()}_${rand}@test.local`;
+  try {
+    const body = JSON.stringify({
+      email,
+      password: CPP_PASSWORD,
+      full_name: `E2E Throwaway ${tag}`,
+    });
+    execSync(
+      `curl -k -s -o /dev/null -X POST ${CPP_API}/ui/register/start ` +
+        `-H 'Content-Type: application/json' --data-binary @-`,
+      { input: body, timeout: 30_000 },
+    );
+  } catch {
+    return null;
+  }
+  const session = cppLoginSync(email);
+  if (!session) return null;
+  return { email, session };
 }
 
 /** Fallback: read the F2 storageState JSON, retarget domain, shape as SessionData. */

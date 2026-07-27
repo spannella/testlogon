@@ -25,7 +25,9 @@ import { execSync } from "child_process";
 import { pbkdf2Sync, randomBytes as cryptoRandomBytes, createCipheriv } from "crypto";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, cppRegisterThrowaway } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod, cppResetBillingPms, cppDeleteTotpDevices } from "./helpers/cpp-seed";
+import { cppReadLedger } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -193,6 +195,12 @@ ddb = boto3.resource(
 `;
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // cpp store: write the PM into tlc_billing via the shim (byte-identical
+    // shape). The Python :8001 write below never reaches cpp.
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -245,6 +253,7 @@ print('injected')
 }
 
 function removePaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) { cppResetBillingPms(userSub, [pmId]); return; }
   try {
     execSync(
       `${PYTHON} -c "
@@ -278,6 +287,7 @@ print('removed')
 }
 
 function cleanupAllPaymentMethods(userSub: string): void {
+  if (usingCpp()) { cppResetBillingPms(userSub); return; }
   try {
     execSync(
       `${PYTHON} -c "
@@ -301,6 +311,7 @@ print('cleaned up all PMs')
 
 /** Delete all TOTP devices for a user from DynamoDB (best-effort cleanup). */
 function deleteAllTotpDevices(userSub: string): void {
+  if (usingCpp()) { cppDeleteTotpDevices(userSub); return; }
   try {
     execSync(
       `${PYTHON} -c "
@@ -473,8 +484,19 @@ test.describe("17. Tip on new message — billing ledger debit entry (send_text_
   test("Billing ledger has a tip debit entry (send_text_message tip path)", () => {
     // The tip-on-new-message path writes reason="Tip: message" (unified format).
     // Legacy entries used "Tip attached to message".
-    const result = execSync(
-      `${PYTHON} -c "
+    let count: number;
+    if (usingCpp()) {
+      // cpp store: read the ledger via the shim; filter client-side. cppReadLedger
+      // normalizes cpp's tip_debit -> debit so the type=='debit' predicate matches.
+      const rows = cppReadLedger(aliceSub);
+      count = rows.filter(
+        (r) =>
+          r.type === "debit" &&
+          ["Tip attached to message", "Tip: message"].includes(r.reason as string),
+      ).length;
+    } else {
+      const result = execSync(
+        `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE.trim()}
 from boto3.dynamodb.conditions import Key, Attr
 tbl = ddb.Table('billing')
@@ -485,10 +507,12 @@ resp = tbl.query(
 )
 print(len(resp['Items']))
 "`,
-      { timeout: 10_000 },
-    ).toString().trim();
+        { timeout: 10_000 },
+      ).toString().trim();
+      count = parseInt(result, 10);
+    }
 
-    expect(parseInt(result, 10)).toBeGreaterThan(0);
+    expect(count).toBeGreaterThan(0);
   });
 });
 

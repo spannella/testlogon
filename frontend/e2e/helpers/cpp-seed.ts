@@ -103,6 +103,50 @@ export function cppSeedPaymentMethod(userSub: string, pmId: string): void {
   runCppShim("seed_payment_method.py", { user_sub: userSub, pm_id: pmId });
 }
 
+/**
+ * Delete PM# rows (+ BILLING pointer) for a user in cpp's tlc_billing. Empty
+ * pmIds = delete ALL PMs (mirrors bug-fixes-2.spec.ts cleanupAllPaymentMethods /
+ * removePaymentMethod, whose Python :8001 writes never reach cpp). Best-effort.
+ */
+export function cppResetBillingPms(userSub: string, pmIds: string[] = []): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_billing_pms.py", { user_sub: userSub, pm_ids: pmIds });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Delete all TOTP devices for a user in cpp's tlc_totp. Best-effort. */
+export function cppDeleteTotpDevices(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("delete_totp_devices.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Delete all email MFA devices for a user in cpp's tlc_email. Best-effort. */
+export function cppDeleteEmailDevices(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("delete_email_devices.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Delete all SMS MFA devices for a user in cpp's tlc_sms. Best-effort. */
+export function cppDeleteSmsDevices(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("delete_sms_devices.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Set subscriber_count on one admin subscription tier in cpp's world. */
 export function cppSeedSubscriberCount(
   creatorSub: string,
@@ -368,5 +412,23 @@ export function cppResetAccountDeletion(userSub: string): void {
     runCppShim("reset_account_deletion.py", { user_sub: userSub });
   } catch {
     /* best-effort: never fail setup on a cleanup hiccup */
+  }
+}
+
+/**
+ * Back-date a deletion request's scheduled_for in cpp's OWN moto table so admin
+ * process-due finalizes it (mirrors account-deletion.spec.ts::expireGrace, whose
+ * Python :8001 write never reaches cpp). Pass the cpp SUB + request_id. No-op
+ * unless usingCpp().
+ */
+export function cppExpireAccountDeletion(userSub: string, requestId: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("expire_account_deletion.py", {
+      user_sub: userSub,
+      request_id: requestId,
+    });
+  } catch {
+    /* best-effort */
   }
 }
