@@ -15,6 +15,11 @@ import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
 import { cppCancelActivePayouts } from "./helpers/cpp-seed";
+import {
+  usingCpp,
+  cppSeedPayoutCredits,
+  cppCancelActivePayoutsDirect,
+} from "./helpers/cpp-seed-payouts-subs-ats-misc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -92,6 +97,12 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
  * Returns the total seeded cents.
  */
 function seedOldCredits(userSub: string, count: number, amountEach: number): number {
+  // cpp path: the Python DDB write below never reaches cpp's tlc_billing (which
+  // /ui/payouts/balance scans keyed by the real SUB). Seed settled credits into
+  // cpp's own moto so the balance endpoint counts them as available_cents.
+  if (usingCpp()) {
+    return cppSeedPayoutCredits({ userSub, count, amountEach });
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, uuid, time
@@ -135,8 +146,11 @@ print('seeded')
  * Clean up all active payouts for a user to avoid test interference.
  */
 function cleanupActivePayouts(userSub: string): void {
-  // cpp path: cancel active payouts via the cpp API (Python DDB writes below
-  // never reach cpp), clearing stale one-active-payout 409s across runs.
+  // cpp path: cancel active payouts DIRECTLY in cpp's moto (the API-based helper
+  // no-ops on this build — /ui/session/start returns no Set-Cookie). This clears
+  // the stale one-active-payout 409 deterministically. Python DDB write below is
+  // for the Python backend only.
+  cppCancelActivePayoutsDirect(userSub);
   cppCancelActivePayouts(userSub);
   execSync(
     `${PYTHON} -c "

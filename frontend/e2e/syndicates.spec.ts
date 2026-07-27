@@ -15,6 +15,10 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppResetUserSyndicates,
+} from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -22,7 +26,16 @@ const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..")
 const BASE     = "http://localhost:3000";
 const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 const BOB_ID   = resolveIdentityId("e2e_bob@test.local");
-const CHARLIE_ID = resolveIdentityId("e2e_charlie@test.local");
+// The "charlie" role in this file is driven by the charlie_admin *page*
+// (newIdentityPage(browser, "charlie_admin")). cpp keys REQUEST#/MEMBER# by the
+// caller's SUB, so the id used in approve/remove/reject URL paths MUST be that
+// same session's sub — NOT the distinct e2e_charlie fixture (which has a
+// different sub and would make approve/remove 404 "No pending request"). Under
+// cpp resolve from the charlie_admin session; the Python path is unchanged
+// (resolveIdentityId returns the email verbatim there).
+const CHARLIE_ID = usingCpp()
+  ? resolveIdentityId("charlie_admin")
+  : resolveIdentityId("e2e_charlie@test.local");
 
 const TS = Date.now();
 
@@ -88,6 +101,19 @@ let charliePage: Page;
 let syndicateId: string;
 let dissolveSyndicateId: string;
 let autoPromoteSyndicateId: string;
+
+// cpp only: clear the test users' stale syndicate index BEFORE any create so
+// SY_MAX_PER_USER (10) is not tripped by accumulation from prior runs. On the
+// Python path DDB-Local is fresh each run, so this is a no-op-by-gate.
+test.beforeAll(() => {
+  if (!usingCpp()) return;
+  const s = getSessions();
+  cppResetUserSyndicates([
+    s["alice"]?.user_sub,
+    s["bob"]?.user_sub,
+    s["charlie_admin"]?.user_sub,
+  ].filter(Boolean) as string[]);
+});
 
 // ─── Section 423: Syndicate Creation API ───────────────────────────────────────
 

@@ -21,6 +21,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -84,16 +85,20 @@ type APIRequestContext = import("@playwright/test").APIRequestContext;
 
 /** POST as an arbitrary user using Bearer auth (dev mode). */
 async function apiPostBearer(req: APIRequestContext, path: string, body: object, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
 /** GET as an arbitrary user using Bearer auth (dev mode). */
 async function apiGetBearer(req: APIRequestContext, path: string, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 

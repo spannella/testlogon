@@ -13,6 +13,11 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedPaymentMethodBB,
+  cppReadLedger,
+} from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
@@ -73,6 +78,11 @@ async function apiGet(page: Page, path: string) {
 // ─── Payment method helpers ──────────────────────────────────────────────────
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // cpp reads its OWN tlc_billing on .82; seed the PM# + BILLING rows there.
+    cppSeedPaymentMethodBB(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -125,6 +135,11 @@ print('injected')
 }
 
 function removePaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // Best-effort cleanup is a no-op under cpp: the PM# seed is idempotent and
+    // harmless to leave, and there is no delete shim in the read-path. Skip.
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "
@@ -183,6 +198,11 @@ function expectedNet(gross: number, entry: LedgerEntry): number {
 }
 
 function queryLedger(userSub: string): LedgerEntry[] {
+  if (usingCpp()) {
+    // Under cpp the tip charge writes LEDGER# rows into cpp's OWN tlc_billing
+    // (moto :5005 on .82); read them from there rather than the Python DDB.
+    return cppReadLedger(userSub) as unknown as LedgerEntry[];
+  }
   const raw = execSync(
     `${PYTHON} -c "
 import boto3, os, json

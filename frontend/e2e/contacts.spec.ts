@@ -15,6 +15,9 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedUserSearch, cppCleanupContacts } from "./helpers/cpp-seed-alerts-broadcast-calendar";
+import { cppSeedProfile } from "./helpers/cpp-seed-profile-social";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -104,6 +107,7 @@ ddb = boto3.resource(
 
 /** Remove all contacts for Alice from the Contacts table. */
 function cleanupAliceContacts(): void {
+  if (usingCpp()) { cppCleanupContacts(resolveIdentityId(ALICE_ID)); return; }
   try {
     execSync(
       `${PYTHON} -c "
@@ -128,6 +132,18 @@ print('cleaned')
  * 2. The UserSearch table (so the dialog search for "bob" returns Bob)
  */
 function seedBobProfile(): void {
+  if (usingCpp()) {
+    // cpp reads profile identity from tlc_profile (keyed by whatever
+    // user_id is POSTed to /ui/contacts) and search from tlc_user_search.
+    // The direct-API tests POST BOB_ID (email); the Add-Contact dialog
+    // POSTs the search result's user_id (the cpp SUB). Seed BOTH profile
+    // keys so display_name enriches to 'E2E Bob' on either path.
+    const bobSub = resolveIdentityId(BOB_ID);
+    cppSeedProfile({ userSub: bobSub, displayName: 'E2E Bob' });
+    if (bobSub !== BOB_ID) cppSeedProfile({ userSub: BOB_ID, displayName: 'E2E Bob' });
+    cppSeedUserSearch([{ userId: bobSub, displayName: 'E2E Bob', email: BOB_ID }]);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE.trim()}

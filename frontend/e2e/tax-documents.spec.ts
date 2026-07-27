@@ -21,12 +21,19 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedTaxLedger,
+  cppCleanupTax,
+} from "./helpers/cpp-seed-appeals-moderation-tail";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+// Under cpp these resolve to the JWT sub (tlc_billing keyed by sub); Python path
+// returns the email verbatim (unchanged).
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const TS = Date.now();
 
@@ -107,6 +114,10 @@ interface SeedEntry {
 }
 
 function seedLedger(userSub: string, entries: SeedEntry[]): void {
+  if (usingCpp()) {
+    cppSeedTaxLedger(userSub, entries, TS);
+    return;
+  }
   const b64 = Buffer.from(JSON.stringify(entries)).toString("base64");
   execSync(
     `${PYTHON} -c "
@@ -155,6 +166,14 @@ print('seeded')
 }
 
 function cleanupLedger(userSub: string): void {
+  if (usingCpp()) {
+    try {
+      cppCleanupTax(userSub, TS);
+    } catch {
+      // best effort
+    }
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "

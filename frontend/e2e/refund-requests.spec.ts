@@ -18,6 +18,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedLedgerEntries } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -97,6 +98,10 @@ ddb_client = boto3.client('dynamodb', endpoint_url='http://localhost:8001', regi
 `;
 
 function ensureRefundRequestsTable(): void {
+  if (usingCpp()) {
+    // cpp's tlc_refund_requests already exists in its moto; no create needed.
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 try:
@@ -154,6 +159,24 @@ except ddb_client.exceptions.ResourceInUseException:
  */
 function seedLedgerEntry(entryId: string, amountCents: number, reason: string, tsOverride?: number): void {
   const ts = tsOverride ?? Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    // cpp keys the ledger by the SUB (not the email) and reads it from its OWN
+    // tlc_billing; the refund-create endpoint's rr_find_ledger scans that store
+    // for the matching entry_id. Seed alice's sub, not ALICE_ID (the email).
+    cppSeedLedgerEntries([
+      {
+        userSub: getSessions()["alice"].user_sub,
+        entryId,
+        ts,
+        type: "charge",
+        amountCents,
+        state: "settled",
+        reason,
+        currency: "USD",
+      },
+    ]);
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 tbl = ddb.Table('billing')
@@ -190,6 +213,12 @@ function seedOldLedgerEntry(entryId: string, amountCents: number): void {
  * Scans the ByRequesterCreatedAt GSI and batch-deletes matching items.
  */
 function cleanupAliceRefundRequests(): void {
+  if (usingCpp()) {
+    // No delete shim in the cpp read-path; refund requests filed by prior runs
+    // are keyed by unique per-run entry ids (TS-suffixed), so they do not
+    // collide with this run's create tests. Skip (best-effort cleanup only).
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 tbl = ddb.Table('RefundRequests')

@@ -28,6 +28,8 @@ import { readFileSync, statSync } from "fs";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedAlertPrefs, cppClearAlertPrefs } from "./helpers/cpp-seed-alerts-broadcast-calendar";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -103,6 +105,7 @@ function runPython(code: string): void {
 }
 
 function clearAliceAlertPrefs(): void {
+  if (usingCpp()) { cppClearAlertPrefs(resolveIdentityId(ALICE_ID)); return; }
   execSync(
     `python3 -c "
 import boto3, os
@@ -143,6 +146,18 @@ function injectAlertPrefs(opts: {
     smsEventTypes = [],
     toastEventTypes = [],
   } = opts;
+
+  if (usingCpp()) {
+    cppSeedAlertPrefs({
+      userSub: resolveIdentityId(ALICE_ID),
+      emails,
+      smsNumbers,
+      emailEventTypes,
+      smsEventTypes,
+      toastEventTypes,
+    });
+    return;
+  }
 
   execSync(
     `python3 << 'PYEOF'

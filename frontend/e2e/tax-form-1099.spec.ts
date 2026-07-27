@@ -24,12 +24,21 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedTaxLedger,
+  cppSeedProfile,
+  cppCleanupTax,
+  cppSeedBatchLock,
+} from "./helpers/cpp-seed-appeals-moderation-tail";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+// Under cpp these resolve to the JWT sub (tlc_billing/tlc_profile keyed by sub);
+// Python path returns the email verbatim (unchanged).
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const TS = Date.now();
 
@@ -113,6 +122,10 @@ interface SeedEntry {
 }
 
 function seedLedger(userSub: string, entries: SeedEntry[]): void {
+  if (usingCpp()) {
+    cppSeedTaxLedger(userSub, entries, TS);
+    return;
+  }
   const b64 = Buffer.from(JSON.stringify(entries)).toString("base64");
   execSync(
     `${PYTHON} -c "
@@ -160,6 +173,10 @@ print('seeded')
 }
 
 function seedProfile(userSub: string, displayName: string): void {
+  if (usingCpp()) {
+    cppSeedProfile(userSub, displayName);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os
@@ -186,6 +203,14 @@ print('profile ok')
 }
 
 function cleanup(userSubs: string[], years: number[]): void {
+  if (usingCpp()) {
+    try {
+      for (const sub of userSubs) cppCleanupTax(sub, TS, years);
+    } catch {
+      // best effort
+    }
+    return;
+  }
   const subsB64 = Buffer.from(JSON.stringify(userSubs)).toString("base64");
   const yearsB64 = Buffer.from(JSON.stringify(years)).toString("base64");
   try {
@@ -427,6 +452,9 @@ test.describe("FIN-008 Section 582: Admin batch generation", () => {
 
   test("582.4 second concurrent batch returns 429", async () => {
     // Manually plant an in-progress lock, then attempt a batch.
+    if (usingCpp()) {
+      cppSeedBatchLock(BATCH_YEAR);
+    } else {
     execSync(
       `${PYTHON} -c "
 import boto3, os, time
@@ -448,6 +476,7 @@ print('locked')
 "`,
       { timeout: 15_000 },
     );
+    }
     const resp = await apiPost(admin, "root", `/ui/tax-forms/admin/batch`, {
       tax_year: BATCH_YEAR,
     });

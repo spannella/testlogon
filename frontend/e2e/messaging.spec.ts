@@ -16,6 +16,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppBearerPost, cppBearerGet, cppBearerPatch, cppBearerDelete } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -109,16 +110,24 @@ async function openConv(page: Page, convId: string) {
 
 /** Direct API call via page.request (uses Bearer token in DEV_MODE). */
 async function apiPost(page: Page, path: string, body: object, userId = ALICE_ID) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  // cpp: even browser.newPage() inherits the project admin storageState cookie,
+  // which JWT-verifies and shadows the raw-sub bearer -> the call runs as admin
+  // ("Not a participant"). Route through a cookie-free context so cpp takes the
+  // dev raw-sub path and the call is genuinely `userId`.
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   const resp = await page.request.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
   return resp;
 }
 
 async function apiGet(page: Page, path: string, userId = ALICE_ID) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   const resp = await page.request.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
   return resp;
 }
@@ -401,7 +410,9 @@ test.describe("4. Message operations (API)", () => {
   test("Can edit a message", async () => {
     const cid = getTestConvId();
     const mid = getTestMsgId();
-    const resp = await page.request.patch(
+    const resp = usingCpp()
+      ? await cppBearerPatch(`/messaging/conversations/${cid}/messages/${mid}`, { text: "Edited text" }, getSessions()[ALICE_ID].user_sub)
+      : await page.request.patch(
       `${API}/messaging/conversations/${cid}/messages/${mid}`,
       {
         data: { text: "Edited text" },
@@ -446,7 +457,9 @@ test.describe("4. Message operations (API)", () => {
     );
     expect(createResp.ok()).toBe(true);
     const created = await createResp.json();
-    const deleteResp = await page.request.delete(
+    const deleteResp = usingCpp()
+      ? await cppBearerDelete(`/messaging/conversations/${cid}/messages/${created.message_id}`, getSessions()[ALICE_ID].user_sub)
+      : await page.request.delete(
       `${API}/messaging/conversations/${cid}/messages/${created.message_id}`,
       { headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` } }
     );
@@ -636,7 +649,9 @@ test.describe("7. Scheduled messages", () => {
       send_at: Math.floor(Date.now() / 1000) + 7200,
     });
     const msg = await createResp.json();
-    const cancelResp = await page.request.delete(
+    const cancelResp = usingCpp()
+      ? await cppBearerDelete(`/messaging/conversations/${cid}/messages/${msg.message_id}/schedule`, getSessions()[ALICE_ID].user_sub)
+      : await page.request.delete(
       `${API}/messaging/conversations/${cid}/messages/${msg.message_id}/schedule`,
       { headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` } }
     );
@@ -757,7 +772,9 @@ test.describe("9. Gallery and attachments", () => {
 
   test("Gallery endpoint returns correct shape", async () => {
     const cid = getTestConvId();
-    const resp = await page.request.get(
+    const resp = usingCpp()
+      ? await cppBearerGet(`/messaging/conversations/${cid}/gallery?type=image&limit=10`, getSessions()[ALICE_ID].user_sub)
+      : await page.request.get(
       `${API}/messaging/conversations/${cid}/gallery`,
       {
         params: { type: "image", limit: "10" },

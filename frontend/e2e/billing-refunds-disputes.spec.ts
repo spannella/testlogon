@@ -26,6 +26,11 @@ import * as path from "path";
 import { retryOn429 } from "./helpers/retry";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedLedgerEntries,
+  cppPurgeUserDisputes,
+} from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -103,6 +108,7 @@ ddb_client = boto3.client('dynamodb', endpoint_url='http://localhost:8001', regi
 `;
 
 function ensureBillingDisputesTable(): void {
+  if (usingCpp()) return; // cpp's tlc_billing_disputes already exists
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 try:
@@ -154,6 +160,12 @@ except ddb_client.exceptions.ResourceInUseException:
  * ByUserCreatedAt GSI.
  */
 function purgeUserDisputes(userSub: string): void {
+  if (usingCpp()) {
+    // Reset the cap in cpp's OWN tlc_billing_disputes keyed by the SUB, not the
+    // email. The caller passes ALICE_ID (email) so resolve alice's sub here.
+    cppPurgeUserDisputes(getSessions()["alice"].user_sub);
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 from boto3.dynamodb.conditions import Key
@@ -172,6 +184,23 @@ print(json.dumps({'purged': n}))
 
 function seedLedgerEntry(entryId: string, amountCents: number): void {
   const ts = Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    // cpp keys the ledger by SUB and reads it from its OWN tlc_billing; the
+    // dispute-file endpoint's rr_find_ledger scans that store for the entry_id.
+    cppSeedLedgerEntries([
+      {
+        userSub: getSessions()["alice"].user_sub,
+        entryId,
+        ts,
+        type: "charge",
+        amountCents,
+        state: "settled",
+        reason: "test_charge",
+        currency: "USD",
+      },
+    ]);
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 tbl = ddb.Table('billing')

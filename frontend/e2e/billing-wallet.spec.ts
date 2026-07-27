@@ -21,6 +21,13 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedPaymentMethodBB,
+  cppSeedWalletBalance,
+  cppSeedLedgerEntry,
+  cppDeleteBillingRow,
+} from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -114,6 +121,10 @@ const PYTHON = "python3";
 
 /** Inject a test payment method and set it as default in DynamoDB. */
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    cppSeedPaymentMethodBB(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 pk = 'USER#${userSub}'
@@ -148,6 +159,10 @@ print('injected')
 
 /** Directly set wallet balance in DynamoDB (bypasses Stripe for test setup). */
 function injectWalletBalance(userSub: string, balanceCents: number): void {
+  if (usingCpp()) {
+    cppSeedWalletBalance(userSub, balanceCents);
+    return;
+  }
   execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 import time
@@ -177,6 +192,17 @@ function seedWalletLedgerEntry(userSub: string, reasonBase: string): string {
   const marker = `${reasonBase}_e2e_${TS}_${Math.random().toString(36).slice(2, 8)}`;
   // Far-future ts (now + ~1 year) guarantees newest-first ordering regardless of
   // how many rows other specs have accumulated.
+  if (usingCpp()) {
+    cppSeedLedgerEntry({
+      userSub,
+      ts: Math.floor(Date.now() / 1000) + 31_000_000,
+      type: "debit",
+      amountCents: 250,
+      state: "settled",
+      reason: marker,
+    });
+    return marker;
+  }
   execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 import time, secrets
@@ -203,6 +229,16 @@ print('ledger seeded')
 
 /** Delete the WALLET row and injected PM from DynamoDB. */
 function cleanupWallet(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // Reset the WALLET balance to 0 in cpp (the only stateful row the balance
+    // tests care about); PM#/BILLING seeds are idempotent and harmless to leave.
+    try {
+      cppSeedWalletBalance(userSub, 0);
+    } catch {
+      /* best-effort */
+    }
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "${DDB_PRELUDE}
@@ -279,15 +315,19 @@ test.describe("Section 69: Wallet API", () => {
   });
 
   test("69.5 POST deposit with no PM and no default → 400", async () => {
-    // Temporarily remove the BILLING row so there's no default PM
-    execSync(
-      `${PYTHON} -c "${DDB_PRELUDE}
+    // Temporarily remove the BILLING default-PM pointer so there's no default PM.
+    if (usingCpp()) {
+      cppDeleteBillingRow(aliceSub, "BILLING");
+    } else {
+      execSync(
+        `${PYTHON} -c "${DDB_PRELUDE}
 pk = 'USER#${aliceSub}'
 tbl.delete_item(Key={'pk': pk, 'sk': 'BILLING'})
 print('billing row deleted')
 "`,
-      { timeout: 10_000 },
-    );
+        { timeout: 10_000 },
+      );
+    }
     const resp = await apiPost(alicePage, "/ui/billing/wallet/deposit", {
       amount_cents: 500,
     });

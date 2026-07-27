@@ -15,14 +15,27 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 import { asArray } from "./helpers/shape";
+import {
+  usingCpp,
+  cppResetUserSyndicates,
+} from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
-const CHARLIE_ID = "e2e_charlie@test.local";
+// BOB_ID / CHARLIE_ID feed the invite user_id (URL/body). cpp keys INVITE#/
+// MEMBER# by the invitee's SUB and invite/respond looks up INVITE#<caller sub>,
+// so the invited id MUST be the SAME session's sub used by that member's page
+// (bobPage="bob", charliePage="charlie_admin"). Under cpp resolve to those subs;
+// the Python path is unchanged (resolveIdentityId returns the email verbatim).
+const BOB_ID = usingCpp()
+  ? resolveIdentityId("bob")
+  : "e2e_bob@test.local";
+const CHARLIE_ID = usingCpp()
+  ? resolveIdentityId("charlie_admin")
+  : "e2e_charlie@test.local";
 
 const TS = Date.now();
 
@@ -103,6 +116,16 @@ test.beforeAll(async ({ browser }) => {
   alicePage = await newIdentityPage(browser, "alice");
   bobPage = await newIdentityPage(browser, "bob");
   charliePage = await newIdentityPage(browser, "charlie_admin");
+
+  // cpp only: clear the caller's stale syndicate index so SY_MAX_PER_USER (10)
+  // is not tripped by accumulation from prior runs (Python DDB-Local is fresh).
+  if (usingCpp()) {
+    cppResetUserSyndicates([
+      getSessions()["alice"]?.user_sub,
+      getSessions()["bob"]?.user_sub,
+      getSessions()["charlie_admin"]?.user_sub,
+    ].filter(Boolean) as string[]);
+  }
 
   const resp = await apiPost(alicePage, "alice", "/ui/syndicates", {
     name: `Feed Syndicate ${TS}`,

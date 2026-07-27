@@ -30,6 +30,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppBearerGet, cppSeedStickerCollection } from "./helpers/cpp-seed-messaging-calls";
 import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -110,7 +111,9 @@ async function apiDelete(page: Page, path: string) {
 
 /** GET/POST as an arbitrary user using the dev-mode Bearer token (bypasses CSRF). */
 async function apiGetBearer(req: APIRequestContext, path: string, userId: string) {
-  return req.get(`${API}${path}`, { headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` } });
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
+  return req.get(`${API}${path}`, { headers: { Authorization: `Bearer ${sub}` } });
 }
 
 // ─── DDB seed helper ──────────────────────────────────────────────────────────
@@ -136,6 +139,23 @@ ddb = boto3.resource(
 
 /** Seed a test sticker collection (1 META + 1 sticker) directly into DDB. */
 function seedStickerCollection() {
+  if (usingCpp()) {
+    // cpp reads its OWN moto tlc_sticker_collections, not the :8001 Python DDB.
+    const url = `/mock/s3/my-chat-images/stickers/${TEST_COLLECTION_ID}/${TEST_STICKER_ID}.png`;
+    cppSeedStickerCollection({
+      collectionId: TEST_COLLECTION_ID,
+      name: `E2E Cats ${TS}`,
+      description: "E2E test collection",
+      thumbnailUrl: url,
+      createdBy: "root",
+      createdAtSec: Math.floor(TS / 1000),
+      isActive: "1",
+      stickers: [
+        { sticker_id: TEST_STICKER_ID, image_url: url, alt_text: "Cat waving hello", sort_order: 1, width: 256, height: 256 },
+      ],
+    });
+    return;
+  }
   execSync(
     `${PYTHON} -c "${DDB_HELPER_PRELUDE}
 tbl = ddb.Table(os.environ.get('DDB_STICKER_COLLECTIONS_TABLE', 'sticker_collections'))

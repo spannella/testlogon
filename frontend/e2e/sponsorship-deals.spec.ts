@@ -18,6 +18,10 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
 import { usingCpp, cppSeedWallet } from "./helpers/cpp-seed-messaging-crm-misc";
+import {
+  cppReadItem,
+  cppReadLedger,
+} from "./helpers/cpp-seed-payouts-subs-ats-misc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -110,6 +114,17 @@ print('ok')
 }
 
 function ddbGet(tableName: string, key: Record<string, string>): Record<string, unknown> | null {
+  // cpp path: cpp wrote its mutation into its OWN moto (tlc_*), keyed by SUB —
+  // the Python DDB-Local read below would see nothing. Translate any USER#<email>
+  // partition (wallet/ledger rows) to the cpp SUB and read cpp's own table.
+  if (usingCpp()) {
+    const cppKey: Record<string, string> = { ...key };
+    if (typeof cppKey.pk === "string" && cppKey.pk.startsWith("USER#")) {
+      const email = cppKey.pk.slice("USER#".length);
+      cppKey.pk = "USER#" + cppSub(email);
+    }
+    return cppReadItem(tableName, cppKey);
+  }
   const script = `${pyEnvPreamble()}
 class Enc(json.JSONEncoder):
     def default(self, o):
@@ -162,6 +177,10 @@ function seedWallet(userSub: string, balanceCents: number): void {
 }
 
 function ddbQueryLedger(userSub: string): Array<Record<string, unknown>> {
+  // cpp path: read the ledger from cpp's OWN tlc_billing keyed by the SUB.
+  if (usingCpp()) {
+    return cppReadLedger(cppSub(userSub));
+  }
   const script = `${pyEnvPreamble()}
 from boto3.dynamodb.conditions import Key
 class Enc(json.JSONEncoder):

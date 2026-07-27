@@ -16,6 +16,7 @@ import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedLedgerEntry } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -106,6 +107,22 @@ with open('${tmpFile}') as f:
 
 function seedBillingEntry(userSub: string, opts: { entry_type: string; amount_cents: number; reason: string; created_at: number }) {
   const uuid = Math.random().toString(36).slice(2, 14);
+  if (usingCpp()) {
+    // cpp's billing_ledger CSV export reads LEDGER# rows from its OWN tlc_billing
+    // keyed by SUB, using entry_type (S) + created_at (N). Seed those there.
+    cppSeedLedgerEntry({
+      userSub,
+      entryId: uuid,
+      ts: opts.created_at,
+      createdAt: opts.created_at,
+      entryType: opts.entry_type,
+      amountCents: opts.amount_cents,
+      state: "settled",
+      reason: opts.reason,
+      currency: "USD",
+    });
+    return;
+  }
   ddbPutItem("billing", {
     pk: `USER#${userSub}`,
     sk: `LEDGER#${opts.created_at}#${uuid}`,

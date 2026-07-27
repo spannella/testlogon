@@ -44,6 +44,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -111,16 +112,20 @@ type Browser = import("@playwright/test").Browser;
 
 /** POST as any user with dev-mode Bearer token (messaging endpoints only). */
 async function apiPost(req: APIRequestContext, path: string, body: object, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
 /** GET as any user with dev-mode Bearer token (messaging endpoints only). */
 async function apiGet(req: APIRequestContext, path: string, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 

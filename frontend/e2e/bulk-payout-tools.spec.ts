@@ -20,6 +20,11 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import { execFileSync } from "child_process";
 import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  resolveIdentityId,
+  cppSeedBulkPending,
+} from "./helpers/cpp-seed-payouts-subs-ats-misc";
 
 // ESM-safe __dirname (this spec runs under Playwright's ESM loader).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -92,6 +97,12 @@ function csrfHeaders(identity: string): Record<string, string> {
 
 /** Seed a pending payout/refund row directly in DynamoDB. Returns the ref_id. */
 function seedPending(kind: "payout" | "refund", userId: string, amountCents: number): string {
+  // cpp path: the Python seed script writes the :8001 DDB-Local; cpp reads its
+  // own tlc_creator_payouts / tlc_refund_requests. Seed a pending row there and
+  // return the ref_id (email->SUB resolution happens inside the wrapper).
+  if (usingCpp()) {
+    return cppSeedBulkPending(kind, userId, amountCents);
+  }
   const out = execFileSync(
     "bash",
     [

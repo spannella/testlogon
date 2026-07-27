@@ -27,13 +27,20 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedIncident,
+  cppDeleteIncident,
+} from "./helpers/cpp-seed-appeals-moderation-tail";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TS       = Date.now();
-const ALICE_ID = "e2e_alice@test.local";
+// Under cpp the incident owner is keyed by the JWT sub (account_id/customer_id
+// == sub); Python path returns the email verbatim (unchanged).
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 const ROOT_SUB = "root.admin@testdev.local";
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
@@ -105,6 +112,9 @@ ddb_client = boto3.client('dynamodb', endpoint_url='http://localhost:8001', regi
  * the events / evidence / retries / ticket_links tables may not be.
  */
 function ensureTables(): void {
+  // cpp stores retry-attempts/evidence as nested arrays on the incident row (no
+  // subsidiary tables), so there is nothing to pre-create under cpp.
+  if (usingCpp()) return;
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 for tname, pk, sk in [
@@ -143,6 +153,18 @@ function seedIncident(opts: {
 }): void {
   const ref = opts.paymentReference ?? `pi_${opts.incidentId}`;
   const amt = opts.amount ?? "5000";
+  if (usingCpp()) {
+    cppSeedIncident({
+      incidentId: opts.incidentId,
+      provider: opts.provider,
+      incidentType: opts.incidentType,
+      status: opts.status,
+      accountSub: opts.accountId,
+      paymentReference: ref,
+      amount: amt,
+    });
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 table = ddb.Table('payment_incidents')
@@ -169,6 +191,10 @@ table.put_item(Item={
 }
 
 function deleteIncident(incidentId: string): void {
+  if (usingCpp()) {
+    cppDeleteIncident(incidentId);
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 ddb.Table('payment_incidents').delete_item(Key={'incident_id': '${incidentId}'})
@@ -178,6 +204,9 @@ ddb.Table('payment_incidents').delete_item(Key={'incident_id': '${incidentId}'})
 }
 
 function cleanupIncidentArtifacts(incidentId: string): void {
+  // cpp keeps retry/evidence artifacts inline on the incident row, which
+  // deleteIncident already removes — no subsidiary tables to sweep.
+  if (usingCpp()) return;
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 from boto3.dynamodb.conditions import Key

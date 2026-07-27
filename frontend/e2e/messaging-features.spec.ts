@@ -34,6 +34,7 @@ import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
 import { usingCpp } from "./helpers/cpp-seed-messaging-crm-misc";
 import { cppSeedPaymentMethod } from "./helpers/cpp-seed";
+import { cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -130,9 +131,11 @@ async function apiPostBearer(
   body: object,
   userId: string,
 ) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
@@ -142,8 +145,10 @@ async function apiGetBearer(
   path: string,
   userId: string,
 ) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 

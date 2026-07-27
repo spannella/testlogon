@@ -16,6 +16,11 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppDdbPut,
+  cppDdbGet,
+} from "./helpers/cpp-seed-appeals-moderation-tail";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -81,6 +86,10 @@ function apiGet(page: Page, path: string, params?: Record<string, string>) {
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 function ddbPut(table: string, item: Record<string, unknown>): void {
+  if (usingCpp()) {
+    cppDdbPut(table, item);
+    return;
+  }
   const script = `
 import boto3, json, sys
 from decimal import Decimal
@@ -107,6 +116,9 @@ table.put_item(Item=to_ddb(item))
 }
 
 function ddbGet(table: string, key: Record<string, string>): Record<string, unknown> | null {
+  if (usingCpp()) {
+    return cppDdbGet(table, key);
+  }
   const script = `
 import boto3, json, sys
 from decimal import Decimal
