@@ -98,3 +98,83 @@ export function cppCleanupContacts(ownerSub: string): void {
     owner_id: ownerSub,
   });
 }
+
+// ── alerts (tlc_alerts, PK user_sub / SK alert_id) ───────────────────────────
+/**
+ * Event → priority map, byte-identical to cpp's alert_priority_for()
+ * (app/main.cpp:3904) and the Python get_alert_priority()
+ * (app/services/alert_priority.py). Used so seeded alerts carry the SAME
+ * priority cpp would compute. cpp's alert_out ECHOES a stored `priority` when
+ * present (`it.contains("priority") ? item_s : alert_priority_for`), so the
+ * seed MUST write the value cpp would otherwise derive — otherwise the shim's
+ * default "normal" would mask urgent/low events (206.x).
+ */
+const CPP_ALERT_PRIORITY: Record<string, string> = {
+  login_failure: "urgent", mfa_failure: "urgent", challenge_failed: "urgent",
+  access_denied: "urgent", security_event: "urgent", device_new: "urgent",
+  device_location_mismatch: "urgent", rate_limited: "urgent",
+  new_follower: "low", post_liked: "low", post_reaction: "low", post_shared: "low",
+  login_success: "low", mfa_success: "low", api_key_created: "low",
+  device_trust: "low", challenge_created: "low", challenge_revoked: "low",
+  calendar_event_created: "low", calendar_event_updated: "low",
+  calendar_event_deleted: "low",
+};
+
+export function cppAlertPriorityFor(event: string, alertType?: string): string {
+  const key = alertType || event;
+  return CPP_ALERT_PRIORITY[key] ?? "normal";
+}
+
+export interface CppSeedAlert {
+  userSub: string; // cpp SUB (resolveIdentityId), NOT the email
+  event: string;
+  title?: string;
+  outcome?: string;
+  details?: Record<string, unknown>;
+  read?: boolean;
+  priority?: string; // if omitted, derived from event/details.alert_type like cpp
+  category?: string;
+  actionUrl?: string;
+}
+
+/**
+ * Seed one-or-more alert rows into cpp's tlc_alerts so /ui/alerts,
+ * /ui/alerts/unread-count and the bell UI see them. Mirrors writeTestAlert()
+ * in notification-enhancements.spec.ts (Python write_alert). cpp has NO
+ * UNREAD_COUNT sentinel — unread-count LIVE-counts read=false rows — so an
+ * inserted read:false row makes the count native-correct with no sentinel bump.
+ * priority is derived from the event (matching cpp) unless explicitly supplied.
+ */
+export function cppSeedAlerts(alerts: CppSeedAlert[]): void {
+  if (!usingCpp()) return;
+  runCppShim("seed_profile-social_alerts.py", {
+    alerts: alerts.map((a) => {
+      const alertType =
+        (a.details && typeof a.details["alert_type"] === "string"
+          ? (a.details["alert_type"] as string)
+          : undefined);
+      return {
+        user_sub: a.userSub,
+        event: a.event,
+        title: a.title ?? "",
+        outcome: a.outcome ?? "success",
+        details: a.details ?? {},
+        read: a.read ?? false,
+        priority: a.priority ?? cppAlertPriorityFor(a.event, alertType),
+        ...(a.category != null ? { category: a.category } : {}),
+        ...(a.actionUrl != null ? { action_url: a.actionUrl } : {}),
+      };
+    }),
+  });
+}
+
+/**
+ * Reset a user's alert state to the empty/all-read baseline under cpp by
+ * DELETING every tlc_alerts row for the sub (cpp has no sentinel to zero).
+ * Mirrors resetAliceAlerts() in notification-enhancements.spec.ts. After this
+ * /ui/alerts/unread-count returns 0.
+ */
+export function cppResetAlerts(userSub: string): void {
+  if (!usingCpp()) return;
+  runCppShim("delete_alerts.py", { user_sub: userSub });
+}
