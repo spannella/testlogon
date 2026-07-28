@@ -24,8 +24,8 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
-import { usingCpp, cppSeedSyndicateTreasury, cppReadSyndicateTreasury } from "./helpers/cpp-seed-groups-treasury";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedSyndicateTreasury, cppReadSyndicateTreasury, cppResetUserSyndicates } from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -165,14 +165,28 @@ async function bootstrapSyndicate(browser: Browser, treasuryCents: number) {
   alicePage = await newIdentityPage(browser, "alice");
   bobPage = await newIdentityPage(browser, "bob");
 
+  // cpp: clear Alice's (+Bob's) syndicate index so POST /ui/syndicates stays
+  // below SY_MAX_PER_USER (10). bootstrapSyndicate runs in EACH block's
+  // beforeAll (4x), so keep just the newest to prevent cap-creep across blocks.
+  if (usingCpp()) {
+    cppResetUserSyndicates([resolveIdentityId(ALICE_ID), resolveIdentityId(BOB_ID)], 1);
+  }
+
   const create = await apiPost(alicePage, "alice", "/ui/syndicates", {
     name: `Ad Syndicate ${TS}`,
     description: "Advertising E2E",
   });
   syndicateId = (await create.json()).syndicate_id;
+  if (!syndicateId) {
+    throw new Error(
+      `syndicate create failed (status ${create.status()}): ${await create.text()}`,
+    );
+  }
 
-  // Bob joins as a member (non-admin).
-  await apiPost(alicePage, "alice", `/ui/syndicates/${syndicateId}/invite`, { user_id: BOB_ID });
+  // Bob joins as a member (non-admin). cpp keys the invite row by the invitee's
+  // SUB (h_sy_invite/respond), so send the resolved sub — not the raw email.
+  const inviteId = usingCpp() ? resolveIdentityId(BOB_ID) : BOB_ID;
+  await apiPost(alicePage, "alice", `/ui/syndicates/${syndicateId}/invite`, { user_id: inviteId });
   await apiPost(bobPage, "bob", `/ui/syndicates/${syndicateId}/invite/respond`, { accept: true });
 
   seedTreasury(syndicateId, treasuryCents);

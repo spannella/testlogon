@@ -22,6 +22,10 @@ import { usingCpp, cppResetUserSyndicates } from "./helpers/cpp-seed-groups-trea
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
+// cpp keys invite/access/member rows by SUB; Python keys by email. resolveIdentityId
+// returns the email verbatim on the Python path, so these are byte-identical there.
+const ALICE_DATA_ID = () => resolveIdentityId(ALICE_ID);
+const BOB_DATA_ID = () => resolveIdentityId(BOB_ID);
 
 // Unique per-run suffix to avoid cross-run conflicts
 const TS = Date.now().toString(36);
@@ -103,7 +107,7 @@ let subscriptionId = "";
 test.describe("427 — Bundle Plan CRUD API", () => {
   test.beforeAll(async ({ browser }) => {
     if (usingCpp()) {
-      cppResetUserSyndicates([resolveIdentityId(ALICE_ID), resolveIdentityId(BOB_ID)]);
+      cppResetUserSyndicates([resolveIdentityId(ALICE_ID), resolveIdentityId(BOB_ID)], 1);
     }
     const context = await browser.newContext();
     const page = await context.newPage();
@@ -121,7 +125,7 @@ test.describe("427 — Bundle Plan CRUD API", () => {
 
     // Invite Bob and auto-accept
     const invResp = await apiPost(page, ALICE_ID, `/ui/syndicates/${syndicateId}/invite`, {
-      user_id: BOB_ID,
+      user_id: BOB_DATA_ID(),
     });
     expect(invResp.status()).toBe(201);
 
@@ -295,7 +299,7 @@ test.describe("428 — Bundle Subscription API", () => {
     await injectAuth(page, BOB_ID);
 
     // Check access to Alice (syndicate admin/member)
-    const resp = await apiGet(page, `/ui/syndicates/${syndicateId}/access/${ALICE_ID}`);
+    const resp = await apiGet(page, `/ui/syndicates/${syndicateId}/access/${ALICE_DATA_ID()}`);
     expect(resp.status()).toBe(200);
     const result = await resp.json();
     expect(result.has_access).toBe(true);
@@ -314,7 +318,7 @@ test.describe("428 — Bundle Subscription API", () => {
     await injectAuth(page, ALICE_ID);
 
     // Alice checks her own bundle access to Bob -- Alice has no bundle subscription
-    const resp = await apiGet(page, `/ui/syndicates/${syndicateId}/access/${BOB_ID}`);
+    const resp = await apiGet(page, `/ui/syndicates/${syndicateId}/access/${BOB_DATA_ID()}`);
     expect(resp.status()).toBe(200);
     const result = await resp.json();
     // Alice is not a bundle subscriber, so no bundle access
@@ -375,6 +379,9 @@ test.describe("429 — Dynamic Membership Access", () => {
 
   test.beforeAll(async ({ browser }) => {
     // Create a fresh syndicate with Alice as admin
+    if (usingCpp()) {
+      cppResetUserSyndicates([resolveIdentityId(ALICE_ID), resolveIdentityId(BOB_ID)], 1);
+    }
     const context = await browser.newContext();
     const page = await context.newPage();
     await injectAuth(page, ALICE_ID);
@@ -412,7 +419,7 @@ test.describe("429 — Dynamic Membership Access", () => {
     accessSubId = sub.subscription_id;
 
     // Bob checks access to Alice (who is in the syndicate)
-    const accessResp = await apiGet(page, `/ui/syndicates/${accessSyndicateId}/access/${ALICE_ID}`);
+    const accessResp = await apiGet(page, `/ui/syndicates/${accessSyndicateId}/access/${ALICE_DATA_ID()}`);
     expect(accessResp.status()).toBe(200);
     const result = await accessResp.json();
     expect(result.has_access).toBe(true);
@@ -431,7 +438,7 @@ test.describe("429 — Dynamic Membership Access", () => {
     await injectAuth(page, BOB_ID);
 
     // Bob checks access to himself (Bob is NOT a member of this syndicate)
-    const resp = await apiGet(page, `/ui/syndicates/${accessSyndicateId}/access/${BOB_ID}`);
+    const resp = await apiGet(page, `/ui/syndicates/${accessSyndicateId}/access/${BOB_DATA_ID()}`);
     expect(resp.status()).toBe(200);
     const result = await resp.json();
     // Bob is not a member of the syndicate, so bundle access check should be false
@@ -452,7 +459,7 @@ test.describe("429 — Dynamic Membership Access", () => {
     expect(cancelResult.status).toBe("cancelled");
 
     // Access should still work (period hasn't ended)
-    const accessResp = await apiGet(page, `/ui/syndicates/${accessSyndicateId}/access/${ALICE_ID}`);
+    const accessResp = await apiGet(page, `/ui/syndicates/${accessSyndicateId}/access/${ALICE_DATA_ID()}`);
     expect(accessResp.status()).toBe(200);
     const result = await accessResp.json();
     expect(result.has_access).toBe(true);
@@ -469,7 +476,7 @@ test.describe("429 — Dynamic Membership Access", () => {
 
     // Alice is the syndicate admin/member -- check if she has bundle access to herself
     // She doesn't have a bundle subscription to her own syndicate, so this should be false
-    const resp = await apiGet(page, `/ui/syndicates/${accessSyndicateId}/access/${ALICE_ID}`);
+    const resp = await apiGet(page, `/ui/syndicates/${accessSyndicateId}/access/${ALICE_DATA_ID()}`);
     expect(resp.status()).toBe(200);
     const result = await resp.json();
     // Alice is a member, not a subscriber -- no bundle access
@@ -490,7 +497,7 @@ test.describe("429 — Dynamic Membership Access", () => {
     expect(plan.plan_type).toBe("syndicate_bundle");
     expect(Array.isArray(plan.current_members)).toBe(true);
     // Alice should be in the member list
-    const aliceMember = plan.current_members.find((m: { user_id: string }) => m.user_id === ALICE_ID);
+    const aliceMember = plan.current_members.find((m: { user_id: string }) => m.user_id === ALICE_DATA_ID());
     expect(aliceMember).toBeTruthy();
     expect(aliceMember.role).toBe("admin");
 
@@ -509,6 +516,9 @@ test.describe("430 — Bundle Plan UI", () => {
   let uiSyndId = "";
 
   test.beforeAll(async ({ browser }) => {
+    if (usingCpp()) {
+      cppResetUserSyndicates([resolveIdentityId(ALICE_ID), resolveIdentityId(BOB_ID)], 1);
+    }
     const context = await browser.newContext();
     const page = await context.newPage();
     await injectAuth(page, ALICE_ID);
@@ -523,7 +533,7 @@ test.describe("430 — Bundle Plan UI", () => {
 
     // Invite Bob and have him accept so he is a non-admin member.
     const invResp = await apiPost(page, ALICE_ID, `/ui/syndicates/${uiSyndId}/invite`, {
-      user_id: BOB_ID,
+      user_id: BOB_DATA_ID(),
     });
     expect(invResp.status()).toBe(201);
 

@@ -34,6 +34,7 @@ import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
 import { asArray } from "./helpers/shape";
+import { usingCpp, cppSeedPaymentMethod } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -116,6 +117,10 @@ async function apiGetBearer(req: APIRequestContext, path: string, userId: string
 // ─── Payment method helpers ───────────────────────────────────────────────────
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -168,6 +173,11 @@ print('injected')
 }
 
 function removePaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // Best-effort: PM seeds are idempotent overwrites in tlc_billing; cleanup is
+    // non-load-bearing under cpp (mirrors cppDeleteVodVideo's convention).
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "

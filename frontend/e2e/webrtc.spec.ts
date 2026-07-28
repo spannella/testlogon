@@ -23,6 +23,13 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedCallSession,
+  cppDeleteCallSession,
+  cppSeedConversation,
+  cppDeleteConversation,
+} from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ---------------------------------------------------------------------------
@@ -99,6 +106,16 @@ function seedCallSession(opts: {
   calleeUserId: string;
   state: string;
 }): void {
+  if (usingCpp()) {
+    cppSeedCallSession({
+      callId: opts.callId,
+      conversationId: opts.conversationId,
+      callerUserId: opts.callerUserId,
+      calleeUserId: opts.calleeUserId,
+      state: opts.state,
+    });
+    return;
+  }
   const py = `
 import json, sys, boto3, time
 sys.path.insert(0, "${REPO_ROOT}")
@@ -132,6 +149,10 @@ print("ok")
 }
 
 function deleteCallSession(callId: string): void {
+  if (usingCpp()) {
+    cppDeleteCallSession(callId);
+    return;
+  }
   const py = `
 import boto3
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
@@ -450,6 +471,10 @@ test.describe("73 — WebRTC TURN credentials", () => {
 // ===========================================================================
 
 function seedConversation(conversationId: string, participantIds: string[]): void {
+  if (usingCpp()) {
+    cppSeedConversation(conversationId, participantIds);
+    return;
+  }
   const py = `
 import boto3, time
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
@@ -495,6 +520,10 @@ print("ok")
 }
 
 function deleteConversation(conversationId: string): void {
+  if (usingCpp()) {
+    cppDeleteConversation(conversationId, [ALICE_ID, BOB_ID]);
+    return;
+  }
   const py = `
 import boto3
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",

@@ -169,3 +169,70 @@ export function cppSeedStickerCollection(opts: CppStickerCollectionOpts): void {
     })),
   });
 }
+
+// ── webrtc.spec.ts: call-session + conversation cpp seeds ────────────────────
+
+export interface CppCallSessionOpts {
+  callId: string;
+  conversationId: string;
+  callerUserId: string; // cpp SUB
+  calleeUserId: string; // cpp SUB
+  state: string;
+  initialMode?: string;
+}
+
+/**
+ * Seed one call-session row into cpp's tlc_message_call_sessions (PK call_id;
+ * GSI1 conversation_id/start_ts_sort). Mirrors webrtc.spec.ts seedCallSession(),
+ * whose Python :8001 "MessageCallSessions" put never reaches cpp. NUMERICS land
+ * as numbers, lifecycle_events as a list, idempotency_records as a map — the
+ * exact shape cs_put's json_to_ddb produces, so cs_get/rec_require_call_participant
+ * read it back. caller/callee/conversation ids MUST be cpp subs.
+ */
+export function cppSeedCallSession(opts: CppCallSessionOpts): void {
+  runCppShim("seed_messaging-calls_call_session.py", {
+    call_id: opts.callId,
+    conversation_id: opts.conversationId,
+    caller_user_id: opts.callerUserId,
+    callee_user_id: opts.calleeUserId,
+    state: opts.state,
+    ...(opts.initialMode ? { initial_mode: opts.initialMode } : {}),
+  });
+}
+
+/** Delete a call-session row from cpp's tlc_message_call_sessions. Best-effort. */
+export function cppDeleteCallSession(callId: string): void {
+  try {
+    runCppShim("delete_call_session.py", { call_id: callId });
+  } catch {
+    /* ignore cleanup errors */
+  }
+}
+
+/**
+ * Seed a conversation + one active participant row per sub into cpp's
+ * tlc_conversations + tlc_participants (GSI1PK=conversation_id). Mirrors
+ * webrtc.spec.ts seedConversation(). cpp's call lifecycle resolves the
+ * participant set from tlc_participants (get_participant / GSI1), requiring
+ * status=="active". participantSubs MUST be cpp subs (map emails via
+ * resolveIdentityId in the spec before calling).
+ */
+export function cppSeedConversation(conversationId: string, participantSubs: string[]): void {
+  runCppShim("seed_messaging-calls_conversation.py", {
+    conversation_id: conversationId,
+    participant_subs: participantSubs,
+    type: "dm",
+  });
+}
+
+/** Delete a conversation + its participant rows from cpp. Best-effort. */
+export function cppDeleteConversation(conversationId: string, participantSubs?: string[]): void {
+  try {
+    runCppShim("delete_conversation.py", {
+      conversation_id: conversationId,
+      ...(participantSubs ? { participant_subs: participantSubs } : {}),
+    });
+  } catch {
+    /* ignore cleanup errors */
+  }
+}

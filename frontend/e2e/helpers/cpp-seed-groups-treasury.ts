@@ -80,10 +80,13 @@ export function cppReadUserWallet(userSub: string): number {
  * subs MUST be cpp SUBs (the sid the JWT carries), NOT emails.
  * Verified live: after reset, POST /ui/syndicates -> 201 (was 400).
  */
-export function cppResetUserSyndicates(subs: string[]): void {
+export function cppResetUserSyndicates(subs: string[], keepNewest?: number): void {
   const clean = subs.filter(Boolean);
   if (clean.length === 0) return;
-  runCppShim("reset_syndicates.py", { subs: clean });
+  runCppShim("reset_syndicates.py", {
+    subs: clean,
+    ...(keepNewest != null ? { keep_newest: keepNewest } : {}),
+  });
 }
 
 // -- syndicate-advertising treasury (syndicate-advertising.spec.ts) -----------

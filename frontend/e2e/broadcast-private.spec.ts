@@ -3,6 +3,11 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod } from "./helpers/cpp-seed";
+import {
+  cppActivateBroadcastPrivateSession,
+  cppQueryBillingLedger,
+} from "./helpers/cpp-seed-broadcast-private";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
@@ -98,6 +103,10 @@ print('ok')
 }
 
 function seedPaymentMethod(userId: string, pmId: string) {
+  if (usingCpp()) {
+    cppSeedPaymentMethod(userId, pmId);
+    return;
+  }
   const code = `
 ${PY_PREAMBLE}
 table = ddb.Table('billing')
@@ -120,6 +129,10 @@ print('ok')
 }
 
 function activatePrivateSession(sessionId: string, requestId: string) {
+  if (usingCpp()) {
+    cppActivateBroadcastPrivateSession(sessionId, requestId);
+    return;
+  }
   const code = `
 ${PY_PREAMBLE}
 table = ddb.Table('BroadcastPrivateSessions')
@@ -135,6 +148,9 @@ print('ok')
 }
 
 function queryBillingLedger(userId: string): { count: number } {
+  if (usingCpp()) {
+    return cppQueryBillingLedger(userId, "Private session");
+  }
   const code = `
 ${PY_PREAMBLE}
 from boto3.dynamodb.conditions import Key as K
@@ -175,8 +191,14 @@ async function createLiveBroadcast(page: Page): Promise<{ profileId: string; ses
   expect(sessionResp.status()).toBe(201);
   const sessionId = (await sessionResp.json()).id;
 
-  // Set session to live via DDB (bypassing orchestrator)
-  setSessionStatus(sessionId, "live");
+  // Set session to live. cpp: promote draft->live via the real API (root owns
+  // the session + has role root, so bc_do_start is allowed). Python: DDB poke.
+  if (usingCpp()) {
+    const startResp = await apiPost(page, "root", `/broadcast/sessions/${sessionId}/start`, {});
+    expect([200, 202]).toContain(startResp.status());
+  } else {
+    setSessionStatus(sessionId, "live");
+  }
 
   return { profileId, sessionId };
 }

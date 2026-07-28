@@ -17,7 +17,13 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedConversation,
+  cppSeedVideo,
+  cppDeleteVodVideo,
+} from "./helpers/cpp-seed-messaging-video";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -95,6 +101,21 @@ function seedVideo(opts: {
     : "";
   const publishedField = status === "published" ? `'published_at': ${createdAt},` : "";
 
+  if (usingCpp()) {
+    cppSeedVideo({
+      videoId: opts.videoId,
+      ownerSub: opts.ownerUserId, // already a cpp SUB (ALICE_SUB()/BOB_SUB())
+      title: opts.title,
+      status,
+      visibility,
+      hlsManifestUrl: opts.hlsManifestUrl,
+      thumbnailUrl: opts.thumbnailUrl,
+      durationSeconds: 120.5,
+      extra: { width: 1920, height: 1080 },
+    });
+    return;
+  }
+
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')
@@ -131,6 +152,10 @@ print('ok')
 }
 
 function deleteVideo(videoId: string): void {
+  if (usingCpp()) {
+    cppDeleteVodVideo(videoId);
+    return;
+  }
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')
@@ -161,6 +186,17 @@ function seedConversation(opts: {
 }): void {
   const type = opts.type ?? "dm";
   const nameField = opts.name ? `'name': '${opts.name}',` : "";
+  if (usingCpp()) {
+    // cpp gates participants by SUB (require_participant_active), but the spec
+    // passes email constants -> map each to its cpp sub before seeding.
+    cppSeedConversation({
+      conversationId: opts.conversationId,
+      participantSubs: opts.participantIds.map((id) => resolveIdentityId(id)),
+      type,
+      title: opts.name,
+    });
+    return;
+  }
   const py = `
 import boto3, time
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
