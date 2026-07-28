@@ -25,6 +25,7 @@ import { test, expect, chromium, type Browser, type Page } from "@playwright/tes
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { runCppShim, usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // A connected paid call requires getUserMedia() to succeed (the caller acquires a
@@ -137,6 +138,18 @@ async function ensurePaidRate(page: Page) {
 
 /** Read the most-recent call_id for a conversation from DynamoDB. */
 function latestCallId(convoId: string): string {
+  if (usingCpp()) {
+    // cpp keeps call sessions in tlc_message_call_sessions on .82 moto, not the
+    // Python DDB-Local MessageCallSessions table. Route via the cpp shim.
+    const out = runCppShim("read_call_sessions_latest_active.py", { conversation_id: convoId });
+    const lines = out.split(/\r?\n/).map((l) => l.trim());
+    // last non-"ok" line is the call_id (may be empty while none active yet)
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i] === "ok" || lines[i] === "") continue;
+      return lines[i];
+    }
+    return "";
+  }
   const script = `
 import boto3
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1",
@@ -157,6 +170,10 @@ print(items[-1]["call_id"] if items else "")
 /** Force the backend call session into the "connected" state directly in DDB
  *  (a full WebRTC handshake cannot complete in headless Chromium). */
 function forceCallConnected(callId: string): void {
+  if (usingCpp()) {
+    runCppShim("force_call_connected.py", { call_id: callId });
+    return;
+  }
   const script = `
 import boto3, time
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1",
@@ -178,6 +195,10 @@ print("ok")
 /** Force-terminate any non-terminal call sessions for a conversation in DDB so a
  *  fresh invite is not rejected (409) by an earlier test's lingering call. */
 function endActiveCallSessions(convoId: string): void {
+  if (usingCpp()) {
+    runCppShim("end_active_call_sessions.py", { conversation_id: convoId });
+    return;
+  }
   const script = `
 import boto3, time
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1",

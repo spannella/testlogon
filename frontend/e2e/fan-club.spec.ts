@@ -149,7 +149,8 @@ async function fcPut(page: Page, userId: string, path: string, body?: object) {
 async function subPost(page: Page, userId: string, path: string, body?: object) {
   return page.request.post(`${API}${path}`, {
     data: body ?? {},
-    headers: { "X-User-Id": userId },
+    // cpp requires CSRF on cookie-authenticated mutations; send it alongside X-User-Id.
+    headers: { "X-User-Id": userId, "x-csrf-token": getSessions()[userId].csrf_token },
   });
 }
 
