@@ -178,8 +178,19 @@ test.describe("1. Story CRUD API", () => {
   });
 
   test("1.6 Cannot delete another user's story", async () => {
-    // Bob tries to delete Alice's story
-    const resp = await apiDelete(bobPage, `/ui/stories/${aliceStoryId}`, BOB_ID);
+    // Create a fresh Alice-owned story in THIS test so the target is guaranteed
+    // to exist in the live backend (describe-scoped ids from earlier tests are
+    // not reliably shared, and under E2E_USE_CPP the story must live in cpp's
+    // own store — which a create via the API satisfies).
+    const createResp = await apiPost(alicePage, "/ui/stories", {
+      media_type: "image",
+      media_url: `story-media/owner_check_${TS}.jpg`,
+    });
+    expect(createResp.status()).toBe(201);
+    const { story_id } = await createResp.json();
+
+    // Bob tries to delete Alice's story -> forbidden (not found would be 404).
+    const resp = await apiDelete(bobPage, `/ui/stories/${story_id}`, BOB_ID);
     expect(resp.status()).toBe(403);
   });
 });
