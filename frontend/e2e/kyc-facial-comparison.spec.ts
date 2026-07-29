@@ -236,9 +236,11 @@ test.describe("723. KYC-014 Face Comparison API", () => {
     expect((await r.json()).detail).toBe("access_forbidden");
   });
 
-  test("723.9 unauthenticated request returns 401", async ({ request }) => {
+  test("723.9 unauthenticated request returns 401", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
     const caseId = `kyc_fc_${TS}_match`;
-    const r = await request.post(`${API}/v1/kyc/cases/${caseId}/compare-face`);
+    const r = await anonCtx.request.post(`${API}/v1/kyc/cases/${caseId}/compare-face`);
+    await anonCtx.close();
     expect(r.status()).toBe(401);
   });
 

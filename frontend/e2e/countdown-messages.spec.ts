@@ -240,11 +240,13 @@ test.describe("Section 696: Countdown Message API", () => {
     await page.close();
   });
 
-  test("696.6 auth required (no cookie/bearer → 401)", async ({ request }) => {
-    const resp = await request.post(
+  test("696.6 auth required (no cookie/bearer → 401)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(
       `${API}/messaging/conversations/${convoId}/messages/countdown`,
       { data: { title: "x", target_datetime: nowSec() + 600 } },
     );
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });

@@ -293,11 +293,13 @@ test.describe("Section 712: Find-a-DateTime Creation API", () => {
     await page.close();
   });
 
-  test("712.7 auth required (no cookie/bearer → 401)", async ({ request }) => {
-    const resp = await request.post(
+  test("712.7 auth required (no cookie/bearer → 401)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(
       `${API}/messaging/conversations/${convoId}/messages/find-datetime`,
       { data: fadtBody({ title: "x" }) },
     );
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });

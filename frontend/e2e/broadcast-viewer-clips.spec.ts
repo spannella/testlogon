@@ -237,11 +237,13 @@ test.describe("712 — Viewer Clip Sharing (public clip view)", () => {
     });
   });
 
-  test("712.7 Auth required for clip creation (401)", async ({ request }) => {
+  test("712.7 Auth required for clip creation (401)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
     // No cookies / no auth -> require_ui_session should reject.
-    const resp = await request.post(`${API}/broadcast/sessions/${liveSessionId}/clips`, {
+    const resp = await anonCtx.request.post(`${API}/broadcast/sessions/${liveSessionId}/clips`, {
       data: { start_seconds: 0, end_seconds: 15 },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 

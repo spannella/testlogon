@@ -243,11 +243,13 @@ test.describe("vod-rental 1 - start + validation", () => {
     await ctx.close();
   });
 
-  test("start rental requires auth (401 without session)", async ({ request }) => {
-    const resp = await request.post(BASE + `/ui/vod/rental/${RENTAL_VID}/start`, {
+  test("start rental requires auth (401 without session)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(BASE + `/ui/vod/rental/${RENTAL_VID}/start`, {
       headers: { "Content-Type": "application/json" },
       data: { tier: "rental" },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });

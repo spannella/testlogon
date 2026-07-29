@@ -469,8 +469,10 @@ test.describe("676. Negative Tests", () => {
     expect(r.status()).toBe(422);
   });
 
-  test("676.5 unauthenticated request rejected", async ({ request }) => {
-    const r = await request.get(`${API}/ui/agents/pm/ideas`);
+  test("676.5 unauthenticated request rejected", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const r = await anonCtx.request.get(`${API}/ui/agents/pm/ideas`);
+    await anonCtx.close();
     expect([401, 403]).toContain(r.status());
   });
 });

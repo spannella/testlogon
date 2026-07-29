@@ -347,11 +347,13 @@ test.describe("FEED-004 rich comments", () => {
       expect(c.body ?? c.body_plain).toBe(`edited ${TS}`);
     });
 
-    test("727.2 unauthenticated comment rejected", async ({ request }) => {
-      const resp = await request.post(`${API}/posts/${postId}/comments`, {
+    test("727.2 unauthenticated comment rejected", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+      const resp = await anonCtx.request.post(`${API}/posts/${postId}/comments`, {
         data: { kind: "gif", gif_url: GIF_URL },
       });
-      expect(resp.status()).toBe(401);
+      await anonCtx.close();
+    expect(resp.status()).toBe(401);
     });
   });
 

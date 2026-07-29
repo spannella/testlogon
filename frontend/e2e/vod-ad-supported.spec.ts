@@ -241,11 +241,13 @@ test.describe("vod-ad-supported 1 - start + gating", () => {
     await ctx.close();
   });
 
-  test("start requires auth (401 without session)", async ({ request }) => {
-    const resp = await request.post(BASE + `/ui/vod/ad-supported/${AD_VID}/start`, {
+  test("start requires auth (401 without session)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(BASE + `/ui/vod/ad-supported/${AD_VID}/start`, {
       headers: { "Content-Type": "application/json" },
       data: {},
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });

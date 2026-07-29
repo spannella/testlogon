@@ -515,10 +515,12 @@ test.describe("Section 708: GIF Message Send/Receive API", () => {
     await page.close();
   });
 
-  test("708.6 GIF send requires auth (401)", async ({ request }) => {
-    const resp = await request.post(`${API}/messaging/conversations/${convoId}/messages/gif`, {
+  test("708.6 GIF send requires auth (401)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(`${API}/messaging/conversations/${convoId}/messages/gif`, {
       data: { gif_url: "/mock/gifs/placeholder_1.gif" },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });

@@ -396,11 +396,13 @@ test.describe("792: KYC address verification decisions + auth", () => {
     expect(resp.status()).toBe(403);
   });
 
-  test("792.6 Unauthenticated request returns 401", async ({ request }) => {
-    const resp = await request.post(`${API}/${BASE}/cases/${caseId}/verify`, {
+  test("792.6 Unauthenticated request returns 401", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(`${API}/${BASE}/cases/${caseId}/verify`, {
       data: { address: US_ADDRESS },
       headers: { "Content-Type": "application/json" },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 
