@@ -82,15 +82,15 @@ export function useMediaDevices(): UseMediaDevicesReturn {
   }, [enumerate]);
 
   const audioInputs = React.useMemo(
-    () => devices.filter((d) => d.kind === "audioinput"),
+    () => devices.filter((d) => d.kind === "audioinput" && !!d.deviceId),
     [devices],
   );
   const videoInputs = React.useMemo(
-    () => devices.filter((d) => d.kind === "videoinput"),
+    () => devices.filter((d) => d.kind === "videoinput" && !!d.deviceId),
     [devices],
   );
   const audioOutputs = React.useMemo(
-    () => devices.filter((d) => d.kind === "audiooutput"),
+    () => devices.filter((d) => d.kind === "audiooutput" && !!d.deviceId),
     [devices],
   );
 

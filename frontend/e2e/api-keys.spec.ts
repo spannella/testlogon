@@ -267,7 +267,7 @@ test.describe("4. Create Key — submission and result", () => {
   test("Done button closes the dialog and the key appears in the list", async () => {
     await page.getByRole("dialog").getByRole("button", { name: "Done" }).click();
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 3000 });
-    await expect(page.getByText(LABEL)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(LABEL).first()).toBeVisible({ timeout: 5000 });
   });
 
   test("key list entry shows 'ak_' prefix and a creation date", async () => {

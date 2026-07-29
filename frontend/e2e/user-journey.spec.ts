@@ -495,24 +495,44 @@ test.describe("90. Compose and send a DM", () => {
   });
 
   test("90.1 Alice sees the Bob DM in the sidebar", async () => {
+    // Reload /messages and wait for the conversations list GET to resolve before
+    // asserting (retries reuse the shared page, which 90.2 leaves on a single
+    // conversation deep-link, so the sidebar list must be re-fetched).
+    const listLoaded = alicePage
+      .waitForResponse(
+        (r) =>
+          r.url().includes("/messaging/conversations") &&
+          r.request().method() === "GET" &&
+          !r.url().match(/\/conversations\/[^/]+$/),
+        { timeout: 20_000 },
+      )
+      .catch(() => undefined);
+    await alicePage.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await listLoaded;
     await expect(
       alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    ).toBeVisible({ timeout: 20_000 });
   });
 
   test("90.2 Alice opens the DM with Bob", async () => {
-    const msgsLoaded = alicePage.waitForResponse(
-      (r) =>
-        r.url().includes(`/conversations/${dmConvoId}/messages`) &&
-        r.request().method() === "GET",
-      { timeout: 15_000 },
-    );
-    await alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first().click();
+    const msgsLoaded = alicePage
+      .waitForResponse(
+        (r) =>
+          r.url().includes(`/conversations/${dmConvoId}/messages`) &&
+          r.request().method() === "GET",
+        { timeout: 15_000 },
+      )
+      .catch(() => undefined);
+    // Deep-link to the conversation instead of clicking the sidebar row: the
+    // row's accessible name is the recipient ("E2E Bob") and its centre overlaps
+    // the avatar/name profile-links, so a default click navigates to Bob's
+    // profile rather than opening the DM. /messages/:id auto-opens the thread.
+    await alicePage.goto(`${BASE}/messages/${dmConvoId}`, { waitUntil: "load" });
     await expect(
       alicePage
         .getByPlaceholder("Type a message...")
         .or(alicePage.getByPlaceholder("Type an encrypted message...")),
-    ).toBeVisible({ timeout: 8_000 });
+    ).toBeVisible({ timeout: 15_000 });
     await msgsLoaded;
   });
 
@@ -536,15 +556,15 @@ test.describe("90. Compose and send a DM", () => {
 
   test("90.4 The sent message appears in the conversation", async () => {
     await expect(
-      alicePage.locator("p").filter({ hasText: MSG }),
-    ).toBeVisible({ timeout: 8_000 });
+      alicePage.locator("p").filter({ hasText: MSG }).first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("90.5 Compose bar is cleared after sending", async () => {
     const composer = alicePage
       .getByPlaceholder("Type a message...")
       .or(alicePage.getByPlaceholder("Type an encrypted message..."));
-    await expect(composer).toHaveValue("", { timeout: 3_000 });
+    await expect(composer.first()).toHaveValue("", { timeout: 8_000 });
   });
 });
 

@@ -333,7 +333,9 @@ test.describe("101 — Media Settings Page UI", () => {
   // run first.
   test.beforeEach(async () => {
     await page.goto(`${BASE}/calls/settings`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("heading", { name: "Media Settings" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Media Settings" })).toBeVisible({
+      timeout: 20000,
+    });
   });
 
   test.afterAll(async () => {

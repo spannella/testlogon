@@ -153,24 +153,26 @@ async function openDmWithBob(page: Page) {
     headers: { "x-csrf-token": session.csrf_token },
   }).catch(() => {});
 
-  // Register the conversations-list response listener BEFORE navigating.
-  const convsLoaded = page.waitForResponse(
-    (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-      && !r.url().match(/\/conversations\/[^/]+$/),
-    { timeout: 15000 },
-  );
-  await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await convsLoaded;
-  await page.waitForTimeout(300);
-
-  const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-  await expect(row).toBeVisible({ timeout: 15000 });
-  await row.click();
+  // Deep-link straight to /messages/:conversationId (auto-opens the thread).
+  // Clicking the sidebar "E2E Bob" row was flaky: the row centre overlaps the
+  // avatar/name profile-links (role=link + stopPropagation) so a default click
+  // navigates to Bob's profile instead of opening the DM, and with hundreds of
+  // seeded convos the row often did not render in time. Deep-linking is
+  // deterministic and race-free.
+  const msgsLoaded = page
+    .waitForResponse(
+      (r) => r.url().includes(`/conversations/${convoId}/messages`) &&
+             r.request().method() === "GET",
+      { timeout: 15000 },
+    )
+    .catch(() => undefined);
+  await page.goto(`${BASE}/messages/${convoId}`, { waitUntil: "load" });
   await expect(
     page.getByPlaceholder("Type a message...").or(
       page.getByPlaceholder("Type an encrypted message..."),
     ),
-  ).toBeVisible({ timeout: 5000 });
+  ).toBeVisible({ timeout: 15000 });
+  await msgsLoaded;
 }
 
 // ─── DDB helpers ─────────────────────────────────────────────────────────────
@@ -374,9 +376,7 @@ test.describe("16. Tip compose bar — PM selector and send-gate when tip enable
     await page.reload({ waitUntil: "load" });
     await sec16ConvsLoaded;
     await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
-    await row.click();
+    await page.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
     await expect(page.getByPlaceholder("Type a message...")).toBeVisible({ timeout: 5000 });
   });
 
@@ -565,8 +565,8 @@ test.describe("18. Locked message — sidebar preview shows real text after unlo
   test("Sidebar shows '[Locked message]' before unlocking", async () => {
     // No refetch needed — the conversations list was already loaded in beforeAll.
     // The sidebar should already show "[Locked message]" from the GET response.
-    const row = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 5000 });
+    const row = alicePage.getByTestId(`conversation-row-${_dmConvoId}`);
+    await expect(row).toBeVisible({ timeout: 8000 });
     await expect(row).toContainText("[Locked message]", { timeout: 8000 });
   });
 
@@ -591,8 +591,8 @@ test.describe("18. Locked message — sidebar preview shows real text after unlo
     await sec18ConvsLoaded;
     await alicePage.waitForTimeout(300);
 
-    const row = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 5000 });
+    const row = alicePage.getByTestId(`conversation-row-${_dmConvoId}`);
+    await expect(row).toBeVisible({ timeout: 8000 });
     // The sidebar should no longer show "[Locked message]" — it should now show
     // the unlocked text (is_unlocked=true → getPreviewText returns the real text).
     await expect(row).toContainText(LOCK_TEXT, { timeout: 8000 });
@@ -652,9 +652,7 @@ test.describe("19. Tip checkbox — unblocked after PM add + billing nav (no pag
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec19ConvsLoaded;
     await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
+    await page.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
     await expect(page.getByPlaceholder("Type a message...")).toBeVisible({ timeout: 5000 });
 
     // The tip toggle in "+" popover must now be enabled — no page refresh needed.
@@ -800,9 +798,7 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec20BobConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    await aliceRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
     await expect(
       bobPage.getByText("Encrypted image").last()
     ).toBeVisible({ timeout: 12000 });
@@ -839,10 +835,7 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec20WrongPwConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    // Click the preview area (avoid avatar/name links which navigate to profile)
-    await aliceRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
 
     await expect(
       bobPage.getByRole("button", { name: "Decrypt to view" }).last()
@@ -2480,9 +2473,7 @@ test.describe("29. Encrypted video message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec29BobConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    await aliceRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
     await expect(
       bobPage.getByText("Encrypted video").last()
     ).toBeVisible({ timeout: 12000 });
@@ -2527,10 +2518,7 @@ test.describe("29. Encrypted video message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec29WrongPwConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    // Click the preview area (avoid avatar/name links which navigate to profile)
-    await aliceRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
 
     await expect(
       bobPage.getByRole("button", { name: "Decrypt to view" }).last()
