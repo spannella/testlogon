@@ -281,7 +281,7 @@ test.describe("100 — Media Preferences API", () => {
   });
 
   test("100.8 GET without auth returns 401 or 403", async () => {
-    const ctx = await alicePage.context().browser()!.newContext();
+    const ctx = await alicePage.context().browser()!.newContext({ storageState: undefined });
     const anonPage = await ctx.newPage();
     // Navigate to establish domain for requests
     await anonPage.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });

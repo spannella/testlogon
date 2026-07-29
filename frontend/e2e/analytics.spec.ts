@@ -407,7 +407,7 @@ test.describe("B — Analytics API Edge Cases", () => {
 
   test("B2 — Unauthenticated request returns 401", async () => {
     // Use a fresh context with no cookies
-    const ctx = await alicePage.context().browser()!.newContext();
+    const ctx = await alicePage.context().browser()!.newContext({ storageState: undefined });
     const noAuthPage = await ctx.newPage();
     const resp = await noAuthPage.request.get(`${BASE}/ui/analytics/overview`);
     expect(resp.status()).toBe(401);

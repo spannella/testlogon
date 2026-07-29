@@ -650,7 +650,7 @@ test.describe("36. find-or-create DM — API idempotency and error handling", ()
 
   test("contacts GET returns 401 when not authenticated", async () => {
     // A fresh request context with no cookies
-    const anonCtx = await page.context().browser()!.newContext();
+    const anonCtx = await page.context().browser()!.newContext({ storageState: undefined });
     const anonPage = await anonCtx.newPage();
     const r = await anonPage.request.get(`${API}/ui/contacts`);
     await anonCtx.close();

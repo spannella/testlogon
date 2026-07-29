@@ -440,11 +440,11 @@ test.describe("527. Platform Financial Dashboard — Edge cases", () => {
   });
 
   test("unauthenticated request is rejected", async ({ browser }) => {
-    const anon = await browser.newPage();
-    const r = await anon.request.get(`${API}/ui/admin/financial-dashboard/kpis`, {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const r = await anonCtx.request.get(`${API}/ui/admin/financial-dashboard/kpis`, {
       params: { start_date: RANGE_START, end_date: RANGE_END },
     });
     expect([401, 403]).toContain(r.status());
-    await anon.close();
+    await anonCtx.close();
   });
 });
