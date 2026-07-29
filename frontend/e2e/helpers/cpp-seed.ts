@@ -485,3 +485,43 @@ export function cppExpireAccountDeletion(userSub: string, requestId: string): vo
     /* best-effort */
   }
 }
+
+
+/**
+ * Append ONE stripe-mock event line to cpp's billing dev-log on .82 so the
+ * /internal/dev-tools/billing/{ledger,summary} handlers parse it. Under cpp the
+ * auth-mfa-devtools §81 test can't appendFileSync on the frontend host (.249) —
+ * cpp reads its OWN log on .82. No-op unless usingCpp().
+ */
+export function cppAppendBillingLog(line: string): void {
+  if (!usingCpp()) return;
+  runCppShim("append_billing_log.py", { line });
+}
+
+
+/**
+ * Seed ONE LLM provider key into cpp's tlc_llm_provider_keys moto table so
+ * worker-create's provider validation passes. Returns the generated key_id.
+ * Under cpp the spec's Python createLlmKey() writes the WRONG datastore (Python
+ * DDB :8001) so worker-create 400s "LLM key not found". No-op guard: callers
+ * only invoke this when usingCpp().
+ */
+export function cppCreateLlmKey(userSub: string, provider: string, label: string): string {
+  const out = runCppShim("seed_llm_provider_key.py", {
+    user_sub: userSub, provider, label,
+  });
+  const m = out.match(/ok\s+([0-9a-f]+)/);
+  if (!m) throw new Error(`seed_llm_provider_key did not return a key_id: ${out}`);
+  return m[1];
+}
+
+
+/**
+ * Delete ALL of a user's agent_workers rows in cpp's tlc_agent_workers moto so
+ * the per-user active-worker limit doesn't 409 a fresh worker-create. Mirrors
+ * the spec's Python cleanupWorkers(). No-op unless usingCpp().
+ */
+export function cppCleanupWorkers(userSub: string): void {
+  if (!usingCpp()) return;
+  runCppShim("delete_agent_workers.py", { user_sub: userSub });
+}

@@ -11,7 +11,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -74,8 +74,9 @@ async function apiDelete(page: Page, identity: string, path: string) {
 
 const ALICE = "alice";
 const BOB = "bob";
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+// cpp keys author_id/feed filters/UI attribution on the opaque login sub, not the email.
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 
 test.describe("Section 115 - Feed Fan-Out API", () => {
   let alicePage: Page;

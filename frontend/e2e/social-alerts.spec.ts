@@ -13,13 +13,17 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppSeedAlerts, cppResetAlerts, cppClearAlertPrefs } from "./helpers/cpp-seed-alerts-broadcast-calendar";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const ALICE_SUB = "e2e_alice@test.local";
+// Under cpp the alerts tables are keyed by the opaque login sub, not the email.
+const ALICE_CPP_SUB = usingCpp() ? resolveIdentityId(ALICE_SUB) : ALICE_SUB;
 // Session keys used in e2e_admin_session_setup.py
 const ALICE_KEY = "alice";
 const ROOT_KEY = "root";
@@ -90,6 +94,7 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
  * Clear all unread alerts for a user to establish a known baseline.
  */
 function clearUnreadAlerts(userSub: string): void {
+  if (usingCpp()) { cppResetAlerts(ALICE_CPP_SUB); return; }
   execSync(
     `${PYTHON} -c "
 import boto3, os
@@ -130,6 +135,15 @@ print('cleared')
  * Returns the list of alert_ids seeded.
  */
 function seedUnreadAlerts(userSub: string, count: number, prefix: string): string[] {
+  if (usingCpp()) {
+    const alerts = Array.from({ length: count }, (_, i) => ({
+      userSub: ALICE_CPP_SUB, event: "new_follower", outcome: "success",
+      title: `${prefix} alert ${i}`, read: false,
+      details: { source: prefix } as Record<string, unknown>,
+    }));
+    cppSeedAlerts(alerts);
+    return alerts.map((_, i) => `cpp_${prefix}_${i}`);
+  }
   const result = execSync(
     `${PYTHON} -c "
 import boto3, os, uuid, time, json
@@ -295,6 +309,7 @@ else:
  * Reset type_preferences on the alert_prefs table for a user.
  */
 function resetTypePreferences(userSub: string): void {
+  if (usingCpp()) { cppClearAlertPrefs(ALICE_CPP_SUB); return; }
   execSync(
     `${PYTHON} -c "
 import boto3, os
@@ -522,6 +537,13 @@ test.describe("112 · Social Alert Emission", () => {
   test("112.1 Seed a social alert (new_follower), verify it appears in alerts list", async () => {
     const uniqueTitle = `Follower alert ${TS}`;
     // Seed directly via DDB (simulating what emit_social_alert + write_alert does)
+    if (usingCpp()) {
+      cppSeedAlerts([{
+        userSub: ALICE_CPP_SUB, event: "new_follower", outcome: "success",
+        title: uniqueTitle, read: false,
+        details: { actor: "bob_user", source: "e2e_test" },
+      }]);
+    } else {
     execSync(
       `${PYTHON} -c "
 import boto3, os, uuid, time
@@ -553,6 +575,7 @@ print(alert_id)
 "`,
       { cwd: REPO_ROOT, timeout: 15_000 },
     );
+    }
 
     // Verify it appears in the alerts list
     const resp = await apiGet(alicePage, "/ui/alerts", { limit: "50" });

@@ -18,6 +18,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppCreateLlmKey, cppCleanupWorkers } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -118,6 +119,7 @@ function ddbExec(code: string): string {
 }
 
 function createLlmKey(userId: string, provider: string, label: string): string {
+  if (usingCpp()) return cppCreateLlmKey(userId, provider, label);
   // Create an LLM key directly in DDB and return the key_id
   const code = `
 import uuid, time, json
@@ -158,6 +160,7 @@ print(key_id)
 }
 
 function cleanupWorkers(userId: string) {
+  if (usingCpp()) { cppCleanupWorkers(userId); return; }
   const code = `
 tbl = ddb.Table('agent_workers')
 resp = tbl.query(

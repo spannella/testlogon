@@ -22,7 +22,7 @@ import { randomBytes } from "crypto";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId, cppRegisterThrowaway } from "./helpers/session";
-import { usingCpp, cppDeleteEmailDevices, cppDeleteSmsDevices } from "./helpers/cpp-seed";
+import { usingCpp, cppDeleteEmailDevices, cppDeleteSmsDevices, cppAppendBillingLog } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE     = "http://localhost:3000";
@@ -506,7 +506,8 @@ test.describe("Section 81: Billing ledger tie-out via dev log UI", () => {
           },
         },
       });
-      appendFileSync(STRIPE_LOG, line + "\n");
+      if (usingCpp()) cppAppendBillingLog(line);
+      else appendFileSync(STRIPE_LOG, line + "\n");
     }
   });
 
