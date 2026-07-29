@@ -29,7 +29,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 import { usingCpp, cppBearerGet, cppSeedStickerCollection } from "./helpers/cpp-seed-messaging-calls";
 import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
@@ -312,9 +312,11 @@ test.describe("Section 706: GIF Search API", () => {
     await page.close();
   });
 
-  test("706.6 GIF search requires auth (401)", async ({ request }) => {
-    const resp = await request.get(`${API}/ui/stickers/gifs/trending`);
+  test("706.6 GIF search requires auth (401)", async () => {
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/stickers/gifs/trending`);
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 });
 

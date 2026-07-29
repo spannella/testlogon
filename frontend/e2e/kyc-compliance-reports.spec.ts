@@ -14,7 +14,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -405,9 +405,9 @@ print("FOUND" if it else "MISSING")
     expect(ok.status()).toBe(200);
     await charlie.close();
 
-    const anon = await rootPage.context().browser()!.newPage();
-    const r = await anon.request.get(`${BASE}/v1/kyc/compliance/reports/volume`);
+    const anon = await unauthContext(BASE);
+    const r = await anon.get(`/v1/kyc/compliance/reports/volume`);
     expect(r.status()).toBe(401);
-    await anon.close();
+    await anon.dispose();
   });
 });

@@ -20,7 +20,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -672,12 +672,14 @@ test.describe("85 · Access control", () => {
 
   test("85.1 — Jira endpoints require authentication", async () => {
     // GET /integrations/jira/status without session cookies should be rejected
-    const resp = await unauthPage.request.get(
-      `${API}/integrations/jira/status?workspace_id=${WORKSPACE}`,
+    const anon = await unauthContext(API);
+    const resp = await anon.get(
+      `/integrations/jira/status?workspace_id=${WORKSPACE}`,
     );
     // Should be 401 or 403 (no valid session)
     expect(resp.status()).toBeGreaterThanOrEqual(400);
     expect(resp.status()).toBeLessThan(500);
+    await anon.dispose();
   });
 });
 

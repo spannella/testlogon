@@ -22,7 +22,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -583,12 +583,11 @@ test.describe("587 — Engagement Edge Cases", () => {
   });
 
   test("587.5 — unauthenticated request returns 401", async () => {
-    const fresh = await page.context().browser()!.newContext();
-    const freshPage = await fresh.newPage();
-    const resp = await freshPage.request.get(
-      `${BASE}/ui/analytics/engagement?period_days=30`,
+    const anon = await unauthContext(BASE);
+    const resp = await anon.get(
+      `/ui/analytics/engagement?period_days=30`,
     );
     expect(resp.status()).toBe(401);
-    await fresh.close();
+    await anon.dispose();
   });
 });

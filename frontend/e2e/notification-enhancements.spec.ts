@@ -18,7 +18,7 @@ import { execSync } from "child_process";
 import { readFileSync, existsSync } from "fs";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 import { resolveIdentityId } from "./helpers/session";
 import {
   usingCpp,
@@ -320,13 +320,12 @@ test.describe("205 -- Unread count API (sentinel-based)", () => {
     await ctx.close();
   });
 
-  test("205.5 Unread count endpoint requires authentication", async ({ browser }) => {
-    const ctx = await browser.newContext();
-    const page = await ctx.newPage();
+  test("205.5 Unread count endpoint requires authentication", async () => {
+    const anon = await unauthContext(API);
     // No auth injected — should get 401
-    const resp = await page.request.get(`${API}/ui/alerts/unread-count`);
+    const resp = await anon.get(`/ui/alerts/unread-count`);
     expect(resp.status()).toBe(401);
-    await ctx.close();
+    await anon.dispose();
   });
 });
 

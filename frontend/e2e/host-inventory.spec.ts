@@ -16,7 +16,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
@@ -233,9 +233,11 @@ test.describe("INFRA-001 Host Inventory", () => {
       expect(resp.status()).toBe(422);
     });
 
-    test("Unauthenticated request returns 401", async ({ request }) => {
-      const resp = await request.get(`${API}/ui/hosts`);
+    test("Unauthenticated request returns 401", async () => {
+      const anon = await unauthContext(API);
+      const resp = await anon.get(`/ui/hosts`);
       expect(resp.status()).toBe(401);
+      await anon.dispose();
     });
   });
 

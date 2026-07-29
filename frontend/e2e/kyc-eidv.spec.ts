@@ -20,7 +20,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { loadSessions, resolveIdentityId, isCpp, unauthContext } from "./helpers/session";
 import {
   cppSeedKycCaseFull,
   cppGetKycCase,
@@ -441,9 +441,11 @@ test.describe("731. KYC-022 Status, Auth & Edge Cases", () => {
     expect(data.eid_verification.assertion_id).toMatch(/^ea_[a-f0-9]{12}$/);
   });
 
-  test("731.2 schemes endpoint requires auth (401 without session)", async ({ request }) => {
-    const r = await request.get(`${API}/v1/kyc/eid/schemes`);
+  test("731.2 schemes endpoint requires auth (401 without session)", async () => {
+    const anon = await unauthContext(API);
+    const r = await anon.get(`/v1/kyc/eid/schemes`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("731.3 non-owner cannot start eID on another user's case (403)", async () => {

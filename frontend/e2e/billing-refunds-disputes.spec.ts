@@ -25,7 +25,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { retryOn429 } from "./helpers/retry";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 import {
   usingCpp,
   cppSeedLedgerEntries,
@@ -382,9 +382,11 @@ test.describe("94 — Admin dispute resolution API", () => {
 // ─── Section 95: Access control + validation ──────────────────────────────────
 
 test.describe("95 — Access control + validation", () => {
-  test("95.1 unauthenticated dispute list returns 401", async ({ request }) => {
-    const resp = await request.get(`${API}/ui/billing/disputes`);
+  test("95.1 unauthenticated dispute list returns 401", async () => {
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/billing/disputes`);
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("95.2 non-admin cannot list the admin queue (403)", async () => {

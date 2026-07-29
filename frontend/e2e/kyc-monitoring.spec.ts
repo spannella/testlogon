@@ -15,7 +15,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -432,8 +432,10 @@ test.describe("753. KYC-016 Monitoring Dashboard API", () => {
     expect(r.status()).toBe(403);
   });
 
-  test("753.4 unauthenticated request to dashboard returns 401", async ({ request }) => {
-    const r = await request.get(`${API}/v1/kyc/monitoring/admin/dashboard`);
+  test("753.4 unauthenticated request to dashboard returns 401", async () => {
+    const anon = await unauthContext(API);
+    const r = await anon.get(`/v1/kyc/monitoring/admin/dashboard`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 });

@@ -21,7 +21,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 
@@ -297,8 +297,10 @@ test.describe("196: KYC webhook negatives + access control", () => {
     expect(emit.status()).toBe(403);
   });
 
-  test("196.4 Unauthenticated event-type listing is rejected (401)", async ({ request }) => {
-    const resp = await request.get(`${API}/ui/kyc/webhooks/event-types`);
+  test("196.4 Unauthenticated event-type listing is rejected (401)", async () => {
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/kyc/webhooks/event-types`);
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 });

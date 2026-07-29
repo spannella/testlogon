@@ -17,7 +17,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const TS = Date.now();
@@ -173,9 +173,11 @@ test.describe("729: Personal custom emoji CRUD API", () => {
     expect(body.personal_count).toBeGreaterThanOrEqual(1);
   });
 
-  test("729.7 auth required without session (401)", async ({ request }) => {
-    const res = await request.get(`${API}/ui/emojis/custom`);
+  test("729.7 auth required without session (401)", async () => {
+    const anon = await unauthContext(API);
+    const res = await anon.get(`/ui/emojis/custom`);
     expect(res.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("729.8 delete personal emoji removes it from list", async () => {

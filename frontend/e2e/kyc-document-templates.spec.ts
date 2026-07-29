@@ -17,7 +17,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const ALICE_ID = "e2e_alice@test.local";
@@ -430,8 +430,10 @@ test.describe("784. KYC document templates admin-only / auth", () => {
     expect(r.status()).toBe(403);
   });
 
-  test("784.3 anonymous request is unauthorized (401)", async ({ request }) => {
-    const r = await request.get(`${API}/${TPL_BASE}`);
+  test("784.3 anonymous request is unauthorized (401)", async () => {
+    const anon = await unauthContext(API);
+    const r = await anon.get(`/${TPL_BASE}`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 });

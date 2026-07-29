@@ -20,7 +20,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { loadSessions, resolveIdentityId, unauthContext } from "./helpers/session";
 import { usingCpp, cppSeedPaymentMethod, cppResetBillingPms } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -530,8 +530,10 @@ test.describe("543. Invoice edge cases & concurrency", () => {
     expect(list.invoices.length).toBe(0);
   });
 
-  test("543.2 Unauthenticated request is rejected", async ({ request }) => {
-    const resp = await request.get(`${API}/ui/invoices`);
+  test("543.2 Unauthenticated request is rejected", async () => {
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/invoices`);
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 });

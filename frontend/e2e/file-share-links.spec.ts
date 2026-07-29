@@ -16,7 +16,7 @@ import { test, expect, type Page, request as pwRequest } from "@playwright/test"
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -417,8 +417,8 @@ test.describe("700. Share Link Edge Cases", () => {
   });
 
   test("700.2 management endpoints require auth (401 without session)", async () => {
-    const anon = await pwRequest.newContext();
-    const resp = await anon.get(`${API}/ui/files/share-links`);
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/files/share-links`);
     expect(resp.status()).toBe(401);
     await anon.dispose();
   });

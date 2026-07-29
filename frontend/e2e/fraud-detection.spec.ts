@@ -20,7 +20,7 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { loadSessions, resolveIdentityId, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // Load backend env (.env.local) so child python processes get the real
@@ -501,9 +501,11 @@ test.describe("710. Fraud admin access control (API)", () => {
     expect(r.status()).toBe(403);
   });
 
-  test("Unauthenticated request → 401", async ({ request }) => {
-    const r = await request.get(`${API}${BASE}/queue`);
+  test("Unauthenticated request → 401", async () => {
+    const anon = await unauthContext(API);
+    const r = await anon.get(`${BASE}/queue`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("Admin (non-root) CAN access the queue but CANNOT update config → 403", async () => {

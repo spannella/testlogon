@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
@@ -374,9 +374,11 @@ test.describe("132 — Broadcast privacy auth & validation", () => {
     expect(resp.status()).toBe(422);
   });
 
-  test("unauthenticated privacy request returns 401", async ({ request }) => {
-    const resp = await request.get(`${API}/broadcast/sessions/${sessionId}/privacy`);
+  test("unauthenticated privacy request returns 401", async () => {
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/broadcast/sessions/${sessionId}/privacy`);
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("privacy for non-existent session returns 404", async () => {

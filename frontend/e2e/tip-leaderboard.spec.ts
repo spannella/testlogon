@@ -18,7 +18,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { loadSessions, resolveIdentityId, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────
@@ -262,12 +262,14 @@ test.describe("1 — Top Supporters API", () => {
     expect(data.supporters.length).toBeLessThanOrEqual(1);
   });
 
-  test("1.5 Endpoint returns 401 without auth", async ({ page }) => {
+  test("1.5 Endpoint returns 401 without auth", async () => {
     // No cookies injected — anonymous request
-    const resp = await page.request.get(
-      `${API}/ui/creators/${ALICE_ID}/top-supporters?period=30d`,
+    const anon = await unauthContext(API);
+    const resp = await anon.get(
+      `/ui/creators/${ALICE_ID}/top-supporters?period=30d`,
     );
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("1.6 Each supporter entry has required fields", async ({ page }) => {

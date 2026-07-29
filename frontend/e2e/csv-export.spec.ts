@@ -15,7 +15,7 @@ import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, unauthContext } from "./helpers/session";
 import { usingCpp, cppSeedLedgerEntry } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
@@ -280,10 +280,12 @@ test.describe("73 — CSV Export API", () => {
     expect(resp.status()).toBe(422);
   });
 
-  test("Unauthenticated request returns 401", async ({ page }) => {
-    // No auth injected
-    const resp = await exportCsv(page, { source: "billing_ledger" });
+  test("Unauthenticated request returns 401", async () => {
+    // No auth injected — anonymous context (exportCsv uses page.request which leaks storageState)
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/export/csv`, { params: { source: "billing_ledger" } });
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("GET billing_ledger with no matching entries returns headers-only CSV", async ({ page }) => {

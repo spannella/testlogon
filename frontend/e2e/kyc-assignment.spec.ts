@@ -16,7 +16,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { loadSessions, resolveIdentityId, isCpp, unauthContext } from "./helpers/session";
 import { cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -236,11 +236,13 @@ test.describe("760. KYC auto-assignment API", () => {
     expect(r.status()).toBe(403);
   });
 
-  test("760.5 unauthenticated request is rejected (401)", async ({ request }) => {
+  test("760.5 unauthenticated request is rejected (401)", async () => {
     const caseId = `kyc_a760e_${TS}`;
     seedCase({ caseId, status: "submitted" });
-    const r = await request.post(`${API}/v1/kyc/assignment/cases/${caseId}/auto-assign`);
+    const anon = await unauthContext(API);
+    const r = await anon.post(`/v1/kyc/assignment/cases/${caseId}/auto-assign`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("760.6 auto-assign on a missing case returns 404", async () => {
