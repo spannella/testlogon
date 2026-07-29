@@ -74,7 +74,11 @@ async function newIdentityPage(browser: Browser, userId: string): Promise<Page> 
 async function subPost(page: Page, userId: string, path: string, body?: object) {
   return page.request.post(`${API}${path}`, {
     data: body ?? {},
-    headers: { "X-User-Id": userId },
+    // cpp cookie-authenticates the caller (from injectAuth's addCookies) and, for
+    // non-GET requests, requires X-CSRF-Token == the ui_csrf cookie == the stored
+    // session token; without it cpp 403s "Missing CSRF token". getSessions() is
+    // keyed by sub (userId), so csrf_token resolves. (Python ignores the header.)
+    headers: { "X-User-Id": userId, "x-csrf-token": getSessions()[userId]?.csrf_token ?? "" },
   });
 }
 
@@ -87,7 +91,7 @@ async function subGet(page: Page, userId: string, path: string) {
 async function subPatch(page: Page, userId: string, path: string, body: object) {
   return page.request.patch(`${API}${path}`, {
     data: body,
-    headers: { "X-User-Id": userId },
+    headers: { "X-User-Id": userId, "x-csrf-token": getSessions()[userId]?.csrf_token ?? "" },
   });
 }
 

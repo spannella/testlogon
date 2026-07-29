@@ -89,6 +89,26 @@ export function cppResetUserSyndicates(subs: string[], keepNewest?: number): voi
   });
 }
 
+// -- referral code index reset (REFERRAL_MAX_CODES_PER_USER de-flake) ----------
+
+/**
+ * Clear the given cpp SUBs' referral-code index rows (pk=REFCODES#<sub>,
+ * sk=CODE#<code>) plus each code's REFCODE#<code>/META lookup row in cpp's
+ * tlc_referrals (moto :5005). Run in referrals.spec.ts beforeAll BEFORE the
+ * first POST /ui/referrals/code so the caller starts at 0 active codes and the
+ * create returns 201 (cpp caps active codes at REFERRAL_MAX_CODES_PER_USER=5;
+ * the Python cleanupReferralData() targets DDB-Local/:8001 + email keys and is a
+ * NO-OP against cpp, so codes accumulate across runs -> 429). Idempotent.
+ *
+ * subs MUST be cpp SUBs (the sid the JWT carries), NOT emails.
+ * Verified live: after reset, POST /ui/referrals/code -> 201 (was 429).
+ */
+export function cppResetUserReferrals(subs: string[]): void {
+  const clean = subs.filter(Boolean);
+  if (clean.length === 0) return;
+  runCppShim("reset_referrals.py", { subs: clean });
+}
+
 // -- syndicate-advertising treasury (syndicate-advertising.spec.ts) -----------
 
 /** Seed a syndicate treasury BALANCE (additive) into cpp's tlc_syndicate_treasury (moto :5005). */

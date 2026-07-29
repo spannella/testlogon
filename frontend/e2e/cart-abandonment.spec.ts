@@ -21,11 +21,17 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppCartTimestamp, cppCartSetReminder, cppCartGetRaw, cppCartClear } from "./helpers/cpp-cart";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE     = "http://localhost:3000";
+// Under E2E_USE_CPP the shared `API` still defaults to the Python :8000 backend,
+// which rejects cpp session cookies (401). Route through the vite->cpp proxy
+// (BASE) so cart/admin requests hit cpp with valid cookies. Python path unchanged.
+const API_EFF  = usingCpp() ? BASE : API;
 const ALICE_ID = "e2e_alice@test.local";
 const ROOT_ID  = "root.admin@testdev.local";
 const TS       = Date.now();
@@ -86,26 +92,39 @@ function adminSession(sessionKey: string): SessionData {
 
 async function cartPost(page: Page, sessionKey: string, path: string, body?: object) {
   const session = adminSession(sessionKey);
-  return page.request.post(`${API}${path}`, {
+  return page.request.post(`${API_EFF}${path}`, {
     data: body ?? {},
     headers: { "x-csrf-token": session.csrf_token },
   });
 }
 
 async function cartGet(page: Page, path: string) {
-  return page.request.get(`${API}${path}`);
+  return page.request.get(`${API_EFF}${path}`);
 }
 
 async function cartDelete(page: Page, sessionKey: string, path: string) {
   const session = adminSession(sessionKey);
-  return page.request.delete(`${API}${path}`, {
+  return page.request.delete(`${API_EFF}${path}`, {
     headers: { "x-csrf-token": session.csrf_token },
   });
 }
 
 // ─── DynamoDB helper ─────────────────────────────────────────────────────────
 
+// Resolve the cpp JWT sub for a cart-owner email (loadSessions registers the
+// email alias -> its SessionData). Used only on the cpp path where carts are
+// keyed PK=USER#<sub>, not PK=USER#<email>.
+function cppSubFor(userEmail: string): string {
+  const sub = getAdminSessions()[userEmail]?.user_sub;
+  if (!sub) throw new Error(`No cpp sub for ${userEmail}`);
+  return sub;
+}
+
 function ddbUpdateCartTimestamp(userSub: string, cartId: string, lastActivityAt: number) {
+  if (usingCpp()) {
+    cppCartTimestamp(cppSubFor(userSub), cartId, lastActivityAt);
+    return;
+  }
   const script = `
 import boto3, sys
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1',
@@ -126,6 +145,9 @@ print('OK')
 }
 
 function ddbGetCartRaw(userSub: string, cartId: string): Record<string, unknown> {
+  if (usingCpp()) {
+    return cppCartGetRaw(cppSubFor(userSub), cartId);
+  }
   const script = `
 import boto3, json
 from decimal import Decimal
@@ -148,6 +170,10 @@ print(json.dumps(item, cls=DecEncoder))
 }
 
 function ddbSetCartReminderCount(userSub: string, cartId: string, count: number, lastReminderAt: number) {
+  if (usingCpp()) {
+    cppCartSetReminder(cppSubFor(userSub), cartId, count, lastReminderAt);
+    return;
+  }
   const script = `
 import boto3
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1',
@@ -180,6 +206,7 @@ let cartId: string;
 test.describe("SHOP-003 — Section 1: Activity Tracking API", () => {
   test.beforeAll(async ({ browser }) => {
     alicePage = await newIdentityPage(browser, "alice");
+    if (usingCpp()) cppCartClear(cppSubFor(ALICE_ID));
     rootPage = await newIdentityPage(browser, "root");
   });
 
@@ -241,6 +268,7 @@ test.describe("SHOP-003 — Section 2: Abandonment Detection API", () => {
 
   test.beforeAll(async ({ browser }) => {
     alicePage = await newIdentityPage(browser, "alice");
+    if (usingCpp()) cppCartClear(cppSubFor(ALICE_ID));
     rootPage = await newIdentityPage(browser, "root");
 
     // Create a cart with an item for abandonment testing
@@ -265,7 +293,7 @@ test.describe("SHOP-003 — Section 2: Abandonment Detection API", () => {
   test("2.1 Cart with recent activity is not abandoned", async () => {
     // The admin scan endpoint should NOT find our recently active cart
     const session = adminSession("root");
-    const scanResp = await rootPage.request.post(`${API}/ui/shoppingcart/admin/cart-abandonment/scan`, {
+    const scanResp = await rootPage.request.post(`${API_EFF}/ui/shoppingcart/admin/cart-abandonment/scan`, {
       headers: { "x-csrf-token": session.csrf_token },
     });
     expect(scanResp.status()).toBe(200);
@@ -281,7 +309,7 @@ test.describe("SHOP-003 — Section 2: Abandonment Detection API", () => {
 
     // Trigger scan
     const session = adminSession("root");
-    const scanResp = await rootPage.request.post(`${API}/ui/shoppingcart/admin/cart-abandonment/scan`, {
+    const scanResp = await rootPage.request.post(`${API_EFF}/ui/shoppingcart/admin/cart-abandonment/scan`, {
       headers: { "x-csrf-token": session.csrf_token },
     });
     expect(scanResp.status()).toBe(200);
@@ -331,6 +359,7 @@ test.describe("SHOP-003 — Section 3: Reminder Limits", () => {
 
   test.beforeAll(async ({ browser }) => {
     alicePage = await newIdentityPage(browser, "alice");
+    if (usingCpp()) cppCartClear(cppSubFor(ALICE_ID));
     rootPage = await newIdentityPage(browser, "root");
 
     // Create a cart with item for limit testing
@@ -351,7 +380,7 @@ test.describe("SHOP-003 — Section 3: Reminder Limits", () => {
 
     // Trigger first reminder via scan
     const session = adminSession("root");
-    await rootPage.request.post(`${API}/ui/shoppingcart/admin/cart-abandonment/scan`, {
+    await rootPage.request.post(`${API_EFF}/ui/shoppingcart/admin/cart-abandonment/scan`, {
       headers: { "x-csrf-token": session.csrf_token },
     });
   });
@@ -376,7 +405,7 @@ test.describe("SHOP-003 — Section 3: Reminder Limits", () => {
 
     // Try to scan again — cooldown should prevent second reminder
     const session = adminSession("root");
-    const scanResp = await rootPage.request.post(`${API}/ui/shoppingcart/admin/cart-abandonment/scan`, {
+    const scanResp = await rootPage.request.post(`${API_EFF}/ui/shoppingcart/admin/cart-abandonment/scan`, {
       headers: { "x-csrf-token": session.csrf_token },
     });
     expect(scanResp.status()).toBe(200);
@@ -400,7 +429,7 @@ test.describe("SHOP-003 — Section 3: Reminder Limits", () => {
 
     // Scan - should NOT send a 3rd reminder
     const session = adminSession("root");
-    await rootPage.request.post(`${API}/ui/shoppingcart/admin/cart-abandonment/scan`, {
+    await rootPage.request.post(`${API_EFF}/ui/shoppingcart/admin/cart-abandonment/scan`, {
       headers: { "x-csrf-token": session.csrf_token },
     });
 
@@ -419,6 +448,7 @@ test.describe("SHOP-003 — Section 4: TTL & Purchase", () => {
 
   test.beforeAll(async ({ browser }) => {
     alicePage = await newIdentityPage(browser, "alice");
+    if (usingCpp()) cppCartClear(cppSubFor(ALICE_ID));
     rootPage = await newIdentityPage(browser, "root");
 
     // Create a cart for TTL testing
@@ -480,7 +510,7 @@ print('OK')
 
   test("4.3 Admin stats endpoint returns metrics", async () => {
     const session = adminSession("root");
-    const resp = await rootPage.request.get(`${API}/ui/shoppingcart/admin/cart-abandonment/stats`, {
+    const resp = await rootPage.request.get(`${API_EFF}/ui/shoppingcart/admin/cart-abandonment/stats`, {
       headers: { "x-csrf-token": session.csrf_token },
     });
     expect(resp.status()).toBe(200);
@@ -502,6 +532,7 @@ test.describe("SHOP-003 — Section 5: Deterministic sweep & expiry", () => {
 
   test.beforeAll(async ({ browser }) => {
     alicePage = await newIdentityPage(browser, "alice");
+    if (usingCpp()) cppCartClear(cppSubFor(ALICE_ID));
     rootPage = await newIdentityPage(browser, "root");
 
     const createResp = await cartPost(alicePage, "alice", "/ui/shoppingcart/carts");
@@ -527,7 +558,7 @@ test.describe("SHOP-003 — Section 5: Deterministic sweep & expiry", () => {
 
     const session = adminSession("root");
     const scanResp = await rootPage.request.post(
-      `${API}/ui/shoppingcart/admin/cart-abandonment/scan`,
+      `${API_EFF}/ui/shoppingcart/admin/cart-abandonment/scan`,
       {
         headers: { "x-csrf-token": session.csrf_token },
         data: { now: pinnedNow, threshold_hours: 24 },
@@ -572,7 +603,7 @@ test.describe("SHOP-003 — Section 5: Deterministic sweep & expiry", () => {
 
     const session = adminSession("root");
     const scanResp = await rootPage.request.post(
-      `${API}/ui/shoppingcart/admin/cart-abandonment/scan`,
+      `${API_EFF}/ui/shoppingcart/admin/cart-abandonment/scan`,
       {
         headers: { "x-csrf-token": session.csrf_token },
         data: { now: pinnedNow, threshold_hours: 24, expire: true, expire_hours: 720 },

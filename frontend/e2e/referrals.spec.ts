@@ -15,6 +15,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppResetUserReferrals } from "./helpers/cpp-seed-groups-treasury";
+import { runCppShim } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -86,6 +88,14 @@ async function apiDelete(page: Page, identity: string, path: string) {
 // ─── DynamoDB direct helpers (for cleanup / seeding) ─────────────────────────
 
 function ddbPut(item: Record<string, unknown>) {
+  if (usingCpp()) {
+    // cpp reads referral attribution from tlc_referrals on moto (:5005) keyed by
+    // sub; the Python put below targets DDB-Local (:8001)/app_single_table keyed
+    // by email, a NO-OP against cpp. Under cpp BOB_ID/ALICE_ID already resolve to
+    // subs, so the item's REFERRAL#<sub> pk is correct — just land it in cpp.
+    runCppShim("seed_referral_attribution.py", item as Record<string, unknown>);
+    return;
+  }
   const json = JSON.stringify(item);
   execSync(
     `python3 -c "
@@ -149,6 +159,22 @@ for item in resp.get('Items', []):
 }
 
 function cleanupReferralData() {
+  // Under E2E_USE_CPP the Python DDB-Local cleanup below is a NO-OP against cpp
+  // (cpp stores codes in tlc_referrals on moto :5005, keyed REFCODES#<sub>, not
+  // the email-keyed DDB-Local rows). Reset cpp's per-user code index directly so
+  // Alice/Bob start each run at 0 active codes (else POST /ui/referrals/code hits
+  // the 5-active cap and 429s, cascading the whole spec).
+  if (usingCpp()) {
+    try {
+      const subs = [
+        getSessions()[ALICE_ID]?.user_sub,
+        getSessions()[BOB_ID]?.user_sub,
+      ].filter(Boolean) as string[];
+      cppResetUserReferrals(subs);
+    } catch {
+      // Ignore — cpp reset is best-effort
+    }
+  }
   // Clean up codes, attributions, commissions from previous runs
   try {
     // Codes are stored with pk=REFCODE#{code}, but GSI1PK=REFCODES#{user_id}
