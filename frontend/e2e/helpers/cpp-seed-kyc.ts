@@ -43,6 +43,7 @@ export interface CppKycCaseOpts {
   caseId: string;
   userSub: string; // cpp SUB (owner) — NOT an email
   status?: string; // draft | submitted | under_review | approved | rejected | ...
+  targetTier?: string | null; // tier_0..tier_4 (render-for-case reads this)
   intakeProfile?: string | null; // standard | enhanced | basic | null
   assignedAdminSub?: string | null;
   version?: number;
@@ -63,6 +64,7 @@ export function cppSeedKycCaseFull(opts: CppKycCaseOpts): void {
     case_id: opts.caseId,
     user_sub: opts.userSub,
     status: opts.status ?? "draft",
+    target_tier: opts.targetTier ?? null,
     intake_profile: opts.intakeProfile ?? null,
     assigned_admin_sub: opts.assignedAdminSub ?? null,
     version: opts.version ?? 1,
