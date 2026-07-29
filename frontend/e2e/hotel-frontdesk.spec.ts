@@ -213,10 +213,12 @@ test.describe("Section 70: Front-desk read API", () => {
     expect([200, 404]).toContain(resp.status());
   });
 
-  test("70.6 unauthenticated GET arrivals returns 401 or 404", async ({ request }) => {
-    const resp = await request.get(
+  test("70.6 unauthenticated GET arrivals returns 401 or 404", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.get(
       `${API}/ui/hotels/${HOTEL_ID}/front-desk/arrivals`,
     );
+    await anonCtx.close();
     expect([401, 404]).toContain(resp.status());
   });
 });

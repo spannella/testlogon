@@ -331,8 +331,10 @@ test.describe("Section 83: Auth / flag gating (API)", () => {
     expect([403, 404]).toContain(resp.status());
   });
 
-  test("83.2 Unauthenticated request → 401/403/404", async ({ request }) => {
-    const resp = await request.get(`${API}/${WFL}/rules`);
+  test("83.2 Unauthenticated request → 401/403/404", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.get(`${API}/${WFL}/rules`);
+    await anonCtx.close();
     expect([401, 403, 404]).toContain(resp.status());
   });
 
