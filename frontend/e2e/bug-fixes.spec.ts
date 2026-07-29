@@ -18,6 +18,8 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppSeedPaymentMethodBB, cppReadLedger } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1279,6 +1281,7 @@ test.describe("13. Tip — billing ledger has a debit entry after sending a tip"
   test.beforeAll(async ({ browser, request }) => {
     aliceSub = getSessions()[ALICE_ID].user_sub;
     injectPaymentMethod(aliceSub, ALICE_PM);
+    if (usingCpp()) cppSeedPaymentMethodBB(aliceSub, ALICE_PM);
 
     page = await browser.newPage();
     await openDmWithBob(page);
@@ -1308,6 +1311,18 @@ test.describe("13. Tip — billing ledger has a debit entry after sending a tip"
   });
 
   test("Billing ledger contains a tip debit entry for Alice", () => {
+    if (usingCpp()) {
+      // cpp writes the debit to its OWN tlc_billing (moto :5005). Read it there
+      // and count debit rows whose reason marks a message tip.
+      const rows = cppReadLedger(aliceSub);
+      const n = rows.filter(
+        (r) =>
+          r.type === "debit" &&
+          ["Tip sent", "Tip: message"].includes(String(r.reason)),
+      ).length;
+      expect(n).toBeGreaterThan(0);
+      return;
+    }
     const result = execSync(
       `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE}
@@ -1342,6 +1357,7 @@ test.describe("14. Unlock — billing ledger has a debit entry after unlocking a
   test.beforeAll(async ({ browser, request }) => {
     aliceSub = getSessions()[ALICE_ID].user_sub;
     injectPaymentMethod(aliceSub, ALICE_PM);
+    if (usingCpp()) cppSeedPaymentMethodBB(aliceSub, ALICE_PM);
 
     page = await browser.newPage();
     await openDmWithBob(page);
@@ -1374,6 +1390,14 @@ test.describe("14. Unlock — billing ledger has a debit entry after unlocking a
   });
 
   test("Billing ledger contains a 'Message unlock' debit entry for Alice", () => {
+    if (usingCpp()) {
+      const rows = cppReadLedger(aliceSub);
+      const n = rows.filter(
+        (r) => r.type === "debit" && String(r.reason) === "Message unlock",
+      ).length;
+      expect(n).toBeGreaterThan(0);
+      return;
+    }
     const result = execSync(
       `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE}
