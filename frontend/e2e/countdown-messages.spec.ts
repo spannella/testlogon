@@ -27,7 +27,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, cppRegisterThrowaway } from "./helpers/session";
 import { usingCpp, cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
 import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
@@ -527,13 +527,15 @@ test.describe("Section 700: Countdown in Group Chats", () => {
   });
 
   test("700.4 non-participant cannot send countdown (403)", async ({ request }) => {
-    // Charlie was removed from no group, so use a brand-new group without Charlie,
-    // then have Charlie attempt to post.
+    // Use a REAL authenticated user who is not a member of the group. A bogus
+    // e2e_nonmember@ raw sub 401s (unknown token); an authenticated non-member
+    // triggers the 403/404 membership gate.
+    const outsider = cppRegisterThrowaway("cd_700_4");
     const resp = await apiPostBearer(
       request,
       `/messaging/conversations/${groupId}/messages/countdown`,
       { title: `Intruder ${TS}-700-4`, target_datetime: nowSec() + 600 },
-      "e2e_nonmember@test.local",
+      outsider!.session.user_sub,
     );
     expect([403, 404]).toContain(resp.status());
     await request.dispose();
