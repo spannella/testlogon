@@ -20,7 +20,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { loadSessions, resolveIdentityId, cppRegisterThrowaway } from "./helpers/session";
 import { usingCpp, cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -247,10 +247,15 @@ test.describe("A. Group Call API", () => {
     expect(createResp.status()).toBe(201);
     const newCallId = (await createResp.json()).call_id;
 
-    // Non-member tries to join
-    const resp = await request.post(`${API}/ui/calls/group/${newCallId}/join`, {
-      headers: { Authorization: "Bearer nonexistent_user@test.local" },
-    });
+    // Non-member tries to join: use a REAL authenticated user who is not in the
+    // fresh conversation. A bogus bearer would 401 (bad token); an authenticated
+    // non-participant is what triggers the 403 membership gate.
+    const outsider = cppRegisterThrowaway("gc_a6");
+    const resp = await cppBearerPost(
+      `/ui/calls/group/${newCallId}/join`,
+      {},
+      outsider!.session.user_sub,
+    );
     expect(resp.status()).toBe(403);
 
     // Clean up
@@ -508,15 +513,18 @@ test.describe("C. Signaling API", () => {
     expect(resp2.status()).toBe(200);
   });
 
-  test("C4 — Signal rejected for non-participant (403)", async ({ request }) => {
-    const resp = await request.post(`${API}/ui/calls/group/${signalCallId}/signal`, {
-      data: {
+  test("C4 — Signal rejected for non-participant (403)", async () => {
+    // A real authenticated user who is not a call participant → 403 (not 401).
+    const outsider = cppRegisterThrowaway("gc_c4");
+    const resp = await cppBearerPost(
+      `/ui/calls/group/${signalCallId}/signal`,
+      {
         type: "offer",
         target_user_id: ALICE_ID,
         payload: { sdp: "v=0..." },
       },
-      headers: { Authorization: "Bearer nonexistent_user@test.local" },
-    });
+      outsider!.session.user_sub,
+    );
     expect(resp.status()).toBe(403);
   });
 
