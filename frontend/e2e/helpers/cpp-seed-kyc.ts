@@ -290,3 +290,13 @@ export function cppGetKycCasePii(caseId: string): Record<string, unknown> {
     return {};
   }
 }
+
+/**
+ * Delete a kyc-analytics cohort's cases (KYC#<prefix><i>/META for i<count) from
+ * cpp's tlc_kyc_cases. Mirrors kyc-analytics.spec.ts's afterAll cleanup, whose
+ * Python :8001 deletes never reach cpp — so seeded analytics cases otherwise
+ * accumulate across runs and break count-bounded funnel/tier assertions.
+ */
+export function cppDeleteKycAnalyticsCases(prefix: string, count = 20): void {
+  runCppShim("delete_kyc_analytics_cases.py", { prefix, count });
+}

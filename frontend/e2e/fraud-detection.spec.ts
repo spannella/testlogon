@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId, unauthContext } from "./helpers/session";
+import { usingCpp, cppSeedFraudFlag, cppSeedFraudChargebackCount, cppSeedFraudVelocityRisk } from "./helpers/cpp-seed-fraud";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // Load backend env (.env.local) so child python processes get the real
@@ -137,6 +138,10 @@ function appPython(body: string): string {
 // when the billing table is available and falls back to the persisted 24h
 // counter otherwise, so the velocity_count rule fires either way (> 20/hr).
 function seedVelocityLedger(userId: string): void {
+  if (usingCpp()) {
+    cppSeedFraudVelocityRisk(userId);
+    return;
+  }
   ddbPython(`
 fraud.put_item(Item={'pk':'RISK#USER#${userId}','sk':'SCORE','score':Decimal(0),'components':{},'flagged':False,'frozen':False,'chargeback_count':Decimal(0),'tx_count_24h':Decimal(600),'tx_total_24h':Decimal(60000),'last_scored_at':Decimal(now)})
 try:
@@ -150,6 +155,10 @@ except Exception:
 
 // Seed a flag row directly (status pending) for ALICE.
 function seedFlag(flagId: string, userId: string, status: string): void {
+  if (usingCpp()) {
+    cppSeedFraudFlag(flagId, userId, status);
+    return;
+  }
   const gsi1 = status === "pending" || status === "investigating" ? "FLAGS#PENDING" : "FLAGS#RESOLVED";
   ddbPython(`
 fraud.put_item(Item={'pk':'FLAG#${flagId}','sk':'META','GSI1PK':'${gsi1}','GSI1SK':Decimal(now),'GSI2PK':'FLAGS#USER#${userId}','GSI2SK':Decimal(now),'flag_id':'${flagId}','user_id':'${userId}','tx_id':'led_seed','rule_triggered':'velocity_count','risk_score':Decimal(75),'amount_cents':Decimal(500),'status':'${status}','notes':'','created_at':Decimal(now)})
@@ -158,6 +167,10 @@ fraud.put_item(Item={'pk':'FLAG#${flagId}','sk':'META','GSI1PK':'${gsi1}','GSI1S
 
 // Seed a risk SCORE row with N prior chargebacks (so the next one auto-flags).
 function seedChargebackCount(userId: string, count: number): void {
+  if (usingCpp()) {
+    cppSeedFraudChargebackCount(userId, count);
+    return;
+  }
   ddbPython(`
 fraud.put_item(Item={'pk':'RISK#USER#${userId}','sk':'SCORE','score':Decimal(0),'components':{},'flagged':False,'frozen':False,'chargeback_count':Decimal(${count}),'tx_count_24h':Decimal(0),'tx_total_24h':Decimal(0),'last_scored_at':Decimal(now)})
 `);

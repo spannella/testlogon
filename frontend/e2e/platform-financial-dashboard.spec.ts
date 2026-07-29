@@ -21,6 +21,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedFinancialLedger } from "./helpers/cpp-seed-financial-dashboard";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const ALICE_ID = "e2e_alice@test.local";
@@ -91,6 +92,10 @@ async function apiPost(page: Page, identity: string, path: string, body?: unknow
  *   - 1 platform_commission (revenue)
  */
 function seedLedger(): void {
+  if (usingCpp()) {
+    cppSeedFinancialLedger(SEED_DATE, RUN_TAG);
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os, secrets

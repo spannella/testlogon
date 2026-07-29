@@ -23,6 +23,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedPaymentHealth } from "./helpers/cpp-seed-payment-health";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const PREFIX = "ui/admin/payment-health";
@@ -86,6 +87,10 @@ async function apiPatch(page: Page, identity: string, path: string, body?: unkno
 // ─── DDB seed helper ───────────────────────────────────────────────────────
 
 function seedHealthData(): void {
+  if (usingCpp()) {
+    cppSeedPaymentHealth();
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os, time, uuid

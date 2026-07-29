@@ -15,6 +15,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedEarningsCredits, cppCleanupEarningsCredits } from "./helpers/cpp-seed-earnings";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -86,6 +87,10 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 // ─── DDB seed helper ─────────────────────────────────────────────────────────
 
 function seedLedgerCredits(userSub: string, entries: Array<{ reason: string; amount_cents: number }>): void {
+  if (usingCpp()) {
+    cppSeedEarningsCredits(userSub, entries, String(TS));
+    return;
+  }
   const entriesB64 = Buffer.from(JSON.stringify(entries)).toString("base64");
   execSync(
     `${PYTHON} -c "
@@ -134,6 +139,10 @@ print('seeded')
 }
 
 function cleanupLedgerCredits(userSub: string): void {
+  if (usingCpp()) {
+    cppCleanupEarningsCredits(userSub, String(TS));
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "

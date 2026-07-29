@@ -13,6 +13,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedAffiliateCatalogItem, cppCleanupAffiliateCatalogItem } from "./helpers/cpp-seed-affiliate";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -108,6 +109,10 @@ ddb = boto3.resource(
 `;
 
 function injectCatalogItem(userSub: string, itemId: string, name: string): void {
+  if (usingCpp()) {
+    cppSeedAffiliateCatalogItem(userSub, itemId, name);
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PRELUDE}
 tbl = ddb.Table('shopping_catalog')
@@ -130,6 +135,10 @@ tbl.put_item(Item={
 }
 
 function cleanupCatalogItem(itemId: string): void {
+  if (usingCpp()) {
+    cppCleanupAffiliateCatalogItem(itemId);
+    return;
+  }
   try {
     execSync(
       `python3 -c "${DDB_PRELUDE}

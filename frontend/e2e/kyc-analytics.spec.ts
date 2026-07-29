@@ -17,7 +17,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
-import { usingCpp, cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
+import { usingCpp, cppSeedKycCaseFull, cppDeleteKycAnalyticsCases } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -191,12 +191,16 @@ test.afterAll(async () => {
   await rootPage?.close();
   await alicePage?.close();
   try {
-    runPy(`
+    if (usingCpp()) {
+      cppDeleteKycAnalyticsCases(`kyc_an${TS}_`, 20);
+    } else {
+      runPy(`
 tbl = ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
 for i in range(20):
     tbl.delete_item(Key={'pk': 'KYC#kyc_an${TS}_' + str(i), 'sk': 'META'})
 print('cleaned')
 `);
+    }
   } catch {
     /* best-effort */
   }

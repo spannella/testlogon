@@ -24,6 +24,7 @@ import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedAnalyticsRollup, cppSeedAnalyticsSummary } from "./helpers/cpp-seed-analytics";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -106,6 +107,10 @@ function seedRollupRow(
   dateStr: string,
   data: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    cppSeedAnalyticsRollup(userSub, dateStr, data);
+    return;
+  }
   const tmpFile = `${tmpdir()}/analytics_seed_${Date.now()}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -147,6 +152,10 @@ function seedSummarySentinel(
   userSub: string,
   data: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    cppSeedAnalyticsSummary(userSub, data);
+    return;
+  }
   const tmpFile = `${tmpdir()}/analytics_summary_${Date.now()}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {

@@ -14,6 +14,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedBillingTick, cppSeedMonthlyTotal, cppSeedComputeWallet } from "./helpers/cpp-seed-compute-billing";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -110,6 +111,10 @@ function ddbPut(tableName: string, item: Record<string, unknown>) {
 }
 
 function seedWalletBalance(userSub: string, balanceCents: number) {
+  if (usingCpp()) {
+    cppSeedComputeWallet(userSub, balanceCents);
+    return;
+  }
   ddbPut("billing", {
     pk: { S: `USER#${userSub}` },
     sk: { S: "WALLET" },
@@ -134,6 +139,10 @@ function seedBillingTick(
     entryId: string;
   },
 ) {
+  if (usingCpp()) {
+    cppSeedBillingTick(userSub, opts);
+    return;
+  }
   ddbPut("compute_billing", {
     user_sub: { S: userSub },
     sk: { S: `TICK#${opts.createdAt}#${opts.entryId}` },
@@ -153,6 +162,10 @@ function seedBillingTick(
 }
 
 function seedMonthlyTotal(userSub: string, monthKey: string, totalCents: number) {
+  if (usingCpp()) {
+    cppSeedMonthlyTotal(userSub, monthKey, totalCents);
+    return;
+  }
   ddbPut("compute_billing", {
     user_sub: { S: userSub },
     sk: { S: `MONTH#${monthKey}` },

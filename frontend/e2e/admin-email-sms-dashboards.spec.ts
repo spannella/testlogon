@@ -21,6 +21,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedAdminComms } from "./helpers/cpp-seed-admin-comms";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const ROOT_SUB = "root.admin@testdev.local";
@@ -89,6 +90,10 @@ async function apiDelete(page: Page, identity: string, path: string) {
 
 /** Seed email + SMS delivery records and notification templates directly into DDB. */
 function seedDeliveryData(): void {
+  if (usingCpp()) {
+    cppSeedAdminComms();
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os, time
