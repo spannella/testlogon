@@ -30,6 +30,32 @@ import { runCppShim, usingCpp } from "./cpp-seed";
 
 export { usingCpp };
 
+// ── filemanager file node seed (kyc.spec injectFileNode) ───────────────
+/**
+ * Seed ONE filemanager FILE node into cpp's moto tlc_filemanager (PK=USER#<sub>,
+ * SK=NODE#<path>) so h_cc_attach_file's fm_get_node_opt() resolves it. Mirrors
+ * kyc.spec.ts injectFileNode(), which writes to the Python DDB-Local :8001
+ * file_manager table cpp never reads. Reuses the existing seed_filemanager_video_node.py
+ * shim (content_type overridable to image/jpeg for KYC selfie/id docs).
+ * userSub MUST be the cpp SUB (fm_get_node_opt keys on s.user_sub), never an email.
+ */
+export function cppSeedFilemanagerNode(
+  userSub: string,
+  filePath: string,
+  contentType = "image/jpeg",
+): void {
+  const name = filePath.split("/").pop() as string;
+  runCppShim("seed_filemanager_video_node.py", {
+    owner_user_id: userSub,
+    path: filePath,
+    name,
+    content_type: contentType,
+    s3_bucket: "test-bucket",
+    s3_key: `e2e/fake/${name}`,
+    size: 2048,
+  });
+}
+
 // ── full KYC case seed ───────────────────────────────────────────────────────
 export interface CppKycCaseFile {
   type: string; // "selfie" | "id_front" | "id_back" | ...

@@ -16,7 +16,7 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -30,8 +30,11 @@ const BOB_KEY = "bob";
 const CHARLIE_KEY = "charlie_admin";
 
 // Email-based user subs
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+// Under cpp, identities are opaque SUBs (not emails). resolveIdentityId maps the
+// seeded email -> the live cpp SUB so request bodies (owner_id/licensee_id/creator)
+// AND the assertions below are SUB-consistent. Python path (sub==email) unchanged.
+const ALICE_SUB = isCpp() ? resolveIdentityId("e2e_alice@test.local") : "e2e_alice@test.local";
+const BOB_SUB = isCpp() ? resolveIdentityId("e2e_bob@test.local") : "e2e_bob@test.local";
 
 // Unique content IDs per run
 const PER_USER_CONTENT = `pu_content_${TS}`;

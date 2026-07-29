@@ -95,7 +95,10 @@ const CPP_IDENTITY: Record<string, { email: string; file: string }> = {
   // specs only need an admin-authenticated session to exercise the admin gate,
   // and this prevents getSessions()[name] -> undefined -> ".cookies" NPEs on the
   // cpp path (Python path unchanged; loadCppSessions is cpp-only).
-  compliance_admin: { email: "e2e_admin@test.local", file: "admin" },
+  // C1 messaging-compliance: compliance_admin must be BOTH admin AND the group
+  // participant/creator that setupConversationsAndMessages uses (CHARLIE_ID).
+  // e2e_charlie is role=admin, so it passes require_admin AND require_participant_active.
+  compliance_admin: { email: "e2e_charlie@test.local", file: "charlie" },
   // charlie_scoped is a DEDICATED scoped-admin fixture (role=admin,
   // admin_profile={type:"scoped",scopes:["auth_support"]}, NO billing_support)
   // provisioned by seed_cpp.py so cpp's require_admin_scope("billing_support")
