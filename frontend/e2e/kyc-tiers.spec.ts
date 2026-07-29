@@ -16,6 +16,11 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppSetUserKycFields,
+  cppRemoveUserKycFields,
+} from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -105,6 +110,10 @@ users = ddb.Table('users')
 `;
 
 function setProfileField(userSub: string, field: string, value: string | number | boolean) {
+  if (usingCpp()) {
+    cppSetUserKycFields(userSub, { [field]: value });
+    return;
+  }
   const pyVal =
     typeof value === "boolean" ? (value ? "True" : "False") :
     typeof value === "number" ? String(value) :
@@ -123,6 +132,10 @@ print('ok')
 }
 
 function removeProfileField(userSub: string, field: string) {
+  if (usingCpp()) {
+    cppRemoveUserKycFields(userSub, [field]);
+    return;
+  }
   execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 users.update_item(
@@ -136,6 +149,16 @@ print('ok')
 }
 
 function clearTierFields(userSub: string) {
+  if (usingCpp()) {
+    cppRemoveUserKycFields(userSub, [
+      "kyc_tier",
+      "kyc_tier_updated_at",
+      "kyc_tier_history",
+      "email_verified",
+      "phone_verified",
+    ]);
+    return;
+  }
   execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 users.update_item(

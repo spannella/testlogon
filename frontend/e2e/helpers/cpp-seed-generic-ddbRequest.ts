@@ -102,6 +102,41 @@ export function cppSeedRollupRow(
   cppSeedAnalyticsRollups([{ user_sub: userSub, date: dateStr, data }]);
 }
 
+// ── engagement-rate extras (SUMMARY toggle / profile follower_count / cleanup) ─
+// engagement-rate.spec.ts also needs: the tlc_analytics_rollups SUMMARY row's
+// show_engagement_public flag (public /api/creators/{id}/engagement gate), the
+// profile follower_count at the ITEM ROOT of tlc_profile (eng_live_followers),
+// and a CREATOR# rollup cleanup. All keyed by the cpp SUB.
+
+/** Set the SUMMARY-row show_engagement_public flag for a creator. */
+export function cppSetEngagementSummaryPublic(
+  userSub: string,
+  visible: boolean,
+): void {
+  runCppShim("seed_engagement_extras.py", {
+    op: "summary",
+    user_sub: resolveIdentityId(userSub),
+    visible,
+  });
+}
+
+/** Set root-level follower_count on a creator's tlc_profile row. */
+export function cppSetProfileFollowerCount(userSub: string, count: number): void {
+  runCppShim("seed_engagement_extras.py", {
+    op: "follower",
+    user_sub: resolveIdentityId(userSub),
+    count,
+  });
+}
+
+/** Delete all CREATOR#<sub> rollup rows (DAILY# + SUMMARY) for a creator. */
+export function cppCleanupAnalyticsRollups(userSub: string): void {
+  runCppShim("seed_engagement_extras.py", {
+    op: "cleanup",
+    user_sub: resolveIdentityId(userSub),
+  });
+}
+
 // ── billing ledger (tlc_billing) ─────────────────────────────────────────────
 
 export interface GenLedgerEntry {

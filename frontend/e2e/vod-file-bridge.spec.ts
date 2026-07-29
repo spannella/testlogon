@@ -18,7 +18,12 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedVodVideo,
+  cppSeedFilemanagerVideoNode,
+} from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -98,6 +103,44 @@ function seedVideo(opts: {
   thumbnailUrl?: string;
   fileSizeBytes?: number;
 }): void {
+  if (usingCpp()) {
+    const o = opts as Record<string, unknown>;
+    const sub = resolveIdentityId(opts.ownerUserId);
+    const extra: Record<string, unknown> = { source_type: "upload" };
+    const put = (k: string, v: unknown) => { if (v !== undefined) extra[k] = v; };
+    put("source_s3_key",
+      o.sourceS3Key === ""
+        ? undefined
+        : (o.sourceS3Key ?? `videos/${sub}/${opts.videoId}/source.mp4`));
+    put("video_codec", o.videoCodec);
+    put("audio_codec", o.audioCodec);
+    put("width", o.width);
+    put("height", o.height);
+    put("frame_rate", o.frameRate);
+    put("file_size_bytes", o.fileSizeBytes);
+    put("created_at", o.createdAt);
+    put("allow_download", o.allowDownload);
+    put("watermark_downloads", o.watermarkDownloads);
+    put("download_mp4_key", o.downloadMp4Key);
+    put("download_mp4_status", o.downloadMp4Status);
+    put("download_mp4_size_bytes", o.downloadMp4SizeBytes);
+    put("thumbnail_url", o.thumbnailUrl);
+    cppSeedVodVideo({
+      videoId: opts.videoId,
+      ownerSub: sub,
+      title: opts.title,
+      status: (o.status as string) || "published",
+      visibility: (o.visibility as string) || "public",
+      ...(o.durationSeconds !== undefined
+        ? { durationSeconds: o.durationSeconds as number }
+        : {}),
+      ...(o.hlsManifestUrl !== undefined
+        ? { hlsManifestUrl: o.hlsManifestUrl as string }
+        : {}),
+      extra,
+    });
+    return;
+  }
   const status = opts.status ?? "published";
   const visibility = opts.visibility ?? "public";
   const createdAt = Math.floor(Date.now() / 1000);
@@ -147,6 +190,7 @@ print('ok')
 }
 
 function deleteVideo(videoId: string): void {
+  if (usingCpp()) return;
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')
@@ -183,6 +227,19 @@ function seedFileNode(opts: {
   size?: number;
   vodVideoId?: string;
 }): void {
+  if (usingCpp()) {
+    cppSeedFilemanagerVideoNode({
+      ownerSub: resolveIdentityId(opts.ownerUserId),
+      path: opts.path,
+      name: opts.name,
+      contentType: opts.contentType,
+      ...(opts.s3Bucket ? { s3Bucket: opts.s3Bucket } : {}),
+      ...(opts.s3Key ? { s3Key: opts.s3Key } : {}),
+      ...(opts.size != null ? { size: opts.size } : {}),
+      ...(opts.vodVideoId ? { vodVideoId: opts.vodVideoId } : {}),
+    });
+    return;
+  }
   const s3Bucket = opts.s3Bucket ?? "local-uploads";
   const s3Key = opts.s3Key ?? `tenants/${opts.ownerUserId}/uploads/${opts.name}`;
   const size = opts.size ?? 1048576;
@@ -239,6 +296,7 @@ print('ok')
 }
 
 function deleteFileNode(ownerUserId: string, path: string): void {
+  if (usingCpp()) return;
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')
@@ -517,6 +575,27 @@ test.describe.serial("123 — VOD Bridge Status & Unlink API", () => {
 
   test("123.3 DELETE /ui/vod-bridge/{id}/link removes vod fields", async () => {
     // We need to set the source_file_node_id on the video record first
+    if (usingCpp()) {
+      // cpp: set source_file_node_id via re-seed (the Python :8001 update
+      // below never reaches cpp's tlc_video_metadata).
+      cppSeedVodVideo({
+        videoId: VIDEO_ID_UNLINK,
+        ownerSub: ALICE_SUB(),
+        title: `Bridge Unlink Test ${TS}`,
+        status: "published",
+        extra: { source_file_node_id: LINKED_FILE_PATH_UNLINK },
+      });
+      const respCpp = await apiDelete(
+        alicePage,
+        "alice",
+        `/ui/vod-bridge/${VIDEO_ID_UNLINK}/link`,
+      );
+      expect(respCpp.status()).toBe(200);
+      const dataCpp = await respCpp.json();
+      expect(dataCpp.video_id).toBe(VIDEO_ID_UNLINK);
+      expect(dataCpp.unlinked).toBe(true);
+      return;
+    }
     const py = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')

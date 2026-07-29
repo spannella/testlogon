@@ -21,6 +21,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 
@@ -380,6 +381,15 @@ function gap257Py(script: string, timeout = 15_000): void {
 }
 
 function gap257SeedKycCase(caseId: string, userSub: string): void {
+  if (usingCpp()) {
+    cppSeedKycCaseFull({
+      caseId,
+      userSub,
+      status: "under_review",
+      intakeProfile: "enhanced",
+    });
+    return;
+  }
   const ts = Math.floor(Date.now() / 1000);
   gap257Py(`
 ${GAP257_DDB_PRELUDE}
@@ -413,6 +423,7 @@ print(case_id)
 }
 
 function gap257DeleteKycCase(caseId: string): void {
+  if (usingCpp()) return;
   try {
     gap257Py(`
 ${GAP257_DDB_PRELUDE}

@@ -41,12 +41,19 @@ export interface CppKycCaseFile {
 
 export interface CppKycCaseOpts {
   caseId: string;
-  userSub: string; // cpp SUB (owner) — NOT an email
+  userSub: string; // cpp SUB (owner) — or an opaque analytics-cohort string
   status?: string; // draft | submitted | under_review | approved | rejected | ...
   targetTier?: string | null; // tier_0..tier_4 (render-for-case reads this)
   intakeProfile?: string | null; // standard | enhanced | basic | null
+  country?: string | null; // ISO-2 (analytics geographic / anl_case_country)
   assignedAdminSub?: string | null;
   version?: number;
+  createdAt?: number;
+  submittedAt?: number; // submission.submitted_at (processing-time / deadlines)
+  decidedAt?: number; // review.decided_at (processing-time / retention)
+  purgedAt?: number | null; // review.purged_at (retention overdue)
+  reasonCodes?: string[]; // review.reason_codes (rejection-reasons)
+  decision?: string | null; // review.decision
   slaDueAt?: number | null;
   escalationLevel?: number;
   files?: CppKycCaseFile[];
@@ -66,8 +73,15 @@ export function cppSeedKycCaseFull(opts: CppKycCaseOpts): void {
     status: opts.status ?? "draft",
     target_tier: opts.targetTier ?? null,
     intake_profile: opts.intakeProfile ?? null,
+    ...(opts.country != null ? { country: opts.country } : {}),
     assigned_admin_sub: opts.assignedAdminSub ?? null,
     version: opts.version ?? 1,
+    ...(opts.createdAt != null ? { created_at: opts.createdAt } : {}),
+    ...(opts.submittedAt != null ? { submitted_at: opts.submittedAt } : {}),
+    ...(opts.decidedAt != null ? { decided_at: opts.decidedAt } : {}),
+    ...(opts.purgedAt != null ? { purged_at: opts.purgedAt } : {}),
+    ...(opts.reasonCodes != null ? { reason_codes: opts.reasonCodes } : {}),
+    ...(opts.decision != null ? { decision: opts.decision } : {}),
     sla_due_at: opts.slaDueAt ?? null,
     escalation_level: opts.escalationLevel ?? 0,
     files: (opts.files ?? []).map((f) => ({
@@ -111,6 +125,22 @@ export function cppGetKycCaseVersion(caseId: string): number {
  * / status / files / review). Mirrors getCaseItem() in kyc-eidv.spec.ts. Returns
  * {} if absent. The shim prints an 'ok' marker line then the JSON payload.
  */
+/**
+ * Read one row from cpp's tlc_kyc_cases by explicit pk/sk (e.g. a SAR record
+ * pk=SAR#<id>, sk=META). Mirrors the direct :8001 get_item read-backs. {} if
+ * absent.
+ */
+export function cppGetKycRow(pk: string, sk = "META"): Record<string, unknown> {
+  const out = runCppShim("get_kyc_case.py", { pk, sk });
+  const lines = out.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const json = lines[lines.length - 1] ?? "{}";
+  try {
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
 export function cppGetKycCase(caseId: string): Record<string, unknown> {
   const out = runCppShim("get_kyc_case.py", { case_id: caseId });
   // last non-empty line is the JSON payload
@@ -134,4 +164,103 @@ export function cppGetUserKycTier(userSub: string): number {
 /** REMOVE a user's kyc_tier (+updated_at/history) in cpp's tlc_msg_users. */
 export function cppClearUserKycTier(userSub: string): void {
   runCppShim("set_user_kyc_tier.py", { user_sub: userSub, op: "clear" });
+}
+
+// ── KYC screening result seed (tlc_kyc_screening_results) ────────────────────
+export interface CppKycScreeningOpts {
+  caseId: string;
+  userSub: string; // cpp SUB or analytics-cohort string
+  result?: string; // clear | potential_match | confirmed_match
+  reviewDecision?: string | null; // clear | escalate | null
+  reviewedBy?: string | null;
+  screenType?: string;
+  screenKey?: string;
+  screeningId?: string;
+  createdAt: number;
+}
+
+/**
+ * Seed ONE screening result row into cpp's tlc_kyc_screening_results
+ * (PK=case_id, SK=screen_key). The compliance screening report scans that table
+ * (created_at BETWEEN) and reads result / review_decision. Mirrors
+ * seedScreening() in kyc-compliance-reports.spec.ts.
+ */
+export function cppSeedKycScreening(opts: CppKycScreeningOpts): void {
+  runCppShim("seed_kyc_screening.py", {
+    case_id: opts.caseId,
+    user_sub: opts.userSub,
+    result: opts.result ?? "clear",
+    review_decision: opts.reviewDecision ?? null,
+    ...(opts.reviewedBy != null ? { reviewed_by: opts.reviewedBy } : {}),
+    ...(opts.screenType ? { screen_type: opts.screenType } : {}),
+    ...(opts.screenKey ? { screen_key: opts.screenKey } : {}),
+    ...(opts.screeningId ? { screening_id: opts.screeningId } : {}),
+    created_at: opts.createdAt,
+  });
+}
+
+// ── set nested identity on an existing case (id-scanner cross-reference) ─────
+/**
+ * Set the nested `identity` map (first/last name, DOB, nationality) on an
+ * existing cpp KYC case so ids_cross_reference matches. Mirrors seedCaseIdentity()
+ * in kyc-id-scanner.spec.ts (which update_items the :8001 case row).
+ */
+export function cppSetKycCaseIdentity(
+  caseId: string,
+  firstName: string,
+  lastName: string,
+  dob: string,
+  nationality: string,
+): void {
+  runCppShim("set_kyc_case_identity.py", {
+    case_id: caseId,
+    first_name: firstName,
+    last_name: lastName,
+    date_of_birth: dob,
+    nationality,
+  });
+}
+
+// ── generic user-row field set/remove on tlc_msg_users (kyc-tiers) ───────────
+/**
+ * SET arbitrary attrs (email_verified / phone_verified / kyc_tier /
+ * kyc_tier_history / kyc_tier_updated_at) on a user's tlc_msg_users row. Mirrors
+ * setProfileField() in kyc-tiers.spec.ts.
+ */
+export function cppSetUserKycFields(
+  userSub: string,
+  fields: Record<string, string | number | boolean>,
+): void {
+  runCppShim("set_user_kyc_tier.py", { user_sub: userSub, op: "set", fields });
+}
+
+/** REMOVE named attrs from a user's tlc_msg_users row (removeProfileField). */
+export function cppRemoveUserKycFields(userSub: string, fields: string[]): void {
+  runCppShim("set_user_kyc_tier.py", { user_sub: userSub, op: "remove", fields });
+}
+
+// ── direct case admin-assign + encrypted-PII read (kyc-encryption/pii-section) ─
+/**
+ * Set review.assigned_admin_sub on an existing cpp case (read-modify-write).
+ * Mirrors assignAdminDirect() (no REST endpoint). adminSub MUST be the cpp SUB
+ * of the identity that will call /pii/decrypt (the decrypt gate matches
+ * review.assigned_admin_sub == session sub).
+ */
+export function cppAssignKycAdmin(caseId: string, adminSub: string): void {
+  runCppShim("assign_kyc_admin.py", { case_id: caseId, admin_sub: adminSub });
+}
+
+/**
+ * Read the raw encrypted_pii map for a case from cpp's tlc_kyc_cases (at-rest
+ * ciphertext shape). Mirrors readEncryptedPii(). {} if absent.
+ */
+export function cppGetKycCasePii(caseId: string): Record<string, unknown> {
+  const out = runCppShim("get_kyc_case_pii.py", { case_id: caseId });
+  const lines = out.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const json = lines[lines.length - 1] ?? "{}";
+  try {
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }

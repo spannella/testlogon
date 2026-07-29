@@ -23,6 +23,13 @@ import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import * as path from "path";
 import { loadSessions, unauthContext } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import {
+  cppSeedRollupRow,
+  cppSetEngagementSummaryPublic,
+  cppSetProfileFollowerCount,
+  cppCleanupAnalyticsRollups,
+} from "./helpers/cpp-seed-generic-ddbRequest";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -100,6 +107,10 @@ function seedEngagementRow(
   dateStr: string,
   data: Record<string, number>,
 ): void {
+  if (usingCpp()) {
+    cppSeedRollupRow(userSub, dateStr, data);
+    return;
+  }
   const tmpFile = `${tmpdir()}/eng_seed_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -129,6 +140,10 @@ print('seeded', '${dateStr}')
 }
 
 function setFollowerCount(userSub: string, count: number): void {
+  if (usingCpp()) {
+    cppSetProfileFollowerCount(userSub, count);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 ${DDB_PRELUDE}
@@ -144,6 +159,10 @@ print('followers', ${count})
 }
 
 function setSummaryPublic(userSub: string, visible: boolean): void {
+  if (usingCpp()) {
+    cppSetEngagementSummaryPublic(userSub, visible);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 ${DDB_PRELUDE}
@@ -159,6 +178,14 @@ print('public', '${visible}')
 }
 
 function cleanupRollups(userSub: string): void {
+  if (usingCpp()) {
+    try {
+      cppCleanupAnalyticsRollups(userSub);
+    } catch {
+      /* best-effort */
+    }
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "${DDB_PRELUDE}

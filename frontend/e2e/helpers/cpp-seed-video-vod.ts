@@ -219,3 +219,35 @@ export function cppDeleteSubscription(subscriberSub: string, subId?: string): vo
     ...(subId ? { sub_id: subId } : {}),
   });
 }
+
+// ── filemanager video node (tlc_filemanager) — VOD file-bridge source ────────
+// The vod-file-bridge spec pre-creates a filemanager FILE node with a video/*
+// content-type that POST /ui/vod-bridge/import reads via fm_get_node_opt. Its
+// inline seedFileNode() writes to the Python :8001 'file_manager' table which
+// cpp never reads; this lands the node in cpp's own tlc_filemanager (PK
+// USER#<sub>, SK NODE#<path>). ownerSub MUST be the cpp SUB.
+
+export interface CppFilemanagerNodeOpts {
+  ownerSub: string; // cpp SUB
+  path: string; // e.g. "/videos/foo.mp4"
+  name?: string;
+  contentType?: string; // MUST start with "video/" for the bridge
+  s3Bucket?: string;
+  s3Key?: string;
+  size?: number;
+  vodVideoId?: string; // pre-link to an existing VOD record
+}
+
+/** Seed ONE filemanager video FILE node into cpp's tlc_filemanager. */
+export function cppSeedFilemanagerVideoNode(opts: CppFilemanagerNodeOpts): void {
+  runCppShim("seed_filemanager_video_node.py", {
+    owner_user_id: opts.ownerSub,
+    path: opts.path,
+    ...(opts.name ? { name: opts.name } : {}),
+    ...(opts.contentType ? { content_type: opts.contentType } : {}),
+    ...(opts.s3Bucket ? { s3_bucket: opts.s3Bucket } : {}),
+    ...(opts.s3Key ? { s3_key: opts.s3Key } : {}),
+    ...(opts.size != null ? { size: opts.size } : {}),
+    ...(opts.vodVideoId ? { vod_video_id: opts.vodVideoId } : {}),
+  });
+}

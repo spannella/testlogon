@@ -17,6 +17,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -112,6 +113,23 @@ interface SeedCase {
 
 /** Seed KYC cases directly into the kyc_cases table. */
 function seedCases(cases: SeedCase[]): void {
+  if (usingCpp()) {
+    const cohort = String(TS);
+    cases.forEach((c, i) => {
+      cppSeedKycCaseFull({
+        caseId: `kyc_an${cohort}_${i}`,
+        userSub: `an_${cohort}_${i}@test.local`,
+        status: c.status,
+        intakeProfile: c.intake ?? "basic",
+        ...(c.country != null ? { country: c.country } : {}),
+        createdAt: Math.floor(c.createdAt),
+        ...(c.submittedAt != null ? { submittedAt: Math.floor(c.submittedAt) } : {}),
+        ...(c.decidedAt != null ? { decidedAt: Math.floor(c.decidedAt) } : {}),
+        ...(c.reason ? { reasonCodes: [c.reason] } : {}),
+      });
+    });
+    return;
+  }
   runPy(`
 tbl = ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
 cohort = '${TS}'

@@ -15,6 +15,12 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions, unauthContext } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedKycCaseFull,
+  cppSeedKycScreening,
+  cppGetKycRow,
+} from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -119,6 +125,25 @@ interface SeedCaseOpts {
 }
 
 function seedCase(o: SeedCaseOpts) {
+  if (usingCpp()) {
+    cppSeedKycCaseFull({
+      caseId: o.caseId,
+      userSub: o.userSub,
+      status: o.status,
+      intakeProfile: "standard",
+      ...(o.createdAt != null ? { createdAt: Math.floor(o.createdAt) } : {}),
+      ...(o.submittedAt != null ? { submittedAt: Math.floor(o.submittedAt) } : {}),
+      ...(o.decidedAt != null ? { decidedAt: Math.floor(o.decidedAt) } : {}),
+      ...(o.purgedAt != null ? { purgedAt: Math.floor(o.purgedAt) } : {}),
+      ...(o.assignedAdmin != null ? { assignedAdminSub: o.assignedAdmin } : {}),
+      files: [
+        { type: "selfie", path: "/x/selfie.jpg" },
+        { type: "id_front", path: "/x/id_front.jpg" },
+        { type: "id_back", path: "/x/id_back.jpg" },
+      ],
+    });
+    return;
+  }
   const created = o.createdAt ?? Math.floor(Date.now() / 1000);
   const submitted = o.submittedAt ?? created;
   const decided = o.decidedAt ?? 0;
@@ -156,6 +181,17 @@ print(case_id)
 }
 
 function seedScreening(caseId: string, userSub: string, result: string, reviewDecision: string | null, createdAt: number) {
+  if (usingCpp()) {
+    cppSeedKycScreening({
+      caseId,
+      userSub,
+      result,
+      reviewDecision,
+      ...(reviewDecision ? { reviewedBy: ROOT_SUB } : {}),
+      createdAt,
+    });
+    return;
+  }
   const dec = reviewDecision ? `"${reviewDecision}"` : "None";
   runPy(`
 screening.put_item(Item={
@@ -169,6 +205,7 @@ print("ok")
 }
 
 function deleteCase(caseId: string) {
+  if (usingCpp()) return;
   runPy(`cases.delete_item(Key={"pk": f"KYC#${caseId}", "sk": "META"}); print("d")`);
 }
 
@@ -352,10 +389,16 @@ test.describe("708 — SAR / Export / Authorization", () => {
       reason: `Stored SAR check for run ${RUN}`,
     });
     const j = await r.json();
-    const out = runPy(`
+    let out: string;
+    if (usingCpp()) {
+      const row = cppGetKycRow(`SAR#${j.sar_id}`, "META");
+      out = Object.keys(row).length > 0 ? "FOUND" : "MISSING";
+    } else {
+      out = runPy(`
 it = cases.get_item(Key={"pk": "SAR#${j.sar_id}", "sk": "META"}).get("Item")
 print("FOUND" if it else "MISSING")
 `);
+    }
     expect(out).toBe("FOUND");
   });
 
