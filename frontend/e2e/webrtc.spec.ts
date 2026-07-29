@@ -249,10 +249,12 @@ test.describe("73 — WebRTC TURN credentials", () => {
 
   // ── 73.1  Missing auth returns 401 ──────────────────────────────────────
 
-  test("73.1 — request without auth returns 401", async ({ request }) => {
-    const resp = await request.post(
+  test("73.1 — request without auth returns 401", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(
       `${API}${TURN_PATH("no_auth_call")}`,
     );
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 
@@ -645,10 +647,12 @@ test.describe("74 — Call Lifecycle: Invite Flow", () => {
     deleteCallSession(callId);
   });
 
-  test("74.5 — request without auth returns 401", async ({ request }) => {
-    const resp = await request.post(`${API}/messaging/messages/calls/invite`, {
+  test("74.5 — request without auth returns 401", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(`${API}/messaging/messages/calls/invite`, {
       data: { call_id: "noauth", conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio" },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });
