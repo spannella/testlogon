@@ -15,7 +15,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 import { usingCpp, cppBearerPost, cppBearerGet, cppBearerPatch, cppBearerDelete } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -24,6 +24,9 @@ const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..")
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
+// cpp view/receipt rows carry the user SUB as user_id, not the email. Resolve
+// the sub for result comparisons (session-map keys elsewhere stay the emails).
+const BOB_UID = resolveIdentityId(BOB_ID);
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
 
@@ -171,10 +174,15 @@ function getTestMsgId(): string {
 // ─── 1. Basic page load ───────────────────────────────────────────────────────
 
 test.describe("1. Messages page loads correctly", () => {
-  test("Redirects to /login without auth", async ({ page }) => {
+  test("Redirects to /login without auth", async ({ browser }) => {
+    // The default `page` fixture inherits the project admin storageState under
+    // cpp, so it is authenticated. Use a genuinely cookieless context.
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const page = await anonCtx.newPage();
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
     await page.waitForTimeout(500);
     expect(page.url()).toContain("/login");
+    await anonCtx.close();
   });
 
   test("Shows messages page when authenticated", async ({ browser }) => {
@@ -276,11 +284,15 @@ test.describe("2b. Messaging profile links", () => {
     await page.close();
   });
 
-  test("Unauthenticated user is redirected to login before messaging profile links are available", async ({ page }) => {
+  test("Unauthenticated user is redirected to login before messaging profile links are available", async ({ browser }) => {
+    // Genuinely cookieless context (default `page` carries admin storageState).
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const page = await anonCtx.newPage();
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
     await page.waitForTimeout(500);
     await expect(page).toHaveURL(/\/login/);
     await expect(page.locator("[aria-label*='Open'][aria-label*='profile']")).toHaveCount(0);
+    await anonCtx.close();
   });
 });
 
@@ -444,7 +456,7 @@ test.describe("4. Message operations (API)", () => {
     expect(resp.ok()).toBe(true);
     const viewers = await resp.json();
     expect(Array.isArray(viewers)).toBe(true);
-    const bob = viewers.find((v: { user_id?: string }) => v.user_id === BOB_ID);
+    const bob = viewers.find((v: { user_id?: string }) => v.user_id === BOB_UID);
     expect(bob).toBeTruthy();
   });
 
@@ -732,7 +744,7 @@ test.describe("8. Image message details", () => {
     );
     expect(resp.ok()).toBe(true);
     const viewers = await resp.json();
-    const bob = viewers.find((v: { user_id?: string }) => v.user_id === BOB_ID);
+    const bob = viewers.find((v: { user_id?: string }) => v.user_id === BOB_UID);
     expect(bob).toBeTruthy();
     expect(bob.last_viewed_at).toBeGreaterThan(0);
   });
