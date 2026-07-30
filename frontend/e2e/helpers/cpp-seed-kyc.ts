@@ -300,3 +300,38 @@ export function cppGetKycCasePii(caseId: string): Record<string, unknown> {
 export function cppDeleteKycAnalyticsCases(prefix: string, count = 20): void {
   runCppShim("delete_kyc_analytics_cases.py", { prefix, count });
 }
+
+
+// ── liveness verification call seed (kyc-verification-call-panel) ────────────
+export interface CppLivenessCallOpts {
+  callId: string;
+  caseId: string;
+  userSub: string; // cpp SUB (owner)
+  status?: string; // scheduled | in_progress | conducted | passed | failed | ...
+  scheduledAt?: number;
+  durationMinutes?: number;
+  note?: string;
+  verifierSub?: string;
+  createdAt?: number;
+}
+
+/**
+ * Seed ONE KYC liveness call into cpp's tlc_kyc_liveness_calls (PK=call_id;
+ * ByCase GSI on case_id) so the admin case-detail VerificationCallPanel
+ * (GET /ui/kyc/liveness-call/admin/case/{case_id}) renders. Mirrors
+ * seedLivenessCall() in kyc-verification-call-panel.spec.ts, whose Python :8001
+ * 'kyc_liveness_calls' write cpp never reads.
+ */
+export function cppSeedLivenessCall(opts: CppLivenessCallOpts): void {
+  runCppShim("seed_liveness_call.py", {
+    call_id: opts.callId,
+    case_id: opts.caseId,
+    user_sub: opts.userSub,
+    status: opts.status ?? "scheduled",
+    ...(opts.scheduledAt != null ? { scheduled_at: opts.scheduledAt } : {}),
+    ...(opts.durationMinutes != null ? { duration_minutes: opts.durationMinutes } : {}),
+    ...(opts.note != null ? { note: opts.note } : {}),
+    ...(opts.verifierSub != null ? { verifier_sub: opts.verifierSub } : {}),
+    ...(opts.createdAt != null ? { created_at: opts.createdAt } : {}),
+  });
+}

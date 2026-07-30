@@ -25,7 +25,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppSeedKycCaseFull, cppSeedLivenessCall } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -112,6 +114,19 @@ function py(script: string, timeout = 15_000): void {
 
 function seedKycCase(caseId: string): void {
   const ts = Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    // cpp reads tlc_kyc_cases (SUB-keyed), not the Python :8001 'kyc_cases'.
+    cppSeedKycCaseFull({
+      caseId,
+      userSub: resolveIdentityId(ALICE_ID),
+      status: "under_review",
+      intakeProfile: "standard",
+      createdAt: ts,
+      submittedAt: ts,
+      files: [],
+    });
+    return;
+  }
   py(`
 ${DDB_PRELUDE}
 ts = ${ts}
@@ -145,6 +160,20 @@ print(case_id)
 
 function seedLivenessCall(callId: string, caseId: string, status: string): void {
   const ts = Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    // cpp reads tlc_kyc_liveness_calls (ByCase GSI), not the Python :8001 table.
+    cppSeedLivenessCall({
+      callId,
+      caseId,
+      userSub: resolveIdentityId(ALICE_ID),
+      status,
+      scheduledAt: ts + 3600,
+      durationMinutes: 30,
+      note: "E2E seeded call",
+      createdAt: ts,
+    });
+    return;
+  }
   py(`
 ${DDB_PRELUDE}
 ts = ${ts}
@@ -171,6 +200,7 @@ print("call seeded")
 }
 
 function deleteKycCase(caseId: string): void {
+  if (usingCpp()) return; // unique per-run case ids; leftover rows are inert
   try {
     py(`
 ${DDB_PRELUDE}
@@ -183,6 +213,7 @@ print("deleted")
 }
 
 function deleteLivenessCallsForCase(caseId: string): void {
+  if (usingCpp()) return; // unique per-run ids; leftover rows are inert
   try {
     py(`
 ${DDB_PRELUDE}
