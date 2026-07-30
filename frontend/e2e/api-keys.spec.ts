@@ -102,8 +102,11 @@ async function apiGet(page: Page, path: string) {
 async function revokeAllKeys(page: Page) {
   const resp = await apiGet(page, "/ui/api_keys");
   if (!resp.ok()) return;
-  const { keys = [] } = (await resp.json()) as { keys: Array<{ key_id: string }> };
+  const { keys = [] } = (await resp.json()) as {
+    keys: Array<{ key_id: string; revoked?: boolean }>;
+  };
   for (const k of keys) {
+    if (k.revoked) continue; // cpp keeps revoked rows in the list; skip them
     await apiPost(page, "/ui/api_keys/revoke", { key_id: k.key_id });
   }
 }
@@ -461,10 +464,15 @@ test.describe("7. REST API — /ui/api_keys", () => {
     expect(revokeResp.ok()).toBe(true);
     expect((await revokeResp.json()).ok).toBe(true);
 
-    // The key must no longer appear in the list.
+    // The key must no longer appear as an ACTIVE key. cpp soft-deletes (keeps
+    // the row with revoked:true) and the frontend filters revoked keys out of
+    // the visible list, so assert the key is absent OR marked revoked.
     const listResp = await apiGet(page, "/ui/api_keys");
-    const { keys } = (await listResp.json()) as { keys: Array<{ key_id: string }> };
-    expect(keys.some((k) => k.key_id === key_id)).toBe(false);
+    const { keys } = (await listResp.json()) as {
+      keys: Array<{ key_id: string; revoked?: boolean }>;
+    };
+    const stillActive = keys.some((k) => k.key_id === key_id && !k.revoked);
+    expect(stillActive).toBe(false);
   });
 
   test("POST /ui/api_keys/ip_rules saves and returns normalised CIDRs", async () => {
