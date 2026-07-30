@@ -60,10 +60,16 @@ async function injectAuth(page: Page, userId: string) {
   if (!session) throw new Error(`No session for ${userId}`);
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  // The auth store's userId is what the manage page compares against
+  // syndicate.admin_user_id (isAdmin gate for the Create Plan / admin controls).
+  // cpp returns admin_user_id as the SUB, and login stores me.user_sub, so under
+  // cpp we must seed the store with the resolved sub — not the email — or the
+  // admin controls never render. Python returns the email, so it is unchanged.
+  const storeUserId = resolveIdentityId(userId);
   await page.evaluate((uid: string) => {
     const state = { userId: uid, accessToken: null, isAuthenticated: true };
     localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, userId);
+  }, storeUserId);
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
