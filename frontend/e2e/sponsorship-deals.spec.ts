@@ -16,8 +16,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 import { usingCpp, cppSeedWallet } from "./helpers/cpp-seed-messaging-crm-misc";
+import { cppSeedPosts } from "./helpers/cpp-seed-profile-social";
 import {
   cppReadItem,
   cppReadLedger,
@@ -100,6 +101,26 @@ ddb = boto3.resource('dynamodb',
 }
 
 function ddbPut(tableName: string, item: Record<string, unknown>): void {
+  if (usingCpp() && tableName === "app_single_table" &&
+      typeof item.pk === "string" && item.pk.startsWith("POST#")) {
+    const postId = (item.pk as string).slice("POST#".length);
+    const ownerRaw = String(item.user_id ?? "");
+    const ownerSub = getSessions()[ownerRaw]
+      ? getSessions()[ownerRaw].user_sub
+      : resolveIdentityId(ownerRaw);
+    cppSeedPosts({
+      authorSub: ownerSub,
+      posts: [
+        {
+          post_id: postId,
+          body: String(item.body ?? ""),
+          visibility: String(item.visibility ?? "public"),
+          status: "published",
+        },
+      ],
+    });
+    return;
+  }
   const script = `${pyEnvPreamble()}
 item = json.loads(os.environ['DDB_ITEM'], parse_float=decimal.Decimal, parse_int=decimal.Decimal)
 ddb.Table(os.environ['DDB_TABLE']).put_item(Item=item)
@@ -148,6 +169,7 @@ print(json.dumps(item, cls=Enc) if item else 'null')
 // Resolve a fixture identity (email or short key) to the cpp SUB used by the
 // C++ backend for wallet keys, escrow debits and creator_sub matching.
 function cppSub(idOrEmail: string): string {
+  if (idOrEmail === "platform") return "platform"; // SPD platform-revenue pseudo-sub
   return getSessions()[idOrEmail].user_sub;
 }
 
@@ -478,7 +500,10 @@ test.describe("399 — Deal Completion & Payment API", () => {
     await apiPost(alicePage, `/ui/ads/sponsorships/${dealId}/complete`, {}, ALICE_ID);
     const entries = ddbQueryLedger("platform");
     const commission = entries.filter(
-      (e) => e.type === "sponsorship_commission" && (e.meta as Record<string, unknown>)?.deal_id === dealId,
+      (e) =>
+        ((e.type === "sponsorship_commission") ||
+          (usingCpp() && (e.meta as Record<string, unknown>)?.entry_type === "sponsorship_commission")) &&
+        (e.meta as Record<string, unknown>)?.deal_id === dealId,
     );
     expect(commission.length).toBeGreaterThanOrEqual(1);
     expect(Number(commission[0].amount_cents)).toBe(15000); // 15% of $1,000
