@@ -288,7 +288,10 @@ test.describe("31. Add contact via 'Add Contact' dialog", () => {
     const data = await resp.json() as {
       contacts: Array<{ contact_id: string; display_name: string; is_favorite: boolean; is_blocked: boolean }>;
     };
-    const bob = data.contacts.find((c) => c.contact_id === BOB_ID);
+    const bobSub = resolveIdentityId(BOB_ID);
+    const bob = data.contacts.find(
+      (c) => c.contact_id === BOB_ID || c.contact_id === bobSub,
+    );
     expect(bob).toBeDefined();
     expect(bob!.display_name).toBe("E2E Bob");
     expect(bob!.is_favorite).toBe(false);
@@ -323,11 +326,15 @@ test.describe("31b. Contact identity links to canonical profile", () => {
   });
 
   test("unauthenticated viewer sees public profile rendering on canonical route", async ({ browser }) => {
-    const anon = await browser.newPage();
-    await anon.goto(`${BASE}/u/${encodeURIComponent(BOB_ID)}`, { waitUntil: "load" });
+    // A bare newPage() inherits the default (authenticated) storageState under
+    // cpp, so force a cookie-free context for a genuine anonymous view.
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const anon = await anonCtx.newPage();
+    await anon.goto(`${BASE}/u/${encodeURIComponent(resolveIdentityId(BOB_ID))}`, { waitUntil: "load" });
     await expect(anon.getByText(/Audience: public/i)).toBeVisible({ timeout: 8_000 });
     await expect(anon.getByRole("button", { name: /sign in to view more/i })).toBeVisible({ timeout: 8_000 });
     await anon.close();
+    await anonCtx.close();
   });
 });
 
