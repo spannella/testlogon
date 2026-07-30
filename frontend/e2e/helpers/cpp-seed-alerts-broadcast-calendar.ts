@@ -178,3 +178,44 @@ export function cppResetAlerts(userSub: string): void {
   if (!usingCpp()) return;
   runCppShim("delete_alerts.py", { user_sub: userSub });
 }
+
+/**
+ * Seed ONE BATCH social alert (BATCH#<batchKey> row aggregating actorCount
+ * actors) into cpp tlc_alerts, matching cpp's sa_batch_alert field shapes
+ * (ts non-zero, actor_count as String). Mirrors social-alerts.spec seedBatchAlert.
+ */
+export function cppSeedBatchAlert(
+  userSub: string,
+  batchKey: string,
+  alertType: string,
+  actorCount: number,
+): void {
+  runCppShim("seed_batch_alert.py", {
+    user_sub: userSub,
+    batch_key: batchKey,
+    alert_type: alertType,
+    actor_count: actorCount,
+  });
+}
+
+/**
+ * Read the raw cpp tlc_alerts BATCH#<batchKey> row (or null). Mirrors
+ * social-alerts.spec getBatchAlert. Returns the parsed item map.
+ */
+export function cppGetBatchAlert(
+  userSub: string,
+  batchKey: string,
+): Record<string, unknown> | null {
+  const out = runCppShim("get_batch_alert.py", {
+    user_sub: userSub,
+    batch_key: batchKey,
+  });
+  const lines = out.trim().split(/\r?\n/);
+  const last = lines[lines.length - 1].trim();
+  if (last === "null" || last === "") return null;
+  try {
+    return JSON.parse(last) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}

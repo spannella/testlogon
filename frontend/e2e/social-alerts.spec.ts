@@ -15,7 +15,7 @@ import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
 import { usingCpp } from "./helpers/cpp-seed";
-import { cppSeedAlerts, cppResetAlerts, cppClearAlertPrefs } from "./helpers/cpp-seed-alerts-broadcast-calendar";
+import { cppSeedAlerts, cppResetAlerts, cppClearAlertPrefs, cppSeedBatchAlert, cppGetBatchAlert } from "./helpers/cpp-seed-alerts-broadcast-calendar";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -197,6 +197,10 @@ function seedBatchAlert(
   alertType: string,
   actorCount: number,
 ): void {
+  if (usingCpp()) {
+    cppSeedBatchAlert(resolveIdentityId(userSub), batchKey, alertType, actorCount);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -246,6 +250,7 @@ print('seeded')
  * Delete a specific alert by pk/sk.
  */
 function deleteAlert(userSub: string, alertId: string): void {
+  if (usingCpp()) { void alertId; return; } // unique per-run keys; reset covers cleanup
   execSync(
     `${PYTHON} -c "
 import boto3, os
@@ -271,6 +276,9 @@ print('deleted')
  * Get the raw DDB item for a batch alert.
  */
 function getBatchAlert(userSub: string, batchKey: string): Record<string, unknown> | null {
+  if (usingCpp()) {
+    return cppGetBatchAlert(resolveIdentityId(userSub), batchKey);
+  }
   const result = execSync(
     `${PYTHON} -c "
 import boto3, os, json
