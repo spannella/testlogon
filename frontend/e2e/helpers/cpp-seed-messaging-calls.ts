@@ -210,6 +210,24 @@ export function cppDeleteCallSession(callId: string): void {
 }
 
 /**
+ * Check whether a calendar-share grant exists for (calendar_id, recipientSub)
+ * in cpp's tlc_calendar_shares (g_b10_shares_table, key calendar_id +
+ * sk=share#<sub>). Mirrors calendar-messaging.spec.ts checkCalendarShareInDdb,
+ * whose Python :8001 read never reaches cpp. recipientSub MUST be a cpp sub.
+ */
+export function cppCheckCalendarShare(calendarId: string, recipientSub: string): boolean {
+  try {
+    const out = runCppShim("read_calendar_share.py", {
+      calendar_id: calendarId,
+      recipient_sub: recipientSub,
+    });
+    return out.includes("found") && !out.includes("not_found");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Seed a conversation + one active participant row per sub into cpp's
  * tlc_conversations + tlc_participants (GSI1PK=conversation_id). Mirrors
  * webrtc.spec.ts seedConversation(). cpp's call lifecycle resolves the

@@ -44,7 +44,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
-import { usingCpp, cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
+import { usingCpp, cppBearerPost, cppBearerGet, cppCheckCalendarShare } from "./helpers/cpp-seed-messaging-calls";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -295,6 +295,9 @@ async function createEvent(
 
 /** DDB helper: check if a calendar share record exists for a recipient. */
 function checkCalendarShareInDdb(calendarId: string, recipientSub: string): boolean {
+  if (usingCpp()) {
+    return cppCheckCalendarShare(calendarId, recipientSub);
+  }
   try {
     const out = execSync(
       `${PYTHON} -c "
