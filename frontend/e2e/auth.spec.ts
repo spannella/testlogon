@@ -23,6 +23,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { cppVerifyUser } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -62,6 +63,10 @@ function getAuthUser(): AuthUserData {
       { cwd: REPO_ROOT, timeout: 60_000 }
     ).toString();
     _authUser = JSON.parse(raw);
+    // Under cpp the seed user is unverified; mark it verified so
+    // register/check reports available:false + unverified:false (the
+    // "already exists" branch the tests assert), matching the Python path.
+    cppVerifyUser(_authUser!.email);
   }
   return _authUser!;
 }
@@ -188,8 +193,17 @@ test.describe("3. Login form validation", () => {
 // ─── 4. Login with wrong credentials ─────────────────────────────────────────
 
 test.describe("4. Login with wrong credentials", () => {
-  test("wrong password shows error banner", async ({ page }) => {
+  test("wrong password shows error banner", async ({ browser }) => {
     getAuthUser(); // ensure user exists
+    // Under cpp every project inherits storageState: admin, so the login page
+    // loads already-"authenticated" (admin cookie + auth-store). A wrong-password
+    // 401 then hits the client's authenticated-refresh path (refresh succeeds on
+    // the admin cookie -> retry -> 401 -> logout("session_expired")), which shows
+    // the "session expired" banner INSTEAD of the credential error and clears the
+    // error state. A truly anonymous context (no cookie, no localStorage) makes
+    // the unauthenticated-401 branch throw so the destructive error renders.
+    const context = await browser.newContext({ storageState: undefined });
+    const page = await context.newPage();
     await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
     await page.locator("#username").fill("e2e_logintest@test.local");
     await page.locator("#password").fill("WrongPassword999!");
@@ -200,6 +214,7 @@ test.describe("4. Login with wrong credentials", () => {
       hasText: /invalid|incorrect|credential|authentication|unauthorized|failed/i,
     }).first();
     await expect(errorBanner).toBeVisible({ timeout: 10000 });
+    await context.close();
   });
 });
 

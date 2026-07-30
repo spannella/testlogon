@@ -558,3 +558,22 @@ export function cppResetUserOrgs(userSub: string): void {
     /* best-effort */
   }
 }
+
+/**
+ * Mark a user (by email) as verified in cpp's tlc_users moto table.
+ * auth.spec.ts asserts an existing account's email shows "already exists"
+ * (register/check -> available:false, unverified:false). The e2e seed users are
+ * created via register but never email-verified, so in cpp they read
+ * verified:false and cpp's register/check returns unverified:true — the
+ * Register page then shows the amber "verification pending" branch instead of
+ * the "already exists" branch the test expects. Flip verified->true to match the
+ * Python-path assumption. No-op unless usingCpp(). Best-effort.
+ */
+export function cppVerifyUser(email: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("verify_user.py", { email });
+  } catch {
+    /* best-effort */
+  }
+}
