@@ -19,11 +19,15 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
+// Public (no-auth) endpoint base: cpp is reached via the Vite proxy (BASE);
+// the Python backend listens on :8000 directly.
+const PUBLIC_BASE = usingCpp() ? BASE : "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 const CHARLIE_ID = "e2e_charlie@test.local";
@@ -222,7 +226,7 @@ test.describe("452 — Group Feed Query API", () => {
   test("452.3 Public feed endpoint returns public only", async () => {
     // Hit backend directly for public endpoint (no auth, no Vite proxy needed)
     const resp = await alicePage.request.get(
-      `http://localhost:8000/public/groups/${groupId}/feed`,
+      `${PUBLIC_BASE}/public/groups/${groupId}/feed`,
     );
     expect(resp.status()).toBe(200);
     const data = await resp.json();
