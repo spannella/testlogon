@@ -22,7 +22,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { runCppShim, usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -111,6 +112,18 @@ async function revokeAllKeys(page: Page) {
   }
 }
 
+/**
+ * Hard-purge every api key row for Alice from cpp's tlc_api_keys.
+ * cpp's /ui/api_keys/revoke only sets revoked=true and leaves the row, and the
+ * /security UI renders revoked rows, so revokeAllKeys() alone never yields the
+ * empty state (keys accumulate across specs on the shared Alice account). This
+ * deletes the rows outright so "No API keys" is real. No-op off the cpp path.
+ */
+function purgeAllKeys() {
+  if (!usingCpp()) return;
+  runCppShim("purge_api_keys.py", { user_sub: resolveIdentityId(ALICE_ID) });
+}
+
 // ─── 1. Page structure ────────────────────────────────────────────────────────
 
 test.describe("1. API Keys — page structure", () => {
@@ -145,6 +158,7 @@ test.describe("2. API Keys — empty state", () => {
     page = await browser.newPage();
     // Revoke all keys so the empty state is guaranteed.
     await injectAuth(page);
+    purgeAllKeys();
     await revokeAllKeys(page);
     await page.goto(`${BASE}/security`, { waitUntil: "load" });
     await page.waitForTimeout(600);
