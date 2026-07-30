@@ -10,7 +10,9 @@ import * as path from "path";
 import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const BASE = process.env.E2E_BASE_URL || "http://localhost:8000";
+// Honor E2E_API_BASE (cpp -> vite proxy at :3000) so this suite targets the
+// same backend as the rest of the cpp e2e run; E2E_BASE_URL still overrides.
+const BASE = process.env.E2E_BASE_URL || process.env.E2E_API_BASE || "http://localhost:8000";
 
 const ALICE = "e2e_alice@test.local"; // broadcaster / owner
 const BOB = "e2e_bob@test.local"; // feed viewer / non-owner
