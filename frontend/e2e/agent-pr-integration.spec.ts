@@ -19,6 +19,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSetTicketEligible, cppReadAgentTicket } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const ALICE_ID = "e2e_alice@test.local";
@@ -117,9 +118,17 @@ print('created ${ticketId}')
 "`,
     { cwd: REPO_ROOT, timeout: 15_000 },
   );
+  // cpp's orchestrator/PR flow reads tlc_agent_tickets, not the Python "tickets"
+  // table written above -- upsert an eligible META there (with the subject so
+  // cpp-derived PR titles match).
+  cppSetTicketEligible(ticketId, { subject, type: "feature", priority: "medium" });
 }
 
 function readTicket(ticketId: string): Record<string, unknown> {
+  if (usingCpp()) {
+    // cpp persists agent_* fields on tlc_agent_tickets, not Python :8001.
+    return cppReadAgentTicket(ticketId) as Record<string, unknown>;
+  }
   const raw = execSync(
     `python3 -c "
 import boto3, os, json

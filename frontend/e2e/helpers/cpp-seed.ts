@@ -612,7 +612,7 @@ export function cppSetTicketEligible(
  */
 export function cppReadAgentTicket(
   ticketId: string,
-): { agent_worker_id: string; agent_claimed_at: number; agent_state: string } {
+): Record<string, unknown> & { agent_worker_id: string; agent_claimed_at: number; agent_state: string } {
   const out = runCppShim("read_agent_ticket.py", { ticket_id: ticketId });
   const jsonStart = out.indexOf("{");
   return JSON.parse(out.slice(jsonStart));
