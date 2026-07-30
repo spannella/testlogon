@@ -498,7 +498,9 @@ test.describe("Ad Analytics (ADS-008)", () => {
       alicePage.getByRole("paragraph").filter({ hasText: /^CTR$/ }),
     ).toBeVisible();
     await expect(
-      alicePage.getByRole("paragraph").filter({ hasText: /^Spend$/ }),
+      // The ROAS panel also renders a "Spend" paragraph; the KPI card grid comes
+      // first in the DOM, so .first() targets the KPI card (avoids strict-mode 2-match).
+      alicePage.getByRole("paragraph").filter({ hasText: /^Spend$/ }).first(),
     ).toBeVisible();
   });
 
