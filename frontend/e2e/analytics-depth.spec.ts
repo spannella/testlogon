@@ -19,7 +19,8 @@ import { tmpdir } from "os";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
-import { usingCpp, cppSeedRollupRow, cppSeedLedgerEntry } from "./helpers/cpp-seed-generic-ddbRequest";
+import { usingCpp, cppSeedRollupRow, cppSeedLedgerEntry, cppCleanupAnalyticsRollups } from "./helpers/cpp-seed-generic-ddbRequest";
+import { cppSeedPosts } from "./helpers/cpp-seed-profile-social";
 import { cppSeedVideo } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -198,6 +199,17 @@ function seedPost(
   bodyPlain: string,
   data?: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    // cpp resolves post titles from tlc_newsfeed via nf_post_get(content_id),
+    // reading body_plain/body. The inline Python writes to :8001 which cpp never
+    // reads, so route the post into cpp's newsfeed (userId is already the sub).
+    cppSeedPosts({
+      authorSub: userId,
+      bumpProfileCount: false,
+      posts: [{ post_id: postId, body: bodyPlain, ...(data ?? {}) }],
+    });
+    return;
+  }
   const extraData = data ? JSON.stringify(data) : "{}";
   const tmpFile = `${tmpdir()}/analytics_depth_post_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, extraData);
@@ -268,6 +280,14 @@ print('seeded ledger', '${entryId}')
 }
 
 function cleanupRollups(userSub: string): void {
+  if (usingCpp()) {
+    // cpp reads tlc_analytics_rollups (moto :5005); the inline Python cleanup
+    // hits :8001 AnalyticsRollups which cpp never reads, so stale CREATOR#
+    // rollups from earlier sections bleed into §6's date-range sort. Route the
+    // cleanup to cpp's rollup table (userSub is already the cpp sub).
+    cppCleanupAnalyticsRollups(userSub);
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "
