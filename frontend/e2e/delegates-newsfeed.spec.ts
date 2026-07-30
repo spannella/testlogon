@@ -15,6 +15,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { cppSeedDelegateGrant } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // -- Constants ----------------------------------------------------------------
@@ -136,6 +137,10 @@ async function ensureBobIsDelegateWithPerms(
     label: "Bob - Feed Delegate",
   });
   expect(addResp.ok()).toBeTruthy();
+  // cpp does not port /ui/delegates grant-CRUD into tlc_delegates, which the
+  // newsfeed-delegate feed reads; seed the active grant directly so feed_read/
+  // feed_post/feed_moderate authorize (the POST above is a no-op on cpp).
+  cppSeedDelegateGrant(ALICE_ID, BOB_ID, perms, "Bob - Feed Delegate");
 }
 
 async function ensureCharlieIsDelegateWithPerms(
@@ -157,6 +162,7 @@ async function ensureCharlieIsDelegateWithPerms(
     label: "Charlie - Limited",
   });
   expect(addResp.ok()).toBeTruthy();
+  cppSeedDelegateGrant(ALICE_ID, CHARLIE_ID, perms, "Charlie - Limited");
 }
 
 // =============================================================================

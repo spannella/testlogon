@@ -677,3 +677,31 @@ export function cppResetBroadcastQaRateLimit(sessionId: string, userSub: string)
     /* best-effort */
   }
 }
+
+/**
+ * Seed an active delegate grant into cpp's tlc_delegates moto table.
+ * cpp's delegate-feed brick does NOT port the /ui/delegates grant-CRUD; it only
+ * reads the grant from tlc_delegates (CREATOR#<creator>/DELEGATE#<delegate>). The
+ * newsfeed-delegate specs add the delegate via the unported /ui/delegates
+ * endpoint, so the feed GET/POST (dlg_require_perm) sees no grant -> 403
+ * "Not a delegate for this creator". Seed the grant directly. No-op unless
+ * usingCpp(). Best-effort.
+ */
+export function cppSeedDelegateGrant(
+  creatorSub: string,
+  delegateSub: string,
+  permissions?: string[],
+  label?: string,
+): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("seed_delegate_grant.py", {
+      creator_sub: creatorSub,
+      delegate_sub: delegateSub,
+      ...(permissions ? { permissions } : {}),
+      ...(label ? { label } : {}),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
