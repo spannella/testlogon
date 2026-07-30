@@ -18,6 +18,7 @@
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
+import { usingCpp, runCppShim } from "./helpers/cpp-seed";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, unauthContext } from "./helpers/session";
@@ -104,6 +105,10 @@ async function apiDelete(page: Page, identity: string, path: string) {
 // ─── DynamoDB helpers ─────────────────────────────────────────────────────────
 
 function seedTicket(ticketId: string, userSub: string) {
+  if (usingCpp()) {
+    runCppShim("seed_jira.py", { op: "ticket", ticket_id: ticketId, user_sub: userSub });
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, time
@@ -137,6 +142,13 @@ function seedJiraConnection(
   userSub: string,
   cloudId: string,
 ) {
+  if (usingCpp()) {
+    runCppShim("seed_jira.py", {
+      op: "connection", workspace_id: workspaceId,
+      connection_id: connectionId, user_sub: userSub, cloud_id: cloudId,
+    });
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, time
@@ -216,6 +228,16 @@ function seedJiraLink(
     created_by: "e2e_test",
   };
 
+  if (usingCpp()) {
+    runCppShim("seed_jira.py", {
+      op: "link", ticket_id: ticketId, link_id: linkId, workspace_id: workspaceId,
+      external_issue_id: eid, external_issue_key: ekey, sync_state: syncState,
+      conflict_fields: opts.conflictFields || [],
+      conflict_local: opts.conflictLocal || {},
+      conflict_remote: opts.conflictRemote || {},
+    });
+    return;
+  }
   const itemJson = JSON.stringify(item);
   execSync(
     `python3 -c "
@@ -247,6 +269,14 @@ table.put_item(Item=item)
 }
 
 function cleanupDdbItem(pk: string, sk: string) {
+  if (usingCpp()) {
+    try {
+      runCppShim("seed_jira.py", { op: "delete", pk, sk });
+    } catch {
+      /* best-effort */
+    }
+    return;
+  }
   try {
     execSync(
       `python3 -c "
