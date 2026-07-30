@@ -617,3 +617,28 @@ export function cppReadAgentTicket(
   const jsonStart = out.indexOf("{");
   return JSON.parse(out.slice(jsonStart));
 }
+
+/**
+ * Seed N ready broadcast clips into cpp's tlc_broadcast_clips moto table.
+ * clip-sharing.spec.ts 98.5 seeds 10 clips into Python :8001 "broadcast_clips"
+ * so the 11th create trips the per-broadcast quota (429). cpp counts clips per
+ * {session_id, creator_user_id} in its OWN tlc_broadcast_clips store; the Python
+ * seed never reaches it, so the 11th create returns 200. Seed cpp's store so the
+ * quota gate fires. No-op unless usingCpp().
+ */
+export function cppSeedBroadcastClips(opts: {
+  sessionId: string;
+  creatorUserId: string;
+  broadcasterUserId?: string;
+  count?: number;
+  displayName?: string;
+}): void {
+  if (!usingCpp()) return;
+  runCppShim("seed_broadcast_clips.py", {
+    session_id: opts.sessionId,
+    creator_user_id: opts.creatorUserId,
+    ...(opts.broadcasterUserId ? { broadcaster_user_id: opts.broadcasterUserId } : {}),
+    ...(opts.count != null ? { count: opts.count } : {}),
+    ...(opts.displayName ? { display_name: opts.displayName } : {}),
+  });
+}
