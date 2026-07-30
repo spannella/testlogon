@@ -18,7 +18,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
-import { usingCpp, cppSeedLedgerEntries } from "./helpers/cpp-seed-billing-bulk";
+import { usingCpp, cppSeedLedgerEntries, cppResetRefundRequests } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -214,9 +214,11 @@ function seedOldLedgerEntry(entryId: string, amountCents: number): void {
  */
 function cleanupAliceRefundRequests(): void {
   if (usingCpp()) {
-    // No delete shim in the cpp read-path; refund requests filed by prior runs
-    // are keyed by unique per-run entry ids (TS-suffixed), so they do not
-    // collide with this run's create tests. Skip (best-effort cleanup only).
+    // The refund-create endpoint enforces MAX_REFUND_REQUESTS_PER_MONTH (default
+    // 3) by COUNTING the requester's requests in cpp's tlc_refund_requests -- so
+    // even though per-run entry ids are unique, prior runs' requests accumulate
+    // and push Alice over the cap (-> 400 on 90.1). Reap them from cpp's store.
+    cppResetRefundRequests(getSessions()["alice"].user_sub);
     return;
   }
   execSync(

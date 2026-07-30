@@ -257,3 +257,20 @@ export function cppSeedIncident(o: CppIncidentOpts): void {
     ...(o.responseDueAt != null ? { response_due_at: o.responseDueAt } : {}),
   });
 }
+
+/**
+ * Delete a user's refund requests in cpp's tlc_refund_requests moto table.
+ * refund-requests.spec.ts never cleans up its created requests; cpp persists
+ * them across runs, so the requester crosses MAX_REFUND_REQUESTS_PER_MONTH
+ * (default 3) and POST /ui/billing/refund-requests returns 400. Reap in
+ * beforeAll so the run starts under the cap. userSub MUST be the cpp SUB. No-op
+ * unless usingCpp(). Best-effort.
+ */
+export function cppResetRefundRequests(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_refund_requests.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
