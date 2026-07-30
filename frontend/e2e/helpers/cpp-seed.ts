@@ -577,3 +577,43 @@ export function cppVerifyUser(email: string): void {
     /* best-effort */
   }
 }
+
+/**
+ * Mark a ticket agent-eligible in cpp's orchestrator store (tlc_agent_tickets).
+ * Mirrors agent-orchestrator.spec.ts setTicketAgentEligible(), whose Python
+ * :8001 "tickets" UpdateItem never reaches cpp: the orchestrator claim /
+ * eligible-tickets / lifecycle read tlc_agent_tickets, and POST /tickets writes
+ * only the support "tickets" table. Upserts the TICKET#<id>/META row so the
+ * ticket is claimable. No-op unless usingCpp(). Best-effort.
+ */
+export function cppSetTicketEligible(
+  ticketId: string,
+  opts: { type?: string; priority?: string; subject?: string; spaceId?: string } = {},
+): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("set_ticket_eligible.py", {
+      ticket_id: ticketId,
+      ...(opts.type ? { type: opts.type } : {}),
+      ...(opts.priority ? { priority: opts.priority } : {}),
+      ...(opts.subject ? { subject: opts.subject } : {}),
+      ...(opts.spaceId ? { space_id: opts.spaceId } : {}),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Read a ticket META's agent_* fields from cpp's tlc_agent_tickets moto table.
+ * agent-orchestrator.spec.ts reads these directly from Python :8001 "tickets";
+ * cpp persists them in tlc_agent_tickets. Returns {agent_worker_id,
+ * agent_claimed_at, agent_state}. Throws if usingCpp() is false (callers gate).
+ */
+export function cppReadAgentTicket(
+  ticketId: string,
+): { agent_worker_id: string; agent_claimed_at: number; agent_state: string } {
+  const out = runCppShim("read_agent_ticket.py", { ticket_id: ticketId });
+  const jsonStart = out.indexOf("{");
+  return JSON.parse(out.slice(jsonStart));
+}

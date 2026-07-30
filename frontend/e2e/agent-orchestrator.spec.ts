@@ -15,6 +15,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSetTicketEligible, cppReadAgentTicket } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -173,6 +174,10 @@ print('OK')
   } catch {
     // If boto3 is not available, skip the DDB write
   }
+  // cpp reads the orchestrator ticket from tlc_agent_tickets (not the Python
+  // "tickets" table the block above wrote), and POST /tickets only lands in the
+  // support tickets table -- so upsert an eligible META row into cpp's store.
+  cppSetTicketEligible(ticketId, { type: "feature", priority: "high" });
 }
 
 test.afterAll(async () => {
@@ -318,8 +323,15 @@ test.describe("632 — Ticket Claiming API", () => {
     // The ticket's agent_* fields are stored on the raw DDB META item
     // (they are not surfaced through the public TicketOut model), so read
     // them directly from DynamoDB.
-    const raw = execSync(
-      `python3 -c "
+    let ticket: { agent_worker_id: string; agent_claimed_at: number };
+    if (usingCpp()) {
+      // cpp persists the claim on tlc_agent_tickets, not the Python "tickets"
+      // table -- read it from cpp's store.
+      const t = cppReadAgentTicket(testTicketId2);
+      ticket = { agent_worker_id: t.agent_worker_id, agent_claimed_at: t.agent_claimed_at };
+    } else {
+      const raw = execSync(
+        `python3 -c "
 import boto3, json
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1',
     aws_access_key_id='test', aws_secret_access_key='test')
@@ -330,9 +342,10 @@ print(json.dumps({
     'agent_claimed_at': int(item.get('agent_claimed_at', 0)),
 }))
 "`,
-      { cwd: REPO_ROOT, timeout: 10_000 },
-    ).toString();
-    const ticket = JSON.parse(raw);
+        { cwd: REPO_ROOT, timeout: 10_000 },
+      ).toString();
+      ticket = JSON.parse(raw);
+    }
     expect(ticket.agent_worker_id).toBe(WORKER_ID);
     expect(ticket.agent_claimed_at).toBeGreaterThan(0);
   });
