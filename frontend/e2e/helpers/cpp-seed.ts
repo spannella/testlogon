@@ -542,3 +542,19 @@ export function cppResetInvoices(userSub: string): void {
     /* best-effort */
   }
 }
+
+/**
+ * Delete every org OWNED by a user (all META/MEMBER/INVITE rows) in cpp's
+ * tlc_organizations moto table. org-workspaces.spec.ts creates a fresh org per
+ * section but never deletes it, so cpp's persistent moto store accumulates orgs
+ * across runs and the owner crosses ORG_MAX_PER_USER (default 10) -> create_org
+ * 409s in beforeAll. userSub MUST be the cpp SUB. No-op unless usingCpp().
+ */
+export function cppResetUserOrgs(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_user_orgs.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
