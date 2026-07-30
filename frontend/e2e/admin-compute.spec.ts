@@ -17,6 +17,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
+import { cppClearComputeQuota, cppResetUserInstances, cppResetUserPods, usingCpp } from "./helpers/cpp-seed-admin-compute";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -107,6 +108,13 @@ async function launchPod(page: Page, identity: string): Promise<string> {
 
 /** Remove any custom quota for a user so launches aren't blocked. */
 function clearQuota(userSub: string): void {
+  if (usingCpp()) {
+    // cpp stores the quota in tlc_compute_quotas keyed by the admin URL-path
+    // value (the email userSub here); the Python :8001 delete is invisible so a
+    // prior run's custom quota survives. Clear it in cpp's own moto.
+    cppClearComputeQuota(userSub);
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os
@@ -162,6 +170,8 @@ test.describe("280. Admin compute visibility API", () => {
   test.beforeAll(async ({ browser }) => {
     getSessions();
     clearQuota(ALICE_ID);
+    cppResetUserInstances(ALICE_ID);
+    cppResetUserPods(ALICE_ID);
     rootPage = await newIdentityPage(browser, "root");
     alicePage = await newIdentityPage(browser, "alice");
     instanceId = await launchInstance(alicePage, "alice");
@@ -219,6 +229,8 @@ test.describe("281. Force-terminate API", () => {
   test.beforeAll(async ({ browser }) => {
     getSessions();
     clearQuota(ALICE_ID);
+    cppResetUserInstances(ALICE_ID);
+    cppResetUserPods(ALICE_ID);
     rootPage = await newIdentityPage(browser, "root");
     alicePage = await newIdentityPage(browser, "alice");
     instanceId = await launchInstance(alicePage, "alice");
@@ -283,6 +295,8 @@ test.describe("282. Quota management API", () => {
   test.beforeAll(async ({ browser }) => {
     getSessions();
     clearQuota(ALICE_ID);
+    cppResetUserInstances(ALICE_ID);
+    cppResetUserPods(ALICE_ID);
     rootPage = await newIdentityPage(browser, "root");
     charliePage = await newIdentityPage(browser, "charlie_admin");
     alicePage = await newIdentityPage(browser, "alice");
