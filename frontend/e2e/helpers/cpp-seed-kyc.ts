@@ -277,6 +277,84 @@ export function cppAssignKycAdmin(caseId: string, adminSub: string): void {
 }
 
 /**
+ * Seed one KYC identity document (extraction) row into cpp tlc_kyc_documents so
+ * the admin case-detail Extraction tab (GET /ui/kyc/documents/admin/by-status
+ * ?case_id=..&status=extracted) renders. Mirrors the Python kyc_documents seed
+ * in kyc-case-detail-extraction.spec. userSub MUST be the cpp sub.
+ */
+export function cppSeedKycDocument(opts: {
+  documentId: string;
+  userSub: string;
+  caseId: string;
+  documentType?: string;
+  status?: string;
+  extractedFields?: Record<string, unknown>;
+  matchResults?: Record<string, unknown>;
+  overallConfidence?: string;
+  extractionId?: string;
+  fileName?: string;
+  s3Key?: string;
+  bucket?: string;
+}): void {
+  runCppShim("seed_kyc_document.py", {
+    document_id: opts.documentId,
+    user_sub: opts.userSub,
+    case_id: opts.caseId,
+    ...(opts.documentType != null ? { document_type: opts.documentType } : {}),
+    ...(opts.status != null ? { status: opts.status } : {}),
+    ...(opts.extractedFields != null ? { extracted_fields: opts.extractedFields } : {}),
+    ...(opts.matchResults != null ? { match_results: opts.matchResults } : {}),
+    ...(opts.overallConfidence != null ? { overall_confidence: opts.overallConfidence } : {}),
+    ...(opts.extractionId != null ? { extraction_id: opts.extractionId } : {}),
+    ...(opts.fileName != null ? { file_name: opts.fileName } : {}),
+    ...(opts.s3Key != null ? { s3_key: opts.s3Key } : {}),
+    ...(opts.bucket != null ? { bucket: opts.bucket } : {}),
+  });
+}
+
+/**
+ * Seed one proof-of-residency document row into cpp
+ * tlc_kyc_residency_documents so the admin case-detail Residency tab
+ * (GET /ui/kyc/residency/admin/case/{case_id}) renders. Mirrors the Python
+ * kyc_residency_documents seed in kyc-case-residency-tab.spec.
+ */
+export function cppSeedKycResidencyDocument(opts: {
+  documentId: string;
+  userSub: string;
+  caseId: string;
+  documentType?: string;
+  status?: string;
+  extractedAddress?: Record<string, unknown>;
+  addressMatch?: Record<string, unknown>;
+  issuingEntity?: string;
+  documentDate?: string;
+  recencyValid?: boolean;
+  recencyDays?: number;
+  extractionId?: string;
+  s3Key?: string;
+  bucket?: string;
+  review?: Record<string, unknown>;
+}): void {
+  runCppShim("seed_kyc_residency_document.py", {
+    document_id: opts.documentId,
+    user_sub: opts.userSub,
+    case_id: opts.caseId,
+    ...(opts.documentType != null ? { document_type: opts.documentType } : {}),
+    ...(opts.status != null ? { status: opts.status } : {}),
+    ...(opts.extractedAddress != null ? { extracted_address: opts.extractedAddress } : {}),
+    ...(opts.addressMatch != null ? { address_match: opts.addressMatch } : {}),
+    ...(opts.issuingEntity != null ? { issuing_entity: opts.issuingEntity } : {}),
+    ...(opts.documentDate != null ? { document_date: opts.documentDate } : {}),
+    ...(opts.recencyValid != null ? { recency_valid: opts.recencyValid } : {}),
+    ...(opts.recencyDays != null ? { recency_days: opts.recencyDays } : {}),
+    ...(opts.extractionId != null ? { extraction_id: opts.extractionId } : {}),
+    ...(opts.s3Key != null ? { s3_key: opts.s3Key } : {}),
+    ...(opts.bucket != null ? { bucket: opts.bucket } : {}),
+    ...(opts.review != null ? { review: opts.review } : {}),
+  });
+}
+
+/**
  * Read the raw encrypted_pii map for a case from cpp's tlc_kyc_cases (at-rest
  * ciphertext shape). Mirrors readEncryptedPii(). {} if absent.
  */
