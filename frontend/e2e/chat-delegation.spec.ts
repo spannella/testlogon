@@ -17,6 +17,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { runCppShim, usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -272,6 +273,16 @@ test.describe("491 — Chat Read Delegation API", () => {
     // Write an encrypted message directly to DDB to ensure it exists
     // regardless of whether the encryption API endpoint is enabled
     const msgId = `m_enc_${TS}`;
+    if (usingCpp()) {
+      // cpp reads messages from tlc_messages (not the Python :8001 Messages
+      // table). Seed the encrypted row there so the delegate-read path flags
+      // delegate_cannot_decrypt + nulls the text.
+      runCppShim("seed_messaging-calls_encrypted_message.py", {
+        conversation_id: dmConvoId,
+        message_id: msgId,
+        sender_id: ALICE_SUB,
+      });
+    } else {
     execSync(
       `python3 -c "
 import boto3, os, json
@@ -315,6 +326,7 @@ print('encrypted message seeded')
 "`,
       { timeout: 10_000 },
     );
+    }
 
     // Bob reads via delegate endpoint — encrypted msg should be redacted
     const resp = await apiGet(
