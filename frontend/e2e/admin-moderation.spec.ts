@@ -9,6 +9,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { cppSeedModerationTicket, usingCpp } from "./helpers/cpp-seed-admin-moderation";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -56,6 +57,12 @@ async function apiPut(page: Page, id: string, path: string, body?: unknown) {
 
 /** Seed a moderation ticket + fake post into DynamoDB. */
 function seedTicket(ticketId: string, contentId: string, offenderId: string): void {
+  if (usingCpp()) {
+    // cpp reads its own moto (tlc_moderation_tickets / tlc_newsfeed). offenderId
+    // is already the cpp SUB (cookie session). Seed there instead of :8001.
+    cppSeedModerationTicket({ ticketId, contentId, offenderSub: offenderId });
+    return;
+  }
   const now = Math.floor(Date.now() / 1000);
   execSync(`.venv/bin/python3 -c "
 import boto3, os

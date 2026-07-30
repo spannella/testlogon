@@ -225,7 +225,19 @@ function loadCppSessions(): Record<string, SessionData> {
   for (const [key, { email, file }] of Object.entries(CPP_IDENTITY)) {
     let sess = byEmail.get(email);
     if (!sess) {
-      sess = cppLoginSync(email) || cppFallbackSession(file) || undefined!;
+      // Retry the live login a few times before falling back: cppLoginSync
+      // occasionally returns null on a transient curl/Set-Cookie miss, which
+      // would otherwise leave this identity absent for the whole worker and
+      // NPE any spec's beforeAll (getSessions()[id].cookies).
+      for (let attempt = 0; attempt < 6 && !sess; attempt++) {
+        sess = cppLoginSync(email) || undefined!;
+        // Short backoff between attempts to ride out the --workers=4 connect
+        // storm on cpp's /ui/session/start (transient curl exit 000).
+        if (!sess && attempt < 5) {
+          try { execSync("sleep 0.4"); } catch { /* ignore */ }
+        }
+      }
+      sess = sess || cppFallbackSession(file) || undefined!;
       if (sess) byEmail.set(email, sess);
     }
     if (sess) out[key] = sess;
