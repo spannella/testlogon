@@ -14,7 +14,7 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -27,8 +27,8 @@ const BOB_KEY = "bob";
 const ROOT_KEY = "root";
 
 // User sub values (for data fields)
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+const ALICE_SUB = () => resolveIdentityId("alice");
+const BOB_SUB = () => resolveIdentityId("bob");
 
 const TS = Date.now();
 const CONTENT_ID = `e2e_content_${TS}`;
@@ -193,8 +193,8 @@ test.describe("472 -- Revenue Split Processing API", () => {
     const regResp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID,
       content_id: CONTENT_ID,
-      licensor_id: ALICE_SUB,
-      licensee_id: BOB_SUB,
+      licensor_id: ALICE_SUB(),
+      licensee_id: BOB_SUB(),
       revenue_share_pct: 5,
       profit_share_pct: 0,
       fixed_cost_cents: 0,
@@ -205,8 +205,8 @@ test.describe("472 -- Revenue Split Processing API", () => {
     const regFixed = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID_FIXED,
       content_id: CONTENT_FIXED,
-      licensor_id: ALICE_SUB,
-      licensee_id: BOB_SUB,
+      licensor_id: ALICE_SUB(),
+      licensee_id: BOB_SUB(),
       revenue_share_pct: 5,
       profit_share_pct: 0,
       fixed_cost_cents: 500,
@@ -217,8 +217,8 @@ test.describe("472 -- Revenue Split Processing API", () => {
     const regProf = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID_PROF,
       content_id: CONTENT_PROF,
-      licensor_id: ALICE_SUB,
-      licensee_id: BOB_SUB,
+      licensor_id: ALICE_SUB(),
+      licensee_id: BOB_SUB(),
       revenue_share_pct: 0,
       profit_share_pct: 10,
       fixed_cost_cents: 0,
@@ -229,8 +229,8 @@ test.describe("472 -- Revenue Split Processing API", () => {
     const regSelf = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID_SELF,
       content_id: CONTENT_SELF,
-      licensor_id: ALICE_SUB,
-      licensee_id: ALICE_SUB,
+      licensor_id: ALICE_SUB(),
+      licensee_id: ALICE_SUB(),
       revenue_share_pct: 10,
       profit_share_pct: 0,
       fixed_cost_cents: 0,
@@ -241,8 +241,8 @@ test.describe("472 -- Revenue Split Processing API", () => {
     const regRevoke = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/register-license", {
       issued_license_id: LICENSE_ID_REVOKE,
       content_id: CONTENT_REVOKE,
-      licensor_id: ALICE_SUB,
-      licensee_id: BOB_SUB,
+      licensor_id: ALICE_SUB(),
+      licensee_id: BOB_SUB(),
       revenue_share_pct: 10,
       profit_share_pct: 0,
       fixed_cost_cents: 0,
@@ -259,7 +259,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
   test("472.1 Tip on licensed content triggers revenue split", async () => {
     const resp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_ID,
-      licensee_id: BOB_SUB,
+      licensee_id: BOB_SUB(),
       source_type: "tip",
       source_amount_cents: 1000,
       source_txn_id: `tip_${TS}_1`,
@@ -270,7 +270,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     expect(data.splits.length).toBe(1);
     // 5% of 1000 = 50
     expect(data.splits[0].split_cents).toBe(50);
-    expect(data.splits[0].licensor_id).toBe(ALICE_SUB);
+    expect(data.splits[0].licensor_id).toBe(ALICE_SUB());
     expect(data.splits[0].split_type).toBe("revenue_share");
   });
 
@@ -278,7 +278,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     // First split: should charge fixed fee + revenue share
     const resp1 = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_FIXED,
-      licensee_id: BOB_SUB,
+      licensee_id: BOB_SUB(),
       source_type: "tip",
       source_amount_cents: 1000,
       source_txn_id: `tip_fixed_${TS}_1`,
@@ -291,7 +291,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     // Second split: same content, fixed fee should NOT be re-charged
     const resp2 = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_FIXED,
-      licensee_id: BOB_SUB,
+      licensee_id: BOB_SUB(),
       source_type: "tip",
       source_amount_cents: 1000,
       source_txn_id: `tip_fixed_${TS}_2`,
@@ -305,7 +305,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
   test("472.3 Profit share calculates on net after platform fee", async () => {
     const resp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_PROF,
-      licensee_id: BOB_SUB,
+      licensee_id: BOB_SUB(),
       source_type: "tip",
       source_amount_cents: 1000,
       source_txn_id: `tip_prof_${TS}_1`,
@@ -321,7 +321,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
   test("472.4 Self-split is skipped", async () => {
     const resp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_SELF,
-      licensee_id: ALICE_SUB,
+      licensee_id: ALICE_SUB(),
       source_type: "tip",
       source_amount_cents: 1000,
       source_txn_id: `tip_self_${TS}_1`,
@@ -342,7 +342,7 @@ test.describe("472 -- Revenue Split Processing API", () => {
     // Now try to process a split
     const resp = await apiPost(rootPage, ROOT_KEY, "/ui/licenses/revenue/process-split", {
       content_id: CONTENT_REVOKE,
-      licensee_id: BOB_SUB,
+      licensee_id: BOB_SUB(),
       source_type: "tip",
       source_amount_cents: 1000,
       source_txn_id: `tip_revoke_${TS}_1`,
