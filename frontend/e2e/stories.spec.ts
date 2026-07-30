@@ -13,7 +13,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -21,6 +21,11 @@ const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..")
 const BASE = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
+// Session-map KEYS stay the emails above (getSessions()[ALICE_ID]). But cpp keys
+// story rows / bar entries / viewers / follow targets by the user SUB, so path
+// params and result filters must use the resolved sub (identity id).
+const ALICE_UID = resolveIdentityId(ALICE_ID);
+const BOB_UID = resolveIdentityId(BOB_ID);
 const TS = Date.now();
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
@@ -149,7 +154,7 @@ test.describe("1. Story CRUD API", () => {
   });
 
   test("1.4 Get own stories list", async () => {
-    const resp = await apiGet(alicePage, `/ui/stories/user/${ALICE_ID}`);
+    const resp = await apiGet(alicePage, `/ui/stories/user/${ALICE_UID}`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(data.stories).toBeTruthy();
@@ -211,7 +216,7 @@ test.describe("2. Story Bar API", () => {
     await injectAuth(bobPage, BOB_ID);
 
     // Alice follows Bob
-    await apiPost(alicePage, "/ui/social/follow", { target_user_id: BOB_ID });
+    await apiPost(alicePage, "/ui/social/follow", { target_user_id: BOB_UID });
 
     // Bob creates a story
     const resp = await apiPost(bobPage, "/ui/stories", {
@@ -232,7 +237,7 @@ test.describe("2. Story Bar API", () => {
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(data.bar).toBeTruthy();
-    const bobEntry = data.bar.find((b: any) => b.user_id === BOB_ID);
+    const bobEntry = data.bar.find((b: any) => b.user_id === BOB_UID);
     expect(bobEntry).toBeTruthy();
     expect(bobEntry.has_unseen).toBe(true);
     expect(bobEntry.story_count).toBeGreaterThanOrEqual(1);
@@ -257,7 +262,7 @@ test.describe("2. Story Bar API", () => {
     // Re-fetch bar
     const barResp = await apiGet(alicePage, "/ui/stories/bar");
     const barData = await barResp.json();
-    const bobEntry = barData.bar.find((b: any) => b.user_id === BOB_ID);
+    const bobEntry = barData.bar.find((b: any) => b.user_id === BOB_UID);
     expect(bobEntry).toBeTruthy();
     // has_unseen should reflect that Alice viewed the latest story
     // Note: if Bob has multiple stories, has_unseen checks only the latest
@@ -266,15 +271,15 @@ test.describe("2. Story Bar API", () => {
 
   test("2.10 Story bar excludes unfollowed creators", async () => {
     // Alice unfollows Bob
-    await apiPost(alicePage, "/ui/social/unfollow", { target_user_id: BOB_ID });
+    await apiPost(alicePage, "/ui/social/unfollow", { target_user_id: BOB_UID });
 
     const resp = await apiGet(alicePage, "/ui/stories/bar");
     const data = await resp.json();
-    const bobEntry = data.bar.find((b: any) => b.user_id === BOB_ID);
+    const bobEntry = data.bar.find((b: any) => b.user_id === BOB_UID);
     expect(bobEntry).toBeFalsy();
 
     // Re-follow Bob for subsequent tests
-    await apiPost(alicePage, "/ui/social/follow", { target_user_id: BOB_ID });
+    await apiPost(alicePage, "/ui/social/follow", { target_user_id: BOB_UID });
   });
 });
 
@@ -337,7 +342,7 @@ test.describe("3. View Tracking API", () => {
     const data = await resp.json();
     expect(data.viewers).toBeTruthy();
     expect(data.total_count).toBeGreaterThanOrEqual(1);
-    const bobViewer = data.viewers.find((v: any) => v.user_id === BOB_ID);
+    const bobViewer = data.viewers.find((v: any) => v.user_id === BOB_UID);
     expect(bobViewer).toBeTruthy();
     expect(bobViewer.viewed_at).toBeTruthy();
   });
@@ -412,7 +417,7 @@ test.describe("4. Highlights API", () => {
       group_id: highlightGroupId,
     });
 
-    const resp = await apiGet(alicePage, `/ui/stories/highlights/${ALICE_ID}`);
+    const resp = await apiGet(alicePage, `/ui/stories/highlights/${ALICE_UID}`);
     expect(resp.status()).toBe(200);
     const data = await resp.json();
     expect(data.groups).toBeTruthy();
