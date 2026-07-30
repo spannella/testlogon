@@ -15,6 +15,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { cppResetComputeInstances } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -382,6 +383,11 @@ test.describe("273 — Rule Validation Edge Cases", () => {
 
 test.describe("274 — SG Launch Integration & Multi-User Isolation", () => {
   test.beforeAll(async ({ browser }) => {
+    // cpp caps EC2 launches on a GLOBAL active-instance count (max 3). Prior
+    // runs' running instances persist in cpp's moto store and push the count
+    // over the cap -> launch returns 409. Terminate accumulated active instances
+    // so the launch tests have headroom.
+    cppResetComputeInstances({ all: true });
     alicePage = await browser.newPage();
     bobPage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);

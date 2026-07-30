@@ -642,3 +642,22 @@ export function cppSeedBroadcastClips(opts: {
     ...(opts.displayName ? { display_name: opts.displayName } : {}),
   });
 }
+
+/**
+ * Terminate active compute instances in cpp's tlc_compute_instances moto table.
+ * security-groups.spec.ts 274.23/.24/.27 launch EC2 instances and assert 201, but
+ * cpp gates /ui/remote/ec2/launch on a GLOBAL active-instance count vs
+ * B13_QUOTA_DEFAULT_MAX_EC2 (3). Prior runs' running instances persist and push
+ * the count over the cap -> 409. Flip active instances to terminated so launch
+ * has headroom. Pass {all:true} (default) since the quota is global. No-op unless
+ * usingCpp(). Best-effort.
+ */
+export function cppResetComputeInstances(opts: { userSub?: string; all?: boolean } = { all: true }): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_compute_instances.py",
+      opts.userSub ? { user_sub: opts.userSub } : { all: true });
+  } catch {
+    /* best-effort */
+  }
+}
