@@ -14,7 +14,7 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
@@ -59,10 +59,17 @@ async function injectAuth(page: Page, userId: string) {
   if (!session) throw new Error(`No session for ${userId}`);
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  // The checkout page derives creatorId (and the promo-validate creator_user_id)
+  // from the cart items''' creator_user_id, falling back to the auth store userId.
+  // cpp stores/compares the promo creator as the SUB and login stores
+  // me.user_sub, so seeding the store with the email makes the promo-validate
+  // creator mismatch (-> "not valid for this creator", no success message).
+  // Seed the resolved sub under cpp; Python keeps the email verbatim.
+  const storeUserId = resolveIdentityId(userId);
   await page.evaluate((uid: string) => {
     const state = { userId: uid, accessToken: null, isAuthenticated: true };
     localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, userId);
+  }, storeUserId);
 }
 
 async function newIdentityPage(browser: Browser, userId: string): Promise<Page> {
