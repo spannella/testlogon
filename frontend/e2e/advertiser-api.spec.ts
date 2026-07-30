@@ -23,7 +23,8 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { runCppShim, usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -101,6 +102,16 @@ let serveKey = "";
 // their campaigns) directly in DDB before the run so the create paths always
 // have headroom.
 function ddbDeleteOwnerAccounts(ownerSubs: string[]): void {
+  if (usingCpp()) {
+    // The Python cleanup writes DDB-Local AdAccounts, which cpp never reads;
+    // under cpp the 5-account cap is never cleared and POST /ui/ads/accounts
+    // eventually 422s. Purge the owners' accounts in cpp's tlc_ad_accounts.
+    // ownerSubs here are emails/keys -> resolve to the cpp SUB.
+    runCppShim("delete_ad_accounts.py", {
+      owner_subs: ownerSubs.map((o) => resolveIdentityId(o)),
+    });
+    return;
+  }
   const script = `
 import boto3, os
 from pathlib import Path
