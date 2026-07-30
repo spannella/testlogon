@@ -45,6 +45,15 @@ const TS = Date.now();
 const TEST_YEAR = 2090; // alice single-generate / download / correction
 const BATCH_YEAR = 2091; // batch + concurrency (isolated from TEST_YEAR)
 
+// The admin batch (Section 582) discovers qualifying creators via a GLOBAL scan
+// of the billing ledger and writes forms scanned back by Section 582.3's
+// year-list. Running the file's describes in parallel (fullyParallel/-workers>1)
+// races that global scan against the concurrent seed/generate/cleanup in
+// Sections 580/581, so 582.3 intermittently sees no form for Alice. Serialize
+// the whole file so the batch operates on a stable snapshot (passes fine
+// serially).
+test.describe.configure({ mode: "serial" });
+
 // ─── Session bootstrap ───────────────────────────────────────────────────────
 
 interface SessionData {
