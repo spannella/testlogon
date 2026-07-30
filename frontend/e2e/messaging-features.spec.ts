@@ -80,10 +80,15 @@ async function injectAuth(page: Page, userId = ALICE_ID) {
   if (!session) throw new Error(`No session for ${userId}`);
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  // The real app stores the cpp SUB as auth-store.userId (Login.tsx calls
+  // login(me.user_sub, ...)). isOwn is computed as msg.sender_id === userId, and
+  // cpp's sender_id is the SUB, not the email. Store the SUB so own-message
+  // rendering (e.g. sender view of a view_once message) works under cpp.
+  const authUserId = session.user_sub || userId;
   await page.evaluate((uid: string) => {
     const state = { userId: uid, accessToken: null, isAuthenticated: true };
     localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, userId);
+  }, authUserId);
 }
 
 // ─── Authenticated API helpers ────────────────────────────────────────────────
