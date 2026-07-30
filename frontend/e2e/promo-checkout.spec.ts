@@ -124,6 +124,7 @@ async function createCartWithItem(
   userId: string,
   unitPriceCents: number,
   quantity = 1,
+  creatorUserId?: string,
 ): Promise<string> {
   const cartResp = await apiPost(page, userId, "/ui/shoppingcart/carts");
   expect(cartResp.ok()).toBe(true);
@@ -133,6 +134,11 @@ async function createCartWithItem(
     name: `Item ${cartId}`,
     quantity,
     unit_price_cents: unitPriceCents,
+    // The checkout UI derives the promo creator_user_id from the cart item's
+    // creator_user_id/seller_id. cpp keys promo codes by the creator SUB, so
+    // stamp the item's creator with the resolved sub or the UI sends an empty
+    // creator and validate fails ("not valid for this creator").
+    ...(creatorUserId ? { creator_user_id: creatorUserId } : {}),
   });
   expect(itemResp.ok(), `add item: ${await itemResp.text()}`).toBe(true);
   return cartId;
@@ -318,7 +324,9 @@ test.describe("715 — Promo Checkout API", () => {
       code: MIN_CODE,
       checkout_type: "shop",
       item_price_cents: 9000,
-      creator_user_id: ALICE_ID,
+      // cpp keys promo codes by the creator SUB; pass the resolved id (mirrors
+      // 715.1) so the min-purchase rule — not a creator mismatch — is exercised.
+      creator_user_id: resolveIdentityId(ALICE_ID),
     });
     expect(v.ok()).toBe(true);
     const vData = await v.json();
@@ -419,7 +427,9 @@ test.describe("715 — Checkout promo UI", () => {
       applies_to: ["shop"],
       max_uses_per_user: 10,
     });
-    cartId = await createCartWithItem(alice, ALICE_ID, 10000, 1); // $100
+    // Stamp the cart item's creator so the checkout UI resolves the promo
+    // creator_user_id (Alice's sub under cpp) when applying UI_CODE.
+    cartId = await createCartWithItem(alice, ALICE_ID, 10000, 1, resolveIdentityId(ALICE_ID)); // $100
   });
 
   test.afterAll(async () => {
