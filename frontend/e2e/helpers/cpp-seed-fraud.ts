@@ -39,3 +39,22 @@ export function cppSeedFraudVelocityRisk(userId: string): void {
     tx_total_24h: 60000,
   });
 }
+
+// ── ad-fraud VEL#/IP# counters (tlc_ad_fraud_events) ─────────────────────────
+/**
+ * Pre-seed the click-velocity + IP-clustering fraud counters ABOVE threshold in
+ * cpp's tlc_ad_fraud_events so the next tracked event for (userSub, creativeId,
+ * ip) trips velocity (+25) + ip clustering (+25). Mirrors ad-fraud.spec.ts's
+ * seedFraudCounters(), whose Python :8001 AdFraudEvents writes never reach cpp.
+ *
+ * CRITICAL: cpp keys the velocity counter by the JWT sub, so userSub MUST be the
+ * resolved sub (resolveIdentityId(bob)->sub), NOT the email.
+ */
+export function cppSeedAdFraudCounters(userSub: string, creativeId: string, ip: string): void {
+  runCppShim("seed_ad_fraud_counters.py", {
+    user_sub: userSub,
+    creative_id: creativeId,
+    ip,
+    count: 99,
+  });
+}

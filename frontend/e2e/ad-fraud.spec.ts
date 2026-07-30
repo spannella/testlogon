@@ -22,8 +22,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
 import { cppResetOwnerAdAccounts } from "./helpers/cpp-seed-commerce-billing";
+import { cppSeedAdFraudCounters } from "./helpers/cpp-seed-fraud";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -91,6 +92,14 @@ async function apiGet(page: Page, path: string) {
  * ip clustering (25). Combined with a bot UA (20) => score 70 (flagged).
  */
 function seedFraudCounters(userSub: string, creativeId: string, ip: string): void {
+  if (isCpp()) {
+    // cpp reads its OWN tlc_ad_fraud_events (moto :5005) keyed by the JWT sub,
+    // not the Python :8001 AdFraudEvents keyed by email. Route the VEL#/IP#
+    // counters into cpp keyed by the resolved sub so the single tracked event
+    // trips velocity (+25) + ip (+25).
+    cppSeedAdFraudCounters(resolveIdentityId(userSub), creativeId, ip);
+    return;
+  }
   execSync(
     `python3 -c "
 import time, boto3, os
