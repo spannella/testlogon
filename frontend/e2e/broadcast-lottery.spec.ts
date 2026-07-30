@@ -3,6 +3,8 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod } from "./helpers/cpp-seed";
+import { cppReadLedger } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
@@ -68,6 +70,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /* ------------------------------------------------------------------ */
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -123,6 +129,9 @@ print('injected')
 /* ------------------------------------------------------------------ */
 
 function queryLedger(userSub: string): Array<Record<string, unknown>> {
+  if (usingCpp()) {
+    return cppReadLedger(userSub);
+  }
   const raw = execSync(
     `${PYTHON} -c "
 import boto3, os, json
