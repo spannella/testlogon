@@ -525,3 +525,20 @@ export function cppCleanupWorkers(userSub: string): void {
   if (!usingCpp()) return;
   runCppShim("delete_agent_workers.py", { user_sub: userSub });
 }
+
+/**
+ * Delete ALL of a user's FIN-001/tip invoice rows (pk=USER#<sub>, sk INV#*) in
+ * cpp's tlc_invoices moto table. The invoices spec asserts on invoice COUNTS
+ * (after == before + N) and .find()s specific totals in a LIMIT-capped list;
+ * cpp's moto persists across runs so a user accumulates 50+ invoices and the
+ * list caps out. The spec cleanup only wrote the Python :8001 store cpp never
+ * reads. userSub MUST be the cpp SUB. No-op unless usingCpp(). Best-effort.
+ */
+export function cppResetInvoices(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_invoices.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
