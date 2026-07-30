@@ -103,6 +103,27 @@ export function cppSeedPaymentMethod(userSub: string, pmId: string): void {
   runCppShim("seed_payment_method.py", { user_sub: userSub, pm_id: pmId });
 }
 
+export interface CppTipOpts {
+  recipientSub: string; // cpp SUB (creator receiving the tip)
+  tipperSub: string; // tipper id/group key (SUB or literal)
+  amountCents: number;
+  ts: number; // unix seconds (created_at)
+  contentType?: string;
+}
+
+/** Seed one tip row into cpp's per-creator tip log (tlc_tips) — the
+ *  top-supporters leaderboard source (h_tip_leaderboard aggregates by
+ *  tipper_user_id/amount_cents/created_at under pk=CREATOR#<recipient>). */
+export function cppSeedTip(opts: CppTipOpts): void {
+  runCppShim("seed_tip_leaderboard.py", {
+    recipient_sub: opts.recipientSub,
+    tipper_sub: opts.tipperSub,
+    amount_cents: opts.amountCents,
+    ts: opts.ts,
+    content_type: opts.contentType ?? "message",
+  });
+}
+
 /**
  * Delete PM# rows (+ BILLING pointer) for a user in cpp's tlc_billing. Empty
  * pmIds = delete ALL PMs (mirrors bug-fixes-2.spec.ts cleanupAllPaymentMethods /

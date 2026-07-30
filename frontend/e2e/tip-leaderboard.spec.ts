@@ -19,6 +19,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId, unauthContext } from "./helpers/session";
+import { usingCpp, cppSeedTip } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────
@@ -83,6 +84,16 @@ function seedTipCredit(
   ts: number,
   contentType: string = "message",
 ) {
+  if (usingCpp()) {
+    cppSeedTip({
+      recipientSub: recipientId,
+      tipperSub: tipperId,
+      amountCents: amountCents,
+      ts: ts,
+      contentType: contentType,
+    });
+    return;
+  }
   const entryId = `e2e_${TS}_${Math.random().toString(36).slice(2, 10)}`;
   execSync(
     `${PYTHON} -c "
