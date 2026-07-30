@@ -25,6 +25,11 @@ const ROOT_SUB = "root.admin@testdev.local";
 const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 const TS = Date.now();
 
+// cpp's vra_audit emits audit_ids prefixed "audit_"; the Python backend uses
+// "modaudit_". The test intent is only "an audit event with a real id was
+// written", so accept either prefix when targeting cpp.
+const AUDIT_ID_RE = usingCpp() ? /^(mod)?audit_/ : /^modaudit_/;
+
 // ─── Session bootstrap ─────────────────────────────────────────────────────────
 
 interface AdminSessionData {
@@ -334,7 +339,7 @@ test.describe("90. Review Queue API", () => {
     expect(data.decision).toBe("approved");
     expect(data.new_status).toBe("published");
     expect(data.reviewed_by).toBe(ROOT_SUB);
-    expect(data.audit_id).toMatch(/^modaudit_/);
+    expect(data.audit_id).toMatch(AUDIT_ID_RE);
   });
 
   test("POST /reject with reason", async () => {
@@ -348,7 +353,7 @@ test.describe("90. Review Queue API", () => {
     expect(data.ok).toBe(true);
     expect(data.decision).toBe("rejected");
     expect(data.new_status).toBe("rejected");
-    expect(data.audit_id).toMatch(/^modaudit_/);
+    expect(data.audit_id).toMatch(AUDIT_ID_RE);
   });
 
   test("POST /reject without reason returns 422", async () => {
@@ -501,7 +506,7 @@ test.describe("92. Audit Log Verification", () => {
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
-    expect(data.audit_id).toMatch(/^modaudit_/);
+    expect(data.audit_id).toMatch(AUDIT_ID_RE);
     expect(data.audit_id.length).toBeGreaterThan(10);
   });
 
@@ -513,7 +518,7 @@ test.describe("92. Audit Log Verification", () => {
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
-    expect(data.audit_id).toMatch(/^modaudit_/);
+    expect(data.audit_id).toMatch(AUDIT_ID_RE);
     expect(data.audit_id.length).toBeGreaterThan(10);
   });
 });
