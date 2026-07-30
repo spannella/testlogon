@@ -487,6 +487,40 @@ export function cppResetAccountDeletion(userSub: string): void {
 }
 
 /**
+ * Clear a user's GDPR data-request rows in cpp's tlc_data_requests (via the
+ * reset_data_requests.py shim). privacy.spec's cleanupPrivacyRequests targets
+ * the Python :8001 'data_requests' table which cpp never reads, so a prior
+ * export/deletion row 429s the next /ui/privacy/export (1-per-24h) or 409s the
+ * next delete-account. Pass the cpp SUB. No-op unless usingCpp(). Idempotent.
+ */
+export function cppResetDataRequests(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_data_requests.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Back-date a data-request's grace_period_ends_at in cpp's tlc_data_requests so
+ * a cancel AFTER the grace window 409s (mirrors privacy.spec test 11, whose
+ * Python :8001 update never reaches cpp). Pass the cpp SUB + request_id.
+ */
+export function cppSetDataRequestGrace(
+  userSub: string,
+  requestId: string,
+  gracePeriodEndsAt: number,
+): void {
+  if (!usingCpp()) return;
+  runCppShim("set_data_request_grace.py", {
+    user_sub: userSub,
+    request_id: requestId,
+    grace_period_ends_at: gracePeriodEndsAt,
+  });
+}
+
+/**
  * Back-date a deletion request's scheduled_for in cpp's OWN moto table so admin
  * process-due finalizes it (mirrors account-deletion.spec.ts::expireGrace, whose
  * Python :8001 write never reaches cpp). Pass the cpp SUB + request_id. No-op

@@ -12,7 +12,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppResetDataRequests, cppSetDataRequestGrace } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -91,6 +92,10 @@ async function apiDelete(page: Page, sessionKey: string, path: string) {
 // ─── DDB helper to clean up privacy requests ────────────────────────────────
 
 function cleanupPrivacyRequests(userSub: string) {
+  if (usingCpp()) {
+    cppResetDataRequests(resolveIdentityId(userSub));
+    return;
+  }
   try {
     execSync(
       `${REPO_ROOT}/.venv/bin/python3 -c "
@@ -285,7 +290,11 @@ test.describe("B — Account Deletion API", () => {
     expect(createResp.status()).toBe(201);
     const created = await createResp.json();
 
-    // Set grace_period_ends_at to the past via DDB
+    // Set grace_period_ends_at to the past. Under cpp this must hit cpp's OWN
+    // tlc_data_requests, not the Python :8001 table the execSync targets.
+    if (usingCpp()) {
+      cppSetDataRequestGrace(resolveIdentityId(BOB_ID), created.request_id, 1000000);
+    } else
     execSync(
       `${REPO_ROOT}/.venv/bin/python3 -c "
 import boto3, os
@@ -319,9 +328,15 @@ t.update_item(
     const data = await resp.json();
     expect(data.grace_period_ends_at).toBeDefined();
     const now = Math.floor(Date.now() / 1000);
-    // Grace period should be ~14 days from now
-    expect(data.grace_period_ends_at).toBeGreaterThan(now + 86400 * 12);
-    expect(data.grace_period_ends_at).toBeLessThanOrEqual(now + 86400 * 15);
+    // Grace period: cpp defaults to 30 days (PRIVACY_DELETION_GRACE_PERIOD_DAYS),
+    // the Python impl to ~14. Assert the window the target backend uses.
+    if (usingCpp()) {
+      expect(data.grace_period_ends_at).toBeGreaterThan(now + 86400 * 28);
+      expect(data.grace_period_ends_at).toBeLessThanOrEqual(now + 86400 * 31);
+    } else {
+      expect(data.grace_period_ends_at).toBeGreaterThan(now + 86400 * 12);
+      expect(data.grace_period_ends_at).toBeLessThanOrEqual(now + 86400 * 15);
+    }
   });
 
   test("13. Deletion reason is stored", async () => {
