@@ -18,6 +18,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions } from "./helpers/session";
+import { cppCreateLlmKey, cppCleanupWorkers, usingCpp } from "./helpers/cpp-seed";
+import { resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -117,6 +119,12 @@ ddb = boto3.resource(
 }
 
 function createLlmKey(userId: string, provider: string, label: string): string {
+  if (usingCpp()) {
+    // cpp reads its own tlc_llm_provider_keys keyed by SUB; the Python :8001 put
+    // is invisible so worker-create 400s "LLM key not found". Seed into cpp,
+    // keyed by the cpp SUB.
+    return cppCreateLlmKey(resolveIdentityId(userId), provider, label);
+  }
   const code = `
 import uuid, time, json
 sys.path.insert(0, '${REPO_ROOT}')
@@ -154,6 +162,10 @@ print(key_id)
 }
 
 function cleanupWorkers(userId: string) {
+  if (usingCpp()) {
+    cppCleanupWorkers(resolveIdentityId(userId));
+    return;
+  }
   const code = `
 tbl = ddb.Table('agent_workers')
 resp = tbl.query(
