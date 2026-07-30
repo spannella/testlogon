@@ -17,7 +17,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVideo } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -81,6 +82,20 @@ ddb = boto3.resource(
 `;
 
 function ddbPutVideo(videoId: string, ownerId: string, title: string): void {
+  if (usingCpp()) {
+    // cpp reads tlc_video_metadata keyed by owner SUB, not the Python
+    // VideoMetadata table keyed by email. Seed the sub-shaped row so the
+    // owner-gate (201.5) and enforcement (202.x) see Alice/Bob as owner.
+    cppSeedVideo({
+      videoId,
+      ownerSub: resolveIdentityId(ownerId),
+      title,
+      status: "published",
+      visibility: "public",
+      durationSeconds: 120,
+    });
+    return;
+  }
   const script = `${DDB_PRELUDE}
 import time
 tbl = ddb.Table('VideoMetadata')
@@ -101,6 +116,7 @@ print('OK')
 }
 
 function ddbDeleteVideo(videoId: string): void {
+  if (usingCpp()) return; // unique per-run TS ids; no cpp delete shim needed
   const script = `${DDB_PRELUDE}
 tbl = ddb.Table('VideoMetadata')
 tbl.delete_item(Key={'video_id': '${videoId}'})
