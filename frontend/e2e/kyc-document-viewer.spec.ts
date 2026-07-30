@@ -20,7 +20,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -94,6 +96,25 @@ table = ddb.Table('kyc_cases')
 
 function seedKycCase(caseId: string): void {
   const ts = Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    // cpp reads tlc_kyc_cases (SUB-keyed), not the Python :8001 'kyc_cases'
+    // table this spec's DDB_PRELUDE writes. Seed the same case (with per-file
+    // verification_state so the DocumentViewer badge + tabs render) into cpp.
+    cppSeedKycCaseFull({
+      caseId,
+      userSub: resolveIdentityId(ALICE_ID),
+      status: "under_review",
+      intakeProfile: "standard",
+      createdAt: ts,
+      submittedAt: ts,
+      files: [
+        { type: "selfie", path: `/uploads/kyc/${caseId}_selfie.jpg`, verification_state: "verified" },
+        { type: "id_front", path: `/uploads/kyc/${caseId}_id_front.jpg`, verification_state: "pending" },
+        { type: "id_back", path: `/uploads/kyc/${caseId}_id_back.jpg`, verification_state: "rejected" },
+      ],
+    });
+    return;
+  }
   const script = `
 ${DDB_PRELUDE}
 ts = ${ts}
@@ -135,6 +156,7 @@ print(case_id)
 }
 
 function deleteKycCase(caseId: string): void {
+  if (usingCpp()) return; // case ids are unique per run; leftover rows are inert
   const script = `
 ${DDB_PRELUDE}
 table.delete_item(Key={"pk": f"KYC#${caseId}", "sk": "META"})
