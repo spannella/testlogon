@@ -102,8 +102,25 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 
 function ensureUsersAndProfiles(): void {
   if (usingCpp()) {
-    cppSeedProfile({ userSub: ALICE_SUB, displayName: "Alice Test", description: "E2E test profile" });
-    cppSeedProfile({ userSub: BOB_SUB, displayName: "Bob Test", description: "E2E test profile" });
+    // Mirror the Python profiles seed below EXACTLY so the About tab (117.4)
+    // and stats row (121.x) render the same bio/location/counts under cpp.
+    cppSeedProfile({
+      userSub: ALICE_SUB,
+      displayName: "Alice Test",
+      description: "I create amazing content about technology and art.",
+      location: "San Francisco, CA",
+      followerCount: 42,
+      followingCount: 15,
+      postCount: 0,
+    });
+    cppSeedProfile({
+      userSub: BOB_SUB,
+      displayName: "Bob Test",
+      description: "E2E test profile",
+      followerCount: 42,
+      followingCount: 15,
+      postCount: 0,
+    });
     return;
   }
   execSync(
@@ -156,7 +173,7 @@ function seedAlicePosts(count: number): string[] {
       authorSub: ALICE_SUB,
       count,
       testRun: String(TS),
-      bodyPrefix: "E2E storefront test post",
+      bodyPrefix: "Storefront test post",
     });
   }
   const raw = execSync(
@@ -558,7 +575,7 @@ with tbl.batch_writer() as batch:
 
 test.describe("120 - Unauthenticated View", () => {
   test("120.1 Unauthenticated user sees Posts and About tabs", async ({ browser }) => {
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext(usingCpp() ? { storageState: { cookies: [], origins: [] } } : {});
     const page = await ctx.newPage();
     await page.goto(`/u/${ALICE_SUB}`);
 
@@ -571,7 +588,7 @@ test.describe("120 - Unauthenticated View", () => {
   });
 
   test("120.2 Videos tab hidden for unauthenticated users", async ({ browser }) => {
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext(usingCpp() ? { storageState: { cookies: [], origins: [] } } : {});
     const page = await ctx.newPage();
     await page.goto(`/u/${ALICE_SUB}`);
 
@@ -585,7 +602,7 @@ test.describe("120 - Unauthenticated View", () => {
   });
 
   test("120.3 Unauthenticated user sees sign in button", async ({ browser }) => {
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext(usingCpp() ? { storageState: { cookies: [], origins: [] } } : {});
     const page = await ctx.newPage();
     await page.goto(`/u/${ALICE_SUB}`);
 
