@@ -13,10 +13,11 @@
  * is used, not `page.request`).
  */
 
-import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { test, expect, type Page, type APIRequestContext, request as pwRequest } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -66,13 +67,32 @@ async function apiDelete(page: Page, userId: string, path: string) {
   return page.request.delete(`${BASE}${path}`, { headers: csrf(userId) });
 }
 
+// A genuinely cookie-free request context. Under cpp the built-in `request`
+// fixture inherits the project-level admin storageState, so a "bearer-only"
+// call actually also sends the admin ui_session/ui_access_token cookies. cpp
+// then authenticates as the admin AND the delegation key, taking a much slower
+// path (admin-scoped conversation resolution over the whole accumulated moto
+// store) that pushes GET /v1/conversations past the 10s test timeout. An
+// explicit empty jar makes the delegation key the sole credential.
+let _delegCleanCtx: Promise<APIRequestContext> | null = null;
+function delegCleanCtx(): Promise<APIRequestContext> {
+  if (!_delegCleanCtx) {
+    _delegCleanCtx = pwRequest.newContext({
+      ignoreHTTPSErrors: true,
+      storageState: { cookies: [], origins: [] },
+    });
+  }
+  return _delegCleanCtx;
+}
+
 // Programmatic call helper: Bearer key, no session cookies (CSRF bypassed).
 function keyAuth(req: APIRequestContext, key: string) {
+  const pick = async () => (usingCpp() ? await delegCleanCtx() : req);
   return {
-    get: (path: string) =>
-      req.get(`${BASE}${path}`, { headers: { Authorization: `Bearer ${key}` } }),
-    post: (path: string, body: object) =>
-      req.post(`${BASE}${path}`, {
+    get: async (path: string) =>
+      (await pick()).get(`${BASE}${path}`, { headers: { Authorization: `Bearer ${key}` } }),
+    post: async (path: string, body: object) =>
+      (await pick()).post(`${BASE}${path}`, {
         data: body,
         headers: { Authorization: `Bearer ${key}` },
       }),
