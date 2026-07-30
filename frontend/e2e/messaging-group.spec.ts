@@ -35,6 +35,7 @@ import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId } from "./helpers/session";
 import { asArray } from "./helpers/shape";
 import { usingCpp, cppSeedPaymentMethod } from "./helpers/cpp-seed";
+import { cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -101,16 +102,25 @@ type APIRequestContext = import("@playwright/test").APIRequestContext;
 
 /** POST as an arbitrary user using the dev-mode Bearer token (no browser cookies). */
 async function apiPostBearer(req: APIRequestContext, path: string, body: object, userId: string) {
+  const sub = getSessions()[userId].user_sub;
+  // Under cpp the project storageState injects an admin ui_access_token cookie
+  // into the built-in `request` fixture, which JWT-verifies and SHADOWS the
+  // raw-sub bearer (cpp CurrentUser prefers a valid cookie). Route through a
+  // genuinely cookie-free context so the raw-sub bearer resolves as this user
+  // (Bob/Charlie), not admin — otherwise accept/send run as admin -> 404/403.
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
 /** GET as an arbitrary user using the dev-mode Bearer token. */
 async function apiGetBearer(req: APIRequestContext, path: string, userId: string) {
+  const sub = getSessions()[userId].user_sub;
+  if (usingCpp()) return cppBearerGet(path, sub);
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
@@ -1148,12 +1158,19 @@ test.describe("11. UI — group conversation", () => {
     const bobBubbleText = page.locator("p").filter({ hasText: bobText }).last();
     await expect(bobBubbleText).toBeVisible({ timeout: 8000 });
 
-    // In group conversations the ComposeBar/ConversationView renders a sender
-    // label above each non-own message (showSender=isGroup). The label shows the
-    // sender's id (e.g. "e2e_bob@test.local"). Assert that the sender label for
-    // a message from another member (Bob) is present in the conversation pane.
+    // In group conversations ConversationView renders a sender label above each
+    // non-own message (showSender=isGroup). ConversationView.resolveSenderName
+    // maps the sender_id to the participant's display_name when available and
+    // falls back to the raw id otherwise. Under cpp the group participant list
+    // carries display_name ("E2E Bob"), so the label shows the display name;
+    // under the Python path (no resolved name) it shows the raw id. Accept
+    // either so the assertion is backend-agnostic.
     await expect(
-      page.locator("p.text-primary").filter({ hasText: BOB_ID }).first(),
+      page
+        .locator("p.text-primary")
+        .filter({ hasText: /E2E Bob|e2e_bob@test\.local/ })
+        .or(page.locator("p.text-primary").filter({ hasText: BOB_ID }))
+        .first(),
     ).toBeVisible({ timeout: 5000 });
   });
 
