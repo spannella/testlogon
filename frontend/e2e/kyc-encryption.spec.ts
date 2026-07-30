@@ -29,7 +29,9 @@ import {
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const ALICE_ID = "e2e_alice@test.local";
-const CHARLIE_SUB = "e2e_charlie@test.local";
+// Accessor identity as the audit log records it: cpp = charlie_admin JWT sub,
+// Python = email. Lazy so the live cpp session is loaded (in beforeAll) first.
+const CHARLIE_SUB = () => resolveIdentityId("charlie_admin");
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────
 
@@ -211,7 +213,7 @@ test.describe("KYC-023 Encryption", () => {
 
   test("234.2 Assigned admin can decrypt PII fields", async () => {
     const c = await createCaseWithPii(alicePage);
-    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
     const resp = await apiPost(charliePage, "charlie_admin", `/v1/kyc/cases/${c.kyc_case_id}/pii/decrypt`, {
       fields: ["document_number", "date_of_birth"],
       reason: "Reviewing case for Tier 2 approval",
@@ -224,7 +226,7 @@ test.describe("KYC-023 Encryption", () => {
 
   test("234.3 Non-assigned admin gets masked values", async () => {
     const c = await createCaseWithPii(alicePage);
-    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
     // root is not the assigned admin but may read masked.
     const resp = await apiGet(rootPage, `/v1/kyc/cases/${c.kyc_case_id}/pii/masked`);
     expect(resp.ok()).toBeTruthy();
@@ -235,7 +237,7 @@ test.describe("KYC-023 Encryption", () => {
 
   test("234.4 Decrypt request logged in audit", async () => {
     const c = await createCaseWithPii(alicePage);
-    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
     await apiPost(charliePage, "charlie_admin", `/v1/kyc/cases/${c.kyc_case_id}/pii/decrypt`, {
       fields: ["document_number"],
       reason: "audit check",
@@ -245,7 +247,7 @@ test.describe("KYC-023 Encryption", () => {
     const body = await log.json();
     const decryptEvents = body.events.filter((e: { action: string }) => e.action === "decrypt");
     expect(decryptEvents.length).toBeGreaterThanOrEqual(1);
-    expect(decryptEvents[0].accessor_sub).toBe(CHARLIE_SUB);
+    expect(decryptEvents[0].accessor_sub).toBe(CHARLIE_SUB());
   });
 
   test("234.5 Regular user sees masked PII on their own case", async () => {
@@ -258,7 +260,7 @@ test.describe("KYC-023 Encryption", () => {
 
   test("234.6 Decrypt without reason returns 422", async () => {
     const c = await createCaseWithPii(alicePage);
-    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
     const resp = await apiPost(charliePage, "charlie_admin", `/v1/kyc/cases/${c.kyc_case_id}/pii/decrypt`, {
       fields: ["document_number"],
       reason: "",
@@ -280,7 +282,7 @@ test.describe("KYC-023 Encryption", () => {
 
   test("235.2 Decryption works after key rotation", async () => {
     const c = await createCaseWithPii(alicePage);
-    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
     await apiPost(rootPage, "root", `/v1/kyc/cases/admin/encryption/rotate-key/${ALICE_ID}`);
     const resp = await apiPost(charliePage, "charlie_admin", `/v1/kyc/cases/${c.kyc_case_id}/pii/decrypt`, {
       fields: ["document_number"],
@@ -307,9 +309,9 @@ test.describe("KYC-023 Encryption", () => {
         expected_version: c.version,
         pii: { document_number: "ZZ9999999" },
       });
-      assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+      assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
 
-      const first = await apiPost(rootPage, "root", `/v1/kyc/cases/admin/encryption/destroy-keys/e2e_bob@test.local`);
+      const first = await apiPost(rootPage, "root", `/v1/kyc/cases/admin/encryption/destroy-keys/${resolveIdentityId("bob")}`);
       expect(first.ok()).toBeTruthy();
       expect((await first.json()).keys_destroyed).toBeGreaterThanOrEqual(1);
 
@@ -321,7 +323,7 @@ test.describe("KYC-023 Encryption", () => {
       expect(dec.status()).toBe(410);
 
       // Second destroy is idempotent (0 keys).
-      const second = await apiPost(rootPage, "root", `/v1/kyc/cases/admin/encryption/destroy-keys/e2e_bob@test.local`);
+      const second = await apiPost(rootPage, "root", `/v1/kyc/cases/admin/encryption/destroy-keys/${resolveIdentityId("bob")}`);
       expect(second.ok()).toBeTruthy();
       expect((await second.json()).keys_destroyed).toBe(0);
     } finally {
@@ -333,16 +335,16 @@ test.describe("KYC-023 Encryption", () => {
 
   test("236.2 Audit log filterable by accessor", async () => {
     const c = await createCaseWithPii(alicePage);
-    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
     await apiPost(charliePage, "charlie_admin", `/v1/kyc/cases/${c.kyc_case_id}/pii/decrypt`, {
       fields: ["document_number"],
       reason: "accessor filter test",
     });
-    const resp = await apiGet(rootPage, `/v1/kyc/cases/admin/pii/audit-log?accessor=${encodeURIComponent(CHARLIE_SUB)}&limit=50`);
+    const resp = await apiGet(rootPage, `/v1/kyc/cases/admin/pii/audit-log?accessor=${encodeURIComponent(CHARLIE_SUB())}&limit=50`);
     expect(resp.ok()).toBeTruthy();
     const body = await resp.json();
     expect(body.events.length).toBeGreaterThanOrEqual(1);
-    expect(body.events.every((e: { accessor_sub: string }) => e.accessor_sub === CHARLIE_SUB)).toBe(true);
+    expect(body.events.every((e: { accessor_sub: string }) => e.accessor_sub === CHARLIE_SUB())).toBe(true);
   });
 
   test("236.3 Masking rules applied correctly per field type", async () => {
@@ -357,7 +359,7 @@ test.describe("KYC-023 Encryption", () => {
 
   test("236.5 Audit log includes IP address of accessor", async () => {
     const c = await createCaseWithPii(alicePage);
-    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
     await apiPost(charliePage, "charlie_admin", `/v1/kyc/cases/${c.kyc_case_id}/pii/decrypt`, {
       fields: ["document_number"],
       reason: "ip check",
@@ -408,7 +410,7 @@ test.describe("KYC-023 Encryption", () => {
 
   test("237.1 Decrypt unknown field returns 400", async () => {
     const c = await createCaseWithPii(alicePage);
-    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB);
+    assignAdminDirect(c.kyc_case_id, CHARLIE_SUB());
     const resp = await apiPost(charliePage, "charlie_admin", `/v1/kyc/cases/${c.kyc_case_id}/pii/decrypt`, {
       fields: ["not_a_field"],
       reason: "edge",
