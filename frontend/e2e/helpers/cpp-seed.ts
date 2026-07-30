@@ -661,3 +661,19 @@ export function cppResetComputeInstances(opts: { userSub?: string; all?: boolean
     /* best-effort */
   }
 }
+
+/**
+ * Clear a user's broadcast-QA submit debounce row in cpp's tlc_search moto table.
+ * broadcast-qa.spec.ts 90.6 (empty-question -> 422) runs within the 2s debounce
+ * window of the prior submits; cpp's bc_rate_ok fires 429 BEFORE the empty-text
+ * validation. Delete the "RL#bcqa:{sid}#{sub}" row so the validation path is
+ * reached. No-op unless usingCpp(). Best-effort.
+ */
+export function cppResetBroadcastQaRateLimit(sessionId: string, userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_broadcast_qa_rl.py", { session_id: sessionId, user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
