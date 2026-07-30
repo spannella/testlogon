@@ -3,6 +3,11 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedSubscription,
+  cppDeleteSubscription,
+} from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
@@ -79,6 +84,15 @@ async function apiPatch(page: Page, identity: string, path: string, body: object
 
 /** Seed/clear a subscription row so a viewer is (or isn't) an active subscriber. */
 function seedSubscription(subscriberSub: string, creatorSub: string, status: string): void {
+  if (usingCpp()) {
+    cppSeedSubscription({
+      subscriberSub,
+      creatorSub,
+      subId: creatorSub,
+      status,
+    });
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -106,6 +120,10 @@ print('ok')
 }
 
 function clearSubscription(subscriberSub: string, creatorSub: string): void {
+  if (usingCpp()) {
+    cppDeleteSubscription(subscriberSub, creatorSub);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os
