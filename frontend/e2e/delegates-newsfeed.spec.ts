@@ -27,6 +27,13 @@ const CHARLIE_ID = resolveIdentityId("e2e_charlie@test.local");
 
 const TS = Date.now();
 
+// Every describe wires the SAME Bob/Charlie->Alice delegate relationships in its
+// beforeAll and DELETES them in afterAll. Run in parallel (-workers>1), one
+// describe's afterAll delegate-teardown races another's tests, so a delegated
+// action intermittently 403s. Serialize the whole file so the shared delegate
+// state is never torn down mid-use (passes 17/17 serially).
+test.describe.configure({ mode: "serial" });
+
 // -- Session bootstrap --------------------------------------------------------
 
 interface SessionData {
