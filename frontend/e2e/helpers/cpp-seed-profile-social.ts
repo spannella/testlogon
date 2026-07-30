@@ -266,3 +266,18 @@ export function cppPurgeAuthorPosts(authorSub: string): void {
     op: "purge_author",
   });
 }
+
+/**
+ * Delete a reposters repost of one post in cpps tlc_newsfeed (ownership row +
+ * REPOSTS# list mirror + own FEED# ref). Mirrors repost.spec.ts::cleanupRepost,
+ * whose inline python deletes REPOST#/POST# from the PYTHON :8001 store cpp
+ * never reads (so a stale REPOST# row 409s "already_reposted" on the next run).
+ * userSub MUST be the cpp SUB. Best-effort.
+ */
+export function cppCleanupRepost(userSub: string, postId: string): void {
+  try {
+    runCppShim("cleanup_repost.py", { user_sub: userSub, post_id: postId });
+  } catch {
+    /* best-effort */
+  }
+}
