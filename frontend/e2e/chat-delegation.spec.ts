@@ -16,7 +16,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -29,9 +29,13 @@ const BOB_KEY = "bob";
 const CHARLIE_KEY = "charlie_admin";
 
 // User subs (used for API endpoint paths and delegate IDs)
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
-const CHARLIE_SUB = "e2e_charlie@test.local";
+// cpp keys delegate rows / message sender_id / audit delegate_id by the user
+// SUB, not the email. Resolve the SUB so delegate paths, add/revoke targets and
+// sender_id/delegate_id comparisons all use the real id under cpp. (Session-map
+// keys below — ALICE_KEY/BOB_KEY/CHARLIE_KEY — stay short keys for getSessions.)
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
+const CHARLIE_SUB = resolveIdentityId("e2e_charlie@test.local");
 
 const TS = Date.now();
 
