@@ -23,7 +23,8 @@ import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppResetPromoCodes } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -155,6 +156,10 @@ test.describe("715 — Promo Checkout API", () => {
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     alice = await newIdentityPage(browser, ALICE_ID);
+    // cpp caps promo codes per creator (100); prior runs accumulate in cpp's
+    // tlc_promo_codes (the spec has no cleanup and never touched cpp's store),
+    // so reset Alice's codes first. No-op on the Python path.
+    if (usingCpp()) cppResetPromoCodes(resolveIdentityId(ALICE_ID));
 
     pctCodeId = await createCode(alice, ALICE_ID, {
       code: PCT_CODE,
@@ -201,7 +206,7 @@ test.describe("715 — Promo Checkout API", () => {
       code: PCT_CODE,
       checkout_type: "shop",
       item_price_cents: 5000,
-      creator_user_id: ALICE_ID,
+      creator_user_id: resolveIdentityId(ALICE_ID),
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
@@ -406,6 +411,7 @@ test.describe("715 — Checkout promo UI", () => {
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     alice = await newIdentityPage(browser, ALICE_ID);
+    if (usingCpp()) cppResetPromoCodes(resolveIdentityId(ALICE_ID));
     await createCode(alice, ALICE_ID, {
       code: UI_CODE,
       discount_type: "percentage",
