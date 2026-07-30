@@ -11,7 +11,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
-import { loadSessions } from "./helpers/session";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -19,6 +19,9 @@ const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..")
 const BASE     = "http://localhost:3000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID   = "e2e_bob@test.local";
+// cpp contacts/search returns the user SUB as user_id, not the email. Resolve
+// the sub for result comparisons (session-map keys elsewhere stay the emails).
+const BOB_UID  = resolveIdentityId(BOB_ID);
 const PYTHON   = REPO_ROOT + "/.venv/bin/python3";
 
 // Unique token embedded in test messages to avoid collisions across runs.
@@ -166,7 +169,7 @@ test.describe("37. User/contact search API — GET /messaging/contacts/search", 
     expect(r.ok()).toBe(true);
     const results = await r.json() as Array<{ user_id: string; display_name: string }>;
     expect(Array.isArray(results)).toBe(true);
-    const bob = results.find((u) => u.user_id === BOB_ID);
+    const bob = results.find((u) => u.user_id === BOB_UID);
     expect(bob).toBeDefined();
     expect(bob!.display_name).toBe("E2E Bob");
   });
@@ -175,7 +178,7 @@ test.describe("37. User/contact search API — GET /messaging/contacts/search", 
     const r = await msgGet(page, "contacts/search", { q: "e2e_b" });
     expect(r.ok()).toBe(true);
     const results = await r.json() as Array<{ user_id: string }>;
-    expect(results.some((u) => u.user_id === BOB_ID)).toBe(true);
+    expect(results.some((u) => u.user_id === BOB_UID)).toBe(true);
   });
 
   test("query for a non-existent token returns an empty array", async () => {
@@ -199,7 +202,7 @@ test.describe("37. User/contact search API — GET /messaging/contacts/search", 
   });
 
   test("unauthenticated request returns 401 or 403", async () => {
-    const anonCtx = await page.context().browser()!.newContext();
+    const anonCtx = await page.context().browser()!.newContext({ storageState: undefined });
     const anonPage = await anonCtx.newPage();
     const r = await anonPage.request.get(`${API}/messaging/contacts/search`, { params: { q: "bob" } });
     await anonCtx.close();
@@ -423,7 +426,7 @@ test.describe("40. Cross-conversation message search API — GET /messaging/mess
   });
 
   test("unauthenticated request returns 401 or 403", async () => {
-    const anonCtx = await page.context().browser()!.newContext();
+    const anonCtx = await page.context().browser()!.newContext({ storageState: undefined });
     const anonPage = await anonCtx.newPage();
     const r = await anonPage.request.get(`${API}/messaging/messages/search`, {
       params: { q: searchPhrase },
