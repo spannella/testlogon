@@ -200,6 +200,24 @@ export function cppDeleteSmsDevices(userSub: string): void {
   }
 }
 
+/**
+ * Insert a bare pending login/step-up challenge into cpp's tlc_sessions so
+ * /ui/mfa/{email,sms}/begin finds the challenge (mirrors auth-mfa-devtools.spec
+ * insertLoginChallenge, whose Python :8001 write never reaches cpp).
+ */
+export function cppInsertLoginChallenge(
+  userSub: string,
+  challengeId: string,
+  factors: string[],
+): void {
+  if (!usingCpp()) return;
+  runCppShim("insert_login_challenge.py", {
+    user_sub: userSub,
+    challenge_id: challengeId,
+    factors,
+  });
+}
+
 /** Set subscriber_count on one admin subscription tier in cpp's world. */
 export function cppSeedSubscriberCount(
   creatorSub: string,

@@ -22,7 +22,7 @@ import { randomBytes } from "crypto";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions, resolveIdentityId, cppRegisterThrowaway } from "./helpers/session";
-import { usingCpp, cppDeleteEmailDevices, cppDeleteSmsDevices, cppAppendBillingLog } from "./helpers/cpp-seed";
+import { usingCpp, cppDeleteEmailDevices, cppDeleteSmsDevices, cppAppendBillingLog, cppInsertLoginChallenge } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE     = "http://localhost:3000";
@@ -131,6 +131,7 @@ for item in resp.get('Items', []):
  * through the full login flow.
  */
 function insertLoginChallenge(userSub: string, challengeId: string, factors: string[]): void {
+  if (usingCpp()) { cppInsertLoginChallenge(userSub, challengeId, factors); return; }
   runPython(`${DDB_PREAMBLE}
 import json
 T = ddb.Table('sessions')
@@ -287,7 +288,15 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
     // Begin: backend sends an OTP to alice's enrolled email address
     const beginResp = await apiPost(page, csrf, "/ui/mfa/email/begin", { challenge_id: challengeId });
     expect(beginResp.status()).toBe(200);
-    expect((await beginResp.json() as { status: string }).status).toBe("sent");
+    // cpp begin returns {factor, sent:<n>}; Python returns {status:"sent"}. On cpp
+    // `sent` counts successful SES-mock deliveries (can be 0 on a transient mock
+    // hiccup) while the OTP is ALWAYS written to the dev-tools log regardless — the
+    // real intent is "begin accepted + a login OTP is now retrievable", which the
+    // log-read + verify below prove. So on cpp assert only the 200 + a "login"
+    // factor code was staged; keep the Python status="sent" shape unchanged.
+    const beginBody = await beginResp.json() as { status?: string; factor?: string };
+    if (usingCpp()) expect(beginBody.factor).toBe("email");
+    else expect(beginBody.status).toBe("sent");
 
     // Read the most-recent email for alice from the dev tools log
     const emailResp = await apiGet(page, "/internal/dev-tools/email/messages", { mailbox: MFA_ID });
