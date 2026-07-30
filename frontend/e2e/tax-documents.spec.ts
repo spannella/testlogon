@@ -225,6 +225,13 @@ function catOf(body: any, name: string) {
 //              other 1000 (1)  => grand 21500, 5 spending txns.
 // 2023 totals: tips 10000 (1) => grand 10000.
 
+// Serial: the FIN-004 tests share the e2e_alice/e2e_bob tax-summary state
+// (generate + history + admin views), so parallel workers race the shared
+// account and mutate each other's totals/history. Force serial to match the
+// sharded --workers=4 baseline. Proven contention: 33/33 pass at --workers=1,
+// 8 fail at --workers=4 before this pin.
+test.describe.configure({ mode: "serial" });
+
 test.describe("FIN-004 Consumer Tax Documents", () => {
   let alice: Page;
 
