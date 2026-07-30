@@ -757,7 +757,11 @@ test.describe("104 — Edge cases", () => {
   });
 
   test("104.6 Query with numbers works", async () => {
-    const resp = await apiGet(alicePage, "/ui/search", {
+    test.setTimeout(90_000); // may wait out the 60s search rate-limit window
+    // Use the shared 429-retry wrapper: this large spec can exhaust the
+    // per-user 30/60s search budget, so a 429 here is the limiter, not the
+    // behavior under test.
+    const resp = await searchWithRetry(alicePage, {
       q: "test123",
       types: "contacts",
     });
