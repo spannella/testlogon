@@ -168,7 +168,9 @@ print('seeded')
 function cleanupLedger(userSub: string): void {
   if (usingCpp()) {
     try {
-      cppCleanupTax(userSub, TS);
+      // This suite fully owns Alice/Bob's tax ledger; wipe ALL LEDGER rows so
+      // prior cpp runs (moto persists) do not inflate PREV_YEAR comparison.
+      cppCleanupTax(userSub, TS, [], true);
     } catch {
       // best effort
     }

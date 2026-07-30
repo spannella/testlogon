@@ -119,12 +119,17 @@ export function cppCleanupTax(
   userSub: string,
   testRun: string | number,
   batchYears: number[] = [],
+  allLedger = false,
 ): void {
   runCppShim(SHIM_TAX, {
     op: "cleanup",
     user_sub: userSub,
     test_run: String(testRun),
     batch_years: batchYears,
+    // cpp's moto persists across runs; when the suite fully owns the user's
+    // tax ledger, wipe ALL LEDGER rows (not just this run's) so prior-run
+    // rows do not skew comparison/summary totals.
+    all_ledger: allLedger,
   });
 }
 
