@@ -301,10 +301,11 @@ test.describe("2b. Feed author profile navigation", () => {
   let page: Page;
   const marker = `E2E feed profile nav ${Date.now()}`;
   // PostCard renders the author aria-label as `Open ${author_display_name ||
-  // author_id} profile`. Python keys the author by email (ALICE_ID); cpp keys
-  // it by the JWT sub (and returns the sub as the display name too). Resolve to
-  // whatever the active backend actually renders so the selector matches.
-  const ALICE_AUTHOR_LABEL = resolveIdentityId(ALICE_ID);
+  // author_id} profile`. Python keys the author by email (ALICE_ID) with no
+  // display name, so the email is rendered. cpp resolves the author's profile
+  // and returns the full_name as author_display_name ("E2E Alice"), which
+  // PostCard prefers over the id. Match whatever the active backend renders.
+  const ALICE_AUTHOR_LABEL = usingCpp() ? "E2E Alice" : resolveIdentityId(ALICE_ID);
   // Likewise the canonical public-profile route: Python resolves an email; cpp
   // resolves a sub/username/handle (an email 404s). Use bob's real identity.
   const BOB_CANONICAL = resolveIdentityId(BOB_ID);
