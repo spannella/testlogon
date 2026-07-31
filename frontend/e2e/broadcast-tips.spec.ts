@@ -3,6 +3,7 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
@@ -110,6 +111,13 @@ async function tipWithRetry(
 /* ------------------------------------------------------------------ */
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // cpp reads a DIFFERENT billing store (tlc_billing on moto :5005). The
+    // Python :8001 write below never reaches cpp, so h_bc_tip's PM-ownership
+    // check would 400 an otherwise-valid tip. Seed cpp too. userSub is a SUB.
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time

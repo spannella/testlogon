@@ -111,16 +111,18 @@ async function ensureDelegate(page: Page) {
       delegate_tag_format: "[via @{delegate_name}]",
     },
   });
+  const perms = ["chat_read", "chat_respond", "feed_read", "feed_post"];
   // Add Bob (idempotent — ignore 409 if already present).
   await apiPost(page, ALICE_ID, "/ui/delegates", {
     delegate_id: BOB_ID,
-    permissions: [
-      "chat_read",
-      "chat_respond",
-      "feed_read",
-      "feed_post",
-    ],
+    permissions: perms,
     label: "Bob - API delegate",
+  });
+  // Normalize permissions on the (possibly pre-existing) grant so cross-spec
+  // stale state can't leave Bob without chat_read/chat_respond.
+  await page.request.put(`${BASE}/ui/delegates/${BOB_ID}/permissions`, {
+    headers: csrf(ALICE_ID),
+    data: { permissions: perms },
   });
 }
 
