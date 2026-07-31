@@ -21,6 +21,8 @@ import { execSync } from "child_process";
 import * as path from "path";
 import { API } from "./cpp.config";
 import { loadSessions } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppSeedRateLimits, cppClearRateLimits } from "./helpers/cpp-seed-rate-limits";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -142,6 +144,10 @@ function setTestRateLimits(
   windowSec: number,
   bypassRoles: string[] = [],
 ): void {
+  if (usingCpp()) {
+    cppSeedRateLimits(group, perUser, perIp, windowSec, bypassRoles);
+    return;
+  }
   const rolesStr = bypassRoles.map((r) => `'${r}'`).join(", ");
   execSync(
     `python3 -c "${DDB_PYTHON_PREAMBLE}
@@ -162,6 +168,10 @@ print('OK')
 }
 
 function clearTestRateLimits(group: string): void {
+  if (usingCpp()) {
+    cppClearRateLimits(group);
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PYTHON_PREAMBLE}
 t.delete_item(Key={'pk': 'CONFIG#global', 'sk': 'GROUP#${group}'})
@@ -172,6 +182,11 @@ print('OK')
 }
 
 function clearRateLimitCounters(prefix: string): void {
+  if (usingCpp()) {
+    // cpp counters are in-memory + window-self-expiring; nothing external to clear.
+    void prefix;
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PYTHON_PREAMBLE}
 resp = t.scan(
