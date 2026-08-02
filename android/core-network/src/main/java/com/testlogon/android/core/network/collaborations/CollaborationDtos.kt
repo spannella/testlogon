@@ -43,6 +43,7 @@ import com.squareup.moshi.Json
  */
 data class CollaborationOut(
     @Json(name = "collab_id") val collabId: String? = null,
+    @Json(name = "collaboration_id") val collaborationId: String? = null,
     @Json(name = "id") val id: String? = null,
     @Json(name = "title") val title: String? = null,
     @Json(name = "description") val description: String? = null,
@@ -50,6 +51,7 @@ data class CollaborationOut(
     @Json(name = "initiator_id") val initiatorId: String? = null,
     @Json(name = "recipient_id") val recipientId: String? = null,
     @Json(name = "split") val split: Map<String, Int>? = null,
+    @Json(name = "last_proposed_by") val lastProposedBy: String? = null,
     @Json(name = "created_at") val createdAt: Long? = null,
     @Json(name = "updated_at") val updatedAt: Long? = null,
 )
@@ -90,4 +92,41 @@ data class CollabSplitDistribution(
     @Json(name = "user_id") val userId: String? = null,
     @Json(name = "percentage") val percentage: Int? = null,
     @Json(name = "amount_cents") val amountCents: Int? = null,
+)
+
+// ---------------------------------------------------------------------------
+// PAR-04 - deal-action request bodies + the revision-history response DTO.
+//
+// These are STATE-only mutations (accept / reject / counter / cancel / terminate) - NOT money-bearing, so they
+// are NOT routed through BillingAuthorizer. Only counter + terminate carry a request body; accept / reject /
+// cancel are body-less POSTs. Every wire key is pinned with @Json (the reflective adapter maps VERBATIM). The
+// revisions endpoint returns a BARE JSON ARRAY of CollaborationRevisionOut (no envelope).
+// ---------------------------------------------------------------------------
+
+/**
+ * PAR-04 - counter-offer request. `counter_split_pct` is the INITIATOR's proposed integer percent (1..99;
+ * the recipient gets the remainder). Matches CollaborationCounterIn (models.py). The optional
+ * `counter_terms_text` / `counter_valid_until` / `reason` are omitted by this client (defaults on the wire).
+ */
+data class CollaborationCounterIn(
+    @Json(name = "counter_split_pct") val counterSplitPct: Int,
+)
+
+/** PAR-04 - terminate request. `reason` is an OPTIONAL free note. Matches CollaborationTerminateIn. */
+data class CollaborationTerminateIn(
+    @Json(name = "reason") val reason: String? = null,
+)
+
+/**
+ * PAR-04 - one prior negotiation revision (an element of the GET .../revisions ARRAY). `split` is the proposed
+ * userId -> integer percent map at that step; `proposed_by` / `proposed_at` (epoch-seconds) record authorship;
+ * `status` is typically "superseded". `terms_text` is an optional note. Matches CollaborationRevisionOut.
+ */
+data class CollaborationRevisionOut(
+    @Json(name = "revision") val revision: Int? = null,
+    @Json(name = "split") val split: Map<String, Int>? = null,
+    @Json(name = "terms_text") val termsText: String? = null,
+    @Json(name = "proposed_by") val proposedBy: String? = null,
+    @Json(name = "proposed_at") val proposedAt: Long? = null,
+    @Json(name = "status") val status: String? = null,
 )

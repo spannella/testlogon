@@ -3681,6 +3681,33 @@
     <string name="collaboration_status_cancelled">Cancelled</string>
     <string name="collaboration_status_declined">Declined</string>
     <string name="collaboration_status_unknown">Unknown</string>
+    <!-- PAR-04: collaboration deal actions (accept / reject / counter / cancel / terminate) + revisions -->
+    <string name="collaboration_status_negotiating">Negotiating</string>
+    <string name="collaboration_actions_heading">Actions</string>
+    <string name="collaboration_action_accept">Accept</string>
+    <string name="collaboration_action_reject">Reject</string>
+    <string name="collaboration_action_counter">Counter</string>
+    <string name="collaboration_action_cancel">Cancel request</string>
+    <string name="collaboration_action_terminate">Terminate</string>
+    <string name="collaboration_action_accepted">Collaboration accepted.</string>
+    <string name="collaboration_action_rejected">Collaboration rejected.</string>
+    <string name="collaboration_action_countered">Counter-offer sent.</string>
+    <string name="collaboration_action_cancelled">Request cancelled.</string>
+    <string name="collaboration_action_terminated">Collaboration terminated.</string>
+    <string name="collaboration_counter_title">Counter-offer</string>
+    <string name="collaboration_counter_initiator">Initiator %1$d%%</string>
+    <string name="collaboration_counter_recipient">Recipient %1$d%%</string>
+    <string name="collaboration_counter_send">Send counter-offer</string>
+    <string name="collaboration_confirm_dismiss">Cancel</string>
+    <string name="collaboration_confirm_reject_title">Reject collaboration?</string>
+    <string name="collaboration_confirm_reject_body">This declines the proposed agreement. This can\'t be undone.</string>
+    <string name="collaboration_confirm_cancel_title">Cancel request?</string>
+    <string name="collaboration_confirm_cancel_body">This withdraws your pending collaboration request.</string>
+    <string name="collaboration_confirm_terminate_title">Terminate collaboration?</string>
+    <string name="collaboration_confirm_terminate_body">This ends the active agreement. Existing splits are preserved.</string>
+    <string name="collaboration_revisions_heading">Revision history</string>
+    <string name="collaboration_revision_number">Revision %1$d</string>
+    <string name="collaboration_revision_proposed_by">Proposed by %1$s</string>
 
     <!-- AND-360: delegate / manage-as-creator overlay (banner + delegate console demonstration). -->
     <string name="delegation_banner_managing">Managing @%1$s</string>

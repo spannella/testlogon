@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.LockClock
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,12 +23,23 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -36,15 +48,18 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.core.model.collaborations.CollabRevision
 import com.testlogon.android.core.model.collaborations.CollabStatus
 import com.testlogon.android.core.model.collaborations.Collaboration
 import com.testlogon.android.core.model.collaborations.SplitDistribution
 import com.testlogon.android.core.model.syndicates.formatCents
+import com.testlogon.android.core.ui.input.TlButton
+import com.testlogon.android.core.ui.input.TlButtonVariant
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 
-/** AND-358 - stable testTags shared by the collaborations list + detail screens. */
+/** AND-358 / PAR-04 - stable testTags shared by the collaborations list + detail screens. */
 object CollaborationsTestTags {
     const val DETAIL_SCREEN = "collab_detail_screen"
     const val STATUS = "collab_status"
@@ -53,33 +68,84 @@ object CollaborationsTestTags {
     const val SESSION_EXPIRED = "collab_session_expired"
     const val STALE = "collab_stale"
 
+    // PAR-04 deal actions.
+    const val ACTIONS = "collab_actions"
+    const val ACTION_ACCEPT = "collab_action_accept"
+    const val ACTION_REJECT = "collab_action_reject"
+    const val ACTION_COUNTER = "collab_action_counter"
+    const val ACTION_CANCEL = "collab_action_cancel"
+    const val ACTION_TERMINATE = "collab_action_terminate"
+    const val COUNTER_SHEET = "collab_counter_sheet"
+    const val COUNTER_SLIDER = "collab_counter_slider"
+    const val COUNTER_SEND = "collab_counter_send"
+    const val CONFIRM_DIALOG = "collab_confirm_dialog"
+    const val CONFIRM_ACCEPT = "collab_confirm_accept"
+    const val REVISIONS = "collab_revisions"
+
     fun splitRow(userId: String) = "collab_split_row_$userId"
     fun distribution(index: Int) = "collab_distribution_$index"
+    fun revision(index: Int) = "collab_revision_$index"
 }
 
-/** AND-358 - route-level detail entry; collects the detail state + viewer id. */
+/** AND-358 / PAR-04 - route-level detail entry; collects the detail state + one-shot action effects. */
 @Composable
 fun CollaborationDetailRoute(
     onBack: () -> Unit,
     viewModel: CollaborationDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    val acceptedMsg = stringResource(R.string.collaboration_action_accepted)
+    val rejectedMsg = stringResource(R.string.collaboration_action_rejected)
+    val counteredMsg = stringResource(R.string.collaboration_action_countered)
+    val cancelledMsg = stringResource(R.string.collaboration_action_cancelled)
+    val terminatedMsg = stringResource(R.string.collaboration_action_terminated)
+
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collect { effect ->
+            val message = when (effect) {
+                is CollaborationDetailEffect.ActionSucceeded -> when (effect.action) {
+                    CollabAction.ACCEPT -> acceptedMsg
+                    CollabAction.REJECT -> rejectedMsg
+                    CollabAction.COUNTER -> counteredMsg
+                    CollabAction.CANCEL -> cancelledMsg
+                    CollabAction.TERMINATE -> terminatedMsg
+                }
+                is CollaborationDetailEffect.ActionFailed -> effect.message
+            }
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
     CollaborationDetailScreen(
         state = state,
         viewerId = viewModel.viewerId,
+        snackbarHostState = snackbarHostState,
         onBack = onBack,
         onRetry = viewModel::retry,
+        onAccept = viewModel::accept,
+        onReject = viewModel::reject,
+        onCounter = viewModel::counter,
+        onCancel = viewModel::cancel,
+        onTerminate = { viewModel.terminate() },
     )
 }
 
-/** AND-358 - stateless READ-ONLY collaboration detail (two parties + status + revenue split + amounts). */
+/** AND-358 / PAR-04 - stateless collaboration detail (parties + status + split + revisions + deal actions). */
 @Composable
 fun CollaborationDetailScreen(
     state: CollaborationDetailUiState,
     viewerId: String?,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onAccept: () -> Unit,
+    onReject: () -> Unit,
+    onCounter: (Int) -> Unit,
+    onCancel: () -> Unit,
+    onTerminate: () -> Unit,
     modifier: Modifier = Modifier,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     Scaffold(
         modifier = modifier.testTag(CollaborationsTestTags.DETAIL_SCREEN),
@@ -96,6 +162,7 @@ fun CollaborationDetailScreen(
                 },
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         when (state) {
             is CollaborationDetailUiState.Loading ->
@@ -122,19 +189,35 @@ fun CollaborationDetailScreen(
                 DetailBody(
                     state = state,
                     viewerId = viewerId,
+                    onAccept = onAccept,
+                    onReject = onReject,
+                    onCounter = onCounter,
+                    onCancel = onCancel,
+                    onTerminate = onTerminate,
                     modifier = Modifier.padding(padding),
                 )
         }
     }
 }
 
+/** PAR-04 - the destructive actions that require a confirm dialog before firing. */
+private enum class ConfirmKind { REJECT, CANCEL, TERMINATE }
+
 @Composable
 private fun DetailBody(
     state: CollaborationDetailUiState.Content,
     viewerId: String?,
+    onAccept: () -> Unit,
+    onReject: () -> Unit,
+    onCounter: (Int) -> Unit,
+    onCancel: () -> Unit,
+    onTerminate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val collab = state.collab
+    var showCounter by remember { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf<ConfirmKind?>(null) }
+
     LazyColumn(modifier = modifier.fillMaxSize()) {
         if (state.isStale) {
             item(key = "stale") { StaleRow() }
@@ -155,6 +238,23 @@ private fun DetailBody(
         if (!collab.splitTotalsOk) {
             item(key = "split_warning") { SplitWarning(collab) }
         }
+
+        // PAR-04 - the deal-action card (only when at least one action is valid for the current status).
+        if (hasAnyAction(collab, viewerId)) {
+            item(key = "actions") {
+                ActionsCard(
+                    collab = collab,
+                    viewerId = viewerId,
+                    busy = state.busy,
+                    onAccept = onAccept,
+                    onCounter = { showCounter = true },
+                    onReject = { confirm = ConfirmKind.REJECT },
+                    onCancel = { confirm = ConfirmKind.CANCEL },
+                    onTerminate = { confirm = ConfirmKind.TERMINATE },
+                )
+            }
+        }
+
         if (state.distributions.isNotEmpty()) {
             item(key = "dist_heading") {
                 SectionHeading(stringResource(R.string.collaboration_distributions_heading))
@@ -163,6 +263,324 @@ private fun DetailBody(
                 DistributionRow(dist = dist, index = index)
             }
         }
+
+        if (state.revisions.isNotEmpty()) {
+            item(key = "rev_heading") {
+                SectionHeading(stringResource(R.string.collaboration_revisions_heading))
+            }
+            itemsIndexed(
+                state.revisions,
+                key = { _, r -> "rev_${r.revision}_${r.proposedAt ?: 0L}" },
+            ) { index, rev ->
+                RevisionRow(rev = rev, index = index, viewerId = viewerId)
+            }
+        }
+    }
+
+    if (showCounter) {
+        CounterOfferSheet(
+            collab = collab,
+            busy = state.busy,
+            onDismiss = { showCounter = false },
+            onSend = { pct ->
+                showCounter = false
+                onCounter(pct)
+            },
+        )
+    }
+
+    confirm?.let { kind ->
+        ConfirmActionDialog(
+            kind = kind,
+            onDismiss = { confirm = null },
+            onConfirm = {
+                confirm = null
+                when (kind) {
+                    ConfirmKind.REJECT -> onReject()
+                    ConfirmKind.CANCEL -> onCancel()
+                    ConfirmKind.TERMINATE -> onTerminate()
+                }
+            },
+        )
+    }
+}
+
+/**
+ * PAR-04 - true when ANY deal action is valid for the current status / viewer (drives whether the actions card
+ * renders at all). Mirrors the iOS actionsCard guard: awaiting-response OR active OR (pending AND initiator).
+ */
+private fun hasAnyAction(collab: Collaboration, viewerId: String?): Boolean {
+    val awaiting = collab.awaitingResponse(viewerId)
+    val canCancel = collab.isPendingProposal && collab.isInitiator(viewerId)
+    return awaiting || collab.isActiveAgreement || canCancel
+}
+
+/**
+ * PAR-04 - the actions card. Per the iOS gating: the awaiting-response party gets Accept / Counter / Reject;
+ * the initiator of a still-pending request gets Cancel; either party on an active agreement gets Terminate.
+ * Every action disables while [busy].
+ */
+@Composable
+private fun ActionsCard(
+    collab: Collaboration,
+    viewerId: String?,
+    busy: Boolean,
+    onAccept: () -> Unit,
+    onCounter: () -> Unit,
+    onReject: () -> Unit,
+    onCancel: () -> Unit,
+    onTerminate: () -> Unit,
+) {
+    val awaiting = collab.awaitingResponse(viewerId)
+    val canCancel = collab.isPendingProposal && collab.isInitiator(viewerId)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag(CollaborationsTestTags.ACTIONS),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SectionHeading(stringResource(R.string.collaboration_actions_heading))
+        if (awaiting) {
+            TlButton(
+                text = stringResource(R.string.collaboration_action_accept),
+                onClick = onAccept,
+                enabled = !busy,
+                loading = busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(CollaborationsTestTags.ACTION_ACCEPT),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TlButton(
+                    text = stringResource(R.string.collaboration_action_counter),
+                    onClick = onCounter,
+                    variant = TlButtonVariant.Secondary,
+                    enabled = !busy,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag(CollaborationsTestTags.ACTION_COUNTER),
+                )
+                TlButton(
+                    text = stringResource(R.string.collaboration_action_reject),
+                    onClick = onReject,
+                    variant = TlButtonVariant.Secondary,
+                    enabled = !busy,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag(CollaborationsTestTags.ACTION_REJECT),
+                )
+            }
+        }
+        if (canCancel) {
+            TlButton(
+                text = stringResource(R.string.collaboration_action_cancel),
+                onClick = onCancel,
+                variant = TlButtonVariant.Secondary,
+                enabled = !busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(CollaborationsTestTags.ACTION_CANCEL),
+            )
+        }
+        if (collab.isActiveAgreement) {
+            TlButton(
+                text = stringResource(R.string.collaboration_action_terminate),
+                onClick = onTerminate,
+                variant = TlButtonVariant.Secondary,
+                enabled = !busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(CollaborationsTestTags.ACTION_TERMINATE),
+            )
+        }
+    }
+}
+
+/**
+ * PAR-04 - the counter-offer bottom sheet. The slider sets the INITIATOR's new percent (1..99); the recipient
+ * gets the remainder (mirrors iOS CounterOfferSheet). The initial value is the initiator's current share (or
+ * 50 when absent). Send is disabled while [busy].
+ */
+@Composable
+private fun CounterOfferSheet(
+    collab: Collaboration,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onSend: (Int) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    val initial = (collab.shareFor(collab.initiatorId) ?: DEFAULT_INITIATOR_PCT)
+        .coerceIn(MIN_SPLIT_PCT, MAX_SPLIT_PCT)
+    var pct by remember { mutableFloatStateOf(initial.toFloat()) }
+    val initiatorPct = pct.toInt().coerceIn(MIN_SPLIT_PCT, MAX_SPLIT_PCT)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag(CollaborationsTestTags.COUNTER_SHEET),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.collaboration_counter_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = stringResource(R.string.collaboration_counter_initiator, initiatorPct),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.collaboration_counter_recipient,
+                        Collaboration.FULL_SHARE_PERCENT - initiatorPct,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Slider(
+                value = pct,
+                onValueChange = { pct = it },
+                valueRange = MIN_SPLIT_PCT.toFloat()..MAX_SPLIT_PCT.toFloat(),
+                steps = (MAX_SPLIT_PCT - MIN_SPLIT_PCT) - 1,
+                enabled = !busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(CollaborationsTestTags.COUNTER_SLIDER),
+            )
+            TlButton(
+                text = stringResource(R.string.collaboration_counter_send),
+                onClick = { onSend(initiatorPct) },
+                enabled = !busy,
+                loading = busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(CollaborationsTestTags.COUNTER_SEND),
+            )
+        }
+    }
+}
+
+/** PAR-04 - the confirm dialog for a destructive action (reject / cancel / terminate). */
+@Composable
+private fun ConfirmActionDialog(
+    kind: ConfirmKind,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val (title, body, confirmLabel, confirmTag) = when (kind) {
+        ConfirmKind.REJECT -> ConfirmCopy(
+            stringResource(R.string.collaboration_confirm_reject_title),
+            stringResource(R.string.collaboration_confirm_reject_body),
+            stringResource(R.string.collaboration_action_reject),
+            CollaborationsTestTags.ACTION_REJECT,
+        )
+        ConfirmKind.CANCEL -> ConfirmCopy(
+            stringResource(R.string.collaboration_confirm_cancel_title),
+            stringResource(R.string.collaboration_confirm_cancel_body),
+            stringResource(R.string.collaboration_action_cancel),
+            CollaborationsTestTags.ACTION_CANCEL,
+        )
+        ConfirmKind.TERMINATE -> ConfirmCopy(
+            stringResource(R.string.collaboration_confirm_terminate_title),
+            stringResource(R.string.collaboration_confirm_terminate_body),
+            stringResource(R.string.collaboration_action_terminate),
+            CollaborationsTestTags.ACTION_TERMINATE,
+        )
+    }
+    AlertDialog(
+        modifier = Modifier.testTag(CollaborationsTestTags.CONFIRM_DIALOG),
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(body) },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                modifier = Modifier.testTag(confirmTag + "_confirm"),
+            ) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.collaboration_confirm_dismiss))
+            }
+        },
+    )
+}
+
+/** Small holder so the confirm dialog copy can be destructured. */
+private data class ConfirmCopy(
+    val title: String,
+    val body: String,
+    val confirmLabel: String,
+    val tag: String,
+)
+
+@Composable
+private fun RevisionRow(rev: CollabRevision, index: Int, viewerId: String?) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(CollaborationsTestTags.revision(index))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = stringResource(R.string.collaboration_revision_number, rev.revision),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            val when_ = relativeTime(rev.proposedAt)
+            if (when_.isNotBlank()) {
+                Text(
+                    text = when_,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        val proposedBy = rev.proposedBy
+        if (!proposedBy.isNullOrBlank()) {
+            val label = if (viewerId != null && proposedBy == viewerId) {
+                stringResource(R.string.collaboration_split_you, proposedBy)
+            } else {
+                proposedBy
+            }
+            Text(
+                text = stringResource(R.string.collaboration_revision_proposed_by, label),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        rev.shares.forEach { share ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(text = share.userId, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = stringResource(R.string.collaboration_percent, share.percent),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        HorizontalDivider()
     }
 }
 
@@ -370,6 +788,7 @@ private fun LabelValueRow(label: String, value: String) {
 @Composable
 fun statusLabel(collab: Collaboration): String = when (collab.statusEnum) {
     CollabStatus.PROPOSED -> stringResource(R.string.collaboration_status_proposed)
+    CollabStatus.NEGOTIATING -> stringResource(R.string.collaboration_status_negotiating)
     CollabStatus.ACTIVE -> stringResource(R.string.collaboration_status_active)
     CollabStatus.COMPLETED -> stringResource(R.string.collaboration_status_completed)
     CollabStatus.CANCELLED -> stringResource(R.string.collaboration_status_cancelled)
@@ -397,3 +816,8 @@ private fun relativeTime(epochSeconds: Long?, nowMs: Long = System.currentTimeMi
  * deferred with the rest of the per-distribution metadata).
  */
 private const val FALLBACK_CURRENCY = "USD"
+
+/** PAR-04 - the counter-offer split bounds (server: counter_split_pct is 1..99) + a neutral default. */
+private const val MIN_SPLIT_PCT = 1
+private const val MAX_SPLIT_PCT = 99
+private const val DEFAULT_INITIATOR_PCT = 50
