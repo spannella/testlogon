@@ -63,3 +63,26 @@ data class StoryViewRespDto(
     @Json(name = "ok") val ok: Boolean = true,
     @Json(name = "already_viewed") val alreadyViewed: Boolean = false,
 )
+
+// ---- POST /ui/stories -> create a story ----
+// PAR-01 — wire DTOs for creating a story. IMAGE-first (video out of scope for v1); optional overlay
+// text + a tap-through link. Nullable optionals so Moshi OMITS them from the JSON body when null,
+// matching the backend contract (omit null optionals).
+
+@JsonClass(generateAdapter = true)
+data class CreateStoryReqDto(
+    @Json(name = "media_type") val mediaType: String,
+    @Json(name = "media_url") val mediaUrl: String,
+    @Json(name = "text_overlay") val textOverlay: String? = null,
+    @Json(name = "link_url") val linkUrl: String? = null,
+    @Json(name = "link_label") val linkLabel: String? = null,
+    @Json(name = "duration_seconds") val durationSeconds: Double? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CreateStoryRespDto(
+    @Json(name = "story_id") val storyId: String,
+    @Json(name = "expires_at") val expiresAt: Long = 0,
+    @Json(name = "media_url") val mediaUrl: String = "",
+    @Json(name = "created_at") val createdAt: String? = null,
+)

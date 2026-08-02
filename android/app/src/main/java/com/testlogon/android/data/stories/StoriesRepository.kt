@@ -53,6 +53,19 @@ interface StoriesRepository {
 
     /** Optimistically mark an author's ring "seen" so the tray restyles immediately on viewer return. */
     fun markAuthorSeen(userId: String)
+
+    /**
+     * PAR-01 — create a story for the current user (IMAGE-first for v1). On success the tray is
+     * refreshed so the author's own ring appears. When the backend answers 429 (per-day story limit
+     * reached) this returns [ApiResult.Failure] whose [ApiError.status] is 429, so the caller can show a
+     * friendly limit message; other failures fold into the usual variants.
+     */
+    suspend fun createStory(
+        mediaUrl: String,
+        overlay: String?,
+        linkUrl: String?,
+        linkLabel: String?,
+    ): ApiResult<Unit>
 }
 
 @Singleton
@@ -125,6 +138,28 @@ class StoriesRepositoryImpl @Inject constructor(
 
     override fun markAuthorSeen(userId: String) {
         if (seenAuthorIds.add(userId)) viewedVersion.update { it + 1 }
+    }
+
+    override suspend fun createStory(
+        mediaUrl: String,
+        overlay: String?,
+        linkUrl: String?,
+        linkLabel: String?,
+    ): ApiResult<Unit> = withContext(io) {
+        val result = call {
+            api.createStory(
+                CreateStoryReqDto(
+                    mediaType = "image",
+                    mediaUrl = mediaUrl,
+                    textOverlay = overlay?.trim()?.ifBlank { null },
+                    linkUrl = linkUrl?.trim()?.ifBlank { null },
+                    linkLabel = linkLabel?.trim()?.ifBlank { null },
+                ),
+            )
+        }.map { }
+        // On success, refresh the tray so the author's own ring appears immediately (web parity).
+        if (result is ApiResult.Success) refreshTray()
+        result
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {

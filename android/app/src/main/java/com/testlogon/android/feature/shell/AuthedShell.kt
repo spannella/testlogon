@@ -157,6 +157,10 @@ fun AuthedShellScreen(
                     onOpenStory = { userId ->
                         onOpenRoute(com.testlogon.android.navigation.StoryViewerDest.build(userId))
                     },
+                    // PAR-01 — open the create-story screen from the "Your story" tray tile.
+                    onCreateStory = {
+                        onOpenRoute(com.testlogon.android.navigation.CreateStoryDest.build())
+                    },
                     // ADV2-209 (F2): route a sponsored-unit CTA tap to product/cart/subscribe/profile.
                     onCtaNavigate = { dest -> tabNav.navigateCta(dest) },
                 )

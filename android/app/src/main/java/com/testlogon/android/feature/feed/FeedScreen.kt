@@ -94,6 +94,7 @@ fun FeedRoute(
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onOpenStory: (userId: String) -> Unit = {},
+    onCreateStory: () -> Unit = {},
     onCtaNavigate: (CtaDestination) -> Unit = {},
     viewModel: FeedViewModel = hiltViewModel(),
     paywallViewModel: PaywallViewModel = hiltViewModel(),
@@ -211,6 +212,7 @@ fun FeedRoute(
         unlockStates = unlockStates,
         storyTray = storyTray,
         onOpenStory = onOpenStory,
+        onCreateStory = onCreateStory,
         onRefresh = { items.refresh() },
         onPostClick = { post ->
             // ADV2-409 (F4): opening a creator-authored paid_partnership post fires the advertiser CLICK
@@ -294,6 +296,7 @@ fun FeedScreen(
     storyTray: com.testlogon.android.core.model.ApiResult<List<com.testlogon.android.data.stories.StoryBarItem>> =
         com.testlogon.android.core.model.ApiResult.Success(emptyList()),
     onOpenStory: (userId: String) -> Unit = {},
+    onCreateStory: () -> Unit = {},
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
@@ -373,6 +376,7 @@ fun FeedScreen(
                 com.testlogon.android.feature.stories.StoriesTray(
                     state = storyTray,
                     onRingClick = onOpenStory,
+                    onCreateClick = onCreateStory,
                 )
                 Box(Modifier.fillMaxSize()) {
                 when {

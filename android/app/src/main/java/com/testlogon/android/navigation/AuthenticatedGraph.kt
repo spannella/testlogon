@@ -192,6 +192,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         publicClipDestination(navController)
         // AND-199/AND-200: full-screen story viewer (opened from the feed stories tray).
         storyViewerDestination(navController)
+        // PAR-01: create-a-story screen (opened from the feed stories tray Your-story tile).
+        createStoryDestination(navController)
         // AND-201: published video gallery browse grid (tiles open the shared video detail route).
         galleryDestination(navController)
         // Newsfeed post compose (create a post).

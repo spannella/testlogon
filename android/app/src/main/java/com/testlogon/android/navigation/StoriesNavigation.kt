@@ -6,6 +6,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.testlogon.android.feature.stories.CreateStoryRoute
 import com.testlogon.android.feature.stories.StoryViewerRoute
 import com.testlogon.android.feature.stories.StoryViewerViewModel
 
@@ -37,5 +38,22 @@ fun NavGraphBuilder.storyViewerDestination(navController: NavHostController) {
                 }
             },
         )
+    }
+}
+
+/**
+ * PAR-01 — create-a-story route `stories/create`, launched from the "Your story" tray tile. Pops back on
+ * a successful post (the tray then refreshes so the author's own ring appears).
+ */
+data object CreateStoryDest {
+    const val ROUTE = "stories/create"
+
+    fun build(): String = ROUTE
+}
+
+/** PAR-01 — registers the create-story destination. Back + a successful post both pop to the feed. */
+fun NavGraphBuilder.createStoryDestination(navController: NavHostController) {
+    composable(route = CreateStoryDest.ROUTE) {
+        CreateStoryRoute(onBack = { navController.popBackStack() })
     }
 }

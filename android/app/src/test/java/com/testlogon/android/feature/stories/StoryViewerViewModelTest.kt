@@ -221,6 +221,12 @@ class FakeStoriesRepository(
     }
     override fun isViewed(storyId: String) = storyId in recordedViews
     override fun markAuthorSeen(userId: String) { seenAuthors += userId }
+    override suspend fun createStory(
+        mediaUrl: String,
+        overlay: String?,
+        linkUrl: String?,
+        linkLabel: String?,
+    ): ApiResult<Unit> = ApiResult.Success(Unit)
 }
 
 class FakeStoryReplyRepository(

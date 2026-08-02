@@ -152,4 +152,10 @@ private class NavFakeRepository(
 
     override fun isViewed(storyId: String) = storyId in recordedViews
     override fun markAuthorSeen(userId: String) {}
+    override suspend fun createStory(
+        mediaUrl: String,
+        overlay: String?,
+        linkUrl: String?,
+        linkLabel: String?,
+    ): com.testlogon.android.core.model.ApiResult<Unit> = com.testlogon.android.core.model.ApiResult.Success(Unit)
 }

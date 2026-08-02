@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,31 +42,79 @@ import com.testlogon.android.data.stories.StoryBarItem
 object StoriesTrayTestTags {
     const val TRAY = "stories_tray"
     const val RING = "story_ring"
+    const val CREATE = "story_create_tile"
 }
 
 /**
  * AND-199 — horizontal tray of per-author story rings rendered above the feed. Unseen authors get a
  * vivid gradient ring; seen authors a muted ring (server `has_unseen` OR-merged with the local viewed
- * set in the repository). An empty/failed tray collapses to height 0 (stories are non-critical).
- * Ordering follows server order (web parity — no client sort).
+ * set in the repository). Ordering follows server order (web parity — no client sort).
+ *
+ * PAR-01 — the tray always leads with a "＋ Your story" tile (a plus variant of the story ring) that
+ * launches the create-story screen. The tile is shown even when there are no active stories, so the
+ * tray no longer collapses to 0 height unconditionally.
  */
 @Composable
 fun StoriesTray(
     state: ApiResult<List<StoryBarItem>>,
     onRingClick: (userId: String) -> Unit,
+    onCreateClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val entries = (state as? ApiResult.Success)?.data.orEmpty()
-    if (entries.isEmpty()) return // collapse to 0 height (FR-9)
 
     LazyRow(
         modifier = modifier.testTag(StoriesTrayTestTags.TRAY),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item(key = "__create__") {
+            CreateStoryTile(onClick = onCreateClick)
+        }
         items(items = entries, key = { it.userId }) { entry ->
             StoryRing(entry = entry, onClick = { onRingClick(entry.userId) })
         }
+    }
+}
+
+/** PAR-01 — the leading "＋ Your story" tile: a plus-badged ring that opens the create-story screen. */
+@Composable
+fun CreateStoryTile(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cd = stringResource(R.string.create_story_tray_cd)
+    Column(
+        modifier = modifier
+            .width(72.dp)
+            .testTag(StoriesTrayTestTags.CREATE)
+            .clickable(onClick = onClick)
+            .semantics { role = Role.Button; contentDescription = cd },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant, shape = CircleShape)
+                .padding(4.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Text(
+            text = stringResource(R.string.create_story_tray_cta),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
 }
 
