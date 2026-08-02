@@ -58,6 +58,7 @@ fun OwnProfileRoute(
     onOpenMfaDevices: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenMyPosts: () -> Unit = {},
+    onOpenHighlights: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: OwnProfileViewModel = hiltViewModel(),
     mediaViewModel: ProfileMediaViewModel = hiltViewModel(),
@@ -103,6 +104,7 @@ fun OwnProfileRoute(
         onOpenMfaDevices = onOpenMfaDevices,
         onOpenSettings = onOpenSettings,
         onOpenMyPosts = onOpenMyPosts,
+                        onOpenHighlights = onOpenHighlights,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -120,6 +122,7 @@ fun OwnProfileScreen(
     onOpenMfaDevices: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenMyPosts: () -> Unit = {},
+    onOpenHighlights: () -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     accountActions: @Composable () -> Unit = {
@@ -160,6 +163,7 @@ fun OwnProfileScreen(
                         onEdit = onEdit,
                         onChangePhoto = onChangePhoto,
                         onOpenMyPosts = onOpenMyPosts,
+                        onOpenHighlights = onOpenHighlights,
                         accountActions = accountActions,
                     )
             }
@@ -176,6 +180,7 @@ private fun OwnProfileContent(
     onEdit: () -> Unit,
     onChangePhoto: () -> Unit,
     onOpenMyPosts: () -> Unit = {},
+    onOpenHighlights: () -> Unit = {},
     accountActions: @Composable () -> Unit,
 ) {
     Column(
@@ -233,6 +238,13 @@ private fun OwnProfileContent(
                 onClick = onOpenMyPosts,
                 variant = TlButtonVariant.Secondary,
                 modifier = Modifier.fillMaxWidth().testTag("own_my_posts"),
+            )
+            // PAR-16 -- entry point to the user's own story highlights (create/pin).
+            TlButton(
+                text = stringResource(R.string.highlights_title),
+                onClick = onOpenHighlights,
+                variant = TlButtonVariant.Secondary,
+                modifier = Modifier.fillMaxWidth().testTag("own_highlights"),
             )
             TlButton(
                 text = stringResource(R.string.profile_change_photo),

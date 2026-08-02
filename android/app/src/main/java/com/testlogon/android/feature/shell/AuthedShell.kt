@@ -213,6 +213,9 @@ fun AuthedShellScreen(
                     onOpenMyPosts = {
                         onOpenRoute(com.testlogon.android.navigation.MyPostsDest.ROUTE)
                     },
+                    onOpenHighlights = {
+                        onOpenRoute(com.testlogon.android.navigation.HighlightsDest.buildForSelf())
+                    },
                 )
             }
             composable(AuthedTab.MORE.route) {

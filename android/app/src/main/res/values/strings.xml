@@ -5198,4 +5198,18 @@
     <string name="subscribe_add_card_action">Add a payment method</string>
     <string name="profile_public_subscribe">Subscribe</string>
     <string name="profile_public_tip_creator">Tip this creator</string>
+    <!-- PAR-16 Story Highlights -->
+    <string name="highlights_title">Highlights</string>
+    <string name="highlights_back">Back</string>
+    <string name="highlights_new_group">New highlight</string>
+    <string name="highlights_create">Create</string>
+    <string name="highlights_cancel">Cancel</string>
+    <string name="highlights_title_label">Title</string>
+    <string name="highlights_cover_label">Cover image URL (optional)</string>
+    <string name="highlights_delete_group">Delete highlight</string>
+    <string name="highlights_add_to">Add to \"%1$s\"</string>
+    <string name="highlights_story_count">%1$d stories</string>
+    <string name="highlights_no_stories">You have no active stories to add.</string>
+    <string name="highlights_empty_owner">No highlights yet. Feature your best stories on your profile.</string>
+    <string name="highlights_empty_viewer">No highlights yet.</string>
 </resources>

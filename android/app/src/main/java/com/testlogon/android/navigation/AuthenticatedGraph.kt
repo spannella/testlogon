@@ -194,6 +194,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         storyViewerDestination(navController)
         // PAR-01: create-a-story screen (opened from the feed stories tray Your-story tile).
         createStoryDestination(navController)
+        // PAR-16: Story Highlights (opened from own/public profile).
+        highlightsDestination(navController)
         // AND-201: published video gallery browse grid (tiles open the shared video detail route).
         galleryDestination(navController)
         // Newsfeed post compose (create a post).
