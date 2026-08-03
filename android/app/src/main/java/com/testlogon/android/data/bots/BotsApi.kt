@@ -41,6 +41,16 @@ interface BotsApi {
     @DELETE("ui/bots/{botId}")
     suspend fun deleteBot(@Path("botId") botId: String): OkDto
 
+    /**
+     * PAR-32 - sends a test message AS the bot into a conversation (POST /ui/bots/{bot_id}/send).
+     * 404 if the bot is not found/owned, 409 if the bot is not active, 422 on validation.
+     */
+    @POST("ui/bots/{botId}/send")
+    suspend fun sendTest(
+        @Path("botId") botId: String,
+        @Body body: BotSendTestReqDto,
+    ): BotSendTestRespDto
+
     // ---- Auto-reply rules ----
 
     /** A bot's auto-reply rules. */
@@ -127,6 +137,20 @@ data class BotCreateReqDto(
 @JsonClass(generateAdapter = true)
 data class BotStatusReqDto(
     val status: String,
+)
+
+// ---- Send test (PAR-32) ----
+
+@JsonClass(generateAdapter = true)
+data class BotSendTestReqDto(
+    @Json(name = "conversation_id") val conversationId: String,
+    val text: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class BotSendTestRespDto(
+    @Json(name = "message_id") val messageId: String = "",
+    @Json(name = "conversation_id") val conversationId: String = "",
 )
 
 // ---- Auto-reply DTOs ----

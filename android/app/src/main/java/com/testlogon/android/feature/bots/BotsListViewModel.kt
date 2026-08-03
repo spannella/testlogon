@@ -120,6 +120,53 @@ class BotsListViewModel @Inject constructor(
         }
     }
 
+    // ---- Send test (PAR-32) ----
+
+    fun onOpenSendTest(botId: String) {
+        val bot = _uiState.value.bots.firstOrNull { it.id == botId } ?: return
+        _uiState.update { it.copy(sendTest = SendTestFormState(botId = bot.id, botName = bot.name)) }
+    }
+
+    fun onDismissSendTest() {
+        if (_uiState.value.sendTest?.isSubmitting == true) return
+        _uiState.update { it.copy(sendTest = null) }
+    }
+
+    fun onSendTestConversationChange(value: String) {
+        _uiState.update { st -> st.copy(sendTest = st.sendTest?.copy(conversationId = value)) }
+    }
+
+    fun onSendTestTextChange(value: String) {
+        _uiState.update { st -> st.copy(sendTest = st.sendTest?.copy(text = value)) }
+    }
+
+    fun onSubmitSendTest() {
+        val form = _uiState.value.sendTest ?: return
+        if (!form.canSubmit) return
+        _uiState.update { st -> st.copy(sendTest = st.sendTest?.copy(isSubmitting = true)) }
+        viewModelScope.launch {
+            when (val result = repository.sendTest(form.botId, form.conversationId, form.text)) {
+                is ApiResult.Success -> {
+                    _uiState.update { st -> st.copy(sendTest = null) }
+                    _effects.send(BotsListEffect.ShowMessage(R.string.bots_send_test_success))
+                }
+                is ApiResult.Failure -> {
+                    _uiState.update { st -> st.copy(sendTest = st.sendTest?.copy(isSubmitting = false)) }
+                    val msg = if (result.error.status == HTTP_CONFLICT) {
+                        R.string.bots_send_test_inactive
+                    } else {
+                        R.string.bots_send_test_failed
+                    }
+                    _effects.send(BotsListEffect.ShowMessage(msg))
+                }
+                is ApiResult.NetworkError -> {
+                    _uiState.update { st -> st.copy(sendTest = st.sendTest?.copy(isSubmitting = false)) }
+                    _effects.send(BotsListEffect.ShowMessage(R.string.bots_send_test_failed))
+                }
+            }
+        }
+    }
+
     private suspend fun handleMutation(
         result: ApiResult<Unit>,
         successMsg: Int,
@@ -216,6 +263,7 @@ class BotsListViewModel @Inject constructor(
 
     private companion object {
         private const val HTTP_UNAUTHORIZED = 401
+        private const val HTTP_CONFLICT = 409
         private const val OFFLINE_FALLBACK = "Could not reach the server. Pull down to retry."
     }
 }

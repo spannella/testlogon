@@ -19,6 +19,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.AddShoppingCart
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,7 +55,7 @@ import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.wishlist.WishlistItem
 import com.testlogon.android.feature.catalog.formatPrice
 
-/** ECOM — stable test tags for the Wishlist screen. */
+/** ECOM - stable test tags for the Wishlist screen. */
 object WishlistTestTags {
     const val SCREEN = "wishlist_screen"
     const val LIST = "wishlist_list"
@@ -61,11 +63,14 @@ object WishlistTestTags {
     const val EMPTY = "wishlist_empty"
     const val ERROR = "wishlist_error"
     const val REMOVE = "wishlist_remove"
+
+    // PAR-22 - move/add-to-cart affordance per row.
+    const val MOVE_TO_CART = "wishlist_move_to_cart"
 }
 
 /**
- * ECOM — Wishlist route (SHOP hub entry). Lists the user's saved catalog items; a row taps through to
- * product detail, the heart removes it.
+ * ECOM - Wishlist route (SHOP hub entry). Lists the user's saved catalog items; a row taps through to
+ * product detail, the heart removes it, the cart icon moves it to the cart (PAR-22).
  */
 @Composable
 fun WishlistRoute(
@@ -75,21 +80,32 @@ fun WishlistRoute(
     viewModel: WishlistViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val movingKeys by viewModel.movingKeys.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
                 is WishlistEvent.RemoveFailed -> snackbarHostState.showSnackbar(event.message)
+                is WishlistEvent.MoveToCartFailed -> snackbarHostState.showSnackbar(event.message)
+                is WishlistEvent.MovedToCart -> {
+                    val name = event.itemName ?: context.getString(R.string.catalog_item_title)
+                    snackbarHostState.showSnackbar(
+                        context.getString(R.string.wishlist_moved_to_cart, name),
+                    )
+                }
             }
         }
     }
 
     WishlistScreen(
         state = state,
+        movingKeys = movingKeys,
         snackbarHostState = snackbarHostState,
         onOpenItem = onOpenItem,
         onRemove = viewModel::remove,
+        onMoveToCart = viewModel::moveToCart,
         onRetry = viewModel::refresh,
         onBack = onBack,
         modifier = modifier,
@@ -105,6 +121,8 @@ fun WishlistScreen(
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    movingKeys: Set<String> = emptySet(),
+    onMoveToCart: (WishlistItem) -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(WishlistTestTags.SCREEN),
@@ -150,8 +168,10 @@ fun WishlistScreen(
                             items(state.items, key = { it.key }) { item ->
                                 WishlistRow(
                                     item = item,
+                                    isMoving = item.key in movingKeys,
                                     onClick = { onOpenItem(item.categoryId, item.itemId) },
                                     onRemove = { onRemove(item) },
+                                    onMoveToCart = { onMoveToCart(item) },
                                 )
                             }
                         }
@@ -164,8 +184,10 @@ fun WishlistScreen(
 @Composable
 private fun WishlistRow(
     item: WishlistItem,
+    isMoving: Boolean,
     onClick: () -> Unit,
     onRemove: () -> Unit,
+    onMoveToCart: () -> Unit,
 ) {
     Row(
         Modifier
@@ -212,6 +234,26 @@ private fun WishlistRow(
                     text = stringResource(R.string.wishlist_unavailable),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+        // PAR-22 - move/add-to-cart. Disabled when the item has no price, is unavailable, or a move is
+        // already in flight for this row. Shows a spinner while moving.
+        val moveCd = stringResource(R.string.wishlist_move_to_cart_action)
+        val canMove = item.priceCents != null && item.available && !isMoving
+        IconButton(
+            onClick = onMoveToCart,
+            enabled = canMove,
+            modifier = Modifier
+                .testTag(WishlistTestTags.MOVE_TO_CART)
+                .semantics { contentDescription = moveCd },
+        ) {
+            if (isMoving) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+            } else {
+                Icon(
+                    Icons.Outlined.AddShoppingCart,
+                    contentDescription = moveCd,
                 )
             }
         }

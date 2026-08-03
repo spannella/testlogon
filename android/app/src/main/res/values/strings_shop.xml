@@ -25,6 +25,8 @@
     <string name="wishlist_unavailable">No longer available</string>
     <string name="wishlist_empty_title">Your wishlist is empty</string>
     <string name="wishlist_empty_body">Tap the heart on any product to save it here.</string>
+    <string name="wishlist_move_to_cart_action">Move to cart</string>
+    <string name="wishlist_moved_to_cart">%1$s moved to your cart</string>
 
     <!-- Seller store: More entries -->
     <string name="more_entry_seller_store">My store</string>

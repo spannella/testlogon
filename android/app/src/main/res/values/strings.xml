@@ -94,6 +94,8 @@
     <string name="profile_avatar_cd">Your profile photo</string>
     <string name="profile_edit_action">Edit profile</string>
     <string name="profile_change_photo">Change photo</string>
+    <string name="profile_change_cover">Change cover</string>
+    <string name="profile_cover_cd">Your cover photo</string>
     <string name="profile_email_label">Email</string>
     <string name="profile_phone_label">Phone</string>
     <string name="profile_languages_label">Languages</string>
@@ -4599,6 +4601,15 @@
     <string name="bots_message_count">%1$d messages</string>
     <string name="bots_action_auto_reply">Auto-reply</string>
     <string name="bots_action_templates">Templates</string>
+    <string name="bots_action_send_test">Send test</string>
+    <string name="bots_send_test_title">Send test as %1$s</string>
+    <string name="bots_send_test_body">Post a test message as this bot into a conversation.</string>
+    <string name="bots_send_test_convo_label">Conversation ID</string>
+    <string name="bots_send_test_text_label">Message</string>
+    <string name="bots_send_test_action">Send</string>
+    <string name="bots_send_test_success">Test message sent</string>
+    <string name="bots_send_test_failed">Could not send the test message</string>
+    <string name="bots_send_test_inactive">Activate the bot before sending a test message</string>
     <string name="bots_action_pause">Pause</string>
     <string name="bots_action_enable">Enable</string>
     <string name="bots_action_delete">Delete</string>

@@ -75,7 +75,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         }
         // AND-091: account activity feed (paged).
         composable(MainDest.Activity.route) {
-            ActivityFeedRoute(onBack = { navController.popBackStack() })
+            ActivityFeedRoute(
+                onBack = { navController.popBackStack() },
+                // PAR-33: rows deep-link to post detail / public profile derived from the event ids.
+                onNavigate = { route -> navController.navigate(route) { launchSingleTop = true } },
+            )
         }
         // AND-120..124: messaging (conversation list + thread). First M3 two-user feature.
         messagingGraph(navController)
