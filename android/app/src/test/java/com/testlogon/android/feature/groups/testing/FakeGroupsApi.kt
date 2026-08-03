@@ -6,6 +6,7 @@ import com.testlogon.android.core.network.groups.GroupCampaignListResponse
 import com.testlogon.android.core.network.groups.GroupCampaignStatsDto
 import com.testlogon.android.core.network.groups.GroupCreateCampaignIn
 import com.testlogon.android.core.network.groups.GroupCreateIn
+import com.testlogon.android.core.network.groups.GroupDiscoverResponse
 import com.testlogon.android.core.network.groups.GroupCreateFundraiserIn
 import com.testlogon.android.core.network.groups.GroupFundraiserDto
 import com.testlogon.android.core.network.groups.GroupCommentCreateIn
@@ -52,6 +53,7 @@ class FakeGroupsApi(
     var feedPostDetail: GroupFeedPostDto = GroupFeedPostDto(postId = "gp_1"),
     var commentsEnvelope: GroupCommentListResponse = GroupCommentListResponse(),
     var commentDetail: GroupCommentDto = GroupCommentDto(commentId = "gc_1", userId = "usr_1"),
+    var discoverEnvelope: GroupDiscoverResponse = GroupDiscoverResponse(),
     var throwHttp: Int? = null,
 ) : GroupsApi {
 
@@ -168,6 +170,21 @@ class FakeGroupsApi(
 
     override suspend fun leave(groupId: String): Response<Unit> {
         leaveCalls += groupId
+        maybeThrow()
+        return emptyOk()
+    }
+
+    val discoverQueries = mutableListOf<String?>()
+    val joinCalls = mutableListOf<String>()
+
+    override suspend fun discover(query: String?, limit: Int): GroupDiscoverResponse {
+        discoverQueries += query
+        maybeThrow()
+        return discoverEnvelope
+    }
+
+    override suspend fun join(groupId: String): Response<Unit> {
+        joinCalls += groupId
         maybeThrow()
         return emptyOk()
     }

@@ -25,10 +25,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +53,7 @@ import kotlinx.coroutines.flow.collectLatest
 object GroupDetailTestTags {
     const val SCREEN = "group_detail_screen"
     const val LEAVE = "group_leave"
+    const val JOIN = "group_join"
     const val FEED = "group_detail_feed"
     const val MEMBERS = "group_detail_members"
     const val TREASURY = "group_detail_treasury"
@@ -72,18 +76,22 @@ fun GroupDetailRoute(
     viewModel: GroupDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
     androidx.compose.runtime.LaunchedEffect(viewModel) {
         viewModel.effects.collectLatest { effect ->
             when (effect) {
                 is GroupDetailEffect.LeftGroup -> onLeft(effect.groupId)
+                is GroupDetailEffect.ShowMessage -> snackbarHostState.showSnackbar(effect.message)
             }
         }
     }
     GroupDetailScreen(
         state = state,
+        snackbarHostState = snackbarHostState,
         onBack = onBack,
         onRetry = viewModel::onRetry,
         onLeave = viewModel::leave,
+        onJoin = viewModel::join,
         onOpenFeed = { onOpenFeed(viewModel.groupId) },
         onOpenMembers = { onOpenMembers(viewModel.groupId) },
         onOpenTreasury = { onOpenTreasury(viewModel.groupId) },
@@ -97,9 +105,11 @@ fun GroupDetailRoute(
 @Composable
 fun GroupDetailScreen(
     state: GroupDetailUiState,
+    snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onLeave: () -> Unit,
+    onJoin: () -> Unit,
     onOpenFeed: () -> Unit,
     onOpenMembers: () -> Unit,
     onOpenTreasury: () -> Unit,
@@ -110,6 +120,7 @@ fun GroupDetailScreen(
 ) {
     Scaffold(
         modifier = modifier.testTag(GroupDetailTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.groups_detail_title)) },
@@ -139,6 +150,7 @@ fun GroupDetailScreen(
                 GroupDetailContent(
                     state = state,
                     onLeave = onLeave,
+                    onJoin = onJoin,
                     onOpenFeed = onOpenFeed,
                     onOpenMembers = onOpenMembers,
                     onOpenTreasury = onOpenTreasury,
@@ -155,6 +167,7 @@ fun GroupDetailScreen(
 private fun GroupDetailContent(
     state: GroupDetailUiState.Content,
     onLeave: () -> Unit,
+    onJoin: () -> Unit,
     onOpenFeed: () -> Unit,
     onOpenMembers: () -> Unit,
     onOpenTreasury: () -> Unit,
@@ -242,6 +255,21 @@ private fun GroupDetailContent(
                 .testTag(GroupDetailTestTags.SETTINGS),
         ) {
             Text(text = stringResource(R.string.group_settings_open))
+        }
+        if (state.canJoin) {
+            Button(
+                onClick = onJoin,
+                enabled = !state.isJoining,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(GroupDetailTestTags.JOIN),
+            ) {
+                if (state.isJoining) {
+                    CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                } else {
+                    Text(text = stringResource(R.string.groups_join))
+                }
+            }
         }
         if (state.canLeave) {
             Button(

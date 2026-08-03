@@ -75,3 +75,29 @@ data class WebhookEventTypeDto(
     @Json(name = "type") val type: String,
     @Json(name = "description") val description: String? = null,
 )
+
+/**
+ * PAR-26 - result of POST ui/webhooks/{endpointId}/test (a synthetic delivery attempt).
+ *
+ * The backend records a delivery attempt and reports the outcome WITHOUT throwing on an unreachable host: a
+ * delivery to a reserved / unreachable host returns HTTP 200 with `status:"failed"` (response_code / error
+ * populated), NOT an HTTP error - so the caller surfaces `status` == "failed" as a failed delivery, not a
+ * transport error. All fields except `status` are nullable (response_code is null on a failed attempt).
+ */
+data class WebhookTestResultDto(
+    @Json(name = "delivery_id") val deliveryId: String? = null,
+    @Json(name = "status") val status: String,
+    @Json(name = "response_code") val responseCode: Int? = null,
+    @Json(name = "response_body") val responseBody: String? = null,
+    @Json(name = "error") val error: String? = null,
+    @Json(name = "duration_ms") val durationMs: Long? = null,
+)
+
+/**
+ * PAR-26 - result of POST ui/webhooks/{endpointId}/rotate-secret. `secret` is the NEW plaintext signing
+ * secret, returned exactly ONCE (it is stored hashed server-side and is NEVER re-fetchable). It is surfaced
+ * for a one-time in-session reveal and is NEVER cached / persisted / logged (mirrors the create-secret rule).
+ */
+data class WebhookRotateSecretDto(
+    @Json(name = "secret") val secret: String,
+)

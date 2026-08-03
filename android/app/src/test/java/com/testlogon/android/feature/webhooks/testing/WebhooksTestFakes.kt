@@ -4,10 +4,13 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.webhooks.Webhook
 import com.testlogon.android.core.model.webhooks.WebhookEventType
+import com.testlogon.android.core.model.webhooks.WebhookTestResult
 import com.testlogon.android.core.network.webhooks.CreateWebhookRequest
 import com.testlogon.android.core.network.webhooks.EventTypesDto
 import com.testlogon.android.core.network.webhooks.WebhookEndpointDto
 import com.testlogon.android.core.network.webhooks.WebhookEventTypeDto
+import com.testlogon.android.core.network.webhooks.WebhookRotateSecretDto
+import com.testlogon.android.core.network.webhooks.WebhookTestResultDto
 import com.testlogon.android.core.network.webhooks.WebhooksApi
 import com.testlogon.android.feature.webhooks.data.WebhooksRepository
 import okhttp3.MediaType.Companion.toMediaType
@@ -28,6 +31,8 @@ class FakeWebhooksApi(
     var get: () -> WebhookEndpointDto = { endpointDto("wh_1") },
     var create: () -> WebhookEndpointDto = { endpointDto("wh_new") },
     var eventTypes: () -> EventTypesDto = { EventTypesDto(eventTypes = emptyList()) },
+    var test: () -> WebhookTestResultDto = { WebhookTestResultDto(status = "success", responseCode = 200) },
+    var rotateSecret: () -> WebhookRotateSecretDto = { WebhookRotateSecretDto(secret = "whsec_rotated") },
 ) : WebhooksApi {
 
     var listCallCount = 0
@@ -53,6 +58,19 @@ class FakeWebhooksApi(
     override suspend fun eventTypes(): EventTypesDto {
         eventTypesCallCount++
         return eventTypes.invoke()
+    }
+
+    val testIds = mutableListOf<String>()
+    val rotateIds = mutableListOf<String>()
+
+    override suspend fun test(endpointId: String): WebhookTestResultDto {
+        testIds += endpointId
+        return test.invoke()
+    }
+
+    override suspend fun rotateSecret(endpointId: String): WebhookRotateSecretDto {
+        rotateIds += endpointId
+        return rotateSecret.invoke()
     }
 
     companion object {
@@ -106,6 +124,8 @@ class FakeWebhooksRepo(
     var getResult: ApiResult<Webhook> = ApiResult.Success(webhook("wh_1")),
     var createResult: ApiResult<Webhook> = ApiResult.Success(webhook("wh_new")),
     var eventTypesResult: ApiResult<List<WebhookEventType>> = ApiResult.Success(emptyList()),
+    var testResult: ApiResult<WebhookTestResult> = ApiResult.Success(WebhookTestResult(status = "success", responseCode = 200)),
+    var rotateResult: ApiResult<String> = ApiResult.Success("whsec_rotated"),
 ) : WebhooksRepository {
 
     var listCallCount = 0
@@ -133,6 +153,19 @@ class FakeWebhooksRepo(
     override suspend fun eventTypes(): ApiResult<List<WebhookEventType>> {
         eventTypesCallCount++
         return eventTypesResult
+    }
+
+    val testIds = mutableListOf<String>()
+    val rotateIds = mutableListOf<String>()
+
+    override suspend fun test(id: String): ApiResult<WebhookTestResult> {
+        testIds += id
+        return testResult
+    }
+
+    override suspend fun rotateSecret(id: String): ApiResult<String> {
+        rotateIds += id
+        return rotateResult
     }
 
     companion object {

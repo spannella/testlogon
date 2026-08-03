@@ -20,13 +20,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -39,6 +43,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,7 +65,7 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.core.ui.state.OfflineBanner
 
-/** AND-355 - stable testTags for the social-groups list screen. */
+/** AND-355 / PAR-10 - stable testTags for the social-groups list screen. */
 object GroupsListTestTags {
     const val SCREEN = "groups_list_screen"
     const val ROW_PREFIX = "group_row_"
@@ -69,6 +74,12 @@ object GroupsListTestTags {
     const val CREATE_NAME = "groups_create_name"
     const val CREATE_DESCRIPTION = "groups_create_description"
     const val CREATE_SUBMIT = "groups_create_submit"
+
+    // PAR-10 - discovery tabs + search + per-row join.
+    const val TAB_MINE = "groups_tab_mine"
+    const val TAB_DISCOVER = "groups_tab_discover"
+    const val SEARCH = "groups_discover_search"
+    const val JOIN_PREFIX = "group_join_"
 }
 
 /** AND-355 - route-level groups list entry (reachable from the More hub). */
@@ -80,15 +91,27 @@ fun GroupsListRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val createState by viewModel.createState.collectAsStateWithLifecycle()
+    val tab by viewModel.tab.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(viewModel) {
         viewModel.created.collectLatest { groupId -> onOpenGroup(groupId) }
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.snackbar.collectLatest { message -> snackbarHostState.showSnackbar(message) }
     }
     GroupsListScreen(
         state = state,
         createState = createState,
+        tab = tab,
+        searchQuery = searchQuery,
+        snackbarHostState = snackbarHostState,
         onBack = onBack,
         onRetry = viewModel::load,
         onRefresh = viewModel::refresh,
+        onSelectTab = viewModel::selectTab,
+        onSearchChange = viewModel::onSearchChange,
+        onJoin = viewModel::join,
         onOpenGroup = onOpenGroup,
         onOpenCreate = viewModel::openCreate,
         onDismissCreate = viewModel::dismissCreate,
@@ -99,14 +122,20 @@ fun GroupsListRoute(
     )
 }
 
-/** AND-355 - stateless social-groups list screen (discovery). */
+/** AND-355 / PAR-10 - stateless social-groups list screen (My groups + public discovery). */
 @Composable
 fun GroupsListScreen(
     state: GroupsListUiState,
     createState: CreateGroupFormState,
+    tab: GroupsTab,
+    searchQuery: String,
+    snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
+    onSelectTab: (GroupsTab) -> Unit,
+    onSearchChange: (String) -> Unit,
+    onJoin: (String) -> Unit,
     onOpenGroup: (String) -> Unit,
     onOpenCreate: () -> Unit,
     onDismissCreate: () -> Unit,
@@ -118,6 +147,7 @@ fun GroupsListScreen(
 ) {
     Scaffold(
         modifier = modifier.testTag(GroupsListTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.groups_list_title)) },
@@ -140,26 +170,50 @@ fun GroupsListScreen(
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (state) {
-                is GroupsListUiState.Loading -> LoadingState()
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            GroupsTabRow(tab = tab, onSelectTab = onSelectTab)
+            if (tab == GroupsTab.DISCOVER) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchChange,
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    label = { Text(stringResource(R.string.groups_discover_search_label)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .testTag(GroupsListTestTags.SEARCH),
+                )
+            }
+            Box(Modifier.fillMaxSize()) {
+                when (state) {
+                    is GroupsListUiState.Loading -> LoadingState()
 
-                is GroupsListUiState.Empty ->
-                    EmptyState(
-                        title = stringResource(R.string.groups_empty_title),
-                        body = stringResource(R.string.groups_empty_body),
-                    )
+                    is GroupsListUiState.Empty ->
+                        EmptyState(
+                            title = stringResource(
+                                if (tab == GroupsTab.DISCOVER) R.string.groups_discover_empty_title
+                                else R.string.groups_empty_title,
+                            ),
+                            body = stringResource(
+                                if (tab == GroupsTab.DISCOVER) R.string.groups_discover_empty_body
+                                else R.string.groups_empty_body,
+                            ),
+                        )
 
-                is GroupsListUiState.Error ->
-                    ErrorState(message = state.error.message, onRetry = onRetry)
+                    is GroupsListUiState.Error ->
+                        ErrorState(message = state.error.message, onRetry = onRetry)
 
-                is GroupsListUiState.Content ->
-                    GroupsListContent(
-                        state = state,
-                        onRefresh = onRefresh,
-                        onRetry = onRetry,
-                        onOpenGroup = onOpenGroup,
-                    )
+                    is GroupsListUiState.Content ->
+                        GroupsListContent(
+                            state = state,
+                            tab = tab,
+                            onRefresh = onRefresh,
+                            onRetry = onRetry,
+                            onJoin = onJoin,
+                            onOpenGroup = onOpenGroup,
+                        )
+                }
             }
         }
     }
@@ -172,6 +226,28 @@ fun GroupsListScreen(
             onVisibilityChange = onCreateVisibilityChange,
             onSubmit = onSubmitCreate,
             onDismiss = onDismissCreate,
+        )
+    }
+}
+
+/** PAR-10 - the My / Discover tab selector. */
+@Composable
+private fun GroupsTabRow(tab: GroupsTab, onSelectTab: (GroupsTab) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(
+            selected = tab == GroupsTab.MINE,
+            onClick = { onSelectTab(GroupsTab.MINE) },
+            label = { Text(stringResource(R.string.groups_tab_mine)) },
+            modifier = Modifier.testTag(GroupsListTestTags.TAB_MINE),
+        )
+        FilterChip(
+            selected = tab == GroupsTab.DISCOVER,
+            onClick = { onSelectTab(GroupsTab.DISCOVER) },
+            label = { Text(stringResource(R.string.groups_tab_discover)) },
+            modifier = Modifier.testTag(GroupsListTestTags.TAB_DISCOVER),
         )
     }
 }
@@ -252,8 +328,10 @@ private fun CreateGroupDialog(
 @Composable
 private fun GroupsListContent(
     state: GroupsListUiState.Content,
+    tab: GroupsTab,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
+    onJoin: (String) -> Unit,
     onOpenGroup: (String) -> Unit,
 ) {
     PullToRefreshBox(
@@ -271,7 +349,13 @@ private fun GroupsListContent(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(state.groups, key = { it.id }) { group ->
-                    GroupRow(group = group, onClick = { onOpenGroup(group.id) })
+                    GroupRow(
+                        group = group,
+                        discover = tab == GroupsTab.DISCOVER,
+                        joining = group.id in state.joining,
+                        onClick = { onOpenGroup(group.id) },
+                        onJoin = { onJoin(group.id) },
+                    )
                 }
             }
         }
@@ -281,7 +365,10 @@ private fun GroupsListContent(
 @Composable
 private fun GroupRow(
     group: Group,
+    discover: Boolean,
+    joining: Boolean,
     onClick: () -> Unit,
+    onJoin: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -312,10 +399,27 @@ private fun GroupRow(
                 )
             }
         }
-        AssistChip(
-            onClick = onClick,
-            label = { Text(roleLabel(group.myRole)) },
-        )
+        if (discover) {
+            // A discovered group the caller has not joined (my_role UNKNOWN) shows a Join button; one already
+            // joined shows its role chip instead.
+            if (group.myRole == GroupRole.UNKNOWN) {
+                OutlinedButton(
+                    onClick = onJoin,
+                    enabled = !joining,
+                    modifier = Modifier.testTag(GroupsListTestTags.JOIN_PREFIX + group.id),
+                ) {
+                    if (joining) {
+                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                    } else {
+                        Text(stringResource(R.string.groups_join))
+                    }
+                }
+            } else {
+                AssistChip(onClick = onClick, label = { Text(roleLabel(group.myRole)) })
+            }
+        } else {
+            AssistChip(onClick = onClick, label = { Text(roleLabel(group.myRole)) })
+        }
     }
 }
 

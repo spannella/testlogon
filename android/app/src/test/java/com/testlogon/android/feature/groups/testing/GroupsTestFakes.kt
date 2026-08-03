@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.flowOf
  */
 class FakeGroupsRepo(
     var myGroupsResult: ApiResult<List<Group>> = ApiResult.Success(emptyList()),
+    var discoverResult: ApiResult<List<Group>> = ApiResult.Success(emptyList()),
+    var joinResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var groupResult: ApiResult<Group> = ApiResult.Success(Group(id = "grp_1", name = "G")),
     var membersResult: ApiResult<List<GroupMember>> = ApiResult.Success(emptyList()),
     var inviteResult: ApiResult<Unit> = ApiResult.Success(Unit),
@@ -147,6 +149,19 @@ class FakeGroupsRepo(
     override suspend fun leave(groupId: String): ApiResult<Unit> {
         leaveArgs += groupId
         return leaveResult
+    }
+
+    val discoverArgs = mutableListOf<String?>()
+    val joinArgs = mutableListOf<String>()
+
+    override suspend fun discover(query: String?, limit: Int): ApiResult<List<Group>> {
+        discoverArgs += query
+        return discoverResult
+    }
+
+    override suspend fun join(groupId: String): ApiResult<Unit> {
+        joinArgs += groupId
+        return joinResult
     }
 
     override suspend fun getTreasuryBalance(groupId: String): ApiResult<TreasuryBalance> =

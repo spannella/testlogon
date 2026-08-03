@@ -96,3 +96,15 @@ data class GroupInviteIn(
 data class GroupUpdateRoleIn(
     @Json(name = "role") val role: String,
 )
+
+/**
+ * PAR-10 - ENVELOPE for GET ui/groups/discover (public group discovery). The backend returns
+ * {groups, cursor, has_more}; only the `groups` list is consumed here (the feature loads a single bounded
+ * page - cursor/has_more are tolerated but unused). Each row is a [UserGroupDto] whose `my_role` is null for
+ * a group the caller has not joined (used to derive the join affordance).
+ */
+data class GroupDiscoverResponse(
+    @Json(name = "groups") val groups: List<UserGroupDto> = emptyList(),
+    @Json(name = "cursor") val cursor: String? = null,
+    @Json(name = "has_more") val hasMore: Boolean? = null,
+)

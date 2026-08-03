@@ -1,8 +1,10 @@
 package com.testlogon.android.feature.webhooks.data
 
 import com.testlogon.android.core.model.webhooks.Webhook
+import com.testlogon.android.core.model.webhooks.WebhookTestResult
 import com.testlogon.android.core.model.webhooks.WebhookEventType
 import com.testlogon.android.core.network.webhooks.WebhookEndpointDto
+import com.testlogon.android.core.network.webhooks.WebhookTestResultDto
 import com.testlogon.android.core.network.webhooks.WebhookEventTypeDto
 
 /**
@@ -31,4 +33,13 @@ fun WebhookEndpointDto.toDomain(): Webhook = Webhook(
 fun WebhookEventTypeDto.toDomain(): WebhookEventType = WebhookEventType(
     type = type,
     description = description.orEmpty(),
+)
+
+/** PAR-26 - maps a wire [WebhookTestResultDto] to the domain [WebhookTestResult] (succeeded is derived). */
+fun WebhookTestResultDto.toDomain(): WebhookTestResult = WebhookTestResult(
+    deliveryId = deliveryId,
+    status = status,
+    responseCode = responseCode,
+    error = error,
+    durationMs = durationMs,
 )

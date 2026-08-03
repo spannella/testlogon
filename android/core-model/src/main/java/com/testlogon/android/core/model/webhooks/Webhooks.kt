@@ -35,3 +35,24 @@ data class WebhookEventType(
     val type: String,
     val description: String = "",
 )
+
+/**
+ * PAR-26 - the outcome of a webhook test-send (POST ui/webhooks/{id}/test). The backend records a synthetic
+ * delivery and reports the result WITHOUT throwing on an unreachable host, so [succeeded] is derived from the
+ * wire `status` == "success" (a reserved/unreachable host comes back status="failed" with a populated
+ * [error]). [responseCode] is null on a failed attempt; [durationMs] is best-effort.
+ */
+data class WebhookTestResult(
+    val deliveryId: String? = null,
+    val status: String,
+    val responseCode: Int? = null,
+    val error: String? = null,
+    val durationMs: Long? = null,
+) {
+    /** True only when the backend reported a successful delivery (status == "success"). */
+    val succeeded: Boolean get() = status.equals(STATUS_SUCCESS, ignoreCase = true)
+
+    companion object {
+        const val STATUS_SUCCESS = "success"
+    }
+}

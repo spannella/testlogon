@@ -6,6 +6,7 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.feature.ads.optimization.data.AdOptimizationRepository
 import com.testlogon.android.feature.ads.studio.data.AdsStudioCampaignResolver
+import com.testlogon.android.feature.ads.studio.data.StudioCampaignSelector
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,7 @@ import javax.inject.Inject
 @HiltViewModel
 class AdOptimizationViewModel @Inject constructor(
     private val resolver: AdsStudioCampaignResolver,
+    val campaignSelector: StudioCampaignSelector,
     private val repository: AdOptimizationRepository,
 ) : ViewModel() {
 
@@ -38,6 +40,17 @@ class AdOptimizationViewModel @Inject constructor(
 
     init {
         load()
+        campaignSelector.start(viewModelScope)
+    }
+
+    /** PAR-23 - user picked a different ad account in the studio picker; reload against its campaign. */
+    fun onAccountSelected(accountId: String) {
+        campaignSelector.onAccountSelected(viewModelScope, accountId) { load() }
+    }
+
+    /** PAR-23 - user picked a different campaign in the studio picker; reload against it. */
+    fun onCampaignSelected(campaignId: String) {
+        campaignSelector.onCampaignSelected(campaignId) { load() }
     }
 
     fun load() {

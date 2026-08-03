@@ -2,6 +2,7 @@ package com.testlogon.android.feature.groups
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.testlogon.android.core.model.groups.Group
@@ -31,10 +32,23 @@ class GroupsListScreenTest {
             TestLogonTheme {
                 GroupsListScreen(
                     state = state,
+                    createState = CreateGroupFormState(),
+                    tab = GroupsTab.MINE,
+                    searchQuery = "",
+                    snackbarHostState = SnackbarHostState(),
                     onBack = {},
                     onRetry = {},
                     onRefresh = {},
+                    onSelectTab = {},
+                    onSearchChange = {},
+                    onJoin = {},
                     onOpenGroup = {},
+                    onOpenCreate = {},
+                    onDismissCreate = {},
+                    onCreateNameChange = {},
+                    onCreateDescriptionChange = {},
+                    onCreateVisibilityChange = {},
+                    onSubmitCreate = {},
                 )
             }
         }

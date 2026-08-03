@@ -46,4 +46,21 @@ interface WebhooksApi {
     /** GET the enumerable subscribable event types (NAMED {event_types} envelope) for the create multi-select. */
     @GET("ui/webhooks/event-types")
     suspend fun eventTypes(): EventTypesDto
+
+    /**
+     * PAR-26 - POST a synthetic test delivery to one endpoint. Returns [WebhookTestResultDto] on HTTP 200.
+     * NON-idempotent (records a delivery attempt) -> NO auto-retry. NOTE: a delivery to an unreachable host
+     * still returns 200 with status="failed" (surfaced as a failed delivery, NOT a transport error); a
+     * missing endpoint returns 404. No request body.
+     */
+    @POST("ui/webhooks/{endpointId}/test")
+    suspend fun test(@Path("endpointId") endpointId: String): WebhookTestResultDto
+
+    /**
+     * PAR-26 - POST a signing-secret rotation for one endpoint. Returns [WebhookRotateSecretDto] carrying the
+     * NEW plaintext secret ONCE (never re-fetchable). NON-idempotent (mutates the stored secret) -> NO
+     * auto-retry. No request body.
+     */
+    @POST("ui/webhooks/{endpointId}/rotate-secret")
+    suspend fun rotateSecret(@Path("endpointId") endpointId: String): WebhookRotateSecretDto
 }

@@ -3541,6 +3541,13 @@
     <string name="groups_your_role">Your role: %1$s</string>
     <string name="groups_view_members">View members</string>
     <string name="groups_leave">Leave group</string>
+    <!-- PAR-10: group discovery + join. -->
+    <string name="groups_tab_mine">My groups</string>
+    <string name="groups_tab_discover">Discover</string>
+    <string name="groups_discover_search_label">Search groups</string>
+    <string name="groups_discover_empty_title">No groups found</string>
+    <string name="groups_discover_empty_body">Try a different search, or check back later.</string>
+    <string name="groups_join">Join</string>
     <string name="groups_members_title">Members</string>
     <string name="groups_section_members">Members</string>
     <string name="groups_section_pending">Pending invites</string>
@@ -4280,6 +4287,32 @@
     <string name="webhooks_create_events_label">Events</string>
     <string name="webhooks_create_events_unavailable">Event types are unavailable right now. Try again later.</string>
     <string name="webhooks_create_submit">Create</string>
+
+    <!-- PAR-26: webhook test-send + rotate-secret (detail screen). -->
+    <string name="webhooks_test_button">Send test</string>
+    <string name="webhooks_test_sending">Sending test…</string>
+    <string name="webhooks_test_result_title">Test delivery</string>
+    <string name="webhooks_test_succeeded">Delivered successfully</string>
+    <string name="webhooks_test_failed">Delivery failed</string>
+    <string name="webhooks_test_response_code">Response code: %1$d</string>
+    <string name="webhooks_test_error_label">Error: %1$s</string>
+    <string name="webhooks_test_dismiss">Dismiss</string>
+    <string name="webhooks_rotate_button">Rotate signing secret</string>
+    <string name="webhooks_rotate_rotating">Rotating…</string>
+    <string name="webhooks_rotate_revealed_title">New signing secret</string>
+    <string name="webhooks_rotate_revealed_body">Copy this now — it is shown only once and cannot be retrieved again.</string>
+    <string name="webhooks_rotate_copy">Copy secret</string>
+    <string name="webhooks_rotate_copied">Secret copied</string>
+    <string name="webhooks_rotate_done">Done</string>
+
+    <!-- PAR-23: shared ads studio account+campaign picker. -->
+    <string name="studio_picker_account_label">Ad account</string>
+    <string name="studio_picker_campaign_label">Campaign</string>
+    <string name="studio_picker_loading">Loading…</string>
+    <string name="studio_picker_account_hint">Select an account</string>
+    <string name="studio_picker_account_none">No ad accounts</string>
+    <string name="studio_picker_campaign_hint">Select a campaign</string>
+    <string name="studio_picker_campaign_none">No campaigns in this account</string>
 
     <!-- B-KYC (batch 7): identity verification (More -> Account / Security). -->
     <string name="more_entry_kyc">Identity verification</string>
