@@ -15,19 +15,30 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -37,6 +48,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.ui.i18n.asString
+import com.testlogon.android.core.ui.i18n.resolve
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
@@ -44,7 +56,7 @@ import com.testlogon.android.data.payouts.PayoutDetail
 import com.testlogon.android.data.payouts.PayoutStatus
 import com.testlogon.android.data.payouts.PayoutTimelineEntry
 
-/** PAY-53 — stable testTags for the payout statement/detail screen. */
+/** PAY-53 stable testTags for the payout statement/detail screen. */
 object PayoutDetailTestTags {
     const val SCREEN = "payout_detail_screen"
     const val CONTENT = "payout_detail_content"
@@ -55,9 +67,13 @@ object PayoutDetailTestTags {
     const val FAIL_REASON = "payout_detail_fail_reason"
     // Legacy AND-260 alias kept for any existing test references.
     const val REJECT_REASON = "payout_detail_reject_reason"
+    // PAR-19 cancel action.
+    const val CANCEL_BUTTON = "payout_detail_cancel_button"
+    const val CANCEL_DIALOG = "payout_detail_cancel_dialog"
+    const val CANCEL_CONFIRM = "payout_detail_cancel_confirm"
 }
 
-/** PAY-53 — route-level payout statement/detail entry (real GET /ui/payouts/{id}; server-resolved). */
+/** PAY-53 route-level payout statement/detail entry (real GET /ui/payouts/{id}; server-resolved). */
 @Composable
 fun PayoutDetailRoute(
     onBack: () -> Unit,
@@ -65,7 +81,32 @@ fun PayoutDetailRoute(
     viewModel: PayoutDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    PayoutDetailScreen(state = state, onBack = onBack, onRetry = viewModel::load, modifier = modifier)
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    val cancelSuccessMsg = stringResource(R.string.payout_detail_cancel_success)
+    val cancelFailedFallback = stringResource(R.string.payout_detail_cancel_error_generic)
+    // Non-composable resolver for the one-shot failure UiText inside the effect collector.
+    val resources = LocalContext.current.resources
+
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collect { effect ->
+            val message = when (effect) {
+                PayoutDetailEffect.CancelSucceeded -> cancelSuccessMsg
+                is PayoutDetailEffect.CancelFailed ->
+                    effect.message?.resolve(resources) ?: cancelFailedFallback
+            }
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    PayoutDetailScreen(
+        state = state,
+        onBack = onBack,
+        onRetry = viewModel::load,
+        onCancel = viewModel::cancel,
+        snackbarHostState = snackbarHostState,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -73,10 +114,13 @@ fun PayoutDetailScreen(
     state: PayoutDetailUiState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onCancel: () -> Unit,
     modifier: Modifier = Modifier,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     Scaffold(
         modifier = modifier.testTag(PayoutDetailTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.payout_detail_title)) },
@@ -99,7 +143,12 @@ fun PayoutDetailScreen(
                         modifier = Modifier.testTag(PayoutDetailTestTags.LOADING),
                     )
 
-                is PayoutDetailUiState.Content -> PayoutDetailContent(detail = state.detail)
+                is PayoutDetailUiState.Content ->
+                    PayoutDetailContent(
+                        detail = state.detail,
+                        cancelling = state.cancelling,
+                        onCancel = onCancel,
+                    )
 
                 PayoutDetailUiState.NotFound -> EmptyState(
                     title = stringResource(R.string.payout_detail_not_found_title),
@@ -118,7 +167,13 @@ fun PayoutDetailScreen(
 }
 
 @Composable
-private fun PayoutDetailContent(detail: PayoutDetail, modifier: Modifier = Modifier) {
+private fun PayoutDetailContent(
+    detail: PayoutDetail,
+    cancelling: Boolean,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var showConfirm by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -142,7 +197,6 @@ private fun PayoutDetailContent(detail: PayoutDetail, modifier: Modifier = Modif
 
         HorizontalDivider()
 
-        // Destination: the normalized method type + the resolved last-4 (PAY-B tokenized method).
         val methodLine = stringResource(payoutMethodLabelRes(detail.method)) +
             (if (detail.methodLast4.isNotBlank()) " ••${detail.methodLast4}" else "")
         DetailRow(label = stringResource(R.string.payout_detail_method), value = methodLine)
@@ -159,7 +213,6 @@ private fun PayoutDetailContent(detail: PayoutDetail, modifier: Modifier = Modif
                     ?: stringResource(R.string.payout_date_unknown),
             )
         }
-        // Transfer reference (the honest transfer seam ref; empty until the transfer runs).
         if (detail.transferRef.isNotBlank() || detail.transferProvider.isNotBlank()) {
             val provider = detail.transferProvider.ifBlank { stringResource(R.string.payout_detail_provider_unknown) }
             DetailRow(label = stringResource(R.string.payout_detail_provider), value = provider)
@@ -177,7 +230,6 @@ private fun PayoutDetailContent(detail: PayoutDetail, modifier: Modifier = Modif
             DetailRow(label = stringResource(R.string.payout_detail_notes), value = detail.notes)
         }
 
-        // Hold reason (manual-hold pauses the runner).
         if (detail.manualHold && detail.holdReason.isNotBlank()) {
             ReasonBlock(
                 title = stringResource(R.string.payout_detail_hold_reason),
@@ -186,7 +238,6 @@ private fun PayoutDetailContent(detail: PayoutDetail, modifier: Modifier = Modif
             )
         }
 
-        // Failure / return reason.
         val failure = detail.failureReason
         if (failure.isNotBlank() &&
             detail.status in setOf(PayoutStatus.FAILED, PayoutStatus.RETURNED, PayoutStatus.REJECTED)
@@ -206,7 +257,6 @@ private fun PayoutDetailContent(detail: PayoutDetail, modifier: Modifier = Modif
             }
         }
 
-        // Lifecycle timeline.
         if (detail.timeline.isNotEmpty()) {
             HorizontalDivider()
             Text(
@@ -221,6 +271,51 @@ private fun PayoutDetailContent(detail: PayoutDetail, modifier: Modifier = Modif
                 detail.timeline.forEach { TimelineRow(it) }
             }
         }
+
+        // PAR-19 cancel action, only for a cancelable payout (REQUESTED, per the backend guard).
+        if (detail.displayStatus in PayoutDetailViewModel.CANCELABLE_STATUSES) {
+            HorizontalDivider()
+            OutlinedButton(
+                onClick = { showConfirm = true },
+                enabled = !cancelling,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+                modifier = Modifier.fillMaxWidth().testTag(PayoutDetailTestTags.CANCEL_BUTTON),
+            ) {
+                Text(stringResource(R.string.payout_detail_cancel))
+            }
+            Text(
+                text = stringResource(R.string.payout_detail_cancel_footer),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    if (showConfirm) {
+        AlertDialog(
+            modifier = Modifier.testTag(PayoutDetailTestTags.CANCEL_DIALOG),
+            onDismissRequest = { showConfirm = false },
+            title = { Text(stringResource(R.string.payout_detail_cancel_confirm_title)) },
+            text = { Text(stringResource(R.string.payout_detail_cancel_confirm_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showConfirm = false
+                        onCancel()
+                    },
+                    modifier = Modifier.testTag(PayoutDetailTestTags.CANCEL_CONFIRM),
+                ) {
+                    Text(stringResource(R.string.payout_detail_cancel))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfirm = false }) {
+                    Text(stringResource(R.string.payout_detail_cancel_confirm_dismiss))
+                }
+            },
+        )
     }
 }
 

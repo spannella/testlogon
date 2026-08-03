@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.ui.i18n.UiText
 import com.testlogon.android.data.billing.BillingApi
+import com.testlogon.android.data.billing.BillingBalance
 import com.testlogon.android.data.billing.BillingRepository
 import com.testlogon.android.data.billing.LedgerEntry
 import com.testlogon.android.data.billing.WalletBalance
@@ -33,11 +34,14 @@ sealed interface WalletTransactionsLoadState {
 
 /**
  * PW18 — fully-derived wallet screen state. [wallet] is the optional balance header (best-effort; a
- * balance failure never blocks the transactions list); [isRefreshing] drives pull-to-refresh.
+ * balance failure never blocks the transactions list); [balance] is the PAR-20 account-balance
+ * breakdown (also best-effort — a failure leaves it null and never touches the load state);
+ * [isRefreshing] drives pull-to-refresh.
  */
 data class WalletTransactionsUiState(
     val load: WalletTransactionsLoadState = WalletTransactionsLoadState.Loading,
     val wallet: WalletBalance? = null,
+    val balance: BillingBalance? = null,
     val isRefreshing: Boolean = false,
 ) {
     val transactions: List<LedgerEntry>
@@ -53,6 +57,10 @@ data class WalletTransactionsUiState(
  * GET /ui/billing/ledger, both already exposed by [BillingRepository]). The ledger is the source of
  * truth for the list; the balance is a best-effort header that never blocks the list. Empty/loading/
  * error states are derived from [load]; a refresh keeps the existing list on a transient failure.
+ *
+ * PAR-20: the account-balance breakdown (GET /ui/billing/balance) is fetched in the SAME parallel pass
+ * and folded best-effort — a balance failure leaves [WalletTransactionsUiState.balance] null and never
+ * affects the ledger load state (parity with the iOS WalletScreen concurrent+best-effort load).
  */
 @HiltViewModel
 class WalletTransactionsViewModel @Inject constructor(
@@ -81,13 +89,17 @@ class WalletTransactionsViewModel @Inject constructor(
     }
 
     private suspend fun fetch(refreshing: Boolean) {
-        // Fetch the balance header + ledger in parallel; the ledger result decides the load state.
+        // Fetch the balance header + account-balance breakdown + ledger in parallel; only the ledger
+        // result decides the load state. The header + breakdown are best-effort.
         val walletDeferred = viewModelScope.async { repository.getWallet() }
+        val balanceDeferred = viewModelScope.async { repository.getBalance() }
         val ledgerResult = repository.getLedger(BillingApi.DEFAULT_LIMIT)
         val walletResult = walletDeferred.await()
+        val balanceResult = balanceDeferred.await()
 
         _state.update { current ->
             val newWallet = (walletResult as? ApiResult.Success)?.data ?: current.wallet
+            val newBalance = (balanceResult as? ApiResult.Success)?.data ?: current.balance
             val newLoad = when (ledgerResult) {
                 is ApiResult.Success -> WalletTransactionsLoadState.Loaded(ledgerResult.data.items)
                 else ->
@@ -95,7 +107,7 @@ class WalletTransactionsViewModel @Inject constructor(
                     if (refreshing && current.load is WalletTransactionsLoadState.Loaded) current.load
                     else WalletTransactionsLoadState.Error(errorMapper.map(ledgerResult))
             }
-            current.copy(load = newLoad, wallet = newWallet, isRefreshing = false)
+            current.copy(load = newLoad, wallet = newWallet, balance = newBalance, isRefreshing = false)
         }
     }
 }

@@ -2130,6 +2130,14 @@
     <string name="payout_detail_reject_reason">Reason for rejection</string>
     <string name="payout_detail_not_found_title">Payout unavailable</string>
     <string name="payout_detail_not_found_body">Reopen this payout from your history.</string>
+    <!-- PAR-19: payout cancel action. -->
+    <string name="payout_detail_cancel">Cancel payout</string>
+    <string name="payout_detail_cancel_footer">Cancelling returns this amount to your available balance.</string>
+    <string name="payout_detail_cancel_confirm_title">Cancel this payout?</string>
+    <string name="payout_detail_cancel_confirm_body">This returns the amount to your available balance. This can&#8217;t be undone.</string>
+    <string name="payout_detail_cancel_confirm_dismiss">Keep payout</string>
+    <string name="payout_detail_cancel_success">Payout cancelled.</string>
+    <string name="payout_detail_cancel_error_generic">Couldn&#8217;t cancel this payout.</string>
 
     <!-- Payout setup + KYC gate (AND-259) -->
     <string name="payout_setup_title">Request a payout</string>
@@ -4720,6 +4728,14 @@
     <string name="wallet_transactions_empty_title">No transactions yet</string>
     <string name="wallet_transactions_empty_body">Your wallet activity &#8212; deposits, charges, payouts and credits &#8212; will show up here.</string>
     <string name="wallet_transactions_default_reason">Transaction</string>
+    <!-- PAR-20: account balance breakdown section. -->
+    <string name="wallet_balance_section_title">Account balance</string>
+    <string name="wallet_balance_amount_due">Amount due</string>
+    <string name="wallet_balance_pending_due">Pending due</string>
+    <string name="wallet_balance_owed_settled">Owed (settled)</string>
+    <string name="wallet_balance_owed_pending">Owed (pending)</string>
+    <string name="wallet_balance_paid_settled">Paid (settled)</string>
+    <string name="wallet_balance_paid_pending">Paid (pending)</string>
     <!-- Web-parity: My Bundles (syndicate bundle subscriptions). -->
     <string name="more_entry_my_bundles">My Bundles</string>
     <string name="my_bundles_title">My Bundles</string>
