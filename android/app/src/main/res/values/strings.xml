@@ -5266,4 +5266,60 @@
     <string name="highlights_no_stories">You have no active stories to add.</string>
     <string name="highlights_empty_owner">No highlights yet. Feature your best stories on your profile.</string>
     <string name="highlights_empty_viewer">No highlights yet.</string>
+    <!-- PAR-13: scheduled-posts management -->
+    <string name="scheduled_posts_title">Scheduled posts</string>
+    <string name="scheduled_posts_empty_title">No scheduled posts</string>
+    <string name="scheduled_posts_empty_body">Posts you schedule for later will show up here until they publish.</string>
+    <string name="scheduled_posts_publishes_at">Publishes %1$s</string>
+    <string name="scheduled_posts_publishes_pending">Scheduled to publish</string>
+    <string name="scheduled_posts_media_only">(Media only)</string>
+    <string name="scheduled_posts_no_text">(No text)</string>
+    <string name="scheduled_posts_cancel_action">Cancel</string>
+    <string name="scheduled_posts_cancel_title">Cancel this scheduled post?</string>
+    <string name="scheduled_posts_cancel_body">It won\'t publish. This can\'t be undone.</string>
+    <string name="scheduled_posts_cancel_confirm">Cancel post</string>
+    <string name="scheduled_posts_cancel_dismiss">Keep</string>
+
+    <!-- PAR-18: story viewer report/block -->
+    <string name="story_more_actions">More actions</string>
+    <string name="story_report">Report story</string>
+    <string name="story_block_author">Block %1$s</string>
+
+    <!-- PAR-27: Safety Center hub -->
+    <string name="more_entry_safety_center">Safety Center</string>
+    <string name="safety_center_title">Safety Center</string>
+    <string name="safety_center_section_safety">Safety</string>
+    <string name="safety_center_section_data">Your data</string>
+    <string name="safety_center_section_delete">Delete account</string>
+    <string name="safety_center_blocked_users">Blocked accounts</string>
+    <string name="safety_center_blocked_users_subtitle">See and manage who you\'ve blocked</string>
+    <string name="safety_center_dmca">Report copyright infringement</string>
+    <string name="safety_center_dmca_subtitle">File a DMCA takedown notice</string>
+    <string name="safety_center_privacy_export">Download your data</string>
+    <string name="safety_center_privacy_export_subtitle">Request a machine-readable export of your data</string>
+    <string name="safety_center_account_deletion">Delete your account</string>
+    <string name="safety_center_account_deletion_subtitle">Permanently delete your account and data</string>
+    <string name="safety_center_delete_footer">Account deletion starts a grace period during which you can cancel. After it ends, your account and data are permanently removed.</string>
+
+    <!-- PAR-29: legal screens + age gate -->
+    <string name="more_entry_terms">Terms of Service</string>
+    <string name="more_entry_community_guidelines">Community Guidelines</string>
+    <string name="more_entry_contact">Contact us</string>
+    <string name="legal_about_title">About</string>
+    <string name="legal_about_body">TestLogon is a creator platform for sharing posts, video, live broadcasts, and more. Thanks for being here.</string>
+    <string name="legal_terms_title">Terms of Service</string>
+    <string name="legal_terms_version">Version %1$s</string>
+    <string name="legal_terms_body">By using TestLogon you agree to these Terms of Service. You are responsible for your account and the content you post. You must be at least 18 years old to use the service. We may update these Terms from time to time; continued use means you accept the changes.</string>
+    <string name="legal_guidelines_title">Community Guidelines</string>
+    <string name="legal_guidelines_body">Keep TestLogon safe and welcoming. No harassment, hate speech, illegal content, or content that sexualizes minors. Respect other people\'s privacy and intellectual property. Violations may result in content removal or account action.</string>
+    <string name="legal_contact_title">Contact us</string>
+    <string name="legal_contact_body">Need help or have a question? Reach our support team by email and we\'ll get back to you.</string>
+    <string name="legal_contact_email_cta">Email support</string>
+    <string name="legal_contact_email_subject">TestLogon support request</string>
+    <string name="age_gate_pick_dob">Select your date of birth</string>
+    <string name="age_gate_dob_value">Date of birth: %1$s</string>
+    <string name="age_gate_confirm">Confirm</string>
+    <string name="age_gate_cancel">Cancel</string>
+    <string name="age_gate_too_young">You must be at least %1$d years old to use TestLogon.</string>
+
 </resources>

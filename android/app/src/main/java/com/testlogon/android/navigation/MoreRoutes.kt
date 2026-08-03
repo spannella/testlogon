@@ -477,6 +477,9 @@ object MoreRoutes {
     // P0-BLOCK: Settings/Privacy — the blocked-users management screen (list + unblock).
     const val BLOCKED_USERS = BlockedUsersDest.ROUTE
 
+    // PAR-27: the unified Safety Center hub (aggregates blocked users / data export / DMCA / account deletion).
+    const val SAFETY_CENTER = SafetyCenterDest.ROUTE
+
     // Web-parity: questionnaire BUILDER (creator authoring: drafts list -> create -> sections +
     // questions of 9 types -> publish). Distinct from the respondent renderer.
     const val QUESTIONNAIRE_BUILDER = QuestionnaireBuilderListDest.ROUTE
@@ -501,6 +504,11 @@ object MoreRoutes {
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
     const val ABOUT = "more/about"
+
+    // PAR-29: static legal screens reachable from the Support hub.
+    val TERMS: String get() = LegalRoutes.TERMS
+    val GUIDELINES: String get() = LegalRoutes.GUIDELINES
+    val CONTACT: String get() = LegalRoutes.CONTACT
 
     /** Routes the hub treats as registered (real destinations or intentionally-surfaced stubs). */
     val REGISTERED: Set<String>
@@ -679,6 +687,7 @@ object MoreRoutes {
             KYC,
             API_KEYS,
             BLOCKED_USERS,
+            SAFETY_CENTER,
             QUESTIONNAIRE_BUILDER,
             DELEGATION_KEYS,
             CUSTOM_EMOJIS,
@@ -688,6 +697,9 @@ object MoreRoutes {
             SETTINGS,
             HELP,
             ABOUT,
+            TERMS,
+            GUIDELINES,
+            CONTACT,
         )
 }
 

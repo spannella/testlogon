@@ -204,6 +204,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         galleryDestination(navController)
         // Newsfeed post compose (create a post).
         composePostDestination(navController)
+        // PAR-13: scheduled-posts management (list pending scheduled posts + cancel).
+        scheduledPostsDestination(navController)
         myPostsDestination(navController)
         // VOD upload (publish a video).
         videoUploadDestination(navController)
@@ -495,6 +497,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-387 (E50): account lifecycle - closure (start/finalize), suspend, reactivate over the
         // /ui/account/closure/* + /ui/account/suspend + /ui/account/reactivate endpoints.
         accountLifecycleDestinations(navController)
+        // PAR-27: Safety Center hub. Aggregation only - an arg-less landing that links to four
+        // already-registered child destinations (blocked users / privacy export / DMCA / account deletion).
+        safetyCenterDestination(navController)
+        // PAR-29: static legal screens (About / Terms / Community Guidelines / Contact).
+        legalDestinations(navController)
     }
 }
 

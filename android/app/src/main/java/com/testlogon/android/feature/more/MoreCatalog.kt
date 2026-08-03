@@ -1675,6 +1675,16 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.SUPPORT,
             section = MoreSection.SUPPORT,
         ),
+        // PAR-27: the unified Safety Center hub (Account / Security). Aggregation only - links to the
+        // already-built blocked-users, data-export, DMCA + account-deletion screens.
+        MoreEntry(
+            id = "safety_center",
+            labelRes = R.string.more_entry_safety_center,
+            icon = Icons.Outlined.Shield,
+            route = MoreRoutes.SAFETY_CENTER,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.SECURITY,
+        ),
         // AND-385: Privacy & Data Export (request a machine-readable export -> status -> download).
         MoreEntry(
             id = "privacy_export",
@@ -1700,7 +1710,31 @@ class MoreCatalog @Inject constructor() {
             route = MoreRoutes.ABOUT,
             hub = MoreHub.SUPPORT,
             section = MoreSection.SUPPORT,
-            comingSoon = true,
+        ),
+        // PAR-29: static legal screens (Support hub). Terms + Community Guidelines + Contact.
+        MoreEntry(
+            id = "terms",
+            labelRes = R.string.more_entry_terms,
+            icon = Icons.Outlined.Gavel,
+            route = MoreRoutes.TERMS,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "community_guidelines",
+            labelRes = R.string.more_entry_community_guidelines,
+            icon = Icons.Outlined.Policy,
+            route = MoreRoutes.GUIDELINES,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        MoreEntry(
+            id = "contact",
+            labelRes = R.string.more_entry_contact,
+            icon = Icons.Outlined.Email,
+            route = MoreRoutes.CONTACT,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
         ),
     )
 }

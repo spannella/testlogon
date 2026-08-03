@@ -143,6 +143,8 @@ fun AuthedShellScreen(
                     onOpenDiscover = { tabNav.navigateToTab(AuthedTab.DISCOVER) },
                     // FD11 — a visible 'Your posts' entry straight from the feed top bar.
                     onOpenMyPosts = { onOpenRoute(com.testlogon.android.navigation.MyPostsDest.ROUTE) },
+                    // PAR-13 — scheduled-posts management from the feed top bar.
+                    onOpenScheduledPosts = { onOpenRoute(com.testlogon.android.navigation.ScheduledPostsDest.ROUTE) },
                     // FD12 — Edit own post from the feed overflow.
                     onEditPost = { postId ->
                         onOpenRoute(com.testlogon.android.navigation.EditPostDest.build(postId))

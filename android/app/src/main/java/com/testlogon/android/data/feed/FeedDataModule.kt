@@ -53,6 +53,12 @@ object FeedApiModule {
     @Singleton
     fun provideCurrentUserApi(retrofit: Retrofit): CurrentUserApi =
         retrofit.create(CurrentUserApi::class.java)
+
+    /** PAR-13 — caller's scheduled-posts API (GET /posts/scheduled + POST /posts/{id}/cancel). */
+    @Provides
+    @Singleton
+    fun provideScheduledPostsApi(retrofit: Retrofit): ScheduledPostsApi =
+        retrofit.create(ScheduledPostsApi::class.java)
 }
 
 /** AND-097 / AND-173 / AND-174 / AND-175 — binds the feed + engagement repositories. */
@@ -90,4 +96,9 @@ abstract class FeedDataModule {
     @Binds
     @Singleton
     abstract fun bindCommentImageUploader(impl: PostComposeRepository): CommentImageUploader
+
+    /** PAR-13 — scheduled-posts repository. */
+    @Binds
+    @Singleton
+    abstract fun bindScheduledPostsRepository(impl: ScheduledPostsRepositoryImpl): ScheduledPostsRepository
 }
