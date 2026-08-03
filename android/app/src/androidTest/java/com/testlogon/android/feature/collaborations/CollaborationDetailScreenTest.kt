@@ -42,6 +42,11 @@ class CollaborationDetailScreenTest {
                     viewerId = viewerId,
                     onBack = {},
                     onRetry = {},
+                    onAccept = {},
+                    onReject = {},
+                    onCounter = {},
+                    onCancel = {},
+                    onTerminate = {},
                 )
             }
         }

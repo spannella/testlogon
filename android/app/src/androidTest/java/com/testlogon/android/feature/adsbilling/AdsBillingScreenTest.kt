@@ -82,6 +82,9 @@ class AdsBillingScreenTest {
                     onDismissDeposit = { sheetVisible = false },
                     onAmountChanged = { amount = it },
                     onConfirmDeposit = { deposit = DepositState.Success(200000L) },
+                    paymentMethods = emptyList(),
+                    selectedPaymentMethodId = null,
+                    onPaymentMethodSelected = {},
                 )
             }
         }
