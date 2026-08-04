@@ -33,6 +33,15 @@ interface SyndicateApi {
     suspend fun listMySyndicates(): List<SyndicateListItemDto>
 
     /**
+     * PAR-35(a) - GET discoverable (active) syndicates the caller can browse/join. The wire is a BARE
+     * ARRAY of sy_meta_out rows {syndicate_id, name, description, admin_user_id, status, member_count,
+     * created_at, updated_at} - NOTE the name key is `name` (like create), NOT `syndicate_name` (the list
+     * row). limit is clamped 1..100 server-side (default 50). Confirmed live in cpp h_sy_discover.
+     */
+    @GET("ui/syndicates/discover")
+    suspend fun discover(@Query("limit") limit: Int = 50): List<SyndicateDiscoverItemDto>
+
+    /**
      * Batch-7 - POST a new syndicate (the creator becomes admin). Returns the SyndicateOut create shape
      * (syndicate_id + name). 201 on success; a 422 carries field detail. The X-CSRF-Token is attached by
      * the shared authenticated client interceptor.

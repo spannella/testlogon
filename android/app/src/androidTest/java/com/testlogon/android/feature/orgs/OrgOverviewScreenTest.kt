@@ -3,6 +3,8 @@ package com.testlogon.android.feature.orgs
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.testlogon.android.core.model.ApiError
@@ -39,10 +41,14 @@ class OrgOverviewScreenTest {
             TestLogonTheme {
                 OrgOverviewScreen(
                     state = initial,
+                    leaving = false,
+                    snackbarHostState = remember { SnackbarHostState() },
                     onBack = {},
                     onRetry = {},
                     onOpenMembers = onOpenMembers,
                     onOpenInvites = onOpenInvites,
+                    onOpenTransfer = {},
+                    onLeave = {},
                 )
             }
         }

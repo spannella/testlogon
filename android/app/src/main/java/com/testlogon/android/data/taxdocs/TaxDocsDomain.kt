@@ -28,6 +28,30 @@ data class TaxDocument(
     val isDownloadable: Boolean get() = year != null
 }
 
+/**
+ * PAR-24 — an earnings-summary category row (FIN-004). Reuses [TaxMoney]. `transactionCount` is the
+ * per-category count.
+ */
+data class TaxSpendingCategory(
+    val category: String,
+    val total: TaxMoney,
+    val transactionCount: Int,
+)
+
+/**
+ * PAR-24 — the earnings summary for a period (a single year, here). Reuses [TaxMoney]. Rendered as a
+ * card above the documents list; a null summary (fetch failed) simply hides the card — it never fails
+ * the screen (mirrors iOS tolerance).
+ */
+data class TaxSpendingSummary(
+    val grandTotal: TaxMoney,
+    val transactionCount: Int,
+    val categories: List<TaxSpendingCategory>,
+) {
+    /** True when there is genuinely nothing earned in the period (all-zero). */
+    val isEmpty: Boolean get() = grandTotal.cents == 0L && transactionCount == 0
+}
+
 // ---- Mappers (DTO -> domain) ----
 
 private fun Long.epochSecondsOrNull(): Long? = takeIf { it > 0 }
@@ -39,4 +63,19 @@ internal fun TaxDocumentDto.toDomain(): TaxDocument = TaxDocument(
     grandTotal = TaxMoney(grandTotalCents, currency),
     transactionCount = transactionCount,
     createdAtEpochSeconds = createdAt.epochSecondsOrNull(),
+)
+
+internal fun SpendingCategoryDto.toDomain(currency: String): TaxSpendingCategory = TaxSpendingCategory(
+    category = category,
+    total = TaxMoney(totalCents, currency),
+    transactionCount = transactionCount,
+)
+
+internal fun TaxSpendingSummaryDto.toDomain(): TaxSpendingSummary = TaxSpendingSummary(
+    grandTotal = TaxMoney(grandTotalCents, currency),
+    transactionCount = transactionCount,
+    // Drop all-zero category rows so the card shows only categories with earnings.
+    categories = categories
+        .filter { it.totalCents != 0L || it.transactionCount != 0 }
+        .map { it.toDomain(currency) },
 )

@@ -71,4 +71,33 @@ class TaxDocsRepositoryContractTest {
         assertTrue(result is ApiResult.Failure)
         assertEquals(422, (result as ApiResult.Failure).error.status)
     }
+
+    @Test
+    fun summary_sendsYearQueryParam_andMaps() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"date_from":1,"date_to":2,"currency":"usd","grand_total_cents":500,
+                   "transaction_count":3,"categories":[
+                     {"category":"tips","total_cents":500,"transaction_count":3}]}""",
+            ),
+        )
+        val result = repo().summary(2025)
+        assertTrue(result is ApiResult.Success)
+        val summary = (result as ApiResult.Success).data
+        assertEquals(500L, summary.grandTotal.cents)
+        assertEquals(1, summary.categories.size)
+
+        val req = backend.takeRequest()
+        assertEquals("GET", req.method)
+        assertEquals("/ui/tax-documents/summary", req.requestUrl?.encodedPath)
+        assertEquals("2025", req.requestUrl?.queryParameter("year"))
+    }
+
+    @Test
+    fun summary_422_isFailure() = runTest {
+        backend.enqueue(Fixtures.error("\"missing year\"", 422))
+        val result = repo().summary(2025)
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(422, (result as ApiResult.Failure).error.status)
+    }
 }

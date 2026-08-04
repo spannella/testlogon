@@ -60,6 +60,12 @@ interface OrgsRepository {
     suspend fun transferOwnership(orgId: String, newOwnerUserSub: String): ApiResult<Unit>
 
     /**
+     * PAR-35(b) - the caller LEAVES the org. 204 empty -> Success(Unit). A sole-owner leave is rejected by
+     * the backend with 409 -> Failure(status=409) (the caller surfaces a "transfer ownership first" hint).
+     */
+    suspend fun leaveOrg(orgId: String): ApiResult<Unit>
+
+    /**
      * AND-354 - the caller ACCEPTS one of their own pending invites. [token] is the per-invite token (or
      * empty when the wire row omits one). Success-by-isSuccessful -> Success(Unit).
      */
@@ -126,6 +132,11 @@ class OrgsRepositoryImpl @Inject constructor(
             orgsApi.transferOwnership(orgId, TransferOwnershipReq(newOwnerUserSub)).requireSuccess()
         }
     }
+
+    override suspend fun leaveOrg(orgId: String): ApiResult<Unit> =
+        withContext(Dispatchers.IO) {
+            call { orgsApi.leaveOrg(orgId).requireSuccess() }
+        }
 
     override suspend fun acceptInvite(inviteId: String, token: String): ApiResult<Unit> =
         withContext(Dispatchers.IO) {

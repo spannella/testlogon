@@ -16,16 +16,27 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.MarkEmailUnread
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -47,6 +58,8 @@ object OrgOverviewTestTags {
     const val NAME = "org_overview_name"
     const val MEMBERS_NAV = "org_overview_members_nav"
     const val INVITES_NAV = "org_overview_invites_nav"
+    const val LEAVE = "org_overview_leave"
+    const val TRANSFER = "org_overview_transfer"
 }
 
 /**
@@ -59,15 +72,32 @@ fun OrgOverviewRoute(
     onBack: () -> Unit,
     onOpenMembers: () -> Unit,
     onOpenInvites: () -> Unit,
+    onOpenTransfer: () -> Unit,
     viewModel: OrgOverviewViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val leaving by viewModel.leaving.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(viewModel) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is OrgOverviewEvent.Left -> onBack()
+                is OrgOverviewEvent.Message -> snackbarHostState.showSnackbar(event.text)
+            }
+        }
+    }
+
     OrgOverviewScreen(
         state = state,
+        leaving = leaving,
+        snackbarHostState = snackbarHostState,
         onBack = onBack,
         onRetry = viewModel::onRetry,
         onOpenMembers = onOpenMembers,
         onOpenInvites = onOpenInvites,
+        onOpenTransfer = onOpenTransfer,
+        onLeave = viewModel::leaveOrg,
     )
 }
 
@@ -75,14 +105,19 @@ fun OrgOverviewRoute(
 @Composable
 fun OrgOverviewScreen(
     state: OrgOverviewUiState,
+    leaving: Boolean,
+    snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onOpenMembers: () -> Unit,
     onOpenInvites: () -> Unit,
+    onOpenTransfer: () -> Unit,
+    onLeave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
         modifier = modifier.testTag(OrgOverviewTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.org_overview_title)) },
@@ -118,9 +153,12 @@ fun OrgOverviewScreen(
             is OrgOverviewUiState.Content ->
                 OrgOverviewContent(
                     state = state,
+                    leaving = leaving,
                     onRetry = onRetry,
                     onOpenMembers = onOpenMembers,
                     onOpenInvites = onOpenInvites,
+                    onOpenTransfer = onOpenTransfer,
+                    onLeave = onLeave,
                     modifier = Modifier.padding(padding),
                 )
         }
@@ -130,11 +168,15 @@ fun OrgOverviewScreen(
 @Composable
 private fun OrgOverviewContent(
     state: OrgOverviewUiState.Content,
+    leaving: Boolean,
     onRetry: () -> Unit,
     onOpenMembers: () -> Unit,
     onOpenInvites: () -> Unit,
+    onOpenTransfer: () -> Unit,
+    onLeave: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var confirmLeave by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -181,7 +223,51 @@ private fun OrgOverviewContent(
                 onClick = onOpenInvites,
                 modifier = Modifier.testTag(OrgOverviewTestTags.INVITES_NAV),
             )
+
+            // PAR-35(c) - owner-only transfer-ownership entry.
+            if (state.callerRole == OrgRole.OWNER) {
+                OutlinedButton(
+                    onClick = onOpenTransfer,
+                    modifier = Modifier.fillMaxWidth().testTag(OrgOverviewTestTags.TRANSFER),
+                ) {
+                    Text(stringResource(R.string.org_overview_transfer))
+                }
+            }
+
+            // PAR-35(b) - leave the organization (destructive + confirm).
+            Button(
+                onClick = { confirmLeave = true },
+                enabled = !leaving,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+                modifier = Modifier.fillMaxWidth().testTag(OrgOverviewTestTags.LEAVE),
+            ) {
+                Text(stringResource(R.string.org_overview_leave))
+            }
         }
+    }
+
+    if (confirmLeave) {
+        AlertDialog(
+            onDismissRequest = { confirmLeave = false },
+            title = { Text(stringResource(R.string.org_leave_confirm_title)) },
+            text = { Text(stringResource(R.string.org_leave_confirm_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLeave = false
+                    onLeave()
+                }) {
+                    Text(stringResource(R.string.org_leave_confirm_action))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmLeave = false }) {
+                    Text(stringResource(R.string.org_leave_cancel))
+                }
+            },
+        )
     }
 }
 

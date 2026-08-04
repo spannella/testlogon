@@ -6,13 +6,17 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.orgs.Org
 import com.testlogon.android.core.model.orgs.OrgRole
+import kotlinx.coroutines.channels.Channel
 import com.testlogon.android.feature.orgs.data.OrgsRepository
 import com.testlogon.android.feature.orgs.data.SelectedOrgStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -28,6 +32,15 @@ import javax.inject.Inject
  * content is KEPT with isStale = true (a stale banner) instead of dropping to a terminal Error. A first
  * load with no cache surfaces Empty (no orgs) or Error.
  */
+/**
+ * PAR-35(b) - one-shot effects from the org overview (leave outcome). [Left] pops back to the caller;
+ * [Message] surfaces a snackbar (e.g. sole-owner rejection, failure).
+ */
+sealed interface OrgOverviewEvent {
+    data object Left : OrgOverviewEvent
+    data class Message(val text: String) : OrgOverviewEvent
+}
+
 @HiltViewModel
 class OrgOverviewViewModel @Inject constructor(
     private val repository: OrgsRepository,
@@ -36,6 +49,12 @@ class OrgOverviewViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow<OrgOverviewUiState>(OrgOverviewUiState.Loading)
     val uiState: StateFlow<OrgOverviewUiState> = _uiState.asStateFlow()
+
+    private val _leaving = MutableStateFlow(false)
+    val leaving: StateFlow<Boolean> = _leaving.asStateFlow()
+
+    private val _events = Channel<OrgOverviewEvent>(Channel.BUFFERED)
+    val events: Flow<OrgOverviewEvent> = _events.receiveAsFlow()
 
     init {
         load(orgId = null)
@@ -55,6 +74,32 @@ class OrgOverviewViewModel @Inject constructor(
     }
 
     fun onRetry() = load(orgId = currentOrgId())
+
+    /**
+     * PAR-35(b) - the caller leaves the CURRENT org. A sole-owner leave is rejected by the backend (409)
+     * and surfaces a "transfer ownership first" message. On success emits [OrgOverviewEvent.Left] so the
+     * screen pops. Guarded against re-entrancy via [leaving].
+     */
+    fun leaveOrg() {
+        if (_leaving.value) return
+        val orgId = currentOrgId() ?: return
+        _leaving.value = true
+        viewModelScope.launch {
+            val result = repository.leaveOrg(orgId)
+            _leaving.value = false
+            when (result) {
+                is ApiResult.Success -> _events.send(OrgOverviewEvent.Left)
+                is ApiResult.Failure -> {
+                    val msg = if (result.error.status == STATUS_SOLE_OWNER) SOLE_OWNER else LEAVE_FAILED
+                    _events.send(OrgOverviewEvent.Message(msg))
+                }
+                is ApiResult.NetworkError -> _events.send(OrgOverviewEvent.Message(OFFLINE_FALLBACK))
+            }
+        }
+    }
+
+    /** PAR-35(c) - reload the overview after a transfer changed roles (owner -> admin). */
+    fun reloadAfterTransfer() = load(orgId = currentOrgId())
 
     private suspend fun reduceWithOrgs(
         orgs: List<Org>,
@@ -112,5 +157,8 @@ class OrgOverviewViewModel @Inject constructor(
 
     private companion object {
         const val OFFLINE_FALLBACK = "Couldn't reach the server. Pull down to retry."
+        const val LEAVE_FAILED = "Couldn't leave the organization. Please try again."
+        const val SOLE_OWNER = "You are the sole owner. Transfer ownership before leaving."
+        const val STATUS_SOLE_OWNER = 409
     }
 }

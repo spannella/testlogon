@@ -49,4 +49,34 @@ class TaxDocsMapperTest {
         assertNull(d.createdAtEpochSeconds)
         assertFalse(d.isDownloadable)
     }
+
+    @Test
+    fun decodes_summary_dropsAllZeroCategories() {
+        val json = """
+            {"date_from":1704067200,"date_to":1735689599,"currency":"usd",
+             "grand_total_cents":254013,"transaction_count":87,
+             "categories":[
+               {"category":"subscriptions","total_cents":200000,"transaction_count":40},
+               {"category":"tips","total_cents":54013,"transaction_count":47},
+               {"category":"unlocks","total_cents":0,"transaction_count":0}
+             ]}
+        """.trimIndent()
+        val dto = moshi.adapter(TaxSpendingSummaryDto::class.java).fromJson(json)!!
+        val s = dto.toDomain()
+        assertEquals(254013L, s.grandTotal.cents)
+        assertEquals("usd", s.grandTotal.currency)
+        assertEquals(87, s.transactionCount)
+        // all-zero "unlocks" row dropped
+        assertEquals(2, s.categories.size)
+        assertEquals("subscriptions", s.categories[0].category)
+        assertEquals(200000L, s.categories[0].total.cents)
+        assertFalse(s.isEmpty)
+    }
+
+    @Test
+    fun summary_allZero_isEmpty() {
+        val dto = moshi.adapter(TaxSpendingSummaryDto::class.java)
+            .fromJson("""{"grand_total_cents":0,"transaction_count":0,"categories":[]}""")!!
+        assertTrue(dto.toDomain().isEmpty)
+    }
 }

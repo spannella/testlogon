@@ -1,5 +1,6 @@
 package com.testlogon.android.navigation
 
+import androidx.compose.runtime.collectAsState
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
@@ -10,6 +11,8 @@ import com.testlogon.android.feature.orgs.MyInvitesRoute
 import com.testlogon.android.feature.orgs.OrgMembersRoute
 import com.testlogon.android.feature.orgs.OrgMembersViewModel
 import com.testlogon.android.feature.orgs.OrgOverviewRoute
+import com.testlogon.android.feature.orgs.OrgOverviewViewModel
+import com.testlogon.android.feature.orgs.TransferOwnershipRoute
 
 /** AND-353 - the nested orgs graph (its route is the More-hub entry point). */
 data object OrgsGraphDest {
@@ -39,6 +42,11 @@ data object MyInvitesDest {
     const val ROUTE = "orgs/my-invites"
 }
 
+/** PAR-35(c) - the transfer-ownership member-picker route (owner-only; reached from Overview). */
+data object TransferOwnershipDest {
+    const val ROUTE = "orgs/transfer-ownership"
+}
+
 /**
  * AND-353 / AND-354 - registers the orgs destinations as a NESTED graph. The members + invite screens
  * share ONE graph-scoped [OrgMembersViewModel] (the invite's new pending invite lands in the shared roster
@@ -47,7 +55,18 @@ data object MyInvitesDest {
  */
 fun NavGraphBuilder.orgsDestinations(navController: NavHostController) {
     navigation(route = OrgsGraphDest.ROUTE, startDestination = OrgOverviewDest.ROUTE) {
-        composable(OrgOverviewDest.ROUTE) {
+        composable(OrgOverviewDest.ROUTE) { backStackEntry ->
+            val overviewVm = hiltViewModel<OrgOverviewViewModel>()
+            // PAR-35(c): when the transfer picker pops back with a success flag, reload the roles.
+            val transferred = backStackEntry.savedStateHandle
+                .getStateFlow(TRANSFER_RESULT_KEY, false)
+                .collectAsState()
+            androidx.compose.runtime.LaunchedEffect(transferred.value) {
+                if (transferred.value) {
+                    overviewVm.reloadAfterTransfer()
+                    backStackEntry.savedStateHandle[TRANSFER_RESULT_KEY] = false
+                }
+            }
             OrgOverviewRoute(
                 onBack = { navController.popBackStack() },
                 onOpenMembers = {
@@ -55,6 +74,20 @@ fun NavGraphBuilder.orgsDestinations(navController: NavHostController) {
                 },
                 onOpenInvites = {
                     navController.navigate(MyInvitesDest.ROUTE) { launchSingleTop = true }
+                },
+                onOpenTransfer = {
+                    navController.navigate(TransferOwnershipDest.ROUTE) { launchSingleTop = true }
+                },
+                viewModel = overviewVm,
+            )
+        }
+        composable(TransferOwnershipDest.ROUTE) {
+            TransferOwnershipRoute(
+                onBack = { navController.popBackStack() },
+                onTransferred = {
+                    navController.previousBackStackEntry
+                        ?.savedStateHandle?.set(TRANSFER_RESULT_KEY, true)
+                    navController.popBackStack()
                 },
             )
         }
@@ -90,3 +123,6 @@ private fun rememberOrgsGraphEntry(
     androidx.compose.runtime.remember(backStackEntry) {
         navController.getBackStackEntry(OrgsGraphDest.ROUTE)
     }
+
+/** PAR-35(c) - savedStateHandle key set by the transfer picker so Overview reloads its roles on return. */
+private const val TRANSFER_RESULT_KEY = "orgs.transfer.result"

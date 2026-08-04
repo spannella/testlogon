@@ -9,6 +9,7 @@ import com.testlogon.android.core.model.syndicates.OpenLicensingContent
 import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SplitMode
+import com.testlogon.android.core.model.syndicates.SyndicateDiscoverItem
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
@@ -19,6 +20,7 @@ import com.testlogon.android.core.network.syndicates.SplitConfigOut
 import com.testlogon.android.core.network.syndicates.SyndicateApi
 import com.testlogon.android.core.network.syndicates.SyndicateCreateOut
 import com.testlogon.android.core.network.syndicates.SyndicateCreateIn
+import com.testlogon.android.core.network.syndicates.SyndicateDiscoverItemDto
 import com.testlogon.android.core.network.syndicates.SyndicateListItemDto
 import com.testlogon.android.core.network.syndicates.SyndicateFeedOut
 import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegisterIn
@@ -82,6 +84,13 @@ class FakeSyndicateApi(
     val createSyndicateBodies = mutableListOf<SyndicateCreateIn>()
 
     override suspend fun listMySyndicates(): List<SyndicateListItemDto> = myList()
+
+    var discoverList: () -> List<SyndicateDiscoverItemDto> = { emptyList() }
+    val discoverLimits = mutableListOf<Int>()
+    override suspend fun discover(limit: Int): List<SyndicateDiscoverItemDto> {
+        discoverLimits += limit
+        return discoverList()
+    }
 
     override suspend fun createSyndicate(body: SyndicateCreateIn): SyndicateCreateOut {
         createSyndicateBodies += body
@@ -220,6 +229,15 @@ class FakeSyndicateRepo(
     override suspend fun listMySyndicates(): ApiResult<List<SyndicateListItem>> {
         listCallCount++
         return listResult
+    }
+
+    var discoverResult: ApiResult<List<SyndicateDiscoverItem>> = ApiResult.Success(emptyList())
+    var discoverCallCount = 0
+    val discoverLimits = mutableListOf<Int>()
+    override suspend fun discover(limit: Int): ApiResult<List<SyndicateDiscoverItem>> {
+        discoverCallCount++
+        discoverLimits += limit
+        return discoverResult
     }
 
     override suspend fun createSyndicate(name: String, description: String?): ApiResult<SyndicateListItem> {

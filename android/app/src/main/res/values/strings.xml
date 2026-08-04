@@ -1911,6 +1911,18 @@
     <string name="tax_docs_row_subtitle">%1$s · %2$d transactions</string>
     <string name="tax_docs_download_cd">Download %1$s tax statement</string>
     <string name="tax_docs_no_viewer">No app available to open this file.</string>
+    <!-- PAR-24 earnings summary card -->
+    <string name="tax_docs_summary_title">Earnings summary</string>
+    <string name="tax_docs_summary_year">%1$d</string>
+    <string name="tax_docs_summary_total_label">Total earnings</string>
+    <string name="tax_docs_summary_txns">%1$d transactions</string>
+    <string name="tax_docs_summary_empty">No earnings for %1$d</string>
+    <string name="tax_docs_summary_category_amount">%1$s · %2$d</string>
+    <string name="tax_docs_category_subscriptions">Subscriptions</string>
+    <string name="tax_docs_category_tips">Tips</string>
+    <string name="tax_docs_category_unlocks">Unlocks</string>
+    <string name="tax_docs_category_vod_purchases">Video purchases</string>
+    <string name="tax_docs_category_other">Other</string>
 
     <!-- AND-247: 1099-NEC tax forms -->
     <string name="more_entry_tax_forms_1099">1099 tax forms</string>
@@ -3518,6 +3530,27 @@
     <string name="org_overview_member_count_unknown">Member count unavailable</string>
     <string name="org_overview_members">Members</string>
     <string name="org_overview_my_invites">My invites</string>
+    <!-- PAR-35(b) org leave -->
+    <string name="org_overview_leave">Leave organization</string>
+    <string name="org_leave_confirm_title">Leave organization?</string>
+    <string name="org_leave_confirm_body">You will lose access to this organization. You can be re-invited later.</string>
+    <string name="org_leave_confirm_action">Leave</string>
+    <string name="org_leave_cancel">Cancel</string>
+    <string name="org_leave_failed">Couldn\'t leave the organization. Please try again.</string>
+    <string name="org_leave_sole_owner">You are the sole owner. Transfer ownership before leaving.</string>
+    <string name="org_left">You left the organization.</string>
+    <!-- PAR-35(c) org transfer ownership -->
+    <string name="org_overview_transfer">Transfer ownership</string>
+    <string name="org_transfer_title">Transfer ownership</string>
+    <string name="org_transfer_body">Choose a member to become the new owner. You will become an admin.</string>
+    <string name="org_transfer_empty">No other members to transfer to.</string>
+    <string name="org_transfer_confirm_title">Make %1$s the owner?</string>
+    <string name="org_transfer_confirm_body">They will become the owner and you will become an admin.</string>
+    <string name="org_transfer_confirm_action">Transfer</string>
+    <string name="org_transfer_cancel">Cancel</string>
+    <string name="org_transfer_failed">Couldn\'t transfer ownership. Please try again.</string>
+    <string name="org_transfer_done">Ownership transferred.</string>
+    <string name="org_transfer_back">Back</string>
     <string name="org_overview_empty_title">No organization</string>
     <string name="org_overview_empty_body">You don\'t belong to any organization yet.</string>
     <!-- AND-354: my invites (accept/decline) -->
@@ -3634,6 +3667,12 @@
     <string name="syndicates_list_title">Syndicates</string>
     <string name="syndicates_list_empty_title">No syndicates yet</string>
     <string name="syndicates_list_empty_body">Create a syndicate to get started.</string>
+    <!-- PAR-35(a) syndicate discover tab -->
+    <string name="syndicates_tab_mine">My syndicates</string>
+    <string name="syndicates_tab_discover">Discover</string>
+    <string name="syndicates_discover_empty_title">No syndicates to discover</string>
+    <string name="syndicates_discover_empty_body">There are no public syndicates right now.</string>
+    <string name="syndicates_discover_member_count">%1$d members</string>
     <string name="syndicates_list_error">Couldn\'t load your syndicates.</string>
     <string name="syndicate_create_title">Create syndicate</string>
     <string name="syndicate_create_name_label">Syndicate name</string>

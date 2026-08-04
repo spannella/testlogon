@@ -174,6 +174,21 @@ data class SyndicateCreateOut(
     @Json(name = "name") val name: String? = null,
 )
 
+/**
+ * PAR-35(a) - one discoverable syndicate row (GET ui/syndicates/discover -> a BARE ARRAY of sy_meta_out).
+ * The id key is `syndicate_id`; the name key is `name` (NOT `syndicate_name`). member_count / description /
+ * created_at are informational for the discover card.
+ */
+data class SyndicateDiscoverItemDto(
+    @Json(name = "syndicate_id") val syndicateId: String,
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "admin_user_id") val adminUserId: String? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "member_count") val memberCount: Int? = null,
+    @Json(name = "created_at") val createdAt: Long? = null,
+)
+
 // ---- AND-357: open-licensing sub-surface (extends AND-356, same DTO file) ----
 
 /**
