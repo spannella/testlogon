@@ -15,6 +15,7 @@ data class SymbolDetailUiState(
     val symbolId: Int = 0,
     val symbolName: String = "",
     val candles: List<Candle> = emptyList(),
+    val intervalSec: Int = 60,
     val orderBook: OrderBook? = null,
     val trades: List<Trade> = emptyList(),
     val live: Boolean = false,

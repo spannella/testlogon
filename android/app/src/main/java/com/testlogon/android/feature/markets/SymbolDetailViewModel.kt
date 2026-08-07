@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -39,6 +40,9 @@ class SymbolDetailViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(SymbolDetailUiState(symbolId = symbolId))
     val uiState: StateFlow<SymbolDetailUiState> = _uiState.asStateFlow()
 
+    /** The current live-stream collector; cancelled + restarted when the timeframe changes. */
+    private var streamJob: Job? = null
+
     init {
         resolveName()
         initialFetch()
@@ -49,6 +53,26 @@ class SymbolDetailViewModel @Inject constructor(
     fun onRetry() {
         _uiState.update { it.copy(phase = SymbolDetailUiState.Phase.Loading, errorMessage = null) }
         initialFetch()
+    }
+
+    /**
+     * Switch the chart timeframe: re-fetch candle history at [intervalSec] and restart the live SSE
+     * stream at the same interval so live bars align with the selected grid. No-op if unchanged.
+     */
+    fun setInterval(intervalSec: Int) {
+        if (intervalSec == _uiState.value.intervalSec) return
+        _uiState.update { it.copy(intervalSec = intervalSec, candles = emptyList()) }
+        refetchCandles(intervalSec)
+        streamMarketData()
+    }
+
+    private fun refetchCandles(intervalSec: Int) {
+        viewModelScope.launch {
+            when (val candles = repository.candles(symbolId, intervalSec)) {
+                is ApiResult.Success -> _uiState.update { it.copy(candles = candles.data) }
+                else -> Unit
+            }
+        }
     }
 
     private fun resolveName() {
@@ -63,8 +87,9 @@ class SymbolDetailViewModel @Inject constructor(
     /** One-shot REST fetch for the first paint (order book snapshot + candle history + trades). */
     private fun initialFetch() {
         viewModelScope.launch {
-            val candles = repository.candles(symbolId)
-            val book = repository.orderBook(symbolId)
+            val intervalSec = _uiState.value.intervalSec
+            val candles = repository.candles(symbolId, intervalSec)
+            val book = repository.orderBook(symbolId, depth = 50)
             val trades = repository.trades(symbolId)
 
             val anyOk = candles is ApiResult.Success ||
@@ -90,8 +115,10 @@ class SymbolDetailViewModel @Inject constructor(
 
     /** LIVE order book + latest candle via SSE. Cancelled automatically when the scope clears. */
     private fun streamMarketData() {
-        viewModelScope.launch {
-            exchangeStream.marketData(symbolId).collect { frame ->
+        streamJob?.cancel()
+        val intervalSec = _uiState.value.intervalSec
+        streamJob = viewModelScope.launch {
+            exchangeStream.marketData(symbolId, intervalSec).collect { frame ->
                 _uiState.update { state ->
                     state.copy(
                         phase = SymbolDetailUiState.Phase.Content,

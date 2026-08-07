@@ -59,9 +59,10 @@ class ExchangeStream @Inject constructor(
      * Cold flow of live [MdFrame]s for [symbolId]. Re-opens the stream on end/IO error after a short
      * backoff; cancelling the collector cancels the call and stops reconnecting.
      */
-    fun marketData(symbolId: Int): Flow<MdFrame> = callbackFlow {
+    fun marketData(symbolId: Int, intervalSec: Int = 60): Flow<MdFrame> = callbackFlow {
         var running = true
-        val url = settingsStore.baseUrl.trimEnd('/') + "/" + STREAM_PATH_PREFIX + symbolId + STREAM_QUERY
+        val url = settingsStore.baseUrl.trimEnd('/') + "/" + STREAM_PATH_PREFIX + symbolId +
+            "?interval=" + intervalSec
 
         val worker = Thread {
             while (running) {
@@ -118,10 +119,8 @@ class ExchangeStream @Inject constructor(
 
     private companion object {
         const val STREAM_PATH_PREFIX = "md/stream/"
-        // interval=60 matches ExchangeRepository.candles(intervalSec=60) so live bars align with the
-        // REST history grid (same ts_start_ns) and mergeCandle replaces/appends 60s bars correctly.
-        // interval=1 desynced the chart (1s live bars appended onto 60s history).
-        const val STREAM_QUERY = "?interval=60"
+        // interval is passed per-call so the live bars align with the selected timeframe grid
+        // (same ts_start_ns), and mergeCandle replaces/appends bars correctly.
         const val EVENT_MD = "md"
         const val RECONNECT_BACKOFF_MS = 1_500L
     }
