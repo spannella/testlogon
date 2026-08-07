@@ -71,6 +71,17 @@ enum class ChartType(val label: String) {
     AREA("Area"),
 }
 
+/** Optional bottom oscillator sub-pane. Mutually exclusive. */
+enum class Oscillator(val label: String) {
+    NONE("Off"),
+    RSI("RSI"),
+    MACD("MACD"),
+}
+
+private val RsiColor = Color(0xFFB388FF)    // violet
+private val MacdColor = Color(0xFF4C8DFF)   // blue
+private val SignalColor = Color(0xFFFF9F40) // orange
+
 /**
  * A moving-average overlay: [period] candles, [sma] true = simple, false = exponential, drawn in
  * [color]. The Binance-style defaults are MA7 / MA25 / MA99 (all simple) on the close price.
@@ -96,6 +107,10 @@ private data class Overlays(
     val bbUpper: List<Double?>,
     val bbLower: List<Double?>,
     val vwap: List<Double?>,
+    val rsi: List<Double?>,
+    val macdLine: List<Double?>,
+    val macdSignal: List<Double?>,
+    val macdHist: List<Double?>,
 )
 
 private const val MIN_VISIBLE = 12
@@ -118,6 +133,7 @@ fun CandlestickChart(
     modifier: Modifier = Modifier,
     selected: Timeframe = Timeframe.M1,
     chartType: ChartType = ChartType.CANDLES,
+    oscillator: Oscillator = Oscillator.NONE,
     showTimeframes: Boolean = true,
     onTimeframeSelected: (Timeframe) -> Unit = {},
 ) {
@@ -137,12 +153,15 @@ fun CandlestickChart(
                 }
             }
         }
+        val chartHeight = if (oscillator == Oscillator.NONE) 260.dp else 340.dp
         CandlestickCanvas(
             candles = candles,
             priceScaler = priceScaler.coerceAtLeast(1L),
             timeframe = selected,
             chartType = chartType,
-            modifier = Modifier.fillMaxWidth().height(260.dp).testTag("candle_chart"),
+            oscillator = oscillator,
+            chartHeight = chartHeight,
+            modifier = Modifier.fillMaxWidth().height(chartHeight).testTag("candle_chart"),
         )
     }
 }
@@ -153,6 +172,8 @@ private fun CandlestickCanvas(
     priceScaler: Long,
     timeframe: Timeframe,
     chartType: ChartType,
+    oscillator: Oscillator,
+    chartHeight: androidx.compose.ui.unit.Dp,
     modifier: Modifier,
 ) {
     if (candles.isEmpty()) {
@@ -186,7 +207,8 @@ private fun CandlestickCanvas(
         val sd = stdDev(closes, BB_PERIOD)
         val upper = mid.mapIndexed { i, m -> if (m != null && sd[i] != null) m + BB_MULT * sd[i]!! else null }
         val lower = mid.mapIndexed { i, m -> if (m != null && sd[i] != null) m - BB_MULT * sd[i]!! else null }
-        Overlays(ma, mid, upper, lower, vwap(candles))
+        val (macdLine, macdSignal, macdHist) = macd(closes)
+        Overlays(ma, mid, upper, lower, vwap(candles), rsi(closes, 14), macdLine, macdSignal, macdHist)
     }
     val maSeries = overlays.ma
 
@@ -210,7 +232,7 @@ private fun CandlestickCanvas(
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(260.dp)
+                .height(chartHeight)
                 .pointerInput(candles.size) {
                     detectTapGestures(onDoubleTap = { resetView() })
                 }
@@ -240,9 +262,12 @@ private fun CandlestickCanvas(
         ) {
             val plotWidth = size.width - rightAxisWidthPx
             val totalHeight = size.height - bottomAxisHeightPx
-            val priceHeight = totalHeight * 0.74f
+            val hasOsc = oscillator != Oscillator.NONE
+            val priceHeight = totalHeight * (if (hasOsc) 0.56f else 0.74f)
             val volTop = priceHeight + totalHeight * 0.03f
-            val volHeight = totalHeight - volTop
+            val volHeight = if (hasOsc) totalHeight * 0.14f else totalHeight - volTop
+            val oscTop = volTop + volHeight + totalHeight * 0.03f
+            val oscHeight = if (hasOsc) (totalHeight - oscTop).coerceAtLeast(0f) else 0f
 
             val vc = visibleCount.coerceIn(1, candles.size.coerceAtLeast(1))
             val startIdx = (candles.size - vc - scrollOffset.roundToInt())
@@ -424,6 +449,69 @@ private fun CandlestickCanvas(
                 }
             }
 
+            // ---- oscillator sub-pane (RSI or MACD) ----
+            if (hasOsc && oscHeight > 4f) {
+                val labelPaint = Paint().apply {
+                    color = AxisTextColor.value.toInt(); textSize = axisTextPx; isAntiAlias = true; textAlign = Paint.Align.LEFT
+                }
+                when (oscillator) {
+                    Oscillator.RSI -> {
+                        fun yR(v: Double) = oscTop + oscHeight * (1f - (v / 100.0).toFloat())
+                        val guide = PathEffect.dashPathEffect(floatArrayOf(4f, 6f), 0f)
+                        drawLine(GridColor, Offset(0f, yR(70.0)), Offset(plotWidth, yR(70.0)), strokeWidth = 1f, pathEffect = guide)
+                        drawLine(GridColor, Offset(0f, yR(30.0)), Offset(plotWidth, yR(30.0)), strokeWidth = 1f, pathEffect = guide)
+                        var prev: Offset? = null
+                        var lastVal: Double? = null
+                        for (i in 0 until n) {
+                            val v = overlays.rsi.getOrNull(startIdx + i)
+                            if (v == null) { prev = null; continue }
+                            val cur = Offset(slot * i + slot / 2f, yR(v))
+                            val p = prev
+                            if (p != null) drawLine(RsiColor, p, cur, strokeWidth = 1.5f)
+                            prev = cur; lastVal = v
+                        }
+                        drawContext.canvas.nativeCanvas.drawText(
+                            "RSI 14" + (lastVal?.let { "  " + String.format(Locale.US, "%.1f", it) } ?: ""),
+                            2f, oscTop + axisTextPx, labelPaint,
+                        )
+                    }
+                    Oscillator.MACD -> {
+                        var absMax = 0.0
+                        for (i in 0 until n) {
+                            val gi = startIdx + i
+                            listOf(overlays.macdLine.getOrNull(gi), overlays.macdSignal.getOrNull(gi), overlays.macdHist.getOrNull(gi))
+                                .forEach { it?.let { v -> if (abs(v) > absMax) absMax = abs(v) } }
+                        }
+                        if (absMax <= 0.0) absMax = 1.0
+                        fun yM(v: Double) = oscTop + oscHeight * (0.5f - (v / (2 * absMax)).toFloat())
+                        drawLine(GridColor, Offset(0f, yM(0.0)), Offset(plotWidth, yM(0.0)), strokeWidth = 1f)
+                        for (i in 0 until n) {
+                            val h = overlays.macdHist.getOrNull(startIdx + i) ?: continue
+                            val cx = slot * i + slot / 2f
+                            val yZero = yM(0.0); val yH = yM(h)
+                            val top = minOf(yZero, yH); val hgt = abs(yH - yZero).coerceAtLeast(1f)
+                            val col = if (h >= 0) UpColor else DownColor
+                            drawRect(col.copy(alpha = 0.5f), Offset(cx - bodyWidth / 2f, top), Size(bodyWidth, hgt))
+                        }
+                        fun drawSeries(series: List<Double?>, color: Color) {
+                            var prev: Offset? = null
+                            for (i in 0 until n) {
+                                val v = series.getOrNull(startIdx + i)
+                                if (v == null) { prev = null; continue }
+                                val cur = Offset(slot * i + slot / 2f, yM(v))
+                                val p = prev
+                                if (p != null) drawLine(color, p, cur, strokeWidth = 1.5f)
+                                prev = cur
+                            }
+                        }
+                        drawSeries(overlays.macdLine, MacdColor)
+                        drawSeries(overlays.macdSignal, SignalColor)
+                        drawContext.canvas.nativeCanvas.drawText("MACD 12 26 9", 2f, oscTop + axisTextPx, labelPaint)
+                    }
+                    Oscillator.NONE -> {}
+                }
+            }
+
             // ---- last-price dashed accent line + tag ----
             val last = window.last()
             val yLast = yOfPrice(last.close)
@@ -594,6 +682,67 @@ private fun vwap(candles: List<Candle>): List<Double?> {
         cumV += v
         if (cumV > 0.0) cumPv / cumV else null
     }
+}
+
+/** Wilder RSI over [period], aligned 1:1 with [closes]; null until enough samples. */
+private fun rsi(closes: List<Double>, period: Int): List<Double?> {
+    val out = arrayOfNulls<Double>(closes.size).toMutableList()
+    if (closes.size <= period) return out
+    var gain = 0.0
+    var loss = 0.0
+    for (i in 1..period) {
+        val ch = closes[i] - closes[i - 1]
+        if (ch >= 0) gain += ch else loss -= ch
+    }
+    var avgGain = gain / period
+    var avgLoss = loss / period
+    out[period] = if (avgLoss == 0.0) 100.0 else 100.0 - 100.0 / (1 + avgGain / avgLoss)
+    for (i in period + 1 until closes.size) {
+        val ch = closes[i] - closes[i - 1]
+        val g = if (ch >= 0) ch else 0.0
+        val l = if (ch < 0) -ch else 0.0
+        avgGain = (avgGain * (period - 1) + g) / period
+        avgLoss = (avgLoss * (period - 1) + l) / period
+        out[i] = if (avgLoss == 0.0) 100.0 else 100.0 - 100.0 / (1 + avgGain / avgLoss)
+    }
+    return out
+}
+
+/** MACD(12,26,9): returns (macd line, signal, histogram) each aligned 1:1 with [closes]. */
+private fun macd(closes: List<Double>): Triple<List<Double?>, List<Double?>, List<Double?>> {
+    val fast = emaSeeded(closes, 12)
+    val slow = emaSeeded(closes, 26)
+    val macdLine = closes.indices.map { i -> if (i >= 25) fast[i] - slow[i] else null }
+    val signal = emaNullable(macdLine, 9)
+    val hist = closes.indices.map { i ->
+        val m = macdLine[i]
+        val s = signal[i]
+        if (m != null && s != null) m - s else null
+    }
+    return Triple(macdLine, signal, hist)
+}
+
+/** Continuous EMA seeded at the first sample (no leading nulls). */
+private fun emaSeeded(closes: List<Double>, period: Int): DoubleArray {
+    val k = 2.0 / (period + 1)
+    val out = DoubleArray(closes.size)
+    for (i in closes.indices) out[i] = if (i == 0) closes[0] else closes[i] * k + out[i - 1] * (1 - k)
+    return out
+}
+
+/** EMA over a series that may have leading nulls; starts once [period] real samples are seen. */
+private fun emaNullable(src: List<Double?>, period: Int): List<Double?> {
+    val k = 2.0 / (period + 1)
+    val out = arrayOfNulls<Double>(src.size).toMutableList()
+    var prev: Double? = null
+    var count = 0
+    for (i in src.indices) {
+        val v = src[i] ?: continue
+        prev = if (prev == null) v else v * k + prev!! * (1 - k)
+        count++
+        if (count >= period) out[i] = prev
+    }
+    return out
 }
 
 private fun formatAxisPrice(v: Double): String {

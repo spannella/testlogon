@@ -48,13 +48,15 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 - ☐ **MDX-112 · Volume MA line** — `S` · dep MDX-111
   MA line over the volume histogram sub-pane.
 
-- ☐ **MDX-113 · Oscillator sub-pane framework** — `L` · refactor of volume pane
-  Generalize the volume sub-pane into a reusable stacked-pane host sharing the X-axis + crosshair,
-  so oscillators stack below price. AC: N sub-panes stack with shared X scale + crosshair; volume
-  migrated onto it.
+- ☑ **MDX-113 · Oscillator sub-pane** — `L` · **done** — the chart now reallocates vertical space
+  (price 56% / volume 14% / oscillator 24%) and grows its canvas 260→340dp when an oscillator is
+  active; shares the same window/X-scale as price. A mutually-exclusive `Oscillator` enum (None/RSI/
+  MACD) is selected via an `OscillatorToggle` control (left of the chart-type toggle).
 
-- ☐ **MDX-114 · RSI** — `M` · dep MDX-113
-- ☐ **MDX-115 · MACD** — `M` · dep MDX-113
+- ☑ **MDX-114 · RSI** — `M` · **done** — Wilder RSI(14) in the sub-pane with 30/70 dashed guides +
+  live value label.
+- ☑ **MDX-115 · MACD** — `M` · **done** — MACD(12,26,9): blue MACD line + orange signal + up/down
+  histogram, symmetric zero-centered scale, zero line + label.
 - ☑ **MDX-116 · Bollinger Bands** — `M` · **done** (price overlay: SMA20 ± 2σ upper/lower solid +
   mid dashed + faint fill; `stdDev()` helper; legend `BB` chip toggle, off by default).
 - ☑ **MDX-117 · VWAP** — `M` · **done** (session-cumulative Σ(typical·vol)/Σvol; orange line; legend

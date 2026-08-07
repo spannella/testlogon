@@ -49,6 +49,7 @@ import com.testlogon.android.data.exchange.Trade
 import com.testlogon.android.feature.markets.book.OrderBookL2
 import com.testlogon.android.feature.markets.chart.CandlestickChart
 import com.testlogon.android.feature.markets.chart.ChartType
+import com.testlogon.android.feature.markets.chart.Oscillator
 import com.testlogon.android.feature.markets.chart.Timeframe
 import com.testlogon.android.feature.markets.ui.MarketColors
 import com.testlogon.android.feature.markets.ui.MarketSurface
@@ -116,6 +117,7 @@ private fun SymbolDetailContent(
 ) {
     val selectedTf = Timeframe.entries.firstOrNull { it.seconds == state.intervalSec } ?: Timeframe.M1
     var chartType by remember { mutableStateOf(ChartType.CANDLES) }
+    var oscillator by remember { mutableStateOf(Oscillator.NONE) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("symbol_detail"),
         contentPadding = PaddingValues(bottom = 24.dp),
@@ -125,8 +127,10 @@ private fun SymbolDetailContent(
             TimeframeBar(selected = selectedTf, onTimeframe = onTimeframe)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                OscillatorToggle(selected = oscillator, onSelect = { oscillator = it })
                 ChartTypeToggle(selected = chartType, onSelect = { chartType = it })
             }
             CandlestickChart(
@@ -134,6 +138,7 @@ private fun SymbolDetailContent(
                 priceScaler = PRICE_SCALER,
                 selected = selectedTf,
                 chartType = chartType,
+                oscillator = oscillator,
                 onTimeframeSelected = onTimeframe,
                 showTimeframes = false,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -258,6 +263,31 @@ private fun TimeframeBar(selected: Timeframe, onTimeframe: (Timeframe) -> Unit) 
                     fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OscillatorToggle(selected: Oscillator, onSelect: (Oscillator) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        listOf(Oscillator.RSI, Oscillator.MACD).forEach { osc ->
+            val sel = osc == selected
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (sel) MarketColors.SurfaceAlt else Color.Transparent)
+                    .clickable { onSelect(if (sel) Oscillator.NONE else osc) }
+                    .testTag("osc_${osc.name}")
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    text = osc.label,
+                    color = if (sel) MarketColors.Accent else MarketColors.TextSecondary,
+                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
                 )
             }
         }
