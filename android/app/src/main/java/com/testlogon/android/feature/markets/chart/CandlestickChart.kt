@@ -2,7 +2,10 @@ package com.testlogon.android.feature.markets.chart
 
 import android.graphics.Paint
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,16 +14,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -31,6 +37,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.testlogon.android.data.exchange.Candle
 import com.testlogon.android.feature.markets.ui.MarketColors
 import java.text.SimpleDateFormat
@@ -56,15 +63,35 @@ enum class Timeframe(val label: String, val seconds: Int) {
     D1("1d", 86_400),
 }
 
+/** How the price series is drawn. */
+enum class ChartType(val label: String) {
+    CANDLES("Candles"),
+    LINE("Line"),
+    AREA("Area"),
+}
+
+/**
+ * A moving-average overlay: [period] candles, [sma] true = simple, false = exponential, drawn in
+ * [color]. The Binance-style defaults are MA7 / MA25 / MA99 (all simple) on the close price.
+ */
+private data class MaSpec(val label: String, val period: Int, val sma: Boolean, val color: Color)
+
+private val MA_SPECS = listOf(
+    MaSpec("MA7", 7, sma = true, color = Color(0xFFF0B90B)),   // amber
+    MaSpec("MA25", 25, sma = true, color = Color(0xFFE457C6)), // magenta
+    MaSpec("MA99", 99, sma = true, color = Color(0xFF8C7CFF)), // violet
+)
+
 private const val MIN_VISIBLE = 12
 private const val MAX_VISIBLE = 200
 private const val DEFAULT_VISIBLE = 60
 
 /**
- * TradingView-style interactive candlestick chart, dependency-free (pure Compose [Canvas] + the
- * platform [android.graphics.Canvas] for axis text). Dark exchange palette. Supports horizontal pan,
- * pinch-zoom, a draggable crosshair with an O/H/L/C tooltip card, a right price axis, a bottom time
- * axis, a volume sub-pane, and a dashed accent last-price line with a price tag.
+ * TradingView-style interactive price chart, dependency-free (pure Compose [Canvas] + the platform
+ * [android.graphics.Canvas] for axis text). Dark exchange palette. Supports horizontal pan, pinch-
+ * zoom, double-tap-to-reset, a draggable crosshair with an O/H/L/C tooltip card, moving-average
+ * overlays (MA7/25/99, toggle via the legend), candle / line / area render modes, a right price
+ * axis, an interval-aware bottom time axis, a volume sub-pane, and a dashed last-price line + tag.
  *
  * When [showTimeframes] is false the built-in chip row is hidden (the host supplies its own control).
  */
@@ -74,6 +101,7 @@ fun CandlestickChart(
     priceScaler: Long,
     modifier: Modifier = Modifier,
     selected: Timeframe = Timeframe.M1,
+    chartType: ChartType = ChartType.CANDLES,
     showTimeframes: Boolean = true,
     onTimeframeSelected: (Timeframe) -> Unit = {},
 ) {
@@ -96,6 +124,8 @@ fun CandlestickChart(
         CandlestickCanvas(
             candles = candles,
             priceScaler = priceScaler.coerceAtLeast(1L),
+            timeframe = selected,
+            chartType = chartType,
             modifier = Modifier.fillMaxWidth().height(260.dp).testTag("candle_chart"),
         )
     }
@@ -105,6 +135,8 @@ fun CandlestickChart(
 private fun CandlestickCanvas(
     candles: List<Candle>,
     priceScaler: Long,
+    timeframe: Timeframe,
+    chartType: ChartType,
     modifier: Modifier,
 ) {
     if (candles.isEmpty()) {
@@ -124,12 +156,40 @@ private fun CandlestickCanvas(
     var crosshairIdx by remember { mutableStateOf(-1) }
     var crosshairX by remember { mutableFloatStateOf(-1f) }
     var crosshairY by remember { mutableFloatStateOf(-1f) }
+    // Per-MA visibility, toggled from the legend chips. Defaults all on.
+    val maVisible = remember { mutableStateListOf(true, true, true) }
+
+    // Moving averages over the FULL series (so the left edge of the visible window uses prior bars);
+    // recomputed only when the candle list changes. Each entry is aligned 1:1 with [candles].
+    val maSeries = remember(candles) {
+        val closes = candles.map { it.close.toDouble() }
+        MA_SPECS.map { spec -> if (spec.sma) sma(closes, spec.period) else ema(closes, spec.period) }
+    }
+
+    fun resetView() {
+        visibleCount = DEFAULT_VISIBLE.coerceIn(MIN_VISIBLE, MAX_VISIBLE)
+        scrollOffset = 0f
+    }
+
+    val timeFmt = remember(timeframe) {
+        SimpleDateFormat(
+            when {
+                timeframe.seconds >= 86_400 -> "MMM d"
+                timeframe.seconds >= 3_600 -> "dd HH:mm"
+                else -> "HH:mm"
+            },
+            Locale.US,
+        )
+    }
 
     Box(modifier = modifier) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(260.dp)
+                .pointerInput(candles.size) {
+                    detectTapGestures(onDoubleTap = { resetView() })
+                }
                 .pointerInput(candles.size) {
                     detectTransformGestures { _, pan, zoom, _ ->
                         if (abs(zoom - 1f) > 0.001f) {
@@ -179,6 +239,10 @@ private fun CandlestickCanvas(
             fun yOfPrice(price: Long): Float =
                 priceHeight * (1f - ((price - minLow).toFloat() / range.toFloat()))
 
+            fun yOfPriceD(price: Double): Float =
+                (priceHeight * (1f - ((price - minLow) / range.toDouble()).toFloat()))
+                    .coerceIn(0f, priceHeight)
+
             val gridPaint = Paint().apply {
                 color = AxisTextColor.value.toInt()
                 textSize = axisTextPx
@@ -199,7 +263,6 @@ private fun CandlestickCanvas(
                 )
             }
 
-            val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
             val vTicks = 4
             for (t in 0..vTicks) {
                 val frac = t.toFloat() / vTicks
@@ -216,16 +279,52 @@ private fun CandlestickCanvas(
             }
             gridPaint.textAlign = Paint.Align.LEFT
 
+            // ---- price series: candles, or a line/area over closes ----
+            when (chartType) {
+                ChartType.CANDLES -> {
+                    window.forEachIndexed { i, c ->
+                        val cx = slot * i + slot / 2f
+                        val up = c.close >= c.open
+                        val color = if (up) UpColor else DownColor
+                        drawLine(color, Offset(cx, yOfPrice(c.high)), Offset(cx, yOfPrice(c.low)), strokeWidth = 1.5f)
+                        val yOpen = yOfPrice(c.open)
+                        val yClose = yOfPrice(c.close)
+                        val top = minOf(yOpen, yClose)
+                        val bodyH = abs(yClose - yOpen).coerceAtLeast(1.5f)
+                        drawRect(color, Offset(cx - bodyWidth / 2f, top), Size(bodyWidth, bodyH))
+                    }
+                }
+                ChartType.LINE, ChartType.AREA -> {
+                    val lineColor = AccentColor
+                    if (chartType == ChartType.AREA) {
+                        // Fill under the close line down to the price-pane baseline.
+                        val path = androidx.compose.ui.graphics.Path()
+                        path.moveTo(slot / 2f, priceHeight)
+                        window.forEachIndexed { i, c ->
+                            path.lineTo(slot * i + slot / 2f, yOfPrice(c.close))
+                        }
+                        path.lineTo(slot * (n - 1) + slot / 2f, priceHeight)
+                        path.close()
+                        drawPath(path, lineColor.copy(alpha = 0.14f))
+                    }
+                    for (i in 0 until n - 1) {
+                        val x1 = slot * i + slot / 2f
+                        val x2 = slot * (i + 1) + slot / 2f
+                        drawLine(
+                            lineColor,
+                            Offset(x1, yOfPrice(window[i].close)),
+                            Offset(x2, yOfPrice(window[i + 1].close)),
+                            strokeWidth = 2f,
+                        )
+                    }
+                }
+            }
+
+            // ---- volume sub-pane (always drawn, colored by candle direction) ----
             window.forEachIndexed { i, c ->
                 val cx = slot * i + slot / 2f
                 val up = c.close >= c.open
                 val color = if (up) UpColor else DownColor
-                drawLine(color, Offset(cx, yOfPrice(c.high)), Offset(cx, yOfPrice(c.low)), strokeWidth = 1.5f)
-                val yOpen = yOfPrice(c.open)
-                val yClose = yOfPrice(c.close)
-                val top = minOf(yOpen, yClose)
-                val bodyH = abs(yClose - yOpen).coerceAtLeast(1.5f)
-                drawRect(color, Offset(cx - bodyWidth / 2f, top), Size(bodyWidth, bodyH))
                 val vFrac = c.volume.toFloat() / maxVol.toFloat()
                 val vBarH = volHeight * vFrac
                 drawRect(
@@ -233,6 +332,22 @@ private fun CandlestickCanvas(
                     Offset(cx - bodyWidth / 2f, volTop + (volHeight - vBarH)),
                     Size(bodyWidth, vBarH),
                 )
+            }
+
+            // ---- moving-average overlays (over the price pane) ----
+            maSeries.forEachIndexed { specIdx, series ->
+                if (!maVisible.getOrElse(specIdx) { true }) return@forEachIndexed
+                val color = MA_SPECS[specIdx].color
+                var prev: Offset? = null
+                for (i in 0 until n) {
+                    val gi = startIdx + i
+                    val v = series.getOrNull(gi)
+                    if (v == null) { prev = null; continue }
+                    val cur = Offset(slot * i + slot / 2f, yOfPriceD(v))
+                    val p = prev
+                    if (p != null) drawLine(color, p, cur, strokeWidth = 1.5f)
+                    prev = cur
+                }
             }
 
             // ---- last-price dashed accent line + tag ----
@@ -266,6 +381,27 @@ private fun CandlestickCanvas(
                 drawCrosshairTooltip(window[hoverIdx], priceScaler, axisTextPx, snapX, plotWidth)
             } else {
                 crosshairIdx = -1
+            }
+        }
+
+        // ---- MA legend (top-start), each chip toggles its overlay ----
+        Row(
+            modifier = Modifier.padding(start = 6.dp, top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            MA_SPECS.forEachIndexed { i, spec ->
+                val on = maVisible.getOrElse(i) { true }
+                Text(
+                    text = spec.label,
+                    color = if (on) spec.color else MarketColors.TextFaint,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MarketColors.Surface.copy(alpha = 0.6f))
+                        .clickable { maVisible[i] = !on }
+                        .testTag("ma_toggle_${spec.label}")
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
             }
         }
     }
@@ -323,6 +459,32 @@ private fun DrawScope.drawCrosshairTooltip(
     lines.forEachIndexed { i, line ->
         drawContext.canvas.nativeCanvas.drawText(line, boxX + pad, boxY + lineH * (i + 2), valPaint)
     }
+}
+
+/** Simple moving average aligned 1:1 with [closes]; null until [period] samples are available. */
+private fun sma(closes: List<Double>, period: Int): List<Double?> {
+    if (period <= 0) return closes.map { null }
+    val out = ArrayList<Double?>(closes.size)
+    var sum = 0.0
+    for (i in closes.indices) {
+        sum += closes[i]
+        if (i >= period) sum -= closes[i - period]
+        out.add(if (i >= period - 1) sum / period else null)
+    }
+    return out
+}
+
+/** Exponential moving average aligned 1:1 with [closes]; seeded at the first sample. */
+private fun ema(closes: List<Double>, period: Int): List<Double?> {
+    if (period <= 0 || closes.isEmpty()) return closes.map { null }
+    val k = 2.0 / (period + 1)
+    val out = ArrayList<Double?>(closes.size)
+    var prev = closes[0]
+    for (i in closes.indices) {
+        prev = if (i == 0) closes[0] else closes[i] * k + prev * (1 - k)
+        out.add(if (i >= period - 1) prev else null)
+    }
+    return out
 }
 
 private fun formatAxisPrice(v: Double): String {

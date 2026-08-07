@@ -10,6 +10,11 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 **Effort:** S ≈ ½ day · M ≈ 1–2 days · L ≈ 3–5 days.
 **Status legend:** ☐ todo · ◐ in progress · ☑ done.
 
+> **Baseline already shipped** (verified in code 2026-08-07): candlestick render, volume sub-pane,
+> horizontal pan, pinch-zoom, draggable crosshair + O/H/L/C tooltip card, dashed last-price line +
+> tag, right price axis, bottom time axis, L2 order book + depth curve, HyperLiquid dark theme.
+> Several backlog tickets below were found already-built and are marked ☑.
+
 > Standing constraint (learned the hard way): the cpp HTTP/2 edge refuses concurrent streams
 > (REFUSED_STREAM) and resets long-lived SSE. The entire exchange data plane (REST + SSE) must
 > stay pinned to HTTP/1.1 on its own ConnectionPool. Any new market-data endpoint call inherits
@@ -19,26 +24,25 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 
 ## Epic A — Timeframes & chart controls
 
-- ☐ **MDX-101 · Timeframe switcher** — `M` · no deps
-  Chip row (1m/5m/15m/1h/4h/1D) above the chart; selecting refetches
-  `/md/candles?intervalSec=N` and re-aligns the SSE `marketData(symbolId, intervalSec)` stream.
-  AC: switching interval reloads candle history for that interval; live SSE bar merges at the
-  correct bucket; selection persists per-symbol in VM state; uses the h1.1 client (no REFUSED_STREAM).
+- ☑ **MDX-101 · Timeframe switcher** — `M` · **already built** (Timeframe enum M1/M5/M15/H1/D1,
+  `TimeframeBar` in SymbolDetailScreen, `setInterval()`/`refetchCandles()` in the VM re-fetch
+  `/md/candles/{id}?interval=N` and restart the SSE stream at the new interval). Uses the h1.1 client.
 
 - ☐ **MDX-102 · Chart-type toggle** — `M` · no deps
   Toggle candles / line / area (Heikin-Ashi stretch). Line/area derive from candle closes.
   AC: toggle re-renders without refetch; line/area use the mint `Accent`; state persists per session.
 
-- ☐ **MDX-103 · Interval-aware axis labels** — `S` · dep MDX-101
-  Time-axis tick format adapts to interval (HH:mm intraday, dd MMM for ≥1D); local tz/DST correct;
-  no label overlap.
+- ☑ **MDX-103 · Interval-aware axis labels** — `S` · dep MDX-101 · **this wave**
+  Chart time-axis format now adapts to the selected timeframe (HH:mm intraday, `dd HH:mm` for ≥1h,
+  `MMM d` for ≥1D); the `Timeframe` is threaded into `CandlestickCanvas`.
 
 ## Epic B — Indicators / studies
 
-- ☐ **MDX-111 · SMA/EMA overlay** — `M` · no deps (highest value)
-  Client-computed SMA & EMA (configurable periods, default 7/25/99) drawn as line overlays with a
-  legend + per-MA toggle. AC: lines align to candle centers; recompute on pan/zoom window; correct
-  at series edges (partial windows).
+- ☑ **MDX-111 · MA overlay** — `M` · **this wave**
+  Binance-style MA7 / MA25 / MA99 (simple, on close) computed over the full series (so the visible
+  window's left edge uses prior bars) and drawn as line overlays; a top-left legend with tappable
+  chips toggles each MA on/off. `sma()`/`ema()` helpers included (EMA available for future specs).
+  AC met: lines align to candle centers; nulls skipped until enough samples; per-MA toggle.
 
 - ☐ **MDX-112 · Volume MA line** — `S` · dep MDX-111
   MA line over the volume histogram sub-pane.
@@ -57,8 +61,9 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 
 ## Epic C — Interaction polish
 
-- ◐ **MDX-121 · Double-tap reset / auto-fit** — `S` · no deps (easy win)
-  Double-tap resets `visibleCount` to default and re-fits Y to latest N candles.
+- ☑ **MDX-121 · Double-tap reset / auto-fit** — `S` · **this wave**
+  Double-tap resets `visibleCount` to default and `scrollOffset` to 0 (re-fits Y to latest N candles,
+  since Y auto-scales to the visible window). Added as its own `detectTapGestures` pointerInput.
 
 - ☐ **MDX-122 · Independent Y-axis drag scale** — `M` · no deps
   Vertical drag on the price axis rescales Y; lock/auto toggle; auto re-engages on reset.
@@ -84,9 +89,9 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 
 ## Epic E — Depth & trades tape
 
-- ☐ **MDX-141 · Recent-trades tape** — `M` · partial (pollTrades exists)
-  Surface polled trades as a scrolling list: price (up/down color by aggressor side), size, time;
-  capped ring buffer; updates live.
+- ☑ **MDX-141 · Recent-trades tape** — `M` · **already built** (SymbolDetailScreen "Recent Trades"
+  section: `TradeRow` with aggressor up/down color + ^/v arrow, size, HH:mm:ss time; VM `pollTrades()`
+  at 4s; take(40)). Refinement left: dedicated tab/split layout — see MDX-142.
 
 - ☐ **MDX-142 · Book/tape/chart layout modes** — `M` · dep MDX-141
   Tab or split layout to switch chart ↔ order book ↔ trades on mobile; state preserved.
@@ -126,8 +131,9 @@ side rather than hand-rolling indicators/drawings.
 
 ## Sequencing (build batches) — committed scope: ALL (Batches 1–4)
 
-**Batch 1 — "Feels like a real trading app"** (quick, high-signal; backend already supports)
-MDX-124 → MDX-121 → MDX-101 → MDX-111 → MDX-141 → MDX-102. ~1 week.
+**Batch 1 — "Feels like a real trading app"** — MOSTLY DONE.
+MDX-101 ☑ (pre-existing) · MDX-141 ☑ (pre-existing) · MDX-121 ☑ · MDX-111 ☑ · MDX-103 ☑ ·
+MDX-124 ◐ (on-device verify) · **MDX-102 ☐ (line/area chart type — next)**.
 
 **Batch 2 — Indicators depth**
 MDX-113 → MDX-114 / MDX-115 / MDX-116 / MDX-117 → MDX-112 → MDX-122 → MDX-123 → MDX-103.
