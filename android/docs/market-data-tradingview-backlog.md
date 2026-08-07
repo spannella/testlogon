@@ -112,8 +112,16 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
   section: `TradeRow` with aggressor up/down color + ^/v arrow, size, HH:mm:ss time; VM `pollTrades()`
   at 4s; take(40)). Refinement left: dedicated tab/split layout — see MDX-142.
 
-- ☐ **MDX-142 · Book/tape/chart layout modes** — `M` · dep MDX-141
-  Tab or split layout to switch chart ↔ order book ↔ trades on mobile; state preserved.
+- ☑ **MDX-142 · Chart / Book / Trades layout tabs** — `M` · **done** (2026-08-07) — a `DetailTab`
+  segmented control (Chart/Book/Trades) below the ticker header switches the main panel; each is a
+  first-class full panel. The Trades tab promotes the tape to full-height (120 rows) with a
+  buy/sell **pressure bar** (taker-buy vs taker-sell volume ratio) on top. Ticker header always visible.
+
+- ⊘ **MDX-14x · Liquidation events viewer** — **DEFERRED (no backend feed)** — probed prod: every
+  `/md/liquidation*|/md/liq|/md/forced` endpoint 404s; trades carry no liquidation flag
+  (`{aggressor,price,qty,ts_ns}` only); no liquidation type in the stream; no source references. The
+  engine has no market-data liquidation feed, so a real viewer is blocked engine-side. Not faking it
+  (labeling large trades as "liquidations" would mislead). Revisit when the exchange emits them.
 
 - ☐ **MDX-143 · Depth-chart crosshair readout** — `S` · dep existing depth curve
   Hover shows cumulative size + price at level.

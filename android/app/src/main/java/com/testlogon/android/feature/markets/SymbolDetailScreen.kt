@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -128,64 +129,72 @@ private fun SymbolDetailContent(
     var chartType by remember { mutableStateOf(ChartType.CANDLES) }
     var oscillator by remember { mutableStateOf(Oscillator.NONE) }
     var bookStyle by remember { mutableStateOf(BookStyle.LADDER) }
+    var tab by remember { mutableStateOf(DetailTab.CHART) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("symbol_detail"),
         contentPadding = PaddingValues(bottom = 24.dp),
     ) {
         item { TickerHeader(state) }
-        item {
-            TimeframeBar(selected = selectedTf, onTimeframe = onTimeframe)
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OscillatorToggle(selected = oscillator, onSelect = { oscillator = it })
-                ChartTypeToggle(selected = chartType, onSelect = { chartType = it })
-            }
-            CandlestickChart(
-                candles = state.candles,
-                priceScaler = PRICE_SCALER,
-                selected = selectedTf,
-                chartType = chartType,
-                oscillator = oscillator,
-                drawings = state.drawings,
-                activeTool = state.activeTool,
-                onCommitDrawing = onCommitDrawing,
-                onTimeframeSelected = onTimeframe,
-                showTimeframes = false,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            )
-            DrawingToolbar(
-                active = state.activeTool,
-                hasDrawings = state.drawings.isNotEmpty(),
-                onSetTool = onSetTool,
-                onClear = onClearDrawings,
-            )
-        }
-        item {
-            OrderBookHeader(style = bookStyle, onStyle = { bookStyle = it })
-            OrderBookL2(
-                book = state.orderBook,
-                priceScaler = PRICE_SCALER,
-                style = bookStyle,
-                lastUp = lastTradeUp(state.trades),
-                modifier = Modifier.padding(horizontal = 12.dp),
-            )
-        }
-        item {
-            SectionHeader("Recent Trades")
-            TradesHeader()
-        }
-        items(state.trades.take(40)) { trade -> TradeRow(trade) }
-        if (state.trades.isEmpty()) {
-            item {
-                Text(
-                    "No trades yet.",
-                    color = MarketColors.TextFaint,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        item { DetailTabBar(selected = tab, onSelect = { tab = it }) }
+        when (tab) {
+            DetailTab.CHART -> item {
+                TimeframeBar(selected = selectedTf, onTimeframe = onTimeframe)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OscillatorToggle(selected = oscillator, onSelect = { oscillator = it })
+                    ChartTypeToggle(selected = chartType, onSelect = { chartType = it })
+                }
+                CandlestickChart(
+                    candles = state.candles,
+                    priceScaler = PRICE_SCALER,
+                    selected = selectedTf,
+                    chartType = chartType,
+                    oscillator = oscillator,
+                    drawings = state.drawings,
+                    activeTool = state.activeTool,
+                    onCommitDrawing = onCommitDrawing,
+                    onTimeframeSelected = onTimeframe,
+                    showTimeframes = false,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 )
+                DrawingToolbar(
+                    active = state.activeTool,
+                    hasDrawings = state.drawings.isNotEmpty(),
+                    onSetTool = onSetTool,
+                    onClear = onClearDrawings,
+                )
+            }
+
+            DetailTab.BOOK -> item {
+                OrderBookHeader(style = bookStyle, onStyle = { bookStyle = it })
+                OrderBookL2(
+                    book = state.orderBook,
+                    priceScaler = PRICE_SCALER,
+                    style = bookStyle,
+                    lastUp = lastTradeUp(state.trades),
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+            }
+
+            DetailTab.TRADES -> {
+                item {
+                    TradesPressureBar(state.trades)
+                    TradesHeader()
+                }
+                items(state.trades.take(120)) { trade -> TradeRow(trade) }
+                if (state.trades.isEmpty()) {
+                    item {
+                        Text(
+                            "No trades yet.",
+                            color = MarketColors.TextFaint,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -389,6 +398,67 @@ private fun DrawingToolbar(
                     .testTag("draw_clear")
                     .padding(horizontal = 8.dp, vertical = 6.dp),
             )
+        }
+    }
+}
+
+/** Top-level panel selector for the symbol detail: Chart / Book / Trades. */
+private enum class DetailTab(val label: String) { CHART("Chart"), BOOK("Book"), TRADES("Trades") }
+
+@Composable
+private fun DetailTabBar(selected: DetailTab, onSelect: (DetailTab) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(10.dp))
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        DetailTab.entries.forEach { t ->
+            val sel = t == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (sel) MarketColors.SurfaceAlt else Color.Transparent)
+                    .clickable { onSelect(t) }
+                    .testTag("detailtab_${t.name}")
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = t.label,
+                    color = if (sel) MarketColors.Accent else MarketColors.TextSecondary,
+                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+    }
+}
+
+/** Buy/sell pressure bar over the recent trade window (green = taker buys, red = taker sells). */
+@Composable
+private fun TradesPressureBar(trades: List<Trade>) {
+    val recent = trades.take(120)
+    val buyVol = recent.filter { it.aggressor == Aggressor.BUY }.sumOf { it.qty }
+    val sellVol = recent.filter { it.aggressor == Aggressor.SELL }.sumOf { it.qty }
+    val total = (buyVol + sellVol).coerceAtLeast(1L)
+    val buyFrac = (buyVol.toFloat() / total).coerceIn(0f, 1f)
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 4.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Buy ${String.format("%.0f", buyFrac * 100)}%", color = MarketColors.Up, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            Text("Trades", color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text("${String.format("%.0f", (1f - buyFrac) * 100)}% Sell", color = MarketColors.Down, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))) {
+            Box(modifier = Modifier.weight(buyFrac.coerceIn(0.001f, 0.999f)).fillMaxHeight().background(MarketColors.Up))
+            Box(modifier = Modifier.weight((1f - buyFrac).coerceIn(0.001f, 0.999f)).fillMaxHeight().background(MarketColors.Down))
         }
     }
 }
