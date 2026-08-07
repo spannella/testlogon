@@ -288,6 +288,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         billingConfigDestination(navController)
         // AND-403: read-only admin alerts/dashboards (client-aggregated job + webhook health; 403 self-gate).
         adminDashboardDestination(navController)
+        // Markets (exchange market-data, VIEW-ONLY): instrument list + per-symbol chart/book/tape.
+        marketsDestinations(navController)
         // B5 admin queues (moderation board + video review + DMCA claims).
         moderationBoardDestinations(navController)
         videoReviewDestination(navController)

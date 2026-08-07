@@ -1513,6 +1513,16 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.SECURITY,
             operatorOnly = true,
         ),
+        // Markets (exchange market-data, VIEW-ONLY): tradable instruments -> per-symbol chart / order-book
+        // ladder / recent-trades tape. Read-only; no order entry. Polls the md/ (market-data) endpoints on-screen.
+        MoreEntry(
+            id = "markets",
+            labelRes = R.string.more_entry_markets,
+            icon = Icons.Outlined.TrendingUp,
+            route = MoreRoutes.MARKETS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // AND-404: READ-ONLY admin EMAIL delivery dashboard (per-channel stats + recent activity). Self-gates
         // via the backend 403 -> the screen's Forbidden state; a non-admin sees no admin data.
         MoreEntry(

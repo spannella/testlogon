@@ -352,6 +352,9 @@ object MoreRoutes {
     // pattern); a non-admin sees no admin data.
     const val ADMIN_DASHBOARD = AdminDashboardDest.ROUTE
 
+    // Markets (exchange market-data, VIEW-ONLY): instrument list -> per-symbol chart/book/tape.
+    const val MARKETS = MarketsDest.ROUTE
+
     // AND-404: READ-ONLY admin email/SMS delivery dashboards (per-channel stats + recent activity). Self-gate
     // via the backend 403 -> the screen's Forbidden state (cf. the AND-403 admin-dashboard pattern); a non-admin
     // sees no admin data. Two concrete entry routes off the shared `{channel}` destination template.
@@ -627,6 +630,7 @@ object MoreRoutes {
             SUPPORT,
             WEBHOOKS,
             ADMIN_DASHBOARD,
+            MARKETS,
             ADMIN_EMAIL_DASHBOARD,
             ADMIN_SMS_DASHBOARD,
             ADMIN_MODERATION,
