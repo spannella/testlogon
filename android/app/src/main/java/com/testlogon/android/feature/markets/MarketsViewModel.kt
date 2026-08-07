@@ -18,7 +18,7 @@ import javax.inject.Inject
 /**
  * Drives [MarketsUiState] from [ExchangeRepository]. Loads the instrument catalogue, then polls each
  * instrument's top-of-book (order-book best bid/ask + last trade) every [POLL_MS] so the list shows
- * live-ish quotes. The `md/stream` WS is a later milestone; polling is the interim.
+ * live-ish quotes, plus a periodic candle fetch that feeds each row's sparkline + % change.
  */
 @HiltViewModel
 class MarketsViewModel @Inject constructor(
@@ -58,14 +58,31 @@ class MarketsViewModel @Inject constructor(
         }
     }
 
-    /** Continuously refresh each instrument's top-of-book while the ViewModel is alive. */
+    /** Continuously refresh each instrument's top-of-book + sparkline while the VM is alive. */
     private suspend fun pollQuotes(instruments: List<Instrument>) {
+        var tick = 0
         while (viewModelScope.isActive) {
             for (instrument in instruments) {
                 val book = (repository.orderBook(instrument.symbolId) as? ApiResult.Success)?.data
                 val last = (repository.trades(instrument.symbolId) as? ApiResult.Success)
                     ?.data?.firstOrNull()?.price
                 val lastPrice = last?.let { instrument.display(it) } ?: book?.mid
+
+                // Candle-derived sparkline + % change; refreshed less often than the quote poll.
+                var spark: List<Float>? = null
+                var changePct: Double? = null
+                if (tick % SPARK_EVERY == 0) {
+                    val candles = (repository.candles(instrument.symbolId, SPARK_INTERVAL_SEC)
+                        as? ApiResult.Success)?.data
+                    if (!candles.isNullOrEmpty()) {
+                        val window = candles.takeLast(SPARK_POINTS)
+                        spark = window.map { instrument.display(it.close).toFloat() }
+                        val firstOpen = instrument.display(window.first().open)
+                        val lastClose = instrument.display(window.last().close)
+                        if (firstOpen != 0.0) changePct = (lastClose - firstOpen) / firstOpen * 100.0
+                    }
+                }
+
                 _uiState.update { state ->
                     state.copy(
                         rows = state.rows.map { row ->
@@ -74,6 +91,8 @@ class MarketsViewModel @Inject constructor(
                                     lastPrice = lastPrice,
                                     bestBid = book?.bestBid ?: book?.bids?.firstOrNull()?.price,
                                     bestAsk = book?.bestAsk ?: book?.asks?.firstOrNull()?.price,
+                                    spark = spark ?: row.spark,
+                                    changePct = changePct ?: row.changePct,
                                 )
                             } else {
                                 row
@@ -82,6 +101,7 @@ class MarketsViewModel @Inject constructor(
                     )
                 }
             }
+            tick++
             delay(POLL_MS)
         }
     }
@@ -98,6 +118,9 @@ class MarketsViewModel @Inject constructor(
 
     private companion object {
         const val POLL_MS = 2_000L
+        const val SPARK_EVERY = 5          // refresh sparkline/change every ~10s
+        const val SPARK_INTERVAL_SEC = 60
+        const val SPARK_POINTS = 30
         const val OFFLINE_FALLBACK = "Couldn't reach the market-data service. Tap retry."
     }
 }

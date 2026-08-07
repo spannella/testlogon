@@ -2,49 +2,57 @@
 
 package com.testlogon.android.feature.markets
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.exchange.Aggressor
+import com.testlogon.android.data.exchange.Candle
 import com.testlogon.android.data.exchange.Trade
 import com.testlogon.android.feature.markets.book.OrderBookL2
 import com.testlogon.android.feature.markets.chart.CandlestickChart
 import com.testlogon.android.feature.markets.chart.Timeframe
+import com.testlogon.android.feature.markets.ui.MarketColors
+import com.testlogon.android.feature.markets.ui.MarketSurface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val UpColor = Color(0xFF16A34A)
-private val DownColor = Color(0xFFDC2626)
-
-// Display scaler for raw integer prices/qty. All instruments use a scaler of 1 today, so this is an
-// identity divide; the seam is honoured so a non-1 scaler would flow through unchanged.
+// Display scaler for raw integer prices/qty. All instruments use a scaler of 1 today.
 private const val PRICE_SCALER = 1L
 
 @Composable
@@ -53,29 +61,45 @@ fun SymbolDetailRoute(
     viewModel: SymbolDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(state.symbolName.ifBlank { "Symbol" }) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (state.phase) {
-                SymbolDetailUiState.Phase.Loading -> LoadingState(message = "Loading market data")
-                SymbolDetailUiState.Phase.Error -> ErrorState(
-                    message = state.errorMessage ?: "Could not load market data.",
-                    onRetry = viewModel::onRetry,
-                )
-                SymbolDetailUiState.Phase.Content -> SymbolDetailContent(
-                    state = state,
-                    onTimeframe = { viewModel.setInterval(it.seconds) },
-                )
+    MarketSurface {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+            DetailTopBar(title = state.symbolName.ifBlank { "Symbol" }, live = state.live, onBack = onBack)
+            Box(modifier = Modifier.fillMaxSize()) {
+                when (state.phase) {
+                    SymbolDetailUiState.Phase.Loading -> LoadingState(message = "Loading market data")
+                    SymbolDetailUiState.Phase.Error -> ErrorState(
+                        message = state.errorMessage ?: "Could not load market data.",
+                        onRetry = viewModel::onRetry,
+                    )
+                    SymbolDetailUiState.Phase.Content -> SymbolDetailContent(
+                        state = state,
+                        onTimeframe = { viewModel.setInterval(it.seconds) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailTopBar(title: String, live: Boolean, onBack: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MarketColors.TextPrimary)
+        }
+        Text(title, color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        if (live) {
+            Spacer(Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(MarketColors.UpPill)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text("LIVE", color = MarketColors.Up, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -89,31 +113,141 @@ private fun SymbolDetailContent(
     val selectedTf = Timeframe.entries.firstOrNull { it.seconds == state.intervalSec } ?: Timeframe.M1
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("symbol_detail"),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        contentPadding = PaddingValues(bottom = 24.dp),
     ) {
+        item { TickerHeader(state) }
         item {
-            SectionHeader("Price")
+            TimeframeBar(selected = selectedTf, onTimeframe = onTimeframe)
             CandlestickChart(
                 candles = state.candles,
                 priceScaler = PRICE_SCALER,
                 selected = selectedTf,
                 onTimeframeSelected = onTimeframe,
-                modifier = Modifier.fillMaxWidth(),
+                showTimeframes = false,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             )
         }
         item {
-            SectionHeader(if (state.live) "Order book (LIVE)" else "Order book")
-            OrderBookL2(book = state.orderBook, priceScaler = PRICE_SCALER)
+            SectionHeader(if (state.live) "Order Book" else "Order Book")
+            OrderBookL2(
+                book = state.orderBook,
+                priceScaler = PRICE_SCALER,
+                lastUp = lastTradeUp(state.trades),
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
         }
         item {
-            SectionHeader("Recent trades")
+            SectionHeader("Recent Trades")
+            TradesHeader()
         }
-        items(state.trades.take(40)) { trade ->
-            TradeRow(trade)
-        }
+        items(state.trades.take(40)) { trade -> TradeRow(trade) }
         if (state.trades.isEmpty()) {
-            item { Text("No trades yet.", style = MaterialTheme.typography.bodySmall) }
+            item {
+                Text(
+                    "No trades yet.",
+                    color = MarketColors.TextFaint,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TickerHeader(state: SymbolDetailUiState) {
+    val candles = state.candles
+    val last = candles.lastOrNull()
+    val lastPrice = last?.let { it.close.toDouble() / PRICE_SCALER } ?: state.orderBook?.mid
+    // 24h-style window stats over the loaded candles.
+    val firstOpen = candles.firstOrNull()?.open?.toDouble()?.div(PRICE_SCALER)
+    val hi = candles.maxOfOrNull { it.high }?.toDouble()?.div(PRICE_SCALER)
+    val lo = candles.minOfOrNull { it.low }?.toDouble()?.div(PRICE_SCALER)
+    val vol = candles.sumOf { it.volume }
+    val absChange = if (firstOpen != null && lastPrice != null) lastPrice - firstOpen else null
+    val pct = if (firstOpen != null && firstOpen != 0.0 && absChange != null) absChange / firstOpen * 100.0 else null
+    val up = (pct ?: 0.0) >= 0.0
+    val moveColor = if (up) MarketColors.Up else MarketColors.Down
+
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp)) {
+        Text(
+            text = lastPrice?.let { formatPrice(it) } ?: "--",
+            color = moveColor,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 34.sp,
+        )
+        Spacer(Modifier.height(2.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val sign = if (up) "+" else ""
+            Text(
+                text = absChange?.let { sign + formatPrice(it) } ?: "--",
+                color = moveColor,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = pct?.let { sign + String.format("%.2f%%", it) } ?: "--",
+                color = moveColor,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(MarketColors.Surface)
+                .border(1.dp, MarketColors.Border, RoundedCornerShape(10.dp))
+                .padding(vertical = 10.dp, horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            StatCell("24h High", hi?.let { formatPrice(it) } ?: "--")
+            StatCell("24h Low", lo?.let { formatPrice(it) } ?: "--")
+            StatCell("24h Vol", if (vol > 0) formatCompact(vol) else "--")
+        }
+    }
+}
+
+@Composable
+private fun StatCell(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.Start) {
+        Text(label, color = MarketColors.TextFaint, fontSize = 10.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(value, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun TimeframeBar(selected: Timeframe, onTimeframe: (Timeframe) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Timeframe.entries.forEach { tf ->
+            val sel = tf == selected
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (sel) MarketColors.SurfaceAlt else Color.Transparent)
+                    .clickable { onTimeframe(tf) }
+                    .testTag("tf_chip_${tf.label}")
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    text = tf.label,
+                    color = if (sel) MarketColors.Accent else MarketColors.TextSecondary,
+                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                )
+            }
         }
     }
 }
@@ -122,10 +256,22 @@ private fun SymbolDetailContent(
 private fun SectionHeader(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(bottom = 8.dp),
+        color = MarketColors.TextPrimary,
+        fontWeight = FontWeight.Bold,
+        fontSize = 14.sp,
+        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 8.dp),
     )
+}
+
+@Composable
+private fun TradesHeader() {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+    ) {
+        Text("Price", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1.2f))
+        Text("Size", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("Time", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(1f))
+    }
 }
 
 private val tapeTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
@@ -133,31 +279,55 @@ private val tapeTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
 @Composable
 private fun TradeRow(trade: Trade) {
     val color = when (trade.aggressor) {
-        Aggressor.BUY -> UpColor
-        Aggressor.SELL -> DownColor
-        Aggressor.UNKNOWN -> MaterialTheme.colorScheme.onSurface
+        Aggressor.BUY -> MarketColors.Up
+        Aggressor.SELL -> MarketColors.Down
+        Aggressor.UNKNOWN -> MarketColors.TextSecondary
+    }
+    val arrow = when (trade.aggressor) {
+        Aggressor.BUY -> "^ "
+        Aggressor.SELL -> "v "
+        Aggressor.UNKNOWN -> ""
     }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 1.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = formatPrice(trade.price.toDouble()),
-            style = MaterialTheme.typography.bodySmall,
+            text = arrow + formatPrice(trade.price.toDouble()),
             color = color,
             fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(1.2f),
         )
         Text(
             text = trade.qty.toString(),
-            style = MaterialTheme.typography.bodySmall,
+            color = MarketColors.TextPrimary,
             fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(1f),
         )
         Text(
             text = tapeTimeFormat.format(Date(trade.tsNs / 1_000_000L)),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MarketColors.TextFaint,
             fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1f),
         )
     }
+}
+
+/** Direction of the most recent print, used to color the mid price in the book. Null when unknown. */
+private fun lastTradeUp(trades: List<Trade>): Boolean? = when (trades.firstOrNull()?.aggressor) {
+    Aggressor.BUY -> true
+    Aggressor.SELL -> false
+    else -> null
+}
+
+/** Compact large-number format for volume (e.g. 12.3K, 1.2M). */
+private fun formatCompact(v: Long): String = when {
+    v >= 1_000_000_000L -> String.format("%.2fB", v / 1_000_000_000.0)
+    v >= 1_000_000L -> String.format("%.2fM", v / 1_000_000.0)
+    v >= 1_000L -> String.format("%.2fK", v / 1_000.0)
+    else -> v.toString()
 }

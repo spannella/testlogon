@@ -2,7 +2,6 @@ package com.testlogon.android.feature.markets.chart
 
 import android.graphics.Paint
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -24,7 +22,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
@@ -33,9 +30,9 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.testlogon.android.data.exchange.Candle
+import com.testlogon.android.feature.markets.ui.MarketColors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -43,11 +40,12 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-private val UpColor = Color(0xFF16A34A)
-private val DownColor = Color(0xFFDC2626)
-private val GridColor = Color(0x22888888)
-private val AxisTextColor = Color(0xFF9AA0A6)
-private val CrosshairColor = Color(0xFFB0BEC5)
+private val UpColor = MarketColors.Up
+private val DownColor = MarketColors.Down
+private val GridColor = MarketColors.SurfaceAlt
+private val AxisTextColor = MarketColors.TextSecondary
+private val CrosshairColor = MarketColors.TextSecondary
+private val AccentColor = MarketColors.Accent
 
 /** Supported chart timeframes. [seconds] is the candle interval requested from the backend. */
 enum class Timeframe(val label: String, val seconds: Int) {
@@ -64,11 +62,11 @@ private const val DEFAULT_VISIBLE = 60
 
 /**
  * TradingView-style interactive candlestick chart, dependency-free (pure Compose [Canvas] + the
- * platform [android.graphics.Canvas] for axis text). Supports horizontal pan, pinch-zoom over the
- * visible candle count, a draggable crosshair with an O/H/L/C tooltip, a right-hand price axis,
- * a bottom time axis, a volume sub-pane, and a dashed last-price line.
+ * platform [android.graphics.Canvas] for axis text). Dark exchange palette. Supports horizontal pan,
+ * pinch-zoom, a draggable crosshair with an O/H/L/C tooltip card, a right price axis, a bottom time
+ * axis, a volume sub-pane, and a dashed accent last-price line with a price tag.
  *
- * All prices/qty are raw integers; [priceScaler] (>=1) scales them for display.
+ * When [showTimeframes] is false the built-in chip row is hidden (the host supplies its own control).
  */
 @Composable
 fun CandlestickChart(
@@ -76,26 +74,29 @@ fun CandlestickChart(
     priceScaler: Long,
     modifier: Modifier = Modifier,
     selected: Timeframe = Timeframe.M1,
+    showTimeframes: Boolean = true,
     onTimeframeSelected: (Timeframe) -> Unit = {},
 ) {
     Column(modifier = modifier) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Timeframe.entries.forEach { tf ->
-                FilterChip(
-                    selected = tf == selected,
-                    onClick = { onTimeframeSelected(tf) },
-                    label = { Text(tf.label) },
-                    modifier = Modifier.testTag("tf_chip_${tf.label}"),
-                )
+        if (showTimeframes) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Timeframe.entries.forEach { tf ->
+                    FilterChip(
+                        selected = tf == selected,
+                        onClick = { onTimeframeSelected(tf) },
+                        label = { Text(tf.label) },
+                        modifier = Modifier.testTag("tf_chip_${tf.label}"),
+                    )
+                }
             }
         }
         CandlestickCanvas(
             candles = candles,
             priceScaler = priceScaler.coerceAtLeast(1L),
-            modifier = Modifier.fillMaxWidth().height(240.dp).testTag("candle_chart"),
+            modifier = Modifier.fillMaxWidth().height(260.dp).testTag("candle_chart"),
         )
     }
 }
@@ -108,20 +109,18 @@ private fun CandlestickCanvas(
 ) {
     if (candles.isEmpty()) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
-            Text("No candles.", style = MaterialTheme.typography.bodySmall)
+            Text("No candles.", color = MarketColors.TextFaint)
         }
         return
     }
 
     val density = LocalDensity.current
     val axisTextPx = with(density) { 10.dp.toPx() }
-    val rightAxisWidthPx = with(density) { 56.dp.toPx() }
+    val rightAxisWidthPx = with(density) { 58.dp.toPx() }
     val bottomAxisHeightPx = with(density) { 16.dp.toPx() }
 
-    // Number of candles visible in the window (zoom). Pan offset from the right edge (0 = newest).
     var visibleCount by remember { mutableStateOf(DEFAULT_VISIBLE.coerceAtMost(candles.size)) }
     var scrollOffset by remember { mutableFloatStateOf(0f) }
-    // Crosshair index into the FULL candle list, or -1 when hidden.
     var crosshairIdx by remember { mutableStateOf(-1) }
     var crosshairX by remember { mutableFloatStateOf(-1f) }
     var crosshairY by remember { mutableFloatStateOf(-1f) }
@@ -130,14 +129,13 @@ private fun CandlestickCanvas(
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(240.dp)
+                .height(260.dp)
                 .pointerInput(candles.size) {
                     detectTransformGestures { _, pan, zoom, _ ->
                         if (abs(zoom - 1f) > 0.001f) {
                             val next = (visibleCount / zoom).roundToInt()
                             visibleCount = next.coerceIn(MIN_VISIBLE, MAX_VISIBLE.coerceAtMost(candles.size))
                         }
-                        // Horizontal pan shifts the window; convert px pan to candle offset.
                         val slotPx = (size.width - rightAxisWidthPx) / visibleCount.coerceAtLeast(1)
                         if (slotPx > 0f) {
                             scrollOffset = (scrollOffset - pan.x / slotPx)
@@ -147,10 +145,7 @@ private fun CandlestickCanvas(
                 }
                 .pointerInput(candles.size, visibleCount) {
                     detectDragGestures(
-                        onDragStart = { off ->
-                            crosshairX = off.x
-                            crosshairY = off.y
-                        },
+                        onDragStart = { off -> crosshairX = off.x; crosshairY = off.y },
                         onDragEnd = { crosshairIdx = -1; crosshairX = -1f; crosshairY = -1f },
                         onDragCancel = { crosshairIdx = -1; crosshairX = -1f; crosshairY = -1f },
                     ) { change, _ ->
@@ -161,7 +156,7 @@ private fun CandlestickCanvas(
         ) {
             val plotWidth = size.width - rightAxisWidthPx
             val totalHeight = size.height - bottomAxisHeightPx
-            val priceHeight = totalHeight * 0.72f
+            val priceHeight = totalHeight * 0.74f
             val volTop = priceHeight + totalHeight * 0.03f
             val volHeight = totalHeight - volTop
 
@@ -183,7 +178,6 @@ private fun CandlestickCanvas(
             fun yOfPrice(price: Long): Float =
                 priceHeight * (1f - ((price - minLow).toFloat() / range.toFloat()))
 
-            // ---- horizontal grid + right price-axis labels ----
             val gridPaint = Paint().apply {
                 color = AxisTextColor.value.toInt()
                 textSize = axisTextPx
@@ -198,13 +192,12 @@ private fun CandlestickCanvas(
                 val price = maxHigh - (range * frac).toLong()
                 drawContext.canvas.nativeCanvas.drawText(
                     formatAxisPrice(price.toDouble() / priceScaler),
-                    plotWidth + 4f,
+                    plotWidth + 6f,
                     (y + axisTextPx / 2f).coerceIn(axisTextPx, priceHeight),
                     gridPaint,
                 )
             }
 
-            // ---- vertical grid + bottom time-axis labels ----
             val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
             val vTicks = 4
             for (t in 0..vTicks) {
@@ -218,59 +211,50 @@ private fun CandlestickCanvas(
                     vTicks -> Paint.Align.RIGHT
                     else -> Paint.Align.CENTER
                 }
-                drawContext.canvas.nativeCanvas.drawText(
-                    label,
-                    x.coerceIn(0f, plotWidth),
-                    size.height - 2f,
-                    gridPaint,
-                )
+                drawContext.canvas.nativeCanvas.drawText(label, x.coerceIn(0f, plotWidth), size.height - 2f, gridPaint)
             }
             gridPaint.textAlign = Paint.Align.LEFT
 
-            // ---- candles + volume bars ----
             window.forEachIndexed { i, c ->
                 val cx = slot * i + slot / 2f
                 val up = c.close >= c.open
                 val color = if (up) UpColor else DownColor
-
                 drawLine(color, Offset(cx, yOfPrice(c.high)), Offset(cx, yOfPrice(c.low)), strokeWidth = 1.5f)
                 val yOpen = yOfPrice(c.open)
                 val yClose = yOfPrice(c.close)
                 val top = minOf(yOpen, yClose)
                 val bodyH = abs(yClose - yOpen).coerceAtLeast(1.5f)
                 drawRect(color, Offset(cx - bodyWidth / 2f, top), Size(bodyWidth, bodyH))
-
                 val vFrac = c.volume.toFloat() / maxVol.toFloat()
                 val vBarH = volHeight * vFrac
                 drawRect(
-                    color.copy(alpha = 0.5f),
+                    color.copy(alpha = 0.45f),
                     Offset(cx - bodyWidth / 2f, volTop + (volHeight - vBarH)),
                     Size(bodyWidth, vBarH),
                 )
             }
 
-            // ---- last-price dashed line + tag ----
+            // ---- last-price dashed accent line + tag ----
             val last = window.last()
             val yLast = yOfPrice(last.close)
             val dash = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
-            val lastUp = last.close >= last.open
-            val tagColor = if (lastUp) UpColor else DownColor
-            drawLine(tagColor, Offset(0f, yLast), Offset(plotWidth, yLast), strokeWidth = 1.5f, pathEffect = dash)
-            drawRect(tagColor, Offset(plotWidth, (yLast - axisTextPx).coerceIn(0f, priceHeight)), Size(rightAxisWidthPx, axisTextPx * 2f))
+            drawLine(AccentColor, Offset(0f, yLast), Offset(plotWidth, yLast), strokeWidth = 1.5f, pathEffect = dash)
+            drawRect(AccentColor, Offset(plotWidth, (yLast - axisTextPx).coerceIn(0f, priceHeight)), Size(rightAxisWidthPx, axisTextPx * 2f))
             val tagPaint = Paint().apply {
-                color = android.graphics.Color.WHITE
+                color = android.graphics.Color.BLACK
                 textSize = axisTextPx
                 isAntiAlias = true
+                isFakeBoldText = true
                 textAlign = Paint.Align.LEFT
             }
             drawContext.canvas.nativeCanvas.drawText(
                 formatAxisPrice(last.close.toDouble() / priceScaler),
-                plotWidth + 4f,
+                plotWidth + 6f,
                 (yLast + axisTextPx / 2f).coerceIn(axisTextPx, priceHeight),
                 tagPaint,
             )
 
-            // ---- crosshair + tooltip ----
+            // ---- crosshair + tooltip card ----
             if (crosshairX in 0f..plotWidth && crosshairY in 0f..totalHeight) {
                 val hoverIdx = (crosshairX / slot).toInt().coerceIn(0, n - 1)
                 crosshairIdx = startIdx + hoverIdx
@@ -279,26 +263,8 @@ private fun CandlestickCanvas(
                 drawLine(CrosshairColor, Offset(snapX, 0f), Offset(snapX, totalHeight), strokeWidth = 1f, pathEffect = chDash)
                 drawLine(CrosshairColor, Offset(0f, crosshairY), Offset(plotWidth, crosshairY), strokeWidth = 1f, pathEffect = chDash)
                 drawCrosshairTooltip(window[hoverIdx], priceScaler, axisTextPx, snapX, plotWidth)
-            }
-        }
-
-        // Compose-side tooltip legend (also renders O/H/L/C so it is discoverable via a11y text).
-        val idx = crosshairIdx
-        if (idx in candles.indices) {
-            val c = candles[idx]
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(4.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f))
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
-            ) {
-                Text(
-                    text = ohlcLegend(c, priceScaler),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.testTag("candle_crosshair"),
-                )
+            } else {
+                crosshairIdx = -1
             }
         }
     }
@@ -312,38 +278,51 @@ private fun DrawScope.drawCrosshairTooltip(
     plotWidth: Float,
 ) {
     val timeFmt = SimpleDateFormat("MMM d HH:mm", Locale.US)
+    val up = c.close >= c.open
+    val bodyColor = if (up) MarketColors.Up else MarketColors.Down
     val lines = listOf(
-        timeFmt.format(Date(c.tsStartNs / 1_000_000L)),
         "O " + formatAxisPrice(c.open.toDouble() / priceScaler),
         "H " + formatAxisPrice(c.high.toDouble() / priceScaler),
         "L " + formatAxisPrice(c.low.toDouble() / priceScaler),
         "C " + formatAxisPrice(c.close.toDouble() / priceScaler),
-        "V " + c.volume.toString(),
+        "Vol " + c.volume.toString(),
     )
-    val pad = 6f
-    val lineH = textPx * 1.35f
-    val boxW = 118f
-    val boxH = lineH * lines.size + pad
-    val boxX = (snapX + 10f).coerceIn(0f, max(0f, plotWidth - boxW))
-    val boxY = 6f
-    drawRect(Color(0xE6202124), Offset(boxX, boxY), Size(boxW, boxH))
-    val paint = Paint().apply {
-        color = android.graphics.Color.WHITE
+    val pad = 10f
+    val lineH = textPx * 1.5f
+    val boxW = 132f
+    val boxH = lineH * (lines.size + 1) + pad
+    val boxX = (snapX + 12f).coerceIn(0f, max(0f, plotWidth - boxW))
+    val boxY = 8f
+    // shadow
+    drawRect(Color(0x66000000), Offset(boxX + 2f, boxY + 3f), Size(boxW, boxH))
+    // card
+    drawRect(MarketColors.SurfaceAlt, Offset(boxX, boxY), Size(boxW, boxH))
+    // border
+    drawRect(MarketColors.Border, Offset(boxX, boxY), Size(boxW, 1f))
+    drawRect(MarketColors.Border, Offset(boxX, boxY + boxH - 1f), Size(boxW, 1f))
+    drawRect(MarketColors.Border, Offset(boxX, boxY), Size(1f, boxH))
+    drawRect(MarketColors.Border, Offset(boxX + boxW - 1f, boxY), Size(1f, boxH))
+
+    val headPaint = Paint().apply {
+        color = MarketColors.TextSecondary.value.toInt()
+        textSize = textPx * 0.95f
+        isAntiAlias = true
+        textAlign = Paint.Align.LEFT
+    }
+    drawContext.canvas.nativeCanvas.drawText(
+        timeFmt.format(Date(c.tsStartNs / 1_000_000L)),
+        boxX + pad, boxY + lineH, headPaint,
+    )
+    val valPaint = Paint().apply {
+        color = bodyColor.value.toInt()
         textSize = textPx
         isAntiAlias = true
         textAlign = Paint.Align.LEFT
     }
     lines.forEachIndexed { i, line ->
-        drawContext.canvas.nativeCanvas.drawText(line, boxX + pad, boxY + lineH * (i + 1), paint)
+        drawContext.canvas.nativeCanvas.drawText(line, boxX + pad, boxY + lineH * (i + 2), valPaint)
     }
 }
-
-private fun ohlcLegend(c: Candle, priceScaler: Long): String =
-    "O " + formatAxisPrice(c.open.toDouble() / priceScaler) +
-        "  H " + formatAxisPrice(c.high.toDouble() / priceScaler) +
-        "  L " + formatAxisPrice(c.low.toDouble() / priceScaler) +
-        "  C " + formatAxisPrice(c.close.toDouble() / priceScaler) +
-        "  V " + c.volume
 
 private fun formatAxisPrice(v: Double): String {
     val whole = v == v.toLong().toDouble()
