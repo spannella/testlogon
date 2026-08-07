@@ -96,7 +96,7 @@ private fun SymbolDetailContent(state: SymbolDetailUiState) {
             )
         }
         item {
-            SectionHeader("Order book")
+            SectionHeader(if (state.live) "Order book (LIVE)" else "Order book")
             OrderBookLadder(book = state.orderBook)
         }
         item {
