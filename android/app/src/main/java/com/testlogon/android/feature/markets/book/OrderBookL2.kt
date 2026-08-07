@@ -2,6 +2,7 @@ package com.testlogon.android.feature.markets.book
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.testlogon.android.data.exchange.OrderBook
 import com.testlogon.android.data.exchange.OrderBookLevel
+import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.feature.markets.ui.MarketColors
 
 private val UpColor = MarketColors.Up
@@ -51,6 +53,7 @@ fun OrderBookL2(
     modifier: Modifier = Modifier,
     style: BookStyle = BookStyle.LADDER,
     lastUp: Boolean? = null,
+    onPriceClick: (price: Long, side: OrderSide) -> Unit = { _, _ -> },
 ) {
     if (book == null || (book.asks.isEmpty() && book.bids.isEmpty())) {
         Text("No order book.", color = MarketColors.TextFaint, fontSize = 12.sp, modifier = modifier)
@@ -75,13 +78,13 @@ fun OrderBookL2(
 
             // asks: nearest-to-spread at the BOTTOM, so reverse for top-down render
             asks.indices.reversed().forEach { i ->
-                L2Row(price = asks[i].price, size = asks[i].qty, cum = askCum[i], maxCum = maxCum, color = DownColor, fill = MarketColors.DownFill, scaler = scaler)
+                L2Row(price = asks[i].price, size = asks[i].qty, cum = askCum[i], maxCum = maxCum, color = DownColor, fill = MarketColors.DownFill, scaler = scaler, onClick = { onPriceClick(asks[i].price, OrderSide.BUY) })
             }
 
             SpreadRow(book = book, scaler = scaler, lastUp = lastUp)
 
             bids.indices.forEach { i ->
-                L2Row(price = bids[i].price, size = bids[i].qty, cum = bidCum[i], maxCum = maxCum, color = UpColor, fill = MarketColors.UpFill, scaler = scaler)
+                L2Row(price = bids[i].price, size = bids[i].qty, cum = bidCum[i], maxCum = maxCum, color = UpColor, fill = MarketColors.UpFill, scaler = scaler, onClick = { onPriceClick(bids[i].price, OrderSide.SELL) })
             }
         }
 
@@ -95,7 +98,7 @@ fun OrderBookL2(
                         LabelCell("Bid", TextAlign.End, 1f)
                     }
                     bids.indices.forEach { i ->
-                        BookColRow(price = bids[i].price, size = bids[i].qty, cum = bidCum[i], maxCum = maxCum, color = UpColor, fill = MarketColors.UpFill, scaler = scaler, bidSide = true)
+                        BookColRow(price = bids[i].price, size = bids[i].qty, cum = bidCum[i], maxCum = maxCum, color = UpColor, fill = MarketColors.UpFill, scaler = scaler, bidSide = true, onClick = { onPriceClick(bids[i].price, OrderSide.SELL) })
                     }
                 }
                 Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(MarketColors.Border))
@@ -106,7 +109,7 @@ fun OrderBookL2(
                         LabelCell("Size", TextAlign.End, 1f)
                     }
                     asks.indices.forEach { i ->
-                        BookColRow(price = asks[i].price, size = asks[i].qty, cum = askCum[i], maxCum = maxCum, color = DownColor, fill = MarketColors.DownFill, scaler = scaler, bidSide = false)
+                        BookColRow(price = asks[i].price, size = asks[i].qty, cum = askCum[i], maxCum = maxCum, color = DownColor, fill = MarketColors.DownFill, scaler = scaler, bidSide = false, onClick = { onPriceClick(asks[i].price, OrderSide.BUY) })
                     }
                 }
             }
@@ -176,9 +179,10 @@ private fun L2Row(
     color: Color,
     fill: Color,
     scaler: Long,
+    onClick: () -> Unit = {},
 ) {
     val fraction = (cum.toFloat() / maxCum.toFloat()).coerceIn(0f, 1f)
-    Box(modifier = Modifier.fillMaxWidth().height(21.dp)) {
+    Box(modifier = Modifier.fillMaxWidth().height(21.dp).clickable(onClick = onClick)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction)
@@ -208,9 +212,10 @@ private fun BookColRow(
     fill: Color,
     scaler: Long,
     bidSide: Boolean,
+    onClick: () -> Unit = {},
 ) {
     val fraction = (cum.toFloat() / maxCum.toFloat()).coerceIn(0f, 1f)
-    Box(modifier = Modifier.fillMaxWidth().height(21.dp)) {
+    Box(modifier = Modifier.fillMaxWidth().height(21.dp).clickable(onClick = onClick)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction)

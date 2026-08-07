@@ -55,7 +55,9 @@ import com.testlogon.android.feature.markets.chart.ChartType
 import com.testlogon.android.feature.markets.chart.DrawingTool
 import com.testlogon.android.feature.markets.chart.Oscillator
 import com.testlogon.android.feature.markets.chart.Timeframe
+import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.feature.markets.trade.TradeTicket
+import com.testlogon.android.feature.markets.trade.TradingViewModel
 import com.testlogon.android.feature.markets.ui.MarketColors
 import com.testlogon.android.feature.markets.ui.MarketSurface
 import java.text.SimpleDateFormat
@@ -131,6 +133,7 @@ private fun SymbolDetailContent(
     var oscillator by remember { mutableStateOf(Oscillator.NONE) }
     var bookStyle by remember { mutableStateOf(BookStyle.LADDER) }
     var tab by remember { mutableStateOf(DetailTab.CHART) }
+    val tradingViewModel: TradingViewModel = hiltViewModel()
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("symbol_detail"),
         contentPadding = PaddingValues(bottom = 24.dp),
@@ -176,6 +179,10 @@ private fun SymbolDetailContent(
                     priceScaler = PRICE_SCALER,
                     style = bookStyle,
                     lastUp = lastTradeUp(state.trades),
+                    onPriceClick = { price, side ->
+                        tradingViewModel.prefillPrice(price, side)
+                        tab = DetailTab.TRADE
+                    },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
             }
@@ -199,7 +206,7 @@ private fun SymbolDetailContent(
             }
 
             DetailTab.TRADE -> item {
-                TradeTicket(lastPrice = state.candles.lastOrNull()?.close)
+                TradeTicket(lastPrice = state.candles.lastOrNull()?.close, viewModel = tradingViewModel)
             }
         }
     }

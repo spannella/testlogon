@@ -41,7 +41,10 @@ shipped). Android first; web mirror later. **Prefix `TRD`.** ☐ todo · ◐ in 
   an `me_trade_enabled` account — TRD-16.)
 
 ## Wave 2 — Click-to-trade + order management
-- ☐ **TRD-5 · Click-to-trade from book** — `M` — tap an order-book row → prefill ticket side+price.
+- ☑ **TRD-5 · Click-to-trade from book** — `M` · **done** (2026-08-07) — tapping an order-book row
+  (Ladder or Columns) prefills the ticket and jumps to the Order tab: ask row → Buy @ that ask, bid
+  row → Sell @ that bid. `OrderBookL2.onPriceClick(price, side)` → shared `TradingViewModel.prefillPrice`
+  (both book + ticket resolve the same nav-scoped VM) → `tab = Order`.
 - ☐ **TRD-6 · Click-to-trade from chart** — `M` — tap/long-press a chart price → prefill ticket price.
 - ☐ **TRD-7 · Open orders panel** — `M` — list working orders (from store) with cancel + amend.
 - ☐ **TRD-8 · Amend vs replace** — `M` — reduce-qty → PATCH `new_qty` (amend, keep priority);
