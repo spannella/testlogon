@@ -89,6 +89,11 @@ class SymbolDetailViewModel @Inject constructor(
         viewModelScope.launch {
             val intervalSec = _uiState.value.intervalSec
             val candles = repository.candles(symbolId, intervalSec)
+            // Publish candle history immediately so a slow book/trades fetch (or the concurrent SSE
+            // stream seeding a single bar from empty) can't leave the chart stuck on one candle.
+            if (candles is ApiResult.Success && candles.data.isNotEmpty()) {
+                _uiState.update { it.copy(candles = candles.data, phase = SymbolDetailUiState.Phase.Content) }
+            }
             val book = repository.orderBook(symbolId, depth = 50)
             val trades = repository.trades(symbolId)
 
