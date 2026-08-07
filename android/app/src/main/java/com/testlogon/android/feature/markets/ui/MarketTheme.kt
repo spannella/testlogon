@@ -18,10 +18,10 @@ import androidx.compose.ui.graphics.Color
  * locally rather than reading MaterialTheme.colorScheme (which is the light app theme).
  */
 object MarketColors {
-    val Bg = Color(0xFF0B0E11)
-    val Surface = Color(0xFF151A21)
-    val SurfaceAlt = Color(0xFF1C222B)
-    val Border = Color(0xFF252C36)
+    val Bg = Color(0xFF0A0E0D)
+    val Surface = Color(0xFF121815)
+    val SurfaceAlt = Color(0xFF19211D)
+    val Border = Color(0xFF232B26)
 
     val TextPrimary = Color(0xFFEAECEF)
     val TextSecondary = Color(0xFF848E9C)
@@ -29,7 +29,7 @@ object MarketColors {
 
     val Up = Color(0xFF0ECB81)
     val Down = Color(0xFFF6465D)
-    val Accent = Color(0xFFF0B90B)
+    val Accent = Color(0xFF98FCE4)
 
     // Translucent depth fills (crisp, not pastel).
     val UpFill = Color(0x240ECB81)
