@@ -45,10 +45,15 @@ shipped). Android first; web mirror later. **Prefix `TRD`.** ☐ todo · ◐ in 
   (Ladder or Columns) prefills the ticket and jumps to the Order tab: ask row → Buy @ that ask, bid
   row → Sell @ that bid. `OrderBookL2.onPriceClick(price, side)` → shared `TradingViewModel.prefillPrice`
   (both book + ticket resolve the same nav-scoped VM) → `tab = Order`.
-- ☐ **TRD-6 · Click-to-trade from chart** — `M` — tap/long-press a chart price → prefill ticket price.
+- ☑ **TRD-6 · Click-to-trade from chart** — `M` · **done** (2026-08-07) — LONG-PRESS a price on the
+  chart → prefill the ticket price + jump to the Order tab (long-press avoids conflict with pan /
+  crosshair-drag / double-tap-reset). `CandlestickChart.onPriceLongPress(price)` maps y→price via the
+  existing tapToAnchor geometry → shared TradingViewModel.prefillPrice.
 - ☐ **TRD-7 · Open orders panel** — `M` — list working orders (from store) with cancel + amend.
-- ☐ **TRD-8 · Amend vs replace** — `M` — reduce-qty → PATCH `new_qty` (amend, keep priority);
-  price change / qty-up → replace (cancel+new) or PATCH `new_price`; explicit Replace + Cancel actions.
+- ☑ **TRD-8 · Amend vs replace** — `M` · **done** (2026-08-07) — "Amend" on a working order loads it
+  into the ticket in amend-mode; applying does a pure **reduce-qty → `PATCH new_qty`** (in-place, keeps
+  priority) or, on price-change / qty-increase, a **cancel + replace**. VM `startAmend`/`cancelAmend`/
+  `amend`; ticket shows "Amend order" button + a tap-to-cancel-amend hint; rows gain Amend + Cancel.
 
 ## Wave 3 — Positions, wallet, margin
 - ☐ **TRD-9 · Positions panel** — `M` — from margin_account: qty/side, entry, liq price, unrealized

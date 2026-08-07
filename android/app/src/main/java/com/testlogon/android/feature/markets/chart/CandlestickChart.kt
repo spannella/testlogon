@@ -159,6 +159,7 @@ fun CandlestickChart(
     drawings: List<ChartDrawing> = emptyList(),
     activeTool: DrawingTool = DrawingTool.NONE,
     onCommitDrawing: (ChartDrawing) -> Unit = {},
+    onPriceLongPress: ((Long) -> Unit)? = null,
     showTimeframes: Boolean = true,
     onTimeframeSelected: (Timeframe) -> Unit = {},
 ) {
@@ -188,6 +189,7 @@ fun CandlestickChart(
             drawings = drawings,
             activeTool = activeTool,
             onCommitDrawing = onCommitDrawing,
+            onPriceLongPress = onPriceLongPress,
             chartHeight = chartHeight,
             modifier = Modifier.fillMaxWidth().height(chartHeight).testTag("candle_chart"),
         )
@@ -204,6 +206,7 @@ private fun CandlestickCanvas(
     drawings: List<ChartDrawing>,
     activeTool: DrawingTool,
     onCommitDrawing: (ChartDrawing) -> Unit,
+    onPriceLongPress: ((Long) -> Unit)?,
     chartHeight: androidx.compose.ui.unit.Dp,
     modifier: Modifier,
 ) {
@@ -286,8 +289,14 @@ private fun CandlestickCanvas(
 
     val gestureModifier = if (activeTool == DrawingTool.NONE) {
         Modifier
-            .pointerInput(candles.size) {
-                detectTapGestures(onDoubleTap = { resetView() })
+            .pointerInput(candles.size, onPriceLongPress) {
+                detectTapGestures(
+                    onDoubleTap = { resetView() },
+                    onLongPress = { off ->
+                        val a = tapToAnchor(size.width.toFloat(), size.height.toFloat(), off.x, off.y)
+                        if (a != null) onPriceLongPress?.invoke(a.price.toLong())
+                    },
+                )
             }
             .pointerInput(candles.size) {
                 detectTransformGestures { _, pan, zoom, _ ->

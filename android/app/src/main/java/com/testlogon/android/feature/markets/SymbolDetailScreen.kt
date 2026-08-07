@@ -160,6 +160,10 @@ private fun SymbolDetailContent(
                     drawings = state.drawings,
                     activeTool = state.activeTool,
                     onCommitDrawing = onCommitDrawing,
+                    onPriceLongPress = { price ->
+                        tradingViewModel.prefillPrice(price)
+                        tab = DetailTab.TRADE
+                    },
                     onTimeframeSelected = onTimeframe,
                     showTimeframes = false,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),

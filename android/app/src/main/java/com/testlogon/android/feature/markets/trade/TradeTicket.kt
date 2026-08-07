@@ -98,10 +98,25 @@ fun TradeTicket(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = if (state.placing) "Placing…" else "${if (state.side == OrderSide.BUY) "Buy" else "Sell"} ${state.qtyText.ifBlank { "" }}".trim(),
+                text = when {
+                    state.placing -> if (state.isAmending) "Amending…" else "Placing…"
+                    state.isAmending -> "Amend order"
+                    else -> "${if (state.side == OrderSide.BUY) "Buy" else "Sell"} ${state.qtyText}".trim()
+                },
                 color = if (state.canPlace) Color.Black else MarketColors.TextFaint,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
+            )
+        }
+
+        if (state.isAmending) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Amending order · tap to cancel amend",
+                color = MarketColors.TextSecondary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { viewModel.cancelAmend() }.testTag("cancel_amend").padding(vertical = 4.dp),
             )
         }
 
@@ -123,6 +138,7 @@ fun TradeTicket(
                 WorkingOrderRow(
                     label = "${if (wo.side == OrderSide.BUY) "Buy" else "Sell"}  ${fmt(wo.qty.toDouble())} @ ${fmt(wo.price.toDouble())}",
                     sideColor = if (wo.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down,
+                    onAmend = { viewModel.startAmend(wo) },
                     onCancel = { viewModel.cancel(wo.clordid) },
                 )
             }
@@ -206,25 +222,39 @@ private fun NumberField(label: String, value: String, onValue: (String) -> Unit)
 }
 
 @Composable
-private fun WorkingOrderRow(label: String, sideColor: Color, onCancel: () -> Unit) {
+private fun WorkingOrderRow(label: String, sideColor: Color, onAmend: () -> Unit, onCancel: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(label, color = sideColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-        Text(
-            text = "Cancel",
-            color = MarketColors.Down,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .border(1.dp, MarketColors.Border, RoundedCornerShape(6.dp))
-                .clickable(onClick = onCancel)
-                .testTag("wo_cancel")
-                .padding(horizontal = 10.dp, vertical = 5.dp),
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = "Amend",
+                color = MarketColors.Accent,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(1.dp, MarketColors.Border, RoundedCornerShape(6.dp))
+                    .clickable(onClick = onAmend)
+                    .testTag("wo_amend")
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+            Text(
+                text = "Cancel",
+                color = MarketColors.Down,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(1.dp, MarketColors.Border, RoundedCornerShape(6.dp))
+                    .clickable(onClick = onCancel)
+                    .testTag("wo_cancel")
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+        }
     }
 }
 

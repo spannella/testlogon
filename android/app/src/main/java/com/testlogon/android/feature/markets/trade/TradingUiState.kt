@@ -25,7 +25,9 @@ data class TradingUiState(
     val messageIsError: Boolean = false,
     val account: MarginAccount? = null,
     val workingOrders: List<WorkingOrder> = emptyList(),
+    val amendingClordid: String? = null,
 ) {
+    val isAmending: Boolean get() = amendingClordid != null
     val priceLong: Long? get() = priceText.toLongOrNull()
     val qtyLong: Long? get() = qtyText.toLongOrNull()
     val orderValue: Long? get() {
