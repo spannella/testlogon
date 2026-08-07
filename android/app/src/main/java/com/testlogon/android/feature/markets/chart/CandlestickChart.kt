@@ -81,6 +81,8 @@ enum class Oscillator(val label: String) {
 private val RsiColor = Color(0xFFB388FF)    // violet
 private val MacdColor = Color(0xFF4C8DFF)   // blue
 private val SignalColor = Color(0xFFFF9F40) // orange
+private val VolMaColor = Color(0xFFE0A83A)  // muted gold (volume MA)
+private const val VOL_MA_PERIOD = 20
 
 /**
  * A moving-average overlay: [period] candles, [sma] true = simple, false = exponential, drawn in
@@ -111,6 +113,7 @@ private data class Overlays(
     val macdLine: List<Double?>,
     val macdSignal: List<Double?>,
     val macdHist: List<Double?>,
+    val volMa: List<Double?>,
 )
 
 private const val MIN_VISIBLE = 12
@@ -208,7 +211,8 @@ private fun CandlestickCanvas(
         val upper = mid.mapIndexed { i, m -> if (m != null && sd[i] != null) m + BB_MULT * sd[i]!! else null }
         val lower = mid.mapIndexed { i, m -> if (m != null && sd[i] != null) m - BB_MULT * sd[i]!! else null }
         val (macdLine, macdSignal, macdHist) = macd(closes)
-        Overlays(ma, mid, upper, lower, vwap(candles), rsi(closes, 14), macdLine, macdSignal, macdHist)
+        val volMa = sma(candles.map { it.volume.toDouble() }, VOL_MA_PERIOD)
+        Overlays(ma, mid, upper, lower, vwap(candles), rsi(closes, 14), macdLine, macdSignal, macdHist, volMa)
     }
     val maSeries = overlays.ma
 
@@ -381,6 +385,19 @@ private fun CandlestickCanvas(
                     Offset(cx - bodyWidth / 2f, volTop + (volHeight - vBarH)),
                     Size(bodyWidth, vBarH),
                 )
+            }
+            // volume moving-average line over the volume pane
+            run {
+                var prev: Offset? = null
+                for (i in 0 until n) {
+                    val v = overlays.volMa.getOrNull(startIdx + i)
+                    if (v == null) { prev = null; continue }
+                    val frac = (v / maxVol.toDouble()).toFloat().coerceIn(0f, 1f)
+                    val cur = Offset(slot * i + slot / 2f, volTop + volHeight * (1f - frac))
+                    val p = prev
+                    if (p != null) drawLine(VolMaColor, p, cur, strokeWidth = 1.2f)
+                    prev = cur
+                }
             }
 
             // ---- Bollinger Bands (fill + upper/lower/mid) ----

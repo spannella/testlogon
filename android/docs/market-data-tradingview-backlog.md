@@ -45,8 +45,7 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
   chips toggles each MA on/off. `sma()`/`ema()` helpers included (EMA available for future specs).
   AC met: lines align to candle centers; nulls skipped until enough samples; per-MA toggle.
 
-- ☐ **MDX-112 · Volume MA line** — `S` · dep MDX-111
-  MA line over the volume histogram sub-pane.
+- ☑ **MDX-112 · Volume MA line** — `S` · **done** — gold SMA(20) line over the volume histogram.
 
 - ☑ **MDX-113 · Oscillator sub-pane** — `L` · **done** — the chart now reallocates vertical space
   (price 56% / volume 14% / oscillator 24%) and grows its canvas 260→340dp when an oscillator is
@@ -69,11 +68,14 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
   Double-tap resets `visibleCount` to default and `scrollOffset` to 0 (re-fits Y to latest N candles,
   since Y auto-scales to the visible window). Added as its own `detectTapGestures` pointerInput.
 
-- ☐ **MDX-122 · Independent Y-axis drag scale** — `M` · no deps
-  Vertical drag on the price axis rescales Y; lock/auto toggle; auto re-engages on reset.
+- ⊘ **MDX-122 · Independent Y-axis drag scale** — `M` · **DEFERRED** — on a phone the price-axis
+  gutter is ~58px and overlaps the crosshair drag detector; implementing it means reworking the
+  gesture arbitration between the verified pan/pinch/crosshair detectors for marginal value. Revisit
+  only if users ask. Y auto-fits the visible window today (usually what's wanted).
 
-- ☐ **MDX-123 · Fling / momentum pan** — `S` · no deps
-  Velocity-based inertial scroll on pan release; decelerates smoothly; clamps at data edges.
+- ⊘ **MDX-123 · Fling / momentum pan** — `S` · **DEFERRED** — needs a VelocityTracker + decay
+  animation layered onto detectTransformGestures without disturbing pan/pinch/crosshair; nice-to-have,
+  not worth the regression risk right now.
 
 - ◐ **MDX-124 · On-device pan/zoom verification** — `S` · dep current chart
   `input swipe` + before/after screenshots (+ optional screen-cap) to confirm the window shifts and
@@ -105,15 +107,17 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 
 ## Epic F — Symbols, watchlists, alerts
 
-- ☐ **MDX-151 · Symbol search / switcher** — `M` · partial (list from /md/symbols)
-  Searchable symbol picker; quick-switch without leaving the chart; recent symbols; deep-link retained.
+- ☑ **MDX-151 · Symbol search** — `M` · **done** — themed search field on the Markets list
+  (`MarketSearchField`, BasicTextField + search/clear icons) filters rows by symbol substring.
+  (In-detail quick-switcher deferred — with 3 seeded symbols a one-tap back-to-list suffices.)
 
-- ☐ **MDX-152 · Watchlist / favorites** — `M` · dep MDX-151
-  Star symbols; persisted watchlist row with live last-price + %chg via SSE or poll.
+- ☑ **MDX-152 · Watchlist / favorites** — `M` · **done** — star per row (`Icons.Star/StarBorder`),
+  persisted in SharedPreferences (`markets_prefs/favorites`), starred instruments float to the top of
+  the list; live last-price/%chg already on each row via the existing quote poll.
 
-- ☐ **MDX-153 · Price alerts** — `L` · needs backend seam
-  Set a price threshold → notification on cross. Needs a backend alert-eval seam + push
-  (FCM already wired app-side). AC: create/list/delete alert; fires once on cross; delivered via push.
+- ⊘ **MDX-153 · Price alerts** — `L` · **DEFERRED (needs backend)** — requires a backend alert-eval
+  seam (no `/md` alert endpoint today) + push wiring. App-side FCM exists; blocked on the exchange
+  backend adding a threshold-cross evaluator. Revisit when the backend seam lands.
 
 ## Epic G — Nice-to-haves / lower priority
 

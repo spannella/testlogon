@@ -1,11 +1,13 @@
 package com.testlogon.android.feature.markets
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.Instrument
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,14 +20,18 @@ import javax.inject.Inject
 /**
  * Drives [MarketsUiState] from [ExchangeRepository]. Loads the instrument catalogue, then polls each
  * instrument's top-of-book (order-book best bid/ask + last trade) every [POLL_MS] so the list shows
- * live-ish quotes, plus a periodic candle fetch that feeds each row's sparkline + % change.
+ * live-ish quotes, plus a periodic candle fetch that feeds each row's sparkline + % change. Starred
+ * instruments (the watchlist) are persisted in SharedPreferences and surfaced via [MarketsUiState].
  */
 @HiltViewModel
 class MarketsViewModel @Inject constructor(
     private val repository: ExchangeRepository,
+    @ApplicationContext appContext: Context,
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(MarketsUiState())
+    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private val _uiState = MutableStateFlow(MarketsUiState(favorites = readFavorites()))
     val uiState: StateFlow<MarketsUiState> = _uiState.asStateFlow()
 
     init {
@@ -33,6 +39,18 @@ class MarketsViewModel @Inject constructor(
     }
 
     fun onRetry() = load()
+
+    /** Toggle an instrument in the persisted watchlist. */
+    fun toggleFavorite(symbolId: Int) {
+        val next = _uiState.value.favorites.toMutableSet().apply {
+            if (!add(symbolId)) remove(symbolId)
+        }
+        prefs.edit().putStringSet(KEY_FAV, next.map { it.toString() }.toSet()).apply()
+        _uiState.update { it.copy(favorites = next) }
+    }
+
+    private fun readFavorites(): Set<Int> =
+        prefs.getStringSet(KEY_FAV, emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet()
 
     private fun load() {
         _uiState.update { it.copy(phase = MarketsUiState.Phase.Loading, errorMessage = null) }
@@ -122,5 +140,7 @@ class MarketsViewModel @Inject constructor(
         const val SPARK_INTERVAL_SEC = 60
         const val SPARK_POINTS = 30
         const val OFFLINE_FALLBACK = "Couldn't reach the market-data service. Tap retry."
+        const val PREFS = "markets_prefs"
+        const val KEY_FAV = "favorites"
     }
 }

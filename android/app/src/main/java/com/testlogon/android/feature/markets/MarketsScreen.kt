@@ -29,9 +29,19 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -82,7 +92,9 @@ fun MarketsRoute(
                     )
                     MarketsUiState.Phase.Content -> MarketsList(
                         rows = state.rows,
+                        favorites = state.favorites,
                         onOpenSymbol = onOpenSymbol,
+                        onToggleFavorite = viewModel::toggleFavorite,
                     )
                 }
             }
@@ -124,21 +136,87 @@ private fun MarketsHeader(onBack: () -> Unit, count: Int) {
 @Composable
 private fun MarketsList(
     rows: List<MarketRow>,
+    favorites: Set<Int>,
     onOpenSymbol: (Int) -> Unit,
+    onToggleFavorite: (Int) -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().testTag("markets_list"),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items(rows, key = { it.instrument.symbolId }) { row ->
-            MarketRowCard(row = row, onClick = { onOpenSymbol(row.instrument.symbolId) })
+    var query by remember { mutableStateOf("") }
+    // Filter by symbol, then float starred instruments to the top (stable within each group).
+    val displayed = remember(rows, favorites, query) {
+        rows.filter { query.isBlank() || it.instrument.symbol.contains(query.trim(), ignoreCase = true) }
+            .sortedByDescending { favorites.contains(it.instrument.symbolId) }
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        MarketSearchField(query = query, onQuery = { query = it })
+        if (displayed.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No markets match \"$query\".", color = MarketColors.TextSecondary, fontSize = 13.sp)
+            }
+            return@Column
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().testTag("markets_list"),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(displayed, key = { it.instrument.symbolId }) { row ->
+                MarketRowCard(
+                    row = row,
+                    favorite = favorites.contains(row.instrument.symbolId),
+                    onClick = { onOpenSymbol(row.instrument.symbolId) },
+                    onToggleFavorite = { onToggleFavorite(row.instrument.symbolId) },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun MarketRowCard(row: MarketRow, onClick: () -> Unit) {
+private fun MarketSearchField(query: String, onQuery: (String) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .testTag("markets_search"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = MarketColors.TextSecondary, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Box(modifier = Modifier.weight(1f)) {
+            if (query.isEmpty()) {
+                Text("Search markets", color = MarketColors.TextFaint, fontSize = 14.sp)
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQuery,
+                singleLine = true,
+                textStyle = TextStyle(color = MarketColors.TextPrimary, fontSize = 14.sp),
+                cursorBrush = SolidColor(MarketColors.Accent),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (query.isNotEmpty()) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Clear",
+                tint = MarketColors.TextSecondary,
+                modifier = Modifier.size(18.dp).clickable { onQuery("") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MarketRowCard(
+    row: MarketRow,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -185,6 +263,18 @@ private fun MarketRowCard(row: MarketRow, onClick: () -> Unit) {
             Spacer(Modifier.height(4.dp))
             ChangePill(pct = row.changePct)
         }
+        Spacer(Modifier.width(4.dp))
+        Icon(
+            imageVector = if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+            contentDescription = if (favorite) "Remove from watchlist" else "Add to watchlist",
+            tint = if (favorite) MarketColors.Accent else MarketColors.TextFaint,
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onToggleFavorite)
+                .testTag("fav_${row.instrument.symbolId}")
+                .padding(2.dp),
+        )
     }
 }
 
