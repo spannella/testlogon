@@ -29,13 +29,16 @@ shipped). Android first; web mirror later. **Prefix `TRD`.** ☐ todo · ◐ in 
   (OrderSide/OrderAck/CancelAck/Fill/MarginAccount/PositionSnapshot + `marginUsedFraction`) + mappers
   + `TradingRepository` (apiCall/ApiResult). Wired in ExchangeDataModule reusing the HTTP/1.1 pin +
   cookie session. Build-green. (bulkCancel/advanced endpoints deferred to their waves.)
-- ☐ **TRD-2 · Order + fills store** — `M` — client-tracked working-orders + session-fills store
-  (updated from place/amend/cancel acks + fills[]); persisted per account. (Stretch: probe a private
-  exec-report WS to make it authoritative.)
-- ☐ **TRD-3 · Trade gate** — `S` — detect `me_trade_enabled` (role/attr or a probe); gate all trade UI
-  with a clear "trading not enabled" state.
-- ☐ **TRD-4 · Order ticket UI** — `L` — Buy/Sell, order type (Limit/Market to start), price, qty,
-  order value/cost, place → ack/nak toast. Lives on the symbol screen (new "Trade" tab or sheet).
+- ◐ **TRD-2 · Order + fills store** — `M` — session working-orders tracked in the VM (added on ack,
+  removed on cancel; filled qty subtracted). Persisted store + fills-log still to add.
+- ◐ **TRD-3 · Trade gate** — `S` — rejection path done: the engine's "trading not enabled for this
+  account" nak is surfaced as the (red) ticket message. Proactive gate/disable + enablement still to add.
+- ☑ **TRD-4 · Order ticket UI** — `L` · **done** (2026-08-07) — "Order" tab on the symbol screen:
+  Buy/Sell, price (prefilled from last), quantity, order value, Available + margin-used meter (from
+  margin_account), place → `POST /me/orders`, result/error line, and this-session open-orders list
+  with Cancel. Limit orders (market/advanced later). Build-green; on-device A15 verified: ticket
+  renders, place hits the engine, gate nak "trading not enabled" surfaced. (Successful place pending
+  an `me_trade_enabled` account — TRD-16.)
 
 ## Wave 2 — Click-to-trade + order management
 - ☐ **TRD-5 · Click-to-trade from book** — `M` — tap an order-book row → prefill ticket side+price.

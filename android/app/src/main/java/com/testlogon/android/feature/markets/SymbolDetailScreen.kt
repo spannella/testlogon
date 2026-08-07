@@ -55,6 +55,7 @@ import com.testlogon.android.feature.markets.chart.ChartType
 import com.testlogon.android.feature.markets.chart.DrawingTool
 import com.testlogon.android.feature.markets.chart.Oscillator
 import com.testlogon.android.feature.markets.chart.Timeframe
+import com.testlogon.android.feature.markets.trade.TradeTicket
 import com.testlogon.android.feature.markets.ui.MarketColors
 import com.testlogon.android.feature.markets.ui.MarketSurface
 import java.text.SimpleDateFormat
@@ -195,6 +196,10 @@ private fun SymbolDetailContent(
                         )
                     }
                 }
+            }
+
+            DetailTab.TRADE -> item {
+                TradeTicket(lastPrice = state.candles.lastOrNull()?.close)
             }
         }
     }
@@ -403,7 +408,7 @@ private fun DrawingToolbar(
 }
 
 /** Top-level panel selector for the symbol detail: Chart / Book / Trades. */
-private enum class DetailTab(val label: String) { CHART("Chart"), BOOK("Book"), TRADES("Trades") }
+private enum class DetailTab(val label: String) { CHART("Chart"), BOOK("Book"), TRADES("Trades"), TRADE("Order") }
 
 @Composable
 private fun DetailTabBar(selected: DetailTab, onSelect: (DetailTab) -> Unit) {
