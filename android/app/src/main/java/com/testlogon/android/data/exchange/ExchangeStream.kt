@@ -8,7 +8,9 @@ import com.testlogon.android.data.messaging.realtime.SseLineParser
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 import okhttp3.Request
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -38,9 +40,19 @@ class ExchangeStream @Inject constructor(
 
     /** A dedicated client view with no read timeout so the long-lived stream is not killed early. */
     private val streamClient: OkHttpClient by lazy {
-        baseClient.newBuilder()
+        val builder = baseClient.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
-            .build()
+            // Own pool: otherwise okhttp reuses baseClients pooled HTTP/2 connection and the
+            // .protocols(HTTP_1_1) below never takes effect (the cpp edge resets long-lived h2).
+            .connectionPool(ConnectionPool())
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+        // CRITICAL: the shared baseClient carries a DEBUG-only HttpLoggingInterceptor at Level.BODY.
+        // A BODY-level app interceptor buffers the ENTIRE response body before returning it — which
+        // for an infinite text/event-stream never completes, so it blocks here forever and no frame
+        // ever reaches the collector (the stream shows 200 OK but hangs). Strip it (and any body-
+        // buffering okhttp-logging interceptor) from this streaming clients chain.
+        builder.interceptors().removeAll { it is HttpLoggingInterceptor }
+        builder.build()
     }
 
     /**
@@ -57,6 +69,7 @@ class ExchangeStream @Inject constructor(
                 val request = Request.Builder()
                     .url(url)
                     .header("Accept", "text/event-stream")
+                    .header("Accept-Encoding", "identity")
                     .header("Cache-Control", "no-cache")
                     .build()
                 val call = streamClient.newCall(request)
@@ -105,7 +118,10 @@ class ExchangeStream @Inject constructor(
 
     private companion object {
         const val STREAM_PATH_PREFIX = "md/stream/"
-        const val STREAM_QUERY = "?interval=1"
+        // interval=60 matches ExchangeRepository.candles(intervalSec=60) so live bars align with the
+        // REST history grid (same ts_start_ns) and mergeCandle replaces/appends 60s bars correctly.
+        // interval=1 desynced the chart (1s live bars appended onto 60s history).
+        const val STREAM_QUERY = "?interval=60"
         const val EVENT_MD = "md"
         const val RECONNECT_BACKOFF_MS = 1_500L
     }
