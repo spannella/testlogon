@@ -100,6 +100,14 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 
 ## Epic E — Depth & trades tape
 
+- ☑ **MDX-144 · Order-book style toggle** — `M` · **done** (2026-08-07) — `BookStyle` enum
+  (LADDER/COLUMNS) + a toggle by the "Order Book" header. LADDER = asks-top / spread / bids-bottom
+  (the pre-existing viewer); COLUMNS = bids-left (green) / asks-right (red), best-of-book adjacent to
+  a centre divider, per-row depth bars mirrored outward from centre, spread bar on top. On-device A15
+  verified via UI dump: bids x≈286 / asks x≈558, 4 levels each, toggle switches. NOTE: the live demo
+  book was CROSSED at capture (API `bestBid=100027 > bestAsk=99876`) — a backend matching-engine data
+  artifact; the viewer renders the API book faithfully.
+
 - ☑ **MDX-141 · Recent-trades tape** — `M` · **already built** (SymbolDetailScreen "Recent Trades"
   section: `TradeRow` with aggressor up/down color + ^/v arrow, size, HH:mm:ss time; VM `pollTrades()`
   at 4s; take(40)). Refinement left: dedicated tab/split layout — see MDX-142.

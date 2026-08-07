@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -31,18 +33,23 @@ private val UpColor = MarketColors.Up
 private val DownColor = MarketColors.Down
 private const val MAX_ROWS = 12
 
+/** Order-book layout. LADDER = asks-top / spread / bids-bottom; COLUMNS = bids-left / asks-right. */
+enum class BookStyle(val label: String) { LADDER("Ladder"), COLUMNS("Columns") }
+
 /**
- * L2 depth order-book viewer, dependency-free, dark exchange palette. Asks (red) on top, a centred
- * mid/spread bar, then bids (green) below. Each row has a right-anchored translucent cumulative-depth
- * bar; a compact cumulative depth curve sits above the ladder. Columns are fixed-weight and numbers
- * are end-aligned monospace so they line up. Prices/qty are raw integers scaled by [priceScaler].
- * [lastUp] tints the mid price by the last trade direction (null = neutral).
+ * L2 depth order-book viewer, dependency-free, dark exchange palette. Two layouts via [style]:
+ *  - LADDER: asks (red) on top, a centred mid/spread bar, then bids (green) below, each row with a
+ *    right-anchored cumulative-depth bar plus a compact depth curve above the ladder.
+ *  - COLUMNS: bids (green) on the left and asks (red) on the right, best-of-book adjacent to a centre
+ *    divider, each row's depth bar growing outward from the centre, with the spread bar spanning top.
+ * Prices/qty are raw integers scaled by [priceScaler]; [lastUp] tints the mid by last-trade direction.
  */
 @Composable
 fun OrderBookL2(
     book: OrderBook?,
     priceScaler: Long,
     modifier: Modifier = Modifier,
+    style: BookStyle = BookStyle.LADDER,
     lastUp: Boolean? = null,
 ) {
     if (book == null || (book.asks.isEmpty() && book.bids.isEmpty())) {
@@ -56,27 +63,59 @@ fun OrderBookL2(
     val bidCum = cumulative(bids)
     val maxCum = maxOf(askCum.lastOrNull() ?: 1L, bidCum.lastOrNull() ?: 1L).coerceAtLeast(1L)
 
-    Column(modifier = modifier.fillMaxWidth().testTag("order_book_l2")) {
-        DepthChart(asks = asks, bids = bids, askCum = askCum, bidCum = bidCum, maxCum = maxCum)
+    when (style) {
+        BookStyle.LADDER -> Column(modifier = modifier.fillMaxWidth().testTag("order_book_l2")) {
+            DepthChart(asks = asks, bids = bids, askCum = askCum, bidCum = bidCum, maxCum = maxCum)
 
-        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 4.dp)) {
-            LabelCell("Price", TextAlign.Start, 1.2f)
-            LabelCell("Size", TextAlign.End, 1f)
-            LabelCell("Total", TextAlign.End, 1f)
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 4.dp)) {
+                LabelCell("Price", TextAlign.Start, 1.2f)
+                LabelCell("Size", TextAlign.End, 1f)
+                LabelCell("Total", TextAlign.End, 1f)
+            }
+
+            // asks: nearest-to-spread at the BOTTOM, so reverse for top-down render
+            asks.indices.reversed().forEach { i ->
+                L2Row(price = asks[i].price, size = asks[i].qty, cum = askCum[i], maxCum = maxCum, color = DownColor, fill = MarketColors.DownFill, scaler = scaler)
+            }
+
+            SpreadRow(book = book, scaler = scaler, lastUp = lastUp)
+
+            bids.indices.forEach { i ->
+                L2Row(price = bids[i].price, size = bids[i].qty, cum = bidCum[i], maxCum = maxCum, color = UpColor, fill = MarketColors.UpFill, scaler = scaler)
+            }
         }
 
-        // asks: nearest-to-spread at the BOTTOM, so reverse for top-down render
-        asks.indices.reversed().forEach { i ->
-            L2Row(price = asks[i].price, size = asks[i].qty, cum = askCum[i], maxCum = maxCum, color = DownColor, fill = MarketColors.DownFill, scaler = scaler)
-        }
-
-        SpreadRow(book = book, scaler = scaler, lastUp = lastUp)
-
-        bids.indices.forEach { i ->
-            L2Row(price = bids[i].price, size = bids[i].qty, cum = bidCum[i], maxCum = maxCum, color = UpColor, fill = MarketColors.UpFill, scaler = scaler)
+        BookStyle.COLUMNS -> Column(modifier = modifier.fillMaxWidth().testTag("order_book_columns")) {
+            SpreadRow(book = book, scaler = scaler, lastUp = lastUp)
+            Row(modifier = Modifier.fillMaxWidth().height(intrinsicRows(asks.size, bids.size))) {
+                // Bids on the left: price sits toward the centre, depth grows leftward from the divider.
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 6.dp)) {
+                        LabelCell("Size", TextAlign.Start, 1f)
+                        LabelCell("Bid", TextAlign.End, 1f)
+                    }
+                    bids.indices.forEach { i ->
+                        BookColRow(price = bids[i].price, size = bids[i].qty, cum = bidCum[i], maxCum = maxCum, color = UpColor, fill = MarketColors.UpFill, scaler = scaler, bidSide = true)
+                    }
+                }
+                Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(MarketColors.Border))
+                // Asks on the right: price toward the centre, depth grows rightward from the divider.
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 6.dp)) {
+                        LabelCell("Ask", TextAlign.Start, 1f)
+                        LabelCell("Size", TextAlign.End, 1f)
+                    }
+                    asks.indices.forEach { i ->
+                        BookColRow(price = asks[i].price, size = asks[i].qty, cum = askCum[i], maxCum = maxCum, color = DownColor, fill = MarketColors.DownFill, scaler = scaler, bidSide = false)
+                    }
+                }
+            }
         }
     }
 }
+
+/** Approx height so the centre divider spans the taller column (header + N rows). */
+private fun intrinsicRows(asks: Int, bids: Int) = (34 + 21 * maxOf(asks, bids)).dp
 
 @Composable
 private fun DepthChart(
@@ -154,6 +193,42 @@ private fun L2Row(
             NumCell(fmt(price.toDouble() / scaler), color = color, align = TextAlign.Start, weight = 1.2f, bold = true)
             NumCell(size.toString(), color = MarketColors.TextPrimary, align = TextAlign.End, weight = 1f)
             NumCell(cum.toString(), color = MarketColors.TextSecondary, align = TextAlign.End, weight = 1f)
+        }
+    }
+}
+
+/** One row of the COLUMNS layout. [bidSide] mirrors the depth bar + cell order about the centre. */
+@Composable
+private fun BookColRow(
+    price: Long,
+    size: Long,
+    cum: Long,
+    maxCum: Long,
+    color: Color,
+    fill: Color,
+    scaler: Long,
+    bidSide: Boolean,
+) {
+    val fraction = (cum.toFloat() / maxCum.toFloat()).coerceIn(0f, 1f)
+    Box(modifier = Modifier.fillMaxWidth().height(21.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(fraction)
+                .height(21.dp)
+                .align(if (bidSide) Alignment.CenterEnd else Alignment.CenterStart)
+                .background(fill),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (bidSide) {
+                NumCell(size.toString(), color = MarketColors.TextSecondary, align = TextAlign.Start, weight = 1f)
+                NumCell(fmt(price.toDouble() / scaler), color = color, align = TextAlign.End, weight = 1f, bold = true)
+            } else {
+                NumCell(fmt(price.toDouble() / scaler), color = color, align = TextAlign.Start, weight = 1f, bold = true)
+                NumCell(size.toString(), color = MarketColors.TextSecondary, align = TextAlign.End, weight = 1f)
+            }
         }
     }
 }

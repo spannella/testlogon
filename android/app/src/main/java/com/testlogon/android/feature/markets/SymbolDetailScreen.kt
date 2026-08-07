@@ -46,6 +46,7 @@ import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.exchange.Aggressor
 import com.testlogon.android.data.exchange.Candle
 import com.testlogon.android.data.exchange.Trade
+import com.testlogon.android.feature.markets.book.BookStyle
 import com.testlogon.android.feature.markets.book.OrderBookL2
 import com.testlogon.android.feature.markets.chart.CandlestickChart
 import com.testlogon.android.feature.markets.chart.ChartDrawing
@@ -126,6 +127,7 @@ private fun SymbolDetailContent(
     val selectedTf = Timeframe.entries.firstOrNull { it.seconds == state.intervalSec } ?: Timeframe.M1
     var chartType by remember { mutableStateOf(ChartType.CANDLES) }
     var oscillator by remember { mutableStateOf(Oscillator.NONE) }
+    var bookStyle by remember { mutableStateOf(BookStyle.LADDER) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("symbol_detail"),
         contentPadding = PaddingValues(bottom = 24.dp),
@@ -162,10 +164,11 @@ private fun SymbolDetailContent(
             )
         }
         item {
-            SectionHeader(if (state.live) "Order Book" else "Order Book")
+            OrderBookHeader(style = bookStyle, onStyle = { bookStyle = it })
             OrderBookL2(
                 book = state.orderBook,
                 priceScaler = PRICE_SCALER,
+                style = bookStyle,
                 lastUp = lastTradeUp(state.trades),
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
@@ -386,6 +389,43 @@ private fun DrawingToolbar(
                     .testTag("draw_clear")
                     .padding(horizontal = 8.dp, vertical = 6.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun OrderBookHeader(style: BookStyle, onStyle: (BookStyle) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Order Book",
+            color = MarketColors.TextPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            BookStyle.entries.forEach { s ->
+                val sel = s == style
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (sel) MarketColors.SurfaceAlt else Color.Transparent)
+                        .clickable { onStyle(s) }
+                        .testTag("bookstyle_${s.name}")
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        text = s.label,
+                        color = if (sel) MarketColors.Accent else MarketColors.TextSecondary,
+                        fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
         }
     }
 }
