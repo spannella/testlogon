@@ -20,7 +20,16 @@ abstract class ExchangeDataModule {
     companion object {
         @Provides
         @Singleton
-        fun provideExchangeApi(retrofit: Retrofit): ExchangeApi =
-            retrofit.create(ExchangeApi::class.java)
+        fun provideExchangeApi(retrofit: Retrofit, baseClient: okhttp3.OkHttpClient): ExchangeApi {
+            // The cpp HTTP/2 edge refuses concurrent streams (REFUSED_STREAM) under the markets
+            // screen's REST + SSE load, so /md/candles|book|trades fail intermittently. Pin the
+            // exchange REST client to HTTP/1.1 on its own connection pool, isolated from the app's
+            // shared (busy) h2 connection.
+            val h1Client = baseClient.newBuilder()
+                .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+                .connectionPool(okhttp3.ConnectionPool())
+                .build()
+            return retrofit.newBuilder().client(h1Client).build().create(ExchangeApi::class.java)
+        }
     }
 }
