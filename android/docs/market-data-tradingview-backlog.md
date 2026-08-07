@@ -83,15 +83,20 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 
 ## Epic D — Drawing tools
 
-- ☐ **MDX-131 · Drawing layer + persistence store** — `L` · foundation
-  Overlay canvas + per-symbol persisted drawing model (local first). AC: drawings survive nav
-  away/back and interval change (anchored to time/price, not pixels).
+- ☑ **MDX-131 · Drawing layer + persistence** — `L` · **done** — `Anchor(tsNs, price)` /
+  `ChartDrawing(tool, a, b?)` model anchored to bar-timestamp + price (not pixels), so drawings stay
+  put across pan/zoom. A `DrawingTool` enum + `DrawingToolbar` control; when a tool is active the
+  chart swaps pan/zoom/crosshair for tap-to-place (1st tap buffers, 2nd commits), rendered by mapping
+  ts→x / price→y each frame. Persisted per symbol in SharedPreferences (`chart_drawings/sym_<id>`,
+  serialized) via the detail VM (`@ApplicationContext`); survives nav away/back + app restart. Clear-all
+  button. (Individual-drawing delete + drag-to-edit deferred; clear-all covers the MVP.)
 
-- ☐ **MDX-132 · Horizontal line / ray** — `M` · dep MDX-131
-- ☐ **MDX-133 · Trendline** — `M` · dep MDX-131
-- ☐ **MDX-134 · Fibonacci retracement** — `M` · dep MDX-131
-- ☐ **MDX-135 · Rectangle / zone + text note** — `M` · dep MDX-131
-  AC (each): drag to place/edit, long-press to delete, re-anchors correctly on zoom.
+- ☑ **MDX-132 · Horizontal line** — `M` · **done** — 1-tap price line across the pane (cyan).
+- ☑ **MDX-133 · Trendline** — `M` · **done** — 2-tap segment between (ts,price) anchors.
+- ☑ **MDX-134 · Fibonacci retracement** — `M` · **done** — 2-tap; gold levels 0/.236/.382/.5/.618/.786/1
+  with labels.
+- ☑ **MDX-135 · Rectangle / zone** — `M` · **done** — 2-tap rect with faint fill + border. (Text-note
+  annotation deferred.)
 
 ## Epic E — Depth & trades tape
 

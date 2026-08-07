@@ -48,7 +48,9 @@ import com.testlogon.android.data.exchange.Candle
 import com.testlogon.android.data.exchange.Trade
 import com.testlogon.android.feature.markets.book.OrderBookL2
 import com.testlogon.android.feature.markets.chart.CandlestickChart
+import com.testlogon.android.feature.markets.chart.ChartDrawing
 import com.testlogon.android.feature.markets.chart.ChartType
+import com.testlogon.android.feature.markets.chart.DrawingTool
 import com.testlogon.android.feature.markets.chart.Oscillator
 import com.testlogon.android.feature.markets.chart.Timeframe
 import com.testlogon.android.feature.markets.ui.MarketColors
@@ -79,6 +81,9 @@ fun SymbolDetailRoute(
                     SymbolDetailUiState.Phase.Content -> SymbolDetailContent(
                         state = state,
                         onTimeframe = { viewModel.setInterval(it.seconds) },
+                        onSetTool = viewModel::setTool,
+                        onCommitDrawing = viewModel::addDrawing,
+                        onClearDrawings = viewModel::clearDrawings,
                     )
                 }
             }
@@ -114,6 +119,9 @@ private fun DetailTopBar(title: String, live: Boolean, onBack: () -> Unit) {
 private fun SymbolDetailContent(
     state: SymbolDetailUiState,
     onTimeframe: (Timeframe) -> Unit,
+    onSetTool: (DrawingTool) -> Unit,
+    onCommitDrawing: (ChartDrawing) -> Unit,
+    onClearDrawings: () -> Unit,
 ) {
     val selectedTf = Timeframe.entries.firstOrNull { it.seconds == state.intervalSec } ?: Timeframe.M1
     var chartType by remember { mutableStateOf(ChartType.CANDLES) }
@@ -139,9 +147,18 @@ private fun SymbolDetailContent(
                 selected = selectedTf,
                 chartType = chartType,
                 oscillator = oscillator,
+                drawings = state.drawings,
+                activeTool = state.activeTool,
+                onCommitDrawing = onCommitDrawing,
                 onTimeframeSelected = onTimeframe,
                 showTimeframes = false,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            )
+            DrawingToolbar(
+                active = state.activeTool,
+                hasDrawings = state.drawings.isNotEmpty(),
+                onSetTool = onSetTool,
+                onClear = onClearDrawings,
             )
         }
         item {
@@ -315,6 +332,60 @@ private fun ChartTypeToggle(selected: ChartType, onSelect: (ChartType) -> Unit) 
                     fontSize = 11.sp,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun DrawingToolbar(
+    active: DrawingTool,
+    hasDrawings: Boolean,
+    onSetTool: (DrawingTool) -> Unit,
+    onClear: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = "Draw",
+            color = MarketColors.TextFaint,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        listOf(DrawingTool.HLINE, DrawingTool.TREND, DrawingTool.FIB, DrawingTool.RECT).forEach { tool ->
+            val sel = tool == active
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (sel) MarketColors.SurfaceAlt else Color.Transparent)
+                    .clickable { onSetTool(tool) }
+                    .testTag("draw_${tool.name}")
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    text = tool.label,
+                    color = if (sel) MarketColors.Accent else MarketColors.TextSecondary,
+                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        if (hasDrawings) {
+            Text(
+                text = "Clear",
+                color = MarketColors.Down,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onClear() }
+                    .testTag("draw_clear")
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
         }
     }
 }

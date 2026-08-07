@@ -3,6 +3,8 @@ package com.testlogon.android.feature.markets
 import com.testlogon.android.data.exchange.Candle
 import com.testlogon.android.data.exchange.OrderBook
 import com.testlogon.android.data.exchange.Trade
+import com.testlogon.android.feature.markets.chart.ChartDrawing
+import com.testlogon.android.feature.markets.chart.DrawingTool
 
 /**
  * Single immutable state for the per-symbol detail (chart / order book / trades). Content persists
@@ -19,6 +21,8 @@ data class SymbolDetailUiState(
     val orderBook: OrderBook? = null,
     val trades: List<Trade> = emptyList(),
     val live: Boolean = false,
+    val drawings: List<ChartDrawing> = emptyList(),
+    val activeTool: DrawingTool = DrawingTool.NONE,
     val errorMessage: String? = null,
 ) {
     enum class Phase { Loading, Content, Error }

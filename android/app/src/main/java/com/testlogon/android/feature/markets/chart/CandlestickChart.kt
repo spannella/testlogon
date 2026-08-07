@@ -84,6 +84,25 @@ private val SignalColor = Color(0xFFFF9F40) // orange
 private val VolMaColor = Color(0xFFE0A83A)  // muted gold (volume MA)
 private const val VOL_MA_PERIOD = 20
 
+private val DrawingColor = Color(0xFF26C6DA)   // cyan (user drawings)
+private val FibColor = Color(0xFFF0B90B)       // gold (fib levels)
+private val FIB_LEVELS = listOf(0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0)
+
+/** User chart-drawing tools. NONE = normal interaction (pan/zoom/crosshair). */
+enum class DrawingTool(val label: String, val anchors: Int) {
+    NONE("—", 0),
+    HLINE("Line", 1),   // horizontal price line
+    TREND("Trend", 2),  // segment between two points
+    FIB("Fib", 2),      // retracement between two prices
+    RECT("Rect", 2),    // rectangle zone
+}
+
+/** One placed anchor: a bar timestamp (X) + a price (Y), so drawings stay put across pan/zoom. */
+data class Anchor(val tsNs: Long, val price: Double)
+
+/** A committed drawing: [b] is null for a single-anchor tool (HLINE). */
+data class ChartDrawing(val id: Long, val tool: DrawingTool, val a: Anchor, val b: Anchor? = null)
+
 /**
  * A moving-average overlay: [period] candles, [sma] true = simple, false = exponential, drawn in
  * [color]. The Binance-style defaults are MA7 / MA25 / MA99 (all simple) on the close price.
@@ -137,6 +156,9 @@ fun CandlestickChart(
     selected: Timeframe = Timeframe.M1,
     chartType: ChartType = ChartType.CANDLES,
     oscillator: Oscillator = Oscillator.NONE,
+    drawings: List<ChartDrawing> = emptyList(),
+    activeTool: DrawingTool = DrawingTool.NONE,
+    onCommitDrawing: (ChartDrawing) -> Unit = {},
     showTimeframes: Boolean = true,
     onTimeframeSelected: (Timeframe) -> Unit = {},
 ) {
@@ -163,6 +185,9 @@ fun CandlestickChart(
             timeframe = selected,
             chartType = chartType,
             oscillator = oscillator,
+            drawings = drawings,
+            activeTool = activeTool,
+            onCommitDrawing = onCommitDrawing,
             chartHeight = chartHeight,
             modifier = Modifier.fillMaxWidth().height(chartHeight).testTag("candle_chart"),
         )
@@ -176,6 +201,9 @@ private fun CandlestickCanvas(
     timeframe: Timeframe,
     chartType: ChartType,
     oscillator: Oscillator,
+    drawings: List<ChartDrawing>,
+    activeTool: DrawingTool,
+    onCommitDrawing: (ChartDrawing) -> Unit,
     chartHeight: androidx.compose.ui.unit.Dp,
     modifier: Modifier,
 ) {
@@ -200,6 +228,9 @@ private fun CandlestickCanvas(
     val maVisible = remember { mutableStateListOf(true, true, true) }
     var bbOn by remember { mutableStateOf(false) }
     var vwapOn by remember { mutableStateOf(false) }
+    // First anchor of a 2-point drawing awaiting its second tap.
+    var pendingAnchor by remember { mutableStateOf<Anchor?>(null) }
+    if (activeTool == DrawingTool.NONE) pendingAnchor = null
 
     // All overlays computed over the FULL series (so the visible window's left edge uses prior bars);
     // recomputed only when the candle list changes. Each series is aligned 1:1 with [candles].
@@ -232,37 +263,81 @@ private fun CandlestickCanvas(
         )
     }
 
+    // Map a tap in the price pane to a (timestamp, price) anchor for drawing tools.
+    fun tapToAnchor(w: Float, h: Float, tapX: Float, tapY: Float): Anchor? {
+        if (candles.isEmpty()) return null
+        val totalH = h - bottomAxisHeightPx
+        val hasOsc = oscillator != Oscillator.NONE
+        val priceH = totalH * (if (hasOsc) 0.56f else 0.74f)
+        val plotW = w - rightAxisWidthPx
+        val vc = visibleCount.coerceIn(1, candles.size)
+        val start = (candles.size - vc - scrollOffset.roundToInt()).coerceIn(0, (candles.size - 1).coerceAtLeast(0))
+        val end = (start + vc).coerceAtMost(candles.size)
+        val win = candles.subList(start, end)
+        if (win.isEmpty() || plotW <= 0f) return null
+        val minLow = win.minOf { it.low }
+        val range = (win.maxOf { it.high } - minLow).coerceAtLeast(1L)
+        val slotW = plotW / win.size
+        val hoverIdx = (tapX / slotW).toInt().coerceIn(0, win.size - 1)
+        val ts = candles[start + hoverIdx].tsStartNs
+        val frac = (1f - (tapY / priceH)).coerceIn(0f, 1f).toDouble()
+        return Anchor(ts, minLow + frac * range.toDouble())
+    }
+
+    val gestureModifier = if (activeTool == DrawingTool.NONE) {
+        Modifier
+            .pointerInput(candles.size) {
+                detectTapGestures(onDoubleTap = { resetView() })
+            }
+            .pointerInput(candles.size) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    if (abs(zoom - 1f) > 0.001f) {
+                        val next = (visibleCount / zoom).roundToInt()
+                        visibleCount = next.coerceIn(MIN_VISIBLE, MAX_VISIBLE.coerceAtMost(candles.size))
+                    }
+                    val slotPx = (size.width - rightAxisWidthPx) / visibleCount.coerceAtLeast(1)
+                    if (slotPx > 0f) {
+                        scrollOffset = (scrollOffset - pan.x / slotPx)
+                            .coerceIn(0f, (candles.size - visibleCount).coerceAtLeast(0).toFloat())
+                    }
+                }
+            }
+            .pointerInput(candles.size, visibleCount) {
+                detectDragGestures(
+                    onDragStart = { off -> crosshairX = off.x; crosshairY = off.y },
+                    onDragEnd = { crosshairIdx = -1; crosshairX = -1f; crosshairY = -1f },
+                    onDragCancel = { crosshairIdx = -1; crosshairX = -1f; crosshairY = -1f },
+                ) { change, _ ->
+                    crosshairX = change.position.x
+                    crosshairY = change.position.y
+                }
+            }
+    } else {
+        Modifier.pointerInput(activeTool, candles.size, visibleCount, scrollOffset.roundToInt()) {
+            detectTapGestures { off ->
+                val anchor = tapToAnchor(size.width.toFloat(), size.height.toFloat(), off.x, off.y)
+                    ?: return@detectTapGestures
+                if (activeTool.anchors == 1) {
+                    onCommitDrawing(ChartDrawing(id = System.nanoTime(), tool = activeTool, a = anchor))
+                } else {
+                    val first = pendingAnchor
+                    if (first == null) {
+                        pendingAnchor = anchor
+                    } else {
+                        onCommitDrawing(ChartDrawing(id = System.nanoTime(), tool = activeTool, a = first, b = anchor))
+                        pendingAnchor = null
+                    }
+                }
+            }
+        }
+    }
+
     Box(modifier = modifier) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(chartHeight)
-                .pointerInput(candles.size) {
-                    detectTapGestures(onDoubleTap = { resetView() })
-                }
-                .pointerInput(candles.size) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        if (abs(zoom - 1f) > 0.001f) {
-                            val next = (visibleCount / zoom).roundToInt()
-                            visibleCount = next.coerceIn(MIN_VISIBLE, MAX_VISIBLE.coerceAtMost(candles.size))
-                        }
-                        val slotPx = (size.width - rightAxisWidthPx) / visibleCount.coerceAtLeast(1)
-                        if (slotPx > 0f) {
-                            scrollOffset = (scrollOffset - pan.x / slotPx)
-                                .coerceIn(0f, (candles.size - visibleCount).coerceAtLeast(0).toFloat())
-                        }
-                    }
-                }
-                .pointerInput(candles.size, visibleCount) {
-                    detectDragGestures(
-                        onDragStart = { off -> crosshairX = off.x; crosshairY = off.y },
-                        onDragEnd = { crosshairIdx = -1; crosshairX = -1f; crosshairY = -1f },
-                        onDragCancel = { crosshairIdx = -1; crosshairX = -1f; crosshairY = -1f },
-                    ) { change, _ ->
-                        crosshairX = change.position.x
-                        crosshairY = change.position.y
-                    }
-                },
+                .then(gestureModifier),
         ) {
             val plotWidth = size.width - rightAxisWidthPx
             val totalHeight = size.height - bottomAxisHeightPx
@@ -526,6 +601,67 @@ private fun CandlestickCanvas(
                         drawContext.canvas.nativeCanvas.drawText("MACD 12 26 9", 2f, oscTop + axisTextPx, labelPaint)
                     }
                     Oscillator.NONE -> {}
+                }
+            }
+
+            // ---- user drawings (horizontal line / trend / fib / rect) ----
+            if (drawings.isNotEmpty() || pendingAnchor != null) {
+                fun ax(tsNs: Long): Float {
+                    val gi = candles.indexOfFirst { it.tsStartNs == tsNs }
+                    return when {
+                        gi < 0 -> Float.NaN
+                        gi < startIdx -> 0f
+                        gi >= endIdx -> plotWidth
+                        else -> slot * (gi - startIdx) + slot / 2f
+                    }
+                }
+                for (d in drawings) {
+                    when (d.tool) {
+                        DrawingTool.HLINE -> {
+                            val y = yOfPriceD(d.a.price)
+                            drawLine(DrawingColor, Offset(0f, y), Offset(plotWidth, y), strokeWidth = 1.5f)
+                        }
+                        DrawingTool.TREND -> {
+                            val b = d.b ?: continue
+                            val x1 = ax(d.a.tsNs); val x2 = ax(b.tsNs)
+                            if (!x1.isNaN() && !x2.isNaN()) {
+                                drawLine(DrawingColor, Offset(x1, yOfPriceD(d.a.price)), Offset(x2, yOfPriceD(b.price)), strokeWidth = 2f)
+                            }
+                        }
+                        DrawingTool.RECT -> {
+                            val b = d.b ?: continue
+                            val x1 = ax(d.a.tsNs); val x2 = ax(b.tsNs)
+                            if (!x1.isNaN() && !x2.isNaN()) {
+                                val left = minOf(x1, x2); val right = maxOf(x1, x2)
+                                val yA = yOfPriceD(d.a.price); val yB = yOfPriceD(b.price)
+                                val top = minOf(yA, yB); val h = abs(yB - yA)
+                                drawRect(DrawingColor.copy(alpha = 0.10f), Offset(left, top), Size(right - left, h))
+                                drawRect(DrawingColor, Offset(left, top), Size(right - left, 1f))
+                                drawRect(DrawingColor, Offset(left, top + h - 1f), Size(right - left, 1f))
+                                drawRect(DrawingColor, Offset(left, top), Size(1f, h))
+                                drawRect(DrawingColor, Offset(right - 1f, top), Size(1f, h))
+                            }
+                        }
+                        DrawingTool.FIB -> {
+                            val b = d.b ?: continue
+                            val fibPaint = Paint().apply {
+                                color = FibColor.value.toInt(); textSize = axisTextPx * 0.9f; isAntiAlias = true
+                            }
+                            for (lvl in FIB_LEVELS) {
+                                val p = d.a.price + lvl * (b.price - d.a.price)
+                                val y = yOfPriceD(p)
+                                drawLine(FibColor.copy(alpha = 0.7f), Offset(0f, y), Offset(plotWidth, y), strokeWidth = 1f)
+                                drawContext.canvas.nativeCanvas.drawText(
+                                    String.format(Locale.US, "%.3f", lvl), 2f, y - 2f, fibPaint,
+                                )
+                            }
+                        }
+                        DrawingTool.NONE -> {}
+                    }
+                }
+                pendingAnchor?.let { pa ->
+                    val x = ax(pa.tsNs)
+                    if (!x.isNaN()) drawCircle(DrawingColor, radius = 6f, center = Offset(x, yOfPriceD(pa.price)))
                 }
             }
 
