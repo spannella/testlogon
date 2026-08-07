@@ -24,8 +24,11 @@ shipped). Android first; web mirror later. **Prefix `TRD`.** ☐ todo · ◐ in 
 - Auth `Authorization: Bearer <ui_access_token>` (or cookie). Gate `me_trade_enabled` on tlc_users.
 
 ## Wave 1 — Foundation + order ticket
-- ☐ **TRD-1 · Trading data layer** — `L` — TradingApi (place/amend/cancel/bulkCancel + marginAccount)
-  + DTOs + domain + mappers + repo; pinned HTTP/1.1 + bearer/cookie auth; reuse the h1.1 client seam.
+- ☑ **TRD-1 · Trading data layer** — `L` · **done** (2026-08-07) — `TradingApi` (place/amend/cancel +
+  `getMarginAccount`) + `TradingDtos` (Moshi codegen; `new_qty` amend field) + `TradingModels`
+  (OrderSide/OrderAck/CancelAck/Fill/MarginAccount/PositionSnapshot + `marginUsedFraction`) + mappers
+  + `TradingRepository` (apiCall/ApiResult). Wired in ExchangeDataModule reusing the HTTP/1.1 pin +
+  cookie session. Build-green. (bulkCancel/advanced endpoints deferred to their waves.)
 - ☐ **TRD-2 · Order + fills store** — `M` — client-tracked working-orders + session-fills store
   (updated from place/amend/cancel acks + fills[]); persisted per account. (Stretch: probe a private
   exec-report WS to make it authoritative.)
