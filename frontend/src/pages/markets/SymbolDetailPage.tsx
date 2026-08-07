@@ -6,9 +6,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useSymbols, useOrderBook, useCandles, useTrades } from "@/hooks/useMarketData";
-import type { BookLevel } from "@/api/endpoints/marketData";
+import { useMarketDataStream } from "@/hooks/useMarketDataStream";
+import type { BookLevel, Candle } from "@/api/endpoints/marketData";
 import CandleChart from "./CandleChart";
 import { formatPrice, formatQty, formatTimeNs } from "./format";
+
+/** Trades still poll (SSE carries no trades), relaxed since the book is live. */
+const TRADES_REFETCH_MS = 4000;
 
 function DepthRow({
   level,
@@ -51,9 +55,13 @@ export default function SymbolDetailPage() {
   const id = Number(symbolId);
 
   const symbolsQuery = useSymbols();
-  const book = useOrderBook(id);
+  // SSE drives the book; keep an initial React Query fetch for the first paint
+  // but stop the 2s poll now that the stream pushes updates.
+  const book = useOrderBook(id, 20, true, false);
   const candles = useCandles(id, 60);
-  const trades = useTrades(id);
+  // SSE has no trades, so this keeps polling (relaxed to 4s).
+  const trades = useTrades(id, true, TRADES_REFETCH_MS);
+  const stream = useMarketDataStream(id);
 
   const meta = useMemo(
     () => symbolsQuery.data?.symbols.find((s) => s.symbol_id === id),
@@ -62,24 +70,44 @@ export default function SymbolDetailPage() {
   const scaler = meta?.price_scaler || 1;
   const label = meta?.symbol ?? ("Symbol " + id);
 
+  // Prefer the live streamed book; fall back to the initial React Query fetch
+  // until the first SSE frame arrives.
+  const liveBook = stream.book ?? book.data ?? null;
+
   const asks = useMemo(() => {
-    const rows = [...(book.data?.asks ?? [])].sort((a, b) => a[0] - b[0]);
+    const rows = [...(liveBook?.asks ?? [])].sort((a, b) => a[0] - b[0]);
     return rows.slice(0, 12);
-  }, [book.data]);
+  }, [liveBook]);
   const bids = useMemo(() => {
-    const rows = [...(book.data?.bids ?? [])].sort((a, b) => b[0] - a[0]);
+    const rows = [...(liveBook?.bids ?? [])].sort((a, b) => b[0] - a[0]);
     return rows.slice(0, 12);
-  }, [book.data]);
+  }, [liveBook]);
   const maxQty = useMemo(() => {
     const all = [...asks, ...bids].map((l) => l[1]);
     return all.length ? Math.max(...all) : 0;
   }, [asks, bids]);
 
-  const bestBid = book.data?.bid_px ?? bids[0]?.[0];
-  const bestAsk = book.data?.ask_px ?? asks[0]?.[0];
+  const bestBid = liveBook?.bid_px ?? bids[0]?.[0];
+  const bestAsk = liveBook?.ask_px ?? asks[0]?.[0];
   const spread = bestBid != null && bestAsk != null ? bestAsk - bestBid : undefined;
 
-  const bars = candles.data?.bars ?? [];
+  // Merge the latest streamed candle into the polled series: replace the last
+  // bar if its ts_start_ns matches, else append.
+  const bars = useMemo<Candle[]>(() => {
+    const base = candles.data?.bars ?? [];
+    const live = stream.latestCandle;
+    if (!live) return base;
+    if (base.length === 0) return [live];
+    const last = base[base.length - 1]!;
+    if (last.ts_start_ns === live.ts_start_ns) {
+      return [...base.slice(0, -1), live];
+    }
+    if (live.ts_start_ns > last.ts_start_ns) {
+      return [...base, live];
+    }
+    return base;
+  }, [candles.data, stream.latestCandle]);
+
   const recentTrades = trades.data?.trades ?? [];
 
   return (
@@ -106,7 +134,7 @@ export default function SymbolDetailPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Price (1m candles)</CardTitle>
-          <CardDescription>Green = up, red = down. Updates every 2 seconds.</CardDescription>
+          <CardDescription>Green = up, red = down. Live via streaming feed.</CardDescription>
         </CardHeader>
         <CardContent>
           {candles.isLoading ? (
@@ -122,11 +150,25 @@ export default function SymbolDetailPage() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Order Book</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Order Book</CardTitle>
+              {stream.live && (
+                <Badge
+                  variant="outline"
+                  className="gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+                >
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/70" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                  </span>
+                  LIVE
+                </Badge>
+              )}
+            </div>
             <CardDescription>Best bid/ask ladder with depth.</CardDescription>
           </CardHeader>
           <CardContent>
-            {book.isLoading ? (
+            {book.isLoading && !liveBook ? (
               <Skeleton className="h-64 w-full" />
             ) : (
               <div>
