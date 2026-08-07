@@ -119,7 +119,7 @@ private fun CandlestickCanvas(
     val rightAxisWidthPx = with(density) { 58.dp.toPx() }
     val bottomAxisHeightPx = with(density) { 16.dp.toPx() }
 
-    var visibleCount by remember { mutableStateOf(DEFAULT_VISIBLE.coerceAtMost(candles.size)) }
+    var visibleCount by remember { mutableStateOf(DEFAULT_VISIBLE) }
     var scrollOffset by remember { mutableFloatStateOf(0f) }
     var crosshairIdx by remember { mutableStateOf(-1) }
     var crosshairX by remember { mutableFloatStateOf(-1f) }
@@ -160,9 +160,10 @@ private fun CandlestickCanvas(
             val volTop = priceHeight + totalHeight * 0.03f
             val volHeight = totalHeight - volTop
 
-            val startIdx = (candles.size - visibleCount - scrollOffset.roundToInt())
+            val vc = visibleCount.coerceIn(1, candles.size.coerceAtLeast(1))
+            val startIdx = (candles.size - vc - scrollOffset.roundToInt())
                 .coerceIn(0, (candles.size - 1).coerceAtLeast(0))
-            val endIdx = (startIdx + visibleCount).coerceAtMost(candles.size)
+            val endIdx = (startIdx + vc).coerceAtMost(candles.size)
             val window = candles.subList(startIdx, endIdx)
             if (window.isEmpty()) return@Canvas
 
