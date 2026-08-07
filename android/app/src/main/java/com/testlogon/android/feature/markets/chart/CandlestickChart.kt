@@ -46,6 +46,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 private val UpColor = MarketColors.Up
 private val DownColor = MarketColors.Down
@@ -80,6 +81,21 @@ private val MA_SPECS = listOf(
     MaSpec("MA7", 7, sma = true, color = Color(0xFFF0B90B)),   // amber
     MaSpec("MA25", 25, sma = true, color = Color(0xFFE457C6)), // magenta
     MaSpec("MA99", 99, sma = true, color = Color(0xFF8C7CFF)), // violet
+)
+
+// Bollinger Bands (20, 2σ) and session VWAP — price-pane overlays, off by default.
+private const val BB_PERIOD = 20
+private const val BB_MULT = 2.0
+private val BbColor = Color(0xFF4C8DFF)   // blue
+private val VwapColor = Color(0xFFFF9F40) // orange
+
+/** Precomputed overlay series aligned 1:1 with the full candle list. */
+private data class Overlays(
+    val ma: List<List<Double?>>,
+    val bbMid: List<Double?>,
+    val bbUpper: List<Double?>,
+    val bbLower: List<Double?>,
+    val vwap: List<Double?>,
 )
 
 private const val MIN_VISIBLE = 12
@@ -158,13 +174,21 @@ private fun CandlestickCanvas(
     var crosshairY by remember { mutableFloatStateOf(-1f) }
     // Per-MA visibility, toggled from the legend chips. Defaults all on.
     val maVisible = remember { mutableStateListOf(true, true, true) }
+    var bbOn by remember { mutableStateOf(false) }
+    var vwapOn by remember { mutableStateOf(false) }
 
-    // Moving averages over the FULL series (so the left edge of the visible window uses prior bars);
-    // recomputed only when the candle list changes. Each entry is aligned 1:1 with [candles].
-    val maSeries = remember(candles) {
+    // All overlays computed over the FULL series (so the visible window's left edge uses prior bars);
+    // recomputed only when the candle list changes. Each series is aligned 1:1 with [candles].
+    val overlays = remember(candles) {
         val closes = candles.map { it.close.toDouble() }
-        MA_SPECS.map { spec -> if (spec.sma) sma(closes, spec.period) else ema(closes, spec.period) }
+        val ma = MA_SPECS.map { spec -> if (spec.sma) sma(closes, spec.period) else ema(closes, spec.period) }
+        val mid = sma(closes, BB_PERIOD)
+        val sd = stdDev(closes, BB_PERIOD)
+        val upper = mid.mapIndexed { i, m -> if (m != null && sd[i] != null) m + BB_MULT * sd[i]!! else null }
+        val lower = mid.mapIndexed { i, m -> if (m != null && sd[i] != null) m - BB_MULT * sd[i]!! else null }
+        Overlays(ma, mid, upper, lower, vwap(candles))
     }
+    val maSeries = overlays.ma
 
     fun resetView() {
         visibleCount = DEFAULT_VISIBLE.coerceIn(MIN_VISIBLE, MAX_VISIBLE)
@@ -334,6 +358,56 @@ private fun CandlestickCanvas(
                 )
             }
 
+            // ---- Bollinger Bands (fill + upper/lower/mid) ----
+            if (bbOn) {
+                val up = overlays.bbUpper
+                val lo = overlays.bbLower
+                val mid = overlays.bbMid
+                // faint fill between the bands
+                val fill = androidx.compose.ui.graphics.Path()
+                var started = false
+                for (i in 0 until n) {
+                    val gi = startIdx + i
+                    val u = up.getOrNull(gi) ?: continue
+                    if (!started) { fill.moveTo(slot * i + slot / 2f, yOfPriceD(u)); started = true }
+                    else fill.lineTo(slot * i + slot / 2f, yOfPriceD(u))
+                }
+                for (i in (n - 1) downTo 0) {
+                    val gi = startIdx + i
+                    val l = lo.getOrNull(gi) ?: continue
+                    fill.lineTo(slot * i + slot / 2f, yOfPriceD(l))
+                }
+                if (started) { fill.close(); drawPath(fill, BbColor.copy(alpha = 0.08f)) }
+                fun drawBand(series: List<Double?>, dashed: Boolean) {
+                    var prev: Offset? = null
+                    val effect = if (dashed) PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f) else null
+                    for (i in 0 until n) {
+                        val v = series.getOrNull(startIdx + i)
+                        if (v == null) { prev = null; continue }
+                        val cur = Offset(slot * i + slot / 2f, yOfPriceD(v))
+                        val p = prev
+                        if (p != null) drawLine(BbColor, p, cur, strokeWidth = 1f, pathEffect = effect)
+                        prev = cur
+                    }
+                }
+                drawBand(up, dashed = false)
+                drawBand(lo, dashed = false)
+                drawBand(mid, dashed = true)
+            }
+
+            // ---- VWAP ----
+            if (vwapOn) {
+                var prev: Offset? = null
+                for (i in 0 until n) {
+                    val v = overlays.vwap.getOrNull(startIdx + i)
+                    if (v == null) { prev = null; continue }
+                    val cur = Offset(slot * i + slot / 2f, yOfPriceD(v))
+                    val p = prev
+                    if (p != null) drawLine(VwapColor, p, cur, strokeWidth = 1.5f)
+                    prev = cur
+                }
+            }
+
             // ---- moving-average overlays (over the price pane) ----
             maSeries.forEachIndexed { specIdx, series ->
                 if (!maVisible.getOrElse(specIdx) { true }) return@forEachIndexed
@@ -391,20 +465,28 @@ private fun CandlestickCanvas(
         ) {
             MA_SPECS.forEachIndexed { i, spec ->
                 val on = maVisible.getOrElse(i) { true }
-                Text(
-                    text = spec.label,
-                    color = if (on) spec.color else MarketColors.TextFaint,
-                    fontSize = 10.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(MarketColors.Surface.copy(alpha = 0.6f))
-                        .clickable { maVisible[i] = !on }
-                        .testTag("ma_toggle_${spec.label}")
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                )
+                LegendChip(spec.label, spec.color, on) { maVisible[i] = !on }
             }
+            LegendChip("BB", BbColor, bbOn) { bbOn = !bbOn }
+            LegendChip("VWAP", VwapColor, vwapOn) { vwapOn = !vwapOn }
         }
     }
+}
+
+/** A small tappable overlay-legend chip; dims to faint when [on] is false. */
+@Composable
+private fun LegendChip(label: String, color: Color, on: Boolean, onToggle: () -> Unit) {
+    Text(
+        text = label,
+        color = if (on) color else MarketColors.TextFaint,
+        fontSize = 10.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MarketColors.Surface.copy(alpha = 0.6f))
+            .clickable { onToggle() }
+            .testTag("ind_toggle_$label")
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }
 
 private fun DrawScope.drawCrosshairTooltip(
@@ -485,6 +567,33 @@ private fun ema(closes: List<Double>, period: Int): List<Double?> {
         out.add(if (i >= period - 1) prev else null)
     }
     return out
+}
+
+/** Rolling population standard deviation over [period], aligned 1:1 with [closes]. */
+private fun stdDev(closes: List<Double>, period: Int): List<Double?> {
+    if (period <= 0) return closes.map { null }
+    val out = ArrayList<Double?>(closes.size)
+    for (i in closes.indices) {
+        if (i < period - 1) { out.add(null); continue }
+        val window = closes.subList(i - period + 1, i + 1)
+        val mean = window.average()
+        val variance = window.sumOf { (it - mean) * (it - mean) } / period
+        out.add(sqrt(variance))
+    }
+    return out
+}
+
+/** Session VWAP: cumulative Σ(typicalPrice·volume)/Σ(volume) from the start of the loaded series. */
+private fun vwap(candles: List<Candle>): List<Double?> {
+    var cumPv = 0.0
+    var cumV = 0.0
+    return candles.map { c ->
+        val typical = (c.high + c.low + c.close).toDouble() / 3.0
+        val v = c.volume.toDouble()
+        cumPv += typical * v
+        cumV += v
+        if (cumV > 0.0) cumPv / cumV else null
+    }
 }
 
 private fun formatAxisPrice(v: Double): String {

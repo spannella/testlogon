@@ -27,6 +27,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,6 +48,7 @@ import com.testlogon.android.data.exchange.Candle
 import com.testlogon.android.data.exchange.Trade
 import com.testlogon.android.feature.markets.book.OrderBookL2
 import com.testlogon.android.feature.markets.chart.CandlestickChart
+import com.testlogon.android.feature.markets.chart.ChartType
 import com.testlogon.android.feature.markets.chart.Timeframe
 import com.testlogon.android.feature.markets.ui.MarketColors
 import com.testlogon.android.feature.markets.ui.MarketSurface
@@ -111,6 +115,7 @@ private fun SymbolDetailContent(
     onTimeframe: (Timeframe) -> Unit,
 ) {
     val selectedTf = Timeframe.entries.firstOrNull { it.seconds == state.intervalSec } ?: Timeframe.M1
+    var chartType by remember { mutableStateOf(ChartType.CANDLES) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("symbol_detail"),
         contentPadding = PaddingValues(bottom = 24.dp),
@@ -118,10 +123,17 @@ private fun SymbolDetailContent(
         item { TickerHeader(state) }
         item {
             TimeframeBar(selected = selectedTf, onTimeframe = onTimeframe)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                ChartTypeToggle(selected = chartType, onSelect = { chartType = it })
+            }
             CandlestickChart(
                 candles = state.candles,
                 priceScaler = PRICE_SCALER,
                 selected = selectedTf,
+                chartType = chartType,
                 onTimeframeSelected = onTimeframe,
                 showTimeframes = false,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -246,6 +258,31 @@ private fun TimeframeBar(selected: Timeframe, onTimeframe: (Timeframe) -> Unit) 
                     fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChartTypeToggle(selected: ChartType, onSelect: (ChartType) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        ChartType.entries.forEach { ct ->
+            val sel = ct == selected
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (sel) MarketColors.SurfaceAlt else Color.Transparent)
+                    .clickable { onSelect(ct) }
+                    .testTag("charttype_${ct.name}")
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    text = ct.label,
+                    color = if (sel) MarketColors.Accent else MarketColors.TextSecondary,
+                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
                 )
             }
         }

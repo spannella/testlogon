@@ -28,9 +28,10 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
   `TimeframeBar` in SymbolDetailScreen, `setInterval()`/`refetchCandles()` in the VM re-fetch
   `/md/candles/{id}?interval=N` and restart the SSE stream at the new interval). Uses the h1.1 client.
 
-- ☐ **MDX-102 · Chart-type toggle** — `M` · no deps
-  Toggle candles / line / area (Heikin-Ashi stretch). Line/area derive from candle closes.
-  AC: toggle re-renders without refetch; line/area use the mint `Accent`; state persists per session.
+- ☑ **MDX-102 · Chart-type toggle** — `M` · **done**
+  Candles / Line / Area toggle (`ChartType` enum) in a `ChartTypeToggle` control beside the timeframe
+  bar; line/area drawn over closes in the mint `Accent` (area = filled to baseline). State in the
+  screen via `remember` (per-session). No refetch.
 
 - ☑ **MDX-103 · Interval-aware axis labels** — `S` · dep MDX-101 · **this wave**
   Chart time-axis format now adapts to the selected timeframe (HH:mm intraday, `dd HH:mm` for ≥1h,
@@ -54,10 +55,11 @@ UX, plus the parallel web surface. This is the follow-on to the exchange market-
 
 - ☐ **MDX-114 · RSI** — `M` · dep MDX-113
 - ☐ **MDX-115 · MACD** — `M` · dep MDX-113
-- ☐ **MDX-116 · Bollinger Bands** — `M` · dep MDX-111 (price overlay, not sub-pane)
-- ☐ **MDX-117 · VWAP** — `M` · dep MDX-111
-  Each: standard formula, configurable params, crosshair legend readout.
-  AC (each): matches TradingView within rounding on a spot-check symbol; toggle on/off; params editable.
+- ☑ **MDX-116 · Bollinger Bands** — `M` · **done** (price overlay: SMA20 ± 2σ upper/lower solid +
+  mid dashed + faint fill; `stdDev()` helper; legend `BB` chip toggle, off by default).
+- ☑ **MDX-117 · VWAP** — `M` · **done** (session-cumulative Σ(typical·vol)/Σvol; orange line; legend
+  `VWAP` chip toggle, off by default).
+  Note: RSI/MACD (sub-pane) remain — see MDX-113/114/115. Params fixed for now (20/2σ), not yet editable.
 
 ## Epic C — Interaction polish
 
