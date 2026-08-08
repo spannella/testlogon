@@ -69,6 +69,15 @@ fun TradeTicket(
         Spacer(Modifier.height(10.dp))
         state.account?.let { AccountStrip(it) }
 
+        Spacer(Modifier.height(8.dp))
+        FundRow(
+            value = state.depositText,
+            canDeposit = state.canDeposit,
+            depositing = state.depositing,
+            onValue = viewModel::setDeposit,
+            onDeposit = viewModel::deposit,
+        )
+
         Spacer(Modifier.height(10.dp))
         NumberField("Price", state.priceText, viewModel::setPrice)
         Spacer(Modifier.height(8.dp))
@@ -296,6 +305,41 @@ private fun AccountStrip(account: com.testlogon.android.data.exchange.MarginAcco
                 color = MarketColors.Down,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FundRow(
+    value: String,
+    canDeposit: Boolean,
+    depositing: Boolean,
+    onValue: (String) -> Unit,
+    onDeposit: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(modifier = Modifier.weight(1f)) {
+            NumberField("Deposit collateral", value, onValue)
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (canDeposit) MarketColors.Accent else MarketColors.SurfaceAlt)
+                .clickable(enabled = canDeposit && !depositing, onClick = onDeposit)
+                .testTag("trade_deposit")
+                .padding(horizontal = 16.dp, vertical = 13.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (depositing) "…" else "Deposit",
+                color = if (canDeposit) Color.Black else MarketColors.TextFaint,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
             )
         }
     }

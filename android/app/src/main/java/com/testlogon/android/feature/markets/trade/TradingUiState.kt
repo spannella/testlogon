@@ -28,8 +28,12 @@ data class TradingUiState(
     val workingOrders: List<WorkingOrder> = emptyList(),
     val sessionFills: List<Fill> = emptyList(),
     val amendingClordid: String? = null,
+    val depositText: String = "",
+    val depositing: Boolean = false,
 ) {
     val isAmending: Boolean get() = amendingClordid != null
+    val depositLong: Long? get() = depositText.toLongOrNull()
+    val canDeposit: Boolean get() = !depositing && (depositLong ?: 0L) > 0L
     val priceLong: Long? get() = priceText.toLongOrNull()
     val qtyLong: Long? get() = qtyText.toLongOrNull()
     val orderValue: Long? get() {

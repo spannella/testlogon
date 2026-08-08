@@ -53,6 +53,36 @@ class TradingViewModel @Inject constructor(
     fun setSide(side: OrderSide) = _uiState.update { it.copy(side = side) }
     fun setPrice(text: String) = _uiState.update { it.copy(priceText = text.filter { c -> c.isDigit() }.take(12)) }
     fun setQty(text: String) = _uiState.update { it.copy(qtyText = text.filter { c -> c.isDigit() }.take(9)) }
+    fun setDeposit(text: String) = _uiState.update { it.copy(depositText = text.filter { c -> c.isDigit() }.take(12)) }
+
+    /**
+     * Deposit collateral into the margin account (`POST /me/margin_deposit`). Fresh accounts start at
+     * zero balance and a fill on an unfunded account opens NO position, so funding is a precondition
+     * for trading. Also flips the engine into margin mode.
+     */
+    fun deposit() {
+        val amount = _uiState.value.depositText.toLongOrNull() ?: return
+        if (amount <= 0) return
+        _uiState.update { it.copy(depositing = true, message = null) }
+        viewModelScope.launch {
+            when (val r = repository.deposit(amount)) {
+                is ApiResult.Success -> {
+                    val ack = r.data
+                    _uiState.update {
+                        it.copy(
+                            depositing = false,
+                            depositText = if (ack.accepted) "" else it.depositText,
+                            message = if (ack.accepted) "Deposited · balance ${ack.newBalance}" else (ack.message ?: "Deposit rejected"),
+                            messageIsError = !ack.accepted,
+                        )
+                    }
+                    if (ack.accepted) refreshAccount()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(depositing = false, message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(depositing = false, message = "Network error", messageIsError = true) }
+            }
+        }
+    }
 
     /** Prefill the price (click-to-trade from the book/chart). */
     fun prefillPrice(price: Long, side: OrderSide? = null) = _uiState.update {
@@ -151,8 +181,19 @@ class TradingViewModel @Inject constructor(
         // Cross the spread by ~5% to guarantee a fill (marketable limit; the engine takes no market type).
         val price = if (side == OrderSide.SELL) (lastPrice * 95L / 100L).coerceAtLeast(1L) else (lastPrice * 105L / 100L)
         val clordid = "c${System.currentTimeMillis()}${seq++ % 100}"
+        // Self-trade-prevention guard: the engine KILLS (ioc_fok_cancelled) an order that would cross
+        // one of our OWN resting orders. A close SELL matches bids (our BUYs) priced >= the close
+        // price; a close BUY matches asks (our SELLs) priced <= it. Cancel those first so the close
+        // isn't STP-killed before it can flatten the position.
+        val colliding = _uiState.value.workingOrders.filter { wo ->
+            wo.side != side && if (side == OrderSide.SELL) wo.price >= price else wo.price <= price
+        }
         _uiState.update { it.copy(placing = true, message = null) }
         viewModelScope.launch {
+            colliding.forEach { wo -> repository.cancelOrder(wo.clordid) }
+            if (colliding.isNotEmpty()) {
+                _uiState.update { st -> st.copy(workingOrders = st.workingOrders.filterNot { c -> colliding.any { it.clordid == c.clordid } }) }
+            }
             when (val r = repository.placeOrder(symbolId, side, price, qty, clordid)) {
                 is ApiResult.Success -> {
                     val ack = r.data

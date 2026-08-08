@@ -84,7 +84,7 @@ fun OrderAckDto.toOrderAck(fallbackClordid: String): OrderAck = OrderAck(
     orderId = orderid,
     symbolId = symbolid,
     fills = fills.orEmpty().map { it.toDomain() },
-    message = detail ?: error,
+    message = detail ?: error ?: note ?: reason,
 )
 
 fun OrderAckDto.toCancelAck(fallbackClordid: String): CancelAck = CancelAck(
@@ -118,3 +118,18 @@ fun MarginAccountDto.toDomain(): MarginAccount {
         mpid = mpid.orEmpty(),
     )
 }
+
+/** Result of a collateral deposit. */
+data class DepositAck(
+    val accepted: Boolean,
+    val newBalance: Long,
+    val availableBalance: Long,
+    val message: String?,
+)
+
+fun MarginDepositAckDto.toDomain(): DepositAck = DepositAck(
+    accepted = status == "ack",
+    newBalance = newBalance ?: 0L,
+    availableBalance = availableBalance ?: 0L,
+    message = detail ?: error,
+)

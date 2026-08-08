@@ -21,6 +21,7 @@ interface TradingRepository {
     suspend fun amendOrder(clordid: String, newQty: Long, newPrice: Long? = null): ApiResult<OrderAck>
     suspend fun cancelOrder(clordid: String): ApiResult<CancelAck>
     suspend fun marginAccount(): ApiResult<MarginAccount>
+    suspend fun deposit(amount: Long): ApiResult<DepositAck>
 }
 
 @Singleton
@@ -53,6 +54,9 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun marginAccount(): ApiResult<MarginAccount> =
         withContext(io) { apiCall { api.getMarginAccount().toDomain() } }
+
+    override suspend fun deposit(amount: Long): ApiResult<DepositAck> =
+        withContext(io) { apiCall { api.marginDeposit(MarginDepositDto(amount)).toDomain() } }
 
     private suspend fun <T> apiCall(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

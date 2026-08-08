@@ -36,6 +36,8 @@ data class OrderAckDto(
     val fills: List<FillDto>? = null,
     val detail: String? = null,
     val error: String? = null,
+    val note: String? = null,
+    val reason: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -65,4 +67,20 @@ data class MarginAccountDto(
     val mpid: String? = null,
     val status: String? = null,
     val type: String? = null,
+)
+
+/** Deposit request: raw integer [amount] of collateral to credit. */
+@JsonClass(generateAdapter = true)
+data class MarginDepositDto(val amount: Long)
+
+/** Deposit ack: the resulting balances. */
+@JsonClass(generateAdapter = true)
+data class MarginDepositAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "new_balance") val newBalance: Long? = null,
+    @Json(name = "available_balance") val availableBalance: Long? = null,
+    val result: Int? = null,
+    val detail: String? = null,
+    val error: String? = null,
 )

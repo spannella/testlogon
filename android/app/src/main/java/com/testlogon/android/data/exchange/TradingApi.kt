@@ -32,4 +32,8 @@ interface TradingApi {
     /** Margin account snapshot: cash balance, reserved margin, and the (single net) position. */
     @GET("me/margin_account")
     suspend fun getMarginAccount(): MarginAccountDto
+
+    /** Deposit collateral into the margin account (credits balance/available; enables margin mode). */
+    @POST("me/margin_deposit")
+    suspend fun marginDeposit(@Body body: MarginDepositDto): MarginDepositAckDto
 }
