@@ -199,3 +199,43 @@ fun ExecEventsDto.toDomain(): ExecEvents = ExecEvents(
     triggeredCount = triggered.orEmpty().size,
     otoTriggeredCount = otoTriggered.orEmpty().size,
 )
+
+// ==== Pre-staged advanced surfaces (behind TradingFeatures flags) ====
+
+data class OcoAck(val accepted: Boolean, val ocoId: Long?, val fills: List<Fill>, val message: String?)
+data class FundingAck(val accepted: Boolean, val fundingId: Long?, val message: String?)
+data class SpotAsset(val asset: Int, val symbol: String, val balance: Long, val available: Long)
+data class SpotBalance(val assets: List<SpotAsset>, val mpid: String)
+data class SpotDepositAck(val accepted: Boolean, val newBalance: Long, val availableBalance: Long, val message: String?)
+
+fun OcoAckDto.toDomain(): OcoAck = OcoAck(
+    accepted = status == "ack",
+    ocoId = ocoId,
+    fills = fills.orEmpty().map { it.toDomain() },
+    message = detail ?: error ?: note ?: reasonCode?.let { "rejected (code $it)" },
+)
+
+fun FundingAckDto.toDomain(): FundingAck = FundingAck(
+    accepted = status == "ack",
+    fundingId = fundingId,
+    message = detail ?: error ?: note ?: (reason ?: reasonCode)?.let { "rejected (code $it)" },
+)
+
+fun SpotAssetDto.toDomain(): SpotAsset = SpotAsset(
+    asset = asset ?: 0,
+    symbol = symbol.orEmpty(),
+    balance = balance ?: 0L,
+    available = available ?: 0L,
+)
+
+fun SpotBalanceDto.toDomain(): SpotBalance = SpotBalance(
+    assets = balances.orEmpty().map { it.toDomain() },
+    mpid = mpid.orEmpty(),
+)
+
+fun SpotDepositAckDto.toDomain(): SpotDepositAck = SpotDepositAck(
+    accepted = status == "ack",
+    newBalance = newBalance ?: 0L,
+    availableBalance = availableBalance ?: 0L,
+    message = detail ?: error,
+)

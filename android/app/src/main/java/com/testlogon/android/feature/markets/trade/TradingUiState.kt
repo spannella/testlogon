@@ -3,6 +3,7 @@ package com.testlogon.android.feature.markets.trade
 import com.testlogon.android.data.exchange.Fill
 import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.OrderSide
+import com.testlogon.android.data.exchange.SpotBalance
 
 /** Order entry type. LIMIT is the plain resting limit; the rest map to advanced engine endpoints. */
 enum class OrderType(val label: String) {
@@ -13,6 +14,25 @@ enum class OrderType(val label: String) {
     TAKE_PROFIT("Take-Profit"),
     QUOTE("Quote"),
     OTO("OTO"),
+    OCO("OCO"),
+    FUNDING("Funding"),
+}
+
+/**
+ * Pre-staged surfaces that depend on backend routes not yet live through the prod edge. Flip a flag
+ * to true once the corresponding backend port lands. Everything behind these is wired + build-green.
+ */
+object TradingFeatures {
+    const val OCO_ENABLED = false      // POST /me/oco (edge returns no_response today)
+    const val FUNDING_ENABLED = false  // POST /me/funding_order (rejects reason 30 today)
+    const val SPOT_ENABLED = false     // GET /me/spot_balance + POST /me/spot_deposit (needs asset-id map)
+}
+
+/** Whether an order type is exposed in the selector (advanced ones gate on [TradingFeatures]). */
+fun OrderType.isAvailable(): Boolean = when (this) {
+    OrderType.OCO -> TradingFeatures.OCO_ENABLED
+    OrderType.FUNDING -> TradingFeatures.FUNDING_ENABLED
+    else -> true
 }
 
 /** A working order this session placed (the engine has no server-side list, so we track our own). */
@@ -55,6 +75,13 @@ data class TradingUiState(
     val minQtyText: String = "",
     val expiryMinText: String = "",
     val advancedOpen: Boolean = false,
+    val fundingRateText: String = "",
+    val fundingQtyText: String = "",
+    val fundingDurationText: String = "",
+    val fundingBorrow: Boolean = true,
+    val spotBalance: SpotBalance? = null,
+    val spotAssetText: String = "",
+    val spotAmountText: String = "",
 ) {
     val isAmending: Boolean get() = amendingClordid != null
     val depositLong: Long? get() = depositText.toLongOrNull()
@@ -75,6 +102,11 @@ data class TradingUiState(
     val displayQtyLong: Long? get() = displayText.toLongOrNull()
     val minQtyLong: Long? get() = minQtyText.toLongOrNull()
     val expiryMinLong: Long? get() = expiryMinText.toLongOrNull()
+    val fundingRateLong: Long? get() = fundingRateText.toLongOrNull()
+    val fundingQtyLong: Long? get() = fundingQtyText.toLongOrNull()
+    val fundingDurationLong: Long? get() = fundingDurationText.toLongOrNull()
+    val spotAssetInt: Int? get() = spotAssetText.toIntOrNull()
+    val spotAmountLong: Long? get() = spotAmountText.toLongOrNull()
 
     /** Whether the current order-type has all the fields it needs to submit. */
     val canSubmit: Boolean get() = !placing && when (orderType) {
@@ -85,5 +117,7 @@ data class TradingUiState(
         OrderType.TAKE_PROFIT -> (stopLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L
         OrderType.QUOTE -> (bidLong ?: 0L) > 0L && (askLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L
         OrderType.OTO -> (priceLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L && (childPriceLong ?: 0L) > 0L && (childQtyLong ?: 0L) > 0L
+        OrderType.OCO -> (priceLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L && (childPriceLong ?: 0L) > 0L && (childQtyLong ?: 0L) > 0L
+        OrderType.FUNDING -> (fundingRateLong ?: 0L) > 0L && (fundingQtyLong ?: 0L) > 0L
     }
 }

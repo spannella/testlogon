@@ -192,3 +192,84 @@ data class ExecEventsDto(
     val triggered: List<TriggerDto>? = null,
     @Json(name = "oto_triggered") val otoTriggered: List<TriggerDto>? = null,
 )
+
+// ==== Pre-staged advanced surfaces (behind TradingFeatures flags) ====
+// The contracts below reflect what was observed live; align exact field names with the backend port.
+
+/** One OCO leg. */
+@JsonClass(generateAdapter = true)
+data class OcoLegDto(val side: String, val price: Long, val qty: Long)
+
+/** OCO request: two opposite-side legs (engine rejects same-side). */
+@JsonClass(generateAdapter = true)
+data class OcoOrderDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    val legs: List<OcoLegDto>,
+)
+
+@JsonClass(generateAdapter = true)
+data class OcoAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "oco_id") val ocoId: Long? = null,
+    @Json(name = "orderids") val orderIds: List<Long>? = null,
+    val fills: List<FillDto>? = null,
+    @Json(name = "reasoncode") val reasonCode: Int? = null,
+    val note: String? = null,
+    val detail: String? = null,
+    val error: String? = null,
+)
+
+/** Funding (borrow/lend) request. Contract verified from the handler: rate_bps/qty/is_borrow/duration. */
+@JsonClass(generateAdapter = true)
+data class FundingOrderDto(
+    @Json(name = "rate_bps") val rateBps: Long,
+    val qty: Long,
+    @Json(name = "is_borrow") val isBorrow: Boolean,
+    @Json(name = "duration_seconds") val durationSeconds: Long? = null,
+    @Json(name = "symbolid") val symbolId: Int? = null,
+    val clordid: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class FundingAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    val clordid: String? = null,
+    @Json(name = "funding_id") val fundingId: Long? = null,
+    val reason: Int? = null,
+    @Json(name = "reasoncode") val reasonCode: Int? = null,
+    val detail: String? = null,
+    val error: String? = null,
+    val note: String? = null,
+)
+
+/** One spot asset balance (shape captured loosely; unknown keys ignored). */
+@JsonClass(generateAdapter = true)
+data class SpotAssetDto(
+    val asset: Int? = null,
+    val symbol: String? = null,
+    val balance: Long? = null,
+    val available: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class SpotBalanceDto(
+    val balances: List<SpotAssetDto>? = null,
+    val mpid: String? = null,
+)
+
+/** Spot deposit request (asset is a numeric asset id per the handler). */
+@JsonClass(generateAdapter = true)
+data class SpotDepositDto(val asset: Int, val amount: Long)
+
+@JsonClass(generateAdapter = true)
+data class SpotDepositAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    val asset: Int? = null,
+    @Json(name = "new_balance") val newBalance: Long? = null,
+    @Json(name = "available_balance") val availableBalance: Long? = null,
+    val detail: String? = null,
+    val error: String? = null,
+)

@@ -38,6 +38,7 @@ class TradingViewModel @Inject constructor(
     init {
         refreshAccount()
         pollAccount()
+        if (TradingFeatures.SPOT_ENABLED) refreshSpot()
     }
 
     /** Keep the wallet / margin / position fresh while the VM is alive. */
@@ -69,6 +70,89 @@ class TradingViewModel @Inject constructor(
     fun setDisplayQty(text: String) = _uiState.update { it.copy(displayText = digits(text, 9)) }
     fun setMinQty(text: String) = _uiState.update { it.copy(minQtyText = digits(text, 9)) }
     fun setExpiryMin(text: String) = _uiState.update { it.copy(expiryMinText = digits(text, 6)) }
+    fun setFundingRate(text: String) = _uiState.update { it.copy(fundingRateText = digits(text, 9)) }
+    fun setFundingQty(text: String) = _uiState.update { it.copy(fundingQtyText = digits(text, 9)) }
+    fun setFundingDuration(text: String) = _uiState.update { it.copy(fundingDurationText = digits(text, 9)) }
+    fun setFundingBorrow(borrow: Boolean) = _uiState.update { it.copy(fundingBorrow = borrow) }
+    fun setSpotAsset(text: String) = _uiState.update { it.copy(spotAssetText = digits(text, 6)) }
+    fun setSpotAmount(text: String) = _uiState.update { it.copy(spotAmountText = digits(text, 12)) }
+
+    fun refreshSpot() {
+        viewModelScope.launch {
+            when (val r = repository.spotBalance()) {
+                is ApiResult.Success -> _uiState.update { it.copy(spotBalance = r.data) }
+                else -> Unit
+            }
+        }
+    }
+
+    fun spotDeposit() {
+        val asset = _uiState.value.spotAssetInt ?: return
+        val amount = _uiState.value.spotAmountLong ?: return
+        if (amount <= 0) return
+        _uiState.update { it.copy(placing = true, message = null) }
+        viewModelScope.launch {
+            when (val r = repository.spotDeposit(asset, amount)) {
+                is ApiResult.Success -> {
+                    val ack = r.data
+                    _uiState.update {
+                        it.copy(
+                            placing = false,
+                            spotAmountText = if (ack.accepted) "" else it.spotAmountText,
+                            message = if (ack.accepted) "Spot deposited (asset $asset)" else (ack.message ?: "Spot deposit rejected"),
+                            messageIsError = !ack.accepted,
+                        )
+                    }
+                    if (ack.accepted) refreshSpot()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+            }
+        }
+    }
+
+    /** OCO: leg A = Buy/Sell selector + price/qty; leg B = opposite side + child price/qty. */
+    private fun submitOco() {
+        val s = _uiState.value
+        val aPrice = s.priceLong ?: return
+        val aQty = s.qtyLong ?: return
+        val bPrice = s.childPriceLong ?: return
+        val bQty = s.childQtyLong ?: return
+        if (aPrice <= 0 || aQty <= 0 || bPrice <= 0 || bQty <= 0) return
+        val bSide = if (s.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
+        _uiState.update { it.copy(placing = true, message = null) }
+        viewModelScope.launch {
+            when (val r = repository.placeOco(symbolId, s.side, aPrice, aQty, bSide, bPrice, bQty)) {
+                is ApiResult.Success -> {
+                    val ack = r.data
+                    _uiState.update { it.copy(placing = false, message = if (ack.accepted) "OCO #${ack.ocoId ?: "?"} placed" else (ack.message ?: "OCO rejected"), messageIsError = !ack.accepted) }
+                    if (ack.accepted) refreshAccount()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+            }
+        }
+    }
+
+    /** Funding: borrow or lend into the on-book funding market. */
+    private fun submitFunding() {
+        val s = _uiState.value
+        val rate = s.fundingRateLong ?: return
+        val qty = s.fundingQtyLong ?: return
+        if (rate <= 0 || qty <= 0) return
+        _uiState.update { it.copy(placing = true, message = null) }
+        viewModelScope.launch {
+            when (val r = repository.placeFunding(rate, qty, s.fundingBorrow, s.fundingDurationLong, null)) {
+                is ApiResult.Success -> {
+                    val ack = r.data
+                    _uiState.update { it.copy(placing = false, message = if (ack.accepted) "Funding ${if (s.fundingBorrow) "borrow" else "lend"} #${ack.fundingId ?: "?"}" else (ack.message ?: "Funding rejected"), messageIsError = !ack.accepted) }
+                    if (ack.accepted) refreshAccount()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+            }
+        }
+    }
 
     /** Route the ticket's primary action to the right engine endpoint for the selected order type. */
     fun submit() {
@@ -80,6 +164,8 @@ class TradingViewModel @Inject constructor(
             OrderType.TAKE_PROFIT -> submitAlgo("take_profit")
             OrderType.QUOTE -> submitQuote()
             OrderType.OTO -> submitOto()
+            OrderType.OCO -> submitOco()
+            OrderType.FUNDING -> submitFunding()
         }
     }
 

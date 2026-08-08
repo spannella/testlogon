@@ -36,6 +36,11 @@ interface TradingRepository {
     suspend fun cancelOrder(clordid: String): ApiResult<CancelAck>
     suspend fun marginAccount(): ApiResult<MarginAccount>
     suspend fun execEvents(): ApiResult<ExecEvents>
+    // Pre-staged (behind TradingFeatures flags):
+    suspend fun placeOco(symbolId: Int, aSide: OrderSide, aPrice: Long, aQty: Long, bSide: OrderSide, bPrice: Long, bQty: Long): ApiResult<OcoAck>
+    suspend fun placeFunding(rateBps: Long, qty: Long, isBorrow: Boolean, durationSeconds: Long?, symbolId: Int?): ApiResult<FundingAck>
+    suspend fun spotBalance(): ApiResult<SpotBalance>
+    suspend fun spotDeposit(asset: Int, amount: Long): ApiResult<SpotDepositAck>
     suspend fun deposit(amount: Long): ApiResult<DepositAck>
     suspend fun cancelAll(): ApiResult<BulkCancelResult>
     suspend fun placeQuote(symbolId: Int, bidPrice: Long, askPrice: Long, bidQty: Long, askQty: Long): ApiResult<QuoteAck>
@@ -86,6 +91,24 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun execEvents(): ApiResult<ExecEvents> =
         withContext(io) { apiCall { api.algoEvents().toDomain() } }
+
+    override suspend fun placeOco(symbolId: Int, aSide: OrderSide, aPrice: Long, aQty: Long, bSide: OrderSide, bPrice: Long, bQty: Long): ApiResult<OcoAck> =
+        withContext(io) {
+            apiCall {
+                api.placeOco(
+                    OcoOrderDto(symbolId, listOf(OcoLegDto(aSide.wire, aPrice, aQty), OcoLegDto(bSide.wire, bPrice, bQty))),
+                ).toDomain()
+            }
+        }
+
+    override suspend fun placeFunding(rateBps: Long, qty: Long, isBorrow: Boolean, durationSeconds: Long?, symbolId: Int?): ApiResult<FundingAck> =
+        withContext(io) { apiCall { api.placeFunding(FundingOrderDto(rateBps, qty, isBorrow, durationSeconds, symbolId, null)).toDomain() } }
+
+    override suspend fun spotBalance(): ApiResult<SpotBalance> =
+        withContext(io) { apiCall { api.spotBalance().toDomain() } }
+
+    override suspend fun spotDeposit(asset: Int, amount: Long): ApiResult<SpotDepositAck> =
+        withContext(io) { apiCall { api.spotDeposit(SpotDepositDto(asset, amount)).toDomain() } }
 
     override suspend fun deposit(amount: Long): ApiResult<DepositAck> =
         withContext(io) { apiCall { api.marginDeposit(MarginDepositDto(amount)).toDomain() } }

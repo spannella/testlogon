@@ -62,8 +62,8 @@ fun TradeTicket(
         OrderTypeRow(selected = state.orderType, onSelect = viewModel::setOrderType)
         Spacer(Modifier.height(10.dp))
 
-        // ---- Buy / Sell (hidden for the two-sided quote) ----
-        if (state.orderType != OrderType.QUOTE) {
+        // ---- Buy / Sell (hidden for the two-sided quote + funding) ----
+        if (state.orderType != OrderType.QUOTE && state.orderType != OrderType.FUNDING) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SideButton("Buy", selected = state.side == OrderSide.BUY, color = MarketColors.Up, modifier = Modifier.weight(1f)) {
                     viewModel.setSide(OrderSide.BUY)
@@ -85,6 +85,11 @@ fun TradeTicket(
             onValue = viewModel::setDeposit,
             onDeposit = viewModel::deposit,
         )
+
+        if (TradingFeatures.SPOT_ENABLED) {
+            Spacer(Modifier.height(10.dp))
+            SpotPanel(state, viewModel)
+        }
 
         Spacer(Modifier.height(10.dp))
         // ---- Type-specific inputs ----
@@ -156,6 +161,35 @@ fun TradeTicket(
                     color = MarketColors.TextSecondary,
                     fontSize = 11.sp,
                 )
+            }
+            OrderType.OCO -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) { NumberField("Leg A price", state.priceText, viewModel::setPrice) }
+                    Box(Modifier.weight(1f)) { NumberField("Leg A qty", state.qtyText, viewModel::setQty) }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) { NumberField("Leg B price", state.childPriceText, viewModel::setChildPrice) }
+                    Box(Modifier.weight(1f)) { NumberField("Leg B qty", state.childQtyText, viewModel::setChildQty) }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Leg A = ${if (state.side == OrderSide.BUY) "Buy" else "Sell"}, Leg B = ${if (state.side == OrderSide.BUY) "Sell" else "Buy"} · a fill on one cancels the other",
+                    color = MarketColors.TextSecondary,
+                    fontSize = 11.sp,
+                )
+            }
+            OrderType.FUNDING -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SideButton("Borrow", selected = state.fundingBorrow, color = MarketColors.Up, modifier = Modifier.weight(1f)) { viewModel.setFundingBorrow(true) }
+                    SideButton("Lend", selected = !state.fundingBorrow, color = MarketColors.Down, modifier = Modifier.weight(1f)) { viewModel.setFundingBorrow(false) }
+                }
+                Spacer(Modifier.height(8.dp))
+                NumberField("Rate (bps)", state.fundingRateText, viewModel::setFundingRate)
+                Spacer(Modifier.height(8.dp))
+                NumberField("Quantity", state.fundingQtyText, viewModel::setFundingQty)
+                Spacer(Modifier.height(8.dp))
+                NumberField("Duration (seconds, optional)", state.fundingDurationText, viewModel::setFundingDuration)
             }
         }
 
@@ -461,7 +495,7 @@ private fun OrderTypeRow(selected: OrderType, onSelect: (OrderType) -> Unit) {
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        OrderType.values().forEach { t ->
+        OrderType.values().filter { it.isAvailable() }.forEach { t ->
             val on = t == selected
             Text(
                 text = t.label,
@@ -506,6 +540,48 @@ private fun submitLabel(state: TradingUiState): String {
         OrderType.TAKE_PROFIT -> "$side Take-Profit"
         OrderType.QUOTE -> "Place quote"
         OrderType.OTO -> "Place OTO ($side parent)"
+        OrderType.OCO -> "Place OCO ($side / ${if (state.side == OrderSide.BUY) "Sell" else "Buy"})"
+        OrderType.FUNDING -> if (state.fundingBorrow) "Borrow" else "Lend"
+    }
+}
+
+@Composable
+private fun SpotPanel(state: TradingUiState, viewModel: TradingViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+    ) {
+        Text("Spot balances", color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Spacer(Modifier.height(6.dp))
+        val bal = state.spotBalance
+        if (bal == null || bal.assets.isEmpty()) {
+            Text("No spot balances", color = MarketColors.TextFaint, fontSize = 11.sp)
+        } else {
+            bal.assets.forEach { a ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(if (a.symbol.isNotEmpty()) a.symbol else "asset ${a.asset}", color = MarketColors.TextSecondary, fontSize = 11.sp)
+                    Text(fmt(a.balance.toDouble()), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.weight(1f)) { NumberField("Asset id", state.spotAssetText, viewModel::setSpotAsset) }
+            Box(Modifier.weight(1f)) { NumberField("Amount", state.spotAmountText, viewModel::setSpotAmount) }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MarketColors.Accent)
+                    .clickable { viewModel.spotDeposit() }
+                    .testTag("spot_deposit")
+                    .padding(horizontal = 14.dp, vertical = 13.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text("Deposit", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+        }
     }
 }
 

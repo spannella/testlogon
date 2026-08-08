@@ -56,4 +56,22 @@ interface TradingApi {
     /** Drain this session's async exec events (algo/oto triggers + fills that landed after placement). */
     @GET("me/algo/events")
     suspend fun algoEvents(): ExecEventsDto
+
+    // ---- Pre-staged (behind TradingFeatures flags); align field names with the backend port. ----
+
+    /** One-cancels-other: two opposite-side legs; a fill on one cancels the other. */
+    @POST("me/oco")
+    suspend fun placeOco(@Body body: OcoOrderDto): OcoAckDto
+
+    /** On-book funding/lending: submit a borrow or lend order into the funding market. */
+    @POST("me/funding_order")
+    suspend fun placeFunding(@Body body: FundingOrderDto): FundingAckDto
+
+    /** Read spot (cash) balances per asset. */
+    @GET("me/spot_balance")
+    suspend fun spotBalance(): SpotBalanceDto
+
+    /** Credit a spot asset balance. */
+    @POST("me/spot_deposit")
+    suspend fun spotDeposit(@Body body: SpotDepositDto): SpotDepositAckDto
 }
