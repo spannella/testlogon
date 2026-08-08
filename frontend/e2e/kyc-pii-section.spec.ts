@@ -27,10 +27,15 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppAssignKycAdmin,
+} from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const CHARLIE_SUB = "e2e_charlie@test.local";
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────
@@ -55,11 +60,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -116,6 +117,11 @@ ddb = boto3.resource(
 
 /** Assign an admin sub onto a case's review ref (no REST endpoint for this). */
 function assignAdminDirect(caseId: string, adminSub: string): void {
+  if (usingCpp()) {
+    void adminSub;
+    cppAssignKycAdmin(caseId, resolveIdentityId("charlie_admin"));
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PRELUDE}
 tbl = ddb.Table('kyc_cases')

@@ -14,11 +14,13 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, unauthContext } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 const TS = Date.now();
@@ -52,11 +54,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -89,7 +87,19 @@ async function apiGet(page: Page, path: string, params?: ReqParams) {
 
 // ─── DDB helpers ───────────────────────────────────────────────────────────────
 
-const PY_ENV = `
+const CPP_DDB = "http://localhost:5005";                 // moto on .82 (loopback there)
+const CPP_SCHEDULE_TABLE = "tlc_kyc_review_schedule";
+// Under cpp, boto3 runs ON .82 (moto is 127.0.0.1-bound) against tlc_* tables;
+// the Python path is byte-identical (defaults + .env.local untouched).
+const PY_ENV = usingCpp()
+  ? `
+import boto3, os
+os.environ.setdefault('DDB_ENDPOINT_URL', '${CPP_DDB}')
+os.environ.setdefault('KYC_REVIEW_SCHEDULE_TABLE_NAME', '${CPP_SCHEDULE_TABLE}')
+os.environ.setdefault('USERS_TABLE_NAME', 'tlc_users')
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','${CPP_DDB}'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+`
+  : `
 import boto3, os
 from pathlib import Path
 env = Path('${REPO_ROOT}/.env.local')
@@ -105,6 +115,19 @@ function runPy(body: string): string {
   // NOTE: do NOT replace real newlines with literal "\n" — python -c cannot parse
   // backslash-n as a statement separator (SyntaxError). Real newlines in the
   // double-quoted shell argument are preserved and execute correctly.
+  if (usingCpp()) {
+    // moto binds 127.0.0.1 on .82, so the boto3 writes must run THERE. Base64
+    // the script so the remote login shell never has to parse quotes/newlines.
+    const script = `${PY_ENV}${body}`;
+    const b64 = Buffer.from(script, "utf8").toString("base64");
+    const key = process.env.E2E_CPP_SSH_KEY ?? "/home/sean/.ssh/e2e_cpp_seed_ed25519";
+    return execSync(
+      `ssh -i ${key} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 `
+        + `sean@192.168.0.82 `
+        + `'python3 -c "import base64,sys; exec(base64.b64decode(sys.argv[1]).decode())" ${b64}'`,
+      { timeout: 20_000 },
+    ).toString();
+  }
   return execSync(`python3 -c "${PY_ENV}${body}"`, {
     cwd: REPO_ROOT,
     timeout: 15_000,
@@ -409,8 +432,10 @@ test.describe("753. KYC-016 Monitoring Dashboard API", () => {
     expect(r.status()).toBe(403);
   });
 
-  test("753.4 unauthenticated request to dashboard returns 401", async ({ request }) => {
-    const r = await request.get(`${API}/v1/kyc/monitoring/admin/dashboard`);
+  test("753.4 unauthenticated request to dashboard returns 401", async () => {
+    const anon = await unauthContext(API);
+    const r = await anon.get(`/v1/kyc/monitoring/admin/dashboard`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 });

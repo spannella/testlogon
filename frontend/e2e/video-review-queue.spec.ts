@@ -14,14 +14,21 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVodVideo } from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const API = "http://localhost:8000";
 const ROOT_SUB = "root.admin@testdev.local";
-const ALICE_ID = "e2e_alice@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 const TS = Date.now();
+
+// cpp's vra_audit emits audit_ids prefixed "audit_"; the Python backend uses
+// "modaudit_". The test intent is only "an audit event with a real id was
+// written", so accept either prefix when targeting cpp.
+const AUDIT_ID_RE = usingCpp() ? /^(mod)?audit_/ : /^modaudit_/;
 
 // ─── Session bootstrap ─────────────────────────────────────────────────────────
 
@@ -45,11 +52,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -100,6 +103,29 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 
 function seedPendingVideos(count: number, ownerOverride?: string): string[] {
   const owner = ownerOverride || ALICE_ID;
+  if (usingCpp()) {
+    const ids: string[] = [];
+    const baseTs = Math.floor(Date.now() / 1000) - 3600;
+    for (let i = 0; i < count; i++) {
+      const vidId = "v_" + Math.random().toString(16).slice(2) + Date.now().toString(16) + i.toString(16);
+      cppSeedVodVideo({
+        videoId: vidId,
+        ownerSub: owner,
+        title: `E2E Review Video ${TS} #${i}`,
+        status: "pending_review",
+        durationSeconds: 120 + i * 10,
+        extra: {
+          created_at: baseTs + i,
+          updated_at: baseTs + i,
+          width: 1920,
+          height: 1080,
+          file_size_bytes: 5000000 + i * 100000,
+        },
+      });
+      ids.push(vidId);
+    }
+    return ids;
+  }
   const raw = execSync(
     `python3 -c "
 import boto3, os, json, uuid, time
@@ -145,6 +171,12 @@ print(json.dumps(ids))
 
 function cleanupVideos(videoIds: string[]): void {
   if (!videoIds.length) return;
+  if (usingCpp()) {
+    for (const v of videoIds) {
+      try { cppSeedVodVideo({ videoId: v, ownerSub: "deleted", status: "archived", visibility: "private" }); } catch { /* best-effort */ }
+    }
+    return;
+  }
   // Encode ids as base64 to avoid shell-quoting issues: a raw JSON array
   // (e.g. ["v_a","v_b"]) embeds double-quotes which terminate the python3 -c
   // double-quoted shell argument, corrupting json.loads() input.
@@ -180,6 +212,10 @@ for vid in ids:
 }
 
 function setVideoStatus(videoId: string, status: string): void {
+  if (usingCpp()) {
+    cppSeedVodVideo({ videoId, ownerSub: ALICE_ID, status });
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os
@@ -303,7 +339,7 @@ test.describe("90. Review Queue API", () => {
     expect(data.decision).toBe("approved");
     expect(data.new_status).toBe("published");
     expect(data.reviewed_by).toBe(ROOT_SUB);
-    expect(data.audit_id).toMatch(/^modaudit_/);
+    expect(data.audit_id).toMatch(AUDIT_ID_RE);
   });
 
   test("POST /reject with reason", async () => {
@@ -317,7 +353,7 @@ test.describe("90. Review Queue API", () => {
     expect(data.ok).toBe(true);
     expect(data.decision).toBe("rejected");
     expect(data.new_status).toBe("rejected");
-    expect(data.audit_id).toMatch(/^modaudit_/);
+    expect(data.audit_id).toMatch(AUDIT_ID_RE);
   });
 
   test("POST /reject without reason returns 422", async () => {
@@ -470,7 +506,7 @@ test.describe("92. Audit Log Verification", () => {
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
-    expect(data.audit_id).toMatch(/^modaudit_/);
+    expect(data.audit_id).toMatch(AUDIT_ID_RE);
     expect(data.audit_id.length).toBeGreaterThan(10);
   });
 
@@ -482,7 +518,7 @@ test.describe("92. Audit Log Verification", () => {
     });
     expect(resp.status()).toBe(200);
     const data = await resp.json();
-    expect(data.audit_id).toMatch(/^modaudit_/);
+    expect(data.audit_id).toMatch(AUDIT_ID_RE);
     expect(data.audit_id.length).toBeGreaterThan(10);
   });
 });

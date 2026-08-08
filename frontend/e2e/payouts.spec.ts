@@ -22,13 +22,20 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { cppCancelActivePayouts } from "./helpers/cpp-seed";
+import {
+  usingCpp,
+  cppSeedPayoutCredits,
+  cppCancelActivePayoutsDirect,
+} from "./helpers/cpp-seed-payouts-subs-ats-misc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PYTHON   = REPO_ROOT + "/.venv/bin/python3";
 const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const TS       = Date.now();
 
@@ -54,11 +61,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -111,6 +114,11 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
  * Seed CREDIT ledger entries for a user with old timestamps (past hold period).
  */
 function seedOldCredits(userSub: string, count: number, amountEach: number): number {
+  // cpp path: mirror the settled-credit seed into cpp's own tlc_billing so
+  // /ui/payouts/balance sees withdrawable earnings (Python DDB never reaches it).
+  if (usingCpp()) {
+    return cppSeedPayoutCredits({ userSub, count, amountEach });
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, uuid, time
@@ -154,6 +162,11 @@ print('seeded')
  * Cancel all active payouts for a user to avoid test interference.
  */
 function cleanupActivePayouts(userSub: string): void {
+  // cpp path: cancel active payouts DIRECTLY in cpp's moto (the API-based helper
+  // no-ops on this build), clearing the stale one-active-payout 409. The Python
+  // DDB writes below reach only the Python backend.
+  cppCancelActivePayoutsDirect(userSub);
+  cppCancelActivePayouts(userSub);
   execSync(
     `${PYTHON} -c "
 import boto3, os

@@ -16,6 +16,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -47,11 +48,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -245,8 +242,9 @@ test.describe("733 — Business Case CRUD API", () => {
     expect(resp.status()).toBe(422);
   });
 
-  test("733.6 unauthenticated request returns 401", async ({ request }) => {
-    const resp = await request.post(`${BASE}/v1/kyc/business-cases`, {
+  test("733.6 unauthenticated request returns 401", async () => {
+    const anon = await unauthContext(BASE);
+    const resp = await anon.post(`/v1/kyc/business-cases`, {
       data: {
         legal_name: "NoAuth",
         registration_number: "X",
@@ -255,6 +253,7 @@ test.describe("733 — Business Case CRUD API", () => {
       },
     });
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 });
 

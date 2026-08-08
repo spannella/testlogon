@@ -2,6 +2,7 @@ package com.testlogon.android.data.auth
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import com.testlogon.android.core.network.json.LenientLong
 
 /**
  * Wire DTOs for the cookie-based auth + MFA surface (AND-026, AND-033).
@@ -56,20 +57,58 @@ data class SessionFinalizeResp(
 data class MeResp(
     @Json(name = "user_sub") val userSub: String,
     @Json(name = "session_id") val sessionId: String,
-    val ip: String,
+    // cpp GET /ui/me returns only {user_sub, session_id} (no ip); the Python backend also sends ip.
+    // Nullable + defaulted so BOTH shapes deserialize without a JsonDataException. (A1b DTO-drift fix.)
+    val ip: String? = null,
 )
 
+/**
+ * One active session row.
+ *
+ * A1b DTO-drift fix (app<->cpp). The two backends disagree on the WIRE shape of this row:
+ *  - Python sends `is_current` (bool), NUMERIC `created_at`/`last_seen_at`, and `ip`/`user_agent`.
+ *  - cpp GET /ui/sessions sends `current` (bool) INSTEAD OF `is_current`, STRINGIFIED
+ *    `created_at`/`last_seen_at` (e.g. "1784811816"), and OMITS `ip`/`user_agent` (+ `revoked_at`).
+ *
+ * To tolerate BOTH without a JsonDataException — and WITHOUT touching any of the ~6 UI/repo call
+ * sites or the two constructor-based tests — the wire fields are modelled as nullable + defaulted
+ * codegen params, and the app-facing shape the rest of the code already reads
+ * ([isCurrent]/[createdAt]/[lastSeenAt]/[ip]/[userAgent], all NON-NULL) is re-exposed as computed
+ * properties that coalesce the two spellings / supply the cpp-omitted defaults:
+ *  - timestamps use the existing @LenientLong adapter (already on NetworkModule.provideMoshi), which
+ *    accepts a JSON number (Python) OR a numeric string (cpp) OR null -> Long?.
+ *  - `is_current` (Python) and `current` (cpp) are BOTH mapped (distinct keys) and OR-folded.
+ *  - ip/user_agent default to "" when the server omits them.
+ * No new Moshi adapter or module dependency is introduced (core-network cannot see this app-module
+ * type); the reflective KotlinJsonAdapterFactory + the existing @LenientLong qualifier do the work.
+ */
 @JsonClass(generateAdapter = true)
 data class SessionInfo(
     @Json(name = "session_id") val sessionId: String,
-    @Json(name = "is_current") val isCurrent: Boolean,
-    @Json(name = "created_at") val createdAt: Long,
-    @Json(name = "last_seen_at") val lastSeenAt: Long,
-    val ip: String,
-    @Json(name = "user_agent") val userAgent: String,
-    val revoked: Boolean,
+    @Json(name = "is_current") val isCurrentWire: Boolean? = null,
+    @Json(name = "current") val currentWire: Boolean? = null,
+    @LenientLong @Json(name = "created_at") val createdAtWire: Long? = null,
+    @LenientLong @Json(name = "last_seen_at") val lastSeenAtWire: Long? = null,
+    @Json(name = "ip") val ipWire: String? = null,
+    @Json(name = "user_agent") val userAgentWire: String? = null,
+    val revoked: Boolean = false,
     @Json(name = "revoked_at") val revokedAt: Long? = null,
-)
+) {
+    /** True if this is the caller's own session - Python `is_current` OR cpp `current`. */
+    val isCurrent: Boolean get() = isCurrentWire ?: currentWire ?: false
+
+    /** Session creation epoch (seconds). cpp sends it stringified; @LenientLong normalises both. */
+    val createdAt: Long get() = createdAtWire ?: 0L
+
+    /** Last-seen epoch (seconds). cpp sends it stringified; @LenientLong normalises both. */
+    val lastSeenAt: Long get() = lastSeenAtWire ?: 0L
+
+    /** Client IP. cpp omits it on /ui/sessions -> "". */
+    val ip: String get() = ipWire ?: ""
+
+    /** Client user-agent. cpp omits it on /ui/sessions -> "". */
+    val userAgent: String get() = userAgentWire ?: ""
+}
 
 @JsonClass(generateAdapter = true)
 data class SessionsResp(

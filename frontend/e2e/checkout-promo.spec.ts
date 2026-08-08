@@ -13,12 +13,14 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID   = "e2e_bob@test.local";
 const TS       = Date.now();
@@ -45,11 +47,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -61,10 +59,17 @@ async function injectAuth(page: Page, userId: string) {
   if (!session) throw new Error(`No session for ${userId}`);
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  // The checkout page derives creatorId (and the promo-validate creator_user_id)
+  // from the cart items''' creator_user_id, falling back to the auth store userId.
+  // cpp stores/compares the promo creator as the SUB and login stores
+  // me.user_sub, so seeding the store with the email makes the promo-validate
+  // creator mismatch (-> "not valid for this creator", no success message).
+  // Seed the resolved sub under cpp; Python keeps the email verbatim.
+  const storeUserId = resolveIdentityId(userId);
   await page.evaluate((uid: string) => {
     const state = { userId: uid, accessToken: null, isAuthenticated: true };
     localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, userId);
+  }, storeUserId);
 }
 
 async function newIdentityPage(browser: Browser, userId: string): Promise<Page> {
@@ -207,7 +212,7 @@ test.describe("Section 1: Promo Validation API", () => {
       code: VALID_CODE,
       checkout_type: "shop",
       item_price_cents: 5000,
-      creator_user_id: ALICE_ID,
+      creator_user_id: usingCpp() ? getSessions()[ALICE_ID].user_sub : ALICE_ID,
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
@@ -223,7 +228,7 @@ test.describe("Section 1: Promo Validation API", () => {
       code: EXPIRED_CODE,
       checkout_type: "shop",
       item_price_cents: 5000,
-      creator_user_id: ALICE_ID,
+      creator_user_id: usingCpp() ? getSessions()[ALICE_ID].user_sub : ALICE_ID,
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
@@ -236,7 +241,7 @@ test.describe("Section 1: Promo Validation API", () => {
       code: VALID_CODE,
       checkout_type: "subscription",
       item_price_cents: 5000,
-      creator_user_id: ALICE_ID,
+      creator_user_id: usingCpp() ? getSessions()[ALICE_ID].user_sub : ALICE_ID,
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
@@ -249,7 +254,7 @@ test.describe("Section 1: Promo Validation API", () => {
       code: MAXED_CODE,
       checkout_type: "shop",
       item_price_cents: 5000,
-      creator_user_id: ALICE_ID,
+      creator_user_id: usingCpp() ? getSessions()[ALICE_ID].user_sub : ALICE_ID,
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
@@ -262,7 +267,7 @@ test.describe("Section 1: Promo Validation API", () => {
       code: FIXED_CODE,
       checkout_type: "shop",
       item_price_cents: 5000, // $50 cart, $100 code
-      creator_user_id: ALICE_ID,
+      creator_user_id: usingCpp() ? getSessions()[ALICE_ID].user_sub : ALICE_ID,
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
@@ -328,7 +333,7 @@ test.describe("Section 2: Checkout with Promo", () => {
       code: PROMO_CODE,
       checkout_type: "shop",
       item_price_cents: 5000, // 2 x 2500
-      creator_user_id: ALICE_ID,
+      creator_user_id: usingCpp() ? getSessions()[ALICE_ID].user_sub : ALICE_ID,
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
@@ -342,7 +347,7 @@ test.describe("Section 2: Checkout with Promo", () => {
       code: "NONEXISTENT_CODE",
       checkout_type: "shop",
       item_price_cents: 5000,
-      creator_user_id: ALICE_ID,
+      creator_user_id: usingCpp() ? getSessions()[ALICE_ID].user_sub : ALICE_ID,
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();

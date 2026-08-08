@@ -13,18 +13,30 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedEnforcement,
+  cppSeedBan,
+  cppClearBan,
+  cppClearAppealsForUser,
+} from "./helpers/cpp-seed-appeals-moderation-tail";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
-const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 
 const ALICE_KEY = "alice";
 const BOB_KEY = "bob";
 const ROOT_KEY = "root";
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+// Under cpp, identity is keyed by the JWT sub (not the email); resolveIdentityId
+// maps the email to the real logged-in sub so seed keys AND the user_id the API
+// returns line up. On the Python path resolveIdentityId returns its arg verbatim
+// (the email), so existing runs are byte-for-byte unchanged.
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 const ROOT_SUB = "root.admin@testdev.local";
 
 const TS = Date.now();
@@ -51,11 +63,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -117,6 +125,17 @@ function seedEnforcement(
   suffix: string,
 ): string {
   const enfId = `enf_e2e_${suffix}_${TS}`;
+  if (usingCpp()) {
+    cppSeedEnforcement({
+      userSub: userId,
+      enforcementId: enfId,
+      enforcementType,
+      sourceTicketId: `ticket_e2e_${suffix}_${TS}`,
+      createdByAdminUserId: ROOT_SUB,
+      note: `E2E test enforcement ${suffix}`,
+    });
+    return enfId;
+  }
   const cmd = `python3 -c "
 import boto3, time
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
@@ -139,6 +158,10 @@ print('OK')
 }
 
 function seedBan(userId: string, suffix: string): void {
+  if (usingCpp()) {
+    cppSeedBan(userId, `ticket_e2e_${suffix}_${TS}`);
+    return;
+  }
   const cmd = `python3 -c "
 import boto3, time
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
@@ -161,6 +184,10 @@ print('OK')
 }
 
 function clearBan(userId: string): void {
+  if (usingCpp()) {
+    cppClearBan(userId);
+    return;
+  }
   const cmd = `python3 -c "
 import boto3
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
@@ -175,6 +202,13 @@ print('OK')
 }
 
 function clearAppeals(): void {
+  if (usingCpp()) {
+    // cpp keys appeals by appeal_id in tlc_appeals; clear the two seeded users'
+    // rows (ByUserCreatedAt GSI) so the per-user pending-appeal 429 gate resets.
+    cppClearAppealsForUser(ALICE_SUB);
+    cppClearAppealsForUser(BOB_SUB);
+    return;
+  }
   const cmd = `python3 -c "
 import boto3
 ddb = boto3.resource('dynamodb', endpoint_url='http://localhost:8001', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')

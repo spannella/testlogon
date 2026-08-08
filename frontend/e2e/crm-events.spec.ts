@@ -22,12 +22,13 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID   = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID   = resolveIdentityId("e2e_bob@test.local");
 const TS       = Date.now();
 
 interface AdminSessionData {
@@ -44,11 +45,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }

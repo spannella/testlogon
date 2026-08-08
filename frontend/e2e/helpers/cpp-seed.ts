@@ -1,0 +1,780 @@
+/**
+ * cpp-aware seeding glue (TRACK: seed).
+ *
+ * PROBLEM this solves: the inline per-test seed helpers (seedVideo,
+ * injectPaymentMethod, seedSubscriberCount) write to a Python DDB-Local at
+ * localhost:8001 on the frontend host. The C++ backend reads a DIFFERENT store
+ * (moto :5005 on .82) and keys its tables differently (SUB, not email;
+ * tlc_video_metadata / tlc_billing / tlc_admin_subscription_tiers). So under
+ * E2E_USE_CPP those inline seeds NEVER reach cpp and the UI renders empty.
+ *
+ * FIX: when targeting cpp, invoke small arg-driven shims that live ON .82
+ * (~/projects/testlogon-cpp/e2e/seed_shims/*.py) over ssh, so ONE correctly
+ * shaped item lands in cpp's OWN moto tables. The default Python path is left
+ * completely untouched (callers gate on usingCpp()).
+ *
+ * This module owns only the cpp-seed path. It does NOT edit session.ts /
+ * playwright.config.ts / vite.config.ts.
+ */
+import { execFileSync } from "child_process";
+
+// ── cpp targeting detection (mirrors helpers/session.ts::usingCpp) ───────────
+export function usingCpp(): boolean {
+  if (process.env.E2E_USE_CPP === "1") return true;
+  const api = process.env.E2E_API_BASE ?? "";
+  return api !== "" && !/localhost:8000\/?$/.test(api);
+}
+
+// ── .82 ssh target for the shims ─────────────────────────────────────────────
+const CPP_SSH_HOST = process.env.E2E_CPP_SSH_HOST ?? "sean@192.168.0.82";
+const CPP_SSH_KEY =
+  process.env.E2E_CPP_SSH_KEY ?? "/home/sean/.ssh/e2e_cpp_seed_ed25519";
+const CPP_SHIM_DIR =
+  process.env.E2E_CPP_SHIM_DIR ??
+  "/home/sean/projects/testlogon-cpp/e2e/seed_shims";
+
+/**
+ * Run one seed shim on .82 with a single JSON arg. Throws on non-zero exit or
+ * if the shim does not print an 'ok' line. Returns the shim's stdout (trimmed).
+ */
+export function runCppShim(shim: string, args: Record<string, unknown>): string {
+  // base64 the JSON payload so the remote login shell never has to parse
+  // quotes/spaces/apostrophes in the args (robust single-token transport).
+  const b64 = Buffer.from(JSON.stringify(args), "utf8").toString("base64");
+  const remote = `python3 ${CPP_SHIM_DIR}/${shim} --b64 ${b64}`;
+  const out = execFileSync(
+    "ssh",
+    [
+      "-i",
+      CPP_SSH_KEY,
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=20",
+      "-o", "ControlMaster=auto",
+      "-o", `ControlPath=/home/sean/.ssh/cm-cppseed-w${process.env.TEST_WORKER_INDEX || "0"}-%C`,
+      "-o", "ControlPersist=180",
+      CPP_SSH_HOST,
+      remote,
+    ],
+    { timeout: 30_000, encoding: "utf8" },
+  ).trim();
+  if (!/\bok\b/.test(out)) {
+    throw new Error(`cpp shim ${shim} did not confirm: ${out}`);
+  }
+  return out;
+}
+
+// ── typed wrappers ───────────────────────────────────────────────────────────
+
+export interface CppVideoOpts {
+  videoId: string;
+  ownerSub: string; // cpp SUB (owner_user_id), NOT an email
+  title?: string;
+  status?: string;
+  visibility?: string;
+  hlsManifestUrl?: string;
+  thumbnailUrl?: string;
+  durationSeconds?: number;
+  extra?: Record<string, unknown>; // access_mode / price_cents / ...
+}
+
+/** Seed one video row into cpp's tlc_video_metadata (PK video_id). */
+export function cppSeedVideo(opts: CppVideoOpts): void {
+  runCppShim("seed_video.py", {
+    video_id: opts.videoId,
+    owner_user_id: opts.ownerSub,
+    title: opts.title ?? "E2E Seed Video",
+    status: opts.status ?? "published",
+    visibility: opts.visibility ?? "public",
+    ...(opts.hlsManifestUrl ? { hls_manifest_url: opts.hlsManifestUrl } : {}),
+    ...(opts.thumbnailUrl ? { thumbnail_url: opts.thumbnailUrl } : {}),
+    ...(opts.durationSeconds != null
+      ? { duration_seconds: opts.durationSeconds }
+      : {}),
+    ...(opts.extra ?? {}),
+  });
+}
+
+/** Seed one payment-method fixture (PM# + BILLING) into cpp's tlc_billing. */
+export function cppSeedPaymentMethod(userSub: string, pmId: string): void {
+  runCppShim("seed_payment_method.py", { user_sub: userSub, pm_id: pmId });
+}
+
+export interface CppTipOpts {
+  recipientSub: string; // cpp SUB (creator receiving the tip)
+  tipperSub: string; // tipper id/group key (SUB or literal)
+  amountCents: number;
+  ts: number; // unix seconds (created_at)
+  contentType?: string;
+}
+
+/** Seed one tip row into cpp's per-creator tip log (tlc_tips) — the
+ *  top-supporters leaderboard source (h_tip_leaderboard aggregates by
+ *  tipper_user_id/amount_cents/created_at under pk=CREATOR#<recipient>). */
+export function cppSeedTip(opts: CppTipOpts): void {
+  runCppShim("seed_tip_leaderboard.py", {
+    recipient_sub: opts.recipientSub,
+    tipper_sub: opts.tipperSub,
+    amount_cents: opts.amountCents,
+    ts: opts.ts,
+    content_type: opts.contentType ?? "message",
+  });
+}
+
+/**
+ * Delete PM# rows (+ BILLING pointer) for a user in cpp's tlc_billing. Empty
+ * pmIds = delete ALL PMs (mirrors bug-fixes-2.spec.ts cleanupAllPaymentMethods /
+ * removePaymentMethod, whose Python :8001 writes never reach cpp). Best-effort.
+ */
+
+// ── promo codes (tlc_promo_codes) ────────────────────────────────────────────
+
+/**
+ * Delete a creator's PROMO#* rows (META + REDEEM#*) in cpp's tlc_promo_codes.
+ * Mirrors promo-codes.spec.ts cleanupAlicePromoCodes(), whose Python :8001
+ * 'PromoCodes'/'ByCreatorCreatedAt' deletes never reach cpp. userSub MUST be the
+ * cpp SUB. Run in beforeAll so the creator is below the per-creator cap.
+ */
+export function cppResetPromoCodes(userSub: string): void {
+  runCppShim("reset_promo_codes.py", { user_sub: userSub });
+}
+
+export interface CppPromoCodeOpts {
+  userSub: string; // cpp SUB (creator_user_id)
+  code: string;
+  codeId?: string;
+  discountType?: string;
+  discountValue?: number;
+  appliesTo?: string | string[];
+  active?: boolean;
+  currentUses?: number;
+  maxUses?: number;
+  maxUsesPerUser?: number;
+  minPurchaseCents?: number;
+  freeTrialDays?: number;
+  expiresAt?: number; // epoch seconds; 0 = never
+}
+
+/**
+ * Seed ONE promo META row into cpp's tlc_promo_codes with the exact fields cpp's
+ * create handler writes. Mirrors promo-codes.spec.ts's two direct DDB seeds
+ * (B3 expired-code + D UI-seed), which otherwise write creator_scope rows into
+ * the Python :8001 'PromoCodes' store cpp never reads.
+ */
+export function cppSeedPromoCode(opts: CppPromoCodeOpts): void {
+  runCppShim("seed_promo_code.py", {
+    user_sub: opts.userSub,
+    code: opts.code,
+    ...(opts.codeId ? { code_id: opts.codeId } : {}),
+    ...(opts.discountType ? { discount_type: opts.discountType } : {}),
+    ...(opts.discountValue != null ? { discount_value: opts.discountValue } : {}),
+    ...(opts.appliesTo != null ? { applies_to: opts.appliesTo } : {}),
+    ...(opts.active != null ? { active: opts.active } : {}),
+    ...(opts.currentUses != null ? { current_uses: opts.currentUses } : {}),
+    ...(opts.maxUses != null ? { max_uses: opts.maxUses } : {}),
+    ...(opts.maxUsesPerUser != null ? { max_uses_per_user: opts.maxUsesPerUser } : {}),
+    ...(opts.minPurchaseCents != null ? { min_purchase_cents: opts.minPurchaseCents } : {}),
+    ...(opts.freeTrialDays != null ? { free_trial_days: opts.freeTrialDays } : {}),
+    ...(opts.expiresAt != null ? { expires_at: opts.expiresAt } : {}),
+  });
+}
+
+export function cppResetBillingPms(userSub: string, pmIds: string[] = []): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_billing_pms.py", { user_sub: userSub, pm_ids: pmIds });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Delete all TOTP devices for a user in cpp's tlc_totp. Best-effort. */
+export function cppDeleteTotpDevices(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("delete_totp_devices.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Delete all email MFA devices for a user in cpp's tlc_email. Best-effort. */
+export function cppDeleteEmailDevices(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("delete_email_devices.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Delete all SMS MFA devices for a user in cpp's tlc_sms. Best-effort. */
+export function cppDeleteSmsDevices(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("delete_sms_devices.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Insert a bare pending login/step-up challenge into cpp's tlc_sessions so
+ * /ui/mfa/{email,sms}/begin finds the challenge (mirrors auth-mfa-devtools.spec
+ * insertLoginChallenge, whose Python :8001 write never reaches cpp).
+ */
+export function cppInsertLoginChallenge(
+  userSub: string,
+  challengeId: string,
+  factors: string[],
+): void {
+  if (!usingCpp()) return;
+  runCppShim("insert_login_challenge.py", {
+    user_sub: userSub,
+    challenge_id: challengeId,
+    factors,
+  });
+}
+
+/** Set subscriber_count on one admin subscription tier in cpp's world. */
+export function cppSeedSubscriberCount(
+  creatorSub: string,
+  tierId: string,
+  count = 3,
+): void {
+  runCppShim("seed_subscriber_count.py", {
+    creator_sub: creatorSub,
+    tier_id: tierId,
+    count,
+  });
+}
+
+/**
+ * Top up one user's billing WALLET (pk=USER#<sub>, sk=WALLET) in cpp's moto.
+ * cpp's h_subscribe / wallet-funded charges debit this balance and 402 when it
+ * is short — the Python path resolves a default PM instead, so a PM-only seed
+ * never funds cpp. Default 100_000c ($1000) comfortably covers a first cycle.
+ */
+export function cppSeedWallet(userSub: string, cents = 100_000): void {
+  runCppShim("seed_wallet.py", { user_sub: userSub, cents });
+}
+
+// ── ads-analytics fixture (TRACK: harness-seed) ──────────────────────────────
+export interface CppAdAnalyticsOpts {
+  accountId: string;
+  campaignId: string;
+  ownerSub: string; // cpp SUB (owner_sub) — NOT an email
+  withLedger?: boolean; // seed tlc_ad_billing LEDGER rows (summary/ROAS source)
+  withHourly?: boolean; // seed 3 hourly rollups for today
+}
+
+/**
+ * Seed an advertiser account + 7d/prev-7d daily rollups (+ optional hourly +
+ * billing ledger) into cpp's tlc_ad_accounts / tlc_ad_analytics_rollups /
+ * tlc_ad_billing. Mirrors the inline :8001 python seeder in ads-analytics.spec
+ * so /ui/ads/analytics/{breakdown,summary,timeseries,export} render non-empty
+ * under cpp. owner_sub MUST be the cpp SUB (ba_require_account_owner matches
+ * account.owner_sub == u.sub).
+ */
+export function cppSeedAdAnalytics(opts: CppAdAnalyticsOpts): void {
+  runCppShim("seed_ad_analytics.py", {
+    account_id: opts.accountId,
+    campaign_id: opts.campaignId,
+    owner_sub: opts.ownerSub,
+    with_ledger: opts.withLedger ?? true,
+    with_hourly: opts.withHourly ?? true,
+  });
+}
+
+// ── per-content-revenue fixture (TRACK: harness-seed) ────────────────────────
+export interface CppContentRevEntry {
+  content_id: string;
+  content_type: string;
+  reason: string; // 'unlock' -> unlocks_cents, 'tip' -> tips_cents, ...
+  amount_cents: number;
+  day_offset?: number;
+}
+
+/**
+ * Seed 'credit' LEDGER rows into cpp's tlc_billing (pk=USER#<sub>) so
+ * GET /ui/analytics/content-revenue attributes per-content revenue. Mirrors the
+ * inline :8001 python seeder in per-content-revenue.spec.ts. user_sub MUST be
+ * the cpp SUB (bilt_accumulate queries pk=USER#<sub>).
+ */
+export function cppSeedContentRevenue(
+  userSub: string,
+  entries: CppContentRevEntry[],
+  testRun = '',
+): void {
+  runCppShim('seed_content_revenue.py', {
+    user_sub: userSub,
+    test_run: testRun,
+    entries,
+  });
+}
+
+
+// ── kyc-case fixture (TRACK: harness-seed) ───────────────────────────────────
+export interface CppKycFile {
+  type: string; // "selfie" | "id_front" | ...
+  path?: string;
+  size?: number;
+  mime_type?: string;
+}
+
+/**
+ * Seed one KYC case (pk=KYC#<caseId>, sk=META, files array) into cpp's
+ * tlc_kyc_cases so POST /v1/kyc/cases/{id}/compare-face (b11_case_get +
+ * cc_face_anti_spoof) finds it. Mirrors seedKycCase() in
+ * kyc-facial-comparison.spec.ts. userSub MUST be the cpp SUB (owner check).
+ */
+export function cppSeedKycCase(
+  caseId: string,
+  userSub: string,
+  files: CppKycFile[],
+  status = "draft",
+): void {
+  runCppShim("seed_kyc_case.py", {
+    case_id: caseId,
+    user_sub: userSub,
+    status,
+    files,
+  });
+}
+
+// ── role-reset shim (TRACK: harness-reset) ───────────────────────────────────
+/**
+ * Reset ONE user's role back to a plain "user" (REMOVE admin_profile) in cpp's
+ * OWN tlc_users (moto :5005), PK user_sub. Mirrors admin-roles.spec.ts's
+ * resetBobToUser() cleanup — but that helper writes to the Python DDB-Local at
+ * :8001, which cpp never reads, so under E2E_USE_CPP the reset must route here.
+ * userSub MUST be the cpp SUB (resolveIdentityId under cpp). Idempotent.
+ */
+export function cppResetUserRole(userSub: string, role = "user"): void {
+  runCppShim("reset_user_role.py", { user_sub: userSub, role });
+}
+
+// ── payout idempotency cleanup (TRACK: seed / 409-idempotency) ───────────────
+//
+// The payout specs (payouts / creator-payouts / payout-dashboard) call an
+// inline cleanupActivePayouts() that mutates the PYTHON CreatorPayouts table on
+// DDB-Local :8001 — which cpp never reads. Under E2E_USE_CPP a prior run's
+// still-`requested` payout therefore survives, and cpp's one-active-payout
+// guard returns 409 on the next POST /ui/payouts/request. This helper cancels
+// every active payout for a user THROUGH THE CPP API (the only store cpp reads),
+// so each test starts from a clean slate. No-op unless usingCpp(). Idempotent.
+//
+// email: the cpp login email for the identity (e.g. e2e_alice@test.local).
+// apiBase: the base the specs hit — defaults to the vite proxy the suite uses.
+export function cppCancelActivePayouts(
+  email: string,
+  apiBase = process.env.E2E_API_BASE ?? "http://localhost:3000",
+): void {
+  if (!usingCpp()) return;
+  const cppDirect = process.env.E2E_CPP_LOGIN_BASE ?? "https://192.168.0.82:8443";
+  const pw = process.env.E2E_PASSWORD ?? "Passw0rd!123";
+  try {
+    // 1) real cpp login → cookies (login must hit cpp directly for Set-Cookie).
+    const loginBody = JSON.stringify({
+      challenge_context: { username: email, password: pw },
+    });
+    const hdr = execFileSync(
+      "curl",
+      ["-k", "-s", "-D", "-", "-o", "/dev/null", "-X", "POST",
+       `${cppDirect}/ui/session/start`, "-H", "Content-Type: application/json",
+       "--data-binary", "@-"],
+      { input: loginBody, timeout: 30_000, encoding: "utf8" },
+    );
+    const jar: Record<string, string> = {};
+    for (const line of hdr.split(/\r?\n/)) {
+      const m = /^set-cookie:\s*([^=]+)=([^;]+)/i.exec(line);
+      if (m) jar[m[1].trim()] = m[2].trim();
+    }
+    const sid = jar["ui_session"], at = jar["ui_access_token"], csrf = jar["ui_csrf"];
+    if (!sid || !at || !csrf) return; // login failed → leave state as-is
+    const cookie = `ui_session=${sid}; ui_access_token=${at}; ui_csrf=${csrf}`;
+    // 2) list this user's payouts.
+    const listRaw = execFileSync(
+      "curl",
+      ["-k", "-s", `${apiBase}/ui/payouts`, "-H", `Cookie: ${cookie}`],
+      { timeout: 30_000, encoding: "utf8" },
+    );
+    let payouts: Array<{ payout_id: string; status: string }> = [];
+    try {
+      const parsed = JSON.parse(listRaw);
+      payouts = Array.isArray(parsed) ? parsed : parsed?.payouts ?? [];
+    } catch {
+      return;
+    }
+    // 3) cancel every still-active payout.
+    const ACTIVE = new Set(["requested", "approved", "processing", "pending"]);
+    for (const p of payouts) {
+      if (!p?.payout_id || !ACTIVE.has(p.status)) continue;
+      try {
+        execFileSync(
+          "curl",
+          ["-k", "-s", "-o", "/dev/null", "-X", "POST",
+           `${apiBase}/ui/payouts/${p.payout_id}/cancel`,
+           "-H", `Cookie: ${cookie}`, "-H", `x-csrf-token: ${csrf}`],
+          { timeout: 20_000, encoding: "utf8" },
+        );
+      } catch {
+        /* best-effort: keep cancelling the rest */
+      }
+    }
+  } catch {
+    /* best-effort cleanup: never fail the test setup on a cleanup hiccup */
+  }
+}
+
+// ── account-deletion idempotency cleanup (TRACK: seed / 409-idempotency) ─────
+//
+// account-deletion.spec.ts's cleanupUser() deletes rows from the PYTHON
+// account_deletion_requests table on :8001, which cpp never reads. Under cpp a
+// prior run's still-`pending` deletion request survives and cpp returns 409 on
+// the next POST /request ("one pending deletion per user"). This cancels every
+// cancellable pending/processing deletion request for the user THROUGH THE CPP
+// API. No-op unless usingCpp(). Idempotent, best-effort.
+export function cppCancelActiveDeletions(
+  email: string,
+  apiBase = process.env.E2E_API_BASE ?? "http://localhost:3000",
+): void {
+  if (!usingCpp()) return;
+  const cppDirect = process.env.E2E_CPP_LOGIN_BASE ?? "https://192.168.0.82:8443";
+  const pw = process.env.E2E_PASSWORD ?? "Passw0rd!123";
+  const base = "ui/privacy/account-deletion";
+  try {
+    const loginBody = JSON.stringify({ challenge_context: { username: email, password: pw } });
+    const hdr = execFileSync(
+      "curl",
+      ["-k", "-s", "-D", "-", "-o", "/dev/null", "-X", "POST",
+       `${cppDirect}/ui/session/start`, "-H", "Content-Type: application/json",
+       "--data-binary", "@-"],
+      { input: loginBody, timeout: 30_000, encoding: "utf8" },
+    );
+    const jar: Record<string, string> = {};
+    for (const line of hdr.split(/\r?\n/)) {
+      const m = /^set-cookie:\s*([^=]+)=([^;]+)/i.exec(line);
+      if (m) jar[m[1].trim()] = m[2].trim();
+    }
+    const sid = jar["ui_session"], at = jar["ui_access_token"], csrf = jar["ui_csrf"];
+    if (!sid || !at || !csrf) return;
+    const cookie = `ui_session=${sid}; ui_access_token=${at}; ui_csrf=${csrf}`;
+    const listRaw = execFileSync(
+      "curl",
+      ["-k", "-s", `${apiBase}/${base}/requests`, "-H", `Cookie: ${cookie}`],
+      { timeout: 30_000, encoding: "utf8" },
+    );
+    let requests: Array<{ request_id: string; status: string; can_cancel?: boolean }> = [];
+    try {
+      const parsed = JSON.parse(listRaw);
+      requests = Array.isArray(parsed) ? parsed : parsed?.requests ?? [];
+    } catch {
+      return;
+    }
+    const ACTIVE = new Set(["pending", "processing", "scheduled"]);
+    for (const r of requests) {
+      if (!r?.request_id || !ACTIVE.has(r.status) || r.can_cancel === false) continue;
+      try {
+        execFileSync(
+          "curl",
+          ["-k", "-s", "-o", "/dev/null", "-X", "POST",
+           `${apiBase}/${base}/requests/${r.request_id}/cancel`,
+           "-H", `Cookie: ${cookie}`, "-H", `x-csrf-token: ${csrf}`],
+          { timeout: 20_000, encoding: "utf8" },
+        );
+      } catch { /* keep going */ }
+    }
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Delete all account-deletion + data-export rows for a user in cpp's OWN moto
+ * table (via the reset_account_deletion.py shim on .82). Clears BOTH a stale
+ * pending deletion (409 on POST /request) AND a prior export row (429 on POST
+ * /export — cpp treats a <24h export row as the rate-limit signal). Pass the
+ * cpp SUB (resolveIdentityId under cpp). No-op unless usingCpp(). Idempotent.
+ */
+export function cppResetAccountDeletion(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_account_deletion.py", { user_sub: userSub });
+  } catch {
+    /* best-effort: never fail setup on a cleanup hiccup */
+  }
+}
+
+/**
+ * Clear a user's GDPR data-request rows in cpp's tlc_data_requests (via the
+ * reset_data_requests.py shim). privacy.spec's cleanupPrivacyRequests targets
+ * the Python :8001 'data_requests' table which cpp never reads, so a prior
+ * export/deletion row 429s the next /ui/privacy/export (1-per-24h) or 409s the
+ * next delete-account. Pass the cpp SUB. No-op unless usingCpp(). Idempotent.
+ */
+export function cppResetDataRequests(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_data_requests.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Back-date a data-request's grace_period_ends_at in cpp's tlc_data_requests so
+ * a cancel AFTER the grace window 409s (mirrors privacy.spec test 11, whose
+ * Python :8001 update never reaches cpp). Pass the cpp SUB + request_id.
+ */
+export function cppSetDataRequestGrace(
+  userSub: string,
+  requestId: string,
+  gracePeriodEndsAt: number,
+): void {
+  if (!usingCpp()) return;
+  runCppShim("set_data_request_grace.py", {
+    user_sub: userSub,
+    request_id: requestId,
+    grace_period_ends_at: gracePeriodEndsAt,
+  });
+}
+
+/**
+ * Back-date a deletion request's scheduled_for in cpp's OWN moto table so admin
+ * process-due finalizes it (mirrors account-deletion.spec.ts::expireGrace, whose
+ * Python :8001 write never reaches cpp). Pass the cpp SUB + request_id. No-op
+ * unless usingCpp().
+ */
+export function cppExpireAccountDeletion(userSub: string, requestId: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("expire_account_deletion.py", {
+      user_sub: userSub,
+      request_id: requestId,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+
+/**
+ * Append ONE stripe-mock event line to cpp's billing dev-log on .82 so the
+ * /internal/dev-tools/billing/{ledger,summary} handlers parse it. Under cpp the
+ * auth-mfa-devtools §81 test can't appendFileSync on the frontend host (.249) —
+ * cpp reads its OWN log on .82. No-op unless usingCpp().
+ */
+export function cppAppendBillingLog(line: string): void {
+  if (!usingCpp()) return;
+  runCppShim("append_billing_log.py", { line });
+}
+
+
+/**
+ * Seed ONE LLM provider key into cpp's tlc_llm_provider_keys moto table so
+ * worker-create's provider validation passes. Returns the generated key_id.
+ * Under cpp the spec's Python createLlmKey() writes the WRONG datastore (Python
+ * DDB :8001) so worker-create 400s "LLM key not found". No-op guard: callers
+ * only invoke this when usingCpp().
+ */
+export function cppCreateLlmKey(userSub: string, provider: string, label: string): string {
+  const out = runCppShim("seed_llm_provider_key.py", {
+    user_sub: userSub, provider, label,
+  });
+  const m = out.match(/ok\s+([0-9a-f]+)/);
+  if (!m) throw new Error(`seed_llm_provider_key did not return a key_id: ${out}`);
+  return m[1];
+}
+
+
+/**
+ * Delete ALL of a user's agent_workers rows in cpp's tlc_agent_workers moto so
+ * the per-user active-worker limit doesn't 409 a fresh worker-create. Mirrors
+ * the spec's Python cleanupWorkers(). No-op unless usingCpp().
+ */
+export function cppCleanupWorkers(userSub: string): void {
+  if (!usingCpp()) return;
+  runCppShim("delete_agent_workers.py", { user_sub: userSub });
+}
+
+/**
+ * Delete ALL of a user's FIN-001/tip invoice rows (pk=USER#<sub>, sk INV#*) in
+ * cpp's tlc_invoices moto table. The invoices spec asserts on invoice COUNTS
+ * (after == before + N) and .find()s specific totals in a LIMIT-capped list;
+ * cpp's moto persists across runs so a user accumulates 50+ invoices and the
+ * list caps out. The spec cleanup only wrote the Python :8001 store cpp never
+ * reads. userSub MUST be the cpp SUB. No-op unless usingCpp(). Best-effort.
+ */
+export function cppResetInvoices(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_invoices.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Delete every org OWNED by a user (all META/MEMBER/INVITE rows) in cpp's
+ * tlc_organizations moto table. org-workspaces.spec.ts creates a fresh org per
+ * section but never deletes it, so cpp's persistent moto store accumulates orgs
+ * across runs and the owner crosses ORG_MAX_PER_USER (default 10) -> create_org
+ * 409s in beforeAll. userSub MUST be the cpp SUB. No-op unless usingCpp().
+ */
+export function cppResetUserOrgs(userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_user_orgs.py", { user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Mark a user (by email) as verified in cpp's tlc_users moto table.
+ * auth.spec.ts asserts an existing account's email shows "already exists"
+ * (register/check -> available:false, unverified:false). The e2e seed users are
+ * created via register but never email-verified, so in cpp they read
+ * verified:false and cpp's register/check returns unverified:true — the
+ * Register page then shows the amber "verification pending" branch instead of
+ * the "already exists" branch the test expects. Flip verified->true to match the
+ * Python-path assumption. No-op unless usingCpp(). Best-effort.
+ */
+export function cppVerifyUser(email: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("verify_user.py", { email });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Mark a ticket agent-eligible in cpp's orchestrator store (tlc_agent_tickets).
+ * Mirrors agent-orchestrator.spec.ts setTicketAgentEligible(), whose Python
+ * :8001 "tickets" UpdateItem never reaches cpp: the orchestrator claim /
+ * eligible-tickets / lifecycle read tlc_agent_tickets, and POST /tickets writes
+ * only the support "tickets" table. Upserts the TICKET#<id>/META row so the
+ * ticket is claimable. No-op unless usingCpp(). Best-effort.
+ */
+export function cppSetTicketEligible(
+  ticketId: string,
+  opts: { type?: string; priority?: string; subject?: string; spaceId?: string } = {},
+): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("set_ticket_eligible.py", {
+      ticket_id: ticketId,
+      ...(opts.type ? { type: opts.type } : {}),
+      ...(opts.priority ? { priority: opts.priority } : {}),
+      ...(opts.subject ? { subject: opts.subject } : {}),
+      ...(opts.spaceId ? { space_id: opts.spaceId } : {}),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Read a ticket META's agent_* fields from cpp's tlc_agent_tickets moto table.
+ * agent-orchestrator.spec.ts reads these directly from Python :8001 "tickets";
+ * cpp persists them in tlc_agent_tickets. Returns {agent_worker_id,
+ * agent_claimed_at, agent_state}. Throws if usingCpp() is false (callers gate).
+ */
+export function cppReadAgentTicket(
+  ticketId: string,
+): Record<string, unknown> & { agent_worker_id: string; agent_claimed_at: number; agent_state: string } {
+  const out = runCppShim("read_agent_ticket.py", { ticket_id: ticketId });
+  const jsonStart = out.indexOf("{");
+  return JSON.parse(out.slice(jsonStart));
+}
+
+/**
+ * Seed N ready broadcast clips into cpp's tlc_broadcast_clips moto table.
+ * clip-sharing.spec.ts 98.5 seeds 10 clips into Python :8001 "broadcast_clips"
+ * so the 11th create trips the per-broadcast quota (429). cpp counts clips per
+ * {session_id, creator_user_id} in its OWN tlc_broadcast_clips store; the Python
+ * seed never reaches it, so the 11th create returns 200. Seed cpp's store so the
+ * quota gate fires. No-op unless usingCpp().
+ */
+export function cppSeedBroadcastClips(opts: {
+  sessionId: string;
+  creatorUserId: string;
+  broadcasterUserId?: string;
+  count?: number;
+  displayName?: string;
+}): void {
+  if (!usingCpp()) return;
+  runCppShim("seed_broadcast_clips.py", {
+    session_id: opts.sessionId,
+    creator_user_id: opts.creatorUserId,
+    ...(opts.broadcasterUserId ? { broadcaster_user_id: opts.broadcasterUserId } : {}),
+    ...(opts.count != null ? { count: opts.count } : {}),
+    ...(opts.displayName ? { display_name: opts.displayName } : {}),
+  });
+}
+
+/**
+ * Terminate active compute instances in cpp's tlc_compute_instances moto table.
+ * security-groups.spec.ts 274.23/.24/.27 launch EC2 instances and assert 201, but
+ * cpp gates /ui/remote/ec2/launch on a GLOBAL active-instance count vs
+ * B13_QUOTA_DEFAULT_MAX_EC2 (3). Prior runs' running instances persist and push
+ * the count over the cap -> 409. Flip active instances to terminated so launch
+ * has headroom. Pass {all:true} (default) since the quota is global. No-op unless
+ * usingCpp(). Best-effort.
+ */
+export function cppResetComputeInstances(opts: { userSub?: string; all?: boolean } = { all: true }): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_compute_instances.py",
+      opts.userSub ? { user_sub: opts.userSub } : { all: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Clear a user's broadcast-QA submit debounce row in cpp's tlc_search moto table.
+ * broadcast-qa.spec.ts 90.6 (empty-question -> 422) runs within the 2s debounce
+ * window of the prior submits; cpp's bc_rate_ok fires 429 BEFORE the empty-text
+ * validation. Delete the "RL#bcqa:{sid}#{sub}" row so the validation path is
+ * reached. No-op unless usingCpp(). Best-effort.
+ */
+export function cppResetBroadcastQaRateLimit(sessionId: string, userSub: string): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("reset_broadcast_qa_rl.py", { session_id: sessionId, user_sub: userSub });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Seed an active delegate grant into cpp's tlc_delegates moto table.
+ * cpp's delegate-feed brick does NOT port the /ui/delegates grant-CRUD; it only
+ * reads the grant from tlc_delegates (CREATOR#<creator>/DELEGATE#<delegate>). The
+ * newsfeed-delegate specs add the delegate via the unported /ui/delegates
+ * endpoint, so the feed GET/POST (dlg_require_perm) sees no grant -> 403
+ * "Not a delegate for this creator". Seed the grant directly. No-op unless
+ * usingCpp(). Best-effort.
+ */
+export function cppSeedDelegateGrant(
+  creatorSub: string,
+  delegateSub: string,
+  permissions?: string[],
+  label?: string,
+): void {
+  if (!usingCpp()) return;
+  try {
+    runCppShim("seed_delegate_grant.py", {
+      creator_sub: creatorSub,
+      delegate_sub: delegateSub,
+      ...(permissions ? { permissions } : {}),
+      ...(label ? { label } : {}),
+    });
+  } catch {
+    /* best-effort */
+  }
+}

@@ -24,6 +24,8 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedSyndicateTreasury, cppReadSyndicateTreasury, cppResetUserSyndicates } from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -55,11 +57,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -118,6 +116,7 @@ function ddbExec(script: string): string {
 
 // Seed treasury balance directly (avoids depending on the deposit flow).
 function seedTreasury(syndId: string, cents: number) {
+  if (usingCpp()) { cppSeedSyndicateTreasury(syndId, cents); return; }
   ddbExec(`
 import time
 t = ddb.Table('syndicate_treasury')
@@ -131,6 +130,7 @@ print('treasury seeded')
 }
 
 function getTreasuryBalance(syndId: string): number {
+  if (usingCpp()) return cppReadSyndicateTreasury(syndId);
   const out = ddbExec(`
 t = ddb.Table('syndicate_treasury')
 r = t.get_item(Key={'pk': 'TREASURY#${syndId}', 'sk': 'BALANCE'}).get('Item') or {}
@@ -165,14 +165,28 @@ async function bootstrapSyndicate(browser: Browser, treasuryCents: number) {
   alicePage = await newIdentityPage(browser, "alice");
   bobPage = await newIdentityPage(browser, "bob");
 
+  // cpp: clear Alice's (+Bob's) syndicate index so POST /ui/syndicates stays
+  // below SY_MAX_PER_USER (10). bootstrapSyndicate runs in EACH block's
+  // beforeAll (4x), so keep just the newest to prevent cap-creep across blocks.
+  if (usingCpp()) {
+    cppResetUserSyndicates([resolveIdentityId(ALICE_ID), resolveIdentityId(BOB_ID)], 1);
+  }
+
   const create = await apiPost(alicePage, "alice", "/ui/syndicates", {
     name: `Ad Syndicate ${TS}`,
     description: "Advertising E2E",
   });
   syndicateId = (await create.json()).syndicate_id;
+  if (!syndicateId) {
+    throw new Error(
+      `syndicate create failed (status ${create.status()}): ${await create.text()}`,
+    );
+  }
 
-  // Bob joins as a member (non-admin).
-  await apiPost(alicePage, "alice", `/ui/syndicates/${syndicateId}/invite`, { user_id: BOB_ID });
+  // Bob joins as a member (non-admin). cpp keys the invite row by the invitee's
+  // SUB (h_sy_invite/respond), so send the resolved sub — not the raw email.
+  const inviteId = usingCpp() ? resolveIdentityId(BOB_ID) : BOB_ID;
+  await apiPost(alicePage, "alice", `/ui/syndicates/${syndicateId}/invite`, { user_id: inviteId });
   await apiPost(bobPage, "bob", `/ui/syndicates/${syndicateId}/invite/respond`, { accept: true });
 
   seedTreasury(syndicateId, treasuryCents);

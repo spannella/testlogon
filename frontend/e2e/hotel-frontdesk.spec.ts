@@ -22,12 +22,13 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
 const TS       = Date.now();
 
 /** Placeholder hotel_id. In a real seeded env this would match a real hotel. */
@@ -62,11 +63,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -216,10 +213,12 @@ test.describe("Section 70: Front-desk read API", () => {
     expect([200, 404]).toContain(resp.status());
   });
 
-  test("70.6 unauthenticated GET arrivals returns 401 or 404", async ({ request }) => {
-    const resp = await request.get(
+  test("70.6 unauthenticated GET arrivals returns 401 or 404", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.get(
       `${API}/ui/hotels/${HOTEL_ID}/front-desk/arrivals`,
     );
+    await anonCtx.close();
     expect([401, 404]).toContain(resp.status());
   });
 });

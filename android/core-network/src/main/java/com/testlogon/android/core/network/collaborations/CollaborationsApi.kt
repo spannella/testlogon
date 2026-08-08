@@ -1,11 +1,13 @@
 package com.testlogon.android.core.network.collaborations
 
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
- * AND-358 - Retrofit interface for the READ-ONLY collaborations surface. Transport only; the repository
+ * AND-358 / PAR-04 - Retrofit interface for the collaborations surface. Transport only; the repository
  * (CollaborationsRepository) wraps these RAW DTO returns in ApiResult and exposes the list as a Paging-3
  * flow. Mirrors the AND-356 SyndicateApi convention.
  *
@@ -13,7 +15,9 @@ import retrofit2.http.Query
  * All calls are suspend. The shared authenticated client attaches the session cookie, the X-CSRF-Token and
  * the Bearer token via the global interceptors.
  *
- * READ-ONLY: there is NO create / edit / propose / payout endpoint here - those are OUT OF SCOPE for AND-358.
+ * AND-358 added the READ surface (list / detail / splits). PAR-04 adds the STATE-only DEAL ACTIONS
+ * (accept / reject / counter / cancel / terminate) + the negotiation revision history. These mutations are
+ * NOT money-bearing (agreement state only) so they are NOT routed through BillingAuthorizer.
  *
  * @Path token is EXACTLY {collabId}. The list is cursor-paged via the optional `cursor` query.
  */
@@ -38,4 +42,37 @@ interface CollaborationsApi {
      */
     @GET("ui/collaborations/{collabId}/splits")
     suspend fun getSplits(@Path("collabId") collabId: String): CollabSplitHistoryOut
+
+    /**
+     * GET the negotiation revision history (a BARE JSON ARRAY of prior proposed splits). The detail screen
+     * tolerates this call failing (it falls back to an empty revisions list).
+     */
+    @GET("ui/collaborations/{collabId}/revisions")
+    suspend fun getRevisions(@Path("collabId") collabId: String): List<CollaborationRevisionOut>
+
+    /** POST accept the current proposal (body-less). Returns the updated collaboration. State-only. */
+    @POST("ui/collaborations/{collabId}/accept")
+    suspend fun acceptCollaboration(@Path("collabId") collabId: String): CollaborationOut
+
+    /** POST reject the current proposal (body-less). Returns the updated collaboration. State-only. */
+    @POST("ui/collaborations/{collabId}/reject")
+    suspend fun rejectCollaboration(@Path("collabId") collabId: String): CollaborationOut
+
+    /** POST a counter-offer (new initiator split percent). Returns the updated collaboration. State-only. */
+    @POST("ui/collaborations/{collabId}/counter")
+    suspend fun counterCollaboration(
+        @Path("collabId") collabId: String,
+        @Body body: CollaborationCounterIn,
+    ): CollaborationOut
+
+    /** POST cancel the pending request (initiator only, body-less). Returns the updated collaboration. */
+    @POST("ui/collaborations/{collabId}/cancel")
+    suspend fun cancelCollaboration(@Path("collabId") collabId: String): CollaborationOut
+
+    /** POST terminate the active agreement (optional reason). Returns the updated collaboration. State-only. */
+    @POST("ui/collaborations/{collabId}/terminate")
+    suspend fun terminateCollaboration(
+        @Path("collabId") collabId: String,
+        @Body body: CollaborationTerminateIn,
+    ): CollaborationOut
 }

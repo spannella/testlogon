@@ -19,16 +19,18 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, cppRegisterThrowaway } from "./helpers/session";
+import { usingCpp, cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API  = "http://localhost:8000";
 
-const ALICE_ID   = "e2e_alice@test.local";
-const BOB_ID     = "e2e_bob@test.local";
-const CHARLIE_ID = "e2e_charlie@test.local";
+const ALICE_ID   = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID     = resolveIdentityId("e2e_bob@test.local");
+const CHARLIE_ID = resolveIdentityId("e2e_charlie@test.local");
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────
 
@@ -47,11 +49,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -87,16 +85,20 @@ type APIRequestContext = import("@playwright/test").APIRequestContext;
 
 /** POST as an arbitrary user using Bearer auth (dev mode). */
 async function apiPostBearer(req: APIRequestContext, path: string, body: object, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
 /** GET as an arbitrary user using Bearer auth (dev mode). */
 async function apiGetBearer(req: APIRequestContext, path: string, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
@@ -245,10 +247,15 @@ test.describe("A. Group Call API", () => {
     expect(createResp.status()).toBe(201);
     const newCallId = (await createResp.json()).call_id;
 
-    // Non-member tries to join
-    const resp = await request.post(`${API}/ui/calls/group/${newCallId}/join`, {
-      headers: { Authorization: "Bearer nonexistent_user@test.local" },
-    });
+    // Non-member tries to join: use a REAL authenticated user who is not in the
+    // fresh conversation. A bogus bearer would 401 (bad token); an authenticated
+    // non-participant is what triggers the 403 membership gate.
+    const outsider = cppRegisterThrowaway("gc_a6");
+    const resp = await cppBearerPost(
+      `/ui/calls/group/${newCallId}/join`,
+      {},
+      outsider!.session.user_sub,
+    );
     expect(resp.status()).toBe(403);
 
     // Clean up
@@ -506,15 +513,18 @@ test.describe("C. Signaling API", () => {
     expect(resp2.status()).toBe(200);
   });
 
-  test("C4 — Signal rejected for non-participant (403)", async ({ request }) => {
-    const resp = await request.post(`${API}/ui/calls/group/${signalCallId}/signal`, {
-      data: {
+  test("C4 — Signal rejected for non-participant (403)", async () => {
+    // A real authenticated user who is not a call participant → 403 (not 401).
+    const outsider = cppRegisterThrowaway("gc_c4");
+    const resp = await cppBearerPost(
+      `/ui/calls/group/${signalCallId}/signal`,
+      {
         type: "offer",
         target_user_id: ALICE_ID,
         payload: { sdp: "v=0..." },
       },
-      headers: { Authorization: "Bearer nonexistent_user@test.local" },
-    });
+      outsider!.session.user_sub,
+    );
     expect(resp.status()).toBe(403);
   });
 

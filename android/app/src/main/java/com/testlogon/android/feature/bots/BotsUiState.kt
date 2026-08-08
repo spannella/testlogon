@@ -27,7 +27,24 @@ data class BotsListUiState(
     val isMutating: Boolean = false,
     val errorMessage: String? = null,
     val create: CreateBotFormState = CreateBotFormState(),
+    // PAR-32 - the "Send test" sheet state (null when closed).
+    val sendTest: SendTestFormState? = null,
 )
+
+/**
+ * PAR-32 - state for the "Send test" bottom sheet. [botId]/[botName] identify the target bot; the two
+ * text fields are validated by [canSubmit].
+ */
+data class SendTestFormState(
+    val botId: String,
+    val botName: String,
+    val conversationId: String = "",
+    val text: String = "",
+    val isSubmitting: Boolean = false,
+) {
+    val canSubmit: Boolean
+        get() = !isSubmitting && conversationId.isNotBlank() && text.isNotBlank()
+}
 
 /** State for the create-bot dialog. [canSubmit] gates the confirm button. */
 data class CreateBotFormState(

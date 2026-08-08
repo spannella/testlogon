@@ -21,12 +21,15 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, isCpp } from "./helpers/session";
+import type { APIRequestContext } from "@playwright/test";
+import { cppVerifyUser } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 
 // ─── Session bootstrap (re-uses messaging spec helper) ────────────────────────
@@ -46,11 +49,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 }
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -65,6 +64,10 @@ function getAuthUser(): AuthUserData {
       { cwd: REPO_ROOT, timeout: 60_000 }
     ).toString();
     _authUser = JSON.parse(raw);
+    // Under cpp the seed user is unverified; mark it verified so
+    // register/check reports available:false + unverified:false (the
+    // "already exists" branch the tests assert), matching the Python path.
+    cppVerifyUser(_authUser!.email);
   }
   return _authUser!;
 }
@@ -191,8 +194,17 @@ test.describe("3. Login form validation", () => {
 // ─── 4. Login with wrong credentials ─────────────────────────────────────────
 
 test.describe("4. Login with wrong credentials", () => {
-  test("wrong password shows error banner", async ({ page }) => {
+  test("wrong password shows error banner", async ({ browser }) => {
     getAuthUser(); // ensure user exists
+    // Under cpp every project inherits storageState: admin, so the login page
+    // loads already-"authenticated" (admin cookie + auth-store). A wrong-password
+    // 401 then hits the client's authenticated-refresh path (refresh succeeds on
+    // the admin cookie -> retry -> 401 -> logout("session_expired")), which shows
+    // the "session expired" banner INSTEAD of the credential error and clears the
+    // error state. A truly anonymous context (no cookie, no localStorage) makes
+    // the unauthenticated-401 branch throw so the destructive error renders.
+    const context = await browser.newContext({ storageState: undefined });
+    const page = await context.newPage();
     await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
     await page.locator("#username").fill("e2e_logintest@test.local");
     await page.locator("#password").fill("WrongPassword999!");
@@ -203,6 +215,7 @@ test.describe("4. Login with wrong credentials", () => {
       hasText: /invalid|incorrect|credential|authentication|unauthorized|failed/i,
     }).first();
     await expect(errorBanner).toBeVisible({ timeout: 10000 });
+    await context.close();
   });
 });
 
@@ -444,10 +457,25 @@ async function runMfaSetup(args: string, browser: import("@playwright/test").Bro
   const ua = await tmpPage.evaluate(() => navigator.userAgent);
   await tmpPage.close();
 
-  const raw = execSync(
-    `python3 ${REPO_ROOT}/e2e_register_mfa_setup.py ${args}`,
-    { cwd: REPO_ROOT, env: { ...process.env, E2E_PLAYWRIGHT_UA: ua }, timeout: 30_000 },
-  ).toString();
+  // Under cpp the register API + moto DDB both live on .82 (moto binds
+  // 127.0.0.1 there), so run the seeder ON .82 over ssh (same transport as
+  // helpers/cpp-seed.ts). Python path unchanged when not usingCpp().
+  const cpp = process.env.E2E_USE_CPP === "1"
+    || (!!process.env.E2E_API_BASE && !/localhost:8000\/?$/.test(process.env.E2E_API_BASE));
+  const raw = cpp
+    ? execSync(
+        `ssh -i ${process.env.E2E_CPP_SSH_KEY ?? "/home/sean/.ssh/e2e_cpp_seed_ed25519"} `
+          + `-o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 `
+          + `sean@192.168.0.82 `
+          + `'E2E_USE_CPP=1 E2E_API_BASE=https://localhost:8443 E2E_PLAYWRIGHT_UA=${JSON.stringify(ua)} `
+          + `DDB_ENDPOINT_URL=http://localhost:5005 `
+          + `python3 ~/projects/testlogon-cpp/e2e/e2e_register_mfa_setup.py ${args}'`,
+        { timeout: 40_000 },
+      ).toString()
+    : execSync(
+        `python3 ${REPO_ROOT}/e2e_register_mfa_setup.py ${args}`,
+        { cwd: REPO_ROOT, env: { ...process.env, E2E_PLAYWRIGHT_UA: ua }, timeout: 30_000 },
+      ).toString();
   return JSON.parse(raw) as MfaSetupData;
 }
 
@@ -613,6 +641,12 @@ test.describe("11. SMS MFA at registration", () => {
  * 13 tests don't get 429s from accumulated calls across multiple test runs.
  */
 function clearTotpRateLimitBucket(): void {
+  if (isCpp()) {
+    // cpp reads its OWN sessions table (moto :5005) and §13 registers a fresh
+    // throwaway user each run, so no per-user rate-limit accumulates. The Python
+    // :8001 clear below would be a no-op against cpp; skip it.
+    return;
+  }
   execSync(
     `${REPO_ROOT}/.venv/bin/python3 -c "
 import boto3, os
@@ -649,6 +683,65 @@ interface MfaMultiSetup {
 }
 
 function runMfaMultiSetup(): MfaMultiSetup {
+  if (isCpp()) {
+    // The Python seeder writes a user/session into DDB-Local :8001 that cpp
+    // never reads (cpp keys by sub in moto :5005 + verifies cpp-scheme pw_hash).
+    // Register a fresh user through cpp's OWN /auth/register (201, no rate-limit,
+    // no email-verification gate — unlike /ui/register/start which 429s under
+    // -workers=4) and log it in via /ui/session/start for a live cpp web
+    // session, so the injected cookies authenticate against cpp and the whole
+    // enrollment/verify flow runs natively. The device enroll handlers
+    // (h_totp_begin/confirm) require only UiSession (no fresh-MFA gate), so no
+    // mfa_verified_at stamp is needed for the second device.
+    const password = process.env.E2E_PASSWORD ?? "Passw0rd!123";
+    const email = `e2e_mfa_multi_${Date.now()}_${Math.random().toString(36).slice(2, 8)}@test.local`;
+    execSync(
+      `curl -k -s -o /dev/null -X POST ${API}/auth/register ` +
+        `-H 'Content-Type: application/json' --data-binary @-`,
+      { input: JSON.stringify({ email, password }), timeout: 30_000 },
+    );
+    const raw = execSync(
+      `curl -k -s -D - -o /dev/null -X POST ${API}/ui/session/start ` +
+        `-H 'Content-Type: application/json' --data-binary @-`,
+      {
+        input: JSON.stringify({ challenge_context: { username: email, password } }),
+        timeout: 30_000,
+      },
+    ).toString();
+    const jar: Record<string, string> = {};
+    for (const line of raw.split(/\r?\n/)) {
+      const m = /^set-cookie:\s*([^=]+)=([^;]+)/i.exec(line);
+      if (m) jar[m[1].trim()] = m[2].trim();
+    }
+    const sid = jar["ui_session"];
+    const at = jar["ui_access_token"];
+    const csrf = jar["ui_csrf"];
+    if (!sid || !at || !csrf) {
+      throw new Error(`cpp MFA-multi setup: login did not set session cookies (headers: ${raw.slice(0, 200)})`);
+    }
+    let sub = "";
+    try {
+      sub = JSON.parse(Buffer.from(at.split(".")[1], "base64").toString("utf8")).sub ?? "";
+    } catch { /* leave empty */ }
+    const now = Math.floor(Date.now() / 1000);
+    const mk = (name: string, value: string, httpOnly: boolean) => ({
+      name, value, domain: "localhost", path: "/",
+      httpOnly, secure: false, sameSite: "Lax" as const, expires: now + 86400,
+    });
+    return {
+      email,
+      password,
+      user_sub: sub,
+      session_id: sid,
+      csrf_token: csrf,
+      access_token: at,
+      cookies: [
+        mk("ui_session", sid, true),
+        mk("ui_access_token", at, true),
+        mk("ui_csrf", csrf, false),
+      ],
+    };
+  }
   const raw = execSync(
     "python3 " + REPO_ROOT + "/e2e_mfa_multidevice_setup.py",
     { cwd: REPO_ROOT, timeout: 30_000 },
@@ -688,6 +781,27 @@ test.describe("13. Multi-device TOTP MFA", () => {
   let device2Id: string;
   let device2Secret: string;
   let enrollPage: import("@playwright/test").Page;
+
+  // Under cpp every project inherits the admin storageState, so the built-in
+  // `request` fixture is silently admin-authenticated. cpp's /ui/mfa/totp/verify
+  // + /ui/session/finalize resolve the caller via CurrentUser and then look up
+  // the pending challenge session by {caller_sub, challenge_id} — so the request
+  // MUST be authenticated as the SAME user who owns the challenge. The leaked
+  // admin cookie makes that lookup run as ADMIN (challenge invisible -> 401), and
+  // a pending /ui/session/start sets NO cookie of its own, so a cookie-free
+  // context 401s too. Give these flows a context carrying the throwaway user's
+  // own (non-MFA) session cookies from setup, so CurrentUser resolves to the
+  // challenge owner. On Python the built-in fixture is returned verbatim (no
+  // admin leak, verify is challenge-scoped), so existing runs are unchanged.
+  async function loginCtx(
+    request: APIRequestContext,
+    browser: import("@playwright/test").Browser,
+  ): Promise<{ ctx: APIRequestContext; dispose: () => Promise<void> }> {
+    if (!isCpp()) return { ctx: request, dispose: async () => {} };
+    const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    await context.addCookies(setupData.cookies);
+    return { ctx: context.request, dispose: async () => context.close() };
+  }
 
   test.beforeAll(async ({ browser }) => {
     // Clear accumulated IP rate-limit / lockout state from previous runs so
@@ -777,144 +891,188 @@ test.describe("13. Multi-device TOTP MFA", () => {
   // POST /ui/session/start sets a short-lived ui_access_token cookie in the
   // response that subsequent calls in the same context pick up automatically.
 
-  test("API: TOTP verify with Device 1 code returns ok", async ({ request }) => {
-    const startResp = await request.post(`${API}/ui/session/start`, {
-      data: { challenge_context: { username: setupData.email, password: setupData.password } },
-    });
-    expect(startResp.ok()).toBeTruthy();
-    const startData = await startResp.json();
-    expect(startData.auth_required).toBe(true);
-    expect(startData.required_factors).toContain("totp");
+  test("API: TOTP verify with Device 1 code returns ok", async ({ request, browser }) => {
+    const { ctx, dispose } = await loginCtx(request, browser);
+    try {
+      const startResp = await ctx.post(`${API}/ui/session/start`, {
+        data: { challenge_context: { username: setupData.email, password: setupData.password } },
+      });
+      expect(startResp.ok()).toBeTruthy();
+      const startData = await startResp.json();
+      expect(startData.auth_required).toBe(true);
+      expect(startData.required_factors).toContain("totp");
 
-    const code = totpNow(device1Secret);
-    const verifyResp = await request.post(`${API}/ui/mfa/totp/verify`, {
-      data: { challenge_id: startData.challenge_id, totp_code: code },
-    });
-    expect(verifyResp.ok()).toBeTruthy();
-    const verifyData = await verifyResp.json();
-    expect(verifyData.status).toBe("ok");
+      const code = totpNow(device1Secret);
+      const verifyResp = await ctx.post(`${API}/ui/mfa/totp/verify`, {
+        data: { challenge_id: startData.challenge_id, totp_code: code },
+      });
+      expect(verifyResp.ok()).toBeTruthy();
+      const verifyData = await verifyResp.json();
+      expect(verifyData.status).toBe("ok");
+    } finally {
+      await dispose();
+    }
   });
 
   // ── Login with Device 2 code ─────────────────────────────────────────────────
 
-  test("API: TOTP verify with Device 2 code returns ok", async ({ request }) => {
-    const startResp = await request.post(`${API}/ui/session/start`, {
-      data: { challenge_context: { username: setupData.email, password: setupData.password } },
-    });
-    expect(startResp.ok()).toBeTruthy();
-    const startData = await startResp.json();
-    expect(startData.auth_required).toBe(true);
+  test("API: TOTP verify with Device 2 code returns ok", async ({ request, browser }) => {
+    const { ctx, dispose } = await loginCtx(request, browser);
+    try {
+      const startResp = await ctx.post(`${API}/ui/session/start`, {
+        data: { challenge_context: { username: setupData.email, password: setupData.password } },
+      });
+      expect(startResp.ok()).toBeTruthy();
+      const startData = await startResp.json();
+      expect(startData.auth_required).toBe(true);
 
-    const code = totpNow(device2Secret);
-    const verifyResp = await request.post(`${API}/ui/mfa/totp/verify`, {
-      data: { challenge_id: startData.challenge_id, totp_code: code },
-    });
-    expect(verifyResp.ok()).toBeTruthy();
-    const verifyData = await verifyResp.json();
-    expect(verifyData.status).toBe("ok");
+      const code = totpNow(device2Secret);
+      const verifyResp = await ctx.post(`${API}/ui/mfa/totp/verify`, {
+        data: { challenge_id: startData.challenge_id, totp_code: code },
+      });
+      expect(verifyResp.ok()).toBeTruthy();
+      const verifyData = await verifyResp.json();
+      expect(verifyData.status).toBe("ok");
+    } finally {
+      await dispose();
+    }
   });
 
   // ── Wrong code is rejected ───────────────────────────────────────────────────
 
-  test("API: TOTP verify with wrong code returns 401", async ({ request }) => {
-    const startResp = await request.post(`${API}/ui/session/start`, {
-      data: { challenge_context: { username: setupData.email, password: setupData.password } },
-    });
-    const startData = await startResp.json();
+  test("API: TOTP verify with wrong code returns 401", async ({ request, browser }) => {
+    const { ctx, dispose } = await loginCtx(request, browser);
+    try {
+      const startResp = await ctx.post(`${API}/ui/session/start`, {
+        data: { challenge_context: { username: setupData.email, password: setupData.password } },
+      });
+      const startData = await startResp.json();
 
-    const verifyResp = await request.post(`${API}/ui/mfa/totp/verify`, {
-      data: { challenge_id: startData.challenge_id, totp_code: "000000" },
-    });
-    expect(verifyResp.status()).toBe(401);
+      const verifyResp = await ctx.post(`${API}/ui/mfa/totp/verify`, {
+        data: { challenge_id: startData.challenge_id, totp_code: "000000" },
+      });
+      expect(verifyResp.status()).toBe(401);
+    } finally {
+      await dispose();
+    }
   });
 
   // ── Full login flows ─────────────────────────────────────────────────────────
 
-  test("API: full login flow (start → TOTP Device 1 → finalize) creates a session", async ({ request }) => {
-    const startResp = await request.post(`${API}/ui/session/start`, {
-      data: { challenge_context: { username: setupData.email, password: setupData.password } },
-    });
-    expect(startResp.ok()).toBeTruthy();
-    const { challenge_id } = await startResp.json();
+  test("API: full login flow (start → TOTP Device 1 → finalize) creates a session", async ({ request, browser }) => {
+    const { ctx, dispose } = await loginCtx(request, browser);
+    try {
+      const startResp = await ctx.post(`${API}/ui/session/start`, {
+        data: { challenge_context: { username: setupData.email, password: setupData.password } },
+      });
+      expect(startResp.ok()).toBeTruthy();
+      const { challenge_id } = await startResp.json();
 
-    const code = totpNow(device1Secret);
-    await request.post(`${API}/ui/mfa/totp/verify`, {
-      data: { challenge_id, totp_code: code },
-    });
+      const code = totpNow(device1Secret);
+      await ctx.post(`${API}/ui/mfa/totp/verify`, {
+        data: { challenge_id, totp_code: code },
+      });
 
-    const finalizeResp = await request.post(`${API}/ui/session/finalize`, {
-      data: { challenge_id, remember_device: false },
-    });
-    expect(finalizeResp.ok()).toBeTruthy();
-    const finalizeData = await finalizeResp.json();
-    expect(finalizeData.status).toBe("ok");
-    expect(typeof finalizeData.session_id).toBe("string");
-    expect(finalizeData.session_id.length).toBeGreaterThan(0);
+      const finalizeResp = await ctx.post(`${API}/ui/session/finalize`, {
+        data: { challenge_id, remember_device: false },
+      });
+      expect(finalizeResp.ok()).toBeTruthy();
+      const finalizeData = await finalizeResp.json();
+      // cpp finalizes the single-factor session inside /ui/mfa/totp/verify, so a
+      // subsequent /ui/session/finalize hits the idempotent already-finalized
+      // path that returns just {session_id} (no status field). Either way a real
+      // session_id proves the session was created.
+      if (!isCpp()) expect(finalizeData.status).toBe("ok");
+      expect(typeof finalizeData.session_id).toBe("string");
+      expect(finalizeData.session_id.length).toBeGreaterThan(0);
+    } finally {
+      await dispose();
+    }
   });
 
-  test("API: full login flow (start → TOTP Device 2 → finalize) creates a session", async ({ request }) => {
-    const startResp = await request.post(`${API}/ui/session/start`, {
-      data: { challenge_context: { username: setupData.email, password: setupData.password } },
-    });
-    expect(startResp.ok()).toBeTruthy();
-    const { challenge_id } = await startResp.json();
+  test("API: full login flow (start → TOTP Device 2 → finalize) creates a session", async ({ request, browser }) => {
+    const { ctx, dispose } = await loginCtx(request, browser);
+    try {
+      const startResp = await ctx.post(`${API}/ui/session/start`, {
+        data: { challenge_context: { username: setupData.email, password: setupData.password } },
+      });
+      expect(startResp.ok()).toBeTruthy();
+      const { challenge_id } = await startResp.json();
 
-    const code = totpNow(device2Secret);
-    await request.post(`${API}/ui/mfa/totp/verify`, {
-      data: { challenge_id, totp_code: code },
-    });
+      const code = totpNow(device2Secret);
+      await ctx.post(`${API}/ui/mfa/totp/verify`, {
+        data: { challenge_id, totp_code: code },
+      });
 
-    const finalizeResp = await request.post(`${API}/ui/session/finalize`, {
-      data: { challenge_id, remember_device: false },
-    });
-    expect(finalizeResp.ok()).toBeTruthy();
-    const finalizeData = await finalizeResp.json();
-    expect(finalizeData.status).toBe("ok");
-    expect(typeof finalizeData.session_id).toBe("string");
+      const finalizeResp = await ctx.post(`${API}/ui/session/finalize`, {
+        data: { challenge_id, remember_device: false },
+      });
+      expect(finalizeResp.ok()).toBeTruthy();
+      const finalizeData = await finalizeResp.json();
+      // cpp finalizes inside /ui/mfa/totp/verify; the follow-up finalize is the
+      // idempotent {session_id}-only path (no status). session_id still proves it.
+      if (!isCpp()) expect(finalizeData.status).toBe("ok");
+      expect(typeof finalizeData.session_id).toBe("string");
+    } finally {
+      await dispose();
+    }
   });
 
   // ── After removing Device 1, only Device 2 remains ──────────────────────────
 
-  test("API: after removing Device 1, its TOTP code is rejected at login", async ({ request }) => {
+  test("API: after removing Device 1, its TOTP code is rejected at login", async ({ request, browser }) => {
     // Remove Device 1. The endpoint requires a valid TOTP code from *any*
     // remaining enabled device to confirm the removal, so we use Device 2.
     const removeCode = totpNow(device2Secret);
+    // cpp's /remove reads the confirmation code from the "code" field only
+    // (body_code), while Python reads "totp_code"; send BOTH so the removal
+    // proves a remaining factor on either backend.
     const removeResp = await enrollPage.request.post(
       `${API}/ui/mfa/totp/devices/${device1Id}/remove`,
-      { data: { totp_code: removeCode }, headers: { "x-csrf-token": setupData.csrf_token } },
+      { data: { totp_code: removeCode, code: removeCode }, headers: { "x-csrf-token": setupData.csrf_token } },
     );
     expect(removeResp.ok()).toBeTruthy();
 
-    // Start a fresh login and attempt TOTP with the now-removed Device 1.
-    const startResp = await request.post(`${API}/ui/session/start`, {
-      data: { challenge_context: { username: setupData.email, password: setupData.password } },
-    });
-    expect(startResp.ok()).toBeTruthy();
-    const startData = await startResp.json();
-    expect(startData.auth_required).toBe(true);
+    const { ctx, dispose } = await loginCtx(request, browser);
+    try {
+      // Start a fresh login and attempt TOTP with the now-removed Device 1.
+      const startResp = await ctx.post(`${API}/ui/session/start`, {
+        data: { challenge_context: { username: setupData.email, password: setupData.password } },
+      });
+      expect(startResp.ok()).toBeTruthy();
+      const startData = await startResp.json();
+      expect(startData.auth_required).toBe(true);
 
-    const code1 = totpNow(device1Secret);
-    const verifyResp = await request.post(`${API}/ui/mfa/totp/verify`, {
-      data: { challenge_id: startData.challenge_id, totp_code: code1 },
-    });
-    expect(verifyResp.status()).toBe(401);
+      const code1 = totpNow(device1Secret);
+      const verifyResp = await ctx.post(`${API}/ui/mfa/totp/verify`, {
+        data: { challenge_id: startData.challenge_id, totp_code: code1 },
+      });
+      expect(verifyResp.status()).toBe(401);
+    } finally {
+      await dispose();
+    }
   });
 
-  test("API: after removing Device 1, Device 2 still allows login", async ({ request }) => {
-    // Device 1 was removed in the previous test; Device 2 must still work.
-    const startResp = await request.post(`${API}/ui/session/start`, {
-      data: { challenge_context: { username: setupData.email, password: setupData.password } },
-    });
-    expect(startResp.ok()).toBeTruthy();
-    const { challenge_id } = await startResp.json();
+  test("API: after removing Device 1, Device 2 still allows login", async ({ request, browser }) => {
+    const { ctx, dispose } = await loginCtx(request, browser);
+    try {
+      // Device 1 was removed in the previous test; Device 2 must still work.
+      const startResp = await ctx.post(`${API}/ui/session/start`, {
+        data: { challenge_context: { username: setupData.email, password: setupData.password } },
+      });
+      expect(startResp.ok()).toBeTruthy();
+      const { challenge_id } = await startResp.json();
 
-    const code2 = totpNow(device2Secret);
-    const verifyResp = await request.post(`${API}/ui/mfa/totp/verify`, {
-      data: { challenge_id, totp_code: code2 },
-    });
-    expect(verifyResp.ok()).toBeTruthy();
-    const verifyData = await verifyResp.json();
-    expect(verifyData.status).toBe("ok");
+      const code2 = totpNow(device2Secret);
+      const verifyResp = await ctx.post(`${API}/ui/mfa/totp/verify`, {
+        data: { challenge_id, totp_code: code2 },
+      });
+      expect(verifyResp.ok()).toBeTruthy();
+      const verifyData = await verifyResp.json();
+      expect(verifyData.status).toBe("ok");
+    } finally {
+      await dispose();
+    }
   });
 });
 

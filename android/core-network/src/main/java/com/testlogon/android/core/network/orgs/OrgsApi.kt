@@ -67,6 +67,16 @@ interface OrgsApi {
     ): Response<Unit>
 
     /**
+     * PAR-35(b) - the CURRENT USER leaves the org (204 EMPTY body, NO request body). Success-by-isSuccessful
+     * via Response<Unit>. The backend rejects a SOLE-OWNER leave with 409 ("Transfer ownership first."),
+     * which surfaces as Failure(status=409). Confirmed live in cpp h_org_leave. @Path token is EXACTLY {orgId}.
+     */
+    @POST("ui/orgs/{orgId}/leave")
+    suspend fun leaveOrg(
+        @Path("orgId") orgId: String,
+    ): Response<Unit>
+
+    /**
      * POST ownership transfer (the SEPARATE owner-assignment endpoint). Modeled per OpenAPI; the
      * role-change UI does NOT offer this. Success-by-isSuccessful via Response<Unit>.
      */

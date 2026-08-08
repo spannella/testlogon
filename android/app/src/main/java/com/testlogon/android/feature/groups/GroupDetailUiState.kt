@@ -20,8 +20,12 @@ sealed interface GroupDetailUiState {
         val group: Group,
         /** True when the viewer may leave (a member who is NOT the owner). */
         val canLeave: Boolean,
+        /** PAR-10 - True when the viewer is NOT yet a member and may join. */
+        val canJoin: Boolean = false,
         /** True while a leave POST is in flight. */
         val isLeaving: Boolean = false,
+        /** PAR-10 - True while a join POST is in flight. */
+        val isJoining: Boolean = false,
     ) : GroupDetailUiState
 
     /** Terminal failure (no content to show). */
@@ -32,4 +36,7 @@ sealed interface GroupDetailUiState {
 sealed interface GroupDetailEffect {
     /** The viewer successfully left [groupId]; the host should pop back to the list. */
     data class LeftGroup(val groupId: String) : GroupDetailEffect
+
+    /** PAR-10 - a transient user-facing message (e.g. a 409 already-member on join). */
+    data class ShowMessage(val message: String) : GroupDetailEffect
 }

@@ -18,9 +18,11 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, unauthContext } from "./helpers/session";
+import { usingCpp, cppSeedSubscriberCount } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const BASE = "ui/admin/subscription-tiers";
 
 interface AdminSessionData {
@@ -43,11 +45,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -275,9 +273,15 @@ test.describe("547. Subscription tier CRUD API", () => {
   });
 
   test("delete tier with subscribers returns 409", async () => {
-    // Seed a subscriber count directly on the Gold tier, then attempt delete.
-    execSync(
-      `python3 -c "
+    // Seed a subscriber count on the Gold tier, then attempt delete.
+    if (usingCpp()) {
+      // cpp reads the tier from moto :5005 keyed CREATOR#<admin-sub>; the inline
+      // Python boto3 seed below targets the Python DDB-Local and never reaches
+      // cpp. Use the cross-host cpp shim keyed by the admin's real cpp SUB.
+      cppSeedSubscriberCount(getAdminSessions()["root"].user_sub, goldId, 3);
+    } else {
+      execSync(
+        `python3 -c "
 import boto3, os
 from pathlib import Path
 env = Path('${REPO_ROOT}/.env.local')
@@ -291,8 +295,9 @@ tbl = ddb.Table(os.environ.get('ADMIN_SUBSCRIPTION_TIERS_TABLE_NAME','admin_subs
 tbl.update_item(Key={'pk':'CREATOR#root.admin@testdev.local','sk':'TIER#${goldId}'}, UpdateExpression='SET subscriber_count=:c', ExpressionAttributeValues={':c':3})
 print('seeded subscriber_count')
 "`,
-      { cwd: REPO_ROOT, timeout: 10_000 },
-    );
+        { cwd: REPO_ROOT, timeout: 10_000 },
+      );
+    }
     const r = await apiDelete(rootPage, "root", `${BASE}/${goldId}`);
     expect(r.status()).toBe(409);
   });
@@ -415,7 +420,11 @@ test.describe("549b. Tier authorization & CSRF", () => {
   test.beforeAll(async ({ browser }) => {
     rootPage = await newIdentityPage(browser, "root");
     alicePage = await newIdentityPage(browser, "alice");
-    charliePage = await newIdentityPage(browser, "charlie_admin");
+    // Use the DISTINCT charlie admin (e2e_charlie, role=admin, separate sub) for
+    // the per-operator scoping test. Under cpp, "charlie_admin" resolves to the
+    // same e2e_admin identity as root, which would (correctly) see root's tiers
+    // and defeat the isolation assertion; charlie is a genuinely separate creator.
+    charliePage = await newIdentityPage(browser, "charlie");
   });
   test.afterAll(async () => {
     await rootPage?.close();
@@ -438,9 +447,17 @@ test.describe("549b. Tier authorization & CSRF", () => {
     expect(names).not.toContain(`E2E_Gold_${TS}`);
   });
 
-  test("unauthenticated request gets 401", async ({ request }) => {
-    const r = await request.get(`${API}/${BASE}`);
-    expect(r.status()).toBe(401);
+  test("unauthenticated request gets 401", async () => {
+    // The project-level storageState (cpp) makes the built-in `request` fixture
+    // admin-authenticated, so use a genuinely cookie-less context to actually
+    // exercise the backend's unauthenticated path.
+    const anon = await unauthContext();
+    try {
+      const r = await anon.get(`${API}/${BASE}`);
+      expect(r.status()).toBe(401);
+    } finally {
+      await anon.dispose();
+    }
   });
 
   test("missing CSRF on POST returns 403", async () => {

@@ -22,6 +22,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppSeedKycCaseFull, cppSeedKycDocument } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -55,11 +58,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -107,6 +106,16 @@ function py(script: string, timeout = 15_000): void {
 }
 
 function seedKycCase(caseId: string): void {
+  if (usingCpp()) {
+    cppSeedKycCaseFull({
+      caseId,
+      userSub: resolveIdentityId("alice"),
+      status: "under_review",
+      intakeProfile: "standard",
+      version: 1,
+    });
+    return;
+  }
   const ts = Math.floor(Date.now() / 1000);
   py(`
 ${DDB_PRELUDE}
@@ -140,6 +149,30 @@ print(case_id)
 }
 
 function seedExtractedDocument(caseId: string): void {
+  if (usingCpp()) {
+    cppSeedKycDocument({
+      documentId: `kycdoc_e2e_${caseId}_front`,
+      userSub: resolveIdentityId("alice"),
+      caseId,
+      documentType: "id_front",
+      status: "extracted",
+      extractionId: "ext_1",
+      extractedFields: {
+        given_names: "ALICE",
+        surname: "EXAMPLE",
+        date_of_birth: "1990-01-01",
+      },
+      matchResults: {
+        given_names: { status: "match", profile_value: "ALICE", extracted_value: "ALICE", similarity: 1 },
+        surname: { status: "mismatch", profile_value: "SMITH", extracted_value: "EXAMPLE", similarity: 0 },
+      },
+      overallConfidence: "medium",
+      fileName: "id_front.jpg",
+      s3Key: `kyc/${caseId}/front.jpg`,
+      bucket: "kyc-docs",
+    });
+    return;
+  }
   const ts = Math.floor(Date.now() / 1000);
   py(`
 ${DDB_PRELUDE}
@@ -176,6 +209,7 @@ print("doc seeded")
 }
 
 function deleteKycCase(caseId: string): void {
+  if (usingCpp()) return; // unique per-run TS case ids; no cpp delete needed
   try {
     py(`
 ${DDB_PRELUDE}

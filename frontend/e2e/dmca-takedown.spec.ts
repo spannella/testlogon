@@ -13,19 +13,22 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
-const API  = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 
 const ALICE_KEY = "alice";
 const BOB_KEY   = "bob";
 const ROOT_KEY  = "root";
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB   = "e2e_bob@test.local";
+// cpp keys dmca target_user_id / strike counts / infringer-status by the opaque login sub.
+const ALICE_SUB = usingCpp() ? resolveIdentityId("e2e_alice@test.local") : "e2e_alice@test.local";
+const BOB_SUB   = usingCpp() ? resolveIdentityId("e2e_bob@test.local") : "e2e_bob@test.local";
 
 const TS = Date.now();
 
@@ -51,11 +54,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }

@@ -16,6 +16,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVodVideo } from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -48,11 +50,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -85,6 +83,21 @@ async function retry429(fn: () => Promise<any>) {
 // ─── DDB Helpers ──────────────────────────────────────────────────────────────
 
 function ddbPut(table: string, item: Record<string, any>): void {
+  if (usingCpp()) {
+    if (table === "VideoMetadata") {
+      const { video_id, owner_user_id, title, status, visibility, ...rest } = item;
+      const extra: Record<string, unknown> = { ...rest };
+      cppSeedVodVideo({
+        videoId: video_id,
+        ownerSub: resolveIdentityId(owner_user_id),
+        title,
+        status: status || "published",
+        visibility: visibility || "public",
+        extra,
+      });
+    }
+    return;
+  }
   const itemB64 = Buffer.from(JSON.stringify(item)).toString("base64");
   execSync(
     `python3 -c "
@@ -100,6 +113,7 @@ print('ok')
 }
 
 function ddbDelete(table: string, key: Record<string, any>): void {
+  if (usingCpp()) return;
   const keyB64 = Buffer.from(JSON.stringify(key)).toString("base64");
   try {
     execSync(

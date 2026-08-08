@@ -1,13 +1,14 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, unauthContext } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
 /*  BCAST-011 — Broadcast Go-Private (visibility + allowlist gating)   */
 /* ------------------------------------------------------------------ */
 
-const API = "http://localhost:8000";
 const TS = Date.now();
 
 interface SessionData {
@@ -30,11 +31,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -377,9 +374,11 @@ test.describe("132 — Broadcast privacy auth & validation", () => {
     expect(resp.status()).toBe(422);
   });
 
-  test("unauthenticated privacy request returns 401", async ({ request }) => {
-    const resp = await request.get(`${API}/broadcast/sessions/${sessionId}/privacy`);
+  test("unauthenticated privacy request returns 401", async () => {
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/broadcast/sessions/${sessionId}/privacy`);
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("privacy for non-existent session returns 404", async () => {

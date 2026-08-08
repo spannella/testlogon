@@ -18,10 +18,16 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 
-const BASE = "http://localhost:3000";
-const BACKEND = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
+// When targeting the C++ backend, hit it DIRECTLY at E2E_API_BASE
+// (https://192.168.0.82:8443) for both the mock-admin endpoints and the app
+// APIs — the Python defaults (:3000 proxy / :8000) do not exist in that run.
+// loadSessions() injects cookies for the API host too, so page.request auths.
+const _API_BASE = process.env.E2E_API_BASE;
+const BASE = _API_BASE ?? "http://localhost:3000";
+const BACKEND = _API_BASE ?? "http://localhost:8000";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /** The integration router prefix (no /ui — registered at app level). */
@@ -50,11 +56,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 e2e_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }

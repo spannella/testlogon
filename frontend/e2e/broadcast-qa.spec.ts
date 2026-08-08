@@ -1,13 +1,15 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { cppResetBroadcastQaRateLimit } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
 /*  Constants & helpers                                                */
 /* ------------------------------------------------------------------ */
 
-const API = "http://localhost:8000";
 const TS = Date.now();
 
 interface SessionData {
@@ -30,11 +32,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -325,6 +323,10 @@ test.describe("Section 90 — Question Submission API", () => {
     const bobPage = await bobCtx.newPage();
     await injectAuth(bobPage, BOB_ID);
 
+    // Clear cpp's 2s QA-submit debounce for bob on this session so the empty-text
+    // POST reaches validation (422) instead of being rate-limited (429) by the
+    // rapidly-preceding submissions in 90.1-90.5.
+    cppResetBroadcastQaRateLimit(sessionId, resolveIdentityId(BOB_ID));
     const resp = await apiPost(
       bobPage,
       BOB_ID,
@@ -341,6 +343,9 @@ test.describe("Section 90 — Question Submission API", () => {
     const bobPage = await bobCtx.newPage();
     await injectAuth(bobPage, BOB_ID);
 
+    // Clear cpp's 2s QA-submit debounce so this real submit isn't rate-limited
+    // (429) by the immediately-preceding 90.6 empty-text POST.
+    cppResetBroadcastQaRateLimit(sessionId, resolveIdentityId(BOB_ID));
     const resp = await apiPost(
       bobPage,
       BOB_ID,

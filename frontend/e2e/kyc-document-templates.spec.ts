@@ -16,9 +16,12 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, unauthContext } from "./helpers/session";
+import { usingCpp, cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
+import { cppSeedProfile } from "./helpers/cpp-seed-profile-social";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const TPL_BASE = "v1/kyc/document-templates";
 
@@ -48,11 +51,7 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -96,7 +95,31 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 }
 
 // Seed Alice's profile + a KYC case with a target tier directly into DDB.
-function seedProfileAndCase(caseId: string, targetTier: string): void {
+function seedProfileAndCase(caseId: string, targetTier: string, aliceSub?: string): void {
+  if (usingCpp()) {
+    // cpp reads tlc_kyc_cases (pk=KYC#<id>,sk=META, target_tier) + tlc_profile
+    // (nested `profile` map). The :8001 python seed below never reaches cpp.
+    const sub = aliceSub!;
+    cppSeedProfile({
+      userSub: sub,
+      displayName: "Alice Tester",
+      extra: {
+        first_name: "Alice",
+        last_name: "Tester",
+        displayed_email: "alice@example.com",
+        birthday: "1991-02-03",
+        mailing_address: {
+          line1: "42 Test Lane",
+          city: "Testville",
+          state: "NY",
+          postal_code: "10001",
+          country: "US",
+        },
+      },
+    });
+    cppSeedKycCaseFull({ caseId, userSub: sub, status: "draft", targetTier });
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os
@@ -353,7 +376,7 @@ test.describe("783. KYC render-for-case auto-population API", () => {
   test.beforeAll(async ({ browser }) => {
     rootPage = await newIdentityPage(browser, "root");
     alicePage = await newIdentityPage(browser, "alice");
-    seedProfileAndCase(caseId, "tier_1");
+    seedProfileAndCase(caseId, "tier_1", getSessions()["alice"].user_sub);
     const r = await apiPost(rootPage, "root", TPL_BASE, {
       slug,
       display_name: "Render Doc",
@@ -433,8 +456,10 @@ test.describe("784. KYC document templates admin-only / auth", () => {
     expect(r.status()).toBe(403);
   });
 
-  test("784.3 anonymous request is unauthorized (401)", async ({ request }) => {
-    const r = await request.get(`${API}/${TPL_BASE}`);
+  test("784.3 anonymous request is unauthorized (401)", async () => {
+    const anon = await unauthContext(API);
+    const r = await anon.get(`/${TPL_BASE}`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 });

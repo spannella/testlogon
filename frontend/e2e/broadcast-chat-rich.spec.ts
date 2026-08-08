@@ -1,13 +1,17 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { cppSeedPaymentMethod } from "./helpers/cpp-seed";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppExpireBroadcastChatMessage } from "./helpers/cpp-seed-broadcast-chat";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
 /*  Constants & helpers                                                */
 /* ------------------------------------------------------------------ */
 
-const API = "http://localhost:8000";
 const TS = Date.now();
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
@@ -50,11 +54,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -90,6 +90,13 @@ async function apiDelete(page: Page, identity: string, path: string) {
 }
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // cpp reads its own tlc_billing keyed by SUB; the Python :8001 put below is
+    // invisible to it, so the locked-message unlock 400s "Payment method not
+    // found". Seed the same PM# + BILLING rows into cpp's moto.
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE.trim()}
@@ -127,6 +134,12 @@ print('injected')
 }
 
 function setExpiresAtToPast(sessionId: string, messageId: string): void {
+  if (usingCpp()) {
+    // cpp stores chat in its own tlc_broadcast_chat; the Python :8001 update
+    // below raises "Message not found". Force-expire in cpp's moto instead.
+    cppExpireBroadcastChatMessage(sessionId, messageId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE.trim()}

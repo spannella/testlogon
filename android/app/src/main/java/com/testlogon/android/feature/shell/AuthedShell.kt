@@ -143,6 +143,8 @@ fun AuthedShellScreen(
                     onOpenDiscover = { tabNav.navigateToTab(AuthedTab.DISCOVER) },
                     // FD11 — a visible 'Your posts' entry straight from the feed top bar.
                     onOpenMyPosts = { onOpenRoute(com.testlogon.android.navigation.MyPostsDest.ROUTE) },
+                    // PAR-13 — scheduled-posts management from the feed top bar.
+                    onOpenScheduledPosts = { onOpenRoute(com.testlogon.android.navigation.ScheduledPostsDest.ROUTE) },
                     // FD12 — Edit own post from the feed overflow.
                     onEditPost = { postId ->
                         onOpenRoute(com.testlogon.android.navigation.EditPostDest.build(postId))
@@ -156,6 +158,10 @@ fun AuthedShellScreen(
                     // AND-199 — open the full-screen story viewer for the tapped author.
                     onOpenStory = { userId ->
                         onOpenRoute(com.testlogon.android.navigation.StoryViewerDest.build(userId))
+                    },
+                    // PAR-01 — open the create-story screen from the "Your story" tray tile.
+                    onCreateStory = {
+                        onOpenRoute(com.testlogon.android.navigation.CreateStoryDest.build())
                     },
                     // ADV2-209 (F2): route a sponsored-unit CTA tap to product/cart/subscribe/profile.
                     onCtaNavigate = { dest -> tabNav.navigateCta(dest) },
@@ -208,6 +214,9 @@ fun AuthedShellScreen(
                     // FD1 -- "Your posts" management surface.
                     onOpenMyPosts = {
                         onOpenRoute(com.testlogon.android.navigation.MyPostsDest.ROUTE)
+                    },
+                    onOpenHighlights = {
+                        onOpenRoute(com.testlogon.android.navigation.HighlightsDest.buildForSelf())
                     },
                 )
             }

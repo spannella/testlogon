@@ -49,6 +49,8 @@ const ShopShippingAdminPage = lazy(() => import("@/pages/shop/admin/ShippingAdmi
 const FeedPage = lazy(() => import("@/pages/feed/FeedPage"));
 const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
 const DelegateFeedPage = lazy(() => import("@/pages/feed/DelegateFeedPage"));
+const MarketsPage = lazy(() => import("@/pages/markets/MarketsPage"));
+const SymbolDetailPage = lazy(() => import("@/pages/markets/SymbolDetailPage"));
 const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
 const SyndicateProfilePage = lazy(() => import("@/pages/syndicates/SyndicateProfilePage"));
 const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
@@ -724,6 +726,8 @@ export default function App() {
           <Route path="cart" element={<CartPage />} />
           <Route path="cart/checkout" element={<Checkout />} />
           <Route path="feed" element={<FeedPage />} />
+          <Route path="markets" element={<MarketsPage />} />
+          <Route path="markets/:symbolId" element={<SymbolDetailPage />} />
           <Route path="discover" element={<DiscoverPage />} />
           <Route path="discover/tags/:tag" element={<TagPage />} />
           <Route path="search" element={<SearchPage />} />

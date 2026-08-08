@@ -1,0 +1,75 @@
+# Maestro black-box flow: sign in against cpp, then create a post through the
+# REAL Feed composer UI. Best-effort — drives the shipped compose flow.
+#
+# Backend contract (cpp): the composer POSTs to  POST /posts {body,visibility}
+# (cpp has no /newsfeed). A CSRF header is attached by the app from the ui_csrf
+# cookie automatically.
+#
+# FLAG_SECURE note: rely on view-tree assertions (testTag), not screenshots.
+#
+# Run: maestro --device <serial> test maestro/cpp/create-post.yaml
+#      (see login.yaml header for the required env: PATH / TERM / JAVA_TOOL_OPTIONS)
+appId: com.testlogon.android
+---
+- stopApp
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: "login_screen"
+
+# Point at cpp.
+- tapOn:
+    id: "login_server_url"
+- assertVisible:
+    id: "server_url_screen"
+- tapOn:
+    id: "server_url_input"
+- tapOn:
+    point: "94%,22%"     # cursor to END of the pre-filled default URL (see login.yaml note)
+- eraseText:
+    charactersToErase: 80
+- inputText: "https://192.168.0.82:8443"
+- tapOn:
+    id: "server_url_save"
+- assertVisible:
+    text: ".*Current: https://192.168.0.82:8443.*"
+- tapOn:
+    id: "server_url_back"
+
+# Sign in.
+- tapOn:
+    id: "login_email"
+- inputText: "e2e_bob@test.local"
+- tapOn:
+    id: "login_password"
+- inputText: "Passw0rd!123"
+- hideKeyboard
+- tapOn:
+    id: "login_submit"
+- extendedWaitUntil:
+    visible:
+      id: "tab_home"
+    timeout: 20000
+
+# --- Compose a post -------------------------------------------------------
+# Jump to the Feed tab where the compose FAB lives.
+- tapOn:
+    id: "tab_feed"
+- tapOn:
+    id: "feed_compose_fab"
+- assertVisible:
+    id: "compose_post_screen"
+- tapOn:
+    id: "compose_post_body"
+- inputText: "e2e cpp maestro post ${maestroTimestamp}"
+- hideKeyboard
+- tapOn:
+    id: "compose_post_submit"
+
+# Back on the feed after a successful POST /posts. The composer screen closes.
+- extendedWaitUntil:
+    notVisible:
+      id: "compose_post_screen"
+    timeout: 20000
+- assertVisible:
+    id: "tab_feed"

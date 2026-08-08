@@ -22,6 +22,14 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import * as path from "path";
+import { loadSessions, unauthContext } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import {
+  cppSeedRollupRow,
+  cppSetEngagementSummaryPublic,
+  cppSetProfileFollowerCount,
+  cppCleanupAnalyticsRollups,
+} from "./helpers/cpp-seed-generic-ddbRequest";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -51,11 +59,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -103,6 +107,10 @@ function seedEngagementRow(
   dateStr: string,
   data: Record<string, number>,
 ): void {
+  if (usingCpp()) {
+    cppSeedRollupRow(userSub, dateStr, data);
+    return;
+  }
   const tmpFile = `${tmpdir()}/eng_seed_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -132,6 +140,10 @@ print('seeded', '${dateStr}')
 }
 
 function setFollowerCount(userSub: string, count: number): void {
+  if (usingCpp()) {
+    cppSetProfileFollowerCount(userSub, count);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 ${DDB_PRELUDE}
@@ -147,6 +159,10 @@ print('followers', ${count})
 }
 
 function setSummaryPublic(userSub: string, visible: boolean): void {
+  if (usingCpp()) {
+    cppSetEngagementSummaryPublic(userSub, visible);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 ${DDB_PRELUDE}
@@ -162,6 +178,14 @@ print('public', '${visible}')
 }
 
 function cleanupRollups(userSub: string): void {
+  if (usingCpp()) {
+    try {
+      cppCleanupAnalyticsRollups(userSub);
+    } catch {
+      /* best-effort */
+    }
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "${DDB_PRELUDE}
@@ -586,12 +610,11 @@ test.describe("587 — Engagement Edge Cases", () => {
   });
 
   test("587.5 — unauthenticated request returns 401", async () => {
-    const fresh = await page.context().browser()!.newContext();
-    const freshPage = await fresh.newPage();
-    const resp = await freshPage.request.get(
-      `${BASE}/ui/analytics/engagement?period_days=30`,
+    const anon = await unauthContext(BASE);
+    const resp = await anon.get(
+      `/ui/analytics/engagement?period_days=30`,
     );
     expect(resp.status()).toBe(401);
-    await fresh.close();
+    await anon.dispose();
   });
 });

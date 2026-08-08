@@ -24,15 +24,17 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, runCppShim, cppSeedWallet } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE       = "http://localhost:3000";
-const API        = "http://localhost:8000";
-const ALICE_ID   = "e2e_alice@test.local";
-const BOB_ID     = "e2e_bob@test.local";
-const CHARLIE_ID = "e2e_charlie@test.local";
+const ALICE_ID   = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID     = resolveIdentityId("e2e_bob@test.local");
+const CHARLIE_ID = resolveIdentityId("e2e_charlie@test.local");
 const TS         = Date.now();
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
@@ -57,11 +59,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -87,6 +85,16 @@ async function newIdentityPage(browser: Browser, userId: string): Promise<Page> 
 
 // Real-charge subscribe needs a default PM on file (else 402 no_payment_method).
 function seedDefaultPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // cpp reads payment methods from tlc_billing on moto (:5005) keyed by sub;
+    // the Python seed below targets DDB-Local (:8001) which cpp never reads.
+    // Seed the PM into cpp's store, AND fund the wallet: cpp's plan-subscribe
+    // charges the WALLET (provider: wallet), so a card PM alone yields
+    // insufficient_balance/402. cppSeedWallet gives the subscriber balance.
+    runCppShim("seed_payment_method.py", { user_sub: userSub, pm_id: pmId });
+    cppSeedWallet(userSub, 100_000);
+    return;
+  }
   execSync(
     `${REPO_ROOT}/.venv/bin/python3 -c "
 import boto3, os, time
@@ -152,13 +160,32 @@ async function fcPut(page: Page, userId: string, path: string, body?: object) {
 async function subPost(page: Page, userId: string, path: string, body?: object) {
   return page.request.post(`${API}${path}`, {
     data: body ?? {},
-    headers: { "X-User-Id": userId },
+    // cpp requires CSRF on cookie-authenticated mutations; send it alongside X-User-Id.
+    headers: { "X-User-Id": userId, "x-csrf-token": getSessions()[userId].csrf_token },
   });
 }
 
 // ─── DDB cleanup helper ───────────────────────────────────────────────────────
 
 function cleanupOldFanClubData() {
+  // Under E2E_USE_CPP the Python fan_club_cleanup.py is a NO-OP against cpp: it
+  // targets DDB-Local (:8001) keyed by email, but cpp stores tiers in
+  // tlc_subscriptions on moto (:5005) keyed pk=CREATOR#<sub>, sk=TIER#<id>. So
+  // stale ACTIVE tiers survive and POST /ui/fan-club/tiers 409s
+  // ("Tier level N already exists"), shedding the whole spec. Archive
+  // (active=false) Alice's + Bob's cpp tiers directly so create returns 201.
+  if (usingCpp()) {
+    try {
+      const subs = [
+        getSessions()[ALICE_ID]?.user_sub,
+        getSessions()[BOB_ID]?.user_sub,
+      ].filter(Boolean) as string[];
+      if (subs.length) runCppShim("reset_fanclub_tiers.py", { subs });
+    } catch {
+      // Best-effort cpp cleanup
+    }
+    return;
+  }
   try {
     execSync(
       "python3 " + REPO_ROOT + "/scripts/fan_club_cleanup.py",

@@ -26,12 +26,15 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, cppRegisterThrowaway } from "./helpers/session";
+import { usingCpp, cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
@@ -57,11 +60,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -97,16 +96,20 @@ async function apiGet(page: Page, path: string) {
 
 /** POST as an arbitrary user using the dev-mode Bearer token. */
 async function apiPostBearer(req: APIRequestContext, path: string, body: object, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
 /** GET as an arbitrary user using the dev-mode Bearer token. */
 async function apiGetBearer(req: APIRequestContext, path: string, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
@@ -237,11 +240,13 @@ test.describe("Section 696: Countdown Message API", () => {
     await page.close();
   });
 
-  test("696.6 auth required (no cookie/bearer → 401)", async ({ request }) => {
-    const resp = await request.post(
+  test("696.6 auth required (no cookie/bearer → 401)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(
       `${API}/messaging/conversations/${convoId}/messages/countdown`,
       { data: { title: "x", target_datetime: nowSec() + 600 } },
     );
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });
@@ -271,7 +276,7 @@ test.describe("Section 697: Countdown Message in Conversation", () => {
     await injectAuth(page, ALICE_ID);
     const resp = await apiGet(page, `/messaging/conversations/${convoId}/messages`);
     expect(resp.ok()).toBeTruthy();
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.message_id === countdownId);
     expect(found).toBeDefined();
     expect(found!.kind).toBe("countdown");
@@ -282,7 +287,7 @@ test.describe("Section 697: Countdown Message in Conversation", () => {
   test("697.2 Bob receives the countdown", async ({ request }) => {
     const resp = await apiGetBearer(request, `/messaging/conversations/${convoId}/messages`, BOB_ID);
     expect(resp.ok()).toBeTruthy();
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.message_id === countdownId);
     expect(found).toBeDefined();
     expect(found!.target_datetime).toBe(target);
@@ -478,7 +483,7 @@ test.describe("Section 700: Countdown in Group Chats", () => {
     expect(resp.status()).toBe(201);
     const created = (await resp.json()) as RawMsg;
     const bobResp = await apiGetBearer(request, `/messaging/conversations/${groupId}/messages`, BOB_ID);
-    const bobData = (await bobResp.json()) as RawMsg[];
+    const bobData = asArray<RawMsg>(await bobResp.json());
     expect(bobData.find((m) => m.message_id === created.message_id)).toBeDefined();
     await page.close();
   });
@@ -496,7 +501,7 @@ test.describe("Section 700: Countdown in Group Chats", () => {
     }
     expect(new Set(ids).size).toBe(3);
     const listResp = await apiGet(page, `/messaging/conversations/${groupId}/messages`);
-    const data = (await listResp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await listResp.json());
     for (const id of ids) {
       expect(data.find((m) => m.message_id === id)).toBeDefined();
     }
@@ -522,13 +527,15 @@ test.describe("Section 700: Countdown in Group Chats", () => {
   });
 
   test("700.4 non-participant cannot send countdown (403)", async ({ request }) => {
-    // Charlie was removed from no group, so use a brand-new group without Charlie,
-    // then have Charlie attempt to post.
+    // Use a REAL authenticated user who is not a member of the group. A bogus
+    // e2e_nonmember@ raw sub 401s (unknown token); an authenticated non-member
+    // triggers the 403/404 membership gate.
+    const outsider = cppRegisterThrowaway("cd_700_4");
     const resp = await apiPostBearer(
       request,
       `/messaging/conversations/${groupId}/messages/countdown`,
       { title: `Intruder ${TS}-700-4`, target_datetime: nowSec() + 600 },
-      "e2e_nonmember@test.local",
+      outsider!.session.user_sub,
     );
     expect([403, 404]).toContain(resp.status());
     await request.dispose();

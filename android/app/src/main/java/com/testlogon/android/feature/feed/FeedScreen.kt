@@ -30,6 +30,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import kotlinx.coroutines.launch
@@ -89,11 +90,13 @@ fun FeedRoute(
     onComposePost: () -> Unit = {},
     onOpenDiscover: () -> Unit = {},
     onOpenMyPosts: () -> Unit = {},
+    onOpenScheduledPosts: () -> Unit = {},
     onEditPost: (postId: String) -> Unit = {},
     modifier: Modifier = Modifier,
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onOpenStory: (userId: String) -> Unit = {},
+    onCreateStory: () -> Unit = {},
     onCtaNavigate: (CtaDestination) -> Unit = {},
     viewModel: FeedViewModel = hiltViewModel(),
     paywallViewModel: PaywallViewModel = hiltViewModel(),
@@ -203,6 +206,7 @@ fun FeedRoute(
         onComposePost = onComposePost,
         onOpenDiscover = onOpenDiscover,
         onOpenMyPosts = onOpenMyPosts,
+        onOpenScheduledPosts = onOpenScheduledPosts,
         currentUserSub = currentUserSub,
         onEditPost = onEditPost,
         snackbarHostState = snackbarHostState,
@@ -211,6 +215,7 @@ fun FeedRoute(
         unlockStates = unlockStates,
         storyTray = storyTray,
         onOpenStory = onOpenStory,
+        onCreateStory = onCreateStory,
         onRefresh = { items.refresh() },
         onPostClick = { post ->
             // ADV2-409 (F4): opening a creator-authored paid_partnership post fires the advertiser CLICK
@@ -283,6 +288,7 @@ fun FeedScreen(
     onComposePost: () -> Unit = {},
     onOpenDiscover: () -> Unit = {},
     onOpenMyPosts: () -> Unit = {},
+    onOpenScheduledPosts: () -> Unit = {},
     currentUserSub: String? = null,
     onEditPost: (postId: String) -> Unit = {},
     onPostClick: (FeedPost) -> Unit,
@@ -294,6 +300,7 @@ fun FeedScreen(
     storyTray: com.testlogon.android.core.model.ApiResult<List<com.testlogon.android.data.stories.StoryBarItem>> =
         com.testlogon.android.core.model.ApiResult.Success(emptyList()),
     onOpenStory: (userId: String) -> Unit = {},
+    onCreateStory: () -> Unit = {},
     onAuthorClick: (authorId: String) -> Unit = {},
     onLinkClick: (url: String) -> Unit = {},
     onUnlockClick: (postId: String) -> Unit = {},
@@ -339,6 +346,16 @@ fun FeedScreen(
             TopAppBar(
                 title = { Text("Feed") },
                 actions = {
+                    // PAR-13 — jump to the scheduled-posts management screen.
+                    androidx.compose.material3.IconButton(
+                        onClick = onOpenScheduledPosts,
+                        modifier = Modifier.testTag("feed_scheduled_posts_action"),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Schedule,
+                            contentDescription = stringResource(R.string.scheduled_posts_title),
+                        )
+                    }
                     androidx.compose.material3.IconButton(
                         onClick = onOpenMyPosts,
                         modifier = Modifier.testTag("feed_my_posts_action"),
@@ -373,6 +390,7 @@ fun FeedScreen(
                 com.testlogon.android.feature.stories.StoriesTray(
                     state = storyTray,
                     onRingClick = onOpenStory,
+                    onCreateClick = onCreateStory,
                 )
                 Box(Modifier.fillMaxSize()) {
                 when {

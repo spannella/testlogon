@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -17,6 +18,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -73,6 +77,13 @@ object BotsListTestTags {
     const val FORM_PERSONALITY = "bots_form_personality"
     const val FORM_SUBMIT = "bots_form_submit"
     const val ROW_PREFIX = "bots_row_"
+
+    // PAR-32 - send-test sheet.
+    const val SEND_TEST = "bots_send_test"
+    const val SEND_TEST_SHEET = "bots_send_test_sheet"
+    const val SEND_TEST_CONVO = "bots_send_test_convo"
+    const val SEND_TEST_TEXT = "bots_send_test_text"
+    const val SEND_TEST_SUBMIT = "bots_send_test_submit"
 }
 
 /** Route-level bots list (reachable from the More hub). Mirrors the web bots page. */
@@ -117,6 +128,11 @@ fun BotsListRoute(
         onDelete = viewModel::onDelete,
         onOpenAutoReply = onOpenAutoReply,
         onOpenTemplates = onOpenTemplates,
+        onOpenSendTest = viewModel::onOpenSendTest,
+        onDismissSendTest = viewModel::onDismissSendTest,
+        onSendTestConversationChange = viewModel::onSendTestConversationChange,
+        onSendTestTextChange = viewModel::onSendTestTextChange,
+        onSubmitSendTest = viewModel::onSubmitSendTest,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -139,6 +155,11 @@ fun BotsListScreen(
     onOpenAutoReply: (String) -> Unit,
     onOpenTemplates: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenSendTest: (String) -> Unit = {},
+    onDismissSendTest: () -> Unit = {},
+    onSendTestConversationChange: (String) -> Unit = {},
+    onSendTestTextChange: (String) -> Unit = {},
+    onSubmitSendTest: () -> Unit = {},
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     Scaffold(
@@ -237,6 +258,7 @@ fun BotsListScreen(
                                     onDelete = { onDelete(bot.id) },
                                     onOpenAutoReply = { onOpenAutoReply(bot.id) },
                                     onOpenTemplates = { onOpenTemplates(bot.id) },
+                                    onSendTest = { onOpenSendTest(bot.id) },
                                 )
                             }
                         }
@@ -256,6 +278,16 @@ fun BotsListScreen(
             onSubmit = onSubmitCreate,
         )
     }
+
+    state.sendTest?.let { form ->
+        BotSendTestSheet(
+            form = form,
+            onDismiss = onDismissSendTest,
+            onConversationChange = onSendTestConversationChange,
+            onTextChange = onSendTestTextChange,
+            onSubmit = onSubmitSendTest,
+        )
+    }
 }
 
 @Composable
@@ -266,6 +298,7 @@ private fun BotCard(
     onDelete: () -> Unit,
     onOpenAutoReply: () -> Unit,
     onOpenTemplates: () -> Unit,
+    onSendTest: () -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
 
@@ -319,6 +352,12 @@ private fun BotCard(
                 }
                 TextButton(onClick = onOpenTemplates) {
                     Text(stringResource(R.string.bots_action_templates))
+                }
+                TextButton(
+                    onClick = onSendTest,
+                    modifier = Modifier.testTag(BotsListTestTags.SEND_TEST),
+                ) {
+                    Text(stringResource(R.string.bots_action_send_test))
                 }
             }
 
@@ -443,6 +482,79 @@ private fun CreateBotDialog(
                         modifier = Modifier.testTag(BotsListTestTags.FORM_SUBMIT),
                     ) {
                         Text(stringResource(R.string.bots_create_action))
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * PAR-32 - the "Send test" bottom sheet: a conversation-id field + a message field, both required, that
+ * posts a test message as the bot. The submit button is gated by [SendTestFormState.canSubmit] and shows
+ * a spinner while sending. The sheet is dismissed by the ViewModel on success (state.sendTest -> null).
+ */
+@Composable
+private fun BotSendTestSheet(
+    form: SendTestFormState,
+    onDismiss: () -> Unit,
+    onConversationChange: (String) -> Unit,
+    onTextChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag(BotsListTestTags.SEND_TEST_SHEET),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.bots_send_test_title, form.botName),
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                text = stringResource(R.string.bots_send_test_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = form.conversationId,
+                onValueChange = onConversationChange,
+                label = { Text(stringResource(R.string.bots_send_test_convo_label)) },
+                singleLine = true,
+                enabled = !form.isSubmitting,
+                modifier = Modifier.fillMaxWidth().testTag(BotsListTestTags.SEND_TEST_CONVO),
+            )
+            OutlinedTextField(
+                value = form.text,
+                onValueChange = onTextChange,
+                label = { Text(stringResource(R.string.bots_send_test_text_label)) },
+                minLines = 2,
+                enabled = !form.isSubmitting,
+                modifier = Modifier.fillMaxWidth().testTag(BotsListTestTags.SEND_TEST_TEXT),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss, enabled = !form.isSubmitting) {
+                    Text(stringResource(R.string.bots_cancel))
+                }
+                TextButton(
+                    onClick = onSubmit,
+                    enabled = form.canSubmit,
+                    modifier = Modifier.testTag(BotsListTestTags.SEND_TEST_SUBMIT),
+                ) {
+                    if (form.isSubmitting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                    } else {
+                        Text(stringResource(R.string.bots_send_test_action))
                     }
                 }
             }

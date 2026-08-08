@@ -1,5 +1,6 @@
 package com.testlogon.android.data.stories
 
+import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
@@ -16,6 +17,7 @@ import retrofit2.http.Path
  *  - GET  ui/stories/bar                 -> StoryBarResp   (idempotent, bounded-backoff eligible)
  *  - GET  ui/stories/user/{user_id}      -> UserStoriesResp (idempotent)
  *  - POST ui/stories/{story_id}/view     -> StoryViewResp  (empty body; NOT retried; deduped by id)
+ *  - POST ui/stories                     -> CreateStoryResp (PAR-01; 429 when the daily limit is hit)
  */
 interface StoriesApi {
 
@@ -29,4 +31,12 @@ interface StoriesApi {
     @Headers("Content-Type: application/json")
     @POST("ui/stories/{storyId}/view")
     suspend fun recordView(@Path("storyId") storyId: String): StoryViewRespDto
+
+    /**
+     * PAR-01 — create a story (IMAGE-first for v1). Returns the created story; the backend answers 429
+     * when the per-day story limit is hit (surfaced by the repository as a distinct rate-limited result).
+     */
+    @Headers("Content-Type: application/json")
+    @POST("ui/stories")
+    suspend fun createStory(@Body body: CreateStoryReqDto): CreateStoryRespDto
 }

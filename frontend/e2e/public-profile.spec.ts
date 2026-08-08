@@ -11,15 +11,27 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedProfile,
+  cppSeedPosts,
+  cppSeedFollow,
+  cppSeedSubPlan,
+  cppPurgeSubPlans,
+} from "./helpers/cpp-seed-profile-social";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // --- Constants ----------------------------------------------------------------
 
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
-const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+// Under cpp, identity is keyed by the JWT SUB (not the email). These constants
+// feed both the /u/<id> URL and the seed helpers, so resolve to the cpp sub
+// when targeting cpp; the Python path keeps the email verbatim.
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 const ALICE_KEY = "alice";
 const BOB_KEY = "bob";
 const TS = Date.now();
@@ -46,11 +58,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -110,6 +118,13 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
  * identifier resolution) and profile records in the profiles table.
  */
 function ensureUsersAndProfiles(): void {
+  if (usingCpp()) {
+    // cpp: Alice/Bob already exist as cpp users; only (re)normalise their
+    // tlc_profile nested map so the public-profile page shows the display name.
+    cppSeedProfile({ userSub: ALICE_SUB, displayName: "Alice Test", description: "E2E test profile" });
+    cppSeedProfile({ userSub: BOB_SUB, displayName: "Bob Test", description: "E2E test profile" });
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -161,6 +176,14 @@ print('done')
  * Returns the created post IDs.
  */
 function seedAlicePosts(count: number): string[] {
+  if (usingCpp()) {
+    return cppSeedPosts({
+      authorSub: ALICE_SUB,
+      count,
+      testRun: String(TS),
+      bodyPrefix: "E2E public profile test post",
+    });
+  }
   const raw = execSync(
     `${PYTHON} -c "
 import boto3, os, uuid, time, json
@@ -224,6 +247,10 @@ print(json.dumps(post_ids))
  * Clean up any existing follow relationship between Bob and Alice.
  */
 function cleanupFollow(): void {
+  if (usingCpp()) {
+    cppSeedFollow(BOB_SUB, ALICE_SUB, "unfollow");
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os
@@ -260,6 +287,10 @@ print('cleaned')
  * the subscription plans section and subscribe CTA.
  */
 function seedAliceSubscriptionPlan(): void {
+  if (usingCpp()) {
+    cppSeedSubPlan({ creatorSub: ALICE_SUB, planId: "plan_e2e_gold_fixed", name: "E2E Gold Plan", priceCents: 999 });
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, uuid, time
@@ -309,6 +340,10 @@ print(plan_id)
  * Remove all subscription plans for Bob (to test "no plans" case).
  */
 function cleanupBobSubscriptionPlans(): void {
+  if (usingCpp()) {
+    cppPurgeSubPlans(BOB_SUB);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os

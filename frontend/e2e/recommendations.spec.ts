@@ -16,13 +16,23 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import {
+  cppSeedRecoForYou,
+  cppSeedSimilarVideos,
+  cppSeedCreatorSuggest,
+  cppSeedRecoSignal,
+  cppCleanupReco,
+} from "./helpers/cpp-seed-profile-social";
+import { cppSeedVideo } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
@@ -47,11 +57,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -130,6 +136,34 @@ const VID_C = `reco_vid_c_${TS}`;
 const VID_D = `reco_vid_d_${TS}`;
 
 function seedTestVideos(): void {
+  if (usingCpp()) {
+    const rows: Array<[string, string, string]> = [
+      [VID_A, `Reco Test A ${TS}`, "tutorials"],
+      [VID_B, `Reco Test B ${TS}`, "tutorials"],
+      [VID_C, `Reco Test C ${TS}`, "entertainment"],
+      [VID_D, `Reco Test D ${TS}`, "entertainment"],
+    ];
+    for (const [vid, title, cat] of rows) {
+      cppSeedVideo({
+        videoId: vid,
+        ownerSub: BOB_ID,
+        title,
+        status: "published",
+        visibility: "public",
+        extra: {
+          description: `Description for ${title}`,
+          category: cat,
+          tags: ["test"],
+          view_count: 100,
+          like_count: 10,
+          comment_count: 0,
+          gallery_published: true,
+          gallery_status: "published",
+        },
+      });
+    }
+    return;
+  }
   const code = `
 now = int(time.time())
 for vid, title, cat in [
@@ -159,6 +193,10 @@ for vid, title, cat in [
 }
 
 function seedForYouRecommendations(userId: string, videoIds: string[]): void {
+  if (usingCpp()) {
+    cppSeedRecoForYou(userId, videoIds);
+    return;
+  }
   const idsJson = JSON.stringify(videoIds);
   const code = `
 now = int(time.time())
@@ -175,6 +213,10 @@ reco_tbl.put_item(Item={
 }
 
 function seedSimilarVideos(videoId: string, similarIds: string[]): void {
+  if (usingCpp()) {
+    cppSeedSimilarVideos(videoId, similarIds);
+    return;
+  }
   const idsJson = JSON.stringify(similarIds);
   const code = `
 now = int(time.time())
@@ -190,6 +232,10 @@ reco_tbl.put_item(Item={
 }
 
 function seedCreatorSuggestions(userId: string, creatorIds: string[]): void {
+  if (usingCpp()) {
+    cppSeedCreatorSuggest(userId, creatorIds);
+    return;
+  }
   const idsJson = JSON.stringify(creatorIds);
   const code = `
 now = int(time.time())
@@ -206,6 +252,10 @@ reco_tbl.put_item(Item={
 }
 
 function seedSignal(userId: string, videoId: string, watchPct: number, liked: boolean): void {
+  if (usingCpp()) {
+    cppSeedRecoSignal(userId, videoId, watchPct, liked);
+    return;
+  }
   const code = `
 now = int(time.time())
 reco_tbl.put_item(Item={
@@ -222,6 +272,14 @@ reco_tbl.put_item(Item={
 }
 
 function cleanupTestData(): void {
+  if (usingCpp()) {
+    cppCleanupReco([
+      `RECO#${ALICE_ID}`, `RECO#${BOB_ID}`,
+      `SIMILAR#${VID_A}`, `SIMILAR#${VID_B}`,
+      `SIGNAL#${ALICE_ID}`, `SIGNAL#${BOB_ID}`,
+    ]);
+    return;
+  }
   const code = `
 # Clean up test recommendations
 for prefix in ['RECO#${ALICE_ID}', 'RECO#${BOB_ID}', 'SIMILAR#${VID_A}', 'SIMILAR#${VID_B}']:

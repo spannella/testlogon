@@ -19,9 +19,11 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, unauthContext } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod, cppResetBillingPms, cppResetInvoices } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 const PYTHON = "python3";
 const ALICE_ID = "e2e_alice@test.local";
@@ -45,10 +47,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_session_setup.py", {
-      cwd: REPO_ROOT, timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -56,10 +55,7 @@ function getSessions(): Record<string, SessionData> {
 let _adminSessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_adminSessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT, timeout: 30_000,
-    }).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -105,6 +101,7 @@ print('ok')
 }
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) { cppSeedPaymentMethod(resolveIdentityId(userSub), pmId); return; }
   execSync(`${PYTHON} -c "${pyEnvPreamble()}
 tbl = ddb.Table('billing')
 pk = 'USER#${userSub}'
@@ -115,6 +112,7 @@ print('injected')
 }
 
 function removePaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) { cppResetBillingPms(resolveIdentityId(userSub), [pmId]); return; }
   try {
     execSync(`${PYTHON} -c "${pyEnvPreamble()}
 tbl = ddb.Table('billing')
@@ -200,6 +198,9 @@ test.describe("539. Invoice generation API", () => {
     ensureInvoicesTable();
     getSessions();
     injectPaymentMethod(ALICE_ID, PM_ID);
+    // cpp moto persists across runs; wipe Alice's accumulated tip
+    // invoices so count/find assertions start from a clean slate.
+    if (usingCpp()) cppResetInvoices(resolveIdentityId(ALICE_ID));
     alicePage = await browser.newPage();
     bobPage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
@@ -293,6 +294,9 @@ test.describe("540. Invoice download API", () => {
     ensureInvoicesTable();
     getSessions();
     injectPaymentMethod(ALICE_ID, PM_ID);
+    // cpp moto persists across runs; wipe Alice's accumulated tip
+    // invoices so count/find assertions start from a clean slate.
+    if (usingCpp()) cppResetInvoices(resolveIdentityId(ALICE_ID));
     alicePage = await browser.newPage();
     bobPage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
@@ -349,15 +353,22 @@ test.describe("541. Invoice list & filter API", () => {
     ensureInvoicesTable();
     getSessions();
     injectPaymentMethod(ALICE_ID, PM_ID);
+    // cpp moto persists across runs; wipe Alice's accumulated tip
+    // invoices so count/find assertions start from a clean slate.
+    if (usingCpp()) cppResetInvoices(resolveIdentityId(ALICE_ID));
     alicePage = await browser.newPage();
     bobPage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
     await injectAuth(bobPage, BOB_ID);
     convoId = await createDm(alicePage);
-    // Ensure at least 3 invoices exist.
+    // Ensure at least 3 invoices exist. Space them >1s apart so each invoice's
+    // created_at (second-granularity) is distinct -- with the fresh cpp reset
+    // above, same-second ties would make the descending-by-date sort (541.1)
+    // ambiguous. On the Python path the tiny sleeps are harmless.
     for (const amt of [110, 120, 130]) {
       const r = await tipBobMessage(alicePage, bobPage, convoId, amt);
       expect(r.ok()).toBe(true);
+      await new Promise((res) => setTimeout(res, 1100));
     }
   });
 
@@ -421,6 +432,9 @@ test.describe("542. Invoice email & admin API", () => {
     getSessions();
     getAdminSessions();
     injectPaymentMethod(ALICE_ID, PM_ID);
+    // cpp moto persists across runs; wipe Alice's accumulated tip
+    // invoices so count/find assertions start from a clean slate.
+    if (usingCpp()) cppResetInvoices(resolveIdentityId(ALICE_ID));
     alicePage = await browser.newPage();
     bobPage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
@@ -480,6 +494,9 @@ test.describe("543. Invoice edge cases & concurrency", () => {
     ensureInvoicesTable();
     getSessions();
     injectPaymentMethod(ALICE_ID, PM_ID);
+    // cpp moto persists across runs; wipe Alice's accumulated tip
+    // invoices so count/find assertions start from a clean slate.
+    if (usingCpp()) cppResetInvoices(resolveIdentityId(ALICE_ID));
     alicePage = await browser.newPage();
     bobPage = await browser.newPage();
     await injectAuth(alicePage, ALICE_ID);
@@ -532,8 +549,10 @@ test.describe("543. Invoice edge cases & concurrency", () => {
     expect(list.invoices.length).toBe(0);
   });
 
-  test("543.2 Unauthenticated request is rejected", async ({ request }) => {
-    const resp = await request.get(`${API}/ui/invoices`);
+  test("543.2 Unauthenticated request is rejected", async () => {
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/invoices`);
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 });

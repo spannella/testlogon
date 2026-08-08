@@ -53,6 +53,7 @@ class GroupDetailViewModel @Inject constructor(
                 is ApiResult.Success -> GroupDetailUiState.Content(
                     group = result.data,
                     canLeave = deriveCanLeave(result.data),
+                    canJoin = deriveCanJoin(result.data),
                 )
                 is ApiResult.Failure -> GroupDetailUiState.Error(result.error)
                 is ApiResult.NetworkError -> GroupDetailUiState.Error(networkError())
@@ -80,6 +81,34 @@ class GroupDetailViewModel @Inject constructor(
     }
 
     /**
+     * PAR-10 - joins the group. Guarded against double-tap and only when the viewer is not already a member.
+     * On a successful public join, reloads the detail so the role / affordances reflect the new membership; a
+     * 409 (already a member / pending / invited) surfaces a one-shot snackbar; other failures restore content.
+     */
+    fun join() {
+        val content = _uiState.value as? GroupDetailUiState.Content ?: return
+        if (!content.canJoin || content.isJoining) return
+        _uiState.value = content.copy(isJoining = true)
+        viewModelScope.launch {
+            when (val result = repository.join(groupId)) {
+                is ApiResult.Success -> load()
+                is ApiResult.Failure -> {
+                    _uiState.value = content.copy(isJoining = false)
+                    _effects.send(
+                        GroupDetailEffect.ShowMessage(
+                            if (result.error.status == HTTP_CONFLICT) ALREADY_MEMBER else result.error.message,
+                        ),
+                    )
+                }
+                is ApiResult.NetworkError -> {
+                    _uiState.value = content.copy(isJoining = false)
+                    _effects.send(GroupDetailEffect.ShowMessage(OFFLINE_FALLBACK))
+                }
+            }
+        }
+    }
+
+    /**
      * canLeave = the viewer is a member (my_role is known) AND is NOT the owner. ASSUMPTION: the detail
      * payload does not echo the viewer's own user_id, so the viewer cannot be compared to admin_user_id
      * directly; ownership is inferred from my_role == admin (the admin IS the owner in this model), so an
@@ -90,6 +119,9 @@ class GroupDetailViewModel @Inject constructor(
         return isMember && group.myRole != GroupRole.ADMIN
     }
 
+    /** canJoin = the viewer is NOT already a member (my_role is UNKNOWN for a group they have not joined). */
+    private fun deriveCanJoin(group: Group): Boolean = group.myRole == GroupRole.UNKNOWN
+
     private fun networkError(): ApiError =
         ApiError(status = ApiError.STATUS_NETWORK, message = OFFLINE_FALLBACK)
 
@@ -97,5 +129,7 @@ class GroupDetailViewModel @Inject constructor(
         const val ARG_GROUP_ID = "groupId"
 
         private const val OFFLINE_FALLBACK = "Couldn't reach the server. Pull down to retry."
+        private const val HTTP_CONFLICT = 409
+        private const val ALREADY_MEMBER = "You're already a member of this group."
     }
 }

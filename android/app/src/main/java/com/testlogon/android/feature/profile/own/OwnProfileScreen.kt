@@ -3,16 +3,24 @@ package com.testlogon.android.feature.profile.own
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -23,6 +31,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -47,9 +58,9 @@ import com.testlogon.android.feature.profile.media.MediaUploadEffect
 import com.testlogon.android.feature.profile.media.ProfileMediaViewModel
 
 /**
- * AND-071 — route-level own-profile entry wired into the Profile tab. Collects state lifecycle-aware,
- * routes the "Edit" effect to the edit screen, and lets the user replace their avatar via the system
- * Photo Picker (AND-074, gated gracefully when no picker handles the request).
+ * AND-071 - route-level own-profile entry wired into the Profile tab. Collects state lifecycle-aware,
+ * routes the "Edit" effect to the edit screen, and lets the user replace their avatar (AND-074) or
+ * cover photo (PAR-15) via the system Photo Picker, gated gracefully when no picker handles the request.
  */
 @Composable
 fun OwnProfileRoute(
@@ -58,6 +69,7 @@ fun OwnProfileRoute(
     onOpenMfaDevices: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenMyPosts: () -> Unit = {},
+    onOpenHighlights: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: OwnProfileViewModel = hiltViewModel(),
     mediaViewModel: ProfileMediaViewModel = hiltViewModel(),
@@ -69,6 +81,11 @@ fun OwnProfileRoute(
     val photoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri -> if (uri != null) mediaViewModel.startUpload(MediaKind.AVATAR, uri) }
+
+    // PAR-15 - a distinct launcher so a cover pick uploads MediaKind.COVER (backend accepts kind=cover).
+    val coverPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) mediaViewModel.startUpload(MediaKind.COVER, uri) }
 
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
@@ -99,10 +116,16 @@ fun OwnProfileRoute(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
             )
         },
+        onChangeCover = {
+            coverPicker.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+        },
         onOpenSessions = onOpenSessions,
         onOpenMfaDevices = onOpenMfaDevices,
         onOpenSettings = onOpenSettings,
         onOpenMyPosts = onOpenMyPosts,
+                        onOpenHighlights = onOpenHighlights,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -119,7 +142,9 @@ fun OwnProfileScreen(
     onOpenSessions: () -> Unit,
     onOpenMfaDevices: () -> Unit,
     onOpenSettings: () -> Unit,
+    onChangeCover: () -> Unit = {},
     onOpenMyPosts: () -> Unit = {},
+    onOpenHighlights: () -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     accountActions: @Composable () -> Unit = {
@@ -159,7 +184,9 @@ fun OwnProfileScreen(
                         onRetry = onRetry,
                         onEdit = onEdit,
                         onChangePhoto = onChangePhoto,
+                        onChangeCover = onChangeCover,
                         onOpenMyPosts = onOpenMyPosts,
+                        onOpenHighlights = onOpenHighlights,
                         accountActions = accountActions,
                     )
             }
@@ -175,7 +202,9 @@ private fun OwnProfileContent(
     onRetry: () -> Unit,
     onEdit: () -> Unit,
     onChangePhoto: () -> Unit,
+    onChangeCover: () -> Unit,
     onOpenMyPosts: () -> Unit = {},
+    onOpenHighlights: () -> Unit = {},
     accountActions: @Composable () -> Unit,
 ) {
     Column(
@@ -193,18 +222,12 @@ private fun OwnProfileContent(
                 modifier = Modifier.testTag(ProfileTestTags.OWN_STALE_BANNER),
             )
         }
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            AsyncImage(
-                model = profile.profilePhotoUrl,
-                contentDescription = stringResource(R.string.profile_avatar_cd),
-                modifier = Modifier
-                    .size(96.dp)
-                    .testTag(ProfileTestTags.OWN_AVATAR),
-            )
-        }
+        // PAR-15 - full-width 16:9 cover banner behind the avatar; tap anywhere to change the cover.
+        CoverBanner(
+            coverUrl = profile.coverPhotoUrl,
+            avatarUrl = profile.profilePhotoUrl,
+            onChangeCover = onChangeCover,
+        )
         ProfileHeader(
             displayName = profile.bestName,
             title = profile.title,
@@ -234,13 +257,104 @@ private fun OwnProfileContent(
                 variant = TlButtonVariant.Secondary,
                 modifier = Modifier.fillMaxWidth().testTag("own_my_posts"),
             )
+            // PAR-16 -- entry point to the user's own story highlights (create/pin).
+            TlButton(
+                text = stringResource(R.string.highlights_title),
+                onClick = onOpenHighlights,
+                variant = TlButtonVariant.Secondary,
+                modifier = Modifier.fillMaxWidth().testTag("own_highlights"),
+            )
             TlButton(
                 text = stringResource(R.string.profile_change_photo),
                 onClick = onChangePhoto,
                 variant = TlButtonVariant.Secondary,
                 modifier = Modifier.fillMaxWidth().testTag(ProfileTestTags.OWN_CHANGE_PHOTO),
             )
+            // PAR-15 -- explicit "Change cover" affordance (mirrors the change-photo button).
+            TlButton(
+                text = stringResource(R.string.profile_change_cover),
+                onClick = onChangeCover,
+                variant = TlButtonVariant.Secondary,
+                modifier = Modifier.fillMaxWidth().testTag("own_change_cover"),
+            )
             accountActions()
         }
+    }
+}
+
+/**
+ * PAR-15 - the cover banner: a full-width 16:9 image (or a gradient placeholder when null) with the
+ * circular avatar overlaid bottom-start, and a camera badge affording "change cover". The whole banner
+ * is clickable so tapping the cover opens the picker.
+ */
+@Composable
+private fun CoverBanner(
+    coverUrl: String?,
+    avatarUrl: String?,
+    onChangeCover: () -> Unit,
+) {
+    val changeCoverCd = stringResource(R.string.profile_change_cover)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .clickable(onClick = onChangeCover)
+            .testTag("own_cover"),
+    ) {
+        if (coverUrl != null) {
+            AsyncImage(
+                model = coverUrl,
+                contentDescription = stringResource(R.string.profile_cover_cd),
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                MaterialTheme.colorScheme.primaryContainer,
+                                MaterialTheme.colorScheme.surfaceVariant,
+                            ),
+                        ),
+                    ),
+            )
+        }
+        // Camera badge -> change cover.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(12.dp)
+                .size(36.dp)
+                .background(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                    shape = CircleShape,
+                )
+                .clickable(onClick = onChangeCover)
+                .testTag("own_change_cover_badge"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.PhotoCamera,
+                contentDescription = changeCoverCd,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        // Avatar overlaid on the bottom-start of the banner.
+        AsyncImage(
+            model = avatarUrl,
+            contentDescription = stringResource(R.string.profile_avatar_cd),
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 16.dp)
+                .size(88.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .testTag(ProfileTestTags.OWN_AVATAR),
+        )
     }
 }

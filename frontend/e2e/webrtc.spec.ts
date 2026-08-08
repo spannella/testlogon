@@ -21,16 +21,24 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedCallSession,
+  cppDeleteCallSession,
+  cppSeedConversation,
+  cppDeleteConversation,
+} from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 const TURN_PATH = (callId: string) =>
   `/messaging/messages/calls/${callId}/turn-credentials`;
@@ -59,11 +67,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -102,6 +106,16 @@ function seedCallSession(opts: {
   calleeUserId: string;
   state: string;
 }): void {
+  if (usingCpp()) {
+    cppSeedCallSession({
+      callId: opts.callId,
+      conversationId: opts.conversationId,
+      callerUserId: opts.callerUserId,
+      calleeUserId: opts.calleeUserId,
+      state: opts.state,
+    });
+    return;
+  }
   const py = `
 import json, sys, boto3, time
 sys.path.insert(0, "${REPO_ROOT}")
@@ -135,6 +149,10 @@ print("ok")
 }
 
 function deleteCallSession(callId: string): void {
+  if (usingCpp()) {
+    cppDeleteCallSession(callId);
+    return;
+  }
   const py = `
 import boto3
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
@@ -231,10 +249,12 @@ test.describe("73 — WebRTC TURN credentials", () => {
 
   // ── 73.1  Missing auth returns 401 ──────────────────────────────────────
 
-  test("73.1 — request without auth returns 401", async ({ request }) => {
-    const resp = await request.post(
+  test("73.1 — request without auth returns 401", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(
       `${API}${TURN_PATH("no_auth_call")}`,
     );
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 
@@ -453,6 +473,10 @@ test.describe("73 — WebRTC TURN credentials", () => {
 // ===========================================================================
 
 function seedConversation(conversationId: string, participantIds: string[]): void {
+  if (usingCpp()) {
+    cppSeedConversation(conversationId, participantIds);
+    return;
+  }
   const py = `
 import boto3, time
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
@@ -498,6 +522,10 @@ print("ok")
 }
 
 function deleteConversation(conversationId: string): void {
+  if (usingCpp()) {
+    cppDeleteConversation(conversationId, [ALICE_ID, BOB_ID]);
+    return;
+  }
   const py = `
 import boto3
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
@@ -619,10 +647,12 @@ test.describe("74 — Call Lifecycle: Invite Flow", () => {
     deleteCallSession(callId);
   });
 
-  test("74.5 — request without auth returns 401", async ({ request }) => {
-    const resp = await request.post(`${API}/messaging/messages/calls/invite`, {
+  test("74.5 — request without auth returns 401", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(`${API}/messaging/messages/calls/invite`, {
       data: { call_id: "noauth", conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio" },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });

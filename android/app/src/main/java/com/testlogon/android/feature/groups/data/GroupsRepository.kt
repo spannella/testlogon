@@ -19,6 +19,7 @@ import com.testlogon.android.core.model.groups.TreasuryBalance
 import com.testlogon.android.core.model.groups.TreasuryLedgerEntry
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.groups.GroupCreateIn
+import com.testlogon.android.core.network.groups.GroupDiscoverResponse
 import com.testlogon.android.core.network.groups.GroupCommentCreateIn
 import com.testlogon.android.core.network.groups.GroupPostCreateIn
 import com.testlogon.android.core.network.groups.GroupInviteIn
@@ -53,6 +54,15 @@ interface GroupsRepository {
 
     /** GET the caller's groups (ENVELOPE {groups} -> mapped). Idempotent GET. */
     suspend fun listMyGroups(): ApiResult<List<Group>>
+
+    /** PAR-10 - GET public group discovery (ENVELOPE {groups} -> mapped). [query] filters; [limit] bounds. */
+    suspend fun discover(query: String? = null, limit: Int = 20): ApiResult<List<Group>>
+
+    /**
+     * PAR-10 - POST join a group. 200 (public join / pending request) -> Success(Unit); a 409 (already a
+     * member / pending / invited) or 404 surfaces as Failure with the preserved status.
+     */
+    suspend fun join(groupId: String): ApiResult<Unit>
 
     /**
      * POST a new social group. On success returns the created [Group] (the creator is admin). A 422/4xx
@@ -176,6 +186,18 @@ class GroupsRepositoryImpl @Inject constructor(
 
     override suspend fun listMyGroups(): ApiResult<List<Group>> = withContext(Dispatchers.IO) {
         call { groupsApi.listMyGroups().groups.map { it.toDomain() } }
+    }
+
+    override suspend fun discover(query: String?, limit: Int): ApiResult<List<Group>> =
+        withContext(Dispatchers.IO) {
+            call {
+                groupsApi.discover(query = query?.takeIf { it.isNotBlank() }, limit = limit)
+                    .groups.map { it.toDomain() }
+            }
+        }
+
+    override suspend fun join(groupId: String): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        call { groupsApi.join(groupId).requireSuccess() }
     }
 
     override suspend fun createGroup(

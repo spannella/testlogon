@@ -24,7 +24,10 @@ class ActiveSessionsScreenTest {
     val rule = createComposeRule()
 
     private fun row(id: String, current: Boolean) = SessionRow(
-        info = SessionInfo(id, current, 0L, 0L, "1.2.3.4", "ua-$id", false, null),
+        info = SessionInfo(
+            sessionId = id, isCurrentWire = current, createdAtWire = 0L, lastSeenAtWire = 0L,
+            ipWire = "1.2.3.4", userAgentWire = "ua-$id", revoked = false, revokedAt = null,
+        ),
         isCurrent = current,
     )
 

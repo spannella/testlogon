@@ -19,9 +19,11 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedFinancialLedger } from "./helpers/cpp-seed-financial-dashboard";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 
 // Unique tag for this run so seeded rows / dates don't collide across runs.
@@ -55,11 +57,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -94,6 +92,10 @@ async function apiPost(page: Page, identity: string, path: string, body?: unknow
  *   - 1 platform_commission (revenue)
  */
 function seedLedger(): void {
+  if (usingCpp()) {
+    cppSeedFinancialLedger(SEED_DATE, RUN_TAG);
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os, secrets
@@ -438,11 +440,11 @@ test.describe("527. Platform Financial Dashboard — Edge cases", () => {
   });
 
   test("unauthenticated request is rejected", async ({ browser }) => {
-    const anon = await browser.newPage();
-    const r = await anon.request.get(`${API}/ui/admin/financial-dashboard/kpis`, {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const r = await anonCtx.request.get(`${API}/ui/admin/financial-dashboard/kpis`, {
       params: { start_date: RANGE_START, end_date: RANGE_END },
     });
     expect([401, 403]).toContain(r.status());
-    await anon.close();
+    await anonCtx.close();
   });
 });

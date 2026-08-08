@@ -15,9 +15,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, unauthContext } from "./helpers/session";
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 const TS = Date.now();
@@ -45,8 +46,7 @@ function getSessions(): Record<string, SessionData> {
       ? path.resolve(process.cwd(), "..")
       : process.cwd();
     const setupScript = path.join(repoRoot, "e2e_session_setup.py");
-    const raw = execSync(`python3 ${setupScript}`, { cwd: repoRoot, timeout: 30_000 }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -233,9 +233,11 @@ test.describe("INFRA-001 Host Inventory", () => {
       expect(resp.status()).toBe(422);
     });
 
-    test("Unauthenticated request returns 401", async ({ request }) => {
-      const resp = await request.get(`${API}/ui/hosts`);
+    test("Unauthenticated request returns 401", async () => {
+      const anon = await unauthContext(API);
+      const resp = await anon.get(`/ui/hosts`);
       expect(resp.status()).toBe(401);
+      await anon.dispose();
     });
   });
 

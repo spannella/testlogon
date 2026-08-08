@@ -19,12 +19,19 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedWallet,
+  cppReadUserWallet,
+  cppSeedTreasuryGroup,
+} from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
 const ROOT_ID  = "root";
 const ALICE_ID = "alice";
 const BOB_ID   = "bob";
@@ -54,11 +61,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -146,6 +149,30 @@ function seedGroupAndWallets() {
   const aliceSub = subFor(ALICE_ID);
   const bobSub = subFor(BOB_ID);
 
+  if (usingCpp()) {
+    // cpp reads its OWN tlc_user_groups + tlc_billing (moto :5005); the Python
+    // 'user_groups'/'billing' writes below are invisible to it. Seed the same
+    // GROUP (root=admin, alice/bob=members) with an EMPTY treasury (no WALLET
+    // row => balance 0, matching 459.1) plus the three personal wallets so
+    // ug_require_role passes and the contribute debit has funds.
+    cppSeedTreasuryGroup({
+      groupId: GROUP_ID,
+      adminSub: rootSub,
+      name: "Treasury Test Group",
+      description: "Test group for treasury E2E",
+      visibility: "public",
+      members: [
+        { sub: rootSub, role: "admin", displayName: "Root" },
+        { sub: aliceSub, role: "member", displayName: "Alice" },
+        { sub: bobSub, role: "member", displayName: "Bob" },
+      ],
+    });
+    cppSeedWallet(rootSub, 100000); // $1000
+    cppSeedWallet(aliceSub, 50000); // $500
+    cppSeedWallet(bobSub, 30000); // $300
+    return;
+  }
+
   // Create user_groups table entries for the test group
   // Root = admin, Alice = member, Bob = member
   ddbExec(`
@@ -204,6 +231,33 @@ function seedDissolveGroup() {
   const rootSub = subFor(ROOT_ID);
   const aliceSub = subFor(ALICE_ID);
   const bobSub = subFor(BOB_ID);
+
+  if (usingCpp()) {
+    // Seed the group + a FUNDED treasury (12000, contributed 10000, donated
+    // 2000) + per-contributor rows into cpp's tables so GET .../treasury reads
+    // 12000. NOTE: section 462's dissolution is driven by a DIRECT Python
+    // service call (dissolve_treasury), which has no cpp analog, so the
+    // post-dissolution assertions (462.1/462.3/462.4) still fail under cpp —
+    // this seed only makes the pre-dissolution balance read correct and keeps
+    // the beforeAll from crashing on an absent Python DDB-Local (:8001).
+    cppSeedTreasuryGroup({
+      groupId: DISSOLVE_GROUP_ID,
+      adminSub: rootSub,
+      name: "Dissolve Test Group",
+      description: "Test group for dissolution",
+      visibility: "public",
+      members: [
+        { sub: rootSub, role: "admin", displayName: "Root" },
+        { sub: aliceSub, role: "member", displayName: "Alice" },
+        { sub: bobSub, role: "member", displayName: "Bob" },
+      ],
+      treasuryCents: 12000,
+      totalContributedCents: 10000,
+      totalDonatedCents: 2000,
+      totalSpentCents: 0,
+    });
+    return;
+  }
 
   ddbExec(`
 import time
@@ -266,6 +320,7 @@ print('dissolve group seeded')
 }
 
 function getWalletBalance(userSub: string): number {
+  if (usingCpp()) return cppReadUserWallet(userSub);
   const raw = ddbExec(`
 billing = ddb.Table('billing')
 resp = billing.get_item(Key={'pk': 'USER#` + userSub + `', 'sk': 'WALLET'})
@@ -357,7 +412,9 @@ test.describe("459 — Treasury Balance & Contribution API", () => {
     });
     expect(resp.status()).toBe(400);
     const data = await resp.json();
-    expect(data.detail).toContain("Insufficient wallet balance");
+    // Python (FastAPI) returns {detail}; cpp's Response::error returns {error}.
+    // Accept either so the correct 400 body is validated on both backends.
+    expect(data.detail ?? data.error).toContain("Insufficient wallet balance");
   });
 });
 

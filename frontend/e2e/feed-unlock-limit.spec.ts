@@ -1,9 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod, cppResetBillingPms } from "./helpers/cpp-seed";
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 const CHARLIE_ID = "e2e_charlie@test.local";
@@ -26,16 +28,18 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
     const root = path.resolve(process.cwd(), "..");
-    const raw = execSync(`python3 ${path.join(root, "e2e_session_setup.py")}`, {
-      cwd: root,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
 
 function upsertPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // cpp store: resolve the email->SUB and seed the PM into tlc_billing via the
+    // shim (the Python :8001 write below never reaches cpp).
+    cppSeedPaymentMethod(resolveIdentityId(userSub), pmId);
+    return;
+  }
   const root = path.resolve(process.cwd(), "..");
   execSync(
     `python3 -c "
@@ -74,6 +78,7 @@ print('ok')
 }
 
 function removePaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) { cppResetBillingPms(resolveIdentityId(userSub), [pmId]); return; }
   const root = path.resolve(process.cwd(), "..");
   try {
     execSync(

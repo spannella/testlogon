@@ -16,6 +16,8 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppResetUserSyndicates } from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -23,6 +25,11 @@ const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 
 const TS = Date.now();
+
+// Member identity as the backend stores it in split configs/distributions:
+// cpp = JWT sub, Python = email. Lazy so the live cpp session is loaded first.
+const ALICE_MID = () => resolveIdentityId(ALICE_ID);
+const BOB_MID = () => resolveIdentityId(BOB_ID);
 
 interface SessionData {
   user_sub: string;
@@ -44,11 +51,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -92,6 +95,16 @@ const RS = (id: string) => `/ui/syndicates/revenue-split/${id}`;
 // "User already in 10 syndicates". Purge Alice's + Bob's USER_SYND# membership
 // rows before setup so the count resets.
 function cleanupSyndicates(): void {
+  if (usingCpp()) {
+    // cpp enforces SY_MAX_PER_USER (10) via the per-user index in tlc_syndicates;
+    // the Python DDB prune below never reaches cpp so accumulated runs 400 the
+    // create. Keep the newest so a concurrent run's fresh syndicate survives.
+    cppResetUserSyndicates(
+      [resolveIdentityId(ALICE_ID), resolveIdentityId(BOB_ID)],
+      1,
+    );
+    return;
+  }
   const script = `
 import boto3, os
 from boto3.dynamodb.conditions import Key
@@ -129,7 +142,7 @@ async function setupSyndicate(): Promise<string> {
 
   // Invite Bob, then accept.
   const inviteResp = await apiPost(alicePage, "alice", `/ui/syndicates/${sid}/invite`, {
-    user_id: BOB_ID,
+    user_id: usingCpp() ? resolveIdentityId(BOB_ID) : BOB_ID,
   });
   expect(inviteResp.ok()).toBeTruthy();
   const acceptResp = await apiPost(bobPage, "bob", `/ui/syndicates/${sid}/invite/respond`, {
@@ -166,7 +179,7 @@ test.describe("Section 431: Split Configuration API", () => {
   });
 
   test("431.2 Admin sets weighted split config", async () => {
-    const weights_bps = { [ALICE_ID]: 6000, [BOB_ID]: 4000 };
+    const weights_bps = { [ALICE_MID()]: 6000, [BOB_MID()]: 4000 };
     const resp = await apiPost(alicePage, "alice", `${RS(syndicateId)}/config`, {
       mode: "weighted",
       weights_bps,
@@ -175,14 +188,14 @@ test.describe("Section 431: Split Configuration API", () => {
     const getResp = await apiGet(alicePage, `${RS(syndicateId)}/config`);
     const cfg = await getResp.json();
     expect(cfg.mode).toBe("weighted");
-    expect(cfg.weights_bps[ALICE_ID]).toBe(6000);
-    expect(cfg.weights_bps[BOB_ID]).toBe(4000);
+    expect(cfg.weights_bps[ALICE_MID()]).toBe(6000);
+    expect(cfg.weights_bps[BOB_MID()]).toBe(4000);
   });
 
   test("431.3 Weights must sum to 100% (10000 bps)", async () => {
     const resp = await apiPost(alicePage, "alice", `${RS(syndicateId)}/config`, {
       mode: "weighted",
-      weights_bps: { [ALICE_ID]: 6000, [BOB_ID]: 3000 }, // sums to 9000
+      weights_bps: { [ALICE_MID()]: 6000, [BOB_MID()]: 3000 }, // sums to 9000
     });
     expect(resp.status()).toBe(400);
     const body = await resp.json();
@@ -236,7 +249,7 @@ test.describe("Section 432: Split Execution API", () => {
   test("432.2 Weighted split respects percentages", async () => {
     await apiPost(alicePage, "alice", `${RS(equalSyndId)}/config`, {
       mode: "weighted",
-      weights_bps: { [ALICE_ID]: 6000, [BOB_ID]: 4000 },
+      weights_bps: { [ALICE_MID()]: 6000, [BOB_MID()]: 4000 },
     });
     const resp = await apiPost(alicePage, "alice", `${RS(equalSyndId)}/execute`, {
       gross_amount_cents: 2000,
@@ -247,8 +260,8 @@ test.describe("Section 432: Split Execution API", () => {
     const byUser: Record<string, number> = {};
     split.distributions.forEach((d: any) => (byUser[d.user_id] = d.amount_cents));
     // net 1700: 60% = 1020, 40% = 680.
-    expect(byUser[ALICE_ID]).toBe(1020);
-    expect(byUser[BOB_ID]).toBe(680);
+    expect(byUser[ALICE_MID()]).toBe(1020);
+    expect(byUser[BOB_MID()]).toBe(680);
   });
 
   test("432.3 Platform fee deducted correctly", async () => {
@@ -300,7 +313,7 @@ test.describe("Section 432: Split Execution API", () => {
     const detail = await detailResp.json();
     expect(detail.distributions.length).toBe(2);
     const ids = detail.distributions.map((d: any) => d.user_id).sort();
-    expect(ids).toEqual([ALICE_ID, BOB_ID].sort());
+    expect(ids).toEqual([ALICE_MID(), BOB_MID()].sort());
     detail.distributions.forEach((d: any) => {
       expect(d.ledger_entry_id).toBeTruthy();
     });
@@ -358,7 +371,7 @@ test.describe("Section 433: Split History & Earnings API", () => {
 
     await apiPost(alicePage, "alice", `${RS(histSyndId)}/config`, {
       mode: "weighted",
-      weights_bps: { [ALICE_ID]: 7000, [BOB_ID]: 3000 },
+      weights_bps: { [ALICE_MID()]: 7000, [BOB_MID()]: 3000 },
     });
     const newExec = await apiPost(alicePage, "alice", `${RS(histSyndId)}/execute`, {
       gross_amount_cents: 2000,

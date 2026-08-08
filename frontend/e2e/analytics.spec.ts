@@ -23,6 +23,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedAnalyticsRollup, cppSeedAnalyticsSummary } from "./helpers/cpp-seed-analytics";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -53,11 +55,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -109,6 +107,10 @@ function seedRollupRow(
   dateStr: string,
   data: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    cppSeedAnalyticsRollup(userSub, dateStr, data);
+    return;
+  }
   const tmpFile = `${tmpdir()}/analytics_seed_${Date.now()}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -150,6 +152,10 @@ function seedSummarySentinel(
   userSub: string,
   data: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    cppSeedAnalyticsSummary(userSub, data);
+    return;
+  }
   const tmpFile = `${tmpdir()}/analytics_summary_${Date.now()}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -401,7 +407,7 @@ test.describe("B — Analytics API Edge Cases", () => {
 
   test("B2 — Unauthenticated request returns 401", async () => {
     // Use a fresh context with no cookies
-    const ctx = await alicePage.context().browser()!.newContext();
+    const ctx = await alicePage.context().browser()!.newContext({ storageState: undefined });
     const noAuthPage = await ctx.newPage();
     const resp = await noAuthPage.request.get(`${BASE}/ui/analytics/overview`);
     expect(resp.status()).toBe(401);

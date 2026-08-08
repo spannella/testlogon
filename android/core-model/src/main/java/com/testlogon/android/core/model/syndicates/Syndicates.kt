@@ -189,6 +189,18 @@ data class SyndicateListItem(
 )
 
 /**
+ * PAR-35(a) - one discoverable syndicate (GET ui/syndicates/discover). [memberCount] / [description] are
+ * informational for the discover card; there is NO caller role here (the caller is not a member yet).
+ */
+data class SyndicateDiscoverItem(
+    val id: String,
+    val name: String,
+    val description: String? = null,
+    val memberCount: Int? = null,
+    val createdAt: Long? = null,
+)
+
+/**
  * AND-357 - one open-licensing content row. [contentType] is the typed enum (UNKNOWN fallback); [exempt]
  * gates the "Exempt" vs "Auto-licensed" label; [registeredAt] is kept a Long epoch-SECONDS value
  * (relative-time at the UI), null when absent.

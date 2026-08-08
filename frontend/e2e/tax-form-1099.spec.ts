@@ -23,17 +23,36 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedTaxLedger,
+  cppSeedProfile,
+  cppCleanupTax,
+  cppSeedBatchLock,
+} from "./helpers/cpp-seed-appeals-moderation-tail";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+// Under cpp these resolve to the JWT sub (tlc_billing/tlc_profile keyed by sub);
+// Python path returns the email verbatim (unchanged).
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const TS = Date.now();
 
 const TEST_YEAR = 2090; // alice single-generate / download / correction
 const BATCH_YEAR = 2091; // batch + concurrency (isolated from TEST_YEAR)
+
+// The admin batch (Section 582) discovers qualifying creators via a GLOBAL scan
+// of the billing ledger and writes forms scanned back by Section 582.3's
+// year-list. Running the file's describes in parallel (fullyParallel/-workers>1)
+// races that global scan against the concurrent seed/generate/cleanup in
+// Sections 580/581, so 582.3 intermittently sees no form for Alice. Serialize
+// the whole file so the batch operates on a stable snapshot (passes fine
+// serially).
+test.describe.configure({ mode: "serial" });
 
 // ─── Session bootstrap ───────────────────────────────────────────────────────
 
@@ -57,11 +76,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -116,6 +131,10 @@ interface SeedEntry {
 }
 
 function seedLedger(userSub: string, entries: SeedEntry[]): void {
+  if (usingCpp()) {
+    cppSeedTaxLedger(userSub, entries, TS);
+    return;
+  }
   const b64 = Buffer.from(JSON.stringify(entries)).toString("base64");
   execSync(
     `${PYTHON} -c "
@@ -163,6 +182,10 @@ print('seeded')
 }
 
 function seedProfile(userSub: string, displayName: string): void {
+  if (usingCpp()) {
+    cppSeedProfile(userSub, displayName);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os
@@ -189,6 +212,14 @@ print('profile ok')
 }
 
 function cleanup(userSubs: string[], years: number[]): void {
+  if (usingCpp()) {
+    try {
+      for (const sub of userSubs) cppCleanupTax(sub, TS, years);
+    } catch {
+      // best effort
+    }
+    return;
+  }
   const subsB64 = Buffer.from(JSON.stringify(userSubs)).toString("base64");
   const yearsB64 = Buffer.from(JSON.stringify(years)).toString("base64");
   try {
@@ -294,7 +325,14 @@ test.describe("FIN-008 Section 580: Creator 1099 generation API", () => {
     expect(resp.status()).toBe(200);
     const body = await resp.json();
     expect(typeof body.download_url).toBe("string");
-    expect(body.download_url).toContain("/mock/s3/");
+    // Python's dev path returns a /mock/s3/ URL; cpp under moto returns a REAL
+    // presigned S3 URL to the same PDF object (/_s3/... ?X-Amz-...). Both are
+    // valid downloadable URLs, so accept either shape under cpp.
+    if (usingCpp()) {
+      expect(body.download_url).toMatch(/\/mock\/s3\/|\/_s3\/|X-Amz-/);
+    } else {
+      expect(body.download_url).toContain("/mock/s3/");
+    }
   });
 
   test("580.6 download missing year returns 404", async () => {
@@ -430,6 +468,9 @@ test.describe("FIN-008 Section 582: Admin batch generation", () => {
 
   test("582.4 second concurrent batch returns 429", async () => {
     // Manually plant an in-progress lock, then attempt a batch.
+    if (usingCpp()) {
+      cppSeedBatchLock(BATCH_YEAR);
+    } else {
     execSync(
       `${PYTHON} -c "
 import boto3, os, time
@@ -451,6 +492,7 @@ print('locked')
 "`,
       { timeout: 15_000 },
     );
+    }
     const resp = await apiPost(admin, "root", `/ui/tax-forms/admin/batch`, {
       tax_year: BATCH_YEAR,
     });

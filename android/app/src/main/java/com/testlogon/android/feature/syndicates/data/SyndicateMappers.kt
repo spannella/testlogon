@@ -7,6 +7,7 @@ import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SplitMode
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
 import com.testlogon.android.core.model.syndicates.SyndicateMember
+import com.testlogon.android.core.model.syndicates.SyndicateDiscoverItem
 import com.testlogon.android.core.model.syndicates.SyndicateListItem
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
 import com.testlogon.android.core.model.syndicates.TreasuryEntry
@@ -17,6 +18,7 @@ import com.testlogon.android.core.network.syndicates.SyndicateOpenLicensingRegis
 import com.testlogon.android.core.network.syndicates.SyndicateMemberDto
 import com.testlogon.android.core.network.syndicates.SyndicatePostOut
 import com.testlogon.android.core.network.syndicates.SyndicateCreateOut
+import com.testlogon.android.core.network.syndicates.SyndicateDiscoverItemDto
 import com.testlogon.android.core.network.syndicates.SyndicateListItemDto
 import com.testlogon.android.core.network.syndicates.SyndicateProfileOut
 import com.testlogon.android.core.network.syndicates.SyndicateTreasuryLedgerEntryOut
@@ -51,6 +53,15 @@ fun SyndicateCreateOut.toListItem(): SyndicateListItem = SyndicateListItem(
     id = syndicateId,
     name = name.orEmpty(),
     role = "admin",
+)
+
+/** PAR-35(a) - maps a discover row DTO to the domain [SyndicateDiscoverItem] (id = syndicate_id, name = name). */
+fun SyndicateDiscoverItemDto.toDomain(): SyndicateDiscoverItem = SyndicateDiscoverItem(
+    id = syndicateId,
+    name = name.orEmpty(),
+    description = description?.takeIf { it.isNotBlank() },
+    memberCount = memberCount,
+    createdAt = createdAt,
 )
 
 /**

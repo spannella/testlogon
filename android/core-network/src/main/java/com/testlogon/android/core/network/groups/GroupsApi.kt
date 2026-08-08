@@ -133,6 +133,28 @@ interface GroupsApi {
     suspend fun leave(
         @Path("groupId") groupId: String,
     ): Response<Unit>
+
+    /**
+     * PAR-10 - GET public group discovery (groups the caller can join). ENVELOPE {groups, cursor, has_more}.
+     * `query` filters name/description/topic (server-side, case-insensitive); `limit` is clamped 1..100
+     * server-side. Idempotent GET.
+     */
+    @GET("ui/groups/discover")
+    suspend fun discover(
+        @Query("query") query: String? = null,
+        @Query("limit") limit: Int = 20,
+    ): GroupDiscoverResponse
+
+    /**
+     * PAR-10 - POST join a group. A PUBLIC group joins immediately (200 -> the new member row); a PRIVATE
+     * group creates a pending_approval request. A 409 means already a member / request already pending /
+     * already invited; a 404 means the group was removed. Typed as Response<Unit> so the repo succeeds by
+     * isSuccessful (the member-row body is not consumed) and surfaces the 409/404 via the preserved status.
+     */
+    @POST("ui/groups/{groupId}/join")
+    suspend fun join(
+        @Path("groupId") groupId: String,
+    ): Response<Unit>
     // ---- Sub-pages: treasury / fundraising / campaigns / settings (AND-355 sub-pages) ----
 
     /** GET the group treasury balance (membership-gated read). */

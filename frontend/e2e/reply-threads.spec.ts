@@ -24,10 +24,10 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { API } from "./cpp.config";
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 const CHARLIE_ID = "e2e_charlie@test.local";

@@ -28,6 +28,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -35,6 +37,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -43,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.core.model.syndicates.SyndicateDiscoverItem
 import com.testlogon.android.core.model.syndicates.SyndicateListItem
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
@@ -50,7 +57,7 @@ import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.core.ui.state.OfflineBanner
 import kotlinx.coroutines.flow.collectLatest
 
-/** Batch-7 - stable testTags for the syndicate list + create flow. */
+/** Batch-7 - stable testTags for the syndicate list + create flow. PAR-35(a) adds the discover tab tags. */
 object SyndicateListTestTags {
     const val SCREEN = "syndicates_list_screen"
     const val ROW_PREFIX = "syndicate_row_"
@@ -59,23 +66,31 @@ object SyndicateListTestTags {
     const val CREATE_NAME = "syndicate_create_name"
     const val CREATE_DESCRIPTION = "syndicate_create_description"
     const val CREATE_SUBMIT = "syndicate_create_submit"
+
+    // PAR-35(a) - My/Discover tabs
+    const val TAB_MINE = "syndicates_tab_mine"
+    const val TAB_DISCOVER = "syndicates_tab_discover"
+    const val DISCOVER_ROW_PREFIX = "syndicate_discover_row_"
 }
 
-/** Batch-7 - route-level "my syndicates" list entry (the More-hub landing). */
+/** Batch-7 / PAR-35(a) - route-level "syndicates" list entry with a My / Discover tab (the More-hub landing). */
 @Composable
 fun SyndicateListRoute(
     onBack: () -> Unit,
     onOpenSyndicate: (String) -> Unit,
     viewModel: SyndicateListViewModel = hiltViewModel(),
+    discoverViewModel: SyndicateDiscoverViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val createState by viewModel.createState.collectAsStateWithLifecycle()
+    val discoverState by discoverViewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(viewModel) {
         viewModel.created.collectLatest { id -> onOpenSyndicate(id) }
     }
     SyndicateListScreen(
         state = state,
         createState = createState,
+        discoverState = discoverState,
         onBack = onBack,
         onRetry = viewModel::retry,
         onRefresh = viewModel::refresh,
@@ -85,6 +100,9 @@ fun SyndicateListRoute(
         onCreateNameChange = viewModel::onCreateNameChange,
         onCreateDescriptionChange = viewModel::onCreateDescriptionChange,
         onSubmitCreate = viewModel::submitCreate,
+        onDiscoverShown = discoverViewModel::ensureLoaded,
+        onDiscoverRetry = discoverViewModel::retry,
+        onDiscoverRefresh = discoverViewModel::refresh,
     )
 }
 
@@ -92,6 +110,7 @@ fun SyndicateListRoute(
 fun SyndicateListScreen(
     state: SyndicateListUiState,
     createState: CreateSyndicateFormState,
+    discoverState: SyndicateDiscoverUiState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
@@ -101,8 +120,16 @@ fun SyndicateListScreen(
     onCreateNameChange: (String) -> Unit,
     onCreateDescriptionChange: (String) -> Unit,
     onSubmitCreate: () -> Unit,
+    onDiscoverShown: () -> Unit,
+    onDiscoverRetry: () -> Unit,
+    onDiscoverRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    // Lazy-trigger the discover load the first time that tab is selected.
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 1) onDiscoverShown()
+    }
     Scaffold(
         modifier = modifier.testTag(SyndicateListTestTags.SCREEN),
         topBar = {
@@ -119,32 +146,50 @@ fun SyndicateListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onOpenCreate,
-                modifier = Modifier.testTag(SyndicateListTestTags.CREATE_FAB),
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.syndicate_create_title))
+            if (selectedTab == 0) {
+                FloatingActionButton(
+                    onClick = onOpenCreate,
+                    modifier = Modifier.testTag(SyndicateListTestTags.CREATE_FAB),
+                ) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = stringResource(R.string.syndicate_create_title),
+                    )
+                }
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (state) {
-                is SyndicateListUiState.Loading -> LoadingState()
-                is SyndicateListUiState.Empty,
-                is SyndicateListUiState.NotAvailable ->
-                    EmptyState(
-                        title = stringResource(R.string.syndicates_list_empty_title),
-                        body = stringResource(R.string.syndicates_list_empty_body),
-                    )
-                is SyndicateListUiState.Error ->
-                    ErrorState(message = state.error.message, onRetry = onRetry)
-                is SyndicateListUiState.Content ->
-                    SyndicateListContent(
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text(stringResource(R.string.syndicates_tab_mine)) },
+                    modifier = Modifier.testTag(SyndicateListTestTags.TAB_MINE),
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text(stringResource(R.string.syndicates_tab_discover)) },
+                    modifier = Modifier.testTag(SyndicateListTestTags.TAB_DISCOVER),
+                )
+            }
+            Box(Modifier.fillMaxSize()) {
+                if (selectedTab == 0) {
+                    MyTabContent(
                         state = state,
-                        onRefresh = onRefresh,
                         onRetry = onRetry,
+                        onRefresh = onRefresh,
                         onOpenSyndicate = onOpenSyndicate,
                     )
+                } else {
+                    DiscoverTabContent(
+                        state = discoverState,
+                        onRetry = onDiscoverRetry,
+                        onRefresh = onDiscoverRefresh,
+                        onOpenSyndicate = onOpenSyndicate,
+                    )
+                }
             }
         }
     }
@@ -157,6 +202,74 @@ fun SyndicateListScreen(
             onSubmit = onSubmitCreate,
             onDismiss = onDismissCreate,
         )
+    }
+}
+
+@Composable
+private fun MyTabContent(
+    state: SyndicateListUiState,
+    onRetry: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpenSyndicate: (String) -> Unit,
+) {
+    when (state) {
+        is SyndicateListUiState.Loading -> LoadingState()
+        is SyndicateListUiState.Empty,
+        is SyndicateListUiState.NotAvailable ->
+            EmptyState(
+                title = stringResource(R.string.syndicates_list_empty_title),
+                body = stringResource(R.string.syndicates_list_empty_body),
+            )
+        is SyndicateListUiState.Error ->
+            ErrorState(message = state.error.message, onRetry = onRetry)
+        is SyndicateListUiState.Content ->
+            SyndicateListContent(
+                state = state,
+                onRefresh = onRefresh,
+                onRetry = onRetry,
+                onOpenSyndicate = onOpenSyndicate,
+            )
+    }
+}
+
+@Composable
+private fun DiscoverTabContent(
+    state: SyndicateDiscoverUiState,
+    onRetry: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpenSyndicate: (String) -> Unit,
+) {
+    when (state) {
+        is SyndicateDiscoverUiState.Loading -> LoadingState()
+        is SyndicateDiscoverUiState.Empty ->
+            EmptyState(
+                title = stringResource(R.string.syndicates_discover_empty_title),
+                body = stringResource(R.string.syndicates_discover_empty_body),
+            )
+        is SyndicateDiscoverUiState.Error ->
+            ErrorState(message = state.error.message, onRetry = onRetry)
+        is SyndicateDiscoverUiState.Content ->
+            PullToRefreshBox(
+                isRefreshing = state.isRefreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    val stale = state.staleError
+                    if (stale != null) {
+                        OfflineBanner(message = stale.message, onRetry = onRetry)
+                    }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(state.items, key = { it.id }) { item ->
+                            DiscoverRow(item = item, onClick = { onOpenSyndicate(item.id) })
+                        }
+                    }
+                }
+            }
     }
 }
 
@@ -216,6 +329,47 @@ private fun SyndicateRow(
             AssistChip(
                 onClick = onClick,
                 label = { Text(stringResource(R.string.syndicate_role_label, role)) },
+            )
+        }
+    }
+}
+
+/** PAR-35(a) - one discoverable syndicate row (name + optional description + member count). */
+@Composable
+private fun DiscoverRow(
+    item: SyndicateDiscoverItem,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(SyndicateListTestTags.DISCOVER_ROW_PREFIX + item.id)
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = item.name.ifBlank { item.id },
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val description = item.description
+        if (!description.isNullOrBlank()) {
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        val count = item.memberCount
+        if (count != null) {
+            Text(
+                text = stringResource(R.string.syndicates_discover_member_count, count),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

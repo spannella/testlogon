@@ -15,11 +15,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedVideo, cppSeedPaymentMethod } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const API = "http://localhost:8000";
 const TS = Date.now();
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
@@ -46,11 +48,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -85,6 +83,19 @@ function seedVideo(opts: {
   thumbnailUrl?: string;
   durationSeconds?: number;
 }): void {
+  if (usingCpp()) {
+    cppSeedVideo({
+      videoId: opts.videoId,
+      ownerSub: opts.ownerUserId,
+      title: opts.title,
+      status: opts.status,
+      visibility: opts.visibility,
+      hlsManifestUrl: opts.hlsManifestUrl,
+      thumbnailUrl: opts.thumbnailUrl,
+      durationSeconds: opts.durationSeconds,
+    });
+    return;
+  }
   const status = opts.status ?? "published";
   const visibility = opts.visibility ?? "public";
   const createdAt = Math.floor(Date.now() / 1000);
@@ -156,6 +167,10 @@ print('ok')
 }
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')

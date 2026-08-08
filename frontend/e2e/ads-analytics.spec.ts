@@ -17,6 +17,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, isCpp } from "./helpers/session";
+import { cppSeedAdAnalytics } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -51,11 +53,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -88,6 +86,19 @@ async function apiGet(page: Page, path: string, identity = ALICE_ID) {
 // ─── DDB seed helper ─────────────────────────────────────────────────────────
 
 function seedRollupData() {
+  // TRACK harness-seed: under cpp the inline :8001 python seeder below never
+  // reaches the C++ backend (it reads tlc_ad_* in its own moto). Seed the
+  // equivalent account+rollups+ledger into cpp keyed by ALICE REAL SUB.
+  if (isCpp()) {
+    const aliceSub = loadSessions()[ALICE_ID]?.user_sub;
+    if (!aliceSub) throw new Error("cpp ads-analytics seed: alice sub unresolved");
+    cppSeedAdAnalytics({
+      accountId: ACCOUNT_ID,
+      campaignId: CAMPAIGN_ID,
+      ownerSub: aliceSub,
+    });
+    return;
+  }
   // Seed an ad account, then daily rollup items for the last 7 days
   const script = `
 import sys, os, json
@@ -487,7 +498,9 @@ test.describe("Ad Analytics (ADS-008)", () => {
       alicePage.getByRole("paragraph").filter({ hasText: /^CTR$/ }),
     ).toBeVisible();
     await expect(
-      alicePage.getByRole("paragraph").filter({ hasText: /^Spend$/ }),
+      // The ROAS panel also renders a "Spend" paragraph; the KPI card grid comes
+      // first in the DOM, so .first() targets the KPI card (avoids strict-mode 2-match).
+      alicePage.getByRole("paragraph").filter({ hasText: /^Spend$/ }).first(),
     ).toBeVisible();
   });
 

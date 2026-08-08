@@ -15,18 +15,26 @@ sealed interface GroupsListUiState {
     /** Initial / first-load surface (no cached content yet). */
     data object Loading : GroupsListUiState
 
-    /** Loaded list of the caller's groups. */
+    /** Loaded list for the active tab (my groups, or public discovery results). */
     data class Content(
         val groups: List<Group>,
         /** True while a pull-to-refresh is in flight over already-shown content. */
         val isRefreshing: Boolean = false,
         /** A non-fatal refresh failure surfaced as a banner over the cached list, or null. */
         val staleError: ApiError? = null,
+        /**
+         * PAR-10 - the group ids with a join POST in flight (Discover tab), so the row spinner + disabled
+         * state track each pending join independently.
+         */
+        val joining: Set<String> = emptySet(),
     ) : GroupsListUiState
 
-    /** Loaded successfully but the caller belongs to no groups. */
+    /** Loaded successfully but the active tab has no groups. */
     data object Empty : GroupsListUiState
 
     /** Terminal first-load failure (no content to show). */
     data class Error(val error: ApiError) : GroupsListUiState
 }
+
+/** PAR-10 - the two group-list tabs: the caller's groups vs public discovery. */
+enum class GroupsTab { MINE, DISCOVER }

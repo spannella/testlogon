@@ -34,6 +34,7 @@ class FakeOrgsApi(
     val transferCalls = mutableListOf<Pair<String, TransferOwnershipReq>>()
     val acceptCalls = mutableListOf<Pair<String, OrgInviteAcceptReq>>()
     val declineCalls = mutableListOf<String>()
+    val leaveCalls = mutableListOf<String>()
 
     private fun maybeThrow() {
         throwHttp?.let { status ->
@@ -102,6 +103,12 @@ class FakeOrgsApi(
 
     override suspend fun declineInvite(inviteId: String): Response<Unit> {
         declineCalls += inviteId
+        maybeThrow()
+        return emptyOk()
+    }
+
+    override suspend fun leaveOrg(orgId: String): Response<Unit> {
+        leaveCalls += orgId
         maybeThrow()
         return emptyOk()
     }

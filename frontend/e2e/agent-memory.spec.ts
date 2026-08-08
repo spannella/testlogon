@@ -16,6 +16,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
+import { runCppShim, usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -46,11 +48,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
     // admin setup keys by short name (alice/bob); alias by user_sub so email-id lookups resolve
     for (const _k of Object.keys(_sessions)) { const _s = _sessions[_k]; if (_s && _s.user_sub && !_sessions[_s.user_sub]) _sessions[_s.user_sub] = _s; }
   }
@@ -130,6 +128,13 @@ function ddbExec(code: string): string {
  * Seed an identity + project record directly in DDB so the API can read them.
  */
 function seedWorkerMemory(workerId: string): void {
+  if (usingCpp()) {
+    // The inline Python seed writes DDB-Local agent_memory, which cpp never
+    // reads; cpp GET .../identity 404s without a seeded row in
+    // tlc_agent_memory. Seed the IDENTITY (+PROJECT) row cpp actually reads.
+    runCppShim("seed_agent_memory_identity.py", { worker_id: workerId });
+    return;
+  }
   const code = `
 import time, json
 ts = int(time.time())
@@ -164,6 +169,7 @@ print('ok')
 }
 
 function cleanupWorkerMemory(workerId: string): void {
+  if (usingCpp()) return; // cpp worker ids are unique per run; seed overwrites
   const code = `
 tbl = ddb.Table('agent_memory')
 resp = tbl.query(

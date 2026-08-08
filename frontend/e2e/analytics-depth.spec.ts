@@ -17,12 +17,16 @@ import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedRollupRow, cppSeedLedgerEntry, cppCleanupAnalyticsRollups } from "./helpers/cpp-seed-generic-ddbRequest";
+import { cppSeedPosts } from "./helpers/cpp-seed-profile-social";
+import { cppSeedVideo } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const TS = Date.now();
 
@@ -48,11 +52,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -108,6 +108,10 @@ function seedRollupRow(
   dateStr: string,
   data: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    cppSeedRollupRow(userSub, dateStr, data);
+    return;
+  }
   const tmpFile = `${tmpdir()}/analytics_depth_seed_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -151,6 +155,10 @@ function seedVideoMetadata(
   ownerUserId: string,
   data: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    cppSeedVideo({ videoId, ownerSub: ownerUserId, status: (data.status as string) ?? "published", extra: data });
+    return;
+  }
   const tmpFile = `${tmpdir()}/analytics_depth_video_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, JSON.stringify(data));
   try {
@@ -191,6 +199,17 @@ function seedPost(
   bodyPlain: string,
   data?: Record<string, unknown>,
 ): void {
+  if (usingCpp()) {
+    // cpp resolves post titles from tlc_newsfeed via nf_post_get(content_id),
+    // reading body_plain/body. The inline Python writes to :8001 which cpp never
+    // reads, so route the post into cpp's newsfeed (userId is already the sub).
+    cppSeedPosts({
+      authorSub: userId,
+      bumpProfileCount: false,
+      posts: [{ post_id: postId, body: bodyPlain, ...(data ?? {}) }],
+    });
+    return;
+  }
   const extraData = data ? JSON.stringify(data) : "{}";
   const tmpFile = `${tmpdir()}/analytics_depth_post_${Date.now()}_${Math.random().toString(36).slice(2)}.json`;
   writeFileSync(tmpFile, extraData);
@@ -236,6 +255,10 @@ function seedBillingLedger(
   reason: string,
   amountCents: number,
 ): void {
+  if (usingCpp()) {
+    cppSeedLedgerEntry(userSub, contentId, reason, amountCents);
+    return;
+  }
   const entryId = `ledger_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   execSync(
     `${PYTHON} -c "
@@ -257,6 +280,14 @@ print('seeded ledger', '${entryId}')
 }
 
 function cleanupRollups(userSub: string): void {
+  if (usingCpp()) {
+    // cpp reads tlc_analytics_rollups (moto :5005); the inline Python cleanup
+    // hits :8001 AnalyticsRollups which cpp never reads, so stale CREATOR#
+    // rollups from earlier sections bleed into §6's date-range sort. Route the
+    // cleanup to cpp's rollup table (userSub is already the cpp sub).
+    cppCleanupAnalyticsRollups(userSub);
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "

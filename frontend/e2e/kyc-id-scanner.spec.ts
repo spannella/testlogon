@@ -16,9 +16,11 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSetKycCaseIdentity } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 
 interface SessionData {
   user_sub: string;
@@ -38,11 +40,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -76,6 +74,10 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 
 // Seed a KYC case META.identity so cross-reference is deterministic.
 function seedCaseIdentity(caseId: string, firstName: string, lastName: string, dob: string, nat: string) {
+  if (usingCpp()) {
+    cppSetKycCaseIdentity(caseId, firstName, lastName, dob, nat);
+    return;
+  }
   const py = [
     "import boto3, os",
     "ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL','http://localhost:8001'), region_name=os.environ.get('AWS_DEFAULT_REGION','us-east-1'), aws_access_key_id='test', aws_secret_access_key='test')",

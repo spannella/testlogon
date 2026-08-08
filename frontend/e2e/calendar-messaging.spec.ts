@@ -42,6 +42,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppBearerPost, cppBearerGet, cppCheckCalendarShare } from "./helpers/cpp-seed-messaging-calls";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -49,7 +52,6 @@ import * as path from "path";
 // (/home/runner/...) and on any host, not just the dev box.
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 const BASE   = "http://localhost:3000";
-const API    = "http://localhost:8000";
 const PYTHON = `${REPO_ROOT}/.venv/bin/python3`;
 
 const ALICE_ID = "e2e_alice@test.local";
@@ -85,11 +87,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      `python3 ${REPO_ROOT}/e2e_session_setup.py`,
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -114,16 +112,20 @@ type Browser = import("@playwright/test").Browser;
 
 /** POST as any user with dev-mode Bearer token (messaging endpoints only). */
 async function apiPost(req: APIRequestContext, path: string, body: object, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
 /** GET as any user with dev-mode Bearer token (messaging endpoints only). */
 async function apiGet(req: APIRequestContext, path: string, userId: string) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
@@ -293,6 +295,9 @@ async function createEvent(
 
 /** DDB helper: check if a calendar share record exists for a recipient. */
 function checkCalendarShareInDdb(calendarId: string, recipientSub: string): boolean {
+  if (usingCpp()) {
+    return cppCheckCalendarShare(calendarId, recipientSub);
+  }
   try {
     const out = execSync(
       `${PYTHON} -c "
@@ -336,39 +341,29 @@ async function openDmWithBob(page: Page): Promise<string> {
     });
     _uiDmConvoId = ((await resp.json()) as { conversation_id: string }).conversation_id;
   }
-  // Use a unique touch text so we can identify the exact row in the sidebar
-  const touchText = `touch${Date.now()}`;
+  // Seed a touch message so the conversation has content, then deep-link
+  // straight to it via /messages/:conversationId (auto-opens the thread).
+  // The sidebar-row click was flaky: the row centre overlaps the avatar/name
+  // profile-links (role=link + stopPropagation), so a default click navigates
+  // to the recipient profile instead of opening the DM. Deep-linking is the
+  // deterministic, race-free equivalent.
   const session = getSessions()[ALICE_ID];
   await page.request.post(`${API}/messaging/conversations/${_uiDmConvoId}/messages`, {
-    data: { text: touchText },
+    data: { text: `touch${Date.now()}` },
     headers: { "x-csrf-token": session.csrf_token },
   }).catch(() => {});
-  // Register conversations-list listener before navigation so we catch the initial GET
-  const waitForConvos = page.waitForResponse(
-    r => r.url().includes("/messaging/conversations") &&
-         r.request().method() === "GET" &&
-         !r.url().match(/\/conversations\/[^/]+$/),
-    { timeout: 15000 },
-  );
-  await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await waitForConvos;   // ensure sidebar is populated before we search for the row
-  await page.waitForTimeout(300);
-  // Find the specific DM by the unique touch text (avoids ambiguity with other Bob DMs)
-  const row = page.getByRole("button").filter({ hasText: touchText });
-  await expect(row).toBeVisible({ timeout: 8000 });
-  // Register before clicking so we catch the initial messages GET
   const waitForMsgs = page.waitForResponse(
     r => r.url().includes(`/messaging/conversations/${_uiDmConvoId}/messages`) &&
          r.request().method() === "GET" &&
          !r.url().match(/\/messages\/[^/]+$/),
-    { timeout: 12000 },
-  );
-  await row.click();
+    { timeout: 15000 },
+  ).catch(() => undefined);
+  await page.goto(`${BASE}/messages/${_uiDmConvoId}`, { waitUntil: "load" });
   await expect(
     page.getByPlaceholder("Type a message...").or(
       page.getByPlaceholder("Type an encrypted message..."),
     ),
-  ).toBeVisible({ timeout: 5000 });
+  ).toBeVisible({ timeout: 15000 });
   await waitForMsgs;
   return _uiDmConvoId;
 }
@@ -616,8 +611,12 @@ test.describe("5. Calendar event share — public event page (no auth)", () => {
     const evt  = await createEvent(browser, calendarId, `E2E Public Event ${Date.now()}`);
     eventId    = evt.event_id;
     eventName  = evt.name;
-    // Fresh page = fresh browser context = no auth cookies
-    page = await browser.newPage();
+    // Truly anonymous: the chromium project injects the admin storageState by
+    // default, so browser.newPage() would inherit auth. Create an explicit
+    // context with no storageState so isAuthenticated is false and the public
+    // event page renders the "Sign in to add to calendar" prompt.
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    page = await anonCtx.newPage();
   });
   test.afterAll(async () => page.close());
 
@@ -1384,36 +1383,22 @@ test.describe("17. UI — meeting_poll MessageBubble card + voting UI", () => {
     const pollBody = await pollStateResp.json() as Record<string, unknown>;
     slotIds = (pollBody.slots as Array<Record<string, unknown>>).map(s => s.slot_id as string);
 
-    // Send unique touch text to bring DM to top of sidebar
-    const touchText17 = `touch17${Date.now()}`;
-    const touchResp = await page.request.post(`${API}/messaging/conversations/${convoId}/messages`, {
-      data: { text: touchText17 },
+    // Seed a touch message, then deep-link straight to the conversation via
+    // /messages/:conversationId (auto-opens the thread). The sidebar-row click
+    // was flaky because the row centre overlaps the avatar/name profile-links,
+    // navigating to the recipient profile instead of opening the DM.
+    await page.request.post(`${API}/messaging/conversations/${convoId}/messages`, {
+      data: { text: `touch17${Date.now()}` },
       headers: { "x-csrf-token": session.csrf_token },
-    });
-    if (!touchResp.ok()) throw new Error(`Touch text failed: ${touchResp.status()} ${await touchResp.text()}`);
-
-    // Wait for the conversations list before looking for the row
-    const waitForConvos17 = page.waitForResponse(
-      r => r.url().includes("/messaging/conversations") &&
-           r.request().method() === "GET" &&
-           !r.url().match(/\/conversations\/[^/]+$/),
-      { timeout: 15000 },
-    );
-    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await waitForConvos17;
-    await page.waitForTimeout(300);
-    // Find the specific row by the unique touch text (avoids ambiguity with other Bob DMs)
-    const row = page.getByRole("button").filter({ hasText: touchText17 });
-    await expect(row).toBeVisible({ timeout: 8000 });
-    // Register before clicking so we catch the initial messages GET for convoId
+    }).catch(() => {});
     const waitForMsgs17 = page.waitForResponse(
       r => r.url().includes(`/messaging/conversations/${convoId}/messages`) &&
            r.request().method() === "GET" &&
            !r.url().match(/\/messages\/[^/]+$/),
       { timeout: 15000 },
-    );
-    await row.click();
-    await expect(page.getByPlaceholder("Type a message...")).toBeVisible({ timeout: 5000 });
+    ).catch(() => undefined);
+    await page.goto(`${BASE}/messages/${convoId}`, { waitUntil: "load" });
+    await expect(page.getByPlaceholder("Type a message...")).toBeVisible({ timeout: 15000 });
     await waitForMsgs17;
     await page.waitForTimeout(500);
   });

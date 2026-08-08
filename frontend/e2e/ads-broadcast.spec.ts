@@ -1,6 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedSubscription,
+  cppDeleteSubscription,
+} from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
@@ -8,7 +15,6 @@ const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..")
 /*  Sections 364-368: ad config, pre-roll, mid-roll, SSE, UI          */
 /* ------------------------------------------------------------------ */
 
-const API = "http://localhost:8000";
 const TS = Date.now();
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
@@ -35,11 +41,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -82,6 +84,15 @@ async function apiPatch(page: Page, identity: string, path: string, body: object
 
 /** Seed/clear a subscription row so a viewer is (or isn't) an active subscriber. */
 function seedSubscription(subscriberSub: string, creatorSub: string, status: string): void {
+  if (usingCpp()) {
+    cppSeedSubscription({
+      subscriberSub,
+      creatorSub,
+      subId: creatorSub,
+      status,
+    });
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -109,6 +120,10 @@ print('ok')
 }
 
 function clearSubscription(subscriberSub: string, creatorSub: string): void {
+  if (usingCpp()) {
+    cppDeleteSubscription(subscriberSub, creatorSub);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os

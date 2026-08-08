@@ -19,6 +19,12 @@ import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { execFileSync } from "child_process";
+import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  resolveIdentityId,
+  cppSeedBulkPending,
+} from "./helpers/cpp-seed-payouts-subs-ats-misc";
 
 // ESM-safe __dirname (this spec runs under Playwright's ESM loader).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,13 +48,7 @@ interface SessionRec {
 // into the ui_session/ui_csrf/ui_access_token shape this spec expects.
 let SESSIONS: Record<string, SessionRec> = {};
 try {
-  const raw = JSON.parse(
-    execFileSync("python3", [REPO_ROOT + "/e2e_admin_session_setup.py"], {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-      encoding: "utf-8",
-    }),
-  ) as Record<string, { csrf_token: string; cookies: Array<{ name: string; value: string }> }>;
+  const raw = loadSessions() as Record<string, { csrf_token: string; cookies: Array<{ name: string; value: string }> }>;
   for (const key of Object.keys(raw)) {
     const s = raw[key];
     const ck: Record<string, string> = {};
@@ -97,6 +97,12 @@ function csrfHeaders(identity: string): Record<string, string> {
 
 /** Seed a pending payout/refund row directly in DynamoDB. Returns the ref_id. */
 function seedPending(kind: "payout" | "refund", userId: string, amountCents: number): string {
+  // cpp path: the Python seed script writes the :8001 DDB-Local; cpp reads its
+  // own tlc_creator_payouts / tlc_refund_requests. Seed a pending row there and
+  // return the ref_id (email->SUB resolution happens inside the wrapper).
+  if (usingCpp()) {
+    return cppSeedBulkPending(kind, userId, amountCents);
+  }
   const out = execFileSync(
     "bash",
     [

@@ -34,8 +34,8 @@ class ActiveSessionsViewModelTest {
     }
 
     private fun info(id: String, current: Boolean = false, lastSeen: Long = 0L) = SessionInfo(
-        sessionId = id, isCurrent = current, createdAt = 0L, lastSeenAt = lastSeen,
-        ip = "1.2.3.4", userAgent = "ua-$id", revoked = false, revokedAt = null,
+        sessionId = id, isCurrentWire = current, createdAtWire = 0L, lastSeenAtWire = lastSeen,
+        ipWire = "1.2.3.4", userAgentWire = "ua-$id", revoked = false, revokedAt = null,
     )
 
     private fun vm(repo: FakeRepo) = ActiveSessionsViewModel(repo)

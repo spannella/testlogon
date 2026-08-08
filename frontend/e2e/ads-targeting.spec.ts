@@ -23,12 +23,14 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppResetOwnerAdAccounts } from "./helpers/cpp-seed-commerce-billing";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
 // Session keys for e2e_admin_session_setup.py
 const ALICE_KEY = "alice";
 const BOB_KEY   = "bob";
@@ -60,11 +62,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -185,7 +183,14 @@ print('ok')
 test.beforeAll(async ({ browser }) => {
   // GAP-0039: wipe accumulated ad accounts so the 5-account cap never blocks
   // the account-creation setup below regardless of suite order.
-  ddbDeleteOwnerAccounts(["e2e_alice@test.local", "e2e_bob@test.local"]);
+  if (usingCpp()) {
+    // cpp keys ad accounts by SUB in tlc_ad_accounts (not email in the Python
+    // AdAccounts table), so wipe by the cpp session subs.
+    const sess = getSessions();
+    cppResetOwnerAdAccounts([sess[ALICE_KEY]?.user_sub, sess[BOB_KEY]?.user_sub]);
+  } else {
+    ddbDeleteOwnerAccounts(["e2e_alice@test.local", "e2e_bob@test.local"]);
+  }
 
   alicePage = await newIdentityPage(browser, ALICE_KEY);
   bobPage = await newIdentityPage(browser, BOB_KEY);

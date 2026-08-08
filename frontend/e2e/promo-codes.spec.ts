@@ -15,6 +15,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppResetPromoCodes, cppSeedPromoCode } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────
@@ -55,11 +57,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -187,7 +185,11 @@ let fixedCodeId: string;
 test.describe("Section A — Promo Code CRUD API", () => {
   test.beforeAll(async ({ browser }) => {
     // Clean up accumulated promo codes from previous test runs
-    cleanupAlicePromoCodes();
+    if (usingCpp()) {
+      cppResetPromoCodes(getSessions()[ALICE_ID].user_sub);
+    } else {
+      cleanupAlicePromoCodes();
+    }
     const ctx = await browser.newContext();
     alicePage = await ctx.newPage();
     await injectAuth(alicePage, ALICE_ID);
@@ -398,6 +400,14 @@ test.describe("Section B — Promo Validation API", () => {
     const expCode = EXP_CODE.toUpperCase();
     const expCodeId = `pc_expired${TS}`;
     const aliceSub_ = getSessions()[ALICE_ID].user_sub;
+    if (usingCpp()) {
+      cppSeedPromoCode({
+        userSub: aliceSub_, code: expCode, codeId: expCodeId,
+        discountType: "percentage", discountValue: 10, appliesTo: ["subscription"],
+        maxUses: 0, maxUsesPerUser: 0, minPurchaseCents: 0,
+        active: true, expiresAt: 1000000,
+      });
+    } else {
     const pyScript = `
 import boto3, json
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test")
@@ -432,6 +442,7 @@ print("OK")
       cwd: REPO_ROOT,
       timeout: 10_000,
     });
+    }
 
     const resp = await apiPost(bobP, BOB_ID, "/ui/promo-codes/validate", {
       code: expCode,
@@ -619,6 +630,14 @@ test.describe("Section D — Promo UI", () => {
     const aliceSub_ = getSessions()[ALICE_ID].user_sub;
     const seedCodeId = `pc_ui_${TS}`;
     const seedCode = uiCode.toUpperCase();
+    if (usingCpp()) {
+      cppSeedPromoCode({
+        userSub: aliceSub_, code: seedCode, codeId: seedCodeId,
+        discountType: "percentage", discountValue: 15, appliesTo: ["subscription"],
+        maxUses: 50, maxUsesPerUser: 1, minPurchaseCents: 0,
+        active: true, expiresAt: 0,
+      });
+    } else {
     const seedScript = `
 import boto3
 ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test")
@@ -652,6 +671,7 @@ print("OK")
     const tmpSeed = `${tmpdir()}/promo_ui_seed_${TS}.py`;
     fs.writeFileSync(tmpSeed, seedScript);
     execSync(`python3 ${tmpSeed}`, { cwd: REPO_ROOT, timeout: 10_000 });
+    }
 
     const aliceCtx = await browser.newContext();
     aliceP = await aliceCtx.newPage();

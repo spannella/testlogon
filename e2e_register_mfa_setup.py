@@ -48,9 +48,17 @@ for _candidate in [
 import boto3
 import requests as http
 
+# cpp-aware: when the harness runs against the C++ backend (E2E_USE_CPP=1) it
+# points E2E_API_BASE at cpp (https://localhost:8443 on .82) and the DDB store is
+# moto on .82 (tlc_* tables). This process is expected to run ON .82 (moto binds
+# 127.0.0.1 there). Python path stays byte-identical (defaults unchanged when the
+# env vars are absent).
+USE_CPP = os.environ.get("E2E_USE_CPP") == "1"
 API_BASE = os.environ.get("E2E_API_BASE", "http://localhost:8000")
 DDB_ENDPOINT = os.environ.get("DDB_ENDPOINT_URL", "http://localhost:8001")
-SESSIONS_TABLE = os.environ.get("DDB_SESSIONS_TABLE", "sessions")
+SESSIONS_TABLE = os.environ.get(
+    "DDB_SESSIONS_TABLE", "tlc_sessions" if USE_CPP else "sessions"
+)
 
 dynamodb = boto3.resource(
     "dynamodb",
@@ -93,7 +101,10 @@ def register_start(email: str, password: str, mfa_type: str, phone: str) -> None
         "enable_sms_mfa": mfa_type == "sms",
         "phone": phone if mfa_type == "sms" else None,
     }
-    resp = http.post(f"{API_BASE}/ui/register/start", json=payload, timeout=15)
+    resp = http.post(
+        f"{API_BASE}/ui/register/start", json=payload, timeout=15,
+        verify=not USE_CPP,  # cpp dev cert is self-signed
+    )
     resp.raise_for_status()
     data = resp.json()
     if data.get("status") != "ok":

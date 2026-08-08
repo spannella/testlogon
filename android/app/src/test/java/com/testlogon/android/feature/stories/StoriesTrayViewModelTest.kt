@@ -102,4 +102,10 @@ private class TrayFakeRepository(
     override suspend fun recordView(storyId: String): ApiResult<Unit> = ApiResult.Success(Unit)
     override fun isViewed(storyId: String): Boolean = false
     override fun markAuthorSeen(userId: String) {}
+    override suspend fun createStory(
+        mediaUrl: String,
+        overlay: String?,
+        linkUrl: String?,
+        linkLabel: String?,
+    ): ApiResult<Unit> = ApiResult.Success(Unit)
 }

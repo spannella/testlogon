@@ -18,6 +18,8 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
+import { cppResetOwnerAdAccounts } from "./helpers/cpp-seed-commerce-billing";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -46,11 +48,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -116,6 +114,16 @@ test.beforeAll(async ({ browser }) => {
   bobPage = await newIdentityPage(browser, BOB_ID);
   rootPage = await newIdentityPage(browser, ROOT_ID);
 
+  // GAP-0039 (cpp): a user may own at most 5 non-terminal ad accounts.
+  // E2E runs accumulate accounts for the cpp subs, so wipe them first or
+  // the create below 422s and breaks this beforeAll. No-op off cpp.
+  {
+    const _s = getAdminSessions();
+    cppResetOwnerAdAccounts([
+      _s[ALICE_ID]?.user_sub,
+      _s[BOB_ID]?.user_sub,
+    ]);
+  }
   // Create + approve an advertiser account.
   const acctResp = await apiPost(alicePage, ALICE_ID, "/ui/ads/accounts", {
     company_name: `SchedCo_${TS}`,

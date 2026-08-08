@@ -10,9 +10,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 const TS = Date.now();
 
@@ -36,11 +37,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -75,10 +72,28 @@ async function apiDelete(page: Page, identity: string, path: string) {
   return page.request.delete(`${API}${path}`, { headers: csrf(identity) });
 }
 
+// Navigate a page to the rendered Feed timeline and wait for the /feed API to
+// resolve. 117.2/117.3 originally piggy-backed on 117.1 leaving the page on the
+// feed, but a background nav/refetch can leave the SPA on the Dashboard between
+// tests, so each Feed-UI test now self-navigates to be order-independent.
+async function gotoFeed(page: Page) {
+  // Navigate straight to the feed route (more deterministic than a sidebar
+  // click that can race the dashboard render) and wait for the timeline API.
+  const [resp] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes("/feed") && r.status() === 200,
+      { timeout: 15_000 },
+    ),
+    page.goto(BASE + "/feed", { waitUntil: "domcontentloaded" }),
+  ]);
+  await resp.finished();
+}
+
 const ALICE = "alice";
 const BOB = "bob";
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+// cpp keys author_id/feed filters/UI attribution on the opaque login sub, not the email.
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 
 test.describe("Section 115 - Feed Fan-Out API", () => {
   let alicePage: Page;
@@ -359,9 +374,10 @@ test.describe("Section 117 - Feed Timeline UI", () => {
   });
 
   test("117.2 Own posts do not show following attribution", async () => {
-    test.setTimeout(15_000);
+    test.setTimeout(30_000);
+    await gotoFeed(bobPage);
     // Bob's own post text should be visible
-    await expect(bobPage.getByText(`UI fanout test bob ${TS}`).first()).toBeVisible({ timeout: 5_000 });
+    await expect(bobPage.getByText(`UI fanout test bob ${TS}`).first()).toBeVisible({ timeout: 12_000 });
 
     // There should be no following-attribution for Bob's own post
     // Get all following attributions and verify none mention Bob
@@ -374,10 +390,11 @@ test.describe("Section 117 - Feed Timeline UI", () => {
   });
 
   test("117.3 Feed loads both own and followed posts", async () => {
-    test.setTimeout(15_000);
+    test.setTimeout(30_000);
+    await gotoFeed(bobPage);
     // Both posts should appear in the feed
-    await expect(bobPage.getByText(`UI fanout test alice ${TS}`).first()).toBeVisible({ timeout: 5_000 });
-    await expect(bobPage.getByText(`UI fanout test bob ${TS}`).first()).toBeVisible({ timeout: 5_000 });
+    await expect(bobPage.getByText(`UI fanout test alice ${TS}`).first()).toBeVisible({ timeout: 12_000 });
+    await expect(bobPage.getByText(`UI fanout test bob ${TS}`).first()).toBeVisible({ timeout: 12_000 });
 
     // Clean up
     await apiDelete(alicePage, ALICE, `/posts/${aliceUIPostId}`);

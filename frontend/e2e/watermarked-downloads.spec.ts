@@ -18,6 +18,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVodVideo } from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -50,11 +52,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -126,31 +124,75 @@ function ddbExec(script: string): string {
   }).toString().trim();
 }
 
-function seedTestVideo(videoId: string, ownerSub: string) {
+function seedVideoMeta(opts: {
+  videoId: string;
+  ownerSub: string;
+  title: string;
+  allowDownload: boolean;
+  watermarkDownloads: boolean;
+  downloadMp4Key?: string;
+  downloadMp4Status?: string;
+  downloadMp4SizeBytes?: number;
+  description?: string;
+}): void {
   const now = Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    cppSeedVodVideo({
+      videoId: opts.videoId,
+      ownerSub: resolveIdentityId(opts.ownerSub),
+      title: opts.title,
+      status: "published",
+      visibility: "public",
+      extra: {
+        source_type: "upload",
+        allow_download: opts.allowDownload,
+        watermark_downloads: opts.watermarkDownloads,
+        download_mp4_key: opts.downloadMp4Key ?? "",
+        download_mp4_status: opts.downloadMp4Status ?? "",
+        download_mp4_size_bytes: opts.downloadMp4SizeBytes ?? 0,
+        download_count: 0,
+        ...(opts.description ? { description: opts.description } : {}),
+      },
+    });
+    return;
+  }
   ddbExec(`
 t = ddb.Table(os.environ.get('VIDEO_METADATA_TABLE_NAME', 'VideoMetadata'))
 t.put_item(Item={
-    'video_id': '${videoId}',
-    'owner_user_id': '${ownerSub}',
-    'title': 'E2E Watermark Test Video ${TS}',
-    'description': 'Test video for watermarked downloads',
+    'video_id': '${opts.videoId}',
+    'owner_user_id': '${opts.ownerSub}',
+    'title': '${opts.title}',
     'status': 'published',
     'visibility': 'public',
     'created_at': ${now},
     'updated_at': ${now},
-    'allow_download': True,
-    'download_mp4_key': 'tenants/${ownerSub}/assets/${videoId}/download/${videoId}.mp4',
-    'download_mp4_size_bytes': 1024,
-    'download_mp4_status': 'ready',
+    'allow_download': ${opts.allowDownload ? 'True' : 'False'},
+    'download_mp4_key': '${opts.downloadMp4Key ?? ''}',
+    'download_mp4_status': '${opts.downloadMp4Status ?? ''}',
+    'download_mp4_size_bytes': ${opts.downloadMp4SizeBytes ?? 0},
     'download_count': 0,
-    'watermark_downloads': False,
+    'watermark_downloads': ${opts.watermarkDownloads ? 'True' : 'False'},
     'source_type': 'upload',
-})
+  })
   `);
 }
 
+function seedTestVideo(videoId: string, ownerSub: string) {
+  seedVideoMeta({
+    videoId,
+    ownerSub,
+    title: `E2E Watermark Test Video ${TS}`,
+    description: "Test video for watermarked downloads",
+    allowDownload: true,
+    watermarkDownloads: false,
+    downloadMp4Key: `tenants/${resolveIdentityId(ownerSub)}/assets/${videoId}/download/${videoId}.mp4`,
+    downloadMp4SizeBytes: 1024,
+    downloadMp4Status: "ready",
+  });
+}
+
 function cleanupTestVideo(videoId: string) {
+  if (usingCpp()) return;
   try {
     ddbExec(`
 t = ddb.Table(os.environ.get('VIDEO_METADATA_TABLE_NAME', 'VideoMetadata'))
@@ -162,6 +204,7 @@ t.delete_item(Key={'video_id': '${videoId}'})
 }
 
 function cleanupWatermarkJobs(videoId: string) {
+  if (usingCpp()) return;
   try {
     ddbExec(`
 t = ddb.Table(os.environ.get('WATERMARK_JOBS_TABLE_NAME', 'watermark_jobs'))
@@ -310,25 +353,13 @@ test.describe("2 — Watermarked Download API", () => {
   test("2.4 Download denied when allow_download is false", async () => {
     // Disable downloads on a fresh video
     const VID_NO_DL = `e2e_wm_nodl_${TS}`;
-    ddbExec(`
-t = ddb.Table(os.environ.get('VIDEO_METADATA_TABLE_NAME', 'VideoMetadata'))
-t.put_item(Item={
-    'video_id': '${VID_NO_DL}',
-    'owner_user_id': '${aliceSub}',
-    'title': 'No Download Video',
-    'status': 'published',
-    'visibility': 'public',
-    'created_at': ${Math.floor(Date.now() / 1000)},
-    'updated_at': ${Math.floor(Date.now() / 1000)},
-    'allow_download': False,
-    'download_mp4_key': '',
-    'download_mp4_status': '',
-    'download_mp4_size_bytes': 0,
-    'download_count': 0,
-    'watermark_downloads': True,
-    'source_type': 'upload',
-})
-    `);
+    seedVideoMeta({
+      videoId: VID_NO_DL,
+      ownerSub: aliceSub,
+      title: "No Download Video",
+      allowDownload: false,
+      watermarkDownloads: true,
+    });
 
     const resp = await apiPost(alicePage, ALICE_ID, `/ui/videos/${VID_NO_DL}/download/watermarked`);
     expect(resp.status()).toBe(403);
@@ -340,25 +371,16 @@ t.put_item(Item={
   test("2.5 Non-watermarked download when watermark_downloads is false", async () => {
     // Create a video with watermark disabled
     const VID_PLAIN = `e2e_wm_plain_${TS}`;
-    ddbExec(`
-t = ddb.Table(os.environ.get('VIDEO_METADATA_TABLE_NAME', 'VideoMetadata'))
-t.put_item(Item={
-    'video_id': '${VID_PLAIN}',
-    'owner_user_id': '${aliceSub}',
-    'title': 'Plain Download Video',
-    'status': 'published',
-    'visibility': 'public',
-    'created_at': ${Math.floor(Date.now() / 1000)},
-    'updated_at': ${Math.floor(Date.now() / 1000)},
-    'allow_download': True,
-    'download_mp4_key': 'tenants/${aliceSub}/assets/${VID_PLAIN}/download/${VID_PLAIN}.mp4',
-    'download_mp4_size_bytes': 512,
-    'download_mp4_status': 'ready',
-    'download_count': 0,
-    'watermark_downloads': False,
-    'source_type': 'upload',
-})
-    `);
+    seedVideoMeta({
+      videoId: VID_PLAIN,
+      ownerSub: aliceSub,
+      title: "Plain Download Video",
+      allowDownload: true,
+      watermarkDownloads: false,
+      downloadMp4Key: `tenants/${resolveIdentityId(aliceSub)}/assets/${VID_PLAIN}/download/${VID_PLAIN}.mp4`,
+      downloadMp4SizeBytes: 512,
+      downloadMp4Status: "ready",
+    });
 
     const resp = await apiPost(alicePage, ALICE_ID, `/ui/videos/${VID_PLAIN}/download/watermarked`);
     expect(resp.status()).toBe(200);
@@ -442,26 +464,17 @@ test.describe("4 — Download UI", () => {
 
     // Seed video with downloads and watermark enabled
     const now = Math.floor(Date.now() / 1000);
-    ddbExec(`
-t = ddb.Table(os.environ.get('VIDEO_METADATA_TABLE_NAME', 'VideoMetadata'))
-t.put_item(Item={
-    'video_id': '${VID_UI}',
-    'owner_user_id': '${aliceSub}',
-    'title': 'E2E Watermark UI Video ${TS}',
-    'description': 'UI test video for watermarked downloads',
-    'status': 'published',
-    'visibility': 'public',
-    'created_at': ${now},
-    'updated_at': ${now},
-    'allow_download': True,
-    'download_mp4_key': 'tenants/${aliceSub}/assets/${VID_UI}/download/${VID_UI}.mp4',
-    'download_mp4_size_bytes': 2048,
-    'download_mp4_status': 'ready',
-    'download_count': 0,
-    'watermark_downloads': True,
-    'source_type': 'upload',
-})
-    `);
+    seedVideoMeta({
+      videoId: VID_UI,
+      ownerSub: aliceSub,
+      title: `E2E Watermark UI Video ${TS}`,
+      description: "UI test video for watermarked downloads",
+      allowDownload: true,
+      watermarkDownloads: true,
+      downloadMp4Key: `tenants/${resolveIdentityId(aliceSub)}/assets/${VID_UI}/download/${VID_UI}.mp4`,
+      downloadMp4SizeBytes: 2048,
+      downloadMp4Status: "ready",
+    });
 
     const aliceCtx = await browser.newContext();
     alicePage = await aliceCtx.newPage();

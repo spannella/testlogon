@@ -18,9 +18,11 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, isCpp } from "./helpers/session";
+import { cppSeedContentRevenue } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 const ALICE_KEY = "alice";
 const ALICE_ID = "e2e_alice@test.local";
@@ -54,11 +56,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -96,6 +94,15 @@ interface SeedEntry {
 }
 
 function seedContentRevenue(userSub: string, entries: SeedEntry[]): void {
+  // TRACK harness-seed: under cpp the inline :8001 python seeder below never
+  // reaches the C++ backend (it reads tlc_billing in its own moto). Resolve the
+  // real cpp SUB for the passed identity and seed the equivalent credit rows.
+  if (isCpp()) {
+    const sub = getSessions()[userSub]?.user_sub;
+    if (!sub) throw new Error("cpp content-revenue seed: sub unresolved for " + userSub);
+    cppSeedContentRevenue(sub, entries as unknown as any[], String(TS));
+    return;
+  }
   const b64 = Buffer.from(JSON.stringify(entries)).toString("base64");
   execSync(
     `${PYTHON} -c "

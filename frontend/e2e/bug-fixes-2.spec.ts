@@ -24,12 +24,15 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { pbkdf2Sync, randomBytes as cryptoRandomBytes, createCipheriv } from "crypto";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, cppRegisterThrowaway } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod, cppResetBillingPms, cppDeleteTotpDevices } from "./helpers/cpp-seed";
+import { cppReadLedger } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID   = "e2e_bob@test.local";
 
@@ -57,11 +60,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -98,7 +97,7 @@ async function apiPostBearer(
 ) {
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${getSessions()[userId].user_sub}` },
   });
 }
 
@@ -154,24 +153,26 @@ async function openDmWithBob(page: Page) {
     headers: { "x-csrf-token": session.csrf_token },
   }).catch(() => {});
 
-  // Register the conversations-list response listener BEFORE navigating.
-  const convsLoaded = page.waitForResponse(
-    (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
-      && !r.url().match(/\/conversations\/[^/]+$/),
-    { timeout: 15000 },
-  );
-  await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await convsLoaded;
-  await page.waitForTimeout(300);
-
-  const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-  await expect(row).toBeVisible({ timeout: 15000 });
-  await row.click();
+  // Deep-link straight to /messages/:conversationId (auto-opens the thread).
+  // Clicking the sidebar "E2E Bob" row was flaky: the row centre overlaps the
+  // avatar/name profile-links (role=link + stopPropagation) so a default click
+  // navigates to Bob's profile instead of opening the DM, and with hundreds of
+  // seeded convos the row often did not render in time. Deep-linking is
+  // deterministic and race-free.
+  const msgsLoaded = page
+    .waitForResponse(
+      (r) => r.url().includes(`/conversations/${convoId}/messages`) &&
+             r.request().method() === "GET",
+      { timeout: 15000 },
+    )
+    .catch(() => undefined);
+  await page.goto(`${BASE}/messages/${convoId}`, { waitUntil: "load" });
   await expect(
     page.getByPlaceholder("Type a message...").or(
       page.getByPlaceholder("Type an encrypted message..."),
     ),
-  ).toBeVisible({ timeout: 5000 });
+  ).toBeVisible({ timeout: 15000 });
+  await msgsLoaded;
 }
 
 // ─── DDB helpers ─────────────────────────────────────────────────────────────
@@ -196,6 +197,12 @@ ddb = boto3.resource(
 `;
 
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) {
+    // cpp store: write the PM into tlc_billing via the shim (byte-identical
+    // shape). The Python :8001 write below never reaches cpp.
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -248,6 +255,7 @@ print('injected')
 }
 
 function removePaymentMethod(userSub: string, pmId: string): void {
+  if (usingCpp()) { cppResetBillingPms(userSub, [pmId]); return; }
   try {
     execSync(
       `${PYTHON} -c "
@@ -281,6 +289,7 @@ print('removed')
 }
 
 function cleanupAllPaymentMethods(userSub: string): void {
+  if (usingCpp()) { cppResetBillingPms(userSub); return; }
   try {
     execSync(
       `${PYTHON} -c "
@@ -304,6 +313,7 @@ print('cleaned up all PMs')
 
 /** Delete all TOTP devices for a user from DynamoDB (best-effort cleanup). */
 function deleteAllTotpDevices(userSub: string): void {
+  if (usingCpp()) { cppDeleteTotpDevices(userSub); return; }
   try {
     execSync(
       `${PYTHON} -c "
@@ -366,9 +376,7 @@ test.describe("16. Tip compose bar — PM selector and send-gate when tip enable
     await page.reload({ waitUntil: "load" });
     await sec16ConvsLoaded;
     await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
-    await row.click();
+    await page.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
     await expect(page.getByPlaceholder("Type a message...")).toBeVisible({ timeout: 5000 });
   });
 
@@ -476,8 +484,19 @@ test.describe("17. Tip on new message — billing ledger debit entry (send_text_
   test("Billing ledger has a tip debit entry (send_text_message tip path)", () => {
     // The tip-on-new-message path writes reason="Tip: message" (unified format).
     // Legacy entries used "Tip attached to message".
-    const result = execSync(
-      `${PYTHON} -c "
+    let count: number;
+    if (usingCpp()) {
+      // cpp store: read the ledger via the shim; filter client-side. cppReadLedger
+      // normalizes cpp's tip_debit -> debit so the type=='debit' predicate matches.
+      const rows = cppReadLedger(aliceSub);
+      count = rows.filter(
+        (r) =>
+          r.type === "debit" &&
+          ["Tip attached to message", "Tip: message"].includes(r.reason as string),
+      ).length;
+    } else {
+      const result = execSync(
+        `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE.trim()}
 from boto3.dynamodb.conditions import Key, Attr
 tbl = ddb.Table('billing')
@@ -488,10 +507,12 @@ resp = tbl.query(
 )
 print(len(resp['Items']))
 "`,
-      { timeout: 10_000 },
-    ).toString().trim();
+        { timeout: 10_000 },
+      ).toString().trim();
+      count = parseInt(result, 10);
+    }
 
-    expect(parseInt(result, 10)).toBeGreaterThan(0);
+    expect(count).toBeGreaterThan(0);
   });
 });
 
@@ -544,8 +565,8 @@ test.describe("18. Locked message — sidebar preview shows real text after unlo
   test("Sidebar shows '[Locked message]' before unlocking", async () => {
     // No refetch needed — the conversations list was already loaded in beforeAll.
     // The sidebar should already show "[Locked message]" from the GET response.
-    const row = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 5000 });
+    const row = alicePage.getByTestId(`conversation-row-${_dmConvoId}`);
+    await expect(row).toBeVisible({ timeout: 8000 });
     await expect(row).toContainText("[Locked message]", { timeout: 8000 });
   });
 
@@ -570,8 +591,8 @@ test.describe("18. Locked message — sidebar preview shows real text after unlo
     await sec18ConvsLoaded;
     await alicePage.waitForTimeout(300);
 
-    const row = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 5000 });
+    const row = alicePage.getByTestId(`conversation-row-${_dmConvoId}`);
+    await expect(row).toBeVisible({ timeout: 8000 });
     // The sidebar should no longer show "[Locked message]" — it should now show
     // the unlocked text (is_unlocked=true → getPreviewText returns the real text).
     await expect(row).toContainText(LOCK_TEXT, { timeout: 8000 });
@@ -631,9 +652,7 @@ test.describe("19. Tip checkbox — unblocked after PM add + billing nav (no pag
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec19ConvsLoaded;
     await page.waitForTimeout(300);
-    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
+    await page.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
     await expect(page.getByPlaceholder("Type a message...")).toBeVisible({ timeout: 5000 });
 
     // The tip toggle in "+" popover must now be enabled — no page refresh needed.
@@ -779,9 +798,7 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec20BobConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    await aliceRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
     await expect(
       bobPage.getByText("Encrypted image").last()
     ).toBeVisible({ timeout: 12000 });
@@ -818,10 +835,7 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec20WrongPwConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    // Click the preview area (avoid avatar/name links which navigate to profile)
-    await aliceRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
 
     await expect(
       bobPage.getByRole("button", { name: "Decrypt to view" }).last()
@@ -2459,9 +2473,7 @@ test.describe("29. Encrypted video message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec29BobConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    await aliceRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
     await expect(
       bobPage.getByText("Encrypted video").last()
     ).toBeVisible({ timeout: 12000 });
@@ -2506,10 +2518,7 @@ test.describe("29. Encrypted video message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec29WrongPwConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
-    await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    // Click the preview area (avoid avatar/name links which navigate to profile)
-    await aliceRow.evaluate((el) => (el as HTMLElement).click());
+    await bobPage.goto(BASE + "/messages/" + _dmConvoId, { waitUntil: "load" });
 
     await expect(
       bobPage.getByRole("button", { name: "Decrypt to view" }).last()

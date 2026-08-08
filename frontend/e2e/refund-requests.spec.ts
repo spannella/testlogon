@@ -16,11 +16,13 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedLedgerEntries, cppResetRefundRequests } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const API = "http://localhost:8000";
 const TS = Date.now();
 const ALICE_ID = "e2e_alice@test.local";
 const ROOT_SUB = "root.admin@testdev.local";
@@ -47,11 +49,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -100,6 +98,10 @@ ddb_client = boto3.client('dynamodb', endpoint_url='http://localhost:8001', regi
 `;
 
 function ensureRefundRequestsTable(): void {
+  if (usingCpp()) {
+    // cpp's tlc_refund_requests already exists in its moto; no create needed.
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 try:
@@ -157,6 +159,24 @@ except ddb_client.exceptions.ResourceInUseException:
  */
 function seedLedgerEntry(entryId: string, amountCents: number, reason: string, tsOverride?: number): void {
   const ts = tsOverride ?? Math.floor(Date.now() / 1000);
+  if (usingCpp()) {
+    // cpp keys the ledger by the SUB (not the email) and reads it from its OWN
+    // tlc_billing; the refund-create endpoint's rr_find_ledger scans that store
+    // for the matching entry_id. Seed alice's sub, not ALICE_ID (the email).
+    cppSeedLedgerEntries([
+      {
+        userSub: getSessions()["alice"].user_sub,
+        entryId,
+        ts,
+        type: "charge",
+        amountCents,
+        state: "settled",
+        reason,
+        currency: "USD",
+      },
+    ]);
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 tbl = ddb.Table('billing')
@@ -193,6 +213,14 @@ function seedOldLedgerEntry(entryId: string, amountCents: number): void {
  * Scans the ByRequesterCreatedAt GSI and batch-deletes matching items.
  */
 function cleanupAliceRefundRequests(): void {
+  if (usingCpp()) {
+    // The refund-create endpoint enforces MAX_REFUND_REQUESTS_PER_MONTH (default
+    // 3) by COUNTING the requester's requests in cpp's tlc_refund_requests -- so
+    // even though per-run entry ids are unique, prior runs' requests accumulate
+    // and push Alice over the cap (-> 400 on 90.1). Reap them from cpp's store.
+    cppResetRefundRequests(getSessions()["alice"].user_sub);
+    return;
+  }
   execSync(
     `python3 -c "${DDB_PY_PRELUDE}
 tbl = ddb.Table('RefundRequests')

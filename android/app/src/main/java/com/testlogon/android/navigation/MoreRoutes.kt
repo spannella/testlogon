@@ -352,6 +352,9 @@ object MoreRoutes {
     // pattern); a non-admin sees no admin data.
     const val ADMIN_DASHBOARD = AdminDashboardDest.ROUTE
 
+    // Markets (exchange market-data, VIEW-ONLY): instrument list -> per-symbol chart/book/tape.
+    const val MARKETS = MarketsDest.ROUTE
+
     // AND-404: READ-ONLY admin email/SMS delivery dashboards (per-channel stats + recent activity). Self-gate
     // via the backend 403 -> the screen's Forbidden state (cf. the AND-403 admin-dashboard pattern); a non-admin
     // sees no admin data. Two concrete entry routes off the shared `{channel}` destination template.
@@ -477,6 +480,9 @@ object MoreRoutes {
     // P0-BLOCK: Settings/Privacy — the blocked-users management screen (list + unblock).
     const val BLOCKED_USERS = BlockedUsersDest.ROUTE
 
+    // PAR-27: the unified Safety Center hub (aggregates blocked users / data export / DMCA / account deletion).
+    const val SAFETY_CENTER = SafetyCenterDest.ROUTE
+
     // Web-parity: questionnaire BUILDER (creator authoring: drafts list -> create -> sections +
     // questions of 9 types -> publish). Distinct from the respondent renderer.
     const val QUESTIONNAIRE_BUILDER = QuestionnaireBuilderListDest.ROUTE
@@ -501,6 +507,11 @@ object MoreRoutes {
     val SETTINGS: String get() = MainDest.Settings.route
     const val HELP = "more/help"
     const val ABOUT = "more/about"
+
+    // PAR-29: static legal screens reachable from the Support hub.
+    val TERMS: String get() = LegalRoutes.TERMS
+    val GUIDELINES: String get() = LegalRoutes.GUIDELINES
+    val CONTACT: String get() = LegalRoutes.CONTACT
 
     /** Routes the hub treats as registered (real destinations or intentionally-surfaced stubs). */
     val REGISTERED: Set<String>
@@ -619,6 +630,7 @@ object MoreRoutes {
             SUPPORT,
             WEBHOOKS,
             ADMIN_DASHBOARD,
+            MARKETS,
             ADMIN_EMAIL_DASHBOARD,
             ADMIN_SMS_DASHBOARD,
             ADMIN_MODERATION,
@@ -679,6 +691,7 @@ object MoreRoutes {
             KYC,
             API_KEYS,
             BLOCKED_USERS,
+            SAFETY_CENTER,
             QUESTIONNAIRE_BUILDER,
             DELEGATION_KEYS,
             CUSTOM_EMOJIS,
@@ -688,6 +701,9 @@ object MoreRoutes {
             SETTINGS,
             HELP,
             ABOUT,
+            TERMS,
+            GUIDELINES,
+            CONTACT,
         )
 }
 

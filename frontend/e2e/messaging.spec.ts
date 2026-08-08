@@ -14,14 +14,19 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppBearerPost, cppBearerGet, cppBearerPatch, cppBearerDelete } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
+// cpp view/receipt rows carry the user SUB as user_id, not the email. Resolve
+// the sub for result comparisons (session-map keys elsewhere stay the emails).
+const BOB_UID = resolveIdentityId(BOB_ID);
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
 
@@ -47,11 +52,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 }
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -112,16 +113,24 @@ async function openConv(page: Page, convId: string) {
 
 /** Direct API call via page.request (uses Bearer token in DEV_MODE). */
 async function apiPost(page: Page, path: string, body: object, userId = ALICE_ID) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  // cpp: even browser.newPage() inherits the project admin storageState cookie,
+  // which JWT-verifies and shadows the raw-sub bearer -> the call runs as admin
+  // ("Not a participant"). Route through a cookie-free context so cpp takes the
+  // dev raw-sub path and the call is genuinely `userId`.
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   const resp = await page.request.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
   return resp;
 }
 
 async function apiGet(page: Page, path: string, userId = ALICE_ID) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   const resp = await page.request.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
   return resp;
 }
@@ -137,9 +146,9 @@ function getTestConvId(): string {
   if (!_testConvId) {
     const raw = execSync(
       `curl -s -X POST ${API}/messaging/conversations ` +
-      `-H 'Authorization: Bearer ${ALICE_ID}' ` +
+      `-H 'Authorization: Bearer ${getSessions()[ALICE_ID].user_sub}' ` +
       `-H 'Content-Type: application/json' ` +
-      `-d '{"type":"dm","participant_ids":["${BOB_ID}"]}'`
+      `-d '{"type":"dm","participant_ids":["${getSessions()[BOB_ID].user_sub}"]}'`
     ).toString();
     _testConvId = JSON.parse(raw).conversation_id;
     if (!_testConvId) throw new Error("Failed to create test conversation: " + raw);
@@ -152,7 +161,7 @@ function getTestMsgId(): string {
     const cid = getTestConvId();
     const raw = execSync(
       `curl -s -X POST ${API}/messaging/conversations/${cid}/messages ` +
-      `-H 'Authorization: Bearer ${ALICE_ID}' ` +
+      `-H 'Authorization: Bearer ${getSessions()[ALICE_ID].user_sub}' ` +
       `-H 'Content-Type: application/json' ` +
       `-d '{"text":"E2E test message"}'`
     ).toString();
@@ -165,10 +174,15 @@ function getTestMsgId(): string {
 // ─── 1. Basic page load ───────────────────────────────────────────────────────
 
 test.describe("1. Messages page loads correctly", () => {
-  test("Redirects to /login without auth", async ({ page }) => {
+  test("Redirects to /login without auth", async ({ browser }) => {
+    // The default `page` fixture inherits the project admin storageState under
+    // cpp, so it is authenticated. Use a genuinely cookieless context.
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const page = await anonCtx.newPage();
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
     await page.waitForTimeout(500);
     expect(page.url()).toContain("/login");
+    await anonCtx.close();
   });
 
   test("Shows messages page when authenticated", async ({ browser }) => {
@@ -270,11 +284,15 @@ test.describe("2b. Messaging profile links", () => {
     await page.close();
   });
 
-  test("Unauthenticated user is redirected to login before messaging profile links are available", async ({ page }) => {
+  test("Unauthenticated user is redirected to login before messaging profile links are available", async ({ browser }) => {
+    // Genuinely cookieless context (default `page` carries admin storageState).
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const page = await anonCtx.newPage();
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
     await page.waitForTimeout(500);
     await expect(page).toHaveURL(/\/login/);
     await expect(page.locator("[aria-label*='Open'][aria-label*='profile']")).toHaveCount(0);
+    await anonCtx.close();
   });
 });
 
@@ -404,11 +422,13 @@ test.describe("4. Message operations (API)", () => {
   test("Can edit a message", async () => {
     const cid = getTestConvId();
     const mid = getTestMsgId();
-    const resp = await page.request.patch(
+    const resp = usingCpp()
+      ? await cppBearerPatch(`/messaging/conversations/${cid}/messages/${mid}`, { text: "Edited text" }, getSessions()[ALICE_ID].user_sub)
+      : await page.request.patch(
       `${API}/messaging/conversations/${cid}/messages/${mid}`,
       {
         data: { text: "Edited text" },
-        headers: { Authorization: `Bearer ${ALICE_ID}` },
+        headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` },
       }
     );
     expect(resp.ok()).toBe(true);
@@ -436,7 +456,7 @@ test.describe("4. Message operations (API)", () => {
     expect(resp.ok()).toBe(true);
     const viewers = await resp.json();
     expect(Array.isArray(viewers)).toBe(true);
-    const bob = viewers.find((v: { user_id?: string }) => v.user_id === BOB_ID);
+    const bob = viewers.find((v: { user_id?: string }) => v.user_id === BOB_UID);
     expect(bob).toBeTruthy();
   });
 
@@ -449,9 +469,11 @@ test.describe("4. Message operations (API)", () => {
     );
     expect(createResp.ok()).toBe(true);
     const created = await createResp.json();
-    const deleteResp = await page.request.delete(
+    const deleteResp = usingCpp()
+      ? await cppBearerDelete(`/messaging/conversations/${cid}/messages/${created.message_id}`, getSessions()[ALICE_ID].user_sub)
+      : await page.request.delete(
       `${API}/messaging/conversations/${cid}/messages/${created.message_id}`,
-      { headers: { Authorization: `Bearer ${ALICE_ID}` } }
+      { headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` } }
     );
     expect(deleteResp.ok()).toBe(true);
   });
@@ -639,9 +661,11 @@ test.describe("7. Scheduled messages", () => {
       send_at: Math.floor(Date.now() / 1000) + 7200,
     });
     const msg = await createResp.json();
-    const cancelResp = await page.request.delete(
+    const cancelResp = usingCpp()
+      ? await cppBearerDelete(`/messaging/conversations/${cid}/messages/${msg.message_id}/schedule`, getSessions()[ALICE_ID].user_sub)
+      : await page.request.delete(
       `${API}/messaging/conversations/${cid}/messages/${msg.message_id}/schedule`,
-      { headers: { Authorization: `Bearer ${ALICE_ID}` } }
+      { headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` } }
     );
     expect(cancelResp.ok()).toBe(true);
   });
@@ -720,7 +744,7 @@ test.describe("8. Image message details", () => {
     );
     expect(resp.ok()).toBe(true);
     const viewers = await resp.json();
-    const bob = viewers.find((v: { user_id?: string }) => v.user_id === BOB_ID);
+    const bob = viewers.find((v: { user_id?: string }) => v.user_id === BOB_UID);
     expect(bob).toBeTruthy();
     expect(bob.last_viewed_at).toBeGreaterThan(0);
   });
@@ -760,11 +784,13 @@ test.describe("9. Gallery and attachments", () => {
 
   test("Gallery endpoint returns correct shape", async () => {
     const cid = getTestConvId();
-    const resp = await page.request.get(
+    const resp = usingCpp()
+      ? await cppBearerGet(`/messaging/conversations/${cid}/gallery?type=image&limit=10`, getSessions()[ALICE_ID].user_sub)
+      : await page.request.get(
       `${API}/messaging/conversations/${cid}/gallery`,
       {
         params: { type: "image", limit: "10" },
-        headers: { Authorization: `Bearer ${ALICE_ID}` },
+        headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` },
       }
     );
     expect(resp.ok()).toBe(true);
@@ -819,7 +845,7 @@ test.describe("10. Presence and typing", () => {
   test("User search works", async () => {
     const resp = await page.request.get(`${API}/messaging/contacts/search`, {
       params: { q: "bob" },
-      headers: { Authorization: `Bearer ${ALICE_ID}` },
+      headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` },
     });
     expect(resp.ok()).toBe(true);
     const results = await resp.json();

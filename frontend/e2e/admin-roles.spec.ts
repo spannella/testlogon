@@ -25,15 +25,21 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { cppResetUserRole } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const API        = "http://localhost:8000";
 const ROOT_SUB   = "root.admin@testdev.local";
-const BOB_ID     = "e2e_bob@test.local";
-const ALICE_ID   = "e2e_alice@test.local";
-const CHARLIE_ID = "e2e_charlie@test.local";
+const BOB_ID     = resolveIdentityId("e2e_bob@test.local");
+const ALICE_ID   = resolveIdentityId("e2e_alice@test.local");
+// CHARLIE_ID must match the account the "charlie_admin" SESSION authenticates as
+// (harness maps charlie_admin -> e2e_admin, a general admin). The impersonation
+// test asserts actor_sub === CHARLIE_ID for a charlie_admin call, so resolve from
+// that same identity, not the distinct e2e_charlie fixture. (root-rbac batch fix.)
+const CHARLIE_ID = resolveIdentityId("charlie_admin");
 
 // ─── Session bootstrap ─────────────────────────────────────────────────────────
 
@@ -57,11 +63,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -112,6 +114,14 @@ async function apiGet(page: Page, path: string, params?: ReqParams) {
 
 /** Reset Bob's role back to "user" in the auth users table (cleanup). */
 function resetBobToUser(): void {
+  // Under E2E_USE_CPP the C++ backend reads its OWN tlc_users store (moto on
+  // .82), NOT the Python DDB-Local at :8001 the block below targets. Route the
+  // reset to cpp's world via the seed shim so Bob's role is actually flipped in
+  // the store cpp reads (otherwise the grant tests inherit a stale admin Bob).
+  if (isCpp()) {
+    cppResetUserRole(BOB_ID);
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os

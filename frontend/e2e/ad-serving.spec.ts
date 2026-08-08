@@ -19,6 +19,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, runCppShim } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -52,11 +54,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -109,6 +107,15 @@ let creativeId2: string;
 // ── Setup ────────────────────────────────────────────────────────────────────
 
 function purgeAdAccounts(ownerSub: string): void {
+  if (usingCpp()) {
+    // cpp stores ad accounts in tlc_ad_accounts on moto (:5005) keyed by
+    // owner_sub; the Python purge below targets DDB-Local (:8001)/AdAccounts,
+    // a NO-OP against cpp. Without this, accounts accumulate to
+    // AD_MAX_ACCOUNTS_PER_USER (5) and POST /ui/ads/accounts 422s
+    // ("Account limit reached"), shedding the beforeAll. Mark them terminal.
+    runCppShim("reset_ad_accounts.py", { subs: [ownerSub] });
+    return;
+  }
   execSync(
     `${REPO_ROOT}/.venv/bin/python3 -c "
 import boto3, os

@@ -7,9 +7,12 @@ import { test, expect, request as playwrightRequest } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const BASE = process.env.E2E_BASE_URL || "http://localhost:8000";
+// Honor E2E_API_BASE (cpp -> vite proxy at :3000) so this suite targets the
+// same backend as the rest of the cpp e2e run; E2E_BASE_URL still overrides.
+const BASE = process.env.E2E_BASE_URL || process.env.E2E_API_BASE || "http://localhost:8000";
 
 const ALICE = "e2e_alice@test.local"; // broadcaster / owner
 const BOB = "e2e_bob@test.local"; // feed viewer / non-owner
@@ -18,12 +21,7 @@ const BOB = "e2e_bob@test.local"; // feed viewer / non-owner
 // these endpoints require real cookie sessions. Load them fresh (keyed by short
 // name) and alias by user_sub so email ids resolve too.
 interface Sess { csrf_token: string; cookies: Array<{ name: string; value: string }>; user_sub: string }
-const _sessions: Record<string, Sess> = JSON.parse(
-  execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-    cwd: REPO_ROOT,
-    timeout: 30_000,
-  }).toString(),
-);
+const _sessions: Record<string, Sess> = loadSessions();
 for (const k of Object.keys(_sessions)) {
   const s = _sessions[k];
   if (s?.user_sub && !_sessions[s.user_sub]) _sessions[s.user_sub] = s;

@@ -20,6 +20,9 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, runCppShim } from "./helpers/cpp-seed";
+import { cppResetOwnerAdAccounts } from "./helpers/cpp-seed-commerce-billing";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -48,11 +51,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -103,6 +102,18 @@ function seedRollup(
   );
   const totalImpr = Object.values(byCreative).reduce((a, v) => a + v.impressions, 0);
   const totalClicks = Object.values(byCreative).reduce((a, v) => a + v.clicks, 0);
+  if (usingCpp()) {
+    // cpp reads campaign rollups (pk=CAMP#<cid>, sk=ROLLUP#daily#<date>,
+    // by_creative map) from tlc_ad_analytics_rollups, not the Python store.
+    runCppShim("seed_ad_campaign_rollup.py", {
+      campaign_id: campaignId,
+      account_id: accountId,
+      by_creative: byCreative,
+      date: today,
+    });
+    return;
+  }
+  void totalImpr; void totalClicks;
   const py = `
 import json
 from app.core.tables import T
@@ -144,6 +155,14 @@ test.beforeAll(async ({ browser }) => {
   alicePage = await newIdentityPage(browser, ALICE_ID);
   bobPage = await newIdentityPage(browser, BOB_ID);
   rootPage = await newIdentityPage(browser, ROOT_ID);
+
+  // cpp caps ad accounts per owner at 5; prior runs accumulate in cpp's own
+  // store (the spec never cleans it up), so reset Alice's accounts first. No-op
+  // on the Python path.
+  if (usingCpp()) {
+    const aliceSub = getAdminSessions()[ALICE_ID]?.user_sub;
+    cppResetOwnerAdAccounts([aliceSub].filter(Boolean) as string[]);
+  }
 
   // Create + approve an advertiser account.
   const acctResp = await apiPost(alicePage, ALICE_ID, "/ui/ads/accounts", {

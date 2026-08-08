@@ -8,13 +8,15 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVodVideo } from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
-const API = "http://localhost:8000";
-const ALICE_SUB = "e2e_alice@test.local";
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
 const BOB_SUB = "e2e_bob@test.local";
 const ALICE_KEY = "alice";
 const BOB_KEY = "bob";
@@ -43,11 +45,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -139,6 +137,18 @@ function runPy(script: string): string {
 function seedVideo(videoId: string, ownerSub: string, opts: { access_mode?: string; price_cents?: number } = {}): void {
   const accessMode = opts.access_mode || "free";
   const priceCents = opts.price_cents ?? 0;
+  if (usingCpp()) {
+    cppSeedVodVideo({
+      videoId,
+      ownerSub,
+      title: `Test VOD ${TS}`,
+      status: "published",
+      accessMode,
+      priceCents,
+      durationSeconds: 120,
+    });
+    return;
+  }
   runPy(`
 tbl = ddb.Table('VideoMetadata')
 tbl.put_item(Item={

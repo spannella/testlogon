@@ -2,6 +2,7 @@ package com.testlogon.android.feature.activity
 
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +62,8 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.activity.ActivityEvent
 import com.testlogon.android.data.activity.ActivityEventType
+import com.testlogon.android.navigation.PostDetailDest
+import com.testlogon.android.navigation.PublicProfileDest
 
 /** Stable testTags for the activity feed (AND-091 / AND-096). */
 object ActivityTestTags {
@@ -78,6 +81,7 @@ object ActivityTestTags {
 @Composable
 fun ActivityFeedRoute(
     onBack: () -> Unit,
+    onNavigate: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: ActivityViewModel = hiltViewModel(),
 ) {
@@ -86,6 +90,7 @@ fun ActivityFeedRoute(
         items = items,
         onRefresh = { items.refresh() },
         onBack = onBack,
+        onNavigate = onNavigate,
         modifier = modifier,
     )
 }
@@ -97,6 +102,7 @@ fun ActivityFeedScreen(
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onNavigate: (String) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     Scaffold(
@@ -149,7 +155,7 @@ fun ActivityFeedScreen(
                             modifier = Modifier.testTag(ActivityTestTags.EMPTY),
                         )
 
-                    else -> ActivityList(items = items, listState = listState)
+                    else -> ActivityList(items = items, listState = listState, onNavigate = onNavigate)
                 }
             }
         }
@@ -160,6 +166,7 @@ fun ActivityFeedScreen(
 private fun ActivityList(
     items: LazyPagingItems<ActivityEvent>,
     listState: androidx.compose.foundation.lazy.LazyListState,
+    onNavigate: (String) -> Unit,
 ) {
     LazyColumn(
         state = listState,
@@ -168,7 +175,7 @@ private fun ActivityList(
         items(count = items.itemCount, key = { index -> items.peek(index)?.id ?: index }) { index ->
             val item = items[index]
             if (item != null) {
-                ActivityRow(item = item)
+                ActivityRow(item = item, onNavigate = onNavigate)
             }
         }
 
@@ -200,7 +207,7 @@ private fun ActivityList(
 }
 
 @Composable
-private fun ActivityRow(item: ActivityEvent) {
+private fun ActivityRow(item: ActivityEvent, onNavigate: (String) -> Unit = {}) {
     val relative = remember(item.createdAtEpochSeconds) { relativeTime(item.createdAtEpochSeconds) }
     val title = remember(item.type, item.rawType) { titleFor(item) }
     val rowBackground = if (item.read) {
@@ -215,11 +222,24 @@ private fun ActivityRow(item: ActivityEvent) {
         if (relative.isNotEmpty()) append(", ").append(relative)
     }
 
+    // PAR-33 - derive a tap target from the event's ids: post-detail for post-like targets, else the
+    // actor's public profile. Display-only events (no usable id) stay non-clickable.
+    val targetRoute = remember(item.targetType, item.targetId, item.actorId) {
+        val tType = item.targetType
+        val tId = item.targetId
+        when {
+            tType != null && tType.lowercase().contains("post") && !tId.isNullOrEmpty() ->
+                PostDetailDest.build(tId)
+            item.actorId.isNotEmpty() -> PublicProfileDest.build(item.actorId)
+            else -> null
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .background(rowBackground)
+            .let { m -> if (targetRoute != null) m.clickable { onNavigate(targetRoute) } else m }
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .testTag(ActivityTestTags.ROW)
             .clearAndSetSemantics {

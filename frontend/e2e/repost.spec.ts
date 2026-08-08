@@ -8,13 +8,15 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { cppSeedPosts, cppCleanupRepost, usingCpp } from "./helpers/cpp-seed-profile-social";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
@@ -34,11 +36,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -83,6 +81,17 @@ function createTestPost(
   body: string,
   viewerIds: string[] = [],
 ): void {
+  if (usingCpp()) {
+    // cpp reads posts from tlc_newsfeed (POST#<id>/META). Seed one published
+    // post with the exact id/body the test asserts on. Feed-fanout viewerIds
+    // are ignored under cpp (the UI section only needs the post to exist).
+    cppSeedPosts({
+      authorSub: authorId,
+      bumpProfileCount: false,
+      posts: [{ post_id: postId, body, visibility: "public", status: "published" }],
+    });
+    return;
+  }
   // Python list literal of viewers to fan the post out to (so the post shows
   // in their feed, not just the author's). Use single-quoted strings: the
   // whole python script is wrapped in double quotes for `python3 -c`, so
@@ -164,6 +173,17 @@ print('created')
 }
 
 function createLockedTestPost(postId: string, authorId: string, body: string, priceCents: number): void {
+  if (usingCpp()) {
+    cppSeedPosts({
+      authorSub: authorId,
+      bumpProfileCount: false,
+      posts: [{
+        post_id: postId, body, visibility: "public", status: "published",
+        locked: true, unlock_price_cents: priceCents,
+      }],
+    });
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time
@@ -214,6 +234,10 @@ print('created')
 }
 
 function cleanupRepost(userId: string, postId: string): void {
+  if (usingCpp()) {
+    cppCleanupRepost(userId, postId);
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "

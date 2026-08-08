@@ -22,14 +22,15 @@
 import { test, expect, type Page, type Browser, type APIRequestContext } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const API      = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID   = "e2e_bob@test.local";
-const CHARLIE_ID = "e2e_charlie@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID   = resolveIdentityId("e2e_bob@test.local");
+const CHARLIE_ID = resolveIdentityId("e2e_charlie@test.local");
 const TS = Date.now();
 
 // ─── Admin session bootstrap ──────────────────────────────────────────────────
@@ -49,11 +50,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -71,14 +68,14 @@ async function newIdentityPage(browser: Browser, identity: string): Promise<Page
 async function msgPost(request: APIRequestContext, userId: string, path: string, body?: unknown) {
   return request.post(`${API}/${path}`, {
     data: body ?? {},
-    headers: { "Authorization": `Bearer ${userId}`, "Content-Type": "application/json" },
+    headers: { "Authorization": `Bearer ${getAdminSessions()[userId].user_sub}`, "Content-Type": "application/json" },
   });
 }
 
 /** GET from messaging API using Bearer <user_id> header. */
 async function msgGet(request: APIRequestContext, userId: string, path: string, params?: Record<string, string>) {
   return request.get(`${API}/${path}`, {
-    headers: { "Authorization": `Bearer ${userId}` },
+    headers: { "Authorization": `Bearer ${getAdminSessions()[userId].user_sub}` },
     params,
   });
 }
@@ -87,7 +84,7 @@ async function msgGet(request: APIRequestContext, userId: string, path: string, 
 async function msgPatch(request: APIRequestContext, userId: string, path: string, body?: unknown) {
   return request.patch(`${API}/${path}`, {
     data: body ?? {},
-    headers: { "Authorization": `Bearer ${userId}`, "Content-Type": "application/json" },
+    headers: { "Authorization": `Bearer ${getAdminSessions()[userId].user_sub}`, "Content-Type": "application/json" },
   });
 }
 

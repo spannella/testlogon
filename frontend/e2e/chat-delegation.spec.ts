@@ -16,6 +16,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { runCppShim, usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -28,9 +30,13 @@ const BOB_KEY = "bob";
 const CHARLIE_KEY = "charlie_admin";
 
 // User subs (used for API endpoint paths and delegate IDs)
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
-const CHARLIE_SUB = "e2e_charlie@test.local";
+// cpp keys delegate rows / message sender_id / audit delegate_id by the user
+// SUB, not the email. Resolve the SUB so delegate paths, add/revoke targets and
+// sender_id/delegate_id comparisons all use the real id under cpp. (Session-map
+// keys below — ALICE_KEY/BOB_KEY/CHARLIE_KEY — stay short keys for getSessions.)
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
+const CHARLIE_SUB = resolveIdentityId("e2e_charlie@test.local");
 
 const TS = Date.now();
 
@@ -56,11 +62,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -271,6 +273,16 @@ test.describe("491 — Chat Read Delegation API", () => {
     // Write an encrypted message directly to DDB to ensure it exists
     // regardless of whether the encryption API endpoint is enabled
     const msgId = `m_enc_${TS}`;
+    if (usingCpp()) {
+      // cpp reads messages from tlc_messages (not the Python :8001 Messages
+      // table). Seed the encrypted row there so the delegate-read path flags
+      // delegate_cannot_decrypt + nulls the text.
+      runCppShim("seed_messaging-calls_encrypted_message.py", {
+        conversation_id: dmConvoId,
+        message_id: msgId,
+        sender_id: ALICE_SUB,
+      });
+    } else {
     execSync(
       `python3 -c "
 import boto3, os, json
@@ -314,6 +326,7 @@ print('encrypted message seeded')
 "`,
       { timeout: 10_000 },
     );
+    }
 
     // Bob reads via delegate endpoint — encrypted msg should be redacted
     const resp = await apiGet(

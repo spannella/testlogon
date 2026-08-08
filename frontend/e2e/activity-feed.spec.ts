@@ -15,12 +15,16 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 
-const API = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedAlerts } from "./helpers/cpp-seed-profile-social";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+// Under cpp, alerts are keyed by the JWT sub (resolveIdentityId); Python path
+// keeps the email verbatim. These feed both the seed helpers and API assertions.
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 
 // ─── Session bootstrap ─────────────────────────────────────────────────────
 
@@ -40,11 +44,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -83,6 +83,9 @@ function seedAlerts(spec: string) {
    * Runs a Python script that writes alert records directly to DynamoDB.
    * spec is a JSON array of alert descriptors.
    */
+  if (usingCpp()) {
+    return cppSeedAlerts(JSON.parse(spec));
+  }
   const script = `
 import json, sys, uuid, time, os
 sys.path.insert(0, "${REPO_ROOT}")
@@ -129,6 +132,9 @@ print(json.dumps(results))
 }
 
 function seedAlertsSimple(spec: Array<Record<string, unknown>>): Array<{ alert_id: string; ts: number }> {
+  if (usingCpp()) {
+    return cppSeedAlerts(spec as unknown as import("./helpers/cpp-seed-profile-social").CppAlertSpec[]);
+  }
   const specJson = JSON.stringify(spec);
   const pyCode = `
 import json, sys, uuid, time, os

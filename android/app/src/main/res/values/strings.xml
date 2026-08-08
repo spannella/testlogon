@@ -94,6 +94,8 @@
     <string name="profile_avatar_cd">Your profile photo</string>
     <string name="profile_edit_action">Edit profile</string>
     <string name="profile_change_photo">Change photo</string>
+    <string name="profile_change_cover">Change cover</string>
+    <string name="profile_cover_cd">Your cover photo</string>
     <string name="profile_email_label">Email</string>
     <string name="profile_phone_label">Phone</string>
     <string name="profile_languages_label">Languages</string>
@@ -983,6 +985,9 @@
     <string name="call_accept_cd">Accept call from %1$s</string>
     <string name="call_decline_cd">Decline call from %1$s</string>
     <string name="call_unknown_caller">Unknown caller</string>
+    <string name="call_ongoing_title">Ongoing call</string>
+    <string name="call_ongoing">Tap to return to your call</string>
+    <string name="call_ongoing_with">In call with %1$s</string>
     <string name="call_kind_audio">Audio call</string>
     <string name="call_kind_video">Video call</string>
     <!-- AND-298 — in-call (1:1) controls + status -->
@@ -1427,6 +1432,21 @@
     <string name="story_reply_hint">Reply to story…</string>
     <string name="story_reply_send">Send reply</string>
     <string name="story_views_count">%1$d views</string>
+    <!-- PAR-01: create a story -->
+    <string name="create_story_tray_cta">Your story</string>
+    <string name="create_story_tray_cd">Add to your story</string>
+    <string name="create_story_title">New story</string>
+    <string name="create_story_back">Back</string>
+    <string name="create_story_share">Share</string>
+    <string name="create_story_pick">Add photo</string>
+    <string name="create_story_change_photo">Change photo</string>
+    <string name="create_story_preview_cd">Story photo preview</string>
+    <string name="create_story_overlay_label">Text overlay (optional)</string>
+    <string name="create_story_overlay_hint">Add a caption to your story…</string>
+    <string name="create_story_link_section">Link (optional)</string>
+    <string name="create_story_link_url_label">Link URL</string>
+    <string name="create_story_link_url_hint">https://…</string>
+    <string name="create_story_link_label_label">Link label</string>
 
     <!-- AND-201: Gallery browsing -->
     <string name="gallery_title">Gallery</string>
@@ -1891,6 +1911,18 @@
     <string name="tax_docs_row_subtitle">%1$s · %2$d transactions</string>
     <string name="tax_docs_download_cd">Download %1$s tax statement</string>
     <string name="tax_docs_no_viewer">No app available to open this file.</string>
+    <!-- PAR-24 earnings summary card -->
+    <string name="tax_docs_summary_title">Earnings summary</string>
+    <string name="tax_docs_summary_year">%1$d</string>
+    <string name="tax_docs_summary_total_label">Total earnings</string>
+    <string name="tax_docs_summary_txns">%1$d transactions</string>
+    <string name="tax_docs_summary_empty">No earnings for %1$d</string>
+    <string name="tax_docs_summary_category_amount">%1$s · %2$d</string>
+    <string name="tax_docs_category_subscriptions">Subscriptions</string>
+    <string name="tax_docs_category_tips">Tips</string>
+    <string name="tax_docs_category_unlocks">Unlocks</string>
+    <string name="tax_docs_category_vod_purchases">Video purchases</string>
+    <string name="tax_docs_category_other">Other</string>
 
     <!-- AND-247: 1099-NEC tax forms -->
     <string name="more_entry_tax_forms_1099">1099 tax forms</string>
@@ -2112,6 +2144,14 @@
     <string name="payout_detail_reject_reason">Reason for rejection</string>
     <string name="payout_detail_not_found_title">Payout unavailable</string>
     <string name="payout_detail_not_found_body">Reopen this payout from your history.</string>
+    <!-- PAR-19: payout cancel action. -->
+    <string name="payout_detail_cancel">Cancel payout</string>
+    <string name="payout_detail_cancel_footer">Cancelling returns this amount to your available balance.</string>
+    <string name="payout_detail_cancel_confirm_title">Cancel this payout?</string>
+    <string name="payout_detail_cancel_confirm_body">This returns the amount to your available balance. This can&#8217;t be undone.</string>
+    <string name="payout_detail_cancel_confirm_dismiss">Keep payout</string>
+    <string name="payout_detail_cancel_success">Payout cancelled.</string>
+    <string name="payout_detail_cancel_error_generic">Couldn&#8217;t cancel this payout.</string>
 
     <!-- Payout setup + KYC gate (AND-259) -->
     <string name="payout_setup_title">Request a payout</string>
@@ -3490,6 +3530,27 @@
     <string name="org_overview_member_count_unknown">Member count unavailable</string>
     <string name="org_overview_members">Members</string>
     <string name="org_overview_my_invites">My invites</string>
+    <!-- PAR-35(b) org leave -->
+    <string name="org_overview_leave">Leave organization</string>
+    <string name="org_leave_confirm_title">Leave organization?</string>
+    <string name="org_leave_confirm_body">You will lose access to this organization. You can be re-invited later.</string>
+    <string name="org_leave_confirm_action">Leave</string>
+    <string name="org_leave_cancel">Cancel</string>
+    <string name="org_leave_failed">Couldn\'t leave the organization. Please try again.</string>
+    <string name="org_leave_sole_owner">You are the sole owner. Transfer ownership before leaving.</string>
+    <string name="org_left">You left the organization.</string>
+    <!-- PAR-35(c) org transfer ownership -->
+    <string name="org_overview_transfer">Transfer ownership</string>
+    <string name="org_transfer_title">Transfer ownership</string>
+    <string name="org_transfer_body">Choose a member to become the new owner. You will become an admin.</string>
+    <string name="org_transfer_empty">No other members to transfer to.</string>
+    <string name="org_transfer_confirm_title">Make %1$s the owner?</string>
+    <string name="org_transfer_confirm_body">They will become the owner and you will become an admin.</string>
+    <string name="org_transfer_confirm_action">Transfer</string>
+    <string name="org_transfer_cancel">Cancel</string>
+    <string name="org_transfer_failed">Couldn\'t transfer ownership. Please try again.</string>
+    <string name="org_transfer_done">Ownership transferred.</string>
+    <string name="org_transfer_back">Back</string>
     <string name="org_overview_empty_title">No organization</string>
     <string name="org_overview_empty_body">You don\'t belong to any organization yet.</string>
     <!-- AND-354: my invites (accept/decline) -->
@@ -3513,6 +3574,13 @@
     <string name="groups_your_role">Your role: %1$s</string>
     <string name="groups_view_members">View members</string>
     <string name="groups_leave">Leave group</string>
+    <!-- PAR-10: group discovery + join. -->
+    <string name="groups_tab_mine">My groups</string>
+    <string name="groups_tab_discover">Discover</string>
+    <string name="groups_discover_search_label">Search groups</string>
+    <string name="groups_discover_empty_title">No groups found</string>
+    <string name="groups_discover_empty_body">Try a different search, or check back later.</string>
+    <string name="groups_join">Join</string>
     <string name="groups_members_title">Members</string>
     <string name="groups_section_members">Members</string>
     <string name="groups_section_pending">Pending invites</string>
@@ -3599,6 +3667,12 @@
     <string name="syndicates_list_title">Syndicates</string>
     <string name="syndicates_list_empty_title">No syndicates yet</string>
     <string name="syndicates_list_empty_body">Create a syndicate to get started.</string>
+    <!-- PAR-35(a) syndicate discover tab -->
+    <string name="syndicates_tab_mine">My syndicates</string>
+    <string name="syndicates_tab_discover">Discover</string>
+    <string name="syndicates_discover_empty_title">No syndicates to discover</string>
+    <string name="syndicates_discover_empty_body">There are no public syndicates right now.</string>
+    <string name="syndicates_discover_member_count">%1$d members</string>
     <string name="syndicates_list_error">Couldn\'t load your syndicates.</string>
     <string name="syndicate_create_title">Create syndicate</string>
     <string name="syndicate_create_name_label">Syndicate name</string>
@@ -3663,6 +3737,33 @@
     <string name="collaboration_status_cancelled">Cancelled</string>
     <string name="collaboration_status_declined">Declined</string>
     <string name="collaboration_status_unknown">Unknown</string>
+    <!-- PAR-04: collaboration deal actions (accept / reject / counter / cancel / terminate) + revisions -->
+    <string name="collaboration_status_negotiating">Negotiating</string>
+    <string name="collaboration_actions_heading">Actions</string>
+    <string name="collaboration_action_accept">Accept</string>
+    <string name="collaboration_action_reject">Reject</string>
+    <string name="collaboration_action_counter">Counter</string>
+    <string name="collaboration_action_cancel">Cancel request</string>
+    <string name="collaboration_action_terminate">Terminate</string>
+    <string name="collaboration_action_accepted">Collaboration accepted.</string>
+    <string name="collaboration_action_rejected">Collaboration rejected.</string>
+    <string name="collaboration_action_countered">Counter-offer sent.</string>
+    <string name="collaboration_action_cancelled">Request cancelled.</string>
+    <string name="collaboration_action_terminated">Collaboration terminated.</string>
+    <string name="collaboration_counter_title">Counter-offer</string>
+    <string name="collaboration_counter_initiator">Initiator %1$d%%</string>
+    <string name="collaboration_counter_recipient">Recipient %1$d%%</string>
+    <string name="collaboration_counter_send">Send counter-offer</string>
+    <string name="collaboration_confirm_dismiss">Cancel</string>
+    <string name="collaboration_confirm_reject_title">Reject collaboration?</string>
+    <string name="collaboration_confirm_reject_body">This declines the proposed agreement. This can\'t be undone.</string>
+    <string name="collaboration_confirm_cancel_title">Cancel request?</string>
+    <string name="collaboration_confirm_cancel_body">This withdraws your pending collaboration request.</string>
+    <string name="collaboration_confirm_terminate_title">Terminate collaboration?</string>
+    <string name="collaboration_confirm_terminate_body">This ends the active agreement. Existing splits are preserved.</string>
+    <string name="collaboration_revisions_heading">Revision history</string>
+    <string name="collaboration_revision_number">Revision %1$d</string>
+    <string name="collaboration_revision_proposed_by">Proposed by %1$s</string>
 
     <!-- AND-360: delegate / manage-as-creator overlay (banner + delegate console demonstration). -->
     <string name="delegation_banner_managing">Managing @%1$s</string>
@@ -4142,6 +4243,7 @@
 
     <!-- AND-403: Read-only admin alerts/dashboards. -->
     <string name="more_entry_admin_dashboard">Admin alerts</string>
+    <string name="more_entry_markets">Markets</string>
     <string name="admin_dashboard_title">Admin alerts</string>
     <string name="admin_dashboard_back">Back</string>
     <string name="admin_dashboard_refresh">Refresh</string>
@@ -4225,6 +4327,32 @@
     <string name="webhooks_create_events_label">Events</string>
     <string name="webhooks_create_events_unavailable">Event types are unavailable right now. Try again later.</string>
     <string name="webhooks_create_submit">Create</string>
+
+    <!-- PAR-26: webhook test-send + rotate-secret (detail screen). -->
+    <string name="webhooks_test_button">Send test</string>
+    <string name="webhooks_test_sending">Sending test…</string>
+    <string name="webhooks_test_result_title">Test delivery</string>
+    <string name="webhooks_test_succeeded">Delivered successfully</string>
+    <string name="webhooks_test_failed">Delivery failed</string>
+    <string name="webhooks_test_response_code">Response code: %1$d</string>
+    <string name="webhooks_test_error_label">Error: %1$s</string>
+    <string name="webhooks_test_dismiss">Dismiss</string>
+    <string name="webhooks_rotate_button">Rotate signing secret</string>
+    <string name="webhooks_rotate_rotating">Rotating…</string>
+    <string name="webhooks_rotate_revealed_title">New signing secret</string>
+    <string name="webhooks_rotate_revealed_body">Copy this now — it is shown only once and cannot be retrieved again.</string>
+    <string name="webhooks_rotate_copy">Copy secret</string>
+    <string name="webhooks_rotate_copied">Secret copied</string>
+    <string name="webhooks_rotate_done">Done</string>
+
+    <!-- PAR-23: shared ads studio account+campaign picker. -->
+    <string name="studio_picker_account_label">Ad account</string>
+    <string name="studio_picker_campaign_label">Campaign</string>
+    <string name="studio_picker_loading">Loading…</string>
+    <string name="studio_picker_account_hint">Select an account</string>
+    <string name="studio_picker_account_none">No ad accounts</string>
+    <string name="studio_picker_campaign_hint">Select a campaign</string>
+    <string name="studio_picker_campaign_none">No campaigns in this account</string>
 
     <!-- B-KYC (batch 7): identity verification (More -> Account / Security). -->
     <string name="more_entry_kyc">Identity verification</string>
@@ -4546,6 +4674,15 @@
     <string name="bots_message_count">%1$d messages</string>
     <string name="bots_action_auto_reply">Auto-reply</string>
     <string name="bots_action_templates">Templates</string>
+    <string name="bots_action_send_test">Send test</string>
+    <string name="bots_send_test_title">Send test as %1$s</string>
+    <string name="bots_send_test_body">Post a test message as this bot into a conversation.</string>
+    <string name="bots_send_test_convo_label">Conversation ID</string>
+    <string name="bots_send_test_text_label">Message</string>
+    <string name="bots_send_test_action">Send</string>
+    <string name="bots_send_test_success">Test message sent</string>
+    <string name="bots_send_test_failed">Could not send the test message</string>
+    <string name="bots_send_test_inactive">Activate the bot before sending a test message</string>
     <string name="bots_action_pause">Pause</string>
     <string name="bots_action_enable">Enable</string>
     <string name="bots_action_delete">Delete</string>
@@ -4675,6 +4812,14 @@
     <string name="wallet_transactions_empty_title">No transactions yet</string>
     <string name="wallet_transactions_empty_body">Your wallet activity &#8212; deposits, charges, payouts and credits &#8212; will show up here.</string>
     <string name="wallet_transactions_default_reason">Transaction</string>
+    <!-- PAR-20: account balance breakdown section. -->
+    <string name="wallet_balance_section_title">Account balance</string>
+    <string name="wallet_balance_amount_due">Amount due</string>
+    <string name="wallet_balance_pending_due">Pending due</string>
+    <string name="wallet_balance_owed_settled">Owed (settled)</string>
+    <string name="wallet_balance_owed_pending">Owed (pending)</string>
+    <string name="wallet_balance_paid_settled">Paid (settled)</string>
+    <string name="wallet_balance_paid_pending">Paid (pending)</string>
     <!-- Web-parity: My Bundles (syndicate bundle subscriptions). -->
     <string name="more_entry_my_bundles">My Bundles</string>
     <string name="my_bundles_title">My Bundles</string>
@@ -5180,4 +5325,74 @@
     <string name="subscribe_add_card_action">Add a payment method</string>
     <string name="profile_public_subscribe">Subscribe</string>
     <string name="profile_public_tip_creator">Tip this creator</string>
+    <!-- PAR-16 Story Highlights -->
+    <string name="highlights_title">Highlights</string>
+    <string name="highlights_back">Back</string>
+    <string name="highlights_new_group">New highlight</string>
+    <string name="highlights_create">Create</string>
+    <string name="highlights_cancel">Cancel</string>
+    <string name="highlights_title_label">Title</string>
+    <string name="highlights_cover_label">Cover image URL (optional)</string>
+    <string name="highlights_delete_group">Delete highlight</string>
+    <string name="highlights_add_to">Add to \"%1$s\"</string>
+    <string name="highlights_story_count">%1$d stories</string>
+    <string name="highlights_no_stories">You have no active stories to add.</string>
+    <string name="highlights_empty_owner">No highlights yet. Feature your best stories on your profile.</string>
+    <string name="highlights_empty_viewer">No highlights yet.</string>
+    <!-- PAR-13: scheduled-posts management -->
+    <string name="scheduled_posts_title">Scheduled posts</string>
+    <string name="scheduled_posts_empty_title">No scheduled posts</string>
+    <string name="scheduled_posts_empty_body">Posts you schedule for later will show up here until they publish.</string>
+    <string name="scheduled_posts_publishes_at">Publishes %1$s</string>
+    <string name="scheduled_posts_publishes_pending">Scheduled to publish</string>
+    <string name="scheduled_posts_media_only">(Media only)</string>
+    <string name="scheduled_posts_no_text">(No text)</string>
+    <string name="scheduled_posts_cancel_action">Cancel</string>
+    <string name="scheduled_posts_cancel_title">Cancel this scheduled post?</string>
+    <string name="scheduled_posts_cancel_body">It won\'t publish. This can\'t be undone.</string>
+    <string name="scheduled_posts_cancel_confirm">Cancel post</string>
+    <string name="scheduled_posts_cancel_dismiss">Keep</string>
+
+    <!-- PAR-18: story viewer report/block -->
+    <string name="story_more_actions">More actions</string>
+    <string name="story_report">Report story</string>
+    <string name="story_block_author">Block %1$s</string>
+
+    <!-- PAR-27: Safety Center hub -->
+    <string name="more_entry_safety_center">Safety Center</string>
+    <string name="safety_center_title">Safety Center</string>
+    <string name="safety_center_section_safety">Safety</string>
+    <string name="safety_center_section_data">Your data</string>
+    <string name="safety_center_section_delete">Delete account</string>
+    <string name="safety_center_blocked_users">Blocked accounts</string>
+    <string name="safety_center_blocked_users_subtitle">See and manage who you\'ve blocked</string>
+    <string name="safety_center_dmca">Report copyright infringement</string>
+    <string name="safety_center_dmca_subtitle">File a DMCA takedown notice</string>
+    <string name="safety_center_privacy_export">Download your data</string>
+    <string name="safety_center_privacy_export_subtitle">Request a machine-readable export of your data</string>
+    <string name="safety_center_account_deletion">Delete your account</string>
+    <string name="safety_center_account_deletion_subtitle">Permanently delete your account and data</string>
+    <string name="safety_center_delete_footer">Account deletion starts a grace period during which you can cancel. After it ends, your account and data are permanently removed.</string>
+
+    <!-- PAR-29: legal screens + age gate -->
+    <string name="more_entry_terms">Terms of Service</string>
+    <string name="more_entry_community_guidelines">Community Guidelines</string>
+    <string name="more_entry_contact">Contact us</string>
+    <string name="legal_about_title">About</string>
+    <string name="legal_about_body">TestLogon is a creator platform for sharing posts, video, live broadcasts, and more. Thanks for being here.</string>
+    <string name="legal_terms_title">Terms of Service</string>
+    <string name="legal_terms_version">Version %1$s</string>
+    <string name="legal_terms_body">By using TestLogon you agree to these Terms of Service. You are responsible for your account and the content you post. You must be at least 18 years old to use the service. We may update these Terms from time to time; continued use means you accept the changes.</string>
+    <string name="legal_guidelines_title">Community Guidelines</string>
+    <string name="legal_guidelines_body">Keep TestLogon safe and welcoming. No harassment, hate speech, illegal content, or content that sexualizes minors. Respect other people\'s privacy and intellectual property. Violations may result in content removal or account action.</string>
+    <string name="legal_contact_title">Contact us</string>
+    <string name="legal_contact_body">Need help or have a question? Reach our support team by email and we\'ll get back to you.</string>
+    <string name="legal_contact_email_cta">Email support</string>
+    <string name="legal_contact_email_subject">TestLogon support request</string>
+    <string name="age_gate_pick_dob">Select your date of birth</string>
+    <string name="age_gate_dob_value">Date of birth: %1$s</string>
+    <string name="age_gate_confirm">Confirm</string>
+    <string name="age_gate_cancel">Cancel</string>
+    <string name="age_gate_too_young">You must be at least %1$d years old to use TestLogon.</string>
+
 </resources>

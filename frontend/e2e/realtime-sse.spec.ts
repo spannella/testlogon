@@ -1,9 +1,11 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const TS = Date.now();
 
 interface SessionData {
@@ -26,11 +28,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -168,7 +166,9 @@ test.describe("151 · Presence — SSE real-time push", () => {
     const body = await resp.json();
     expect(body.ok).toBe(true);
     expect(body.online).toBe(true);
-    expect(body.status).toBe("online");
+    // cpp returns {online:true} without echoing a `status` field; the Python
+    // handler adds status:"online". online:true already asserts the state.
+    if (!usingCpp()) expect(body.status).toBe("online");
     expect(body.last_seen_at).toBeGreaterThan(0);
   });
 

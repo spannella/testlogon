@@ -16,16 +16,25 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // -- Constants ----------------------------------------------------------------
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
-const CHARLIE_ID = "e2e_charlie@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
+const CHARLIE_ID = resolveIdentityId("e2e_charlie@test.local");
 
 const TS = Date.now();
+
+// Every describe in this file wires the SAME Bob->Alice delegate relationship in
+// its beforeAll and DELETES it in afterAll. Run in parallel (fullyParallel /
+// -workers>1), one describe's afterAll delegate-teardown races another's tests,
+// so a moderator action intermittently 403s ("not a delegate"). Serialize the
+// whole file so the shared delegate/broadcast state is never torn down mid-use
+// (passes 17/17 serially).
+test.describe.configure({ mode: "serial" });
 
 // -- Session bootstrap --------------------------------------------------------
 
@@ -49,11 +58,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
     // admin setup keys by short name (alice/bob); alias by user_sub so email-id lookups resolve
     for (const _k of Object.keys(_sessions)) { const _s = _sessions[_k]; if (_s && _s.user_sub && !_sessions[_s.user_sub]) _sessions[_s.user_sub] = _s; }
   }

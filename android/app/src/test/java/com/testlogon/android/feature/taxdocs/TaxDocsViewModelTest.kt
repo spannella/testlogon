@@ -6,6 +6,7 @@ import com.testlogon.android.core.testing.MainDispatcherRule
 import com.testlogon.android.data.taxdocs.TaxDocsRepository
 import com.testlogon.android.data.taxdocs.TaxDocument
 import com.testlogon.android.data.taxdocs.TaxMoney
+import com.testlogon.android.data.taxdocs.TaxSpendingSummary
 import com.testlogon.android.feature.billing.error.BillingErrorMapper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -30,7 +31,10 @@ class TaxDocsViewModelTest {
 
     private class FakeTaxDocsRepository : TaxDocsRepository {
         var listResult: ApiResult<List<TaxDocument>> = ApiResult.Success(emptyList())
+        var summaryResult: ApiResult<TaxSpendingSummary> =
+            ApiResult.Success(TaxSpendingSummary(TaxMoney(0, "usd"), 0, emptyList()))
         override suspend fun listTaxDocuments(): ApiResult<List<TaxDocument>> = listResult
+        override suspend fun summary(year: Int): ApiResult<TaxSpendingSummary> = summaryResult
         override fun pdfUrl(year: Int): String = "http://dev.example/ui/tax-documents/document/$year/pdf"
     }
 

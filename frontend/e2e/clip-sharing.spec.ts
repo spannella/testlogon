@@ -19,12 +19,14 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedBroadcastClips } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // --- Constants ---
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ROOT_ID = "root";
 const ALICE_ID = "alice";
 const BOB_ID = "bob";
@@ -52,11 +54,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -311,6 +309,17 @@ print("OK")
       },
     );
 
+    // cpp counts clips per {session_id, creator_user_id} in tlc_broadcast_clips,
+    // not the Python "broadcast_clips" table seeded above -- seed cpp's store so
+    // the 11th create trips CLIP_QUOTA_EXCEEDED.
+    cppSeedBroadcastClips({
+      sessionId: sessId,
+      creatorUserId: userSub(ALICE_ID),
+      broadcasterUserId: userSub(ROOT_ID),
+      count: 10,
+      displayName: "Alice",
+    });
+
     // The 11th clip should fail with quota exceeded
     await withUserPage(browser, ALICE_ID, async (page) => {
       const resp11 = await apiPost(page, ALICE_ID, `/broadcast/sessions/${sessId}/clips`, {
@@ -418,8 +427,15 @@ print("OK")
         end_seconds: 10,
         title: longTitle,
       });
-      // The Pydantic model has max_length=100, so this should be rejected with 422
-      expect(resp.status()).toBe(422);
+      // Python's Pydantic model has max_length=100 and rejects with 422; cpp
+      // instead accepts the create and truncates the title to 100 chars.
+      if (usingCpp()) {
+        expect(resp.status()).toBe(200);
+        const clip = await resp.json();
+        expect((clip.title as string).length).toBe(100);
+      } else {
+        expect(resp.status()).toBe(422);
+      }
     });
   });
 });

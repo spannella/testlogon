@@ -8,6 +8,8 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVodVideo } from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -34,11 +36,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -72,6 +70,44 @@ function seedVideo(opts: {
   durationSeconds?: number;
   sourceS3Key?: string;
 }): void {
+  if (usingCpp()) {
+    const o = opts as Record<string, unknown>;
+    const sub = resolveIdentityId(opts.ownerUserId);
+    const extra: Record<string, unknown> = { source_type: "upload" };
+    const put = (k: string, v: unknown) => { if (v !== undefined) extra[k] = v; };
+    put("source_s3_key",
+      o.sourceS3Key === ""
+        ? undefined
+        : (o.sourceS3Key ?? `videos/${sub}/${opts.videoId}/source.mp4`));
+    put("video_codec", o.videoCodec);
+    put("audio_codec", o.audioCodec);
+    put("width", o.width);
+    put("height", o.height);
+    put("frame_rate", o.frameRate);
+    put("file_size_bytes", o.fileSizeBytes);
+    put("created_at", o.createdAt);
+    put("allow_download", o.allowDownload);
+    put("watermark_downloads", o.watermarkDownloads);
+    put("download_mp4_key", o.downloadMp4Key);
+    put("download_mp4_status", o.downloadMp4Status);
+    put("download_mp4_size_bytes", o.downloadMp4SizeBytes);
+    put("thumbnail_url", o.thumbnailUrl);
+    cppSeedVodVideo({
+      videoId: opts.videoId,
+      ownerSub: sub,
+      title: opts.title,
+      status: (o.status as string) || "published",
+      visibility: (o.visibility as string) || "public",
+      ...(o.durationSeconds !== undefined
+        ? { durationSeconds: o.durationSeconds as number }
+        : {}),
+      ...(o.hlsManifestUrl !== undefined
+        ? { hlsManifestUrl: o.hlsManifestUrl as string }
+        : {}),
+      extra,
+    });
+    return;
+  }
   const status = opts.status || "published";
   const visibility = opts.visibility || "public";
   const createdAt = Math.floor(Date.now() / 1000);
@@ -116,6 +152,7 @@ table.put_item(Item={
 }
 
 function deleteVideo(videoId: string): void {
+  if (usingCpp()) return;
   const script = `
 import sys, os
 sys.path.insert(0, '${REPO_ROOT}')

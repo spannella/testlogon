@@ -199,6 +199,7 @@ class ActivityPipController(private val activity: Activity) : PipController {
             activity.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
 
     override fun enterPip(aspectWidth: Int, aspectHeight: Int): Boolean {
+        android.util.Log.d("TLPIP", "enterPip called videoActive=$videoActive callActive=$callActive callSource=${callSourceState.value != null}")
         if (!isPipSupported) return false
         // Capture the stable snapshot BEFORE entering PiP so the video-only surface has a player even
         // after the inline composable disposes mid-transition.
@@ -206,12 +207,13 @@ class ActivityPipController(private val activity: Activity) : PipController {
         enteringPip = true
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                activity.enterPictureInPictureMode(buildParams(aspectWidth, aspectHeight))
-                true
+                val entered = activity.enterPictureInPictureMode(buildParams(aspectWidth, aspectHeight))
+                android.util.Log.d("TLPIP", "enterPictureInPictureMode returned $entered")
+                entered
             } else {
                 false
             }
-        }.getOrDefault(false)
+        }.onFailure { android.util.Log.d("TLPIP", "enterPictureInPictureMode threw ${it.javaClass.simpleName}: ${it.message}") }.getOrDefault(false)
     }
 
     override fun enterPipWith(player: Player, aspectWidth: Int, aspectHeight: Int): Boolean {
@@ -257,6 +259,7 @@ class ActivityPipController(private val activity: Activity) : PipController {
     }
 
     override fun setCallActive(active: Boolean) {
+        android.util.Log.d("TLPIP", "setCallActive($active)")
         callActive = active
         if (!active) {
             // Leaving eligibility (call ended / audio-only / left the screen): drop the render source so a

@@ -11,6 +11,14 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedVodVideo,
+  cppDeleteVodVideo,
+  cppSeedSubscription,
+  cppDeleteSubscription,
+} from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -18,8 +26,8 @@ const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..")
 const BASE = "http://localhost:3000";
 const ALICE_KEY = "alice";
 const BOB_KEY = "bob";
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────
@@ -44,11 +52,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -122,6 +126,19 @@ async function seedVideo(
     adsFreeForSubscribers?: boolean;
   },
 ) {
+  if (usingCpp()) {
+    cppSeedVodVideo({
+      videoId: opts.videoId,
+      ownerSub: opts.ownerId,
+      title: opts.title,
+      status: opts.status,
+      priceCents: opts.priceCents,
+      accessMode: opts.accessMode,
+      durationSeconds: opts.durationSeconds,
+      adsFreeForSubscribers: opts.adsFreeForSubscribers,
+    });
+    return;
+  }
   await ddbRequest(page, "PutItem", {
     TableName: "VideoMetadata",
     Item: {
@@ -151,6 +168,10 @@ async function seedVideo(
 }
 
 async function deleteVideo(page: Page, videoId: string) {
+  if (usingCpp()) {
+    cppDeleteVodVideo(videoId);
+    return;
+  }
   await ddbRequest(page, "DeleteItem", {
     TableName: "VideoMetadata",
     Key: { video_id: { S: videoId } },
@@ -158,6 +179,10 @@ async function deleteVideo(page: Page, videoId: string) {
 }
 
 async function seedSubscription(page: Page, subscriberId: string, creatorId: string) {
+  if (usingCpp()) {
+    cppSeedSubscription({ subscriberSub: subscriberId, creatorSub: creatorId, subId: `e2e_ad_sub_${TS}`, status: "active" });
+    return;
+  }
   await ddbRequest(page, "PutItem", {
     TableName: "subscriptions",
     Item: {
@@ -170,6 +195,10 @@ async function seedSubscription(page: Page, subscriberId: string, creatorId: str
 }
 
 async function deleteSubscription(page: Page, subscriberId: string) {
+  if (usingCpp()) {
+    cppDeleteSubscription(subscriberId, `e2e_ad_sub_${TS}`);
+    return;
+  }
   await ddbRequest(page, "DeleteItem", {
     TableName: "subscriptions",
     Key: {

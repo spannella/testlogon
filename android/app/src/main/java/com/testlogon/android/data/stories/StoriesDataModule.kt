@@ -12,6 +12,8 @@ import javax.inject.Singleton
  * AND-199 / AND-200 — provides the dedicated [StoriesApi] on the shared Retrofit and binds the stories
  * repositories. Kept separate from the feed / messaging modules so this feature never touches their
  * wiring. The reply repository reuses the already-provided MessagingApi for the DM send path.
+ *
+ * PAR-16 — also provides the dedicated [HighlightsApi] and binds [HighlightsRepository].
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -21,6 +23,12 @@ object StoriesApiModule {
     @Singleton
     fun provideStoriesApi(retrofit: Retrofit): StoriesApi =
         retrofit.create(StoriesApi::class.java)
+
+    // PAR-16 — Story Highlights API on the same shared Retrofit.
+    @Provides
+    @Singleton
+    fun provideHighlightsApi(retrofit: Retrofit): HighlightsApi =
+        retrofit.create(HighlightsApi::class.java)
 }
 
 @Module
@@ -34,4 +42,9 @@ abstract class StoriesDataModule {
     @Binds
     @Singleton
     abstract fun bindStoryReplyRepository(impl: StoryReplyRepositoryImpl): StoryReplyRepository
+
+    // PAR-16 — Story Highlights repository.
+    @Binds
+    @Singleton
+    abstract fun bindHighlightsRepository(impl: HighlightsRepositoryImpl): HighlightsRepository
 }

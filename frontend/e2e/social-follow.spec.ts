@@ -12,20 +12,35 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppFollowTargetId,
+  cppSeedSocialProfile,
+} from "./helpers/cpp-seed-payouts-subs-ats-misc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
-const API  = "http://localhost:8000";
 const BASE = "http://localhost:3000";
 
 // Session keys for e2e_admin_session_setup.py lookup
 const ALICE_KEY = "alice";
 const BOB_KEY   = "bob";
 
-// user_sub values for API calls (target_user_id)
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID   = "e2e_bob@test.local";
+// user_sub values for API calls (target_user_id / URL segments / assertions).
+// cpp keys social edges by the real SUB (not email) and /ui/social/follow 404s
+// unless the target has a tlc_profile row; resolve to the live SUB under cpp
+// (byte-identical email on the Python path). Session lookups use *_KEY only.
+const ALICE_ID = cppFollowTargetId("e2e_alice@test.local");
+const BOB_ID   = cppFollowTargetId("e2e_bob@test.local");
+
+// cpp: ensure both identities have a profile row so follow/unfollow succeed.
+if (usingCpp()) {
+  cppSeedSocialProfile("e2e_alice@test.local", "Alice E2E");
+  cppSeedSocialProfile("e2e_bob@test.local", "Bob E2E");
+}
 
 // ── Session bootstrap ─────────────────────────────────────────────────────
 
@@ -49,11 +64,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }

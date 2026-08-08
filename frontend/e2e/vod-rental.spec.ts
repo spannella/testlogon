@@ -16,6 +16,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedVodVideo,
+  cppDeleteVodRental,
+} from "./helpers/cpp-seed-video-vod";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -23,8 +29,8 @@ const BASE = "http://localhost:3000";
 const ALICE_KEY = "alice"; // creator / owner
 const BOB_KEY = "bob"; // renter
 
-const ALICE_SUB = "e2e_alice@test.local";
-const BOB_SUB = "e2e_bob@test.local";
+const ALICE_SUB = resolveIdentityId("e2e_alice@test.local");
+const BOB_SUB = resolveIdentityId("e2e_bob@test.local");
 
 // ── Session bootstrap ─────────────────────────────────────────────────────
 
@@ -48,11 +54,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -114,6 +116,19 @@ async function seedVideo(
     rentalDurationHours?: number;
   },
 ) {
+  if (usingCpp()) {
+    cppSeedVodVideo({
+      videoId: opts.videoId,
+      ownerSub: opts.ownerId,
+      title: opts.title,
+      status: opts.status,
+      availablePurchaseTypes: opts.availablePurchaseTypes,
+      viewOncePriceCents: opts.viewOncePriceCents,
+      rentalPriceCents: opts.rentalPriceCents,
+      rentalDurationHours: opts.rentalDurationHours,
+    });
+    return;
+  }
   const ts = Math.floor(Date.now() / 1000);
   const item: Record<string, any> = {
     video_id: { S: opts.videoId },
@@ -142,6 +157,10 @@ async function seedVideo(
 }
 
 async function deleteRental(page: Page, userId: string, videoId: string) {
+  if (usingCpp()) {
+    cppDeleteVodRental(userId, videoId);
+    return;
+  }
   await ddbRequest(page, "DeleteItem", {
     TableName: "VodRentals",
     Key: { pk: { S: `USER#${userId}` }, sk: { S: `VIDEO#${videoId}` } },
@@ -224,11 +243,13 @@ test.describe("vod-rental 1 - start + validation", () => {
     await ctx.close();
   });
 
-  test("start rental requires auth (401 without session)", async ({ request }) => {
-    const resp = await request.post(BASE + `/ui/vod/rental/${RENTAL_VID}/start`, {
+  test("start rental requires auth (401 without session)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(BASE + `/ui/vod/rental/${RENTAL_VID}/start`, {
       headers: { "Content-Type": "application/json" },
       data: { tier: "rental" },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });

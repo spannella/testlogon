@@ -24,9 +24,10 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 
 interface SessionData {
@@ -47,11 +48,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -399,11 +396,13 @@ test.describe("792: KYC address verification decisions + auth", () => {
     expect(resp.status()).toBe(403);
   });
 
-  test("792.6 Unauthenticated request returns 401", async ({ request }) => {
-    const resp = await request.post(`${API}/${BASE}/cases/${caseId}/verify`, {
+  test("792.6 Unauthenticated request returns 401", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(`${API}/${BASE}/cases/${caseId}/verify`, {
       data: { address: US_ADDRESS },
       headers: { "Content-Type": "application/json" },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 

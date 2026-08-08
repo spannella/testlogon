@@ -20,15 +20,17 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { cppSetKycCaseStatus, cppGetKycCaseVersion, cppSeedFilemanagerNode } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const API      = "http://localhost:8000";
 const BASE     = "http://localhost:3000";
 const TS       = Date.now();
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID   = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID   = resolveIdentityId("e2e_bob@test.local");
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────
 
@@ -52,11 +54,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -120,6 +118,12 @@ const PYTHON = "python3";
  * the file attachment endpoint can resolve it.
  */
 function injectFileNode(userSub: string, filePath: string, contentType = "image/jpeg"): void {
+  if (isCpp()) {
+    // cpp reads its OWN moto tlc_filemanager (:5005 on .82), not the Python
+    // DDB-Local :8001 file_manager table below. Seed the node where cpp looks.
+    cppSeedFilemanagerNode(userSub, filePath, contentType);
+    return;
+  }
   const name = filePath.split("/").pop()!;
   const parent = filePath.substring(0, filePath.lastIndexOf("/")) || "/";
   execSync(
@@ -148,6 +152,11 @@ print('file node injected')
 }
 
 function cleanupFileNode(userSub: string, filePath: string): void {
+  if (isCpp()) {
+    // cpp path: the node lives in .82's moto (ephemeral); no cleanup shim needed
+    // and injectFileNode is idempotent (put_item overwrites by PK/SK).
+    return;
+  }
   try {
     execSync(
       `${PYTHON} -c "${DDB_PRELUDE}
@@ -167,6 +176,10 @@ print('cleaned up')
  * `under_review` for admin decision tests (no REST endpoint for this transition).
  */
 function setCaseStatusDirect(caseId: string, newStatus: string): void {
+  if (isCpp()) {
+    cppSetKycCaseStatus(caseId, newStatus);
+    return;
+  }
   execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 import time as _time
@@ -201,6 +214,7 @@ print('status updated to ${newStatus}')
  * Read the current version of a KYC case directly from DynamoDB.
  */
 function getCaseVersionDirect(caseId: string): number {
+  if (isCpp()) return cppGetKycCaseVersion(caseId);
   const out = execSync(
     `${PYTHON} -c "${DDB_PRELUDE}
 tbl = ddb.Table('kyc_cases')

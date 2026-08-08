@@ -12,12 +12,14 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { cppHandlesMilestoneTable, cppMilestonePut, cppMilestoneDelete } from "./helpers/cpp-seed-milestone";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 
 const DDB_ENDPOINT = "http://localhost:8001";
@@ -45,11 +47,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      `${PYTHON} ${REPO_ROOT}/e2e_session_setup.py`,
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -90,6 +88,10 @@ async function apiPatch(page: Page, path: string, body: object) {
 // ─── DynamoDB helpers ─────────────────────────────────────────────────────────
 
 function ddbPut(tableName: string, item: Record<string, unknown>) {
+  if (cppHandlesMilestoneTable(tableName)) {
+    cppMilestonePut(item);
+    return;
+  }
   const script = `
 import boto3, json, sys
 from decimal import Decimal
@@ -118,6 +120,10 @@ print("OK")
 }
 
 function ddbDelete(tableName: string, key: Record<string, string>) {
+  if (cppHandlesMilestoneTable(tableName)) {
+    cppMilestoneDelete(key);
+    return;
+  }
   const script = `
 import boto3, json, sys
 ddb = boto3.resource("dynamodb", region_name="us-east-1", endpoint_url="${DDB_ENDPOINT}", aws_access_key_id="test", aws_secret_access_key="test")

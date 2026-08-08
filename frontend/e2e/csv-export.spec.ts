@@ -14,12 +14,14 @@ import { execSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { API } from "./cpp.config";
+import { loadSessions, unauthContext } from "./helpers/session";
+import { usingCpp, cppSeedLedgerEntry } from "./helpers/cpp-seed-billing-bulk";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 
@@ -45,11 +47,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -109,6 +107,22 @@ with open('${tmpFile}') as f:
 
 function seedBillingEntry(userSub: string, opts: { entry_type: string; amount_cents: number; reason: string; created_at: number }) {
   const uuid = Math.random().toString(36).slice(2, 14);
+  if (usingCpp()) {
+    // cpp's billing_ledger CSV export reads LEDGER# rows from its OWN tlc_billing
+    // keyed by SUB, using entry_type (S) + created_at (N). Seed those there.
+    cppSeedLedgerEntry({
+      userSub,
+      entryId: uuid,
+      ts: opts.created_at,
+      createdAt: opts.created_at,
+      entryType: opts.entry_type,
+      amountCents: opts.amount_cents,
+      state: "settled",
+      reason: opts.reason,
+      currency: "USD",
+    });
+    return;
+  }
   ddbPutItem("billing", {
     pk: `USER#${userSub}`,
     sk: `LEDGER#${opts.created_at}#${uuid}`,
@@ -266,10 +280,12 @@ test.describe("73 — CSV Export API", () => {
     expect(resp.status()).toBe(422);
   });
 
-  test("Unauthenticated request returns 401", async ({ page }) => {
-    // No auth injected
-    const resp = await exportCsv(page, { source: "billing_ledger" });
+  test("Unauthenticated request returns 401", async () => {
+    // No auth injected — anonymous context (exportCsv uses page.request which leaks storageState)
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/export/csv`, { params: { source: "billing_ledger" } });
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("GET billing_ledger with no matching entries returns headers-only CSV", async ({ page }) => {

@@ -28,12 +28,15 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, unauthContext } from "./helpers/session";
+import { usingCpp, cppBearerGet, cppSeedStickerCollection } from "./helpers/cpp-seed-messaging-calls";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const PYTHON = REPO_ROOT + "/.venv/bin/python";
 
 const ALICE_ID = "e2e_alice@test.local";
@@ -60,11 +63,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -72,11 +71,7 @@ function getSessions(): Record<string, SessionData> {
 let _adminSessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -116,7 +111,9 @@ async function apiDelete(page: Page, path: string) {
 
 /** GET/POST as an arbitrary user using the dev-mode Bearer token (bypasses CSRF). */
 async function apiGetBearer(req: APIRequestContext, path: string, userId: string) {
-  return req.get(`${API}${path}`, { headers: { Authorization: `Bearer ${userId}` } });
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
+  return req.get(`${API}${path}`, { headers: { Authorization: `Bearer ${sub}` } });
 }
 
 // ─── DDB seed helper ──────────────────────────────────────────────────────────
@@ -142,6 +139,23 @@ ddb = boto3.resource(
 
 /** Seed a test sticker collection (1 META + 1 sticker) directly into DDB. */
 function seedStickerCollection() {
+  if (usingCpp()) {
+    // cpp reads its OWN moto tlc_sticker_collections, not the :8001 Python DDB.
+    const url = `/mock/s3/my-chat-images/stickers/${TEST_COLLECTION_ID}/${TEST_STICKER_ID}.png`;
+    cppSeedStickerCollection({
+      collectionId: TEST_COLLECTION_ID,
+      name: `E2E Cats ${TS}`,
+      description: "E2E test collection",
+      thumbnailUrl: url,
+      createdBy: "root",
+      createdAtSec: Math.floor(TS / 1000),
+      isActive: "1",
+      stickers: [
+        { sticker_id: TEST_STICKER_ID, image_url: url, alt_text: "Cat waving hello", sort_order: 1, width: 256, height: 256 },
+      ],
+    });
+    return;
+  }
   execSync(
     `${PYTHON} -c "${DDB_HELPER_PRELUDE}
 tbl = ddb.Table(os.environ.get('DDB_STICKER_COLLECTIONS_TABLE', 'sticker_collections'))
@@ -298,9 +312,11 @@ test.describe("Section 706: GIF Search API", () => {
     await page.close();
   });
 
-  test("706.6 GIF search requires auth (401)", async ({ request }) => {
-    const resp = await request.get(`${API}/ui/stickers/gifs/trending`);
+  test("706.6 GIF search requires auth (401)", async () => {
+    const anon = await unauthContext(API);
+    const resp = await anon.get(`/ui/stickers/gifs/trending`);
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 });
 
@@ -440,7 +456,7 @@ test.describe("Section 708: GIF Message Send/Receive API", () => {
       gif_alt_text: alt,
     });
     const resp = await apiGet(page, `/messaging/conversations/${convoId}/messages`);
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.gif_alt_text === alt);
     expect(found).toBeTruthy();
     expect(found!.kind).toBe("gif");
@@ -458,7 +474,7 @@ test.describe("Section 708: GIF Message Send/Receive API", () => {
       gif_height: 300,
     });
     const resp = await apiGetBearer(request, `/messaging/conversations/${convoId}/messages`, BOB_ID);
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.gif_alt_text === alt);
     expect(found).toBeTruthy();
     expect(found!.gif_url).toContain("placeholder_5.gif");
@@ -499,10 +515,12 @@ test.describe("Section 708: GIF Message Send/Receive API", () => {
     await page.close();
   });
 
-  test("708.6 GIF send requires auth (401)", async ({ request }) => {
-    const resp = await request.post(`${API}/messaging/conversations/${convoId}/messages/gif`, {
+  test("708.6 GIF send requires auth (401)", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.post(`${API}/messaging/conversations/${convoId}/messages/gif`, {
       data: { gif_url: "/mock/gifs/placeholder_1.gif" },
     });
+    await anonCtx.close();
     expect(resp.status()).toBe(401);
   });
 });
@@ -557,7 +575,7 @@ test.describe("Section 709: Sticker Message Send/Receive API", () => {
       sticker_collection_id: TEST_COLLECTION_ID,
     });
     const resp = await apiGetBearer(request, `/messaging/conversations/${convoId}/messages`, BOB_ID);
-    const data = (await resp.json()) as RawMsg[];
+    const data = asArray<RawMsg>(await resp.json());
     const found = data.find((m) => m.kind === "sticker" && m.sticker_id === TEST_STICKER_ID);
     expect(found).toBeTruthy();
     expect(found!.sticker_url).toBeTruthy();
@@ -623,7 +641,7 @@ test.describe("Section 710: Admin Sticker Management API", () => {
 
   test("710.2 non-admin cannot create collection (403)", async ({ request }) => {
     const resp = await request.post(`${API}/v1/admin/stickers/collections`, {
-      headers: { Authorization: `Bearer ${ALICE_ID}` },
+      headers: { Authorization: `Bearer ${getSessions()[ALICE_ID].user_sub}` },
       multipart: {
         name: `Forbidden ${TS}`,
         files: {

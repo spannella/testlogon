@@ -8,13 +8,14 @@
 // expired-by-duration / cancelled-with-refund) is exercised deterministically
 // at the service layer (app/services/content_boost.py) via an injectable `now`.
 import { test, expect } from "@playwright/test";
+import { API } from "./cpp.config";
 
-const API = "http://localhost:8000";
 const BASE = `${API}/ui/ads/boost`;
 
 test.describe("Content Boost (ADS-012)", () => {
-  test("create boost requires auth", async ({ request }) => {
-    const res = await request.post(BASE, {
+  test("create boost requires auth", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const res = await anonCtx.request.post(BASE, {
       data: {
         content_type: "post",
         content_id: "post_e2e",
@@ -22,26 +23,35 @@ test.describe("Content Boost (ADS-012)", () => {
         duration_seconds: 3600,
       },
     });
+    await anonCtx.close();
     expect([401, 403]).toContain(res.status());
   });
 
-  test("list boosts requires auth", async ({ request }) => {
-    const res = await request.get(BASE);
+  test("list boosts requires auth", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const res = await anonCtx.request.get(BASE);
+    await anonCtx.close();
     expect([401, 403]).toContain(res.status());
   });
 
-  test("get boost requires auth", async ({ request }) => {
-    const res = await request.get(`${BASE}/boost_doesnotexist`);
+  test("get boost requires auth", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const res = await anonCtx.request.get(`${BASE}/boost_doesnotexist`);
+    await anonCtx.close();
     expect([401, 403]).toContain(res.status());
   });
 
-  test("get spend requires auth", async ({ request }) => {
-    const res = await request.get(`${BASE}/boost_doesnotexist/spend`);
+  test("get spend requires auth", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const res = await anonCtx.request.get(`${BASE}/boost_doesnotexist/spend`);
+    await anonCtx.close();
     expect([401, 403]).toContain(res.status());
   });
 
-  test("cancel boost requires auth", async ({ request }) => {
-    const res = await request.post(`${BASE}/boost_doesnotexist/cancel`);
+  test("cancel boost requires auth", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const res = await anonCtx.request.post(`${BASE}/boost_doesnotexist/cancel`);
+    await anonCtx.close();
     expect([401, 403]).toContain(res.status());
   });
 
@@ -52,8 +62,9 @@ test.describe("Content Boost (ADS-012)", () => {
     expect(res.status()).not.toBe(404);
   });
 
-  test("create rejects unauthenticated even with valid-looking body", async ({ request }) => {
-    const res = await request.post(BASE, {
+  test("create rejects unauthenticated even with valid-looking body", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const res = await anonCtx.request.post(BASE, {
       data: {
         content_type: "video",
         content_id: "vid_e2e",
@@ -61,6 +72,7 @@ test.describe("Content Boost (ADS-012)", () => {
         duration_seconds: 86400,
       },
     });
+    await anonCtx.close();
     expect([401, 403]).toContain(res.status());
   });
 });

@@ -21,6 +21,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
+import { cppSeedKycCaseFull, cppSeedKycResidencyDocument } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -54,11 +57,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -106,6 +105,16 @@ function py(script: string, timeout = 15_000): void {
 }
 
 function seedKycCase(caseId: string): void {
+  if (usingCpp()) {
+    cppSeedKycCaseFull({
+      caseId,
+      userSub: resolveIdentityId("alice"),
+      status: "under_review",
+      intakeProfile: "enhanced",
+      version: 1,
+    });
+    return;
+  }
   const ts = Math.floor(Date.now() / 1000);
   py(`
 ${DDB_PRELUDE}
@@ -139,6 +148,48 @@ print(case_id)
 }
 
 function seedResidencyDocument(caseId: string): void {
+  if (usingCpp()) {
+    cppSeedKycResidencyDocument({
+      documentId: `kycres_e2e_${caseId}`,
+      userSub: resolveIdentityId("alice"),
+      caseId,
+      documentType: "utility_bill",
+      status: "verified",
+      issuingEntity: "Pacific Gas",
+      documentDate: "2025-11-01",
+      extractionId: "ext_resid_1",
+      recencyValid: true,
+      recencyDays: 30,
+      extractedAddress: {
+        line1: "123 Main Street",
+        city: "San Francisco",
+        state: "CA",
+        postal_code: "94105",
+        country: "US",
+      },
+      addressMatch: {
+        status: "partial",
+        profile_address: {
+          line1: "123 Main Street",
+          city: "San Francisco",
+          state: "CA",
+          postal_code: "94000",
+          country: "US",
+        },
+        field_matches: {
+          line1: "match",
+          city: "match",
+          state: "match",
+          postal_code: "mismatch",
+          country: "match",
+        },
+      },
+      s3Key: `kyc-residency/${caseId}/bill.pdf`,
+      bucket: "local-uploads",
+      review: { decision: "approve", reviewer_sub: "root", decided_at: Math.floor(Date.now() / 1000), note: "ok" },
+    });
+    return;
+  }
   const ts = Math.floor(Date.now() / 1000);
   py(`
 ${DDB_PRELUDE}
@@ -193,6 +244,7 @@ print("residency doc seeded")
 }
 
 function deleteKycCase(caseId: string): void {
+  if (usingCpp()) return; // unique per-run TS case ids; no cpp delete needed
   try {
     py(`
 ${DDB_PRELUDE}

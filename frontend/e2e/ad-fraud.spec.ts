@@ -22,6 +22,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { cppResetOwnerAdAccounts } from "./helpers/cpp-seed-commerce-billing";
+import { cppSeedAdFraudCounters } from "./helpers/cpp-seed-fraud";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -51,11 +54,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -93,6 +92,14 @@ async function apiGet(page: Page, path: string) {
  * ip clustering (25). Combined with a bot UA (20) => score 70 (flagged).
  */
 function seedFraudCounters(userSub: string, creativeId: string, ip: string): void {
+  if (isCpp()) {
+    // cpp reads its OWN tlc_ad_fraud_events (moto :5005) keyed by the JWT sub,
+    // not the Python :8001 AdFraudEvents keyed by email. Route the VEL#/IP#
+    // counters into cpp keyed by the resolved sub so the single tracked event
+    // trips velocity (+25) + ip (+25).
+    cppSeedAdFraudCounters(resolveIdentityId(userSub), creativeId, ip);
+    return;
+  }
   execSync(
     `python3 -c "
 import time, boto3, os
@@ -165,6 +172,16 @@ test.describe("Ad Fraud Prevention (ADS-014)", () => {
     rootPage = await rootCtx.newPage();
     await injectAuth(rootPage, ROOT_ID);
 
+    // GAP-0039 (cpp): a user may own at most 5 non-terminal ad accounts.
+    // E2E runs accumulate accounts for the cpp subs, so wipe them first or
+    // the create below 422s and breaks this beforeAll. No-op off cpp.
+    {
+      const _s = getSessions();
+      cppResetOwnerAdAccounts([
+        _s[ALICE_ID]?.user_sub,
+        _s[BOB_ID]?.user_sub,
+      ]);
+    }
     // Advertiser account (Alice) -> approve -> campaign -> creative -> approve
     const acctResp = await apiPost(alicePage, ALICE_ID, "/ui/ads/accounts", {
       company_name: `E2E Fraud Co ${TS}`,

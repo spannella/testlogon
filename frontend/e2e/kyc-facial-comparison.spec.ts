@@ -21,12 +21,14 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { cppSeedKycCase } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 const ROOT_SUB = "root.admin@testdev.local";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────
@@ -42,11 +44,7 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -88,6 +86,13 @@ function seedKycCase(
   userSub: string,
   files: Array<{ type: string; path: string; size?: number; mime_type?: string }>,
 ): void {
+  // TRACK harness-seed: under cpp the inline :8001 python seeder below never
+  // reaches the C++ backend (it reads tlc_kyc_cases in its own moto). userSub
+  // is already the cpp SUB here (resolveIdentityId). Seed the equivalent row.
+  if (isCpp()) {
+    cppSeedKycCase(caseId, userSub, files);
+    return;
+  }
   const payload = JSON.stringify({ case_id: caseId, user_sub: userSub, files });
   execSync(
     `python3 -c "
@@ -231,9 +236,11 @@ test.describe("723. KYC-014 Face Comparison API", () => {
     expect((await r.json()).detail).toBe("access_forbidden");
   });
 
-  test("723.9 unauthenticated request returns 401", async ({ request }) => {
+  test("723.9 unauthenticated request returns 401", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
     const caseId = `kyc_fc_${TS}_match`;
-    const r = await request.post(`${API}/v1/kyc/cases/${caseId}/compare-face`);
+    const r = await anonCtx.request.post(`${API}/v1/kyc/cases/${caseId}/compare-face`);
+    await anonCtx.close();
     expect(r.status()).toBe(401);
   });
 

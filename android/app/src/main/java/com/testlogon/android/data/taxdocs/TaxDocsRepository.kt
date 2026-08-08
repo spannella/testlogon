@@ -20,6 +20,10 @@ import javax.inject.Singleton
  * (via [ApiErrorParser]); transport failures to NetworkError. DTOs are mapped to domain before returning.
  * The list is sorted newest-first by year (nulls last), then by created_at (AND-246 FR-1).
  *
+ * PAR-24 — adds [summary] (earnings summary for a year). It goes through the same tolerant [call]
+ * wrapper so callers can fold a failure best-effort (the summary card is optional; a failure must never
+ * fail the docs screen).
+ *
  * [pdfUrl] builds the absolute `/ui/tax-documents/document/{year}/pdf` URL for opening in a Custom Tab /
  * browser (reusing the AND-243 InvoicePdfLauncher pattern), so the session cookies carry the download.
  */
@@ -27,6 +31,9 @@ interface TaxDocsRepository {
 
     /** All of the user's generated tax documents (newest-first). Idempotent GET. */
     suspend fun listTaxDocuments(): ApiResult<List<TaxDocument>>
+
+    /** PAR-24 — earnings summary for [year] (total + per-category + txn count). Always sends the year. */
+    suspend fun summary(year: Int): ApiResult<TaxSpendingSummary>
 
     /** Absolute URL of the year's tax-document PDF, for opening in a browser / Custom Tab. */
     fun pdfUrl(year: Int): String
@@ -58,6 +65,10 @@ class TaxDocsRepositoryImpl @Inject constructor(
                         .thenByDescending { it.createdAtEpochSeconds ?: 0L },
                 )
         }
+    }
+
+    override suspend fun summary(year: Int): ApiResult<TaxSpendingSummary> = withContext(io) {
+        call { api.getSummary(year) }.map { it.toDomain() }
     }
 
     override fun pdfUrl(year: Int): String {

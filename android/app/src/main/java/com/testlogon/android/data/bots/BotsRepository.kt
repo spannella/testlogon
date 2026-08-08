@@ -32,6 +32,19 @@ interface BotsRepository {
 
     suspend fun deleteBot(botId: String): ApiResult<Unit>
 
+    /**
+     * PAR-32 - sends a test message as [botId] into [conversationId]. Default impl returns a
+     * not-implemented NetworkError so pre-existing fakes need no change (only the impl overrides it).
+     */
+    suspend fun sendTest(
+        botId: String,
+        conversationId: String,
+        text: String,
+    ): ApiResult<Unit> = ApiResult.NetworkError(
+        UnsupportedOperationException("sendTest not implemented"),
+        isTimeout = false,
+    )
+
     suspend fun loadAutoReplyRules(botId: String): ApiResult<List<AutoReplyRule>>
 
     suspend fun createAutoReplyRule(
@@ -112,6 +125,20 @@ class BotsRepositoryImpl @Inject constructor(
 
     override suspend fun deleteBot(botId: String): ApiResult<Unit> = withContext(io) {
         call { api.deleteBot(botId); Unit }
+    }
+
+    override suspend fun sendTest(
+        botId: String,
+        conversationId: String,
+        text: String,
+    ): ApiResult<Unit> = withContext(io) {
+        call {
+            api.sendTest(
+                botId,
+                BotSendTestReqDto(conversationId = conversationId.trim(), text = text.trim()),
+            )
+            Unit
+        }
     }
 
     override suspend fun loadAutoReplyRules(botId: String): ApiResult<List<AutoReplyRule>> =

@@ -1,13 +1,16 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedPaymentMethod } from "./helpers/cpp-seed";
+import { cppQueryBillingLedgerRows } from "./helpers/cpp-seed-broadcast-private";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 /* ------------------------------------------------------------------ */
 /*  Constants & helpers                                                */
 /* ------------------------------------------------------------------ */
 
-const API = "http://localhost:8000";
 const TS = Date.now();
 
 interface SessionData {
@@ -30,11 +33,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -133,6 +132,10 @@ print('ok')
 }
 
 function seedPaymentMethod(userId: string, pmId: string) {
+  if (usingCpp()) {
+    cppSeedPaymentMethod(userId, pmId);
+    return;
+  }
   const code = `
 ${PY_PREAMBLE}
 table = ddb.Table('billing')
@@ -155,6 +158,11 @@ print('ok')
 }
 
 function queryBillingLedger(userId: string): Array<Record<string, unknown>> {
+  if (usingCpp()) {
+    return cppQueryBillingLedgerRows(userId, "Private chat") as unknown as Array<
+      Record<string, unknown>
+    >;
+  }
   const code = `
 ${PY_PREAMBLE}
 from boto3.dynamodb.conditions import Key as K
@@ -194,8 +202,24 @@ async function createLiveBroadcast(page: Page): Promise<{ profileId: string; ses
   const sessionId = (await sessionResp.json()).id;
 
   // Set session to live and enable private chat
-  setSessionStatus(sessionId, "live");
-  enablePrivateChat(sessionId);
+  if (usingCpp()) {
+    // cpp: promote draft->live + enable private-chat via the real APIs (root owns
+    // the session). h_pchat_purchase gates on private_chat_enabled +
+    // voyeur_enabled/voyeur_price_cents (the tiers array isn't read by purchase).
+    const startResp = await apiPost(page, "root", `/broadcast/sessions/${sessionId}/start`, {});
+    expect([200, 202]).toContain(startResp.status());
+    const tierResp = await apiPut(page, "root", `/broadcast/sessions/${sessionId}/chat-tiers`, {
+      private_chat_enabled: true,
+      private_chat_rate_per_minute_cents: 500,
+      voyeur_rate_per_minute_cents: 100,
+      private_chat_time_blocks: [5, 15, 30],
+      private_chat_max_concurrent: 5,
+    });
+    expect(tierResp.status()).toBe(200);
+  } else {
+    setSessionStatus(sessionId, "live");
+    enablePrivateChat(sessionId);
+  }
 
   return { profileId, sessionId };
 }

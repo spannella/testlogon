@@ -37,6 +37,8 @@ import com.testlogon.android.core.ui.i18n.asString
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.data.billing.BillingBalance
+import com.testlogon.android.data.billing.BillingMoney
 import com.testlogon.android.data.billing.LedgerEntry
 import com.testlogon.android.data.billing.WalletBalance
 import java.util.Locale
@@ -45,6 +47,7 @@ import java.util.Locale
 object WalletTransactionsTestTags {
     const val SCREEN = "wallet_transactions_screen"
     const val BALANCE = "wallet_transactions_balance"
+    const val ACCOUNT_BALANCE = "wallet_account_balance"
     const val LIST = "wallet_transactions_list"
     const val ROW = "wallet_transactions_row"
     const val EMPTY = "wallet_transactions_empty"
@@ -100,6 +103,8 @@ fun WalletTransactionsScreen(
 
                 is WalletTransactionsLoadState.Loaded -> Column(Modifier.fillMaxSize()) {
                     state.wallet?.let { WalletBalanceHeader(it) }
+                    // PAR-20: account-balance breakdown between the header and the ledger (best-effort).
+                    state.balance?.let { AccountBalanceSection(it) }
                     if (load.transactions.isEmpty()) {
                         EmptyState(
                             title = stringResource(R.string.wallet_transactions_empty_title),
@@ -139,6 +144,64 @@ private fun WalletBalanceHeader(wallet: WalletBalance) {
                 style = MaterialTheme.typography.headlineSmall,
             )
         }
+    }
+}
+
+/**
+ * PAR-20 — the "Account balance" breakdown. Rows, in order: Amount due, Pending due, Owed (settled),
+ * Owed (pending), Paid (settled), Paid (pending). The two `due*` rows are OMITTED when null (parity
+ * with the iOS WalletScreen). Money is rendered via the shared integer-cents [formatWalletMoney].
+ */
+@Composable
+private fun AccountBalanceSection(balance: BillingBalance) {
+    val locale = Locale.getDefault()
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 16.dp)
+            .testTag(WalletTransactionsTestTags.ACCOUNT_BALANCE),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                stringResource(R.string.wallet_balance_section_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            balance.dueSettled?.let {
+                AccountBalanceRow(stringResource(R.string.wallet_balance_amount_due), it, locale)
+            }
+            balance.duePending?.let {
+                AccountBalanceRow(stringResource(R.string.wallet_balance_pending_due), it, locale)
+            }
+            AccountBalanceRow(stringResource(R.string.wallet_balance_owed_settled), balance.owedSettled, locale)
+            AccountBalanceRow(stringResource(R.string.wallet_balance_owed_pending), balance.owedPending, locale)
+            AccountBalanceRow(stringResource(R.string.wallet_balance_paid_settled), balance.paymentsSettled, locale)
+            AccountBalanceRow(stringResource(R.string.wallet_balance_paid_pending), balance.paymentsPending, locale)
+        }
+    }
+}
+
+@Composable
+private fun AccountBalanceRow(label: String, money: BillingMoney, locale: Locale) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            formatWalletMoney(money, locale),
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.End,
+            modifier = Modifier.padding(start = 16.dp),
+        )
     }
 }
 

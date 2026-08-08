@@ -19,11 +19,18 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, isCpp, unauthContext } from "./helpers/session";
+import {
+  cppSeedKycCaseFull,
+  cppGetKycCase,
+  cppGetUserKycTier,
+  cppClearUserKycTier,
+} from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ──────────────────────────────────────────────────────
@@ -39,11 +46,7 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -97,6 +100,13 @@ function py(code: string, arg?: string): string {
 
 /** Seed a draft KYC case META item. */
 function seedKycCase(caseId: string, userSub: string, status = "draft"): void {
+  // TRACK harness-seed (kyc): under cpp the inline :8001 seeder below never
+  // reaches the C++ backend (it reads tlc_kyc_cases in its own moto). userSub is
+  // already the cpp SUB (resolveIdentityId). Seed the equivalent row there.
+  if (isCpp()) {
+    cppSeedKycCaseFull({ caseId, userSub, status });
+    return;
+  }
   py(
     `data = json.loads(sys.argv[1])
 tbl = ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
@@ -108,6 +118,7 @@ print('ok')`,
 
 /** Read the kyc_cases META item back (eid_verification, etc.) as JSON. */
 function getCaseItem(caseId: string): Record<string, unknown> {
+  if (isCpp()) return cppGetKycCase(caseId);
   const out = py(
     `tbl = ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
 item = tbl.get_item(Key={'pk':'KYC#${caseId}','sk':'META'}).get('Item') or {}
@@ -122,6 +133,7 @@ print(json.dumps(item, default=enc))`,
 
 /** Read users.kyc_tier for a user (0 if unset). */
 function getUserTier(userSub: string): number {
+  if (isCpp()) return cppGetUserKycTier(userSub);
   const out = py(
     `users = ddb.Table('users')
 item = users.get_item(Key={'user_sub':'${userSub}'}).get('Item') or {}
@@ -131,6 +143,10 @@ print(int(item.get('kyc_tier', 0)))`,
 }
 
 function clearTier(userSub: string): void {
+  if (isCpp()) {
+    cppClearUserKycTier(userSub);
+    return;
+  }
   py(
     `users = ddb.Table('users')
 try:
@@ -425,9 +441,11 @@ test.describe("731. KYC-022 Status, Auth & Edge Cases", () => {
     expect(data.eid_verification.assertion_id).toMatch(/^ea_[a-f0-9]{12}$/);
   });
 
-  test("731.2 schemes endpoint requires auth (401 without session)", async ({ request }) => {
-    const r = await request.get(`${API}/v1/kyc/eid/schemes`);
+  test("731.2 schemes endpoint requires auth (401 without session)", async () => {
+    const anon = await unauthContext(API);
+    const r = await anon.get(`/v1/kyc/eid/schemes`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("731.3 non-owner cannot start eID on another user's case (403)", async () => {

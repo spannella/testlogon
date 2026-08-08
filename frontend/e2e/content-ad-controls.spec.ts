@@ -21,10 +21,13 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedVideo } from "./helpers/cpp-seed";
+import { cppSeedBillingLedger, cppSeedAdTransparency } from "./helpers/cpp-seed-generic-ddbRequest";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const DDB_URL = "http://localhost:8001/";
 const DDB_HEADERS = {
   "Content-Type": "application/x-amz-json-1.0",
@@ -34,8 +37,8 @@ const DDB_HEADERS = {
 
 const ALICE_KEY = "alice";
 const BOB_KEY = "bob";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 function vid(suffix: string): string {
@@ -68,11 +71,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -143,6 +142,14 @@ async function seedVideo(
     price_cents: { N: "0" },
     duration_seconds: { N: "900" },
   };
+  if (usingCpp()) {
+    cppSeedVideo({
+      videoId: opts.videoId, ownerSub: opts.ownerId, title: opts.title,
+      status: "published", visibility: "public",
+      extra: { access_mode: "ad_supported", price_cents: 0, duration_seconds: 900 },
+    });
+    return;
+  }
   await ddbRequest(page, "PutItem", { TableName: "VideoMetadata", Item: item });
 }
 
@@ -156,6 +163,13 @@ async function seedTransparency(
   clicks: number,
   revenueCents: number,
 ) {
+  if (usingCpp()) {
+    cppSeedAdTransparency([{
+      user_sub: creatorSub, account_id: accountId, company_name: company,
+      month, impression_count: impressions, click_count: clicks, revenue_cents: revenueCents,
+    }]);
+    return;
+  }
   await ddbRequest(page, "PutItem", {
     TableName: "billing",
     Item: {
@@ -179,6 +193,13 @@ async function seedAdRevenueLedger(
   amountCents: number,
   ts: number,
 ) {
+  if (usingCpp()) {
+    cppSeedBillingLedger([{
+      user_sub: creatorSub, video_id: videoId, reason: "Ad revenue",
+      amount_cents: amountCents, type: "ad_revenue_credit", ts,
+    }]);
+    return;
+  }
   await ddbRequest(page, "PutItem", {
     TableName: "billing",
     Item: {

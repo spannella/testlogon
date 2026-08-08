@@ -30,6 +30,7 @@ class FakeOrgsRepo(
     var changeRoleResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var removeResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var transferResult: ApiResult<Unit> = ApiResult.Success(Unit),
+    var leaveResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var acceptResult: ApiResult<Unit> = ApiResult.Success(Unit),
     var declineResult: ApiResult<Unit> = ApiResult.Success(Unit),
 ) : OrgsRepository {
@@ -67,8 +68,17 @@ class FakeOrgsRepo(
         return removeResult
     }
 
-    override suspend fun transferOwnership(orgId: String, newOwnerUserSub: String): ApiResult<Unit> =
-        transferResult
+    override suspend fun transferOwnership(orgId: String, newOwnerUserSub: String): ApiResult<Unit> {
+        transferArgs += orgId to newOwnerUserSub
+        return transferResult
+    }
+
+    val transferArgs = mutableListOf<Pair<String, String>>()
+    val leaveArgs = mutableListOf<String>()
+    override suspend fun leaveOrg(orgId: String): ApiResult<Unit> {
+        leaveArgs += orgId
+        return leaveResult
+    }
 
     override suspend fun acceptInvite(inviteId: String, token: String): ApiResult<Unit> {
         acceptArgs += inviteId to token

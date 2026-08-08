@@ -13,14 +13,16 @@
  * is used, not `page.request`).
  */
 
-import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { test, expect, type Page, type APIRequestContext, request as pwRequest } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 
 interface SessionData {
   user_sub: string;
@@ -33,11 +35,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
     // admin setup keys by short name (alice/bob); alias by user_sub so email-id lookups resolve
     for (const _k of Object.keys(_sessions)) { const _s = _sessions[_k]; if (_s && _s.user_sub && !_sessions[_s.user_sub]) _sessions[_s.user_sub] = _s; }
   }
@@ -69,13 +67,32 @@ async function apiDelete(page: Page, userId: string, path: string) {
   return page.request.delete(`${BASE}${path}`, { headers: csrf(userId) });
 }
 
+// A genuinely cookie-free request context. Under cpp the built-in `request`
+// fixture inherits the project-level admin storageState, so a "bearer-only"
+// call actually also sends the admin ui_session/ui_access_token cookies. cpp
+// then authenticates as the admin AND the delegation key, taking a much slower
+// path (admin-scoped conversation resolution over the whole accumulated moto
+// store) that pushes GET /v1/conversations past the 10s test timeout. An
+// explicit empty jar makes the delegation key the sole credential.
+let _delegCleanCtx: Promise<APIRequestContext> | null = null;
+function delegCleanCtx(): Promise<APIRequestContext> {
+  if (!_delegCleanCtx) {
+    _delegCleanCtx = pwRequest.newContext({
+      ignoreHTTPSErrors: true,
+      storageState: { cookies: [], origins: [] },
+    });
+  }
+  return _delegCleanCtx;
+}
+
 // Programmatic call helper: Bearer key, no session cookies (CSRF bypassed).
 function keyAuth(req: APIRequestContext, key: string) {
+  const pick = async () => (usingCpp() ? await delegCleanCtx() : req);
   return {
-    get: (path: string) =>
-      req.get(`${BASE}${path}`, { headers: { Authorization: `Bearer ${key}` } }),
-    post: (path: string, body: object) =>
-      req.post(`${BASE}${path}`, {
+    get: async (path: string) =>
+      (await pick()).get(`${BASE}${path}`, { headers: { Authorization: `Bearer ${key}` } }),
+    post: async (path: string, body: object) =>
+      (await pick()).post(`${BASE}${path}`, {
         data: body,
         headers: { Authorization: `Bearer ${key}` },
       }),
@@ -94,16 +111,18 @@ async function ensureDelegate(page: Page) {
       delegate_tag_format: "[via @{delegate_name}]",
     },
   });
+  const perms = ["chat_read", "chat_respond", "feed_read", "feed_post"];
   // Add Bob (idempotent — ignore 409 if already present).
   await apiPost(page, ALICE_ID, "/ui/delegates", {
     delegate_id: BOB_ID,
-    permissions: [
-      "chat_read",
-      "chat_respond",
-      "feed_read",
-      "feed_post",
-    ],
+    permissions: perms,
     label: "Bob - API delegate",
+  });
+  // Normalize permissions on the (possibly pre-existing) grant so cross-spec
+  // stale state can't leave Bob without chat_read/chat_respond.
+  await page.request.put(`${BASE}/ui/delegates/${BOB_ID}/permissions`, {
+    headers: csrf(ALICE_ID),
+    data: { permissions: perms },
   });
 }
 

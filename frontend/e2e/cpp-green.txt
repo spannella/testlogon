@@ -1,0 +1,20 @@
+# cpp fully-green specs (W3-full, W2.5 landed) — ran under live cpp with ZERO failing tests
+# Sample: 61 specs / 1314 tests, E2E_USE_CPP=1 via vite :3000 proxy -> cpp :8443
+# Spec-green (100% of that spec passed):
+addresses.spec.ts
+appeals.spec.ts
+# Test-level: 359 tests PASSED across the 61 sampled specs (vs 36 in prior W3 sample).
+
+# ---- W3.x LEVER-1 seed_gap lift (2026-07-23) ----
+# run_all.py (identity+money+feed-social over seed_cpp.py) closed the seed_gap for
+# the 30 quarantined seed_gap specs. Full re-run of those 30: 219 tests PASS
+# (was ~0), 361 fail, 21 skip, 150 did-not-run of 751. Authoritative covered-only
+# JSON re-run of the 19 module-targeted specs: 136 PASS / 224 fail / 39 skip.
+# No seed_gap spec is yet 100% spec-green (each keeps residual cpp behavioral/route
+# fails now reclassified in cpp-quarantine.txt), so none are promoted here -- but the
+# following are NEAR-GREEN and newly render their seeded fixtures:
+#   newsfeed-polls (13/15), broadcast-tips (20/24), broadcast-qa (33/37 base),
+#   admin-rate-limits (24/30 base), shopping-cart (10/11), achievements (17/32),
+#   feed (17/42), messaging-features (63/80 base), messaging-group (36/51 base).
+# Re-run command (module-covered subset, from ~/dev/testlogon/frontend):
+#   . ~/.nvm/nvm.sh && TMPDIR=$HOME/pw_tmp PLAYWRIGHT_TRANSFORM_CACHE_DIR=$HOME/pw_cache #     E2E_USE_CPP=1 E2E_API_BASE=http://localhost:3000 E2E_COOKIE_DOMAIN=localhost #     npx playwright test $(grep seed_gap e2e/cpp-quarantine.txt | grep -oE '[a-zA-Z0-9-]+\.spec\.ts' | sort -u | sed 's|^|e2e/|') #     --workers=4 --retries=0 --reporter=line

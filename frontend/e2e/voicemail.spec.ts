@@ -14,14 +14,20 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import {
+  usingCpp,
+  cppDdbPut,
+  cppDdbGet,
+} from "./helpers/cpp-seed-appeals-moderation-tail";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
@@ -46,11 +52,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -84,6 +86,10 @@ function apiGet(page: Page, path: string, params?: Record<string, string>) {
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 function ddbPut(table: string, item: Record<string, unknown>): void {
+  if (usingCpp()) {
+    cppDdbPut(table, item);
+    return;
+  }
   const script = `
 import boto3, json, sys
 from decimal import Decimal
@@ -110,6 +116,9 @@ table.put_item(Item=to_ddb(item))
 }
 
 function ddbGet(table: string, key: Record<string, string>): Record<string, unknown> | null {
+  if (usingCpp()) {
+    return cppDdbGet(table, key);
+  }
   const script = `
 import boto3, json, sys
 from decimal import Decimal

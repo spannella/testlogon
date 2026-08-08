@@ -21,12 +21,14 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { runCppShim, usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
@@ -51,11 +53,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -105,10 +103,25 @@ async function apiGet(page: Page, path: string) {
 async function revokeAllKeys(page: Page) {
   const resp = await apiGet(page, "/ui/api_keys");
   if (!resp.ok()) return;
-  const { keys = [] } = (await resp.json()) as { keys: Array<{ key_id: string }> };
+  const { keys = [] } = (await resp.json()) as {
+    keys: Array<{ key_id: string; revoked?: boolean }>;
+  };
   for (const k of keys) {
+    if (k.revoked) continue; // cpp keeps revoked rows in the list; skip them
     await apiPost(page, "/ui/api_keys/revoke", { key_id: k.key_id });
   }
+}
+
+/**
+ * Hard-purge every api key row for Alice from cpp's tlc_api_keys.
+ * cpp's /ui/api_keys/revoke only sets revoked=true and leaves the row, and the
+ * /security UI renders revoked rows, so revokeAllKeys() alone never yields the
+ * empty state (keys accumulate across specs on the shared Alice account). This
+ * deletes the rows outright so "No API keys" is real. No-op off the cpp path.
+ */
+function purgeAllKeys() {
+  if (!usingCpp()) return;
+  runCppShim("purge_api_keys.py", { user_sub: resolveIdentityId(ALICE_ID) });
 }
 
 // ─── 1. Page structure ────────────────────────────────────────────────────────
@@ -145,6 +158,7 @@ test.describe("2. API Keys — empty state", () => {
     page = await browser.newPage();
     // Revoke all keys so the empty state is guaranteed.
     await injectAuth(page);
+    purgeAllKeys();
     await revokeAllKeys(page);
     await page.goto(`${BASE}/security`, { waitUntil: "load" });
     await page.waitForTimeout(600);
@@ -270,7 +284,7 @@ test.describe("4. Create Key — submission and result", () => {
   test("Done button closes the dialog and the key appears in the list", async () => {
     await page.getByRole("dialog").getByRole("button", { name: "Done" }).click();
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 3000 });
-    await expect(page.getByText(LABEL)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(LABEL).first()).toBeVisible({ timeout: 5000 });
   });
 
   test("key list entry shows 'ak_' prefix and a creation date", async () => {
@@ -464,10 +478,15 @@ test.describe("7. REST API — /ui/api_keys", () => {
     expect(revokeResp.ok()).toBe(true);
     expect((await revokeResp.json()).ok).toBe(true);
 
-    // The key must no longer appear in the list.
+    // The key must no longer appear as an ACTIVE key. cpp soft-deletes (keeps
+    // the row with revoked:true) and the frontend filters revoked keys out of
+    // the visible list, so assert the key is absent OR marked revoked.
     const listResp = await apiGet(page, "/ui/api_keys");
-    const { keys } = (await listResp.json()) as { keys: Array<{ key_id: string }> };
-    expect(keys.some((k) => k.key_id === key_id)).toBe(false);
+    const { keys } = (await listResp.json()) as {
+      keys: Array<{ key_id: string; revoked?: boolean }>;
+    };
+    const stillActive = keys.some((k) => k.key_id === key_id && !k.revoked);
+    expect(stillActive).toBe(false);
   });
 
   test("POST /ui/api_keys/ip_rules saves and returns normalised CIDRs", async () => {

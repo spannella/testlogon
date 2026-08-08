@@ -1,6 +1,8 @@
 import { test, expect, type APIRequestContext, type TestInfo } from "@playwright/test";
+import { API } from "./cpp.config";
+import { resolveIdentityId } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed";
 
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 const CHARLIE_ID = "e2e_charlie@test.local";
@@ -35,7 +37,7 @@ async function ensureLotteryEnabled(req: APIRequestContext) {
 async function createDmConversation(req: APIRequestContext, senderId: string, recipientId: string) {
   const resp = await apiPostBearer(req, "/messaging/conversations", {
     type: "dm",
-    participant_ids: [recipientId],
+    participant_ids: [usingCpp() ? resolveIdentityId(recipientId) : recipientId],
   }, senderId);
   expect(resp.ok()).toBeTruthy();
   return resp.json();
@@ -64,7 +66,6 @@ test.describe("Messaging lottery DM end-to-end", () => {
     const dm = await createDmConversation(request, ALICE_ID, BOB_ID);
     const lottery = await createLottery(request, ALICE_ID, dm.conversation_id);
     const unlockRes = await apiPostBearer(request, `/messaging/messages/${lottery.message_id}/lottery/unlock`, {}, BOB_ID);
-
     expect(unlockRes.ok()).toBeTruthy();
     const unlock = await unlockRes.json();
 

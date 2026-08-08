@@ -17,12 +17,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "alice";
 const BOB_ID = "bob";
 
@@ -51,11 +52,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -760,7 +757,11 @@ test.describe("104 — Edge cases", () => {
   });
 
   test("104.6 Query with numbers works", async () => {
-    const resp = await apiGet(alicePage, "/ui/search", {
+    test.setTimeout(90_000); // may wait out the 60s search rate-limit window
+    // Use the shared 429-retry wrapper: this large spec can exhaust the
+    // per-user 30/60s search budget, so a 429 here is the limiter, not the
+    // behavior under test.
+    const resp = await searchWithRetry(alicePage, {
       q: "test123",
       types: "contacts",
     });

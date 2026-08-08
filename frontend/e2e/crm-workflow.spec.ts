@@ -23,12 +23,13 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const WFL = "ui/admin/crm/workflow";
 const BOB_ID = "e2e_bob@test.local";
 const TS = Date.now();
@@ -55,11 +56,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -334,8 +331,10 @@ test.describe("Section 83: Auth / flag gating (API)", () => {
     expect([403, 404]).toContain(resp.status());
   });
 
-  test("83.2 Unauthenticated request → 401/403/404", async ({ request }) => {
-    const resp = await request.get(`${API}/${WFL}/rules`);
+  test("83.2 Unauthenticated request → 401/403/404", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const resp = await anonCtx.request.get(`${API}/${WFL}/rules`);
+    await anonCtx.close();
     expect([401, 403, 404]).toContain(resp.status());
   });
 

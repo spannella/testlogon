@@ -14,6 +14,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
+import {
+  usingCpp,
+  cppSeedAdAccount,
+  cppDdbGet,
+} from "./helpers/cpp-seed-commerce-billing";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -48,11 +54,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -62,11 +64,7 @@ function getSessions(): Record<string, SessionData> {
 let _adminSessions: Record<string, SessionData> | null = null;
 function getAdminSessions(): Record<string, SessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -132,7 +130,68 @@ ddb = boto3.resource('dynamodb',
     aws_access_key_id='test', aws_secret_access_key='test')
 `;
 
+// cpp-seed interception (TRACK: seed). Under E2E_USE_CPP, AdAccounts/
+// AdCampaigns ddbPut rows are retargeted to cpp's tlc_ad_* tables via the
+// shim, keyed by the resolved cpp SUB. owner_sub in the item is the email
+// identity (ALICE_ID); we map it to the session sub. Pending accounts are
+// flushed when their campaign (same ACCT# pk) is written, else on next put.
+const _cppPendingAcct: Record<string, Record<string, unknown>> = {};
+function _cppOwnerSub(item: Record<string, unknown>): string {
+  const email = String(item["owner_sub"] ?? ALICE_ID);
+  const sess = getAdminSessions();
+  return sess[email]?.user_sub || sess[ALICE_ID]?.user_sub || email;
+}
+function _cppFlushAcct(acctPk: string): void {
+  const acct = _cppPendingAcct[acctPk];
+  if (!acct) return;
+  delete _cppPendingAcct[acctPk];
+  cppSeedAdAccount({
+    accountId: String(acct["account_id"]),
+    ownerSub: _cppOwnerSub(acct),
+    companyName: acct["company_name"] as string | undefined,
+    billingEmail: acct["billing_email"] as string | undefined,
+    status: (acct["status"] as string) ?? "active",
+    balanceCents: Number(acct["balance_cents"] ?? 0),
+  });
+}
+function _cppDdbPut(tableName: string, item: Record<string, unknown>): boolean {
+  if (!usingCpp()) return false;
+  if (tableName === "AdAccounts") {
+    // Defer: seed with the campaign if one follows, else flush any prior.
+    const pk = String(item["pk"]);
+    _cppFlushAcct(pk);
+    _cppPendingAcct[pk] = item;
+    return true;
+  }
+  if (tableName === "AdCampaigns") {
+    const pk = String(item["pk"]);
+    const acct = _cppPendingAcct[pk];
+    if (acct) {
+      delete _cppPendingAcct[pk];
+      cppSeedAdAccount({
+        accountId: String(acct["account_id"]),
+        ownerSub: _cppOwnerSub(acct),
+        companyName: acct["company_name"] as string | undefined,
+        billingEmail: acct["billing_email"] as string | undefined,
+        status: (acct["status"] as string) ?? "active",
+        balanceCents: Number(acct["balance_cents"] ?? 0),
+        campaign: {
+          campaignId: String(item["campaign_id"]),
+          name: item["name"] as string | undefined,
+          objective: item["objective"] as string | undefined,
+          budgetCents: Number(item["budget_cents"] ?? 10000),
+          budgetType: (item["budget_type"] as string) ?? "lifetime",
+          dailyBudgetCents: Number(item["daily_budget_cents"] ?? 0),
+          status: (item["status"] as string) ?? "active",
+        },
+      });
+    }
+    return true;
+  }
+  return false;
+}
 function ddbPut(tableName: string, item: Record<string, unknown>): void {
+  if (_cppDdbPut(tableName, item)) return;
   const script = `${_DDB_PRELUDE}
 item = json.loads(os.environ['DDB_ITEM'], parse_float=decimal.Decimal, parse_int=decimal.Decimal)
 ddb.Table(os.environ['DDB_TABLE']).put_item(Item=item)
@@ -147,6 +206,12 @@ print('ok')
 }
 
 function ddbGet(tableName: string, key: Record<string, string>): Record<string, unknown> | null {
+  // cpp-read interception (TRACK: readback). Under E2E_USE_CPP, account/
+  // campaign/billing readbacks must reflect cpp's own mutation — the Python
+  // :8001 get below never sees a cpp charge. Route those tables to cpp moto.
+  if (usingCpp() && (tableName === "AdAccounts" || tableName === "AdCampaigns" || tableName === "AdBilling" || tableName === "billing")) {
+    return cppDdbGet(tableName, key);
+  }
   const script = `${_DDB_PRELUDE}
 class Enc(json.JSONEncoder):
     def default(self, o):

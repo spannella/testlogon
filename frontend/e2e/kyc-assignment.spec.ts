@@ -15,12 +15,14 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, isCpp, unauthContext } from "./helpers/session";
+import { cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API        = "http://localhost:8000";
 const ROOT_SUB   = "root.admin@testdev.local";
-const ALICE_ID   = "e2e_alice@test.local";
-const CHARLIE_ID = "e2e_charlie@test.local";
+const ALICE_ID   = resolveIdentityId("e2e_alice@test.local");
+const CHARLIE_ID = resolveIdentityId("e2e_charlie@test.local");
 
 const TS = Date.now();
 
@@ -35,11 +37,7 @@ interface AdminSessionData {
 let _sessions: Record<string, AdminSessionData> | null = null;
 function getSessions(): Record<string, AdminSessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -89,6 +87,21 @@ function seedCase(opts: {
 }): void {
   const status = opts.status ?? "under_review";
   const intake = opts.intakeProfile ?? "basic";
+  // TRACK harness-seed (kyc): under cpp, seed cpp's tlc_kyc_cases so the
+  // status_index queue + auto-assign see this case. user_sub is a placeholder
+  // ("seed_user") in the python path; keep it for cpp (owner index unused here).
+  if (isCpp()) {
+    cppSeedKycCaseFull({
+      caseId: opts.caseId,
+      userSub: "seed_user",
+      status,
+      intakeProfile: intake,
+      assignedAdminSub: opts.assignedAdmin ?? null,
+      slaDueAt: opts.slaDueAt ?? null,
+      escalationLevel: opts.escalationLevel ?? 0,
+    });
+    return;
+  }
   // Build a Python dict literal (single-quoted) for `review` rather than embedding
   // JSON.stringify output — its double quotes collide with the double-quoted
   // `python3 -c "..."` shell wrapper and break the command.
@@ -223,11 +236,13 @@ test.describe("760. KYC auto-assignment API", () => {
     expect(r.status()).toBe(403);
   });
 
-  test("760.5 unauthenticated request is rejected (401)", async ({ request }) => {
+  test("760.5 unauthenticated request is rejected (401)", async () => {
     const caseId = `kyc_a760e_${TS}`;
     seedCase({ caseId, status: "submitted" });
-    const r = await request.post(`${API}/v1/kyc/assignment/cases/${caseId}/auto-assign`);
+    const anon = await unauthContext(API);
+    const r = await anon.post(`/v1/kyc/assignment/cases/${caseId}/auto-assign`);
     expect(r.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("760.6 auto-assign on a missing case returns 404", async () => {

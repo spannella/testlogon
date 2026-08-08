@@ -16,12 +16,16 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppResetUserSyndicates } from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
-const CHARLIE_ID = "e2e_charlie@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
+const CHARLIE_ID = usingCpp()
+  ? resolveIdentityId("charlie_admin")
+  : resolveIdentityId("e2e_charlie@test.local");
 
 const TS = Date.now();
 
@@ -45,11 +49,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -118,6 +118,12 @@ async function heldLicenses(page: Page): Promise<any[]> {
 }
 
 test.beforeAll(async ({ browser }) => {
+  if (usingCpp()) {
+    // cpp caps a user at SY_MAX_PER_USER (10) syndicates via the per-user index;
+    // the Python-only cleanup never reaches cpp, so accumulated runs 400 the
+    // create. Keep the newest so a concurrent run's fresh syndicate survives.
+    cppResetUserSyndicates([ALICE_ID, BOB_ID, CHARLIE_ID], 1);
+  }
   alicePage = await newIdentityPage(browser, "alice");
   bobPage = await newIdentityPage(browser, "bob");
   charliePage = await newIdentityPage(browser, "charlie_admin");

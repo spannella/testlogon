@@ -30,6 +30,11 @@
 import { test, expect, type Page, request as playwrightRequest } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp } from "./helpers/cpp-seed-messaging-crm-misc";
+import { cppSeedPaymentMethod } from "./helpers/cpp-seed";
+import { cppBearerPost, cppBearerGet } from "./helpers/cpp-seed-messaging-calls";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -38,7 +43,6 @@ const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..")
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 
 const BASE = "http://localhost:3000";
-const API  = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID   = "e2e_bob@test.local";
 
@@ -64,11 +68,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -80,10 +80,15 @@ async function injectAuth(page: Page, userId = ALICE_ID) {
   if (!session) throw new Error(`No session for ${userId}`);
   await page.context().addCookies(session.cookies);
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  // The real app stores the cpp SUB as auth-store.userId (Login.tsx calls
+  // login(me.user_sub, ...)). isOwn is computed as msg.sender_id === userId, and
+  // cpp's sender_id is the SUB, not the email. Store the SUB so own-message
+  // rendering (e.g. sender view of a view_once message) works under cpp.
+  const authUserId = session.user_sub || userId;
   await page.evaluate((uid: string) => {
     const state = { userId: uid, accessToken: null, isAuthenticated: true };
     localStorage.setItem("auth-store", JSON.stringify({ state, version: 0 }));
-  }, userId);
+  }, authUserId);
 }
 
 // ─── Authenticated API helpers ────────────────────────────────────────────────
@@ -131,9 +136,11 @@ async function apiPostBearer(
   body: object,
   userId: string,
 ) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerPost(path, body, sub);
   return req.post(`${API}${path}`, {
     data: body,
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
@@ -143,8 +150,10 @@ async function apiGetBearer(
   path: string,
   userId: string,
 ) {
+  const sub = getSessions()[userId]?.user_sub ?? userId; // non-member fallback: raw id (cpp dev raw-sub) -> non-participant 403
+  if (usingCpp()) return cppBearerGet(path, sub);
   return req.get(`${API}${path}`, {
-    headers: { Authorization: `Bearer ${userId}` },
+    headers: { Authorization: `Bearer ${sub}` },
   });
 }
 
@@ -156,6 +165,14 @@ async function apiGetBearer(
  * Unlock for) become enabled without requiring a full billing flow.
  */
 function injectPaymentMethod(userSub: string, pmId: string): void {
+  // cpp path: PM-gated UI toggles (Attach tip / Unlock for) read the caller's
+  // default payment method from cpp's tlc_billing (PM#<id> + BILLING), keyed by
+  // SUB — the Python 'billing' row below is invisible to cpp. userSub is already
+  // the cpp sub here (callers pass getSessions()[id].user_sub).
+  if (usingCpp()) {
+    cppSeedPaymentMethod(userSub, pmId);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 import boto3, os, time

@@ -58,11 +58,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -85,9 +81,39 @@ async function injectAuth(page: Page, userId: string) {
 import { writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedVideo } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || resolve(process.cwd(), "..");
 
 function ddbPut(tableName: string, item: Record<string, unknown>) {
+  if (usingCpp() && tableName === "VideoMetadata") {
+    // cpp reads tlc_video_metadata (SUB-keyed), not the Python :8001
+    // 'VideoMetadata' table this seeder writes. Route the row into cpp so the
+    // video player page's GET /ui/videos/{id} resolves it. owner_user_id is
+    // already the cpp SUB (from getSessions()[...].user_sub). The seed shim
+    // merges arbitrary extra fields (description/width/height/renditions/...).
+    const {
+      video_id,
+      owner_user_id,
+      title,
+      status,
+      visibility,
+      hls_manifest_url,
+      duration_seconds,
+      ...rest
+    } = item as Record<string, any>;
+    cppSeedVideo({
+      videoId: video_id,
+      ownerSub: owner_user_id,
+      title,
+      status,
+      visibility,
+      ...(hls_manifest_url ? { hlsManifestUrl: hls_manifest_url } : {}),
+      ...(duration_seconds != null ? { durationSeconds: duration_seconds } : {}),
+      extra: rest,
+    });
+    return;
+  }
   const itemJson = JSON.stringify(item);
   const scriptPath = join(tmpdir(), `ddb_put_${Date.now()}.py`);
   writeFileSync(scriptPath, `
@@ -118,6 +144,7 @@ table.put_item(Item=convert(json.loads(sys.argv[1])))
 }
 
 function ddbDelete(tableName: string, key: Record<string, unknown>) {
+  if (usingCpp() && tableName === "VideoMetadata") return; // unique per-run ids
   const keyJson = JSON.stringify(key);
   const scriptPath = join(tmpdir(), `ddb_del_${Date.now()}.py`);
   writeFileSync(scriptPath, `

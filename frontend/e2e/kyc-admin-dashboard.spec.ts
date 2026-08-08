@@ -20,14 +20,16 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, isCpp } from "./helpers/session";
+import { cppSeedKycCaseFull } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE       = "http://localhost:3000";
-const API        = "http://localhost:8000";
 const ROOT_SUB   = "root.admin@testdev.local";
-const ALICE_ID   = "e2e_alice@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 const TS         = Date.now();
 
 // ─── Session bootstrap ────────────────────────────────────────────────────────
@@ -52,11 +54,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -133,6 +131,22 @@ function seedKycCase(opts: {
   version?: number;
 }): string {
   const { caseId, userSub, status, intakeProfile, assignedAdminSub, version } = opts;
+  // TRACK harness-seed (kyc): under cpp, seed cpp's tlc_kyc_cases so the
+  // admin queue / owner index list this case. userSub is the cpp SUB.
+  if (isCpp()) {
+    cppSeedKycCaseFull({
+      caseId, userSub, status,
+      intakeProfile: intakeProfile ?? "standard",
+      assignedAdminSub: assignedAdminSub ?? null,
+      version: version ?? 1,
+      files: [
+        { type: "selfie", path: `/uploads/kyc/${caseId}_selfie.jpg`, verification_state: "pending" },
+        { type: "id_front", path: `/uploads/kyc/${caseId}_id_front.jpg`, verification_state: "pending" },
+        { type: "id_back", path: `/uploads/kyc/${caseId}_id_back.jpg`, verification_state: "pending" },
+      ],
+    });
+    return caseId;
+  }
   const ts = Math.floor(Date.now() / 1000);
   const v = version ?? 1;
   const script = `

@@ -26,12 +26,15 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { readFileSync, statSync } from "fs";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedAlertPrefs, cppClearAlertPrefs } from "./helpers/cpp-seed-alerts-broadcast-calendar";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE      = "http://localhost:3000";
-const API       = "http://localhost:8000";
 const ALICE_ID  = "e2e_alice@test.local";
 const EMAIL_LOG = REPO_ROOT + "/.logs/dev/emails.log";
 const SMS_LOG   = REPO_ROOT + "/.logs/dev/sms.log";
@@ -57,11 +60,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -106,6 +105,7 @@ function runPython(code: string): void {
 }
 
 function clearAliceAlertPrefs(): void {
+  if (usingCpp()) { cppClearAlertPrefs(resolveIdentityId(ALICE_ID)); return; }
   execSync(
     `python3 -c "
 import boto3, os
@@ -146,6 +146,18 @@ function injectAlertPrefs(opts: {
     smsEventTypes = [],
     toastEventTypes = [],
   } = opts;
+
+  if (usingCpp()) {
+    cppSeedAlertPrefs({
+      userSub: resolveIdentityId(ALICE_ID),
+      emails,
+      smsNumbers,
+      emailEventTypes,
+      smsEventTypes,
+      toastEventTypes,
+    });
+    return;
+  }
 
   execSync(
     `python3 << 'PYEOF'
@@ -265,7 +277,35 @@ PYEOF`,
 
 // ─── Log helpers ──────────────────────────────────────────────────────────────
 
+// cpp writes the alert dev-logs on .82 (systemd WorkingDirectory=/home/sean, no
+// TLC_DEV_*_LOG override) at /home/sean/.logs/dev/{emails,sms}.log — the .249
+// REPO_ROOT paths are never written in a cpp run. Under usingCpp() read the
+// bytes from .82 over ssh (same key as helpers/cpp-seed.ts). Python path
+// unchanged: non-cpp still reads the local file directly.
+const CPP_SSH_KEY = process.env.E2E_CPP_SSH_KEY ?? "/home/sean/.ssh/e2e_cpp_seed_ed25519";
+const CPP_SSH_HOST = process.env.E2E_CPP_SSH_HOST ?? "sean@192.168.0.82";
+function cppRemoteLogPath(localPath: string): string {
+  // map .../.logs/dev/emails.log -> ~/.logs/dev/emails.log on .82
+  return localPath.endsWith("sms.log")
+    ? "/home/sean/.logs/dev/sms.log"
+    : "/home/sean/.logs/dev/emails.log";
+}
+function readLogFile(logPath: string): string {
+  if (usingCpp()) {
+    try {
+      return execSync(
+        `ssh -i ${CPP_SSH_KEY} -o IdentitiesOnly=yes -o BatchMode=yes `
+          + `-o ConnectTimeout=20 ${CPP_SSH_HOST} `
+          + `'cat ${cppRemoteLogPath(logPath)} 2>/dev/null || true'`,
+        { timeout: 20_000 },
+      ).toString();
+    } catch { return ""; }
+  }
+  try { return readFileSync(logPath, "utf-8"); } catch { return ""; }
+}
+
 function logSize(path: string): number {
+  if (usingCpp()) return Buffer.byteLength(readLogFile(path), "utf-8");
   try { return statSync(path).size; } catch { return 0; }
 }
 
@@ -275,8 +315,7 @@ function logSize(path: string): number {
  * Returns the full body text of the matching entry.
  */
 function readAlertEmail(logPath: string, afterOffset: number, subjectPattern: RegExp): string {
-  let raw = "";
-  try { raw = readFileSync(logPath, "utf-8"); } catch { /* may not exist */ }
+  const raw = readLogFile(logPath);
   const tail = raw.slice(afterOffset);
   // Each alert entry starts with [TIMESTAMP] ALERT_EMAIL TO=...
   const entries = [...tail.matchAll(
@@ -294,8 +333,7 @@ function readAlertEmail(logPath: string, afterOffset: number, subjectPattern: Re
  * bytes, looking for a Body line matching `bodyPattern`.
  */
 function readAlertSms(logPath: string, afterOffset: number, bodyPattern: RegExp): string {
-  let raw = "";
-  try { raw = readFileSync(logPath, "utf-8"); } catch { /* may not exist */ }
+  const raw = readLogFile(logPath);
   const tail = raw.slice(afterOffset);
   const entries = [...tail.matchAll(
     /\[[\d\-T:Z]+\] ALERT_SMS TO=([^\n]+)\n([\s\S]*?)(?=\[[\d\-T:Z]+\]|$)/g,

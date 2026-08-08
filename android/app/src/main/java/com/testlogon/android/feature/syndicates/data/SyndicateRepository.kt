@@ -9,6 +9,7 @@ import com.testlogon.android.core.model.syndicates.OpenLicensingContent
 import com.testlogon.android.core.model.syndicates.RegistrationResult
 import com.testlogon.android.core.model.syndicates.RevenueSplitPolicy
 import com.testlogon.android.core.model.syndicates.SyndicateFeedItem
+import com.testlogon.android.core.model.syndicates.SyndicateDiscoverItem
 import com.testlogon.android.core.model.syndicates.SyndicateListItem
 import com.testlogon.android.core.model.syndicates.SyndicateMember
 import com.testlogon.android.core.model.syndicates.SyndicateOverview
@@ -53,6 +54,12 @@ interface SyndicateRepository {
 
     /** Batch-7 - GET the caller's syndicates (bare-array list -> mapped). Idempotent GET. */
     suspend fun listMySyndicates(): ApiResult<List<SyndicateListItem>>
+
+    /**
+     * PAR-35(a) - GET discoverable (active) syndicates (bare-array -> mapped). [limit] is clamped 1..100
+     * server-side (default 50). Idempotent GET.
+     */
+    suspend fun discover(limit: Int = 50): ApiResult<List<SyndicateDiscoverItem>>
 
     /**
      * Batch-7 - POST a new syndicate (creator becomes admin). On success returns the created
@@ -119,6 +126,11 @@ class SyndicateRepositoryImpl @Inject constructor(
     override suspend fun listMySyndicates(): ApiResult<List<SyndicateListItem>> =
         withContext(Dispatchers.IO) {
             call { api.listMySyndicates().map { it.toDomain() } }
+        }
+
+    override suspend fun discover(limit: Int): ApiResult<List<SyndicateDiscoverItem>> =
+        withContext(Dispatchers.IO) {
+            call { api.discover(limit).map { it.toDomain() } }
         }
 
     override suspend fun createSyndicate(

@@ -22,12 +22,14 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppResetPromoCodes } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
 const TS = Date.now();
@@ -54,11 +56,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -126,6 +124,7 @@ async function createCartWithItem(
   userId: string,
   unitPriceCents: number,
   quantity = 1,
+  creatorUserId?: string,
 ): Promise<string> {
   const cartResp = await apiPost(page, userId, "/ui/shoppingcart/carts");
   expect(cartResp.ok()).toBe(true);
@@ -135,6 +134,11 @@ async function createCartWithItem(
     name: `Item ${cartId}`,
     quantity,
     unit_price_cents: unitPriceCents,
+    // The checkout UI derives the promo creator_user_id from the cart item's
+    // creator_user_id/seller_id. cpp keys promo codes by the creator SUB, so
+    // stamp the item's creator with the resolved sub or the UI sends an empty
+    // creator and validate fails ("not valid for this creator").
+    ...(creatorUserId ? { creator_user_id: creatorUserId } : {}),
   });
   expect(itemResp.ok(), `add item: ${await itemResp.text()}`).toBe(true);
   return cartId;
@@ -158,6 +162,10 @@ test.describe("715 — Promo Checkout API", () => {
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     alice = await newIdentityPage(browser, ALICE_ID);
+    // cpp caps promo codes per creator (100); prior runs accumulate in cpp's
+    // tlc_promo_codes (the spec has no cleanup and never touched cpp's store),
+    // so reset Alice's codes first. No-op on the Python path.
+    if (usingCpp()) cppResetPromoCodes(resolveIdentityId(ALICE_ID));
 
     pctCodeId = await createCode(alice, ALICE_ID, {
       code: PCT_CODE,
@@ -204,7 +212,7 @@ test.describe("715 — Promo Checkout API", () => {
       code: PCT_CODE,
       checkout_type: "shop",
       item_price_cents: 5000,
-      creator_user_id: ALICE_ID,
+      creator_user_id: resolveIdentityId(ALICE_ID),
     });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
@@ -316,7 +324,9 @@ test.describe("715 — Promo Checkout API", () => {
       code: MIN_CODE,
       checkout_type: "shop",
       item_price_cents: 9000,
-      creator_user_id: ALICE_ID,
+      // cpp keys promo codes by the creator SUB; pass the resolved id (mirrors
+      // 715.1) so the min-purchase rule — not a creator mismatch — is exercised.
+      creator_user_id: resolveIdentityId(ALICE_ID),
     });
     expect(v.ok()).toBe(true);
     const vData = await v.json();
@@ -409,6 +419,7 @@ test.describe("715 — Checkout promo UI", () => {
 
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     alice = await newIdentityPage(browser, ALICE_ID);
+    if (usingCpp()) cppResetPromoCodes(resolveIdentityId(ALICE_ID));
     await createCode(alice, ALICE_ID, {
       code: UI_CODE,
       discount_type: "percentage",
@@ -416,7 +427,9 @@ test.describe("715 — Checkout promo UI", () => {
       applies_to: ["shop"],
       max_uses_per_user: 10,
     });
-    cartId = await createCartWithItem(alice, ALICE_ID, 10000, 1); // $100
+    // Stamp the cart item's creator so the checkout UI resolves the promo
+    // creator_user_id (Alice's sub under cpp) when applying UI_CODE.
+    cartId = await createCartWithItem(alice, ALICE_ID, 10000, 1, resolveIdentityId(ALICE_ID)); // $100
   });
 
   test.afterAll(async () => {

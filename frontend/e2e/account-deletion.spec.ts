@@ -20,10 +20,17 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, cppRegisterThrowaway } from "./helpers/session";
+import { cppCancelActiveDeletions, cppResetAccountDeletion, cppExpireAccountDeletion, usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
-const BOB_ID = "e2e_bob@test.local";
+// BOB_ID is the identity this spec mutates DESTRUCTIVELY (§534.7 finalize =
+// hard-delete). Under cpp it is re-pointed to a fresh THROWAWAY user per describe
+// (provisionThrowawayBob) so a finalize never deletes the shared e2e_bob fixture
+// and poisons the whole suite's login. Off the cpp path it stays e2e_bob
+// (Python behaviour byte-identical).
+let BOB_ID = "e2e_bob@test.local";
 const ALICE_ID = "e2e_alice@test.local";
 const BASE = "ui/privacy/account-deletion";
 const ADMIN = "ui/admin/privacy/account-deletion";
@@ -40,12 +47,26 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT, timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
+}
+
+/**
+ * cpp-only: mint a fresh throwaway user and install it as the "bob" identity for
+ * this run, and repoint BOB_ID at its email. Every existing getSessions()["bob"]
+ * / apiPost(page,"bob",…) / cleanupUser(BOB_ID) / expireGrace(BOB_ID,…) then
+ * transparently targets the disposable account, so §534.7's hard-delete finalize
+ * destroys the throwaway — never the shared e2e_bob. No-op off the cpp path.
+ */
+function provisionThrowawayBob(): void {
+  if (!usingCpp()) return;
+  const tw = cppRegisterThrowaway("acctdel");
+  if (!tw) return; // best-effort: fall back to shared bob if register fails
+  getSessions()["bob"] = tw.session as unknown as SessionData;
+  getSessions()[tw.email] = tw.session as unknown as SessionData;
+  getSessions()[tw.session.user_sub] = tw.session as unknown as SessionData;
+  BOB_ID = tw.email;
 }
 
 async function newIdentityPage(browser: Browser, identity: string): Promise<Page> {
@@ -68,6 +89,14 @@ async function apiGet(page: Page, path: string, params?: Record<string, string>)
 
 /** Remove all account-deletion rows for a user (clean slate between runs). */
 function cleanupUser(userSub: string): void {
+  // cpp path: fully reset the user's account-deletion + export rows in cpp's
+  // OWN store (the Python DDB delete below never reaches cpp). This clears a
+  // stale pending deletion (409 on /request) AND a prior <24h export row (429
+  // on /export). userSub here is the fixture EMAIL; resolveIdentityId maps it
+  // to the cpp SUB the shim keys on. cppCancelActiveDeletions is the API-only
+  // fallback for retention-held rows the shim already removes.
+  cppResetAccountDeletion(resolveIdentityId(userSub));
+  cppCancelActiveDeletions(userSub);
   execSync(
     `python3 -c "
 import boto3, os
@@ -90,6 +119,12 @@ print('cleaned')
 
 /** Force a request's scheduled_for into the past so it becomes due. */
 function expireGrace(userSub: string, requestId: string): void {
+  if (usingCpp()) {
+    // cpp store: the Python :8001 write below never reaches cpp. Back-date the
+    // request in cpp's OWN moto table via the shim (SUB, not email).
+    cppExpireAccountDeletion(resolveIdentityId(userSub), requestId);
+    return;
+  }
   execSync(
     `python3 -c "
 import boto3, os, time
@@ -112,7 +147,7 @@ print('expired')
 
 test.describe("531. Account deletion — password / confirm verification", () => {
   let bob: Page;
-  test.beforeAll(async ({ browser }) => { getSessions(); cleanupUser(BOB_ID); bob = await newIdentityPage(browser, "bob"); });
+  test.beforeAll(async ({ browser }) => { getSessions(); provisionThrowawayBob(); cleanupUser(BOB_ID); bob = await newIdentityPage(browser, "bob"); });
   test.afterAll(async () => { cleanupUser(BOB_ID); await bob?.close(); });
 
   test("531.1 empty password returns 401/422", async () => {
@@ -135,7 +170,7 @@ test.describe("531. Account deletion — password / confirm verification", () =>
 
 test.describe("532. Account deletion — lifecycle", () => {
   let bob: Page;
-  test.beforeAll(async ({ browser }) => { getSessions(); cleanupUser(BOB_ID); bob = await newIdentityPage(browser, "bob"); });
+  test.beforeAll(async ({ browser }) => { getSessions(); provisionThrowawayBob(); cleanupUser(BOB_ID); bob = await newIdentityPage(browser, "bob"); });
   test.afterAll(async () => { cleanupUser(BOB_ID); await bob?.close(); });
 
   test("532.1 create deletion request sets pending + future scheduled_for", async () => {
@@ -181,7 +216,7 @@ test.describe("532. Account deletion — lifecycle", () => {
 
 test.describe("533. Privacy data export", () => {
   let bob: Page;
-  test.beforeAll(async ({ browser }) => { getSessions(); cleanupUser(BOB_ID); bob = await newIdentityPage(browser, "bob"); });
+  test.beforeAll(async ({ browser }) => { getSessions(); provisionThrowawayBob(); cleanupUser(BOB_ID); bob = await newIdentityPage(browser, "bob"); });
   test.afterAll(async () => { cleanupUser(BOB_ID); await bob?.close(); });
 
   test("533.1 create export with all categories (201, completed)", async () => {
@@ -223,6 +258,7 @@ test.describe("534. Admin account-deletion management", () => {
 
   test.beforeAll(async ({ browser }) => {
     getSessions();
+    provisionThrowawayBob();
     cleanupUser(BOB_ID);
     root = await newIdentityPage(browser, "root");
     bob = await newIdentityPage(browser, "bob");
@@ -291,7 +327,7 @@ test.describe("534. Admin account-deletion management", () => {
 // ─── 535. Privacy / Account Deletion page UI ─────────────────────────────────
 
 test.describe("535. Account Deletion page UI", () => {
-  test.beforeAll(() => { getSessions(); });
+  test.beforeAll(() => { getSessions(); provisionThrowawayBob(); });
   test.afterAll(() => { cleanupUser(BOB_ID); });
 
   test.beforeEach(async ({ page }) => {

@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.feature.ads.studio.ui.StudioCampaignPicker
 
 /** Stable testTags for the ad targeting editor. */
 object AdTargetingTestTags {
@@ -69,12 +70,27 @@ fun AdTargetingRoute(
     viewModel: AdTargetingViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val accountsState by viewModel.campaignSelector.accountsState.collectAsStateWithLifecycle()
+    val campaignsState by viewModel.campaignSelector.campaignsState.collectAsStateWithLifecycle()
+    val selectedAccountId by viewModel.campaignSelector.selectedAccountId.collectAsStateWithLifecycle()
+    val selectedCampaignId by viewModel.campaignSelector.selectedCampaignId.collectAsStateWithLifecycle()
     AdTargetingScreen(
         state = state,
         onBack = onBack,
         onRetry = viewModel::onRetry,
         onUpdate = viewModel::updateForm,
         onSave = viewModel::save,
+        picker = {
+            StudioCampaignPicker(
+                accountsState = accountsState,
+                campaignsState = campaignsState,
+                selectedAccountId = selectedAccountId,
+                selectedCampaignId = selectedCampaignId,
+                onAccountSelected = viewModel::onAccountSelected,
+                onCampaignSelected = viewModel::onCampaignSelected,
+                enabled = state !is AdTargetingUiState.Loading,
+            )
+        },
     )
 }
 
@@ -85,6 +101,7 @@ fun AdTargetingScreen(
     onRetry: () -> Unit,
     onUpdate: ((TargetingForm) -> TargetingForm) -> Unit,
     onSave: () -> Unit,
+    picker: @androidx.compose.runtime.Composable () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -101,6 +118,7 @@ fun AdTargetingScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { picker() }
             when (state) {
                 is AdTargetingUiState.Loading -> LoadingState()
                 is AdTargetingUiState.NoCampaign -> EmptyState(

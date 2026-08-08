@@ -13,12 +13,16 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedUserSearch, cppCleanupContacts } from "./helpers/cpp-seed-alerts-broadcast-calendar";
+import { cppSeedProfile } from "./helpers/cpp-seed-profile-social";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const BASE     = "http://localhost:3000";
-const API      = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID   = "e2e_bob@test.local";
 const PYTHON   = REPO_ROOT + "/.venv/bin/python3";
@@ -45,11 +49,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -107,6 +107,7 @@ ddb = boto3.resource(
 
 /** Remove all contacts for Alice from the Contacts table. */
 function cleanupAliceContacts(): void {
+  if (usingCpp()) { cppCleanupContacts(resolveIdentityId(ALICE_ID)); return; }
   try {
     execSync(
       `${PYTHON} -c "
@@ -131,6 +132,18 @@ print('cleaned')
  * 2. The UserSearch table (so the dialog search for "bob" returns Bob)
  */
 function seedBobProfile(): void {
+  if (usingCpp()) {
+    // cpp reads profile identity from tlc_profile (keyed by whatever
+    // user_id is POSTed to /ui/contacts) and search from tlc_user_search.
+    // The direct-API tests POST BOB_ID (email); the Add-Contact dialog
+    // POSTs the search result's user_id (the cpp SUB). Seed BOTH profile
+    // keys so display_name enriches to 'E2E Bob' on either path.
+    const bobSub = resolveIdentityId(BOB_ID);
+    cppSeedProfile({ userSub: bobSub, displayName: 'E2E Bob' });
+    if (bobSub !== BOB_ID) cppSeedProfile({ userSub: BOB_ID, displayName: 'E2E Bob' });
+    cppSeedUserSearch([{ userId: bobSub, displayName: 'E2E Bob', email: BOB_ID }]);
+    return;
+  }
   execSync(
     `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE.trim()}
@@ -275,7 +288,10 @@ test.describe("31. Add contact via 'Add Contact' dialog", () => {
     const data = await resp.json() as {
       contacts: Array<{ contact_id: string; display_name: string; is_favorite: boolean; is_blocked: boolean }>;
     };
-    const bob = data.contacts.find((c) => c.contact_id === BOB_ID);
+    const bobSub = resolveIdentityId(BOB_ID);
+    const bob = data.contacts.find(
+      (c) => c.contact_id === BOB_ID || c.contact_id === bobSub,
+    );
     expect(bob).toBeDefined();
     expect(bob!.display_name).toBe("E2E Bob");
     expect(bob!.is_favorite).toBe(false);
@@ -310,11 +326,15 @@ test.describe("31b. Contact identity links to canonical profile", () => {
   });
 
   test("unauthenticated viewer sees public profile rendering on canonical route", async ({ browser }) => {
-    const anon = await browser.newPage();
-    await anon.goto(`${BASE}/u/${encodeURIComponent(BOB_ID)}`, { waitUntil: "load" });
+    // A bare newPage() inherits the default (authenticated) storageState under
+    // cpp, so force a cookie-free context for a genuine anonymous view.
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const anon = await anonCtx.newPage();
+    await anon.goto(`${BASE}/u/${encodeURIComponent(resolveIdentityId(BOB_ID))}`, { waitUntil: "load" });
     await expect(anon.getByText(/Audience: public/i)).toBeVisible({ timeout: 8_000 });
     await expect(anon.getByRole("button", { name: /sign in to view more/i })).toBeVisible({ timeout: 8_000 });
     await anon.close();
+    await anonCtx.close();
   });
 });
 
@@ -637,7 +657,7 @@ test.describe("36. find-or-create DM — API idempotency and error handling", ()
 
   test("contacts GET returns 401 when not authenticated", async () => {
     // A fresh request context with no cookies
-    const anonCtx = await page.context().browser()!.newContext();
+    const anonCtx = await page.context().browser()!.newContext({ storageState: undefined });
     const anonPage = await anonCtx.newPage();
     const r = await anonPage.request.get(`${API}/ui/contacts`);
     await anonCtx.close();

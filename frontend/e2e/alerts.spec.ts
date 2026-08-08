@@ -11,12 +11,15 @@ import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import { readFileSync, statSync } from "fs";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { execFileSync } from "child_process";
+import { usingCpp } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE      = "http://localhost:3000";
-const API       = "http://localhost:8000";
 const ALICE_ID  = "e2e_alice@test.local";
 const EMAIL_LOG = REPO_ROOT + "/.logs/dev/emails.log";
 const SMS_LOG   = REPO_ROOT + "/.logs/dev/sms.log";
@@ -47,11 +50,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -113,7 +112,43 @@ except Exception:
 
 // ─── Log helpers ──────────────────────────────────────────────────────────────
 
+// Under E2E_USE_CPP the OTP dev-logs are written by cpp on .82 at
+// /home/sean/.logs/dev/{emails,sms}.log (cpp's cwd, no env override) — a
+// DIFFERENT host than this test process (.249). Fetch the remote bytes over ssh
+// so logSize()/readOtpFromLog() see cpp's live OTP writes. Local Python path
+// unchanged (statSync/readFileSync on REPO_ROOT/.logs/dev).
+const CPP_SSH_HOST = process.env.E2E_CPP_SSH_HOST ?? "sean@192.168.0.82";
+const CPP_SSH_KEY =
+  process.env.E2E_CPP_SSH_KEY ?? "/home/sean/.ssh/e2e_cpp_seed_ed25519";
+const CPP_DEV_LOG_DIR = process.env.E2E_CPP_DEV_LOG_DIR ?? "/home/sean/.logs/dev";
+
+function cppReadRemoteLog(localPath: string): string {
+  // map REPO_ROOT/.logs/dev/emails.log -> <CPP_DEV_LOG_DIR>/emails.log on .82
+  const base = localPath.split("/").pop() || "";
+  const remote = `${CPP_DEV_LOG_DIR}/${base}`;
+  try {
+    return execFileSync(
+      "ssh",
+      [
+        "-i", CPP_SSH_KEY,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=20",
+        "-o", "ControlMaster=auto",
+        "-o", `ControlPath=/home/sean/.ssh/cm-cppseed-w${process.env.TEST_WORKER_INDEX || "0"}-%C`,
+        "-o", "ControlPersist=180",
+        CPP_SSH_HOST,
+        `cat ${remote} 2>/dev/null || true`,
+      ],
+      { timeout: 25_000, encoding: "utf8" },
+    );
+  } catch {
+    return "";
+  }
+}
+
 function logSize(path: string): number {
+  if (usingCpp()) return Buffer.byteLength(cppReadRemoteLog(path), "utf-8");
   try { return statSync(path).size; } catch { return 0; }
 }
 
@@ -125,7 +160,11 @@ function logSize(path: string): number {
  */
 function readOtpFromLog(logPath: string, afterOffset: number): string {
   let raw = "";
-  try { raw = readFileSync(logPath, "utf-8"); } catch { /* file may not exist yet */ }
+  if (usingCpp()) {
+    raw = cppReadRemoteLog(logPath);
+  } else {
+    try { raw = readFileSync(logPath, "utf-8"); } catch { /* file may not exist yet */ }
+  }
   const tail = raw.slice(afterOffset);
   const matches = [...tail.matchAll(/Your confirmation code is: (\d{6})/g)];
   if (!matches.length) throw new Error(`OTP not found in ${logPath} (scanned ${tail.length} bytes after offset ${afterOffset})`);

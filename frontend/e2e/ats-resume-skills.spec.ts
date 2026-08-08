@@ -30,12 +30,14 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { asArray } from "./helpers/shape";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API  = "http://localhost:8000";
 const TS   = Date.now();
 
 const TEST_SKILL_A    = `e2e-skill-${TS}-alpha`;
@@ -65,11 +67,7 @@ interface AdminSessionData {
 let _adminSessions: Record<string, AdminSessionData> | null = null;
 function getAdminSessions(): Record<string, AdminSessionData> {
   if (!_adminSessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _adminSessions = JSON.parse(raw);
+    _adminSessions = loadSessions();
   }
   return _adminSessions!;
 }
@@ -323,8 +321,8 @@ test.describe("Section 93 — Skill assignment (job order, RSK-001)", () => {
       skills: Array<{ name: string; required?: boolean }>;
     };
     expect(body.entity_type).toBe("job_order");
-    const hit = body.skills.find(
-      (s) => s.name === TEST_SKILL_A.toLowerCase().trim(),
+    const hit = asArray(body.skills).find(
+      (s: any) => s.name === TEST_SKILL_A.toLowerCase().trim(),
     );
     expect(hit).toBeDefined();
     expect(hit?.required).toBe(true);

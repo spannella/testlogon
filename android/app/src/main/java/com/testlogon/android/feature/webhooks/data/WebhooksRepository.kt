@@ -5,6 +5,7 @@ import com.squareup.moshi.JsonEncodingException
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.webhooks.Webhook
 import com.testlogon.android.core.model.webhooks.WebhookEventType
+import com.testlogon.android.core.model.webhooks.WebhookTestResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.webhooks.CreateWebhookRequest
 import com.testlogon.android.core.network.webhooks.WebhooksApi
@@ -60,6 +61,20 @@ interface WebhooksRepository {
 
     /** GET the enumerable subscribable event types for the create multi-select (NAMED envelope unwrap). */
     suspend fun eventTypes(): ApiResult<List<WebhookEventType>>
+
+    /**
+     * PAR-26 - POST a synthetic test delivery to one endpoint. NON-idempotent -> NO auto-retry here. A
+     * 200 with status="failed" (unreachable host) is a SUCCESSFUL call carrying a failed [WebhookTestResult]
+     * (surfaced as failed, not as an error); only a real HTTP/transport error yields Failure / NetworkError.
+     */
+    suspend fun test(id: String): ApiResult<WebhookTestResult>
+
+    /**
+     * PAR-26 - POST a signing-secret rotation for one endpoint; returns the NEW plaintext secret (once).
+     * NON-idempotent -> NO auto-retry. The rotated secret is passed straight through for one-time display and
+     * is NEVER cached / persisted / logged (the in-memory endpoint snapshot is left untouched).
+     */
+    suspend fun rotateSecret(id: String): ApiResult<String>
 }
 
 @Singleton
@@ -119,6 +134,18 @@ class DefaultWebhooksRepository @Inject constructor(
     override suspend fun eventTypes(): ApiResult<List<WebhookEventType>> =
         withContext(Dispatchers.IO) {
             call { api.eventTypes().eventTypes.map { it.toDomain() } }
+        }
+
+    override suspend fun test(id: String): ApiResult<WebhookTestResult> =
+        withContext(Dispatchers.IO) {
+            call { api.test(id).toDomain() }
+        }
+
+    override suspend fun rotateSecret(id: String): ApiResult<String> =
+        withContext(Dispatchers.IO) {
+            // The rotated secret is returned straight to the caller for a one-time reveal; it is NEVER written
+            // into the cached (secret-less) snapshot, persisted, or logged.
+            call { api.rotateSecret(id).secret }
         }
 
     /**

@@ -20,13 +20,21 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { asArray } from "./helpers/shape";
+import {
+  usingCpp,
+  cppResetUserSyndicates,
+  cppSeedWallet,
+  cppReadUserWallet,
+} from "./helpers/cpp-seed-groups-treasury";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ─────────────────────────────────────────────────────────
@@ -51,11 +59,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -113,6 +117,12 @@ function ddbExec(script: string): string {
 }
 
 function seedWallet(userSub: string, cents: number) {
+  if (usingCpp()) {
+    // cpp reads tlc_billing (USER#<sub>/WALLET); the Python 'billing' write
+    // below is invisible to it. SET-to-amount is fine (each user seeded once).
+    cppSeedWallet(userSub, cents);
+    return;
+  }
   ddbExec(`
 import time
 billing = ddb.Table('billing')
@@ -126,6 +136,7 @@ print('wallet seeded')
 }
 
 function getWalletBalance(userSub: string): number {
+  if (usingCpp()) return cppReadUserWallet(userSub);
   const out = ddbExec(`
 billing = ddb.Table('billing')
 r = billing.get_item(Key={'pk': 'USER#${userSub}', 'sk': 'WALLET'}).get('Item') or {}
@@ -146,6 +157,15 @@ test.describe("435 — Treasury Deposit & Balance API", () => {
   test.beforeAll(async ({ browser }) => {
     alicePage = await newIdentityPage(browser, "alice");
     bobPage = await newIdentityPage(browser, "bob");
+
+    // cpp only: clear the caller's stale syndicate index so SY_MAX_PER_USER (10)
+    // is not tripped by accumulation from prior runs (Python DDB-Local is fresh).
+    if (usingCpp()) {
+      cppResetUserSyndicates([
+        getSessions()["alice"]?.user_sub,
+        getSessions()["bob"]?.user_sub,
+      ].filter(Boolean) as string[]);
+    }
 
     // Alice creates a syndicate (she becomes admin).
     const create = await apiPost(alicePage, "alice", "/ui/syndicates", {
@@ -319,7 +339,7 @@ test.describe("437 — Treasury Disbursement & Role Gate API", () => {
     const data = await (
       await apiGet(alicePage, `/ui/syndicates/treasury/${syndicateId}/ledger`)
     ).json();
-    const debit = data.entries.find((e: any) => e.direction === "debit");
+    const debit = asArray(data.entries).find((e: any) => e.direction === "debit");
     expect(debit).toBeTruthy();
     expect(debit.amount_cents).toBe(1000);
     expect(debit.counterparty_user_id).toBe(BOB_ID);

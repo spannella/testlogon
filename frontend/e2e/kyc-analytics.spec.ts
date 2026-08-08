@@ -15,11 +15,13 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppSeedKycCaseFull, cppDeleteKycAnalyticsCases } from "./helpers/cpp-seed-kyc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const TS = Date.now();
 const NOW = Math.floor(Date.now() / 1000);
@@ -48,11 +50,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -115,6 +113,23 @@ interface SeedCase {
 
 /** Seed KYC cases directly into the kyc_cases table. */
 function seedCases(cases: SeedCase[]): void {
+  if (usingCpp()) {
+    const cohort = String(TS);
+    cases.forEach((c, i) => {
+      cppSeedKycCaseFull({
+        caseId: `kyc_an${cohort}_${i}`,
+        userSub: `an_${cohort}_${i}@test.local`,
+        status: c.status,
+        intakeProfile: c.intake ?? "basic",
+        ...(c.country != null ? { country: c.country } : {}),
+        createdAt: Math.floor(c.createdAt),
+        ...(c.submittedAt != null ? { submittedAt: Math.floor(c.submittedAt) } : {}),
+        ...(c.decidedAt != null ? { decidedAt: Math.floor(c.decidedAt) } : {}),
+        ...(c.reason ? { reasonCodes: [c.reason] } : {}),
+      });
+    });
+    return;
+  }
   runPy(`
 tbl = ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
 cohort = '${TS}'
@@ -176,12 +191,16 @@ test.afterAll(async () => {
   await rootPage?.close();
   await alicePage?.close();
   try {
-    runPy(`
+    if (usingCpp()) {
+      cppDeleteKycAnalyticsCases(`kyc_an${TS}_`, 20);
+    } else {
+      runPy(`
 tbl = ddb.Table(os.environ.get('KYC_CASES_TABLE_NAME','kyc_cases'))
 for i in range(20):
     tbl.delete_item(Key={'pk': 'KYC#kyc_an${TS}_' + str(i), 'sk': 'META'})
 print('cleaned')
 `);
+    }
   } catch {
     /* best-effort */
   }

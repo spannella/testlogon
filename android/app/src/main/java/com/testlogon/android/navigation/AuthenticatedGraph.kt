@@ -75,7 +75,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         }
         // AND-091: account activity feed (paged).
         composable(MainDest.Activity.route) {
-            ActivityFeedRoute(onBack = { navController.popBackStack() })
+            ActivityFeedRoute(
+                onBack = { navController.popBackStack() },
+                // PAR-33: rows deep-link to post detail / public profile derived from the event ids.
+                onNavigate = { route -> navController.navigate(route) { launchSingleTop = true } },
+            )
         }
         // AND-120..124: messaging (conversation list + thread). First M3 two-user feature.
         messagingGraph(navController)
@@ -192,10 +196,16 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         publicClipDestination(navController)
         // AND-199/AND-200: full-screen story viewer (opened from the feed stories tray).
         storyViewerDestination(navController)
+        // PAR-01: create-a-story screen (opened from the feed stories tray Your-story tile).
+        createStoryDestination(navController)
+        // PAR-16: Story Highlights (opened from own/public profile).
+        highlightsDestination(navController)
         // AND-201: published video gallery browse grid (tiles open the shared video detail route).
         galleryDestination(navController)
         // Newsfeed post compose (create a post).
         composePostDestination(navController)
+        // PAR-13: scheduled-posts management (list pending scheduled posts + cancel).
+        scheduledPostsDestination(navController)
         myPostsDestination(navController)
         // VOD upload (publish a video).
         videoUploadDestination(navController)
@@ -278,6 +288,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         billingConfigDestination(navController)
         // AND-403: read-only admin alerts/dashboards (client-aggregated job + webhook health; 403 self-gate).
         adminDashboardDestination(navController)
+        // Markets (exchange market-data, VIEW-ONLY): instrument list + per-symbol chart/book/tape.
+        marketsDestinations(navController)
         // B5 admin queues (moderation board + video review + DMCA claims).
         moderationBoardDestinations(navController)
         videoReviewDestination(navController)
@@ -487,6 +499,11 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // AND-387 (E50): account lifecycle - closure (start/finalize), suspend, reactivate over the
         // /ui/account/closure/* + /ui/account/suspend + /ui/account/reactivate endpoints.
         accountLifecycleDestinations(navController)
+        // PAR-27: Safety Center hub. Aggregation only - an arg-less landing that links to four
+        // already-registered child destinations (blocked users / privacy export / DMCA / account deletion).
+        safetyCenterDestination(navController)
+        // PAR-29: static legal screens (About / Terms / Community Guidelines / Contact).
+        legalDestinations(navController)
     }
 }
 

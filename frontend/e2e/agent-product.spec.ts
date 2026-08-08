@@ -17,9 +17,10 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
-const API = "http://localhost:8000";
 
 interface SessionData {
   user_sub: string;
@@ -41,11 +42,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_admin_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -472,8 +469,10 @@ test.describe("676. Negative Tests", () => {
     expect(r.status()).toBe(422);
   });
 
-  test("676.5 unauthenticated request rejected", async ({ request }) => {
-    const r = await request.get(`${API}/ui/agents/pm/ideas`);
+  test("676.5 unauthenticated request rejected", async ({ browser }) => {
+    const anonCtx = await browser.newContext({ storageState: undefined });
+    const r = await anonCtx.request.get(`${API}/ui/agents/pm/ideas`);
+    await anonCtx.close();
     expect([401, 403]).toContain(r.status());
   });
 });

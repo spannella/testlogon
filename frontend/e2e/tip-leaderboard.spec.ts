@@ -17,15 +17,17 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId, unauthContext } from "./helpers/session";
+import { usingCpp, cppSeedTip } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ────────────────────────────────────────────────────────
 
 const PYTHON = REPO_ROOT + "/.venv/bin/python3";
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
-const BOB_ID = "e2e_bob@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
+const BOB_ID = resolveIdentityId("e2e_bob@test.local");
 
 const TS = Date.now();
 
@@ -51,11 +53,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -86,6 +84,16 @@ function seedTipCredit(
   ts: number,
   contentType: string = "message",
 ) {
+  if (usingCpp()) {
+    cppSeedTip({
+      recipientSub: recipientId,
+      tipperSub: tipperId,
+      amountCents: amountCents,
+      ts: ts,
+      contentType: contentType,
+    });
+    return;
+  }
   const entryId = `e2e_${TS}_${Math.random().toString(36).slice(2, 10)}`;
   execSync(
     `${PYTHON} -c "
@@ -265,12 +273,14 @@ test.describe("1 — Top Supporters API", () => {
     expect(data.supporters.length).toBeLessThanOrEqual(1);
   });
 
-  test("1.5 Endpoint returns 401 without auth", async ({ page }) => {
+  test("1.5 Endpoint returns 401 without auth", async () => {
     // No cookies injected — anonymous request
-    const resp = await page.request.get(
-      `${API}/ui/creators/${ALICE_ID}/top-supporters?period=30d`,
+    const anon = await unauthContext(API);
+    const resp = await anon.get(
+      `/ui/creators/${ALICE_ID}/top-supporters?period=30d`,
     );
     expect(resp.status()).toBe(401);
+    await anon.dispose();
   });
 
   test("1.6 Each supporter entry has required fields", async ({ page }) => {

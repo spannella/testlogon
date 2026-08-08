@@ -16,6 +16,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
+import { usingCpp, cppSeedWallet } from "./helpers/cpp-seed-messaging-crm-misc";
+import { cppSeedPosts } from "./helpers/cpp-seed-profile-social";
+import {
+  cppReadItem,
+  cppReadLedger,
+} from "./helpers/cpp-seed-payouts-subs-ats-misc";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 const BASE = "http://localhost:3000";
@@ -45,11 +52,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync("python3 " + REPO_ROOT + "/e2e_session_setup.py", {
-      cwd: REPO_ROOT,
-      timeout: 30_000,
-    }).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -98,6 +101,26 @@ ddb = boto3.resource('dynamodb',
 }
 
 function ddbPut(tableName: string, item: Record<string, unknown>): void {
+  if (usingCpp() && tableName === "app_single_table" &&
+      typeof item.pk === "string" && item.pk.startsWith("POST#")) {
+    const postId = (item.pk as string).slice("POST#".length);
+    const ownerRaw = String(item.user_id ?? "");
+    const ownerSub = getSessions()[ownerRaw]
+      ? getSessions()[ownerRaw].user_sub
+      : resolveIdentityId(ownerRaw);
+    cppSeedPosts({
+      authorSub: ownerSub,
+      posts: [
+        {
+          post_id: postId,
+          body: String(item.body ?? ""),
+          visibility: String(item.visibility ?? "public"),
+          status: "published",
+        },
+      ],
+    });
+    return;
+  }
   const script = `${pyEnvPreamble()}
 item = json.loads(os.environ['DDB_ITEM'], parse_float=decimal.Decimal, parse_int=decimal.Decimal)
 ddb.Table(os.environ['DDB_TABLE']).put_item(Item=item)
@@ -112,6 +135,17 @@ print('ok')
 }
 
 function ddbGet(tableName: string, key: Record<string, string>): Record<string, unknown> | null {
+  // cpp path: cpp wrote its mutation into its OWN moto (tlc_*), keyed by SUB —
+  // the Python DDB-Local read below would see nothing. Translate any USER#<email>
+  // partition (wallet/ledger rows) to the cpp SUB and read cpp's own table.
+  if (usingCpp()) {
+    const cppKey: Record<string, string> = { ...key };
+    if (typeof cppKey.pk === "string" && cppKey.pk.startsWith("USER#")) {
+      const email = cppKey.pk.slice("USER#".length);
+      cppKey.pk = "USER#" + cppSub(email);
+    }
+    return cppReadItem(tableName, cppKey);
+  }
   const script = `${pyEnvPreamble()}
 class Enc(json.JSONEncoder):
     def default(self, o):
@@ -132,7 +166,29 @@ print(json.dumps(item, cls=Enc) if item else 'null')
   return raw === "null" ? null : JSON.parse(raw);
 }
 
+// Resolve a fixture identity (email or short key) to the cpp SUB used by the
+// C++ backend for wallet keys, escrow debits and creator_sub matching.
+function cppSub(idOrEmail: string): string {
+  if (idOrEmail === "platform") return "platform"; // SPD platform-revenue pseudo-sub
+  return getSessions()[idOrEmail].user_sub;
+}
+
+// The deal's creator_sub. Under cpp the accept/submit-content gates compare
+// creator_sub against the caller's session SUB, so it MUST be Bob's cpp sub (the
+// email BOB_ID never matches). The Python backend resolves by the email id.
+function creatorId(): string {
+  return usingCpp() ? cppSub(BOB_ID) : BOB_ID;
+}
+
 function seedWallet(userSub: string, balanceCents: number): void {
+  // cpp path: cpp's escrow debit (spd_create_escrow_hold -> bill_wallet_delta on
+  // pk=USER#<sub>/WALLET in tlc_billing) never sees the Python 'billing' row
+  // below, and it keys by SUB not email. Fund the cpp wallet by SUB so a propose
+  // does not 402 "Insufficient wallet balance for sponsorship escrow".
+  if (usingCpp()) {
+    cppSeedWallet(cppSub(userSub), balanceCents);
+    return;
+  }
   ddbPut("billing", {
     pk: `USER#${userSub}`,
     sk: "WALLET",
@@ -143,6 +199,10 @@ function seedWallet(userSub: string, balanceCents: number): void {
 }
 
 function ddbQueryLedger(userSub: string): Array<Record<string, unknown>> {
+  // cpp path: read the ledger from cpp's OWN tlc_billing keyed by the SUB.
+  if (usingCpp()) {
+    return cppReadLedger(cppSub(userSub));
+  }
   const script = `${pyEnvPreamble()}
 from boto3.dynamodb.conditions import Key
 class Enc(json.JSONEncoder):
@@ -174,7 +234,7 @@ async function createDeal(overrides: Record<string, unknown> = {}): Promise<stri
     "/ui/ads/sponsorships",
     {
       advertiser_account_id: accountId,
-      creator_sub: BOB_ID,
+      creator_sub: creatorId(),
       content_type: "post",
       brief: "Feature our brand new product in a dedicated post.",
       deliverables: ["1 feed post"],
@@ -260,7 +320,7 @@ test.describe("396 — Deal Proposal API", () => {
       "/ui/ads/sponsorships",
       {
         advertiser_account_id: accountId,
-        creator_sub: BOB_ID,
+        creator_sub: creatorId(),
         content_type: "post",
         brief: "Too expensive for the wallet balance available.",
         deliverables: ["1 feed post"],
@@ -279,7 +339,7 @@ test.describe("396 — Deal Proposal API", () => {
       "/ui/ads/sponsorships",
       {
         advertiser_account_id: accountId,
-        creator_sub: BOB_ID,
+        creator_sub: creatorId(),
         content_type: "invalid",
         brief: "Brief that is long enough to pass validation.",
         deliverables: ["1 feed post"],
@@ -440,7 +500,10 @@ test.describe("399 — Deal Completion & Payment API", () => {
     await apiPost(alicePage, `/ui/ads/sponsorships/${dealId}/complete`, {}, ALICE_ID);
     const entries = ddbQueryLedger("platform");
     const commission = entries.filter(
-      (e) => e.type === "sponsorship_commission" && (e.meta as Record<string, unknown>)?.deal_id === dealId,
+      (e) =>
+        ((e.type === "sponsorship_commission") ||
+          (usingCpp() && (e.meta as Record<string, unknown>)?.entry_type === "sponsorship_commission")) &&
+        (e.meta as Record<string, unknown>)?.deal_id === dealId,
     );
     expect(commission.length).toBeGreaterThanOrEqual(1);
     expect(Number(commission[0].amount_cents)).toBe(15000); // 15% of $1,000

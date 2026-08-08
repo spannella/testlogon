@@ -18,6 +18,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { loadSessions } from "./helpers/session";
+import { usingCpp, cppResetUserOrgs } from "./helpers/cpp-seed";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -50,11 +52,7 @@ let _sessions: Record<string, SessionData> | null = null;
 
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_admin_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -125,6 +123,19 @@ async function apiUploadFile(
     },
   });
 }
+
+// Under cpp, orgs persist in moto across runs and the spec never deletes the
+// orgs it creates, so Alice/Bob eventually cross ORG_MAX_PER_USER and every
+// section's beforeAll create_org 409s. Reap each fixture's owned orgs once up
+// front so each run starts under the cap. No-op on the Python path.
+test.beforeAll(() => {
+  if (!usingCpp()) return;
+  const sessions = loadSessions();
+  for (const id of [ALICE_ID, BOB_ID]) {
+    const sub = sessions[id]?.user_sub;
+    if (sub) cppResetUserOrgs(sub);
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Section 92 — Org CRUD API

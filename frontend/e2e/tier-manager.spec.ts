@@ -13,13 +13,14 @@
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 import * as path from "path";
+import { API } from "./cpp.config";
+import { loadSessions, resolveIdentityId } from "./helpers/session";
 const REPO_ROOT = process.env.E2E_REPO_ROOT || path.resolve(process.cwd(), "..");
 
 // ─── Constants ───────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
-const API = "http://localhost:8000";
-const ALICE_ID = "e2e_alice@test.local";
+const ALICE_ID = resolveIdentityId("e2e_alice@test.local");
 const TS = Date.now();
 
 // ─── Session bootstrap ──────────────────────────────────────────
@@ -44,11 +45,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const raw = execSync(
-      "python3 " + REPO_ROOT + "/e2e_session_setup.py",
-      { cwd: REPO_ROOT, timeout: 30_000 },
-    ).toString();
-    _sessions = JSON.parse(raw);
+    _sessions = loadSessions();
   }
   return _sessions!;
 }
@@ -77,7 +74,11 @@ async function newIdentityPage(browser: Browser, userId: string): Promise<Page> 
 async function subPost(page: Page, userId: string, path: string, body?: object) {
   return page.request.post(`${API}${path}`, {
     data: body ?? {},
-    headers: { "X-User-Id": userId },
+    // cpp cookie-authenticates the caller (from injectAuth's addCookies) and, for
+    // non-GET requests, requires X-CSRF-Token == the ui_csrf cookie == the stored
+    // session token; without it cpp 403s "Missing CSRF token". getSessions() is
+    // keyed by sub (userId), so csrf_token resolves. (Python ignores the header.)
+    headers: { "X-User-Id": userId, "x-csrf-token": getSessions()[userId]?.csrf_token ?? "" },
   });
 }
 
@@ -90,7 +91,7 @@ async function subGet(page: Page, userId: string, path: string) {
 async function subPatch(page: Page, userId: string, path: string, body: object) {
   return page.request.patch(`${API}${path}`, {
     data: body,
-    headers: { "X-User-Id": userId },
+    headers: { "X-User-Id": userId, "x-csrf-token": getSessions()[userId]?.csrf_token ?? "" },
   });
 }
 

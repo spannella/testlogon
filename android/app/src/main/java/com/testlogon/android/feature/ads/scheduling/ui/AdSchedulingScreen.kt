@@ -49,6 +49,7 @@ import com.testlogon.android.core.model.syndicates.formatCents
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.feature.ads.studio.ui.StudioCampaignPicker
 
 /** Stable testTags for the ad scheduling editor. */
 object AdSchedulingTestTags {
@@ -68,6 +69,10 @@ fun AdSchedulingRoute(
     viewModel: AdSchedulingViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val accountsState by viewModel.campaignSelector.accountsState.collectAsStateWithLifecycle()
+    val campaignsState by viewModel.campaignSelector.campaignsState.collectAsStateWithLifecycle()
+    val selectedAccountId by viewModel.campaignSelector.selectedAccountId.collectAsStateWithLifecycle()
+    val selectedCampaignId by viewModel.campaignSelector.selectedCampaignId.collectAsStateWithLifecycle()
     AdSchedulingScreen(
         state = state,
         onBack = onBack,
@@ -77,6 +82,17 @@ fun AdSchedulingRoute(
         onApplyTemplate = viewModel::applyTemplate,
         onTimezone = viewModel::setTimezone,
         onSave = viewModel::save,
+        picker = {
+            StudioCampaignPicker(
+                accountsState = accountsState,
+                campaignsState = campaignsState,
+                selectedAccountId = selectedAccountId,
+                selectedCampaignId = selectedCampaignId,
+                onAccountSelected = viewModel::onAccountSelected,
+                onCampaignSelected = viewModel::onCampaignSelected,
+                enabled = state !is AdSchedulingUiState.Loading,
+            )
+        },
     )
 }
 
@@ -90,6 +106,7 @@ fun AdSchedulingScreen(
     onApplyTemplate: (String) -> Unit,
     onTimezone: (String) -> Unit,
     onSave: () -> Unit,
+    picker: @androidx.compose.runtime.Composable () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -106,6 +123,7 @@ fun AdSchedulingScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { picker() }
             when (state) {
                 is AdSchedulingUiState.Loading -> LoadingState()
                 is AdSchedulingUiState.NoCampaign -> EmptyState(

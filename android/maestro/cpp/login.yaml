@@ -1,0 +1,74 @@
+# Maestro black-box login flow driving the REAL Android debug app against the
+# C++ (cpp) backend over HTTPS. The debug build trusts the self-signed cpp LAN
+# cert (192.168.0.82) via network_security_config, so TLS to :8443 succeeds.
+#
+# NOTE ON SECURE SCREENS: authenticated dashboards are FLAG_SECURE, so *screenshots*
+# are blocked. Maestro assertions read the accessibility view tree and WORK on
+# secure screens, so we rely on assertVisible / testTag ids, NOT screenshots.
+#
+# CLEARING THE URL FIELD: the Base-URL field is pre-filled with the default prod
+# URL. A plain eraseText leaves a suffix (cursor lands mid-string), producing a
+# mangled URL that fails validation and silently disables Save. So we tap the
+# field, then tap its right edge to move the cursor to the END, then erase 80
+# chars (more than the field can hold) to fully clear before typing. The 94%,22%
+# point targets the Base-URL field on a 1080x2400 device; adjust for other sizes.
+#
+# Run:  cd ~/dev/testlogon/android
+#       export PATH=$PATH:~/.maestro/bin TERM=dumb MAESTRO_CLI_NO_ANALYTICS=1
+#       export JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=$HOME/gradle_tmp"   # /tmp tmpfs is full
+#       maestro --device <serial> test maestro/cpp/login.yaml
+appId: com.testlogon.android
+---
+# Start clean so we always land on the unauthenticated login screen.
+- stopApp
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: "login_screen"
+
+# --- Point the app at the cpp backend -------------------------------------
+- tapOn:
+    id: "login_server_url"
+- assertVisible:
+    id: "server_url_screen"
+- tapOn:
+    id: "server_url_input"
+- tapOn:
+    point: "94%,22%"     # cursor to END of the pre-filled default URL
+- eraseText:
+    charactersToErase: 80
+- inputText: "https://192.168.0.82:8443"
+- tapOn:
+    id: "server_url_save"
+# Persistence is confirmed by the "Current:" label flipping to the cpp URL.
+- assertVisible:
+    text: ".*Current: https://192.168.0.82:8443.*"
+- tapOn:
+    id: "server_url_back"
+- assertVisible:
+    id: "login_screen"
+# NB: the login "Server:" footer is a KNOWN STALE display — LoginViewModel snapshots
+# the URL at creation and does not re-read it on return from settings. The authoritative
+# proof of the cutover is the "Current:" label asserted above; the host-selection
+# interceptor reads the same persisted store, so login below actually hits cpp.
+
+# --- Sign in as the seeded e2e_bob user -----------------------------------
+- tapOn:
+    id: "login_email"
+- inputText: "e2e_bob@test.local"
+- tapOn:
+    id: "login_password"
+- inputText: "Passw0rd!123"
+- hideKeyboard
+- tapOn:
+    id: "login_submit"
+
+# --- Assert we reached the authenticated shell ----------------------------
+# After a successful /ui/session/start + /ui/me the app lands on the HOME tab.
+# tab_home is the bottom-nav item present only inside the authed shell.
+- extendedWaitUntil:
+    visible:
+      id: "tab_home"
+    timeout: 25000
+- assertNotVisible:
+    id: "login_submit"
