@@ -188,3 +188,14 @@ fun OtoAckDto.toDomain(): OtoAck = OtoAck(
     fills = fills.orEmpty().map { it.toDomain() },
     message = codeMsg(detail, error, note, reasonCode),
 )
+
+/** Drained async exec events. */
+data class ExecEvents(val fills: List<Fill>, val triggeredCount: Int, val otoTriggeredCount: Int) {
+    val isEmpty: Boolean get() = fills.isEmpty() && triggeredCount == 0 && otoTriggeredCount == 0
+}
+
+fun ExecEventsDto.toDomain(): ExecEvents = ExecEvents(
+    fills = fills.orEmpty().map { it.toDomain() },
+    triggeredCount = triggered.orEmpty().size,
+    otoTriggeredCount = otoTriggered.orEmpty().size,
+)

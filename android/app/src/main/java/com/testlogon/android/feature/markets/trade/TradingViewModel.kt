@@ -46,6 +46,7 @@ class TradingViewModel @Inject constructor(
             while (isActive) {
                 delay(5_000L)
                 refreshAccount()
+                drainExecEvents()
             }
         }
     }
@@ -60,11 +61,20 @@ class TradingViewModel @Inject constructor(
     fun setChildPrice(text: String) = _uiState.update { it.copy(childPriceText = digits(text, 12)) }
     fun setChildQty(text: String) = _uiState.update { it.copy(childQtyText = digits(text, 9)) }
     fun setOrderType(t: OrderType) = _uiState.update { it.copy(orderType = t, amendingClordid = null, message = null) }
+    fun setTif(t: String) = _uiState.update { it.copy(tif = t) }
+    fun togglePostOnly() = _uiState.update { it.copy(postOnly = !it.postOnly) }
+    fun toggleHidden() = _uiState.update { it.copy(hidden = !it.hidden) }
+    fun toggleAon() = _uiState.update { it.copy(aon = !it.aon) }
+    fun toggleAdvanced() = _uiState.update { it.copy(advancedOpen = !it.advancedOpen) }
+    fun setDisplayQty(text: String) = _uiState.update { it.copy(displayText = digits(text, 9)) }
+    fun setMinQty(text: String) = _uiState.update { it.copy(minQtyText = digits(text, 9)) }
+    fun setExpiryMin(text: String) = _uiState.update { it.copy(expiryMinText = digits(text, 6)) }
 
     /** Route the ticket's primary action to the right engine endpoint for the selected order type. */
     fun submit() {
         when (_uiState.value.orderType) {
             OrderType.LIMIT -> place()
+            OrderType.MARKET -> place()
             OrderType.STOP -> submitAlgo("stop_market")
             OrderType.STOP_LIMIT -> submitAlgo("stop_limit")
             OrderType.TAKE_PROFIT -> submitAlgo("take_profit")
@@ -118,17 +128,53 @@ class TradingViewModel @Inject constructor(
         }
     }
 
+    /** Drain async exec events (fills that landed after placement + algo/OTO triggers) into the ticket. */
+    private fun drainExecEvents() {
+        viewModelScope.launch {
+            val r = repository.execEvents()
+            if (r is ApiResult.Success && !r.data.isEmpty) {
+                val ev = r.data
+                _uiState.update { st ->
+                    st.copy(
+                        sessionFills = ev.fills + st.sessionFills,
+                        message = when {
+                            ev.triggeredCount > 0 -> "Algo triggered (${ev.triggeredCount})"
+                            ev.otoTriggeredCount > 0 -> "OTO child triggered (${ev.otoTriggeredCount})"
+                            ev.fills.isNotEmpty() -> "Filled ${ev.fills.sumOf { f -> f.qty }} (async)"
+                            else -> st.message
+                        },
+                        messageIsError = false,
+                    )
+                }
+                refreshAccount()
+            }
+        }
+    }
+
     fun place() {
         val s = _uiState.value
-        val price = s.priceLong ?: return
+        val isMarket = s.orderType == OrderType.MARKET
         val qty = s.qtyLong ?: return
-        if (price <= 0 || qty <= 0) return
+        val price = if (isMarket) 0L else (s.priceLong ?: return)
+        if (qty <= 0 || (!isMarket && price <= 0)) return
         s.amendingClordid?.let { amend(it, price, qty, s.side); return }
         // clordid: <=20 chars, unique per placement.
         val clordid = "t${System.currentTimeMillis()}${seq++ % 100}"
+        val tif = if (isMarket) null else s.tif.takeIf { it != "GTC" }
+        val expiryNs = if (!isMarket && s.tif == "GTD") s.expiryMinLong?.let { (System.currentTimeMillis() + it * 60_000L) * 1_000_000L } else null
         _uiState.update { it.copy(placing = true, message = null) }
         viewModelScope.launch {
-            when (val r = repository.placeOrder(symbolId, s.side, price, qty, clordid)) {
+            when (val r = repository.placeOrder(
+                symbolId, s.side, price, qty, clordid,
+                market = if (isMarket) true else null,
+                tif = tif,
+                postOnly = s.postOnly.takeIf { it },
+                hidden = s.hidden.takeIf { it },
+                aon = s.aon.takeIf { it },
+                displayQty = s.displayQtyLong?.takeIf { v -> v > 0 },
+                minQty = s.minQtyLong?.takeIf { v -> v > 0 },
+                expiryNs = expiryNs,
+            )) {
                 is ApiResult.Success -> {
                     val ack = r.data
                     if (ack.accepted) {
@@ -198,23 +244,17 @@ class TradingViewModel @Inject constructor(
         if (pos.qty == 0L || lastPrice <= 0) return
         val side = if (pos.qty > 0) OrderSide.SELL else OrderSide.BUY
         val qty = kotlin.math.abs(pos.qty)
-        // Cross the spread by ~5% to guarantee a fill (marketable limit; the engine takes no market type).
-        val price = if (side == OrderSide.SELL) (lastPrice * 95L / 100L).coerceAtLeast(1L) else (lastPrice * 105L / 100L)
         val clordid = "c${System.currentTimeMillis()}${seq++ % 100}"
-        // Self-trade-prevention guard: the engine KILLS (ioc_fok_cancelled) an order that would cross
-        // one of our OWN resting orders. A close SELL matches bids (our BUYs) priced >= the close
-        // price; a close BUY matches asks (our SELLs) priced <= it. Cancel those first so the close
-        // isn't STP-killed before it can flatten the position.
-        val colliding = _uiState.value.workingOrders.filter { wo ->
-            wo.side != side && if (side == OrderSide.SELL) wo.price >= price else wo.price <= price
-        }
+        // Close with a real MARKET order (walks the book). STP guard: a market close would be killed if
+        // it crossed our OWN resting orders on the opposite side -> cancel those first.
+        val colliding = _uiState.value.workingOrders.filter { it.side != side }
         _uiState.update { it.copy(placing = true, message = null) }
         viewModelScope.launch {
             colliding.forEach { wo -> repository.cancelOrder(wo.clordid) }
             if (colliding.isNotEmpty()) {
                 _uiState.update { st -> st.copy(workingOrders = st.workingOrders.filterNot { c -> colliding.any { it.clordid == c.clordid } }) }
             }
-            when (val r = repository.placeOrder(symbolId, side, price, qty, clordid)) {
+            when (val r = repository.placeOrder(symbolId, side, 0L, qty, clordid, market = true)) {
                 is ApiResult.Success -> {
                     val ack = r.data
                     _uiState.update {

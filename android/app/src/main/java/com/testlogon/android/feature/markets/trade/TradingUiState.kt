@@ -7,6 +7,7 @@ import com.testlogon.android.data.exchange.OrderSide
 /** Order entry type. LIMIT is the plain resting limit; the rest map to advanced engine endpoints. */
 enum class OrderType(val label: String) {
     LIMIT("Limit"),
+    MARKET("Market"),
     STOP("Stop"),
     STOP_LIMIT("Stop-Limit"),
     TAKE_PROFIT("Take-Profit"),
@@ -46,6 +47,14 @@ data class TradingUiState(
     val askText: String = "",
     val childPriceText: String = "",
     val childQtyText: String = "",
+    val tif: String = "GTC",
+    val postOnly: Boolean = false,
+    val hidden: Boolean = false,
+    val aon: Boolean = false,
+    val displayText: String = "",
+    val minQtyText: String = "",
+    val expiryMinText: String = "",
+    val advancedOpen: Boolean = false,
 ) {
     val isAmending: Boolean get() = amendingClordid != null
     val depositLong: Long? get() = depositText.toLongOrNull()
@@ -63,10 +72,14 @@ data class TradingUiState(
     val askLong: Long? get() = askText.toLongOrNull()
     val childPriceLong: Long? get() = childPriceText.toLongOrNull()
     val childQtyLong: Long? get() = childQtyText.toLongOrNull()
+    val displayQtyLong: Long? get() = displayText.toLongOrNull()
+    val minQtyLong: Long? get() = minQtyText.toLongOrNull()
+    val expiryMinLong: Long? get() = expiryMinText.toLongOrNull()
 
     /** Whether the current order-type has all the fields it needs to submit. */
     val canSubmit: Boolean get() = !placing && when (orderType) {
         OrderType.LIMIT -> (priceLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L
+        OrderType.MARKET -> (qtyLong ?: 0L) > 0L
         OrderType.STOP -> (stopLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L
         OrderType.STOP_LIMIT -> (stopLong ?: 0L) > 0L && (priceLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L
         OrderType.TAKE_PROFIT -> (stopLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L

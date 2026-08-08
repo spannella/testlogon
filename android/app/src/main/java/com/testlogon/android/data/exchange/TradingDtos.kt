@@ -11,6 +11,14 @@ data class PlaceOrderDto(
     val price: Long,
     val qty: Long,
     val clordid: String,
+    val market: Boolean? = null,
+    val tif: String? = null,
+    @Json(name = "post_only") val postOnly: Boolean? = null,
+    val hidden: Boolean? = null,
+    val aon: Boolean? = null,
+    @Json(name = "display_qty") val displayQty: Long? = null,
+    @Json(name = "min_qty") val minQty: Long? = null,
+    @Json(name = "expiry_ns") val expiryNs: Long? = null,
 )
 
 /** Amend request. The engine requires `new_qty`; `new_price` is optional. */
@@ -165,4 +173,22 @@ data class OtoAckDto(
     val detail: String? = null,
     val error: String? = null,
     val note: String? = null,
+)
+
+/** A triggered algo/OTO event (fields captured loosely; unknown keys ignored by Moshi). */
+@JsonClass(generateAdapter = true)
+data class TriggerDto(
+    @Json(name = "algo_id") val algoId: Long? = null,
+    @Json(name = "oto_id") val otoId: Long? = null,
+    val clordid: String? = null,
+    val orderid: Long? = null,
+    val symbolid: Int? = null,
+)
+
+/** GET /me/algo/events drain: async fills + algo/oto triggers since the last drain. */
+@JsonClass(generateAdapter = true)
+data class ExecEventsDto(
+    val fills: List<FillDto>? = null,
+    val triggered: List<TriggerDto>? = null,
+    @Json(name = "oto_triggered") val otoTriggered: List<TriggerDto>? = null,
 )

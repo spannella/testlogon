@@ -94,7 +94,24 @@ fun TradeTicket(
                 Spacer(Modifier.height(8.dp))
                 NumberField("Quantity", state.qtyText, viewModel::setQty)
                 Spacer(Modifier.height(8.dp))
+                TifRow(state.tif, viewModel::setTif)
+                if (state.tif == "GTD") {
+                    Spacer(Modifier.height(8.dp))
+                    NumberField("Expires in (minutes)", state.expiryMinText, viewModel::setExpiryMin)
+                }
+                Spacer(Modifier.height(8.dp))
                 OrderValueRow(state.orderValue)
+                AdvancedSection(state, viewModel)
+            }
+            OrderType.MARKET -> {
+                NumberField("Quantity", state.qtyText, viewModel::setQty)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Market order — fills immediately at the best available price.",
+                    color = MarketColors.TextSecondary,
+                    fontSize = 11.sp,
+                )
+                AdvancedSection(state, viewModel)
             }
             OrderType.STOP -> {
                 NumberField("Stop (trigger) price", state.stopText, viewModel::setStop)
@@ -369,6 +386,76 @@ private fun AccountStrip(account: com.testlogon.android.data.exchange.MarginAcco
 }
 
 @Composable
+private fun TifRow(selected: String, onSelect: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Text("Time in force", color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(3.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("GTC", "IOC", "FOK", "GTD").forEach { t ->
+                val on = t == selected
+                Text(
+                    text = t,
+                    color = if (on) Color.Black else MarketColors.TextSecondary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (on) MarketColors.Accent else MarketColors.Surface)
+                        .border(1.dp, if (on) MarketColors.Accent else MarketColors.Border, RoundedCornerShape(6.dp))
+                        .clickable { onSelect(t) }
+                        .testTag("tif_$t")
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TogglePill(label: String, on: Boolean, onToggle: () -> Unit, tag: String) {
+    Text(
+        text = label,
+        color = if (on) Color.Black else MarketColors.TextSecondary,
+        fontWeight = FontWeight.Bold,
+        fontSize = 11.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (on) MarketColors.Accent else MarketColors.Surface)
+            .border(1.dp, if (on) MarketColors.Accent else MarketColors.Border, RoundedCornerShape(6.dp))
+            .clickable(onClick = onToggle)
+            .testTag(tag)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
+}
+
+@Composable
+private fun AdvancedSection(state: TradingUiState, viewModel: TradingViewModel) {
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = if (state.advancedOpen) "Advanced ▲" else "Advanced ▼",
+        color = MarketColors.Accent,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.clickable { viewModel.toggleAdvanced() }.testTag("advanced_toggle").padding(vertical = 4.dp),
+    )
+    if (state.advancedOpen) {
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (state.orderType == OrderType.LIMIT) {
+                TogglePill("Post-only", state.postOnly, viewModel::togglePostOnly, "flag_post_only")
+            }
+            TogglePill("Hidden", state.hidden, viewModel::toggleHidden, "flag_hidden")
+            TogglePill("AON", state.aon, viewModel::toggleAon, "flag_aon")
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.weight(1f)) { NumberField("Display qty (iceberg)", state.displayText, viewModel::setDisplayQty) }
+            Box(Modifier.weight(1f)) { NumberField("Min qty", state.minQtyText, viewModel::setMinQty) }
+        }
+    }
+}
+
+@Composable
 private fun OrderTypeRow(selected: OrderType, onSelect: (OrderType) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -413,6 +500,7 @@ private fun submitLabel(state: TradingUiState): String {
     val side = if (state.side == OrderSide.BUY) "Buy" else "Sell"
     return when (state.orderType) {
         OrderType.LIMIT -> "$side ${state.qtyText}".trim()
+        OrderType.MARKET -> "$side ${state.qtyText} (market)".trim()
         OrderType.STOP -> "$side Stop"
         OrderType.STOP_LIMIT -> "$side Stop-Limit"
         OrderType.TAKE_PROFIT -> "$side Take-Profit"

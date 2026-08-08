@@ -17,10 +17,25 @@ import javax.inject.Singleton
  * account, mapped to domain types and wrapped in [ApiResult]. All calls require `me_trade_enabled`.
  */
 interface TradingRepository {
-    suspend fun placeOrder(symbolId: Int, side: OrderSide, price: Long, qty: Long, clordid: String): ApiResult<OrderAck>
+    suspend fun placeOrder(
+        symbolId: Int,
+        side: OrderSide,
+        price: Long,
+        qty: Long,
+        clordid: String,
+        market: Boolean? = null,
+        tif: String? = null,
+        postOnly: Boolean? = null,
+        hidden: Boolean? = null,
+        aon: Boolean? = null,
+        displayQty: Long? = null,
+        minQty: Long? = null,
+        expiryNs: Long? = null,
+    ): ApiResult<OrderAck>
     suspend fun amendOrder(clordid: String, newQty: Long, newPrice: Long? = null): ApiResult<OrderAck>
     suspend fun cancelOrder(clordid: String): ApiResult<CancelAck>
     suspend fun marginAccount(): ApiResult<MarginAccount>
+    suspend fun execEvents(): ApiResult<ExecEvents>
     suspend fun deposit(amount: Long): ApiResult<DepositAck>
     suspend fun cancelAll(): ApiResult<BulkCancelResult>
     suspend fun placeQuote(symbolId: Int, bidPrice: Long, askPrice: Long, bidQty: Long, askQty: Long): ApiResult<QuoteAck>
@@ -42,9 +57,19 @@ class TradingRepositoryImpl @Inject constructor(
         price: Long,
         qty: Long,
         clordid: String,
+        market: Boolean?,
+        tif: String?,
+        postOnly: Boolean?,
+        hidden: Boolean?,
+        aon: Boolean?,
+        displayQty: Long?,
+        minQty: Long?,
+        expiryNs: Long?,
     ): ApiResult<OrderAck> = withContext(io) {
         apiCall {
-            api.placeOrder(PlaceOrderDto(symbolId, side.wire, price, qty, clordid)).toOrderAck(clordid)
+            api.placeOrder(
+                PlaceOrderDto(symbolId, side.wire, price, qty, clordid, market, tif, postOnly, hidden, aon, displayQty, minQty, expiryNs),
+            ).toOrderAck(clordid)
         }
     }
 
@@ -58,6 +83,9 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun marginAccount(): ApiResult<MarginAccount> =
         withContext(io) { apiCall { api.getMarginAccount().toDomain() } }
+
+    override suspend fun execEvents(): ApiResult<ExecEvents> =
+        withContext(io) { apiCall { api.algoEvents().toDomain() } }
 
     override suspend fun deposit(amount: Long): ApiResult<DepositAck> =
         withContext(io) { apiCall { api.marginDeposit(MarginDepositDto(amount)).toDomain() } }

@@ -52,4 +52,8 @@ interface TradingApi {
     /** One-triggers-other: a parent order whose fill arms a child order. */
     @POST("me/oto")
     suspend fun placeOto(@Body body: OtoOrderDto): OtoAckDto
+
+    /** Drain this session's async exec events (algo/oto triggers + fills that landed after placement). */
+    @GET("me/algo/events")
+    suspend fun algoEvents(): ExecEventsDto
 }
