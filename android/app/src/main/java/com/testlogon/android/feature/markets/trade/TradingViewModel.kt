@@ -54,6 +54,26 @@ class TradingViewModel @Inject constructor(
     fun setPrice(text: String) = _uiState.update { it.copy(priceText = text.filter { c -> c.isDigit() }.take(12)) }
     fun setQty(text: String) = _uiState.update { it.copy(qtyText = text.filter { c -> c.isDigit() }.take(9)) }
     fun setDeposit(text: String) = _uiState.update { it.copy(depositText = text.filter { c -> c.isDigit() }.take(12)) }
+    fun setStop(text: String) = _uiState.update { it.copy(stopText = digits(text, 12)) }
+    fun setBid(text: String) = _uiState.update { it.copy(bidText = digits(text, 12)) }
+    fun setAsk(text: String) = _uiState.update { it.copy(askText = digits(text, 12)) }
+    fun setChildPrice(text: String) = _uiState.update { it.copy(childPriceText = digits(text, 12)) }
+    fun setChildQty(text: String) = _uiState.update { it.copy(childQtyText = digits(text, 9)) }
+    fun setOrderType(t: OrderType) = _uiState.update { it.copy(orderType = t, amendingClordid = null, message = null) }
+
+    /** Route the ticket's primary action to the right engine endpoint for the selected order type. */
+    fun submit() {
+        when (_uiState.value.orderType) {
+            OrderType.LIMIT -> place()
+            OrderType.STOP -> submitAlgo("stop_market")
+            OrderType.STOP_LIMIT -> submitAlgo("stop_limit")
+            OrderType.TAKE_PROFIT -> submitAlgo("take_profit")
+            OrderType.QUOTE -> submitQuote()
+            OrderType.OTO -> submitOto()
+        }
+    }
+
+    private fun digits(t: String, max: Int) = t.filter { it.isDigit() }.take(max)
 
     /**
      * Deposit collateral into the margin account (`POST /me/margin_deposit`). Fresh accounts start at
@@ -205,6 +225,107 @@ class TradingViewModel @Inject constructor(
                         )
                     }
                     refreshAccount()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+            }
+        }
+    }
+
+    /** Cancel ALL resting orders (server-side) via bulk_cancel. Clears quote/OTO legs we can't track. */
+    fun cancelAll() {
+        _uiState.update { it.copy(message = null) }
+        viewModelScope.launch {
+            when (val r = repository.cancelAll()) {
+                is ApiResult.Success -> {
+                    _uiState.update { it.copy(workingOrders = emptyList(), message = "Cancelled all (${r.data.cancelledCount})", messageIsError = false) }
+                    refreshAccount()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(message = "Network error", messageIsError = true) }
+            }
+        }
+    }
+
+    /** Stop / stop-limit / take-profit conditional order. Uses stopText as the trigger, priceText as limit. */
+    private fun submitAlgo(algoType: String) {
+        val s = _uiState.value
+        val stop = s.stopLong ?: return
+        val qty = s.qtyLong ?: return
+        if (stop <= 0 || qty <= 0) return
+        val limit = if (algoType == "stop_market") null else s.priceLong
+        _uiState.update { it.copy(placing = true, message = null) }
+        viewModelScope.launch {
+            when (val r = repository.placeAlgo(algoType, symbolId, s.side, qty, stop, limit)) {
+                is ApiResult.Success -> {
+                    val ack = r.data
+                    _uiState.update {
+                        it.copy(
+                            placing = false,
+                            message = if (ack.accepted) "Algo #${ack.algoId ?: "?"} armed (${s.orderType.label})" else (ack.message ?: "Algo rejected"),
+                            messageIsError = !ack.accepted,
+                        )
+                    }
+                    if (ack.accepted) refreshAccount()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+            }
+        }
+    }
+
+    /** Two-sided maker quote (one qty applied to both bid and ask). */
+    private fun submitQuote() {
+        val s = _uiState.value
+        val bid = s.bidLong ?: return
+        val ask = s.askLong ?: return
+        val qty = s.qtyLong ?: return
+        if (bid <= 0 || ask <= 0 || qty <= 0) return
+        _uiState.update { it.copy(placing = true, message = null) }
+        viewModelScope.launch {
+            when (val r = repository.placeQuote(symbolId, bid, ask, qty, qty)) {
+                is ApiResult.Success -> {
+                    val ack = r.data
+                    val filled = ack.fills.sumOf { f -> f.qty }
+                    _uiState.update {
+                        it.copy(
+                            placing = false,
+                            message = if (ack.accepted) "Quote live · bid #${ack.bidOrderId ?: 0} / ask #${ack.askOrderId ?: 0}" + if (filled > 0) " · filled $filled" else "" else (ack.message ?: "Quote rejected"),
+                            messageIsError = !ack.accepted,
+                            sessionFills = ack.fills + it.sessionFills,
+                        )
+                    }
+                    if (ack.accepted) refreshAccount()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+            }
+        }
+    }
+
+    /** One-triggers-other: parent uses the Buy/Sell selector + price/qty; child is the opposite side. */
+    private fun submitOto() {
+        val s = _uiState.value
+        val pPrice = s.priceLong ?: return
+        val pQty = s.qtyLong ?: return
+        val cPrice = s.childPriceLong ?: return
+        val cQty = s.childQtyLong ?: return
+        if (pPrice <= 0 || pQty <= 0 || cPrice <= 0 || cQty <= 0) return
+        val childSide = if (s.side == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
+        _uiState.update { it.copy(placing = true, message = null) }
+        viewModelScope.launch {
+            when (val r = repository.placeOto(symbolId, s.side, pPrice, pQty, childSide, cPrice, cQty)) {
+                is ApiResult.Success -> {
+                    val ack = r.data
+                    _uiState.update {
+                        it.copy(
+                            placing = false,
+                            message = if (ack.accepted) "OTO #${ack.otoId ?: "?"} · parent #${ack.parentOrderId ?: 0} → child on fill" else (ack.message ?: "OTO rejected"),
+                            messageIsError = !ack.accepted,
+                            sessionFills = ack.fills + it.sessionFills,
+                        )
+                    }
+                    if (ack.accepted) refreshAccount()
                 }
                 is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
                 is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }

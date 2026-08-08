@@ -22,6 +22,10 @@ interface TradingRepository {
     suspend fun cancelOrder(clordid: String): ApiResult<CancelAck>
     suspend fun marginAccount(): ApiResult<MarginAccount>
     suspend fun deposit(amount: Long): ApiResult<DepositAck>
+    suspend fun cancelAll(): ApiResult<BulkCancelResult>
+    suspend fun placeQuote(symbolId: Int, bidPrice: Long, askPrice: Long, bidQty: Long, askQty: Long): ApiResult<QuoteAck>
+    suspend fun placeAlgo(algoType: String, symbolId: Int, side: OrderSide, qty: Long, stopPrice: Long?, limitPrice: Long?): ApiResult<AlgoAck>
+    suspend fun placeOto(symbolId: Int, parentSide: OrderSide, parentPrice: Long, parentQty: Long, childSide: OrderSide, childPrice: Long, childQty: Long): ApiResult<OtoAck>
 }
 
 @Singleton
@@ -57,6 +61,18 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun deposit(amount: Long): ApiResult<DepositAck> =
         withContext(io) { apiCall { api.marginDeposit(MarginDepositDto(amount)).toDomain() } }
+
+    override suspend fun cancelAll(): ApiResult<BulkCancelResult> =
+        withContext(io) { apiCall { api.bulkCancel(emptyMap()).toDomain() } }
+
+    override suspend fun placeQuote(symbolId: Int, bidPrice: Long, askPrice: Long, bidQty: Long, askQty: Long): ApiResult<QuoteAck> =
+        withContext(io) { apiCall { api.placeQuote(QuoteDto(symbolId, bidPrice, askPrice, bidQty, askQty)).toDomain() } }
+
+    override suspend fun placeAlgo(algoType: String, symbolId: Int, side: OrderSide, qty: Long, stopPrice: Long?, limitPrice: Long?): ApiResult<AlgoAck> =
+        withContext(io) { apiCall { api.placeAlgo(AlgoOrderDto(algoType, symbolId, side.wire, qty, stopPrice, limitPrice)).toDomain() } }
+
+    override suspend fun placeOto(symbolId: Int, parentSide: OrderSide, parentPrice: Long, parentQty: Long, childSide: OrderSide, childPrice: Long, childQty: Long): ApiResult<OtoAck> =
+        withContext(io) { apiCall { api.placeOto(OtoOrderDto(symbolId, parentSide.wire, parentPrice, parentQty, childSide.wire, childPrice, childQty)).toDomain() } }
 
     private suspend fun <T> apiCall(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

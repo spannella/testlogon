@@ -3,6 +3,8 @@ package com.testlogon.android.feature.markets.trade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,13 +58,19 @@ fun TradeTicket(
 
     val sideColor = if (state.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("trade_ticket")) {
-        // ---- Buy / Sell ----
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SideButton("Buy", selected = state.side == OrderSide.BUY, color = MarketColors.Up, modifier = Modifier.weight(1f)) {
-                viewModel.setSide(OrderSide.BUY)
-            }
-            SideButton("Sell", selected = state.side == OrderSide.SELL, color = MarketColors.Down, modifier = Modifier.weight(1f)) {
-                viewModel.setSide(OrderSide.SELL)
+        // ---- Order type ----
+        OrderTypeRow(selected = state.orderType, onSelect = viewModel::setOrderType)
+        Spacer(Modifier.height(10.dp))
+
+        // ---- Buy / Sell (hidden for the two-sided quote) ----
+        if (state.orderType != OrderType.QUOTE) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SideButton("Buy", selected = state.side == OrderSide.BUY, color = MarketColors.Up, modifier = Modifier.weight(1f)) {
+                    viewModel.setSide(OrderSide.BUY)
+                }
+                SideButton("Sell", selected = state.side == OrderSide.SELL, color = MarketColors.Down, modifier = Modifier.weight(1f)) {
+                    viewModel.setSide(OrderSide.SELL)
+                }
             }
         }
 
@@ -79,40 +87,76 @@ fun TradeTicket(
         )
 
         Spacer(Modifier.height(10.dp))
-        NumberField("Price", state.priceText, viewModel::setPrice)
-        Spacer(Modifier.height(8.dp))
-        NumberField("Quantity", state.qtyText, viewModel::setQty)
-
-        Spacer(Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Order value", color = MarketColors.TextSecondary, fontSize = 12.sp)
-            Text(
-                text = state.orderValue?.let { fmt(it.toDouble()) } ?: "--",
-                color = MarketColors.TextPrimary,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 12.sp,
-            )
+        // ---- Type-specific inputs ----
+        when (state.orderType) {
+            OrderType.LIMIT -> {
+                NumberField("Price", state.priceText, viewModel::setPrice)
+                Spacer(Modifier.height(8.dp))
+                NumberField("Quantity", state.qtyText, viewModel::setQty)
+                Spacer(Modifier.height(8.dp))
+                OrderValueRow(state.orderValue)
+            }
+            OrderType.STOP -> {
+                NumberField("Stop (trigger) price", state.stopText, viewModel::setStop)
+                Spacer(Modifier.height(8.dp))
+                NumberField("Quantity", state.qtyText, viewModel::setQty)
+            }
+            OrderType.STOP_LIMIT -> {
+                NumberField("Stop (trigger) price", state.stopText, viewModel::setStop)
+                Spacer(Modifier.height(8.dp))
+                NumberField("Limit price", state.priceText, viewModel::setPrice)
+                Spacer(Modifier.height(8.dp))
+                NumberField("Quantity", state.qtyText, viewModel::setQty)
+            }
+            OrderType.TAKE_PROFIT -> {
+                NumberField("Take-profit trigger", state.stopText, viewModel::setStop)
+                Spacer(Modifier.height(8.dp))
+                NumberField("Limit price (optional)", state.priceText, viewModel::setPrice)
+                Spacer(Modifier.height(8.dp))
+                NumberField("Quantity", state.qtyText, viewModel::setQty)
+            }
+            OrderType.QUOTE -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) { NumberField("Bid price", state.bidText, viewModel::setBid) }
+                    Box(Modifier.weight(1f)) { NumberField("Ask price", state.askText, viewModel::setAsk) }
+                }
+                Spacer(Modifier.height(8.dp))
+                NumberField("Quantity (each side)", state.qtyText, viewModel::setQty)
+            }
+            OrderType.OTO -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) { NumberField("Parent price", state.priceText, viewModel::setPrice) }
+                    Box(Modifier.weight(1f)) { NumberField("Parent qty", state.qtyText, viewModel::setQty) }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) { NumberField("Child price", state.childPriceText, viewModel::setChildPrice) }
+                    Box(Modifier.weight(1f)) { NumberField("Child qty", state.childQtyText, viewModel::setChildQty) }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Child = ${if (state.side == OrderSide.BUY) "Sell" else "Buy"} · triggers when the parent fills",
+                    color = MarketColors.TextSecondary,
+                    fontSize = 11.sp,
+                )
+            }
         }
 
         Spacer(Modifier.height(12.dp))
+        val submitColor = if (state.orderType == OrderType.QUOTE) MarketColors.Accent else sideColor
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
-                .background(if (state.canPlace) sideColor else MarketColors.SurfaceAlt)
-                .clickable(enabled = state.canPlace) { viewModel.place() }
+                .background(if (state.canSubmit) submitColor else MarketColors.SurfaceAlt)
+                .clickable(enabled = state.canSubmit) { viewModel.submit() }
                 .testTag("trade_place")
                 .padding(vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = when {
-                    state.placing -> if (state.isAmending) "Amending…" else "Placing…"
-                    state.isAmending -> "Amend order"
-                    else -> "${if (state.side == OrderSide.BUY) "Buy" else "Sell"} ${state.qtyText}".trim()
-                },
-                color = if (state.canPlace) Color.Black else MarketColors.TextFaint,
+                text = submitLabel(state),
+                color = if (state.canSubmit) Color.Black else MarketColors.TextFaint,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
             )
@@ -138,6 +182,20 @@ fun TradeTicket(
                 fontSize = 12.sp,
             )
         }
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "Cancel all resting orders",
+            color = MarketColors.Down,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .border(1.dp, MarketColors.Border, RoundedCornerShape(6.dp))
+                .clickable { viewModel.cancelAll() }
+                .testTag("cancel_all")
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+        )
 
         if (state.workingOrders.isNotEmpty()) {
             Spacer(Modifier.height(16.dp))
@@ -307,6 +365,59 @@ private fun AccountStrip(account: com.testlogon.android.data.exchange.MarginAcco
                 fontWeight = FontWeight.Bold,
             )
         }
+    }
+}
+
+@Composable
+private fun OrderTypeRow(selected: OrderType, onSelect: (OrderType) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        OrderType.values().forEach { t ->
+            val on = t == selected
+            Text(
+                text = t.label,
+                color = if (on) Color.Black else MarketColors.TextSecondary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (on) MarketColors.Accent else MarketColors.Surface)
+                    .border(1.dp, if (on) MarketColors.Accent else MarketColors.Border, RoundedCornerShape(8.dp))
+                    .clickable { onSelect(t) }
+                    .testTag("otype_${t.name}")
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun OrderValueRow(value: Long?) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("Order value", color = MarketColors.TextSecondary, fontSize = 12.sp)
+        Text(
+            text = value?.let { fmt(it.toDouble()) } ?: "--",
+            color = MarketColors.TextPrimary,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+        )
+    }
+}
+
+private fun submitLabel(state: TradingUiState): String {
+    if (state.placing) return if (state.isAmending) "Amending…" else "Working…"
+    if (state.isAmending) return "Amend order"
+    val side = if (state.side == OrderSide.BUY) "Buy" else "Sell"
+    return when (state.orderType) {
+        OrderType.LIMIT -> "$side ${state.qtyText}".trim()
+        OrderType.STOP -> "$side Stop"
+        OrderType.STOP_LIMIT -> "$side Stop-Limit"
+        OrderType.TAKE_PROFIT -> "$side Take-Profit"
+        OrderType.QUOTE -> "Place quote"
+        OrderType.OTO -> "Place OTO ($side parent)"
     }
 }
 

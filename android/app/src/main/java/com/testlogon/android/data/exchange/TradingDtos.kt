@@ -84,3 +84,85 @@ data class MarginDepositAckDto(
     val detail: String? = null,
     val error: String? = null,
 )
+
+/** Cancel-all ack. */
+@JsonClass(generateAdapter = true)
+data class BulkCancelAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "cancelled_count") val cancelledCount: Int? = null,
+)
+
+/** Two-sided quote request (fields verified live: bid_price/ask_price/bid_qty/ask_qty). */
+@JsonClass(generateAdapter = true)
+data class QuoteDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "bid_price") val bidPrice: Long,
+    @Json(name = "ask_price") val askPrice: Long,
+    @Json(name = "bid_qty") val bidQty: Long,
+    @Json(name = "ask_qty") val askQty: Long,
+)
+
+@JsonClass(generateAdapter = true)
+data class QuoteAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "quote_id") val quoteId: String? = null,
+    @Json(name = "bid_orderid") val bidOrderId: Long? = null,
+    @Json(name = "ask_orderid") val askOrderId: Long? = null,
+    val fills: List<FillDto>? = null,
+    @Json(name = "reasoncode") val reasonCode: Int? = null,
+    val detail: String? = null,
+    val error: String? = null,
+    val note: String? = null,
+)
+
+/** Algo order. [algoType] = stop | stop_limit | stop_market | take_profit. */
+@JsonClass(generateAdapter = true)
+data class AlgoOrderDto(
+    @Json(name = "algo_type") val algoType: String,
+    @Json(name = "symbolid") val symbolId: Int,
+    val side: String,
+    val qty: Long,
+    @Json(name = "stop_price") val stopPrice: Long? = null,
+    @Json(name = "limit_price") val limitPrice: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class AlgoAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "algo_id") val algoId: Long? = null,
+    val clordid: String? = null,
+    @Json(name = "reasoncode") val reasonCode: Int? = null,
+    val detail: String? = null,
+    val error: String? = null,
+    val note: String? = null,
+)
+
+/** One-triggers-other (fields verified live: parent and child legs). */
+@JsonClass(generateAdapter = true)
+data class OtoOrderDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "parent_side") val parentSide: String,
+    @Json(name = "parent_price") val parentPrice: Long,
+    @Json(name = "parent_qty") val parentQty: Long,
+    @Json(name = "child_side") val childSide: String,
+    @Json(name = "child_price") val childPrice: Long,
+    @Json(name = "child_qty") val childQty: Long,
+)
+
+@JsonClass(generateAdapter = true)
+data class OtoAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "oto_id") val otoId: Long? = null,
+    @Json(name = "parent_orderid") val parentOrderId: Long? = null,
+    @Json(name = "parent_clordid") val parentClordid: String? = null,
+    @Json(name = "child_clordid") val childClordid: String? = null,
+    val fills: List<FillDto>? = null,
+    @Json(name = "reasoncode") val reasonCode: Int? = null,
+    val detail: String? = null,
+    val error: String? = null,
+    val note: String? = null,
+)

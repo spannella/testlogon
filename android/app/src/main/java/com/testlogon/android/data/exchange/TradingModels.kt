@@ -133,3 +133,58 @@ fun MarginDepositAckDto.toDomain(): DepositAck = DepositAck(
     availableBalance = availableBalance ?: 0L,
     message = detail ?: error,
 )
+
+/** Result of a cancel-all. */
+data class BulkCancelResult(val accepted: Boolean, val cancelledCount: Int, val message: String?)
+
+/** Result of a two-sided quote. */
+data class QuoteAck(
+    val accepted: Boolean,
+    val quoteId: String?,
+    val bidOrderId: Long?,
+    val askOrderId: Long?,
+    val fills: List<Fill>,
+    val message: String?,
+)
+
+/** Result of an algo (conditional) order. */
+data class AlgoAck(val accepted: Boolean, val algoId: Long?, val clordid: String?, val message: String?)
+
+/** Result of a one-triggers-other order. */
+data class OtoAck(
+    val accepted: Boolean,
+    val otoId: Long?,
+    val parentOrderId: Long?,
+    val fills: List<Fill>,
+    val message: String?,
+)
+
+private fun codeMsg(detail: String?, error: String?, note: String?, code: Int?): String? =
+    detail ?: error ?: note ?: code?.let { "rejected (code $it)" }
+
+fun BulkCancelAckDto.toDomain(): BulkCancelResult =
+    BulkCancelResult(accepted = status == "ack", cancelledCount = cancelledCount ?: 0, message = null)
+
+fun QuoteAckDto.toDomain(): QuoteAck = QuoteAck(
+    accepted = status == "ack",
+    quoteId = quoteId,
+    bidOrderId = bidOrderId,
+    askOrderId = askOrderId,
+    fills = fills.orEmpty().map { it.toDomain() },
+    message = codeMsg(detail, error, note, reasonCode),
+)
+
+fun AlgoAckDto.toDomain(): AlgoAck = AlgoAck(
+    accepted = status == "ack",
+    algoId = algoId,
+    clordid = clordid,
+    message = codeMsg(detail, error, note, reasonCode),
+)
+
+fun OtoAckDto.toDomain(): OtoAck = OtoAck(
+    accepted = status == "ack",
+    otoId = otoId,
+    parentOrderId = parentOrderId,
+    fills = fills.orEmpty().map { it.toDomain() },
+    message = codeMsg(detail, error, note, reasonCode),
+)

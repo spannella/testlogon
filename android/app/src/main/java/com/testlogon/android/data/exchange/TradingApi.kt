@@ -36,4 +36,20 @@ interface TradingApi {
     /** Deposit collateral into the margin account (credits balance/available; enables margin mode). */
     @POST("me/margin_deposit")
     suspend fun marginDeposit(@Body body: MarginDepositDto): MarginDepositAckDto
+
+    /** Cancel ALL resting orders for this account (empty body). Clears quote/OTO legs too. */
+    @POST("me/bulk_cancel")
+    suspend fun bulkCancel(@Body body: Map<String, String>): BulkCancelAckDto
+
+    /** Two-sided maker quote: rests a bid and an ask at once. */
+    @POST("me/quote")
+    suspend fun placeQuote(@Body body: QuoteDto): QuoteAckDto
+
+    /** Conditional (algo) order: stop / stop_limit / stop_market / take_profit. */
+    @POST("me/algo")
+    suspend fun placeAlgo(@Body body: AlgoOrderDto): AlgoAckDto
+
+    /** One-triggers-other: a parent order whose fill arms a child order. */
+    @POST("me/oto")
+    suspend fun placeOto(@Body body: OtoOrderDto): OtoAckDto
 }
