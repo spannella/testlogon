@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.markets.trade
 
+import com.testlogon.android.data.exchange.Fill
 import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.OrderSide
 
@@ -25,6 +26,7 @@ data class TradingUiState(
     val messageIsError: Boolean = false,
     val account: MarginAccount? = null,
     val workingOrders: List<WorkingOrder> = emptyList(),
+    val sessionFills: List<Fill> = emptyList(),
     val amendingClordid: String? = null,
 ) {
     val isAmending: Boolean get() = amendingClordid != null

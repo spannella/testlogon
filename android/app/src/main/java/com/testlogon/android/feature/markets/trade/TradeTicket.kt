@@ -150,6 +150,40 @@ fun TradeTicket(
             Spacer(Modifier.height(4.dp))
             PositionCard(pos = pos, onClose = { lastPrice?.let { viewModel.closePosition(it) } })
         }
+
+        if (state.sessionFills.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text("Fills · this session", color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Spacer(Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                Text("Price", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1.2f))
+                Text("Qty", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                Text("Time", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            }
+            state.sessionFills.take(40).forEach { f -> FillRow(f) }
+        }
+    }
+}
+
+private val fillTimeFmt = java.text.SimpleDateFormat("HH:mm:ss", Locale.US)
+
+@Composable
+private fun FillRow(fill: com.testlogon.android.data.exchange.Fill) {
+    val color = when (fill.side) {
+        OrderSide.BUY -> MarketColors.Up
+        OrderSide.SELL -> MarketColors.Down
+        null -> MarketColors.TextPrimary
+    }
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        Text(fmt(fill.price.toDouble()), color = color, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1.2f))
+        Text(fill.qty.toString(), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(
+            text = if (fill.tsNs > 0) fillTimeFmt.format(java.util.Date(fill.tsNs / 1_000_000L)) else "--",
+            color = MarketColors.TextFaint,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

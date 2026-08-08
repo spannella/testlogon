@@ -8,10 +8,12 @@ import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.data.exchange.TradingRepository
 import com.testlogon.android.navigation.SymbolDetailDest
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -33,7 +35,20 @@ class TradingViewModel @Inject constructor(
 
     private var seq = 0
 
-    init { refreshAccount() }
+    init {
+        refreshAccount()
+        pollAccount()
+    }
+
+    /** Keep the wallet / margin / position fresh while the VM is alive. */
+    private fun pollAccount() {
+        viewModelScope.launch {
+            while (isActive) {
+                delay(5_000L)
+                refreshAccount()
+            }
+        }
+    }
 
     fun setSide(side: OrderSide) = _uiState.update { it.copy(side = side) }
     fun setPrice(text: String) = _uiState.update { it.copy(priceText = text.filter { c -> c.isDigit() }.take(12)) }
@@ -76,6 +91,7 @@ class TradingViewModel @Inject constructor(
                                 messageIsError = false,
                                 qtyText = "",
                                 workingOrders = if (qty - filled > 0) st.workingOrders + wo else st.workingOrders,
+                                sessionFills = ack.fills + st.sessionFills,
                             )
                         }
                         refreshAccount()

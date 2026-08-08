@@ -67,14 +67,18 @@ shipped). Android first; web mirror later. **Prefix `TRD`.** ☐ todo · ◐ in 
   `marginUsedFraction`); distress/liquidation warning banner already in the strip.
 
 ## Wave 4 — Fills, advanced types, polish
-- ☐ **TRD-13 · Fills viewer** — `M` — session fills (from acks) with price/qty/side/time; honest
-  "session only" note (no history endpoint).
-- ☐ **TRD-14 · Advanced order types** — `L` — Stop (via /me/algo), OCO, OTO, TWAP/VWAP; scope each
-  contract then build its ticket. (Only after Limit/Market loop is solid.)
-- ☐ **TRD-15 · Live account refresh + notifications** — `M` — poll margin_account; ack/nak/fill toasts;
-  push on fills (FCM already wired).
-- ☐ **TRD-16 · On-device E2E** — `M` — place/amend/cancel/close on an enabled account (A15); verify
-  wallet/margin/position update. Enable the test account (`me_trade_enabled` on tlc_users) or use mmA/mmB.
+- ☑ **TRD-13 · Fills viewer** — `M` · **done** (2026-08-07) — session fills log in the Order tab
+  (price/qty/side/time), accumulated from place/close acks' `fills[]`. Session-only (no history endpoint).
+- ⊘ **TRD-14 · Advanced order types** — `L` · **DEFERRED (needs enabled acct to scope)** — /me/algo,
+  /me/oco, /me/oto exist but only 405 on GET; their request bodies can only be learned via live
+  round-trips against an `me_trade_enabled` account (which this session lacks). Won't guess the
+  contracts. Scope + build once an enabled account is available.
+- ◐ **TRD-15 · Live account refresh + notifications** — `M` — DONE: 5s poll of margin_account keeps
+  wallet/margin/position live (`pollAccount`). Ack/nak result line already shown. Fill PUSH (FCM)
+  deferred — needs a backend fill-notification seam.
+- ◐ **TRD-16 · On-device E2E** — `M` — BLOCKED on `me_trade_enabled` (prod DDB write; prod is
+  SSM-only — user to run the enable command). All UI paths build-green; the market-data + gate-nak
+  paths are device-verified. Once enabled: place→fill→position→close→amend E2E.
 
 ## Deferred / backend-blocked
 - ⊘ Spot account view (no backend read). ⊘ Fills history (no read). ⊘ Working-orders server list
