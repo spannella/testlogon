@@ -123,6 +123,39 @@ class TradingViewModel @Inject constructor(
     fun cancelAmend() = _uiState.update { it.copy(amendingClordid = null, message = null) }
 
     /**
+     * Flatten the current net position with an opposing marketable-limit order priced ~5% through the
+     * market (from [lastPrice]) so it crosses and fills. Long -> Sell, Short -> Buy, qty = |pos_qty|.
+     * With one net position per account this is also "close all".
+     */
+    fun closePosition(lastPrice: Long) {
+        val pos = _uiState.value.account?.position ?: return
+        if (pos.qty == 0L || lastPrice <= 0) return
+        val side = if (pos.qty > 0) OrderSide.SELL else OrderSide.BUY
+        val qty = kotlin.math.abs(pos.qty)
+        // Cross the spread by ~5% to guarantee a fill (marketable limit; the engine takes no market type).
+        val price = if (side == OrderSide.SELL) (lastPrice * 95L / 100L).coerceAtLeast(1L) else (lastPrice * 105L / 100L)
+        val clordid = "c${System.currentTimeMillis()}${seq++ % 100}"
+        _uiState.update { it.copy(placing = true, message = null) }
+        viewModelScope.launch {
+            when (val r = repository.placeOrder(symbolId, side, price, qty, clordid)) {
+                is ApiResult.Success -> {
+                    val ack = r.data
+                    _uiState.update {
+                        it.copy(
+                            placing = false,
+                            message = if (ack.accepted) "Closing position (${if (side == OrderSide.SELL) "sold" else "bought"} $qty)" else (ack.message ?: "Close rejected"),
+                            messageIsError = !ack.accepted,
+                        )
+                    }
+                    refreshAccount()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+            }
+        }
+    }
+
+    /**
      * Apply an amend. A pure quantity REDUCE (same price) uses `PATCH new_qty` (in-place, keeps queue
      * priority). A price change or quantity increase is a REPLACE (cancel + new order).
      */

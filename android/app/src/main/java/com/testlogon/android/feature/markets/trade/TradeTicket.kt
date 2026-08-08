@@ -143,6 +143,80 @@ fun TradeTicket(
                 )
             }
         }
+
+        state.account?.position?.let { pos ->
+            Spacer(Modifier.height(16.dp))
+            Text("Position", color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Spacer(Modifier.height(4.dp))
+            PositionCard(pos = pos, onClose = { lastPrice?.let { viewModel.closePosition(it) } })
+        }
+    }
+}
+
+@Composable
+private fun WalletRow(label: String, value: Long) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Text(fmt(value.toDouble()), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun PositionCard(pos: com.testlogon.android.data.exchange.PositionSnapshot, onClose: () -> Unit) {
+    val long = pos.qty > 0
+    val sideColor = if (long) MarketColors.Up else MarketColors.Down
+    val pnlColor = if (pos.unrealizedPnl >= 0) MarketColors.Up else MarketColors.Down
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${if (long) "Long" else "Short"} ${fmt(kotlin.math.abs(pos.qty).toDouble())}",
+                color = sideColor,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 14.sp,
+            )
+            Text(
+                text = "Close",
+                color = Color.Black,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(sideColor)
+                    .clickable(onClick = onClose)
+                    .testTag("close_position")
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        PosStat("Entry", fmt(pos.entryPrice.toDouble()))
+        PosStat("Liq. price", if (pos.liquidationPrice > 0) fmt(pos.liquidationPrice.toDouble()) else "--")
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Unrealized PnL", color = MarketColors.TextSecondary, fontSize = 11.sp)
+            Text(
+                text = (if (pos.unrealizedPnl >= 0) "+" else "") + fmt(pos.unrealizedPnl.toDouble()),
+                color = pnlColor,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PosStat(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Text(value, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
     }
 }
 
@@ -165,11 +239,12 @@ private fun SideButton(text: String, selected: Boolean, color: Color, modifier: 
 @Composable
 private fun AccountStrip(account: com.testlogon.android.data.exchange.MarginAccount) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Available", color = MarketColors.TextSecondary, fontSize = 11.sp)
-            Text(fmt(account.availableBalance.toDouble()), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-        }
-        Spacer(Modifier.height(4.dp))
+        WalletRow("Balance", account.balance)
+        Spacer(Modifier.height(3.dp))
+        WalletRow("Available", account.availableBalance)
+        Spacer(Modifier.height(3.dp))
+        WalletRow("Reserved margin", account.reservedMargin)
+        Spacer(Modifier.height(6.dp))
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Margin used", color = MarketColors.TextSecondary, fontSize = 11.sp)
             Text("${(account.marginUsedFraction * 100).toInt()}%", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)

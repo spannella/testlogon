@@ -55,14 +55,16 @@ shipped). Android first; web mirror later. **Prefix `TRD`.** ☐ todo · ◐ in 
   priority) or, on price-change / qty-increase, a **cancel + replace**. VM `startAmend`/`cancelAmend`/
   `amend`; ticket shows "Amend order" button + a tap-to-cancel-amend hint; rows gain Amend + Cancel.
 
-## Wave 3 — Positions, wallet, margin
-- ☐ **TRD-9 · Positions panel** — `M` — from margin_account: qty/side, entry, liq price, unrealized
-  PnL (colored), position value.
-- ☐ **TRD-10 · Close position / close all** — `M` — market/opposing order for pos_qty; one-tap close +
-  close-all (single net position today, but built to scale).
-- ☐ **TRD-11 · Wallet (cash)** — `S` — balance + available_balance.
-- ☐ **TRD-12 · Margin usage meter** — `M` — reserved_margin vs balance → used %, free margin;
-  distress_level / is_liquidating warning banner.
+## Wave 3 — Positions, wallet, margin — DONE (2026-08-07)
+- ☑ **TRD-9 · Positions panel** — `M` · **done** — `PositionCard` in the Order tab (from
+  margin_account.position): Long/Short + qty, entry, liq price, unrealized PnL (green/red).
+- ☑ **TRD-10 · Close position / close all** — `M` · **done** — one-tap **Close** = opposing
+  marketable-limit (~5% through the market from lastPrice; Long→Sell, Short→Buy, qty=|pos_qty|).
+  Single net position, so Close == close-all. `TradingViewModel.closePosition(lastPrice)`.
+- ☑ **TRD-11 · Wallet (cash)** — `S` · **done** — account strip shows Balance + Available + Reserved
+  margin.
+- ☑ **TRD-12 · Margin usage meter** — `M` · **done** — margin-used % + bar (reserved/balance via
+  `marginUsedFraction`); distress/liquidation warning banner already in the strip.
 
 ## Wave 4 — Fills, advanced types, polish
 - ☐ **TRD-13 · Fills viewer** — `M` — session fills (from acks) with price/qty/side/time; honest
