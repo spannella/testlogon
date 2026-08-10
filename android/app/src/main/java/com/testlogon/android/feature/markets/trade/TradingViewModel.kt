@@ -25,8 +25,11 @@ import javax.inject.Inject
 @HiltViewModel
 class TradingViewModel @Inject constructor(
     private val repository: TradingRepository,
+    private val notifier: TradingNotifier,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    private var wasLiquidating = false
 
     private val symbolId: Int = savedStateHandle.get<Int>(SymbolDetailDest.ARG_SYMBOL_ID) ?: 0
 
@@ -52,7 +55,7 @@ class TradingViewModel @Inject constructor(
         }
     }
 
-    fun setSide(side: OrderSide) = _uiState.update { it.copy(side = side, armed = null) }
+    fun setSide(side: OrderSide) { notifier.tick(); _uiState.update { it.copy(side = side, armed = null) } }
     fun setPrice(text: String) = _uiState.update { it.copy(priceText = text.filter { c -> c.isDigit() }.take(12), armed = null) }
     fun setQty(text: String) = _uiState.update { it.copy(qtyText = text.filter { c -> c.isDigit() }.take(9), armed = null) }
     fun setDeposit(text: String) = _uiState.update { it.copy(depositText = text.filter { c -> c.isDigit() }.take(12)) }
@@ -61,7 +64,7 @@ class TradingViewModel @Inject constructor(
     fun setAsk(text: String) = _uiState.update { it.copy(askText = digits(text, 12)) }
     fun setChildPrice(text: String) = _uiState.update { it.copy(childPriceText = digits(text, 12)) }
     fun setChildQty(text: String) = _uiState.update { it.copy(childQtyText = digits(text, 9)) }
-    fun setOrderType(t: OrderType) = _uiState.update { it.copy(orderType = t, amendingClordid = null, message = null, armed = null) }
+    fun setOrderType(t: OrderType) { notifier.tick(); _uiState.update { it.copy(orderType = t, amendingClordid = null, message = null, armed = null) } }
     fun setSection(s: TicketSection) = _uiState.update { it.copy(section = s, armed = null) }
     fun toggleOneTap() = _uiState.update { it.copy(oneTap = !it.oneTap) }
 
@@ -72,20 +75,24 @@ class TradingViewModel @Inject constructor(
         if (px <= 0 || avail <= 0) return
         val maxQty = avail / px
         val q = (maxQty * pct / 100).coerceAtLeast(if (pct > 0) 1L else 0L)
+        notifier.tick()
         _uiState.update { it.copy(qtyText = q.toString(), armed = null) }
     }
 
     fun stepQty(delta: Long) {
+        notifier.tick()
         val n = ((_uiState.value.qtyText.toLongOrNull() ?: 0L) + delta).coerceAtLeast(0L)
         _uiState.update { it.copy(qtyText = if (n == 0L) "" else n.toString(), armed = null) }
     }
 
     fun stepPrice(delta: Long) {
+        notifier.tick()
         val n = ((_uiState.value.priceText.toLongOrNull() ?: 0L) + delta).coerceAtLeast(0L)
         _uiState.update { it.copy(priceText = if (n == 0L) "" else n.toString(), armed = null) }
     }
 
     fun stepStop(delta: Long) {
+        notifier.tick()
         val n = ((_uiState.value.stopText.toLongOrNull() ?: 0L) + delta).coerceAtLeast(0L)
         _uiState.update { it.copy(stopText = if (n == 0L) "" else n.toString(), armed = null) }
     }
@@ -132,8 +139,8 @@ class TradingViewModel @Inject constructor(
                     }
                     if (ack.accepted) refreshSpot()
                 }
-                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
             }
         }
     }
@@ -155,8 +162,8 @@ class TradingViewModel @Inject constructor(
                     _uiState.update { it.copy(placing = false, message = if (ack.accepted) "OCO #${ack.ocoId ?: "?"} placed" else (ack.message ?: "OCO rejected"), messageIsError = !ack.accepted) }
                     if (ack.accepted) refreshAccount()
                 }
-                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
             }
         }
     }
@@ -175,8 +182,8 @@ class TradingViewModel @Inject constructor(
                     _uiState.update { it.copy(placing = false, message = if (ack.accepted) "Funding ${if (s.fundingBorrow) "borrow" else "lend"} #${ack.fundingId ?: "?"}" else (ack.message ?: "Funding rejected"), messageIsError = !ack.accepted) }
                     if (ack.accepted) refreshAccount()
                 }
-                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
             }
         }
     }
@@ -185,6 +192,7 @@ class TradingViewModel @Inject constructor(
     fun submit() {
         val s = _uiState.value
         if (s.orderType == OrderType.MARKET && !s.oneTap && s.armed != "market") {
+            notifier.warn()
             _uiState.update { it.copy(armed = "market", message = "Tap Confirm to send the market order", messageIsError = false) }
             return
         }
@@ -241,7 +249,14 @@ class TradingViewModel @Inject constructor(
     fun refreshAccount() {
         viewModelScope.launch {
             when (val r = repository.marginAccount()) {
-                is ApiResult.Success -> _uiState.update { it.copy(account = r.data) }
+                is ApiResult.Success -> {
+                    val acct = r.data
+                    if (acct.isLiquidating && !wasLiquidating) {
+                        notifier.notifyDistress("⚠ Liquidation", "Your position is being liquidated")
+                    }
+                    wasLiquidating = acct.isLiquidating
+                    _uiState.update { it.copy(account = acct) }
+                }
                 else -> Unit
             }
         }
@@ -266,6 +281,12 @@ class TradingViewModel @Inject constructor(
                     )
                 }
                 refreshAccount()
+                when {
+                    ev.triggeredCount > 0 -> notifier.notifyTrigger("Algo triggered", "${ev.triggeredCount} algo order(s) triggered")
+                    ev.otoTriggeredCount > 0 -> notifier.notifyTrigger("OTO triggered", "${ev.otoTriggeredCount} child order(s) fired")
+                    ev.fills.isNotEmpty() -> notifier.notifyFill("Fill", "Filled ${ev.fills.sumOf { f -> f.qty }} on a resting order")
+                    else -> {}
+                }
             }
         }
     }
@@ -310,12 +331,14 @@ class TradingViewModel @Inject constructor(
                             )
                         }
                         refreshAccount()
+                        if (filled > 0) notifier.notifyFill("Order filled", "Filled $filled @ ${ack.fills.firstOrNull()?.price ?: price}") else notifier.success()
                     } else {
                         _uiState.update { it.copy(placing = false, message = ack.message ?: "Order rejected", messageIsError = true) }
+                        notifier.error()
                     }
                 }
-                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
             }
         }
     }
@@ -384,9 +407,10 @@ class TradingViewModel @Inject constructor(
                         )
                     }
                     refreshAccount()
+                    if (ack.accepted) notifier.notifyFill("Position closed", "${if (side == OrderSide.SELL) "Sold" else "Bought"} $qty to flatten") else notifier.error()
                 }
-                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
             }
         }
     }
@@ -427,8 +451,8 @@ class TradingViewModel @Inject constructor(
                     }
                     if (ack.accepted) refreshAccount()
                 }
-                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
             }
         }
     }
@@ -456,8 +480,8 @@ class TradingViewModel @Inject constructor(
                     }
                     if (ack.accepted) refreshAccount()
                 }
-                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
             }
         }
     }
@@ -486,8 +510,8 @@ class TradingViewModel @Inject constructor(
                     }
                     if (ack.accepted) refreshAccount()
                 }
-                is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
             }
         }
     }
@@ -497,6 +521,7 @@ class TradingViewModel @Inject constructor(
         val s = _uiState.value
         if (s.account?.position == null) return
         if (!s.oneTap && s.armed != "close") {
+            notifier.warn()
             _uiState.update { it.copy(armed = "close", message = "Tap Confirm close to flatten the position", messageIsError = false) }
             return
         }
@@ -529,8 +554,8 @@ class TradingViewModel @Inject constructor(
                         }
                         refreshAccount()
                     } else _uiState.update { it.copy(placing = false, message = r.data.message ?: "Amend rejected", messageIsError = true) }
-                    is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                    is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                    is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                    is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
                 }
             } else {
                 // replace: cancel then place a fresh order at the new price/qty
@@ -554,8 +579,8 @@ class TradingViewModel @Inject constructor(
                             refreshAccount()
                         } else _uiState.update { it.copy(placing = false, message = ack.message ?: "Replace rejected", messageIsError = true) }
                     }
-                    is ApiResult.Failure -> _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }
-                    is ApiResult.NetworkError -> _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }
+                    is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
+                    is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
                 }
             }
         }
