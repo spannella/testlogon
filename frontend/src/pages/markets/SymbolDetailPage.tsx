@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useSymbols, useOrderBook, useCandles, useTrades } from "@/hooks/useMarketData";
 import { useMarketDataStream } from "@/hooks/useMarketDataStream";
 import type { BookLevel, Candle } from "@/api/endpoints/marketData";
+import type { OrderSide } from "@/api/endpoints/trading";
 import CandleChart from "./CandleChart";
 import { TradeTicket } from "./TradeTicket";
 import { formatPrice, formatQty, formatTimeNs } from "./format";
@@ -20,17 +21,22 @@ function DepthRow({
   side,
   maxQty,
   scaler,
+  onPick,
 }: {
   level: BookLevel;
   side: "bid" | "ask";
   maxQty: number;
   scaler: number;
+  onPick?: (price: number, orderSide: OrderSide) => void;
 }) {
   const [price, qty] = level;
   const pct = maxQty > 0 ? Math.min(100, (qty / maxQty) * 100) : 0;
   const isBid = side === "bid";
   return (
-    <div className="relative flex items-center justify-between px-2 py-0.5 text-sm tabular-nums">
+    <div
+      className="relative flex cursor-pointer items-center justify-between px-2 py-0.5 text-sm tabular-nums hover:bg-muted/40"
+      onClick={() => onPick?.(price, isBid ? "sell" : "buy")}
+    >
       <div
         className={cn(
           "absolute inset-y-0 right-0",
@@ -54,6 +60,10 @@ function DepthRow({
 export default function SymbolDetailPage() {
   const { symbolId } = useParams<{ symbolId: string }>();
   const id = Number(symbolId);
+
+  const [prefill, setPrefill] = useState<{ price?: number; side?: OrderSide; nonce: number }>({ nonce: 0 });
+  const prefillTicket = (price: number, side?: OrderSide) =>
+    setPrefill((p) => ({ price, side, nonce: p.nonce + 1 }));
 
   const symbolsQuery = useSymbols();
   // SSE drives the book; keep an initial React Query fetch for the first paint
@@ -133,7 +143,7 @@ export default function SymbolDetailPage() {
         </div>
       </div>
 
-      <TradeTicket symbolId={id} scaler={scaler} lastPrice={lastPrice} />
+      <TradeTicket symbolId={id} scaler={scaler} lastPrice={lastPrice} prefill={prefill} />
 
       <Card>
         <CardHeader>
@@ -145,7 +155,7 @@ export default function SymbolDetailPage() {
             <Skeleton className="h-[320px] w-full" />
           ) : (
             <div className="text-muted-foreground">
-              <CandleChart bars={bars} scaler={scaler} />
+              <CandleChart bars={bars} scaler={scaler} onPriceClick={(p) => prefillTicket(p)} />
             </div>
           )}
         </CardContent>
@@ -182,7 +192,7 @@ export default function SymbolDetailPage() {
                 </div>
                 <div className="flex flex-col-reverse">
                   {asks.map((l, i) => (
-                    <DepthRow key={"a" + i} level={l} side="ask" maxQty={maxQty} scaler={scaler} />
+                    <DepthRow key={"a" + i} level={l} side="ask" maxQty={maxQty} scaler={scaler} onPick={prefillTicket} />
                   ))}
                 </div>
                 <div className="my-1 flex items-center justify-between border-y px-2 py-1 text-sm font-medium">
@@ -193,7 +203,7 @@ export default function SymbolDetailPage() {
                 </div>
                 <div>
                   {bids.map((l, i) => (
-                    <DepthRow key={"b" + i} level={l} side="bid" maxQty={maxQty} scaler={scaler} />
+                    <DepthRow key={"b" + i} level={l} side="bid" maxQty={maxQty} scaler={scaler} onPick={prefillTicket} />
                   ))}
                 </div>
                 {asks.length === 0 && bids.length === 0 && (

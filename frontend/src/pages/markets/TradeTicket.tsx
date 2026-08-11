@@ -111,10 +111,12 @@ export function TradeTicket({
   symbolId,
   scaler,
   lastPrice,
+  prefill,
 }: {
   symbolId: number;
   scaler: number;
   lastPrice?: number;
+  prefill?: { price?: number; side?: OrderSide; nonce: number };
 }) {
   const account = useMarginAccount();
   const pm = usePmState(symbolId);
@@ -163,6 +165,16 @@ export function TradeTicket({
     if (!price && lastPrice && lastPrice > 0) setPrice(String(lastPrice));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastPrice]);
+
+  // Click-to-trade prefill from the book/chart (nonce re-fires on each pick).
+  useEffect(() => {
+    if (!prefill) return;
+    if (prefill.price != null) setPrice(String(prefill.price));
+    if (prefill.side) setSide(prefill.side);
+    setSection("trade");
+    setArmed(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.nonce]);
 
   // Fold async fills + triggers from the exec-events drain into the local state.
   useEffect(() => {
