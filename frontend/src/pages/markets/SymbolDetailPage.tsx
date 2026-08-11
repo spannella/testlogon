@@ -9,6 +9,7 @@ import { useSymbols, useOrderBook, useCandles, useTrades } from "@/hooks/useMark
 import { useMarketDataStream } from "@/hooks/useMarketDataStream";
 import type { BookLevel, Candle } from "@/api/endpoints/marketData";
 import CandleChart from "./CandleChart";
+import { TradeTicket } from "./TradeTicket";
 import { formatPrice, formatQty, formatTimeNs } from "./format";
 
 /** Trades still poll (SSE carries no trades), relaxed since the book is live. */
@@ -109,6 +110,7 @@ export default function SymbolDetailPage() {
   }, [candles.data, stream.latestCandle]);
 
   const recentTrades = trades.data?.trades ?? [];
+  const lastPrice = recentTrades[0]?.price ?? bestAsk ?? bestBid;
 
   return (
     <div className="space-y-6">
@@ -130,6 +132,8 @@ export default function SymbolDetailPage() {
           )}
         </div>
       </div>
+
+      <TradeTicket symbolId={id} scaler={scaler} lastPrice={lastPrice} />
 
       <Card>
         <CardHeader>
