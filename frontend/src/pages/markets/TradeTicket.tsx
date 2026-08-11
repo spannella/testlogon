@@ -14,13 +14,18 @@ import {
   usePlaceQuote,
   usePlaceAlgo,
   usePlaceOto,
+  usePlaceOco,
+  usePlaceFunding,
+  useSpotBalance,
+  useSpotDeposit,
 } from "@/hooks/useTrading";
 import { isAck, ackMessage, impliedYes, marginUsedFraction } from "@/api/endpoints/trading";
 import type { OrderSide, Fill, PlaceOrderRequest } from "@/api/endpoints/trading";
 import { formatPrice, formatQty, formatTimeNs } from "./format";
 import { vibrate, notify, ensureNotifyPermission } from "@/lib/tradeFeedback";
+import { tradingFeatures } from "./tradingFeatures";
 
-type OrderType = "limit" | "market" | "stop" | "stop_limit" | "take_profit" | "quote" | "oto";
+type OrderType = "limit" | "market" | "stop" | "stop_limit" | "take_profit" | "quote" | "oto" | "oco" | "funding";
 type Section = "trade" | "positions" | "orders" | "fills";
 type SetStr = React.Dispatch<React.SetStateAction<string>>;
 
@@ -32,6 +37,9 @@ const ORDER_TYPES: { id: OrderType; label: string }[] = [
   { id: "take_profit", label: "Take-Profit" },
   { id: "quote", label: "Quote" },
   { id: "oto", label: "OTO" },
+  // Staged surfaces — only surface when their feature flag is on.
+  ...(tradingFeatures.OCO_ENABLED ? [{ id: "oco" as OrderType, label: "OCO" }] : []),
+  ...(tradingFeatures.FUNDING_ENABLED ? [{ id: "funding" as OrderType, label: "Funding" }] : []),
 ];
 const TIFS = ["GTC", "IOC", "FOK", "GTD"] as const;
 
@@ -129,6 +137,10 @@ export function TradeTicket({
   const quoteM = usePlaceQuote();
   const algoM = usePlaceAlgo();
   const otoM = usePlaceOto();
+  const ocoM = usePlaceOco();
+  const fundingM = usePlaceFunding();
+  const spot = useSpotBalance(tradingFeatures.SPOT_ENABLED);
+  const spotDepositM = useSpotDeposit();
 
   const acct = account.data;
   const pmState = pm.data?.is_binary ? pm.data : undefined;
@@ -152,6 +164,12 @@ export function TradeTicket({
   const [minQty, setMinQty] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [depositAmt, setDepositAmt] = useState("");
+  const [isBorrow, setIsBorrow] = useState(true);
+  const [rateBps, setRateBps] = useState("");
+  const [fundingQty, setFundingQty] = useState("");
+  const [durationSec, setDurationSec] = useState("");
+  const [spotAsset, setSpotAsset] = useState("");
+  const [spotAmt, setSpotAmt] = useState("");
   const [armed, setArmed] = useState<"market" | "close" | null>(null);
   const [oneTap, setOneTap] = useState(false);
   const [workingOrders, setWorkingOrders] = useState<WorkingOrder[]>([]);
@@ -203,6 +221,9 @@ export function TradeTicket({
   const askN = parseInt(ask) || 0;
   const childPriceN = parseInt(childPrice) || 0;
   const childQtyN = parseInt(childQty) || 0;
+  const rateBpsN = parseInt(rateBps) || 0;
+  const fundingQtyN = parseInt(fundingQty) || 0;
+  const durationSecN = parseInt(durationSec) || 0;
   const refPrice = priceN || stopN || lastPrice || 0;
   const avail = acct?.available_balance ?? 0;
   const orderValue = priceN > 0 && qtyN > 0 ? priceN * qtyN : undefined;
@@ -229,6 +250,8 @@ export function TradeTicket({
     !algoM.isPending &&
     !quoteM.isPending &&
     !otoM.isPending &&
+    !ocoM.isPending &&
+    !fundingM.isPending &&
     (() => {
       switch (orderType) {
         case "limit":
@@ -244,6 +267,10 @@ export function TradeTicket({
           return bidN > 0 && askN > 0 && qtyN > 0;
         case "oto":
           return priceN > 0 && qtyN > 0 && childPriceN > 0 && childQtyN > 0;
+        case "oco":
+          return priceN > 0 && qtyN > 0 && childPriceN > 0 && childQtyN > 0;
+        case "funding":
+          return rateBpsN > 0 && fundingQtyN > 0;
         default:
           return false;
       }
@@ -257,6 +284,7 @@ export function TradeTicket({
     cancelled_qty?: number;
     algo_id?: number;
     oto_id?: number;
+    funding_id?: number;
     bid_orderid?: number;
     ask_orderid?: number;
     new_balance?: number;
@@ -375,6 +403,29 @@ export function TradeTicket({
         }),
         { okMsg: (a) => `OTO #${(a as { oto_id?: number }).oto_id ?? "?"}` }
       );
+    } else if (orderType === "oco") {
+      const legBSide: OrderSide = side === "buy" ? "sell" : "buy";
+      void handleAck(
+        ocoM.mutateAsync({
+          symbolId,
+          legs: [
+            { side, price: priceN, qty: qtyN },
+            { side: legBSide, price: childPriceN, qty: childQtyN },
+          ],
+        }),
+        { okMsg: (a) => `OCO placed #${a.orderid ?? "?"}` }
+      );
+    } else if (orderType === "funding") {
+      void handleAck(
+        fundingM.mutateAsync({
+          rate_bps: rateBpsN,
+          qty: fundingQtyN,
+          is_borrow: isBorrow,
+          duration_seconds: durationSecN > 0 ? durationSecN : undefined,
+          symbolid: symbolId,
+        }),
+        { okMsg: (a) => `Funding #${(a as { funding_id?: number }).funding_id ?? "?"} (${isBorrow ? "borrow" : "lend"})` }
+      );
     }
   }
 
@@ -453,10 +504,14 @@ export function TradeTicket({
         return "Place quote";
       case "oto":
         return `Place OTO (${s} parent)`;
+      case "oco":
+        return `Place OCO (${s} leg A)`;
+      case "funding":
+        return isBorrow ? "Borrow funding" : "Lend funding";
       default:
         return "Submit";
     }
-  }, [armed, side, qty, orderType]);
+  }, [armed, side, qty, orderType, isBorrow]);
 
   const sections: { id: Section; label: string; count?: number }[] = [
     { id: "trade", label: "Trade" },
@@ -579,8 +634,8 @@ export function TradeTicket({
               ))}
             </div>
 
-            {/* Side (hidden for quote) */}
-            {orderType !== "quote" && (
+            {/* Side (hidden for quote / funding) */}
+            {orderType !== "quote" && orderType !== "funding" && (
               <div className="flex gap-2">
                 <Button
                   type="button"
@@ -655,6 +710,52 @@ export function TradeTicket({
                 <p className="col-span-2 text-xs text-muted-foreground">
                   Child = {side === "buy" ? "Sell" : "Buy"} · triggers when the parent fills
                 </p>
+              </div>
+            )}
+            {orderType === "oco" && (
+              <div className="grid grid-cols-2 gap-2">
+                <Field label={`Leg A price (${side === "buy" ? "Buy" : "Sell"})`} value={price} onChange={setPrice} />
+                <Field label="Leg A qty" value={qty} onChange={setQty} />
+                <Field label={`Leg B price (${side === "buy" ? "Sell" : "Buy"})`} value={childPrice} onChange={setChildPrice} />
+                <Field label="Leg B qty" value={childQty} onChange={setChildQty} />
+                <p className="col-span-2 text-xs text-muted-foreground">
+                  Leg B = opposite side; a fill on one cancels the other.
+                </p>
+              </div>
+            )}
+            {orderType === "funding" && (
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant={isBorrow ? "default" : "outline"}
+                    className={cn("flex-1", isBorrow && "bg-emerald-600 hover:bg-emerald-600/90")}
+                    onClick={() => {
+                      vibrate("tick");
+                      setIsBorrow(true);
+                      resetArmed();
+                    }}
+                  >
+                    Borrow
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={!isBorrow ? "default" : "outline"}
+                    className={cn("flex-1", !isBorrow && "bg-rose-600 hover:bg-rose-600/90")}
+                    onClick={() => {
+                      vibrate("tick");
+                      setIsBorrow(false);
+                      resetArmed();
+                    }}
+                  >
+                    Lend
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Rate (bps)" value={rateBps} onChange={setRateBps} onStep={(d) => stepField(setRateBps, rateBps, d)} />
+                  <Field label="Quantity" value={fundingQty} onChange={setFundingQty} onStep={(d) => stepField(setFundingQty, fundingQty, d)} />
+                </div>
+                <Field label="Duration (seconds, optional)" value={durationSec} onChange={setDurationSec} />
               </div>
             )}
 
@@ -763,6 +864,53 @@ export function TradeTicket({
                 Deposit
               </Button>
             </div>
+
+            {/* Spot wallet (staged surface) */}
+            {tradingFeatures.SPOT_ENABLED && (
+              <div className="rounded-lg border p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold">Spot balances</span>
+                  {spot.isLoading && <span className="text-xs text-muted-foreground">loading…</span>}
+                </div>
+                {spot.data?.balances && spot.data.balances.length > 0 ? (
+                  <div className="mt-2 space-y-0.5 text-sm">
+                    {spot.data.balances.map((b, i) => (
+                      <div key={b.asset ?? i} className="flex justify-between">
+                        <span className="text-muted-foreground">{b.symbol ?? `asset ${b.asset ?? "?"}`}</span>
+                        <span className="tabular-nums">{formatQty(b.available ?? b.balance ?? 0, scaler)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  !spot.isLoading && <p className="mt-2 text-xs text-muted-foreground">No spot balances</p>
+                )}
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <Field label="Asset id" value={spotAsset} onChange={setSpotAsset} />
+                  <Field label="Amount" value={spotAmt} onChange={setSpotAmt} />
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="mt-2 w-full"
+                  disabled={spotDepositM.isPending || (parseInt(spotAsset) || 0) <= 0 || (parseInt(spotAmt) || 0) <= 0}
+                  onClick={() =>
+                    spotDepositM.mutate(
+                      { asset: parseInt(spotAsset) || 0, amount: parseInt(spotAmt) || 0 },
+                      {
+                        onSuccess: (a) => {
+                          vibrate(isAck(a) ? "success" : "error");
+                          setMsg({ text: isAck(a) ? "Spot deposit ok" : ackMessage(a) ?? "Spot deposit rejected", error: !isAck(a) });
+                          setSpotAmt("");
+                          spot.refetch();
+                        },
+                      }
+                    )
+                  }
+                >
+                  Deposit spot
+                </Button>
+              </div>
+            )}
           </div>
         )}
 

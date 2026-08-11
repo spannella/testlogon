@@ -96,3 +96,36 @@ export function usePlaceOto() {
   const invalidate = useInvalidateAccount();
   return useMutation({ mutationFn: trading.placeOto, onSuccess: invalidate });
 }
+
+export function usePlaceOco() {
+  const invalidate = useInvalidateAccount();
+  return useMutation({
+    mutationFn: (args: { symbolId: number; legs: trading.OcoLeg[] }) =>
+      trading.placeOco(args.symbolId, args.legs),
+    onSuccess: invalidate,
+  });
+}
+
+export function usePlaceFunding() {
+  const invalidate = useInvalidateAccount();
+  return useMutation({ mutationFn: trading.placeFunding, onSuccess: invalidate });
+}
+
+/** Spot wallet balances; polls while mounted. `retry: false` — a backend without spot deployed 404s. */
+export function useSpotBalance(enabled = true) {
+  return useQuery({
+    queryKey: tradingKeys.spotBalance,
+    queryFn: trading.getSpotBalance,
+    enabled,
+    refetchInterval: ACCOUNT_REFETCH_MS,
+    retry: false,
+  });
+}
+
+export function useSpotDeposit() {
+  const invalidate = useInvalidateAccount();
+  return useMutation({
+    mutationFn: (args: { asset: number; amount: number }) => trading.spotDeposit(args.asset, args.amount),
+    onSuccess: invalidate,
+  });
+}

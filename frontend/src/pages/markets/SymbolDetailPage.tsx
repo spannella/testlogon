@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useSymbols, useOrderBook, useCandles, useTrades } from "@/hooks/useMarketData";
 import { useMarketDataStream } from "@/hooks/useMarketDataStream";
@@ -57,10 +58,63 @@ function DepthRow({
   );
 }
 
+/** Single row inside the two-column (COLUMNS) book style. Depth bar grows
+ * outward from the center divider: bids to the left, asks to the right. */
+function ColumnRow({
+  level,
+  side,
+  maxQty,
+  scaler,
+  onPick,
+}: {
+  level: BookLevel;
+  side: "bid" | "ask";
+  maxQty: number;
+  scaler: number;
+  onPick?: (price: number, orderSide: OrderSide) => void;
+}) {
+  const [price, qty] = level;
+  const pct = maxQty > 0 ? Math.min(100, (qty / maxQty) * 100) : 0;
+  const isBid = side === "bid";
+  return (
+    <div
+      className={cn(
+        "relative flex cursor-pointer items-center px-2 py-0.5 text-sm tabular-nums hover:bg-muted/40",
+        isBid ? "justify-end text-right" : "justify-start text-left"
+      )}
+      onClick={() => onPick?.(price, isBid ? "sell" : "buy")}
+    >
+      <div
+        className={cn(
+          "absolute inset-y-0",
+          isBid ? "right-0 bg-emerald-500/10" : "left-0 bg-rose-500/10"
+        )}
+        style={{ width: pct + "%" }}
+      />
+      {isBid ? (
+        <>
+          <span className="relative z-10 mr-3 text-muted-foreground">{formatQty(qty, scaler)}</span>
+          <span className="relative z-10 font-medium text-emerald-600 dark:text-emerald-400">
+            {formatPrice(price, scaler)}
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="relative z-10 mr-3 font-medium text-rose-600 dark:text-rose-400">
+            {formatPrice(price, scaler)}
+          </span>
+          <span className="relative z-10 text-muted-foreground">{formatQty(qty, scaler)}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function SymbolDetailPage() {
   const { symbolId } = useParams<{ symbolId: string }>();
   const id = Number(symbolId);
 
+  const [bookStyle, setBookStyle] = useState<"ladder" | "columns">("ladder");
   const [prefill, setPrefill] = useState<{ price?: number; side?: OrderSide; nonce: number }>({ nonce: 0 });
   const prefillTicket = (price: number, side?: OrderSide) =>
     setPrefill((p) => ({ price, side, nonce: p.nonce + 1 }));
@@ -165,26 +219,48 @@ export default function SymbolDetailPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Order Book</CardTitle>
-              {stream.live && (
-                <Badge
-                  variant="outline"
-                  className="gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-base">Order Book</CardTitle>
+                {stream.live && (
+                  <Badge
+                    variant="outline"
+                    className="gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+                  >
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/70" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                    </span>
+                    LIVE
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={bookStyle === "ladder" ? "default" : "outline"}
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setBookStyle("ladder")}
                 >
-                  <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/70" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                  </span>
-                  LIVE
-                </Badge>
-              )}
+                  Ladder
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={bookStyle === "columns" ? "default" : "outline"}
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setBookStyle("columns")}
+                >
+                  Columns
+                </Button>
+              </div>
             </div>
             <CardDescription>Best bid/ask ladder with depth.</CardDescription>
           </CardHeader>
           <CardContent>
             {book.isLoading && !liveBook ? (
               <Skeleton className="h-64 w-full" />
-            ) : (
+            ) : bookStyle === "ladder" ? (
               <div>
                 <div className="flex justify-between px-2 pb-1 text-xs uppercase text-muted-foreground">
                   <span>Price</span>
@@ -205,6 +281,48 @@ export default function SymbolDetailPage() {
                   {bids.map((l, i) => (
                     <DepthRow key={"b" + i} level={l} side="bid" maxQty={maxQty} scaler={scaler} onPick={prefillTicket} />
                   ))}
+                </div>
+                {asks.length === 0 && bids.length === 0 && (
+                  <p className="py-4 text-center text-sm text-muted-foreground">
+                    No book data.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div>
+                <div className="mb-1 grid grid-cols-2 text-xs uppercase text-muted-foreground">
+                  <div className="flex justify-between px-2 text-emerald-600 dark:text-emerald-400">
+                    <span>Qty</span>
+                    <span>Bid</span>
+                  </div>
+                  <div className="flex justify-between px-2 text-rose-600 dark:text-rose-400">
+                    <span>Ask</span>
+                    <span>Qty</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 divide-x">
+                  <div className="flex flex-col">
+                    {bids.map((l, i) => (
+                      <ColumnRow key={"cb" + i} level={l} side="bid" maxQty={maxQty} scaler={scaler} onPick={prefillTicket} />
+                    ))}
+                    {bids.length === 0 && (
+                      <p className="py-4 text-center text-sm text-muted-foreground">No bids.</p>
+                    )}
+                  </div>
+                  <div className="flex flex-col">
+                    {asks.map((l, i) => (
+                      <ColumnRow key={"ca" + i} level={l} side="ask" maxQty={maxQty} scaler={scaler} onPick={prefillTicket} />
+                    ))}
+                    {asks.length === 0 && (
+                      <p className="py-4 text-center text-sm text-muted-foreground">No asks.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-1 flex items-center justify-center gap-2 border-t px-2 py-1 text-sm font-medium">
+                  <span className="text-muted-foreground">Spread</span>
+                  <span className="tabular-nums">
+                    {spread != null ? formatPrice(spread, scaler) : "-"}
+                  </span>
                 </div>
                 {asks.length === 0 && bids.length === 0 && (
                   <p className="py-4 text-center text-sm text-muted-foreground">
