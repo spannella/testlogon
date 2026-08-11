@@ -18,6 +18,7 @@ import {
 import { isAck, ackMessage, impliedYes, marginUsedFraction } from "@/api/endpoints/trading";
 import type { OrderSide, Fill, PlaceOrderRequest } from "@/api/endpoints/trading";
 import { formatPrice, formatQty, formatTimeNs } from "./format";
+import { vibrate, notify, ensureNotifyPermission } from "@/lib/tradeFeedback";
 
 type OrderType = "limit" | "market" | "stop" | "stop_limit" | "take_profit" | "quote" | "oto";
 type Section = "trade" | "positions" | "orders" | "fills";
@@ -180,10 +181,16 @@ export function TradeTicket({
   useEffect(() => {
     const ev = exec.data;
     if (!ev) return;
-    if (ev.fills && ev.fills.length) setFills((f) => [...ev.fills!, ...f].slice(0, 100));
+    if (ev.fills && ev.fills.length) {
+      setFills((f) => [...ev.fills!, ...f].slice(0, 100));
+      vibrate("success");
+      notify("Fill", `Filled ${ev.fills.reduce((sum, x) => sum + (x.qty ?? 0), 0)} on a resting order`);
+    }
     const triggers = (ev.triggered?.length ?? 0) + (ev.oto_triggered?.length ?? 0);
     if (triggers > 0) {
       setMsg({ text: `${triggers} algo/OTO trigger(s)`, error: false });
+      notify("Algo/OTO triggered", `${triggers} order(s) fired`);
+      vibrate("success");
       account.refetch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -207,9 +214,11 @@ export function TradeTicket({
     if (!avail || !refPrice) return;
     const max = Math.floor(avail / refPrice);
     setQty(String(Math.max(pct > 0 ? 1 : 0, Math.floor((max * pct) / 100))));
+    vibrate("tick");
     resetArmed();
   };
   const stepField = (setter: SetStr, val: string, delta: number) => {
+    vibrate("tick");
     const n = Math.max(0, (parseInt(val) || 0) + delta);
     setter(n === 0 ? "" : String(n));
     resetArmed();
@@ -276,17 +285,27 @@ export function TradeTicket({
           ]);
         }
         setMsg({ text: opts.okMsg(a), error: false });
+        if (filled > 0) {
+          vibrate("success");
+          notify("Order filled", `Filled ${filled}`);
+        } else {
+          vibrate("tick");
+        }
         account.refetch();
       } else {
+        vibrate("error");
         setMsg({ text: ackMessage(a) ?? "Rejected", error: true });
       }
     } catch (e) {
+      vibrate("error");
       setMsg({ text: (e as Error)?.message ?? "Network error", error: true });
     }
   }
 
   function submit() {
+    ensureNotifyPermission();
     if (orderType === "market" && !oneTap && armed !== "market") {
+      vibrate("warn");
       setArmed("market");
       setMsg({ text: "Tap Confirm to send the market order", error: false });
       return;
@@ -362,6 +381,7 @@ export function TradeTicket({
   function closePosition() {
     if (!posQty) return;
     if (!oneTap && armed !== "close") {
+      vibrate("warn");
       setArmed("close");
       setMsg({ text: "Tap Confirm close to flatten the position", error: false });
       return;
@@ -405,6 +425,7 @@ export function TradeTicket({
     depositM.mutate(amt, {
       onSuccess: (a) => {
         setDepositAmt("");
+        vibrate(isAck(a) ? "success" : "error");
         setMsg({ text: isAck(a) ? `Deposited (balance ${a.new_balance})` : ackMessage(a) ?? "Deposit rejected", error: !isAck(a) });
         account.refetch();
       },
@@ -547,6 +568,7 @@ export function TradeTicket({
                   key={t.id}
                   active={orderType === t.id}
                   onClick={() => {
+                    vibrate("tick");
                     setOrderType(t.id);
                     resetArmed();
                   }}
@@ -565,6 +587,7 @@ export function TradeTicket({
                   variant={side === "buy" ? "default" : "outline"}
                   className={cn("flex-1", side === "buy" && "bg-emerald-600 hover:bg-emerald-600/90")}
                   onClick={() => {
+                    vibrate("tick");
                     setSide("buy");
                     resetArmed();
                   }}
@@ -576,6 +599,7 @@ export function TradeTicket({
                   variant={side === "sell" ? "default" : "outline"}
                   className={cn("flex-1", side === "sell" && "bg-rose-600 hover:bg-rose-600/90")}
                   onClick={() => {
+                    vibrate("tick");
                     setSide("sell");
                     resetArmed();
                   }}
