@@ -60,6 +60,10 @@ fun TradeTicket(
     }
 
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("trade_ticket")) {
+        state.pm?.let {
+            PmBanner(it, lastPrice)
+            Spacer(Modifier.height(10.dp))
+        }
         state.account?.let {
             AccountStrip(it)
             Spacer(Modifier.height(10.dp))
@@ -114,9 +118,11 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: Tra
     Spacer(Modifier.height(10.dp))
 
     if (state.orderType != OrderType.QUOTE && state.orderType != OrderType.FUNDING) {
+        val buyLabel = if (state.pm != null) "YES" else "Buy"
+        val sellLabel = if (state.pm != null) "NO" else "Sell"
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SideButton("Buy", state.side == OrderSide.BUY, MarketColors.Up, Modifier.weight(1f)) { viewModel.setSide(OrderSide.BUY) }
-            SideButton("Sell", state.side == OrderSide.SELL, MarketColors.Down, Modifier.weight(1f)) { viewModel.setSide(OrderSide.SELL) }
+            SideButton(buyLabel, state.side == OrderSide.BUY, MarketColors.Up, Modifier.weight(1f)) { viewModel.setSide(OrderSide.BUY) }
+            SideButton(sellLabel, state.side == OrderSide.SELL, MarketColors.Down, Modifier.weight(1f)) { viewModel.setSide(OrderSide.SELL) }
         }
         Spacer(Modifier.height(10.dp))
     }
@@ -702,6 +708,53 @@ private fun submitLabel(state: TradingUiState): String {
         OrderType.OTO -> "Place OTO ($side parent)"
         OrderType.OCO -> "Place OCO ($side / ${if (state.side == OrderSide.BUY) "Sell" else "Buy"})"
         OrderType.FUNDING -> if (state.fundingBorrow) "Borrow" else "Lend"
+    }
+}
+
+@Composable
+private fun PmBanner(pm: com.testlogon.android.data.exchange.PmState, lastPrice: Long?) {
+    val resolved = pm.resolved
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (resolved) MarketColors.SurfaceAlt else MarketColors.Surface)
+            .border(1.dp, if (resolved) MarketColors.Border else MarketColors.Accent, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Prediction market", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text("payout ${fmt(pm.faceValue.toDouble())}", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(6.dp))
+        if (resolved) {
+            val yesWon = pm.outcomeYes == true
+            Text(
+                text = "Resolved: ${if (yesWon) "YES" else "NO"} - " + if (yesWon) "YES pays ${fmt(pm.faceValue.toDouble())}" else "YES pays 0",
+                color = if (yesWon) MarketColors.Up else MarketColors.Down,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+            )
+        } else {
+            val prob = pm.impliedYes(lastPrice)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Implied YES", color = MarketColors.TextSecondary, fontSize = 11.sp)
+                Text(prob?.let { "${(it * 100f).toInt()}%" } ?: "--", color = MarketColors.Up, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(MarketColors.Down.copy(alpha = 0.35f))) {
+                val f = (prob ?: 0f).coerceIn(0.001f, 1f)
+                Box(modifier = Modifier.weight(f).fillMaxHeight().background(MarketColors.Up))
+                Box(modifier = Modifier.weight((1f - f).coerceAtLeast(0.001f)))
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Buy YES to bet it happens, Buy NO to bet against; each YES contract pays ${fmt(pm.faceValue.toDouble())} if it resolves YES.",
+                color = MarketColors.TextFaint,
+                fontSize = 10.sp,
+            )
+        }
     }
 }
 

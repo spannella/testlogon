@@ -41,7 +41,18 @@ class TradingViewModel @Inject constructor(
     init {
         refreshAccount()
         pollAccount()
+        refreshPm()
         if (TradingFeatures.SPOT_ENABLED) refreshSpot()
+    }
+
+    /** Detect + track a binary prediction market on this symbol (404 -> not a PM -> stays null). */
+    fun refreshPm() {
+        viewModelScope.launch {
+            when (val r = repository.pmState(symbolId)) {
+                is ApiResult.Success -> _uiState.update { it.copy(pm = if (r.data.isBinary) r.data else null) }
+                else -> Unit
+            }
+        }
     }
 
     /** Keep the wallet / margin / position fresh while the VM is alive. */
@@ -51,6 +62,7 @@ class TradingViewModel @Inject constructor(
                 delay(5_000L)
                 refreshAccount()
                 drainExecEvents()
+                if (_uiState.value.pm != null) refreshPm()   // catch resolution while it's an active PM
             }
         }
     }

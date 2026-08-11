@@ -93,6 +93,7 @@ data class TradingUiState(
     val section: TicketSection = TicketSection.TRADE,
     val armed: String? = null,        // "market" | "close" -> a confirm is pending (skipped when oneTap)
     val oneTap: Boolean = false,      // when true, market/close fire without a confirm step
+    val pm: com.testlogon.android.data.exchange.PmState? = null,   // set when this symbol is a binary prediction market
 ) {
     val isAmending: Boolean get() = amendingClordid != null
     val depositLong: Long? get() = depositText.toLongOrNull()
