@@ -30,6 +30,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -119,6 +120,9 @@ object NetworkModule {
         .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        // cpp edge HTTP/2 resets concurrent streams under the messaging poll+SSE load, which
+        // cancelled the login POST stream. Pin the app data plane to HTTP/1.1 (exchange already does).
+        .protocols(listOf(Protocol.HTTP_1_1))
         .cookieJar(cookieJar)
         // Host selection first (so downstream sees the effective URL), then delegate re-routing (so the
         // rewritten messaging path is the one CSRF/retry/logging observe), then CSRF, then retry, and
