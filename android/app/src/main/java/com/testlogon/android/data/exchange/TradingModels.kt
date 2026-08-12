@@ -239,3 +239,31 @@ fun SpotDepositAckDto.toDomain(): SpotDepositAck = SpotDepositAck(
     availableBalance = availableBalance ?: 0L,
     message = detail ?: error,
 )
+
+/**
+ * A binary prediction market: the symbol trades in [0, faceValue] where price = implied YES
+ * probability x faceValue. YES = buy/long (pays faceValue on YES), NO = sell/short.
+ */
+data class PmState(
+    val symbolId: Int,
+    val isBinary: Boolean,
+    val resolved: Boolean,
+    val outcomeYes: Boolean?,   // when resolved: true = YES won, false = NO
+    val faceValue: Long,
+    val resolverId: String,
+) {
+    /** Implied YES probability (0..1) at [price], or null when faceValue is unknown. */
+    fun impliedYes(price: Long?): Float? {
+        if (faceValue <= 0 || price == null) return null
+        return (price.toFloat() / faceValue.toFloat()).coerceIn(0f, 1f)
+    }
+}
+
+fun PmStateDto.toDomain(): PmState = PmState(
+    symbolId = symbolid ?: 0,
+    isBinary = isBinary == true,
+    resolved = state == "resolved",
+    outcomeYes = if (state == "resolved") (outcome ?: 0) == 1 else null,
+    faceValue = faceValue ?: 0L,
+    resolverId = resolverId.orEmpty(),
+)

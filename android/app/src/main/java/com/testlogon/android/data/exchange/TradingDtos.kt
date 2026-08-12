@@ -273,3 +273,18 @@ data class SpotDepositAckDto(
     val detail: String? = null,
     val error: String? = null,
 )
+
+/** Binary prediction-market state (`GET /me/pm_state`). state = "trading" | "resolved". */
+@JsonClass(generateAdapter = true)
+data class PmStateDto(
+    val symbolid: Int? = null,
+    @Json(name = "is_binary") val isBinary: Boolean? = null,
+    val state: String? = null,
+    val outcome: Int? = null,
+    @Json(name = "face_value") val faceValue: Long? = null,
+    @Json(name = "resolve_ts") val resolveTs: Long? = null,
+    @Json(name = "resolver_id") val resolverId: String? = null,
+    val status: String? = null,
+    val error: String? = null,
+    val detail: String? = null,
+)

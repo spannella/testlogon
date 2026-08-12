@@ -6,6 +6,7 @@ import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
  * Retrofit interface for the trader order-entry (`me/ (matching-engine)`) endpoints. Write-only order
@@ -56,6 +57,10 @@ interface TradingApi {
     /** Drain this session's async exec events (algo/oto triggers + fills that landed after placement). */
     @GET("me/algo/events")
     suspend fun algoEvents(): ExecEventsDto
+
+    /** Binary prediction-market state for a symbol (404 when the symbol is not a configured PM). */
+    @GET("me/pm_state")
+    suspend fun getPmState(@Query("symbolid") symbolId: Int): PmStateDto
 
     // ---- Pre-staged (behind TradingFeatures flags); align field names with the backend port. ----
 

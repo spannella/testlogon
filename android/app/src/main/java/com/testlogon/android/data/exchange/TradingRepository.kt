@@ -36,6 +36,7 @@ interface TradingRepository {
     suspend fun cancelOrder(clordid: String): ApiResult<CancelAck>
     suspend fun marginAccount(): ApiResult<MarginAccount>
     suspend fun execEvents(): ApiResult<ExecEvents>
+    suspend fun pmState(symbolId: Int): ApiResult<PmState>
     // Pre-staged (behind TradingFeatures flags):
     suspend fun placeOco(symbolId: Int, aSide: OrderSide, aPrice: Long, aQty: Long, bSide: OrderSide, bPrice: Long, bQty: Long): ApiResult<OcoAck>
     suspend fun placeFunding(rateBps: Long, qty: Long, isBorrow: Boolean, durationSeconds: Long?, symbolId: Int?): ApiResult<FundingAck>
@@ -91,6 +92,9 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun execEvents(): ApiResult<ExecEvents> =
         withContext(io) { apiCall { api.algoEvents().toDomain() } }
+
+    override suspend fun pmState(symbolId: Int): ApiResult<PmState> =
+        withContext(io) { apiCall { api.getPmState(symbolId).toDomain() } }
 
     override suspend fun placeOco(symbolId: Int, aSide: OrderSide, aPrice: Long, aQty: Long, bSide: OrderSide, bPrice: Long, bQty: Long): ApiResult<OcoAck> =
         withContext(io) {

@@ -3,6 +3,7 @@
 
     <!-- AND-107: runtime notification permission (requested at runtime on Android 13+ / API 33). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Contacts Feature 2: read the device address book to privacy-safely match contacts
          against platform users. Requested at RUNTIME behind an explicit "Find people you know"

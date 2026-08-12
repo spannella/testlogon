@@ -35,6 +35,14 @@ fun OrderType.isAvailable(): Boolean = when (this) {
     else -> true
 }
 
+/** The order-tab is split into these sections so entry isn't buried under positions/orders/fills. */
+enum class TicketSection(val label: String) {
+    TRADE("Trade"),
+    POSITIONS("Positions"),
+    ORDERS("Orders"),
+    FILLS("Fills"),
+}
+
 /** A working order this session placed (the engine has no server-side list, so we track our own). */
 data class WorkingOrder(
     val clordid: String,
@@ -82,6 +90,10 @@ data class TradingUiState(
     val spotBalance: SpotBalance? = null,
     val spotAssetText: String = "",
     val spotAmountText: String = "",
+    val section: TicketSection = TicketSection.TRADE,
+    val armed: String? = null,        // "market" | "close" -> a confirm is pending (skipped when oneTap)
+    val oneTap: Boolean = false,      // when true, market/close fire without a confirm step
+    val pm: com.testlogon.android.data.exchange.PmState? = null,   // set when this symbol is a binary prediction market
 ) {
     val isAmending: Boolean get() = amendingClordid != null
     val depositLong: Long? get() = depositText.toLongOrNull()
@@ -107,6 +119,17 @@ data class TradingUiState(
     val fundingDurationLong: Long? get() = fundingDurationText.toLongOrNull()
     val spotAssetInt: Int? get() = spotAssetText.toIntOrNull()
     val spotAmountLong: Long? get() = spotAmountText.toLongOrNull()
+
+    /** A short prompt for what's missing, shown when submit is disabled (crisper than a dead button). */
+    val entryHint: String? get() = if (placing || canSubmit) null else when (orderType) {
+        OrderType.LIMIT -> "Enter price and quantity"
+        OrderType.MARKET -> "Enter a quantity"
+        OrderType.STOP, OrderType.TAKE_PROFIT -> "Enter trigger price and quantity"
+        OrderType.STOP_LIMIT -> "Enter stop, limit and quantity"
+        OrderType.QUOTE -> "Enter bid, ask and quantity"
+        OrderType.OTO, OrderType.OCO -> "Enter both legs' price and quantity"
+        OrderType.FUNDING -> "Enter rate and quantity"
+    }
 
     /** Whether the current order-type has all the fields it needs to submit. */
     val canSubmit: Boolean get() = !placing && when (orderType) {
