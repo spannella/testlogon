@@ -29,7 +29,7 @@ class VodAdSupportedRepositoryContractTest {
 
     private fun repo(): VodAdSupportedRepositoryImpl {
         val api = backend.retrofit(moshi).create(VodAdSupportedApi::class.java)
-        return VodAdSupportedRepositoryImpl(api, ApiErrorParser(moshi))
+        return VodAdSupportedRepositoryImpl(api, ApiErrorParser(moshi), VodAdBaseUrlProvider { "http://localhost/" })
     }
 
     @Test
@@ -57,6 +57,9 @@ class VodAdSupportedRepositoryContractTest {
         assertEquals(2, s.adSchedule.size)
         assertEquals(0L, s.adSchedule[0].positionMs)        // pre_roll
         assertEquals(900_000L, s.adSchedule[1].positionMs)  // 900s -> ms
+        // AND-194: relative creative URLs are absolutized against the runtime base URL.
+        assertEquals("http://localhost/a.m3u8", s.adSchedule[0].creativeUrl)
+        assertEquals("http://localhost/b.m3u8", s.adSchedule[1].creativeUrl)
         assertFalse(s.playbackUnlocked)
 
         val req = backend.takeRequest()

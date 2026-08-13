@@ -37,22 +37,32 @@ interface VodAdSupportedRepository {
     ): ApiResult<AdBreakReport>
 }
 
+/**
+ * AND-194 — supplies the runtime backend base URL (normalized to end with '/') so relative ad
+ * creative URLs can be absolutized before reaching ExoPlayer. Behind a fun interface so the
+ * repository stays JVM-unit-testable without an Android Context (SettingsStore needs one).
+ */
+fun interface VodAdBaseUrlProvider {
+    fun baseUrl(): String
+}
+
 @Singleton
 class VodAdSupportedRepositoryImpl @Inject constructor(
     private val api: VodAdSupportedApi,
     private val errorParser: ApiErrorParser,
+    private val baseUrlProvider: VodAdBaseUrlProvider,
 ) : VodAdSupportedRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
 
     override suspend fun getSession(videoId: String): ApiResult<AdSupportedSession> = withContext(io) {
-        call { api.getSession(videoId) }.map { it.toDomain() }
+        call { api.getSession(videoId) }.map { it.toDomain(baseUrlProvider.baseUrl()) }
     }
 
     override suspend fun start(videoId: String, resumePositionSeconds: Int): ApiResult<AdSupportedSession> =
         withContext(io) {
             call { api.start(videoId, VodAdSupportedStartInDto(resumePositionSeconds)) }
-                .map { it.toDomain() }
+                .map { it.toDomain(baseUrlProvider.baseUrl()) }
         }
 
     override suspend fun reportBreak(

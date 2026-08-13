@@ -114,13 +114,29 @@ class AdBreakScheduler(initialBreaks: List<AdBreak>) {
 
 // ---- Mappers (seconds -> millis at this boundary) ----
 
-fun VodAdBreakDto.toDomain(): AdBreak = AdBreak(
+/**
+ * AND-194 — resolve a possibly-relative ad creative URL against the runtime backend [baseUrl]
+ * (normalized to end with '/'). Backends serve the ad creative as a site-relative path (e.g.
+ * "/static/ads/placeholder_preroll.mp4"); handed to ExoPlayer verbatim it resolves to a bogus local
+ * file:// URI (FileNotFoundException) and blocks playback. Absolute (http/https/data) URLs and a
+ * blank base pass through unchanged, so the mappers stay a no-op in pure unit tests.
+ */
+internal fun resolveCreativeUrl(baseUrl: String, url: String): String {
+    if (url.isBlank() || baseUrl.isBlank()) return url
+    val lower = url.lowercase()
+    if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("data:")) return url
+    val base = baseUrl.trimEnd('/')
+    val path = if (url.startsWith("/")) url else "/$url"
+    return base + path
+}
+
+fun VodAdBreakDto.toDomain(baseUrl: String = ""): AdBreak = AdBreak(
     breakId = breakId,
     slotType = slotType,
     positionMs = positionSeconds * 1000L,
     durationMs = durationSeconds * 1000L,
     creativeId = creativeId,
-    creativeUrl = creativeUrl,
+    creativeUrl = resolveCreativeUrl(baseUrl, creativeUrl),
     creativeType = creativeType,
     skipAfterMs = skipAfterSeconds * 1000L,
     slotIndex = slotIndex,
@@ -129,12 +145,12 @@ fun VodAdBreakDto.toDomain(): AdBreak = AdBreak(
     completed = completed,
 )
 
-fun VodAdSupportedStartOutDto.toDomain(): AdSupportedSession = AdSupportedSession(
+fun VodAdSupportedStartOutDto.toDomain(baseUrl: String = ""): AdSupportedSession = AdSupportedSession(
     sessionId = sessionId,
     videoId = videoId,
     status = status,
     playbackUrl = playbackUrl,
-    adSchedule = adSchedule.map { it.toDomain() },
+    adSchedule = adSchedule.map { it.toDomain(baseUrl) },
     breaksTotal = breaksTotal,
     breaksCompleted = breaksCompleted,
     nextRequiredBreakId = nextRequiredBreakId,
@@ -143,12 +159,12 @@ fun VodAdSupportedStartOutDto.toDomain(): AdSupportedSession = AdSupportedSessio
     tokenExpiresAt = tokenExpiresAt,
 )
 
-fun VodAdSupportedSessionOutDto.toDomain(): AdSupportedSession = AdSupportedSession(
+fun VodAdSupportedSessionOutDto.toDomain(baseUrl: String = ""): AdSupportedSession = AdSupportedSession(
     sessionId = sessionId,
     videoId = videoId,
     status = status,
     playbackUrl = "", // session read has no playback grant
-    adSchedule = adSchedule.map { it.toDomain() },
+    adSchedule = adSchedule.map { it.toDomain(baseUrl) },
     breaksTotal = breaksTotal,
     breaksCompleted = breaksCompleted,
     nextRequiredBreakId = nextRequiredBreakId,
