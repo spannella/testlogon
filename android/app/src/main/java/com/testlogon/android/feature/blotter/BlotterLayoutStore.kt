@@ -16,6 +16,7 @@ data class BlotterLayout(
     val sortDir: BlotterSortDir = BlotterSortDir.ASC,
     val groupBy: BlotterGroupKey? = null,
     val hiddenColumns: Set<BlotterColumn> = emptySet(),
+    val columnOrder: List<BlotterColumn> = BlotterColumn.entries.toList(),
     val filters: BlotterFilters = BlotterFilters(),
 )
 
@@ -42,6 +43,9 @@ class BlotterLayoutStore @Inject constructor(
                 hiddenColumns = decodeEnumSet(prefs.getString(KEY_HIDDEN, null)) { name ->
                     enumOrNull<BlotterColumn>(name)
                 },
+                columnOrder = normalizeColumnOrder(
+                    decodeEnumList(prefs.getString(KEY_COL_ORDER, null)) { enumOrNull<BlotterColumn>(it) },
+                ),
                 filters = BlotterFilters(
                     search = prefs.getString(KEY_SEARCH, "") ?: "",
                     symbols = decodeStringSet(prefs.getString(KEY_F_SYM, null)),
@@ -67,6 +71,7 @@ class BlotterLayoutStore @Inject constructor(
                 .putString(KEY_SORT_DIR, layout.sortDir.name)
                 .putString(KEY_GROUP, layout.groupBy?.name)
                 .putString(KEY_HIDDEN, layout.hiddenColumns.joinToString(SEP) { it.name })
+                .putString(KEY_COL_ORDER, layout.columnOrder.joinToString(SEP) { it.name })
                 .putString(KEY_SEARCH, layout.filters.search)
                 .putString(KEY_F_SYM, layout.filters.symbols.joinToString(SEP))
                 .putString(KEY_F_SIDE, layout.filters.sides.joinToString(SEP) { it.name })
@@ -103,6 +108,16 @@ class BlotterLayoutStore @Inject constructor(
         }.toSet()
     }
 
+    // Order-preserving list variant of decodeEnumSet (duplicates are dropped downstream by
+    // normalizeColumnOrder). Used for the persisted column order so drag order round-trips.
+    private fun <E> decodeEnumList(csv: String?, mapper: (String) -> E?): List<E> {
+        if (csv.isNullOrBlank()) return emptyList()
+        return csv.split(SEP).mapNotNull { token ->
+            val t = token.trim()
+            if (t.isEmpty()) null else mapper(t)
+        }
+    }
+
     private companion object {
         const val PREFS_NAME = "blotter_layout"
         const val SEP = ","
@@ -110,6 +125,7 @@ class BlotterLayoutStore @Inject constructor(
         const val KEY_SORT_DIR = "sort_dir"
         const val KEY_GROUP = "group_by"
         const val KEY_HIDDEN = "hidden_cols"
+        const val KEY_COL_ORDER = "col_order"
         const val KEY_SEARCH = "f_search"
         const val KEY_F_SYM = "f_sym"
         const val KEY_F_SIDE = "f_side"

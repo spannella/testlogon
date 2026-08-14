@@ -160,3 +160,20 @@ data class BlotterFilters(
 
     val isActive: Boolean get() = activeCount > 0
 }
+
+// ---- Column ordering (drag-to-reorder) -------------------------------------
+
+/** The default Orders/Fills column order before the user reorders them. */
+val DEFAULT_COLUMN_ORDER: List<BlotterColumn> = BlotterColumn.entries.toList()
+
+/**
+ * Return a COMPLETE, de-duplicated column order derived from a (possibly partial or stale) saved
+ * order: the saved columns first (in saved order, duplicates dropped), then any columns missing
+ * from the save appended in canonical [BlotterColumn.entries] order. This guarantees no column can
+ * silently vanish from the header/cells if a persisted order pre-dates a newly added column.
+ */
+fun normalizeColumnOrder(saved: List<BlotterColumn>): List<BlotterColumn> {
+    val seen = saved.distinct()
+    val missing = BlotterColumn.entries.filter { it !in seen }
+    return seen + missing
+}

@@ -37,16 +37,18 @@ data class BlotterUiState(
     val sortColumn: BlotterSortColumn = BlotterSortColumn.SYM,
     val sortDir: BlotterSortDir = BlotterSortDir.ASC,
     val hiddenColumns: Set<BlotterColumn> = defaultHiddenColumns(),
+    val columnOrder: List<BlotterColumn> = BlotterColumn.entries.toList(),
     val filters: BlotterFilters = BlotterFilters(),
     val groupBy: BlotterGroupKey? = null,
     val collapsedGroups: Set<String> = emptySet(),
+    val expandedRows: Set<String> = emptySet(),
 ) {
     /** Orders that have at least one execution (the Fills tab). */
     val fills: List<BlotterOrder> get() = orders.filter { it.cumQty > 0.0 }
 
     /** The Orders/Fills columns currently shown (descriptor order, minus hidden). */
     val visibleColumns: List<BlotterColumn>
-        get() = BlotterColumn.entries.filter { it !in hiddenColumns }
+        get() = columnOrder.filter { it !in hiddenColumns }
 
     /** Filtered + grouped display rows for the Orders tab. */
     val ordersRows: List<BlotterRow> get() = buildRows(applyFilters(orders))
@@ -164,6 +166,7 @@ class TradingBlotterViewModel @Inject constructor(
                 sortDir = saved.sortDir,
                 groupBy = saved.groupBy,
                 hiddenColumns = saved.hiddenColumns,
+                columnOrder = normalizeColumnOrder(saved.columnOrder),
                 filters = saved.filters,
                 orders = sortOrders(s.orders, saved.sortColumn, saved.sortDir),
             )
@@ -177,6 +180,7 @@ class TradingBlotterViewModel @Inject constructor(
                 sortDir = s.sortDir,
                 groupBy = s.groupBy,
                 hiddenColumns = s.hiddenColumns,
+                columnOrder = s.columnOrder,
                 filters = s.filters,
             ),
         )
@@ -215,6 +219,22 @@ class TradingBlotterViewModel @Inject constructor(
         persist(_uiState.value)
     }
 
+    /**
+     * Reorder the FULL column list by moving the column at [from] to index [to]. The move operates
+     * over the complete columnOrder (not just the visible subset) so hidden columns keep a stable
+     * relative position, then normalizes to guarantee completeness and persists.
+     */
+    fun onReorderColumn(from: Int, to: Int) {
+        _uiState.update { s ->
+            val order = s.columnOrder.toMutableList()
+            if (from !in order.indices || to !in order.indices || from == to) return@update s
+            val moved = order.removeAt(from)
+            order.add(to, moved)
+            s.copy(columnOrder = normalizeColumnOrder(order))
+        }
+        persist(_uiState.value)
+    }
+
     // ---- Filters + search --------------------------------------------------
 
     fun onSearchChanged(query: String) {
@@ -246,6 +266,41 @@ class TradingBlotterViewModel @Inject constructor(
             s.copy(collapsedGroups = c)
         }
         // Collapse state is transient view detail; intentionally not persisted.
+    }
+
+    // ---- Row master-detail -------------------------------------------------
+
+    /** Toggle the inline detail panel for a row (keyed by clord). */
+    fun onToggleRowExpanded(clord: String) {
+        _uiState.update { s ->
+            val e = s.expandedRows.toMutableSet()
+            if (clord in e) e.remove(clord) else e.add(clord)
+            s.copy(expandedRows = e)
+        }
+        // Row-expand state is transient view detail; intentionally not persisted.
+    }
+
+    // ---- Order actions -----------------------------------------------------
+
+    /**
+     * Cancel a working (LIVE/PARTIAL) order in place: mutate the stored source-of-truth order to
+     * status=CANCELLED, leaves=0.0 (mock; no backend). FILLED / already-CANCELLED rows are ignored.
+     * The row is NOT re-sorted (so it does not jump) and layout is NOT persisted (cancellation is
+     * order data, not layout). Derived fills/positions recompute automatically; the 1s ticker never
+     * resurrects it (it only advances working rows, and advanceFill early-returns on terminal state).
+     */
+    fun onCancelOrder(clord: String) {
+        _uiState.update { s ->
+            s.copy(
+                orders = s.orders.map { o ->
+                    if (o.clord == clord && o.status.isWorking()) {
+                        o.copy(status = BlotterStatus.CANCELLED, leaves = 0.0)
+                    } else {
+                        o
+                    }
+                },
+            )
+        }
     }
 
     private fun sortOrders(
@@ -283,7 +338,7 @@ class TradingBlotterViewModel @Inject constructor(
                         val driftPct = (rng.nextDouble() - 0.5) * 0.004 // +/- 0.2%
                         val newPx = roundPx(o.px * (1.0 + driftPct), o.sym)
                         var updated = o.copy(px = newPx)
-                        val working = o.status == BlotterStatus.LIVE || o.status == BlotterStatus.PARTIAL
+                        val working = o.status.isWorking()
                         if (working && rng.nextInt(100) < 25) {
                             updated = advanceFill(updated, newPx)
                         }
@@ -297,6 +352,8 @@ class TradingBlotterViewModel @Inject constructor(
 
     /** Advance a working order by a random partial (may complete it). */
     private fun advanceFill(o: BlotterOrder, mark: Double): BlotterOrder {
+        // Never advance a terminal row (CANCELLED/FILLED): keep leaves as-is and status unchanged.
+        if (!o.status.isWorking()) return o
         val remaining = o.qty - o.cumQty
         if (remaining <= 0.0) return o
         val step = minOf(remaining, remaining * rng.nextDouble(0.2, 1.0))
@@ -375,3 +432,8 @@ class TradingBlotterViewModel @Inject constructor(
         )
     }
 }
+
+
+/** Whether an order is still working (open) and therefore cancelable / tickable. */
+private fun BlotterStatus.isWorking(): Boolean =
+    this == BlotterStatus.LIVE || this == BlotterStatus.PARTIAL
