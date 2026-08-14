@@ -97,6 +97,9 @@ object MoreRoutes {
     // AND-332: the server file manager (path-based browse + upload/download/share/Drive-import).
     const val FILES = FilesDest.ROUTE
 
+    // Trading Blotter: native orders/fills/positions blotter (web parity). Sample data only.
+    const val TRADING_BLOTTER = BlotterDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
@@ -548,6 +551,7 @@ object MoreRoutes {
             SELLER_ORDERS,
             SELLER_SALES,
             FILES,
+            TRADING_BLOTTER,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,

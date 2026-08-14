@@ -9,6 +9,7 @@ import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.CandlestickChart
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Copyright
 import androidx.compose.material.icons.outlined.ReceiptLong
@@ -942,6 +943,14 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_files,
             icon = Icons.Outlined.FolderOpen,
             route = MoreRoutes.FILES,
+            hub = MoreHub.STUDIO,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "trading_blotter",
+            labelRes = R.string.more_entry_trading_blotter,
+            icon = Icons.Outlined.CandlestickChart,
+            route = MoreRoutes.TRADING_BLOTTER,
             hub = MoreHub.STUDIO,
             section = MoreSection.APP,
         ),
