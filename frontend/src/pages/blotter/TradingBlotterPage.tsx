@@ -47,7 +47,21 @@ function makeOrder(): Order {
   };
 }
 
+const MOBILE_IDS = new Set(["sym", "side", "px", "qty", "cumQty", "status"]);
+const mobileOrderColumns = orderColumns.filter((c) => MOBILE_IDS.has((c as any).id));
+function useIsMobile(bp = 767): boolean {
+  const [m, setM] = useState(() => typeof window !== "undefined" && window.matchMedia(`(max-width: ${bp}px)`).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const h = () => setM(mq.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, [bp]);
+  return m;
+}
+
 export default function TradingBlotterPage() {
+  const isMobile = useIsMobile();
   const [orders, setOrders] = useState<Order[]>(() => Array.from({ length: 600 }, makeOrder));
   const [touched, setTouched] = useState<Set<string>>(new Set());
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,7 +109,7 @@ export default function TradingBlotterPage() {
         </span>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <Blotter data={orders} columns={orderColumns} touched={touched} storageKeyPrefix="tl-blotter" onCancel={cancel} />
+        <Blotter data={orders} columns={isMobile ? mobileOrderColumns : orderColumns} touched={touched} storageKeyPrefix="tl-blotter" onCancel={cancel} />
       </div>
     </div>
   );

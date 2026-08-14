@@ -58,13 +58,31 @@ const posColumns: ColumnDef<any>[] = [
   { id: "unrealized", header: "uPnL", accessorKey: "unrealized", size: 110 },
 ];
 
+// Compact column sets for narrow (mobile) screens — fewer columns so rows are
+// readable without horizontal scrolling.
+const MOBILE_ORDER_IDS = new Set(["sym", "side", "px", "qty", "cumQty", "status"]);
+const MOBILE_FILL_IDS = new Set(["sym", "side", "px", "qty", "avgPx", "status"]);
+const mobileOrderColumns = orderColumns.filter((c) => MOBILE_ORDER_IDS.has((c as any).id));
+const mobileFillsColumns = fillsColumns.filter((c) => MOBILE_FILL_IDS.has((c as any).id));
+
+function useIsMobile(bp = 767): boolean {
+  const [m, setM] = useState(() => typeof window !== "undefined" && window.matchMedia(`(max-width: ${bp}px)`).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const h = () => setM(mq.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, [bp]);
+  return m;
+}
+
 const LAYOUT_KEY = "testlogon.trading.dock.v1";
-interface Ctx { orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; }
+interface Ctx { orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; isMobile: boolean; }
 const WsCtx = createContext<Ctx | null>(null);
 const useWs = (): Ctx => { const c = useContext(WsCtx); if (!c) throw new Error("WsCtx missing"); return c; };
 
-function OrdersPanel() { const c = useWs(); return <div className="tl-panel-body"><Blotter data={c.orders} columns={orderColumns} touched={c.touched} storageKeyPrefix="tl-ws-orders" onCancel={c.onCancel} /></div>; }
-function FillsPanel() { const c = useWs(); const fills = useMemo(() => c.orders.filter((o) => o.cumQty > 0), [c.orders]); return <div className="tl-panel-body"><Blotter data={fills} columns={fillsColumns} touched={c.touched} storageKeyPrefix="tl-ws-fills" /></div>; }
+function OrdersPanel() { const c = useWs(); return <div className="tl-panel-body"><Blotter data={c.orders} columns={c.isMobile ? mobileOrderColumns : orderColumns} touched={c.touched} storageKeyPrefix="tl-ws-orders" onCancel={c.onCancel} /></div>; }
+function FillsPanel() { const c = useWs(); const fills = useMemo(() => c.orders.filter((o) => o.cumQty > 0), [c.orders]); return <div className="tl-panel-body"><Blotter data={fills} columns={c.isMobile ? mobileFillsColumns : fillsColumns} touched={c.touched} storageKeyPrefix="tl-ws-fills" /></div>; }
 function PositionsPanel() {
   const c = useWs();
   const pos = useMemo(() => {
@@ -95,6 +113,8 @@ export default function TradingWorkspacePage() {
   const [touched, setTouched] = useState<Set<string>>(new Set());
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancel = (clord: string) => setOrders((prev) => prev.map((o) => (o.clord === clord ? { ...o, status: "cancelled" as OrderStatus, leaves: 0 } : o)));
+  const isMobile = useIsMobile();
+  const [activeTab, setActiveTab] = useState<PanelId>("orders");
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -122,8 +142,8 @@ export default function TradingWorkspacePage() {
     return () => { clearInterval(id); if (clearTimer.current) clearTimeout(clearTimer.current); };
   }, []);
 
-  const ctxRef = useRef<Ctx>({ orders, touched, onCancel: cancel });
-  ctxRef.current = { orders, touched, onCancel: cancel };
+  const ctxRef = useRef<Ctx>({ orders, touched, onCancel: cancel, isMobile });
+  ctxRef.current = { orders, touched, onCancel: cancel, isMobile };
   const stableCtx = useMemo(() => new Proxy({} as Ctx, { get(_, k: string) { return (ctxRef.current as any)[k]; } }), []);
 
   const [dockApi, setDockApi] = useState<DockviewApi | null>(null);
@@ -159,6 +179,25 @@ export default function TradingWorkspacePage() {
   };
   const reset = () => { if (!dockApi) return; dockApi.clear(); addDefaults(dockApi); setMenuOpen(false); };
   const closed = PANEL_META.filter((m) => !openIds.has(m.id));
+
+  // ── Mobile: dockview splits are unusable on a phone, so show one full-width
+  // panel at a time with a segmented tab switcher (grids use compact columns). ──
+  if (isMobile) {
+    const ActivePanel = COMPONENTS[activeTab];
+    return (
+      <WsCtx.Provider value={ctxRef.current}>
+        <div style={{ height: "calc(100vh - 3.5rem)", display: "flex", flexDirection: "column" }}>
+          <h1 style={{ fontSize: "1rem", fontWeight: 600, padding: "0.5rem 0.7rem 0.35rem" }}>Trading Workspace</h1>
+          <div className="tl-mobile-tabs">
+            {PANEL_META.map((m) => (
+              <button key={m.id} type="button" className={activeTab === m.id ? "active" : ""} onClick={() => setActiveTab(m.id)}>{m.title}</button>
+            ))}
+          </div>
+          <div style={{ flex: 1, minHeight: 0 }}><ActivePanel /></div>
+        </div>
+      </WsCtx.Provider>
+    );
+  }
 
   return (
     <WsCtx.Provider value={ctxRef.current}>
