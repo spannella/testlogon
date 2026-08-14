@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package com.testlogon.android.feature.blotter
 
@@ -6,31 +6,56 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Segment
+import androidx.compose.material.icons.filled.ViewColumn
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,6 +74,16 @@ import kotlin.math.abs
 object TradingBlotterTestTags {
     const val SCREEN = "trading_blotter_screen"
     const val TABS = "trading_blotter_tabs"
+    const val ACTION_FILTER = "trading_blotter_action_filter"
+    const val ACTION_GROUP = "trading_blotter_action_group"
+    const val ACTION_COLUMNS = "trading_blotter_action_columns"
+    const val ACTION_CLEAR = "trading_blotter_action_clear"
+    const val SEARCH = "trading_blotter_search"
+    const val FILTER_SHEET = "trading_blotter_filter_sheet"
+    const val COLUMNS_SHEET = "trading_blotter_columns_sheet"
+    const val GROUP_SHEET = "trading_blotter_group_sheet"
+
+    fun groupHeader(value: String): String = "trading_blotter_group_header_$value"
 }
 
 // Color-coding palette (kept local; parity with the web blotter's semantics).
@@ -70,6 +105,12 @@ fun TradingBlotterRoute(
         onBack = onBack,
         onTabSelected = viewModel::onTabSelected,
         onSortColumn = viewModel::onSortColumn,
+        onSearchChanged = viewModel::onSearchChanged,
+        onSetFilters = viewModel::onSetFilters,
+        onClearFilters = viewModel::onClearFilters,
+        onToggleColumn = viewModel::onToggleColumn,
+        onSetGroupBy = viewModel::onSetGroupBy,
+        onToggleGroupCollapsed = viewModel::onToggleGroupCollapsed,
         modifier = modifier,
     )
 }
@@ -80,8 +121,20 @@ fun TradingBlotterScreen(
     onBack: () -> Unit,
     onTabSelected: (BlotterTab) -> Unit,
     onSortColumn: (BlotterSortColumn) -> Unit,
+    onSearchChanged: (String) -> Unit,
+    onSetFilters: (BlotterFilters) -> Unit,
+    onClearFilters: () -> Unit,
+    onToggleColumn: (BlotterColumn) -> Unit,
+    onSetGroupBy: (BlotterGroupKey?) -> Unit,
+    onToggleGroupCollapsed: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showFilterSheet by remember { mutableStateOf(false) }
+    var showColumnsSheet by remember { mutableStateOf(false) }
+    var showGroupSheet by remember { mutableStateOf(false) }
+
+    val tablesTab = state.tab == BlotterTab.ORDERS || state.tab == BlotterTab.FILLS
+
     Scaffold(
         modifier = modifier.testTag(TradingBlotterTestTags.SCREEN),
         topBar = {
@@ -90,6 +143,44 @@ fun TradingBlotterScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (tablesTab) {
+                        // Filter (with active-count badge).
+                        IconButton(
+                            onClick = { showFilterSheet = true },
+                            modifier = Modifier.testTag(TradingBlotterTestTags.ACTION_FILTER),
+                        ) {
+                            BadgedBox(
+                                badge = {
+                                    val n = state.filters.activeCount
+                                    if (n > 0) Badge { Text(n.toString()) }
+                                },
+                            ) {
+                                Icon(Icons.Filled.FilterList, contentDescription = "Filter")
+                            }
+                        }
+                        IconButton(
+                            onClick = { showGroupSheet = true },
+                            modifier = Modifier.testTag(TradingBlotterTestTags.ACTION_GROUP),
+                        ) {
+                            Icon(Icons.Filled.Segment, contentDescription = "Group")
+                        }
+                        IconButton(
+                            onClick = { showColumnsSheet = true },
+                            modifier = Modifier.testTag(TradingBlotterTestTags.ACTION_COLUMNS),
+                        ) {
+                            Icon(Icons.Filled.ViewColumn, contentDescription = "Columns")
+                        }
+                        if (state.filters.isActive) {
+                            IconButton(
+                                onClick = onClearFilters,
+                                modifier = Modifier.testTag(TradingBlotterTestTags.ACTION_CLEAR),
+                            ) {
+                                Icon(Icons.Filled.Clear, contentDescription = "Clear filters")
+                            }
+                        }
                     }
                 },
             )
@@ -101,13 +192,51 @@ fun TradingBlotterScreen(
                 .padding(padding),
         ) {
             BlotterTabRow(selected = state.tab, onTabSelected = onTabSelected)
+            if (tablesTab) {
+                SearchBar(query = state.filters.search, onSearchChanged = onSearchChanged)
+            }
             HorizontalDivider()
             when (state.tab) {
-                BlotterTab.ORDERS -> OrdersTable(state, onSortColumn)
-                BlotterTab.FILLS -> FillsTable(state, onSortColumn)
+                BlotterTab.ORDERS -> OrdersFillsTable(
+                    rows = state.ordersRows,
+                    state = state,
+                    onSortColumn = onSortColumn,
+                    onToggleGroupCollapsed = onToggleGroupCollapsed,
+                    fillsMode = false,
+                )
+                BlotterTab.FILLS -> OrdersFillsTable(
+                    rows = state.fillsRows,
+                    state = state,
+                    onSortColumn = onSortColumn,
+                    onToggleGroupCollapsed = onToggleGroupCollapsed,
+                    fillsMode = true,
+                )
                 BlotterTab.POSITIONS -> PositionsTable(state.positions)
             }
         }
+    }
+
+    if (showFilterSheet) {
+        FilterSheet(
+            state = state,
+            onSetFilters = onSetFilters,
+            onClearFilters = onClearFilters,
+            onDismiss = { showFilterSheet = false },
+        )
+    }
+    if (showColumnsSheet) {
+        ColumnsSheet(
+            state = state,
+            onToggleColumn = onToggleColumn,
+            onDismiss = { showColumnsSheet = false },
+        )
+    }
+    if (showGroupSheet) {
+        GroupSheet(
+            selected = state.groupBy,
+            onSetGroupBy = onSetGroupBy,
+            onDismiss = { showGroupSheet = false },
+        )
     }
 }
 
@@ -134,6 +263,31 @@ private fun BlotterTabRow(
             }
         }
     }
+}
+
+@Composable
+private fun SearchBar(
+    query: String,
+    onSearchChanged: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onSearchChanged,
+        singleLine = true,
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onSearchChanged("") }) {
+                    Icon(Icons.Filled.Clear, contentDescription = "Clear search")
+                }
+            }
+        },
+        placeholder = { Text("Search sym / side / status / clord") },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag(TradingBlotterTestTags.SEARCH),
+    )
 }
 
 // ---- Dense table primitives -------------------------------------------------
@@ -251,96 +405,153 @@ private fun fmtQty(q: Double, sym: String): String =
 private val rowDivider: Color
     @Composable get() = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
 
-// ---- Orders -----------------------------------------------------------------
+/** The display value for a single Orders/Fills column of an order. */
+private fun cellText(col: BlotterColumn, o: BlotterOrder, fillsMode: Boolean): String = when (col) {
+    BlotterColumn.SYM -> o.sym
+    BlotterColumn.SIDE -> o.side.code
+    BlotterColumn.PX -> fmtPx(o.px, o.sym)
+    // In Fills mode the "Qty" column shows executed quantity (cumQty) — matches legacy Fills table.
+    BlotterColumn.QTY -> if (fillsMode) fmtQty(o.cumQty, o.sym) else fmtQty(o.qty, o.sym)
+    BlotterColumn.CUM -> fmtQty(o.cumQty, o.sym)
+    BlotterColumn.LEAVES -> fmtQty(o.leaves, o.sym)
+    BlotterColumn.AVG_PX -> fmtPx(o.avgPx, o.sym)
+    BlotterColumn.TIF -> o.tif.label
+    BlotterColumn.STATUS -> o.status.label
+    BlotterColumn.CLORD -> o.clord
+}
+
+/** The header label for a column (Fills relabels QTY to "Fill" for clarity). */
+private fun headerLabel(col: BlotterColumn, fillsMode: Boolean): String =
+    if (fillsMode && col == BlotterColumn.QTY) "Fill" else col.header
+
+// ---- Orders / Fills (shared, column-descriptor driven) ----------------------
 
 @Composable
-private fun OrdersTable(
+private fun OrdersFillsTable(
+    rows: List<BlotterRow>,
     state: BlotterUiState,
     onSortColumn: (BlotterSortColumn) -> Unit,
+    onToggleGroupCollapsed: (String) -> Unit,
+    fillsMode: Boolean,
 ) {
     val divider = rowDivider
+    val columns = state.visibleColumns
     Column(modifier = Modifier.fillMaxSize()) {
+        // Header row — iterate visible descriptors.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SortableHeader("Sym", 2.2f, BlotterSortColumn.SYM, state, onSortColumn)
-            SortableHeader("Side", 1f, BlotterSortColumn.SIDE, state, onSortColumn)
-            SortableHeader("Px", 2f, BlotterSortColumn.PX, state, onSortColumn, TextAlign.End)
-            SortableHeader("Qty", 1.8f, BlotterSortColumn.QTY, state, onSortColumn, TextAlign.End)
-            SortableHeader("Cum", 1.8f, BlotterSortColumn.CUM, state, onSortColumn, TextAlign.End)
-            SortableHeader("Status", 2f, BlotterSortColumn.STATUS, state, onSortColumn)
+            columns.forEach { col ->
+                val align = if (col.numeric) TextAlign.End else TextAlign.Start
+                val sortable = col.sortColumn
+                if (sortable != null) {
+                    SortableHeader(
+                        label = headerLabel(col, fillsMode),
+                        weight = col.weight,
+                        column = sortable,
+                        state = state,
+                        onSortColumn = onSortColumn,
+                        align = align,
+                    )
+                } else {
+                    StaticHeader(headerLabel(col, fillsMode), Modifier.weight(col.weight), align)
+                }
+            }
         }
         HorizontalDivider()
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(state.orders, key = { it.clord }) { o ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ValueCell(o.sym, Modifier.weight(2.2f))
-                    ValueCell(o.side.code, Modifier.weight(1f), color = sideColor(o.side))
-                    ValueCell(fmtPx(o.px, o.sym), Modifier.weight(2f), TextAlign.End)
-                    ValueCell(fmtQty(o.qty, o.sym), Modifier.weight(1.8f), TextAlign.End)
-                    ValueCell(fmtQty(o.cumQty, o.sym), Modifier.weight(1.8f), TextAlign.End)
-                    Box(modifier = Modifier.weight(2f)) { StatusBadge(o.status) }
+            items(
+                items = rows,
+                key = { row ->
+                    when (row) {
+                        is BlotterRow.Group -> "grp:${row.value}"
+                        is BlotterRow.Item -> row.order.clord
+                    }
+                },
+            ) { row ->
+                when (row) {
+                    is BlotterRow.Group -> GroupHeaderRow(row, onToggleGroupCollapsed)
+                    is BlotterRow.Item -> {
+                        OrderRow(row.order, columns, fillsMode)
+                        HorizontalDivider(color = divider)
+                    }
                 }
-                HorizontalDivider(color = divider)
             }
         }
     }
 }
 
-// ---- Fills ------------------------------------------------------------------
-
 @Composable
-private fun FillsTable(
-    state: BlotterUiState,
-    onSortColumn: (BlotterSortColumn) -> Unit,
+private fun GroupHeaderRow(
+    group: BlotterRow.Group,
+    onToggleGroupCollapsed: (String) -> Unit,
 ) {
-    val divider = rowDivider
-    val fills = state.fills
-    Column(modifier = Modifier.fillMaxSize()) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable { onToggleGroupCollapsed(group.value) }
+                .testTag(TradingBlotterTestTags.groupHeader(group.value))
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SortableHeader("Sym", 2.2f, BlotterSortColumn.SYM, state, onSortColumn)
-            SortableHeader("Side", 1f, BlotterSortColumn.SIDE, state, onSortColumn)
-            SortableHeader("Px", 2f, BlotterSortColumn.PX, state, onSortColumn, TextAlign.End)
-            SortableHeader("Qty", 1.8f, BlotterSortColumn.CUM, state, onSortColumn, TextAlign.End)
-            SortableHeader("AvgPx", 2f, BlotterSortColumn.AVG_PX, state, onSortColumn, TextAlign.End)
-            SortableHeader("Status", 2f, BlotterSortColumn.STATUS, state, onSortColumn)
+            Icon(
+                imageVector = if (group.expanded) {
+                    Icons.Filled.KeyboardArrowDown
+                } else {
+                    Icons.Filled.KeyboardArrowRight
+                },
+                contentDescription = if (group.expanded) "Collapse" else "Expand",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = group.value,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "(${group.count})",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        HorizontalDivider()
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(fills, key = { it.clord }) { o ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ValueCell(o.sym, Modifier.weight(2.2f))
-                    ValueCell(o.side.code, Modifier.weight(1f), color = sideColor(o.side))
-                    ValueCell(fmtPx(o.px, o.sym), Modifier.weight(2f), TextAlign.End)
-                    ValueCell(fmtQty(o.cumQty, o.sym), Modifier.weight(1.8f), TextAlign.End)
-                    ValueCell(fmtPx(o.avgPx, o.sym), Modifier.weight(2f), TextAlign.End)
-                    Box(modifier = Modifier.weight(2f)) { StatusBadge(o.status) }
-                }
-                HorizontalDivider(color = divider)
+    }
+}
+
+@Composable
+private fun OrderRow(
+    o: BlotterOrder,
+    columns: List<BlotterColumn>,
+    fillsMode: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        columns.forEach { col ->
+            val align = if (col.numeric) TextAlign.End else TextAlign.Start
+            when (col) {
+                BlotterColumn.STATUS ->
+                    Box(modifier = Modifier.weight(col.weight)) { StatusBadge(o.status) }
+                BlotterColumn.SIDE ->
+                    ValueCell(o.side.code, Modifier.weight(col.weight), color = sideColor(o.side))
+                else ->
+                    ValueCell(cellText(col, o, fillsMode), Modifier.weight(col.weight), align)
             }
         }
     }
 }
 
-// ---- Positions --------------------------------------------------------------
+// ---- Positions (fixed) ------------------------------------------------------
 
 @Composable
 private fun PositionsTable(positions: List<BlotterPosition>) {
@@ -388,3 +599,279 @@ private fun PositionsTable(positions: List<BlotterPosition>) {
         }
     }
 }
+
+// ---- Columns sheet ----------------------------------------------------------
+
+@Composable
+private fun ColumnsSheet(
+    state: BlotterUiState,
+    onToggleColumn: (BlotterColumn) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag(TradingBlotterTestTags.COLUMNS_SHEET),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text(
+                "Columns",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            BlotterColumn.entries.forEach { col ->
+                val visible = col !in state.hiddenColumns
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggleColumn(col) }
+                        .testTag("trading_blotter_column_toggle_${col.name.lowercase()}")
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = visible, onCheckedChange = { onToggleColumn(col) })
+                    Spacer(Modifier.width(8.dp))
+                    Text(col.header)
+                }
+            }
+        }
+    }
+}
+
+// ---- Group sheet ------------------------------------------------------------
+
+@Composable
+private fun GroupSheet(
+    selected: BlotterGroupKey?,
+    onSetGroupBy: (BlotterGroupKey?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag(TradingBlotterTestTags.GROUP_SHEET),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text(
+                "Group by",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            GroupOption("None", selected == null, "none") {
+                onSetGroupBy(null)
+                onDismiss()
+            }
+            BlotterGroupKey.entries.forEach { key ->
+                GroupOption(key.label, selected == key, key.name.lowercase()) {
+                    onSetGroupBy(key)
+                    onDismiss()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupOption(
+    label: String,
+    selected: Boolean,
+    tagSuffix: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .testTag("trading_blotter_group_option_$tagSuffix")
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
+    }
+}
+
+// ---- Filter sheet -----------------------------------------------------------
+
+@Composable
+private fun FilterSheet(
+    state: BlotterUiState,
+    onSetFilters: (BlotterFilters) -> Unit,
+    onClearFilters: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Local draft — applied on "Apply" so we set filters once (search is preserved from state).
+    var draft by remember { mutableStateOf(state.filters) }
+    var pxMinText by remember { mutableStateOf(state.filters.pxMin?.toString() ?: "") }
+    var pxMaxText by remember { mutableStateOf(state.filters.pxMax?.toString() ?: "") }
+    var qtyMinText by remember { mutableStateOf(state.filters.qtyMin?.toString() ?: "") }
+    var qtyMaxText by remember { mutableStateOf(state.filters.qtyMax?.toString() ?: "") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag(TradingBlotterTestTags.FILTER_SHEET),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text(
+                "Filters",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+
+            FilterSectionLabel("Symbol")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                state.allSymbols.forEach { sym ->
+                    FilterChip(
+                        selected = sym in draft.symbols,
+                        onClick = {
+                            draft = draft.copy(symbols = toggle(draft.symbols, sym))
+                        },
+                        label = { Text(sym, fontFamily = FontFamily.Monospace) },
+                        modifier = Modifier.testTag("trading_blotter_filter_sym_$sym"),
+                    )
+                }
+            }
+
+            FilterSectionLabel("Side")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BlotterSide.entries.forEach { side ->
+                    FilterChip(
+                        selected = side in draft.sides,
+                        onClick = { draft = draft.copy(sides = toggle(draft.sides, side)) },
+                        label = { Text(if (side == BlotterSide.BUY) "Buy" else "Sell") },
+                        modifier = Modifier.testTag("trading_blotter_filter_side_${side.name.lowercase()}"),
+                    )
+                }
+            }
+
+            FilterSectionLabel("Status")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BlotterStatus.entries.forEach { st ->
+                    FilterChip(
+                        selected = st in draft.statuses,
+                        onClick = { draft = draft.copy(statuses = toggle(draft.statuses, st)) },
+                        label = { Text(st.label) },
+                        modifier = Modifier.testTag("trading_blotter_filter_status_${st.name.lowercase()}"),
+                    )
+                }
+            }
+
+            FilterSectionLabel("TIF")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BlotterTif.entries.forEach { tif ->
+                    FilterChip(
+                        selected = tif in draft.tifs,
+                        onClick = { draft = draft.copy(tifs = toggle(draft.tifs, tif)) },
+                        label = { Text(tif.label) },
+                        modifier = Modifier.testTag("trading_blotter_filter_tif_${tif.name.lowercase()}"),
+                    )
+                }
+            }
+
+            FilterSectionLabel("Price range")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RangeField("Min", pxMinText, { pxMinText = it }, Modifier.weight(1f), "trading_blotter_filter_pxmin")
+                RangeField("Max", pxMaxText, { pxMaxText = it }, Modifier.weight(1f), "trading_blotter_filter_pxmax")
+            }
+
+            FilterSectionLabel("Quantity range")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RangeField("Min", qtyMinText, { qtyMinText = it }, Modifier.weight(1f), "trading_blotter_filter_qtymin")
+                RangeField("Max", qtyMaxText, { qtyMaxText = it }, Modifier.weight(1f), "trading_blotter_filter_qtymax")
+            }
+
+            Spacer(Modifier.width(0.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(
+                    onClick = {
+                        onClearFilters()
+                        onDismiss()
+                    },
+                    modifier = Modifier.testTag("trading_blotter_filter_reset"),
+                ) {
+                    Text("Reset")
+                }
+                Spacer(Modifier.width(8.dp))
+                TextButton(
+                    onClick = {
+                        onSetFilters(
+                            draft.copy(
+                                pxMin = pxMinText.toDoubleOrNull(),
+                                pxMax = pxMaxText.toDoubleOrNull(),
+                                qtyMin = qtyMinText.toDoubleOrNull(),
+                                qtyMax = qtyMaxText.toDoubleOrNull(),
+                            ),
+                        )
+                        onDismiss()
+                    },
+                    modifier = Modifier.testTag("trading_blotter_filter_apply"),
+                ) {
+                    Text("Apply")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilterSectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+    )
+}
+
+@Composable
+private fun RangeField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    tag: String,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        label = { Text(label) },
+        modifier = modifier.testTag(tag),
+    )
+}
+
+private fun <T> toggle(set: Set<T>, value: T): Set<T> =
+    if (value in set) set - value else set + value

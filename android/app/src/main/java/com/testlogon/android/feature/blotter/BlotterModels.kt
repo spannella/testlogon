@@ -83,9 +83,80 @@ enum class BlotterSortColumn {
     PX,
     QTY,
     CUM,
+    LEAVES,
     AVG_PX,
+    TIF,
     STATUS,
+    CLORD,
 }
 
 /** Sort direction for the active column. */
 enum class BlotterSortDir { ASC, DESC }
+
+// ---- Parity additions: columns / grouping / filtering ----------------------
+
+/**
+ * A stable descriptor for one Orders/Fills column. The Orders and Fills tables share this single
+ * column set; the Positions table stays fixed. Rendering iterates the VISIBLE descriptors instead
+ * of hardcoding each cell, so the column chooser can show/hide columns generically.
+ *
+ * @param header short header label.
+ * @param weight relative Row weight for layout.
+ * @param defaultVisible whether the column is shown before the user customizes the layout.
+ * @param sortColumn the [BlotterSortColumn] this maps to, or null if the column is not sortable.
+ * @param numeric right-aligned numeric rendering when true.
+ */
+enum class BlotterColumn(
+    val header: String,
+    val weight: Float,
+    val defaultVisible: Boolean,
+    val sortColumn: BlotterSortColumn?,
+    val numeric: Boolean,
+) {
+    SYM("Sym", 2.2f, true, BlotterSortColumn.SYM, false),
+    SIDE("Side", 1f, true, BlotterSortColumn.SIDE, false),
+    PX("Px", 2f, true, BlotterSortColumn.PX, true),
+    QTY("Qty", 1.8f, true, BlotterSortColumn.QTY, true),
+    CUM("Cum", 1.8f, true, BlotterSortColumn.CUM, true),
+    LEAVES("Leaves", 1.8f, false, BlotterSortColumn.LEAVES, true),
+    AVG_PX("AvgPx", 2f, false, BlotterSortColumn.AVG_PX, true),
+    TIF("TIF", 1.4f, false, BlotterSortColumn.TIF, false),
+    STATUS("Status", 2f, true, BlotterSortColumn.STATUS, false),
+    CLORD("ClOrd", 2.2f, false, BlotterSortColumn.CLORD, false),
+}
+
+/** A column the user can group Orders/Fills rows by (collapsible groups). */
+enum class BlotterGroupKey(val label: String) {
+    SYMBOL("Symbol"),
+    SIDE("Side"),
+    STATUS("Status"),
+}
+
+/**
+ * View-derived filter set for Orders/Fills. Applied to a display copy only (never mutates the
+ * stored orders) so the ticker keeps updating the source of truth. Empty selections mean "no
+ * constraint"; null numeric bounds mean "unbounded".
+ */
+data class BlotterFilters(
+    val search: String = "",
+    val symbols: Set<String> = emptySet(),
+    val sides: Set<BlotterSide> = emptySet(),
+    val statuses: Set<BlotterStatus> = emptySet(),
+    val tifs: Set<BlotterTif> = emptySet(),
+    val pxMin: Double? = null,
+    val pxMax: Double? = null,
+    val qtyMin: Double? = null,
+    val qtyMax: Double? = null,
+) {
+    /** How many distinct filter facets are active (drives the toolbar badge). */
+    val activeCount: Int
+        get() = (if (search.isNotBlank()) 1 else 0) +
+            (if (symbols.isNotEmpty()) 1 else 0) +
+            (if (sides.isNotEmpty()) 1 else 0) +
+            (if (statuses.isNotEmpty()) 1 else 0) +
+            (if (tifs.isNotEmpty()) 1 else 0) +
+            (if (pxMin != null || pxMax != null) 1 else 0) +
+            (if (qtyMin != null || qtyMax != null) 1 else 0)
+
+    val isActive: Boolean get() = activeCount > 0
+}

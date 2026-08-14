@@ -13,15 +13,91 @@ import javax.inject.Inject
 import kotlin.math.abs
 import kotlin.random.Random
 
-/** Immutable UI state for the Trading Blotter. Fills + positions are derived from [orders]. */
+/**
+ * One display row of the Orders/Fills list. Grouping turns a flat list into a mix of collapsible
+ * [Group] headers and [Item] rows so the LazyColumn can render both without branching on nulls.
+ */
+sealed interface BlotterRow {
+    /** A collapsible group header: the group [value], its child [count], and whether it is expanded. */
+    data class Group(val value: String, val count: Int, val expanded: Boolean) : BlotterRow
+
+    /** A single order row belonging to the (optionally collapsed) group above it. */
+    data class Item(val order: BlotterOrder) : BlotterRow
+}
+
+/**
+ * Immutable UI state for the Trading Blotter. [orders] is the source of truth (kept sorted so the
+ * ticker mutates a stable, ordered list). Fills + positions are derived from it; the filtered,
+ * grouped, display-ready rows are computed lazily below so composables stay simple and the ticker's
+ * updates always flow through.
+ */
 data class BlotterUiState(
     val tab: BlotterTab = BlotterTab.ORDERS,
     val orders: List<BlotterOrder> = emptyList(),
     val sortColumn: BlotterSortColumn = BlotterSortColumn.SYM,
     val sortDir: BlotterSortDir = BlotterSortDir.ASC,
+    val hiddenColumns: Set<BlotterColumn> = defaultHiddenColumns(),
+    val filters: BlotterFilters = BlotterFilters(),
+    val groupBy: BlotterGroupKey? = null,
+    val collapsedGroups: Set<String> = emptySet(),
 ) {
     /** Orders that have at least one execution (the Fills tab). */
     val fills: List<BlotterOrder> get() = orders.filter { it.cumQty > 0.0 }
+
+    /** The Orders/Fills columns currently shown (descriptor order, minus hidden). */
+    val visibleColumns: List<BlotterColumn>
+        get() = BlotterColumn.entries.filter { it !in hiddenColumns }
+
+    /** Filtered + grouped display rows for the Orders tab. */
+    val ordersRows: List<BlotterRow> get() = buildRows(applyFilters(orders))
+
+    /** Filtered + grouped display rows for the Fills tab. */
+    val fillsRows: List<BlotterRow> get() = buildRows(applyFilters(fills))
+
+    /** Distinct symbols present in the seed (drives the filter chip list). */
+    val allSymbols: List<String> get() = orders.map { it.sym }.distinct().sorted()
+
+    private fun applyFilters(src: List<BlotterOrder>): List<BlotterOrder> {
+        val f = filters
+        if (!f.isActive) return src
+        val needle = f.search.trim().lowercase()
+        return src.filter { o ->
+            (needle.isEmpty() ||
+                o.sym.lowercase().contains(needle) ||
+                o.side.code.lowercase().contains(needle) ||
+                o.status.label.lowercase().contains(needle) ||
+                o.clord.lowercase().contains(needle)) &&
+                (f.symbols.isEmpty() || o.sym in f.symbols) &&
+                (f.sides.isEmpty() || o.side in f.sides) &&
+                (f.statuses.isEmpty() || o.status in f.statuses) &&
+                (f.tifs.isEmpty() || o.tif in f.tifs) &&
+                (f.pxMin == null || o.px >= f.pxMin) &&
+                (f.pxMax == null || o.px <= f.pxMax) &&
+                (f.qtyMin == null || o.qty >= f.qtyMin) &&
+                (f.qtyMax == null || o.qty <= f.qtyMax)
+        }
+    }
+
+    private fun groupValue(o: BlotterOrder, key: BlotterGroupKey): String = when (key) {
+        BlotterGroupKey.SYMBOL -> o.sym
+        BlotterGroupKey.SIDE -> o.side.code
+        BlotterGroupKey.STATUS -> o.status.label
+    }
+
+    /** Flatten a filtered order list into display rows, applying grouping/collapse if active. */
+    private fun buildRows(rows: List<BlotterOrder>): List<BlotterRow> {
+        val key = groupBy ?: return rows.map { BlotterRow.Item(it) }
+        // Preserve current sort order of the first-seen group value.
+        val grouped = LinkedHashMap<String, MutableList<BlotterOrder>>()
+        for (o in rows) grouped.getOrPut(groupValue(o, key)) { mutableListOf() }.add(o)
+        val out = ArrayList<BlotterRow>(rows.size + grouped.size)
+        for ((value, children) in grouped) {
+            val expanded = value !in collapsedGroups
+            out += BlotterRow.Group(value = value, count = children.size, expanded = expanded)
+            if (expanded) children.forEach { out += BlotterRow.Item(it) }
+        }
+        return out
+    }
 
     /** Per-symbol aggregated net positions (the Positions tab). */
     val positions: List<BlotterPosition>
@@ -45,6 +121,12 @@ data class BlotterUiState(
                 }
                 .sortedBy { it.sym }
         }
+
+    companion object {
+        /** Columns hidden by default (the wider/secondary ones) — the visible subset matches legacy. */
+        fun defaultHiddenColumns(): Set<BlotterColumn> =
+            BlotterColumn.entries.filter { !it.defaultVisible }.toSet()
+    }
 }
 
 /**
@@ -54,9 +136,14 @@ data class BlotterUiState(
  * prices, partial fills and mixed statuses, then runs a 1-second ticker that drifts a few prices and
  * occasionally advances a working order (so the surface feels live). No backend — this mirrors the
  * web trading blotter for parity and is deterministic-ish sample data.
+ *
+ * Layout facets (sort, grouping, hidden columns, filters/search) are restored from
+ * [BlotterLayoutStore] on init and persisted whenever any of them changes.
  */
 @HiltViewModel
-class TradingBlotterViewModel @Inject constructor() : ViewModel() {
+class TradingBlotterViewModel @Inject constructor(
+    private val layoutStore: BlotterLayoutStore,
+) : ViewModel() {
 
     private val rng = Random(0xB107)
 
@@ -64,8 +151,35 @@ class TradingBlotterViewModel @Inject constructor() : ViewModel() {
     val uiState: StateFlow<BlotterUiState> = _uiState.asStateFlow()
 
     init {
-        applySort(BlotterSortColumn.SYM, toggle = false)
+        restoreLayout()
         startTicker()
+    }
+
+    /** Merge the persisted layout over defaults and re-sort the seed to match. Never throws. */
+    private fun restoreLayout() {
+        val saved = layoutStore.load()
+        _uiState.update { s ->
+            s.copy(
+                sortColumn = saved.sortColumn,
+                sortDir = saved.sortDir,
+                groupBy = saved.groupBy,
+                hiddenColumns = saved.hiddenColumns,
+                filters = saved.filters,
+                orders = sortOrders(s.orders, saved.sortColumn, saved.sortDir),
+            )
+        }
+    }
+
+    private fun persist(s: BlotterUiState) {
+        layoutStore.save(
+            BlotterLayout(
+                sortColumn = s.sortColumn,
+                sortDir = s.sortDir,
+                groupBy = s.groupBy,
+                hiddenColumns = s.hiddenColumns,
+                filters = s.filters,
+            ),
+        )
     }
 
     fun onTabSelected(tab: BlotterTab) {
@@ -85,6 +199,53 @@ class TradingBlotterViewModel @Inject constructor() : ViewModel() {
             }
             s.copy(sortColumn = column, sortDir = dir, orders = sortOrders(s.orders, column, dir))
         }
+        persist(_uiState.value)
+    }
+
+    // ---- Column chooser ----------------------------------------------------
+
+    fun onToggleColumn(column: BlotterColumn) {
+        _uiState.update { s ->
+            val hidden = s.hiddenColumns.toMutableSet()
+            if (column in hidden) hidden.remove(column) else hidden.add(column)
+            // Never allow every column to be hidden — keep at least the symbol column.
+            if (hidden.size >= BlotterColumn.entries.size) hidden.remove(BlotterColumn.SYM)
+            s.copy(hiddenColumns = hidden)
+        }
+        persist(_uiState.value)
+    }
+
+    // ---- Filters + search --------------------------------------------------
+
+    fun onSearchChanged(query: String) {
+        _uiState.update { it.copy(filters = it.filters.copy(search = query)) }
+        persist(_uiState.value)
+    }
+
+    fun onSetFilters(filters: BlotterFilters) {
+        _uiState.update { it.copy(filters = filters) }
+        persist(_uiState.value)
+    }
+
+    fun onClearFilters() {
+        _uiState.update { it.copy(filters = BlotterFilters()) }
+        persist(_uiState.value)
+    }
+
+    // ---- Grouping ----------------------------------------------------------
+
+    fun onSetGroupBy(key: BlotterGroupKey?) {
+        _uiState.update { it.copy(groupBy = key, collapsedGroups = emptySet()) }
+        persist(_uiState.value)
+    }
+
+    fun onToggleGroupCollapsed(value: String) {
+        _uiState.update { s ->
+            val c = s.collapsedGroups.toMutableSet()
+            if (value in c) c.remove(value) else c.add(value)
+            s.copy(collapsedGroups = c)
+        }
+        // Collapse state is transient view detail; intentionally not persisted.
     }
 
     private fun sortOrders(
@@ -98,8 +259,11 @@ class TradingBlotterViewModel @Inject constructor() : ViewModel() {
             BlotterSortColumn.PX -> compareBy { it.px }
             BlotterSortColumn.QTY -> compareBy { it.qty }
             BlotterSortColumn.CUM -> compareBy { it.cumQty }
+            BlotterSortColumn.LEAVES -> compareBy { it.leaves }
             BlotterSortColumn.AVG_PX -> compareBy { it.avgPx }
+            BlotterSortColumn.TIF -> compareBy { it.tif.ordinal }
             BlotterSortColumn.STATUS -> compareBy { it.status.ordinal }
+            BlotterSortColumn.CLORD -> compareBy { it.clord }
         }
         val tie = cmp.thenBy { it.clord }
         return if (dir == BlotterSortDir.ASC) orders.sortedWith(tie) else orders.sortedWith(tie).reversed()
