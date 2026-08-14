@@ -1130,3 +1130,92 @@ main { overflow: hidden; display: flex; }
   border-radius: 2px;
   box-sizing: border-box;
 }
+
+/* ============================================================
+   Mobile / touch friendliness (<=767px or coarse pointer).
+   The per-column menu (Sort / Group-by / Filter / Hide) is the
+   full layout toolset and is tap-triggered, but its caret + items
+   are desktop-sized. Enlarge those hit targets, keep the popover
+   inside the viewport (scrollable), and grow the header tap area.
+   NOTE: rows are virtualized with a fixed height estimate, so we
+   deliberately do NOT change tbody td padding here.
+   ============================================================ */
+@media (max-width: 767px), (pointer: coarse) {
+  /* funnel/caret that opens the column menu -> real touch target */
+  .col-menu-btn {
+    font-size: 14px;
+    padding: 6px 8px;
+    margin-left: 0;
+    min-width: 30px;
+    min-height: 30px;
+    color: var(--fg-dim);
+    border: 1px solid var(--line-2);
+  }
+  .col-menu-btn:active { background: var(--line-2); }
+
+  /* header title single-tap (sort) tap area */
+  .col-title { padding: 8px 6px 8px 0; }
+  .blotter-tbl thead th { padding: 6px 6px; }
+
+  /* keep the popover on-screen + scroll a tall filter menu */
+  .col-menu {
+    min-width: 260px;
+    max-width: calc(100vw - 20px);
+    max-height: 72vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .col-menu-inner { padding: 12px 12px 14px; }
+
+  /* action buttons (Sort up/down, Group by this, Hide, clear) */
+  .col-menu-actions { gap: 8px; }
+  .col-menu-actions button {
+    flex: 1 1 auto;
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  /* filter inputs/selects inside the menu */
+  .col-menu input,
+  .col-menu select {
+    min-height: 38px;
+    font-size: 14px;
+  }
+
+  /* group-by tree rows / panel easier to hit */
+  .group-tree-row { min-height: 34px; }
+  .group-panel { min-height: 34px; }
+}
+
+/* Toolbar controls (global search, reset, Column-chooser) for touch.
+   The toolbar is a non-wrapping flex with a fixed 320px search box,
+   which overflows a phone viewport -> let it wrap + go full width,
+   and grow the buttons + chooser popover/items to finger size. */
+@media (max-width: 767px), (pointer: coarse) {
+  .blotter-toolbar {
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .filter { width: 100%; min-height: 38px; font-size: 14px; box-sizing: border-box; }
+  .hdr-ctrl-btn {
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+  .col-chooser {
+    min-width: 260px;
+    max-width: calc(100vw - 20px);
+    max-height: 72vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .chooser-list { max-height: 48vh; }
+  .chooser-item {
+    min-height: 36px;
+    padding: 6px 0;
+    font-size: 13px;
+  }
+  .chooser-item input[type="checkbox"] { width: 20px; height: 20px; }
+}
