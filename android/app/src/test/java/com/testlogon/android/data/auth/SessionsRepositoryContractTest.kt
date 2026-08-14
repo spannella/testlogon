@@ -3,6 +3,7 @@ package com.testlogon.android.data.auth
 import com.squareup.moshi.Moshi
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
+import com.testlogon.android.core.network.json.LenientNumberAdapters
 import com.testlogon.android.core.testing.net.FixtureName
 import com.testlogon.android.core.testing.net.Fixtures
 import com.testlogon.android.core.testing.net.MockBackendRule
@@ -20,7 +21,7 @@ class SessionsRepositoryContractTest {
     @get:Rule
     val backend = MockBackendRule()
 
-    private val moshi: Moshi = Moshi.Builder().build()
+    private val moshi: Moshi = Moshi.Builder().add(LenientNumberAdapters).build()
 
     private fun repo(): SessionsRepositoryImpl {
         val api = backend.retrofit(moshi).create(AuthApi::class.java)
