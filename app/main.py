@@ -188,6 +188,7 @@ from app.services.engagement_rate import start_engagement_benchmark_task
 from app.routers.per_content_revenue import per_content_revenue_router
 from app.routers.creator_dashboard import router as creator_dashboard_router
 from app.routers.creator_payouts import router as creator_payouts_router
+from app.routers.custody import router as custody_router  # CUSTODY (crypto-custody proxy)
 from app.routers.admin_payouts import router as admin_payouts_router
 from app.routers.admin_tip_reversal import router as admin_tip_reversal_router  # TIPX-A2
 from app.routers.billing_config import billing_config_router
@@ -953,6 +954,7 @@ def create_app() -> FastAPI:
     app.include_router(per_content_revenue_router)
     app.include_router(creator_dashboard_router)
     app.include_router(creator_payouts_router)
+    app.include_router(custody_router)  # CUSTODY (crypto-custody proxy -> MPC gateway; mock in DEV_MODE)
     from app.routers.live_commerce import router as live_commerce_router  # LIVECOM
     app.include_router(live_commerce_router)
     app.include_router(admin_payouts_router)
