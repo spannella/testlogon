@@ -47,3 +47,37 @@ fun shareBlotterExport(context: Context, content: String, baseName: String, tsv:
         // Provider misconfig / IO error: fail closed, export is best-effort.
     }
 }
+
+
+/**
+ * Share the rendered blotter PDF [bytes] via the system share sheet. Writes them to
+ * cacheDir/attachments/<baseName>.pdf and hands the content:// uri to [Intent.ACTION_SEND] with
+ * mime "application/pdf", using the SAME already-declared FileProvider authority as the CSV/TSV
+ * path. No-op on empty bytes (a failed render). The whole body is wrapped in try/catch so a missing
+ * chooser or provider misconfig never crashes the screen.
+ */
+fun shareBlotterPdf(context: Context, bytes: ByteArray, baseName: String) {
+    if (bytes.isEmpty()) return
+    try {
+        val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+        val file = File(dir, "$baseName.pdf")
+        file.writeBytes(bytes)
+
+        val authority = context.packageName + ".fileprovider"
+        val uri = FileProvider.getUriForFile(context, authority, file)
+
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        val chooser = Intent.createChooser(send, "Export blotter")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(chooser)
+    } catch (_: ActivityNotFoundException) {
+        // No share target available (e.g. a bare emulator): swallow so we never crash.
+    } catch (_: Exception) {
+        // Provider misconfig / IO error: fail closed, export is best-effort.
+    }
+}

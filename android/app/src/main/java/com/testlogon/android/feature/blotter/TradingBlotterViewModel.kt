@@ -38,11 +38,18 @@ data class BlotterUiState(
     val sortDir: BlotterSortDir = BlotterSortDir.ASC,
     val hiddenColumns: Set<BlotterColumn> = defaultHiddenColumns(),
     val columnOrder: List<BlotterColumn> = BlotterColumn.entries.toList(),
+    val columnWidths: Map<BlotterColumn, Float> = emptyMap(),
     val filters: BlotterFilters = BlotterFilters(),
     val groupBy: BlotterGroupKey? = null,
     val collapsedGroups: Set<String> = emptySet(),
     val expandedRows: Set<String> = emptySet(),
 ) {
+    /**
+     * The Row weight to lay a column out with: the user's persisted per-column width override when
+     * present, otherwise the column descriptor's default [BlotterColumn.weight]. Header AND cells
+     * both route through this so they stay pixel-aligned when a column is resized.
+     */
+    fun effectiveWeight(col: BlotterColumn): Float = columnWidths[col] ?: col.weight
     /** Orders that have at least one execution (the Fills tab). */
     val fills: List<BlotterOrder> get() = orders.filter { it.cumQty > 0.0 }
 
@@ -167,6 +174,7 @@ class TradingBlotterViewModel @Inject constructor(
                 groupBy = saved.groupBy,
                 hiddenColumns = saved.hiddenColumns,
                 columnOrder = normalizeColumnOrder(saved.columnOrder),
+                columnWidths = saved.columnWidths,
                 filters = saved.filters,
                 orders = sortOrders(s.orders, saved.sortColumn, saved.sortDir),
             )
@@ -181,6 +189,7 @@ class TradingBlotterViewModel @Inject constructor(
                 groupBy = s.groupBy,
                 hiddenColumns = s.hiddenColumns,
                 columnOrder = s.columnOrder,
+                columnWidths = s.columnWidths,
                 filters = s.filters,
             ),
         )
@@ -232,6 +241,32 @@ class TradingBlotterViewModel @Inject constructor(
             order.add(to, moved)
             s.copy(columnOrder = normalizeColumnOrder(order))
         }
+        persist(_uiState.value)
+    }
+
+    // ---- Column resize -----------------------------------------------------
+
+    /** Sane clamp for a per-column weight override so a column can never collapse or dominate. */
+    private val minColWeight = 0.4f
+    private val maxColWeight = 5.0f
+
+    /**
+     * Resize [col] by [deltaWeight] (added to its current effective weight), clamped to a sane
+     * range, then persist. The override starts from the column's current effective weight so the
+     * first drag continues smoothly from whatever the column is showing (default or prior override).
+     */
+    fun onResizeColumn(col: BlotterColumn, deltaWeight: Float) {
+        _uiState.update { s ->
+            val current = s.columnWidths[col] ?: col.weight
+            val next = (current + deltaWeight).coerceIn(minColWeight, maxColWeight)
+            s.copy(columnWidths = s.columnWidths + (col to next))
+        }
+        persist(_uiState.value)
+    }
+
+    /** Clear all per-column width overrides (columns snap back to their descriptor weights). */
+    fun onResetColumnWidths() {
+        _uiState.update { it.copy(columnWidths = emptyMap()) }
         persist(_uiState.value)
     }
 

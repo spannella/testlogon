@@ -17,6 +17,7 @@ data class BlotterLayout(
     val groupBy: BlotterGroupKey? = null,
     val hiddenColumns: Set<BlotterColumn> = emptySet(),
     val columnOrder: List<BlotterColumn> = BlotterColumn.entries.toList(),
+    val columnWidths: Map<BlotterColumn, Float> = emptyMap(),
     val filters: BlotterFilters = BlotterFilters(),
 )
 
@@ -46,6 +47,7 @@ class BlotterLayoutStore @Inject constructor(
                 columnOrder = normalizeColumnOrder(
                     decodeEnumList(prefs.getString(KEY_COL_ORDER, null)) { enumOrNull<BlotterColumn>(it) },
                 ),
+                columnWidths = decodeColWidths(prefs.getString(KEY_COL_WIDTHS, null)),
                 filters = BlotterFilters(
                     search = prefs.getString(KEY_SEARCH, "") ?: "",
                     symbols = decodeStringSet(prefs.getString(KEY_F_SYM, null)),
@@ -72,6 +74,10 @@ class BlotterLayoutStore @Inject constructor(
                 .putString(KEY_GROUP, layout.groupBy?.name)
                 .putString(KEY_HIDDEN, layout.hiddenColumns.joinToString(SEP) { it.name })
                 .putString(KEY_COL_ORDER, layout.columnOrder.joinToString(SEP) { it.name })
+                .putString(
+                    KEY_COL_WIDTHS,
+                    layout.columnWidths.entries.joinToString(SEP) { (col, w) -> col.name + WPAIR + w },
+                )
                 .putString(KEY_SEARCH, layout.filters.search)
                 .putString(KEY_F_SYM, layout.filters.symbols.joinToString(SEP))
                 .putString(KEY_F_SIDE, layout.filters.sides.joinToString(SEP) { it.name })
@@ -118,6 +124,23 @@ class BlotterLayoutStore @Inject constructor(
         }
     }
 
+    // Decode the persisted per-column widths CSV ("COLNAME:weight" pairs joined by SEP). Unknown
+    // column names and unparseable weights are dropped so a stale/malformed pref never throws.
+    private fun decodeColWidths(csv: String?): Map<BlotterColumn, Float> {
+        if (csv.isNullOrBlank()) return emptyMap()
+        val out = LinkedHashMap<BlotterColumn, Float>()
+        for (token in csv.split(SEP)) {
+            val t = token.trim()
+            if (t.isEmpty()) continue
+            val idx = t.indexOf(WPAIR)
+            if (idx <= 0) continue
+            val col = enumOrNull<BlotterColumn>(t.substring(0, idx)) ?: continue
+            val w = t.substring(idx + 1).toFloatOrNull() ?: continue
+            out[col] = w
+        }
+        return out
+    }
+
     private companion object {
         const val PREFS_NAME = "blotter_layout"
         const val SEP = ","
@@ -126,6 +149,8 @@ class BlotterLayoutStore @Inject constructor(
         const val KEY_GROUP = "group_by"
         const val KEY_HIDDEN = "hidden_cols"
         const val KEY_COL_ORDER = "col_order"
+        const val KEY_COL_WIDTHS = "col_widths"
+        const val WPAIR = ":"
         const val KEY_SEARCH = "f_search"
         const val KEY_F_SYM = "f_sym"
         const val KEY_F_SIDE = "f_side"

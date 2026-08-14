@@ -3,9 +3,12 @@
 package com.testlogon.android.feature.blotter
 
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -105,6 +108,11 @@ object TradingBlotterTestTags {
     const val EXPORT_SHEET = "trading_blotter_export_sheet"
     const val EXPORT_CSV = "trading_blotter_export_csv"
     const val EXPORT_TSV = "trading_blotter_export_tsv"
+    const val EXPORT_PDF = "trading_blotter_export_pdf"
+    const val RESET_WIDTHS = "trading_blotter_reset_widths"
+
+    fun colResize(col: BlotterColumn): String =
+        "trading_blotter_col_resize_${col.name.lowercase()}"
 
     fun groupHeader(value: String): String = "trading_blotter_group_header_$value"
 
@@ -154,6 +162,8 @@ fun TradingBlotterRoute(
         onToggleGroupCollapsed = viewModel::onToggleGroupCollapsed,
         onToggleRowExpanded = viewModel::onToggleRowExpanded,
         onCancelOrder = viewModel::onCancelOrder,
+        onResizeColumn = viewModel::onResizeColumn,
+        onResetColumnWidths = viewModel::onResetColumnWidths,
         modifier = modifier,
     )
 }
@@ -173,6 +183,8 @@ fun TradingBlotterScreen(
     onToggleGroupCollapsed: (String) -> Unit,
     onToggleRowExpanded: (String) -> Unit,
     onCancelOrder: (String) -> Unit,
+    onResizeColumn: (BlotterColumn, Float) -> Unit,
+    onResetColumnWidths: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -263,6 +275,7 @@ fun TradingBlotterScreen(
                     onToggleGroupCollapsed = onToggleGroupCollapsed,
                     onToggleRowExpanded = onToggleRowExpanded,
                     onCancelOrder = onCancelOrder,
+                    onResizeColumn = onResizeColumn,
                     onLongPressOrder = { contextMenuOrder = it },
                 )
             } else {
@@ -274,6 +287,7 @@ fun TradingBlotterScreen(
                     onToggleGroupCollapsed = onToggleGroupCollapsed,
                     onToggleRowExpanded = onToggleRowExpanded,
                     onCancelOrder = onCancelOrder,
+                    onResizeColumn = onResizeColumn,
                     onLongPressOrder = { contextMenuOrder = it },
                 )
             }
@@ -293,6 +307,7 @@ fun TradingBlotterScreen(
             state = state,
             onToggleColumn = onToggleColumn,
             onReorderColumn = onReorderColumn,
+            onResetColumnWidths = onResetColumnWidths,
             onDismiss = { showColumnsSheet = false },
         )
     }
@@ -308,19 +323,39 @@ fun TradingBlotterScreen(
         ExportSheet(
             rowCount = exportRows(state, fillsMode).size,
             columnCount = state.visibleColumns.size,
-            onExport = { tsv ->
-                val text = formatDelimited(
-                    orders = exportRows(state, fillsMode),
-                    columns = state.visibleColumns,
-                    fillsMode = fillsMode,
-                    delimiter = if (tsv) '\t' else ',',
-                )
-                shareBlotterExport(
-                    context = context,
-                    content = text,
-                    baseName = "blotter_" + state.tab.name.lowercase(),
-                    tsv = tsv,
-                )
+            onExport = { format ->
+                val baseName = "blotter_" + state.tab.name.lowercase()
+                when (format) {
+                    BlotterExportFormat.CSV, BlotterExportFormat.TSV -> {
+                        val tsv = format == BlotterExportFormat.TSV
+                        val text = formatDelimited(
+                            orders = exportRows(state, fillsMode),
+                            columns = state.visibleColumns,
+                            fillsMode = fillsMode,
+                            delimiter = if (tsv) '\t' else ',',
+                        )
+                        shareBlotterExport(
+                            context = context,
+                            content = text,
+                            baseName = baseName,
+                            tsv = tsv,
+                        )
+                    }
+                    BlotterExportFormat.PDF -> {
+                        val bytes = renderBlotterPdf(
+                            orders = exportRows(state, fillsMode),
+                            columns = state.visibleColumns,
+                            fillsMode = fillsMode,
+                            title = "Trading Blotter \u2014 " + state.tab.label,
+                            weightOf = state::effectiveWeight,
+                        )
+                        shareBlotterPdf(
+                            context = context,
+                            bytes = bytes,
+                            baseName = baseName,
+                        )
+                    }
+                }
                 showExportSheet = false
             },
             onDismiss = { showExportSheet = false },
@@ -351,6 +386,7 @@ private fun CompactPane(
     onToggleGroupCollapsed: (String) -> Unit,
     onToggleRowExpanded: (String) -> Unit,
     onCancelOrder: (String) -> Unit,
+    onResizeColumn: (BlotterColumn, Float) -> Unit,
     onLongPressOrder: (BlotterOrder) -> Unit,
 ) {
     val tablesTab = state.tab == BlotterTab.ORDERS || state.tab == BlotterTab.FILLS
@@ -368,6 +404,7 @@ private fun CompactPane(
                 onToggleGroupCollapsed = onToggleGroupCollapsed,
                 onToggleRowExpanded = onToggleRowExpanded,
                 onCancelOrder = onCancelOrder,
+                onResizeColumn = onResizeColumn,
                 onLongPressOrder = onLongPressOrder,
                 fillsMode = false,
             )
@@ -378,6 +415,7 @@ private fun CompactPane(
                 onToggleGroupCollapsed = onToggleGroupCollapsed,
                 onToggleRowExpanded = onToggleRowExpanded,
                 onCancelOrder = onCancelOrder,
+                onResizeColumn = onResizeColumn,
                 onLongPressOrder = onLongPressOrder,
                 fillsMode = true,
             )
@@ -398,6 +436,7 @@ private fun WidePane(
     onToggleGroupCollapsed: (String) -> Unit,
     onToggleRowExpanded: (String) -> Unit,
     onCancelOrder: (String) -> Unit,
+    onResizeColumn: (BlotterColumn, Float) -> Unit,
     onLongPressOrder: (BlotterOrder) -> Unit,
 ) {
     Row(modifier = Modifier.fillMaxSize()) {
@@ -417,6 +456,7 @@ private fun WidePane(
                 onToggleGroupCollapsed = onToggleGroupCollapsed,
                 onToggleRowExpanded = onToggleRowExpanded,
                 onCancelOrder = onCancelOrder,
+                onResizeColumn = onResizeColumn,
                 onLongPressOrder = onLongPressOrder,
                 fillsMode = false,
             )
@@ -522,16 +562,15 @@ private fun ValueCell(
 @Composable
 private fun RowScope.SortableHeader(
     label: String,
-    weight: Float,
     column: BlotterSortColumn,
     state: BlotterUiState,
     onSortColumn: (BlotterSortColumn) -> Unit,
     align: TextAlign = TextAlign.Start,
+    modifier: Modifier = Modifier,
 ) {
     val active = state.sortColumn == column
     Row(
-        modifier = Modifier
-            .weight(weight)
+        modifier = modifier
             .testTag("trading_blotter_header_${column.name.lowercase()}")
             .clickable { onSortColumn(column) },
         verticalAlignment = Alignment.CenterVertically,
@@ -640,6 +679,7 @@ private fun OrdersFillsTable(
     onToggleGroupCollapsed: (String) -> Unit,
     onToggleRowExpanded: (String) -> Unit,
     onCancelOrder: (String) -> Unit,
+    onResizeColumn: (BlotterColumn, Float) -> Unit,
     onLongPressOrder: (BlotterOrder) -> Unit,
     fillsMode: Boolean,
 ) {
@@ -655,18 +695,32 @@ private fun OrdersFillsTable(
         ) {
             columns.forEach { col ->
                 val align = if (col.numeric) TextAlign.End else TextAlign.Start
-                val sortable = col.sortColumn
-                if (sortable != null) {
-                    SortableHeader(
-                        label = headerLabel(col, fillsMode),
-                        weight = col.weight,
-                        column = sortable,
-                        state = state,
-                        onSortColumn = onSortColumn,
-                        align = align,
-                    )
-                } else {
-                    StaticHeader(headerLabel(col, fillsMode), Modifier.weight(col.weight), align)
+                // Each header column owns its effective weight so the resize handle (a trailing-edge
+                // child) sits inside the same weighted span as the label; header and cells both use
+                // effectiveWeight so they stay pixel-aligned when a column is resized.
+                Row(
+                    modifier = Modifier.weight(state.effectiveWeight(col)),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = if (align == TextAlign.End) Arrangement.End else Arrangement.Start,
+                ) {
+                    val sortable = col.sortColumn
+                    if (sortable != null) {
+                        SortableHeader(
+                            label = headerLabel(col, fillsMode),
+                            column = sortable,
+                            state = state,
+                            onSortColumn = onSortColumn,
+                            align = align,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    } else {
+                        StaticHeader(
+                            headerLabel(col, fillsMode),
+                            Modifier.weight(1f, fill = false),
+                            align,
+                        )
+                    }
+                    ColumnResizeHandle(col = col, onResizeColumn = onResizeColumn)
                 }
             }
         }
@@ -712,6 +766,7 @@ private fun OrdersFillsTable(
                             OrderRow(
                                 o = o,
                                 columns = columns,
+                                state = state,
                                 fillsMode = fillsMode,
                                 onClick = { onToggleRowExpanded(o.clord) },
                                 onLongClick = { onLongPressOrder(o) },
@@ -774,6 +829,7 @@ private fun GroupHeaderRow(
 private fun OrderRow(
     o: BlotterOrder,
     columns: List<BlotterColumn>,
+    state: BlotterUiState,
     fillsMode: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {},
@@ -789,17 +845,59 @@ private fun OrderRow(
     ) {
         columns.forEach { col ->
             val align = if (col.numeric) TextAlign.End else TextAlign.Start
+            val w = state.effectiveWeight(col)
             when (col) {
                 BlotterColumn.STATUS ->
-                    Box(modifier = Modifier.weight(col.weight)) { StatusBadge(o.status) }
+                    Box(modifier = Modifier.weight(w)) { StatusBadge(o.status) }
                 BlotterColumn.SIDE ->
-                    ValueCell(o.side.code, Modifier.weight(col.weight), color = sideColor(o.side))
+                    ValueCell(o.side.code, Modifier.weight(w), color = sideColor(o.side))
                 else ->
-                    ValueCell(cellText(col, o, fillsMode), Modifier.weight(col.weight), align)
+                    ValueCell(cellText(col, o, fillsMode), Modifier.weight(w), align)
             }
         }
     }
 }
+
+/**
+ * A thin, draggable resize handle pinned to the RIGHT edge of a header cell. Dragging it horizontally
+ * resizes the column by converting the drag distance into a Row-weight delta (a ~[ResizeDragScale]
+ * drag changes the weight by ~1.0). It is a SEPARATE trailing child from the sort label, so tapping
+ * the label still sorts while dragging the handle resizes. A faint vertical divider gives it a
+ * visible affordance.
+ */
+@Composable
+private fun ColumnResizeHandle(
+    col: BlotterColumn,
+    onResizeColumn: (BlotterColumn, Float) -> Unit,
+) {
+    val density = LocalDensity.current
+    val scalePx = with(density) { ResizeDragScale.toPx() }
+    val handleColor = MaterialTheme.colorScheme.outlineVariant
+    Box(
+        modifier = Modifier
+            .width(14.dp)
+            .fillMaxHeight()
+            .testTag(TradingBlotterTestTags.colResize(col))
+            .drawBehind {
+                val x = size.width - 1.dp.toPx()
+                drawLine(
+                    color = handleColor,
+                    start = Offset(x, size.height * 0.15f),
+                    end = Offset(x, size.height * 0.85f),
+                    strokeWidth = 1.5.dp.toPx(),
+                )
+            }
+            .pointerInput(col) {
+                detectHorizontalDragGestures { change, dragAmount ->
+                    change.consume()
+                    onResizeColumn(col, dragAmount / scalePx)
+                }
+            },
+    )
+}
+
+// A comfortable horizontal drag of ~this distance changes a column weight by ~1.0.
+private val ResizeDragScale = 48.dp
 
 // ---- Row master-detail ------------------------------------------------------
 
@@ -983,6 +1081,7 @@ private fun ColumnsSheet(
     state: BlotterUiState,
     onToggleColumn: (BlotterColumn) -> Unit,
     onReorderColumn: (Int, Int) -> Unit,
+    onResetColumnWidths: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1017,6 +1116,13 @@ private fun ColumnsSheet(
                     onToggleColumn = onToggleColumn,
                     onReorderColumn = onReorderColumn,
                 )
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            TextButton(
+                onClick = onResetColumnWidths,
+                modifier = Modifier.testTag(TradingBlotterTestTags.RESET_WIDTHS),
+            ) {
+                Text("Reset widths")
             }
         }
     }
@@ -1158,7 +1264,7 @@ private fun GroupOption(
 private fun ExportSheet(
     rowCount: Int,
     columnCount: Int,
-    onExport: (tsv: Boolean) -> Unit,
+    onExport: (BlotterExportFormat) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1184,8 +1290,9 @@ private fun ExportSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
-            ExportOption("CSV", TradingBlotterTestTags.EXPORT_CSV) { onExport(false) }
-            ExportOption("TSV", TradingBlotterTestTags.EXPORT_TSV) { onExport(true) }
+            ExportOption("CSV", TradingBlotterTestTags.EXPORT_CSV) { onExport(BlotterExportFormat.CSV) }
+            ExportOption("TSV", TradingBlotterTestTags.EXPORT_TSV) { onExport(BlotterExportFormat.TSV) }
+            ExportOption("PDF", TradingBlotterTestTags.EXPORT_PDF) { onExport(BlotterExportFormat.PDF) }
         }
     }
 }

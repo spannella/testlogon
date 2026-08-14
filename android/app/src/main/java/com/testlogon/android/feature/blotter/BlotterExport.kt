@@ -12,6 +12,9 @@ package com.testlogon.android.feature.blotter
 /** Cap for the EXTRA_TEXT fast-path — larger exports are shared as a file stream only. */
 const val EXPORT_TEXT_MAX_CHARS = 4000
 
+/** The delivery formats offered by the blotter Export sheet (delimited text or a rendered PDF). */
+enum class BlotterExportFormat { CSV, TSV, PDF }
+
 /**
  * The filtered + sorted orders currently visible in the given tab, in display order.
  *
