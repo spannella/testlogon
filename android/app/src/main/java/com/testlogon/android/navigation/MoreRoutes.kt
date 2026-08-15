@@ -97,6 +97,10 @@ object MoreRoutes {
     // AND-332: the server file manager (path-based browse + upload/download/share/Drive-import).
     const val FILES = FilesDest.ROUTE
 
+
+    // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /ui/custody/*.
+    const val CUSTODY = CustodyDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
@@ -548,6 +552,7 @@ object MoreRoutes {
             SELLER_ORDERS,
             SELLER_SALES,
             FILES,
+            CUSTODY,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,
