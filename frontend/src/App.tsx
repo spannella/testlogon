@@ -40,6 +40,7 @@ const BillingPage = lazy(() => import("@/pages/billing/BillingPage"));
 const CalendarPage = lazy(() => import("@/pages/calendar/CalendarPage"));
 const TradingBlotterPage = lazy(() => import("@/pages/blotter/TradingBlotterPage"));
 const TradingWorkspacePage = lazy(() => import("@/pages/blotter/TradingWorkspacePage"));
+const CustodyPage = lazy(() => import("@/pages/custody/CustodyPage"));
 const CatalogPage = lazy(() => import("@/pages/shop/CatalogPage"));
 const ProductDetail = lazy(() => import("@/pages/shop/ProductDetail"));
 const CartPage = lazy(() => import("@/pages/shop/CartPage"));
@@ -718,6 +719,7 @@ export default function App() {
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="blotter" element={<TradingWorkspacePage />} />
           <Route path="blotter/single" element={<TradingBlotterPage />} />
+          <Route path="custody" element={<CustodyPage />} />
           <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="agents/memory/:workerId" element={<AgentMemoryPage />} />
           <Route path="agents/feedback" element={<AgentFeedbackPage />} />
