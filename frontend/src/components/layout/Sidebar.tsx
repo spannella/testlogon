@@ -169,6 +169,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: <BarChart3 className="h-5 w-5" /> },
       { label: "Content Revenue", i18nKey: "nav.contentRevenue", path: "/analytics/content-revenue", icon: <BarChart3 className="h-5 w-5" /> },
       { label: "Payouts", i18nKey: "nav.payouts", path: "/payouts", icon: <Wallet className="h-5 w-5" /> },
+      { label: "Custody", i18nKey: "nav.custody", path: "/custody", icon: <Coins className="h-5 w-5" /> },
       { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: <Share2 className="h-5 w-5" /> },
       { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: <Tag className="h-5 w-5" /> },
       { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: <Link2 className="h-5 w-5" /> },
