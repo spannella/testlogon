@@ -18,11 +18,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Data layer for the custody surface. Maps wire DTOs to null-safe domain models and folds transport
- * failures into [ApiResult] (HttpException -> Failure carrying the HTTP status, so the ViewModel can
- * branch on 403 = not-an-officer, 425 = timelock, 409 = under-approved; IOException -> NetworkError).
- * CancellationException is always re-thrown. Reads are safe to retry; the withdrawal POST is not
- * auto-retried.
+ * Data layer for the PRODUCTION custody surface. Maps wire DTOs to null-safe domain models and folds
+ * transport failures into [ApiResult] (HttpException -> Failure carrying the HTTP status; IOException
+ * -> NetworkError). CancellationException is always re-thrown. Reads are safe to retry; the withdraw
+ * POST is not auto-retried.
  */
 @Singleton
 class CustodyRepository @Inject constructor(
@@ -31,64 +30,30 @@ class CustodyRepository @Inject constructor(
 ) {
     private val io: CoroutineDispatcher = Dispatchers.IO
 
-    suspend fun loadAssets(): ApiResult<List<CustodyAsset>> = call {
-        api.assets().map { it.toDomain() }
+    suspend fun getBalance(): ApiResult<CustodyBalances> = call {
+        api.balance().toDomain()
     }
 
-    suspend fun depositAddress(asset: String, chain: String): ApiResult<CustodyDepositAddress> = call {
-        api.depositAddress(asset, chain).toDomain(asset, chain)
+    suspend fun getDepositAddress(chainId: Int): ApiResult<CustodyDepositAddress> = call {
+        api.depositAddress(chainId).toDomain()
     }
 
-    suspend fun loadDeposits(): ApiResult<List<CustodyDeposit>> = call {
-        api.deposits().map { it.toDomain() }
-    }
-
-    suspend fun submitWithdrawal(
-        asset: String,
+    suspend fun withdraw(
         chain: String,
+        to: String,
         amount: String,
-        destination: String,
-        memo: String?,
-    ): ApiResult<CustodyWithdrawalResult> = call {
-        api.createWithdrawal(
-            CustodyWithdrawalRequestDto(
-                asset = asset,
+        token: String?,
+        clientRef: String? = null,
+    ): ApiResult<CustodyWithdrawResult> = call {
+        api.withdraw(
+            WithdrawRequestDto(
                 chain = chain,
-                amount = amount,
-                destination = destination,
-                memo = memo?.takeIf { it.isNotBlank() },
+                to = to.trim(),
+                amount = amount.trim(),
+                token = token?.takeIf { it.isNotBlank() },
+                clientRef = clientRef?.takeIf { it.isNotBlank() },
             ),
         ).toDomain()
-    }
-
-    suspend fun loadWithdrawals(): ApiResult<List<CustodyWithdrawal>> = call {
-        api.withdrawals().map { it.toDomain() }
-    }
-
-    suspend fun loadWithdrawal(id: String): ApiResult<CustodyWithdrawal> = call {
-        api.withdrawal(id).toDomain()
-    }
-
-    suspend fun loadApprovals(): ApiResult<List<CustodyWithdrawal>> = call {
-        api.approvals().map { it.toDomain() }
-    }
-
-    suspend fun approve(id: String, approver: String?): ApiResult<CustodyApproveResult> = call {
-        api.approve(id, CustodyApproveRequestDto(approver = approver?.takeIf { it.isNotBlank() })).toDomain()
-    }
-
-    suspend fun release(id: String): ApiResult<CustodyReleaseResult> = call {
-        api.release(id).toDomain()
-    }
-
-    suspend fun loadAudit(): ApiResult<CustodyAudit> = call {
-        val a = api.audit()
-        val entries = a.entries.orEmpty().map { it.toDomain() }
-        CustodyAudit(entries = entries)
-    }
-
-    suspend fun verifyAudit(): ApiResult<CustodyAuditVerifyDto> = call {
-        api.auditVerify()
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = withContext(io) {
@@ -106,104 +71,50 @@ class CustodyRepository @Inject constructor(
 
 // ---- DTO -> domain mappers ----
 
-private fun String?.orDash(): String = this?.takeIf { it.isNotBlank() } ?: "—"
+/**
+ * Coerces a balances wire value (a JSON number decoded to Double, a numeric String, or null) to a
+ * Double. Any non-numeric shape falls back to 0.
+ */
+private fun coerceAmount(value: Any?): Double = when (value) {
+    null -> 0.0
+    is Double -> value
+    is Number -> value.toDouble()
+    is String -> value.trim().toDoubleOrNull() ?: 0.0
+    else -> value.toString().trim().toDoubleOrNull() ?: 0.0
+}
 
-private fun parseAmount(s: String?): Double = s?.trim()?.toDoubleOrNull() ?: 0.0
-
-private fun CustodyAssetDto.toDomain(): CustodyAsset {
-    val a = asset?.trim().orEmpty()
-    return CustodyAsset(
-        asset = a,
-        chain = chain?.trim().orEmpty(),
-        name = name?.takeIf { it.isNotBlank() } ?: (symbol ?: a),
-        symbol = symbol?.takeIf { it.isNotBlank() } ?: a,
-        decimals = decimals ?: 18,
-        network = network?.takeIf { it.isNotBlank() } ?: (chain ?: ""),
-        balanceText = balance?.trim()?.takeIf { it.isNotBlank() } ?: "0",
-        balance = parseAmount(balance),
-        addressAvailable = addressAvailable ?: false,
+private fun BalanceDto.toDomain(): CustodyBalances {
+    val coerced: Map<String, Double> = balances.orEmpty()
+        .entries
+        .filter { it.key.isNotBlank() }
+        .associate { it.key.trim() to coerceAmount(it.value) }
+    return CustodyBalances(
+        vault = vault?.trim().orEmpty(),
+        tier = tier?.trim()?.takeIf { it.isNotBlank() } ?: "—",
+        rows = CustodyAssets.mergeBalances(coerced),
     )
 }
 
-private fun CustodyDepositAddressDto.toDomain(reqAsset: String, reqChain: String): CustodyDepositAddress =
+private fun DepositAddressDto.toDomain(): CustodyDepositAddress =
     CustodyDepositAddress(
-        asset = asset?.takeIf { it.isNotBlank() } ?: reqAsset,
-        chain = chain?.takeIf { it.isNotBlank() } ?: reqChain,
-        network = network?.takeIf { it.isNotBlank() } ?: (chain ?: reqChain),
         address = address?.trim().orEmpty(),
-        memo = memo?.takeIf { it.isNotBlank() },
+        chain = chain?.trim().orEmpty(),
+        family = family?.takeIf { it.isNotBlank() },
+        derivation = derivation?.takeIf { it.isNotBlank() },
+        domain = domain?.takeIf { it.isNotBlank() },
     )
 
-private fun CustodyDepositDto.toDomain(): CustodyDeposit =
-    CustodyDeposit(
-        id = id?.takeIf { it.isNotBlank() } ?: "",
-        asset = asset.orDash(),
-        chain = chain.orDash(),
-        amountText = amount?.trim()?.takeIf { it.isNotBlank() } ?: "0",
-        status = status?.takeIf { it.isNotBlank() } ?: "pending",
-        confirmations = confirmations ?: 0,
-    )
-
-private fun CustodyWithdrawalResultDto.toDomain(): CustodyWithdrawalResult =
-    CustodyWithdrawalResult(
-        id = id?.takeIf { it.isNotBlank() } ?: "",
-        status = WithdrawalStatus.from(status),
-        asset = asset.orDash(),
-        chain = chain.orDash(),
-        amountText = amount?.trim()?.takeIf { it.isNotBlank() } ?: "0",
-        destination = destination.orDash(),
+private fun WithdrawResultDto.toDomain(): CustodyWithdrawResult =
+    CustodyWithdrawResult(
+        status = WithdrawStatus.from(status),
+        withdrawalId = withdrawalId?.takeIf { it.isNotBlank() },
         signature = signature?.takeIf { it.isNotBlank() },
         digest = digest?.takeIf { it.isNotBlank() },
-        approvalsRequired = approvalsRequired,
-        approvals = approvals,
-        reason = detail?.takeIf { it.isNotBlank() } ?: error?.takeIf { it.isNotBlank() },
+        clientRef = clientRef?.takeIf { it.isNotBlank() },
+        intentId = intentId?.takeIf { it.isNotBlank() },
+        reason = listOfNotNull(detail, reason, error)
+            .firstOrNull { it.isNotBlank() },
         category = category?.takeIf { it.isNotBlank() },
-    )
-
-private fun CustodyWithdrawalDto.toDomain(): CustodyWithdrawal =
-    CustodyWithdrawal(
-        id = id?.takeIf { it.isNotBlank() } ?: "",
-        asset = asset.orDash(),
-        chain = (chain ?: chainRef).orDash(),
-        network = network?.takeIf { it.isNotBlank() } ?: (chainRef ?: chain ?: ""),
-        recipient = (recipient ?: destination).orDash(),
-        amountText = amount?.trim()?.takeIf { it.isNotBlank() } ?: "0",
-        status = WithdrawalStatus.from(status),
-        approvals = approvals.orEmpty(),
-        approvalsCount = approvalsCount ?: approvals?.size ?: 0,
-        approvalsRequired = approvalsRequired ?: 0,
-        signature = signature?.takeIf { it.isNotBlank() },
-        digest = digest?.takeIf { it.isNotBlank() },
-        reason = error?.takeIf { it.isNotBlank() },
-        category = category?.takeIf { it.isNotBlank() },
-        timelockUntilMs = timelockUntilMs,
-        createdMs = createdMs,
-    )
-
-private fun CustodyApproveResultDto.toDomain(): CustodyApproveResult =
-    CustodyApproveResult(
-        withdrawalId = withdrawalId?.takeIf { it.isNotBlank() } ?: "",
-        status = WithdrawalStatus.from(status),
-        approvals = approvals.orEmpty(),
-        approvalsRequired = approvalsRequired ?: 0,
-    )
-
-private fun CustodyReleaseResultDto.toDomain(): CustodyReleaseResult =
-    CustodyReleaseResult(
-        withdrawalId = withdrawalId?.takeIf { it.isNotBlank() } ?: "",
-        status = WithdrawalStatus.from(status),
-        signature = signature?.takeIf { it.isNotBlank() },
-        digest = digest?.takeIf { it.isNotBlank() },
-    )
-
-private fun CustodyAuditEntryDto.toDomain(): CustodyAuditEntry =
-    CustodyAuditEntry(
-        seq = seq ?: 0L,
-        action = action?.takeIf { it.isNotBlank() } ?: "—",
-        detail = detail?.takeIf { it.isNotBlank() } ?: "",
-        tsMs = tsMs ?: 0L,
-        prev = prev.orEmpty(),
-        hash = hash.orEmpty(),
     )
 
 /** Provides the custody Retrofit API (mirrors the auth data module's provider style). */

@@ -4,58 +4,29 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
-import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
- * Retrofit interface for the session-authed custody surface. Paths are relative (no leading slash)
- * so they resolve against the shared Retrofit base URL; the session cookie + CSRF header are attached
- * by the core-network interceptor chain. All methods are suspend and return the typed DTO; a non-2xx
- * surfaces as retrofit2.HttpException (403 on officer-only routes for a non-admin caller; 425 timelock
- * / 409 under-approved on release).
+ * Retrofit interface for the PRODUCTION custody surface (the me/custody endpoints). The exchange edge proxies
+ * these to the MPC gateway. Paths are relative (no leading slash) so they resolve against the shared
+ * Retrofit base URL; the session cookie + CSRF header are attached by the core-network interceptor
+ * chain. All methods are suspend and return the typed DTO; a non-2xx surfaces as
+ * retrofit2.HttpException.
+ *
+ * Only three endpoints exist on this backend — there is NO history / deposits list / approvals / audit.
  */
 interface CustodyApi {
 
-    @GET("ui/custody/assets")
-    suspend fun assets(): List<CustodyAssetDto>
+    /** Vault + tier + per-asset balances (vault auto-provisioned server-side). */
+    @GET("me/custody/balance")
+    suspend fun balance(): BalanceDto
 
-    @GET("ui/custody/deposit-address")
-    suspend fun depositAddress(
-        @Query("asset") asset: String,
-        @Query("chain") chain: String,
-    ): CustodyDepositAddressDto
+    /** Per-CHAIN deposit address (EVM chains share one address). */
+    @GET("me/custody/deposit-address")
+    suspend fun depositAddress(@Query("chain") chain: Int): DepositAddressDto
 
-    @GET("ui/custody/deposits")
-    suspend fun deposits(): List<CustodyDepositDto>
-
+    /** Submit a withdrawal intent; the gateway signs, holds for approval, or blocks/rejects it. */
     @Headers("Content-Type: application/json")
-    @POST("ui/custody/withdrawals")
-    suspend fun createWithdrawal(@Body body: CustodyWithdrawalRequestDto): CustodyWithdrawalResultDto
-
-    @GET("ui/custody/withdrawals")
-    suspend fun withdrawals(): List<CustodyWithdrawalDto>
-
-    @GET("ui/custody/withdrawals/{id}")
-    suspend fun withdrawal(@Path("id") id: String): CustodyWithdrawalDto
-
-    // Officer / admin (403 for a non-admin caller).
-
-    @GET("ui/custody/approvals")
-    suspend fun approvals(): List<CustodyWithdrawalDto>
-
-    @Headers("Content-Type: application/json")
-    @POST("ui/custody/withdrawals/{id}/approve")
-    suspend fun approve(
-        @Path("id") id: String,
-        @Body body: CustodyApproveRequestDto,
-    ): CustodyApproveResultDto
-
-    @POST("ui/custody/withdrawals/{id}/release")
-    suspend fun release(@Path("id") id: String): CustodyReleaseResultDto
-
-    @GET("ui/custody/audit")
-    suspend fun audit(): CustodyAuditDto
-
-    @GET("ui/custody/audit/verify")
-    suspend fun auditVerify(): CustodyAuditVerifyDto
+    @POST("me/custody/withdraw")
+    suspend fun withdraw(@Body body: WithdrawRequestDto): WithdrawResultDto
 }

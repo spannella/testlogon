@@ -12,7 +12,7 @@ data object CustodyDest {
 
 /**
  * Registers the Custody screen in the authenticated graph. Up / Back pops the back stack. The screen
- * is wired to the session-authed the /ui/custody endpoints backend (the shared Retrofit client attaches the cookie);
+ * is wired to the session-authed the /me/custody endpoints backend (the shared Retrofit client attaches the cookie);
  * the officer Approvals/Audit tab self-gates on the caller's admin signal.
  */
 fun NavGraphBuilder.custodyDestination(navController: NavHostController) {

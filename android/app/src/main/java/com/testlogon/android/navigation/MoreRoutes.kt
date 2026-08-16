@@ -100,7 +100,7 @@ object MoreRoutes {
     // Trading Blotter: native orders/fills/positions blotter (web parity). Sample data only.
     const val TRADING_BLOTTER = BlotterDest.ROUTE
 
-    // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /ui/custody/*.
+    // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /me/custody/*.
     const val CUSTODY = CustodyDest.ROUTE
 
     // AND-219: the purchase history list + search.

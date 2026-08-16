@@ -1,155 +1,199 @@
 import { api } from "@/api/client";
 
+// ─── Production /me/custody/* contract ──────────────────────────
+// The exchange edge session-authenticates the caller and performs the
+// HMAC-to-gateway itself. Only THREE endpoints exist:
+//   GET  /me/custody/balance
+//   GET  /me/custody/deposit-address?chain=<id>
+//   POST /me/custody/withdraw
+// There is NO history / deposits / approvals / audit endpoint.
+
 // ─── Types ──────────────────────────────────────────────────────
 
-export interface CustodyAsset {
-  asset: string;
-  chain: string;
-  name: string;
-  symbol: string;
-  decimals: number;
-  network: string;
-  balance: string | number;
-  address_available: boolean;
+export interface CustodyBalance {
+  /** Auto-provisioned vault id for the session's account. */
+  vault: string;
+  /** Custody tier (e.g. "standard"). */
+  tier: string;
+  /** asset-symbol -> amount (string or number). */
+  balances: Record<string, number | string>;
 }
 
 export interface DepositAddress {
-  asset: string;
-  chain: string;
-  network: string;
   address: string;
-  memo?: string | null;
-}
-
-export interface CustodyDeposit {
-  id: string;
-  asset: string;
+  /** Chain id this address belongs to (as a string). */
   chain: string;
-  amount: string | number;
-  status: string;
-  confirmations: number;
+  /** Address family, e.g. "evm". */
+  family: string;
+  /** Derivation path / scheme metadata. */
+  derivation: string;
+  /** Signing / attestation domain. */
+  domain: string;
 }
 
 export type WithdrawalStatus =
-  | "screening"
   | "signed"
   | "pending_approval"
   | "blocked"
   | "rejected"
-  | "broadcast"
-  | "settled";
+  | "error";
 
-/** Shape returned by POST /ui/custody/withdrawals (create). */
-export interface WithdrawalCreateResult {
-  id: string;
-  status: WithdrawalStatus;
-  asset: string;
+export interface WithdrawRequest {
+  /** Chain id, e.g. "1" for Ethereum mainnet. */
   chain: string;
-  amount: string | number;
-  destination: string;
-  signature?: string | null;
-  digest?: string | null;
+  /** Destination address (a leading 0x is fine — backend strips it). */
+  to: string;
+  /** Amount as a string. */
+  amount: string;
+  /** "native" for the chain coin, or an ERC-20 contract address. */
+  token?: string;
+  nonce?: string | number;
+  gas_price?: string | number;
+  gas_limit?: string | number;
+  expiry?: string | number;
+  client_ref?: string;
+}
+
+/** Gateway withdrawal result. Extra fields may be present. */
+export interface WithdrawResult {
+  status: WithdrawalStatus | string;
+  withdrawal_id?: string;
+  signature?: string;
+  digest?: string;
+  client_ref: string;
+  intent_id: string;
+  /** Present on blocked/rejected/error. */
+  detail?: string;
+  error?: string;
+  category?: string;
+  reason?: string;
+  /** Governed-withdrawal approvals metadata (shape not guaranteed). */
   approvals_required?: number;
   approvals?: number | string[];
-  error?: string | null;
-  category?: string | null;
-  source?: string | null;
-  detail?: string | null;
-}
-
-/** Shape returned by list/detail endpoints. */
-export interface Withdrawal {
-  id: string;
-  asset: string;
-  chain_ref?: string;
-  chain?: string;
-  network?: string;
-  recipient?: string;
-  destination?: string;
-  amount: string | number;
-  status: WithdrawalStatus;
-  approvals?: string[];
-  approvals_count?: number;
-  approvals_required?: number;
-  signature?: string | null;
-  digest?: string | null;
-  error?: string | null;
-  category?: string | null;
-  source?: string | null;
-  timelock_until_ms?: number | null;
-  created_ms?: number;
-}
-
-export interface AuditEntry {
-  seq: number;
-  action: string;
-  detail: string;
-  ts_ms: number;
-  prev: string;
-  hash: string;
-}
-
-export interface AuditResp {
-  entries: AuditEntry[];
-}
-
-export interface AuditVerifyResp {
-  ok: boolean;
-  entries: number;
-}
-
-export interface ApproveResp {
-  withdrawal_id: string;
-  status: WithdrawalStatus;
-  approvals: number | string[];
-  approvals_required: number;
-}
-
-export interface ReleaseResp {
-  withdrawal_id: string;
-  status: "signed";
-  signature: string;
-  digest: string;
+  [k: string]: unknown;
 }
 
 // ─── Endpoints ──────────────────────────────────────────────────
 
-export const listCustodyAssets = () =>
-  api.get<CustodyAsset[]>("/ui/custody/assets");
+export const getBalance = () => api.get<CustodyBalance>("/me/custody/balance");
 
-export const getDepositAddress = (asset: string, chain: string) =>
-  api.get<DepositAddress>("/ui/custody/deposit-address", { asset, chain });
+export const getDepositAddress = (chainId: string | number) =>
+  api.get<DepositAddress>("/me/custody/deposit-address", {
+    chain: String(chainId),
+  });
 
-export const listCustodyDeposits = () =>
-  api.get<CustodyDeposit[]>("/ui/custody/deposits");
+export const withdraw = (req: WithdrawRequest) =>
+  api.post<WithdrawResult>("/me/custody/withdraw", req);
 
-export const createWithdrawal = (body: {
-  asset: string;
-  chain: string;
-  amount: string;
-  destination: string;
-  memo?: string;
-}) => api.post<WithdrawalCreateResult>("/ui/custody/withdrawals", body);
+// ─── Client-side asset registry ─────────────────────────────────
+// The /me/custody API is keyed by CHAIN (deposit addresses) and by
+// chain+token (withdrawals). This registry maps the human asset the UI
+// shows to the chain id / token the API needs. EVM chains share a
+// deposit address; the token disambiguates ERC-20s on withdrawal.
 
-export const listWithdrawals = () =>
-  api.get<Withdrawal[]>("/ui/custody/withdrawals");
+export interface CustodyAssetMeta {
+  symbol: string;
+  name: string;
+  /** Chain id used by the deposit + withdraw endpoints. */
+  chainId: number;
+  /** Human chain name. */
+  chainName: string;
+  /** Display network label (e.g. "Ethereum (ERC-20)"). */
+  network: string;
+  /** "native" for the chain coin, or an ERC-20 contract address. */
+  token: "native" | string;
+  decimals: number;
+}
 
-export const getWithdrawal = (id: string) =>
-  api.get<Withdrawal>(`/ui/custody/withdrawals/${id}`);
+export const CUSTODY_ASSETS: CustodyAssetMeta[] = [
+  {
+    symbol: "ETH",
+    name: "Ether",
+    chainId: 1,
+    chainName: "Ethereum",
+    network: "Ethereum",
+    token: "native",
+    decimals: 18,
+  },
+  {
+    symbol: "USDC",
+    name: "USD Coin",
+    chainId: 1,
+    chainName: "Ethereum",
+    network: "Ethereum (ERC-20)",
+    token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    decimals: 6,
+  },
+  {
+    symbol: "USDT",
+    name: "Tether USD",
+    chainId: 1,
+    chainName: "Ethereum",
+    network: "Ethereum (ERC-20)",
+    token: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+    decimals: 6,
+  },
+  {
+    symbol: "BNB",
+    name: "BNB",
+    chainId: 56,
+    chainName: "BNB Smart Chain",
+    network: "BNB Smart Chain",
+    token: "native",
+    decimals: 18,
+  },
+  {
+    symbol: "POL",
+    name: "Polygon",
+    chainId: 137,
+    chainName: "Polygon",
+    network: "Polygon",
+    token: "native",
+    decimals: 18,
+  },
+];
 
-// ─── Officer / admin ────────────────────────────────────────────
+export function findAsset(symbol: string): CustodyAssetMeta | undefined {
+  const up = symbol.toUpperCase();
+  return CUSTODY_ASSETS.find((a) => a.symbol.toUpperCase() === up);
+}
 
-export const listApprovals = () =>
-  api.get<Withdrawal[]>("/ui/custody/approvals");
+/** A displayable asset row: registry metadata merged with a live balance. */
+export interface DisplayAsset extends CustodyAssetMeta {
+  balance: number | string;
+  /** True if this row has no registry entry (balance-only fallback). */
+  unknown: boolean;
+}
 
-export const approveWithdrawal = (id: string, approver?: string) =>
-  api.post<ApproveResp>(`/ui/custody/withdrawals/${id}/approve`, approver ? { approver } : {});
+/**
+ * Merge the balance map (keyed by asset symbol) with the registry.
+ * Every registry asset is shown (0 if absent), and every balance key not
+ * in the registry is shown too with sensible fallbacks so nothing is hidden.
+ */
+export function mergeBalances(
+  balances: Record<string, number | string> | undefined,
+): DisplayAsset[] {
+  const bal = balances ?? {};
+  const rows: DisplayAsset[] = CUSTODY_ASSETS.map((a) => ({
+    ...a,
+    balance: bal[a.symbol] ?? bal[a.symbol.toUpperCase()] ?? 0,
+    unknown: false,
+  }));
 
-export const releaseWithdrawal = (id: string) =>
-  api.post<ReleaseResp>(`/ui/custody/withdrawals/${id}/release`, {});
-
-export const getCustodyAudit = () =>
-  api.get<AuditResp>("/ui/custody/audit");
-
-export const verifyCustodyAudit = () =>
-  api.get<AuditVerifyResp>("/ui/custody/audit/verify");
+  const known = new Set(CUSTODY_ASSETS.map((a) => a.symbol.toUpperCase()));
+  for (const [key, value] of Object.entries(bal)) {
+    if (known.has(key.toUpperCase())) continue;
+    rows.push({
+      symbol: key,
+      name: key,
+      chainId: 1,
+      chainName: "Unknown",
+      network: "Unknown network",
+      token: "native",
+      decimals: 18,
+      balance: value,
+      unknown: true,
+    });
+  }
+  return rows;
+}
