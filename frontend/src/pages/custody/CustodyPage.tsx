@@ -1,13 +1,11 @@
 // Crypto Custody — one responsive React page (desktop + mobile web) for the
-// testlogon `/ui/custody/*` backend: balances, deposit (address + QR),
-// withdraw (with confirm step + status), activity (live-polled), and an
-// officer/admin-only Approvals + hash-chained Audit tab.
+// PRODUCTION `/me/custody/*` gateway (via the exchange edge, which HMACs to
+// the custody gateway itself). Backed tabs: Balances, Deposit (address + QR),
+// Withdraw (confirm step + status). The gateway-internal / officer-only
+// surfaces (Activity, Deposits list, Approvals & Audit) are kept as tabs but
+// render a clear "not available on this backend" empty state — no API calls.
 import { useEffect, useMemo, useState } from "react";
-import {
-  useQuery,
-  useMutation,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Wallet,
   ArrowDownToLine,
@@ -23,11 +21,10 @@ import {
   Clock,
   Ban,
   XCircle,
-  ScrollText,
+  Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { useAuthStore } from "@/stores/authStore";
 import { cn } from "@/lib/utils";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,20 +34,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -66,39 +50,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import { Progress } from "@/components/ui/progress";
 
 import QRCode from "@/components/custody/QRCode";
 import {
-  listCustodyAssets,
+  getBalance,
   getDepositAddress,
-  listCustodyDeposits,
-  createWithdrawal,
-  listWithdrawals,
-  getWithdrawal,
-  listApprovals,
-  approveWithdrawal,
-  releaseWithdrawal,
-  getCustodyAudit,
-  verifyCustodyAudit,
-  type CustodyAsset,
-  type Withdrawal,
-  type WithdrawalCreateResult,
-  type WithdrawalStatus,
+  withdraw,
+  mergeBalances,
+  type DisplayAsset,
+  type WithdrawResult,
 } from "@/api/endpoints/custody";
 
 // ─── helpers ────────────────────────────────────────────────────
 
 function useIsMobile(bp = 767): boolean {
   const [m, setM] = useState(
-    () => typeof window !== "undefined" && window.matchMedia(`(max-width: ${bp}px)`).matches,
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia(`(max-width: ${bp}px)`).matches,
   );
   useEffect(() => {
     const mq = window.matchMedia(`(max-width: ${bp}px)`);
@@ -119,30 +88,6 @@ function fmtAmount(v: string | number | undefined | null): string {
   const n = num(v);
   if (n === 0) return "0";
   return n.toLocaleString(undefined, { maximumFractionDigits: 8 });
-}
-
-const TERMINAL: WithdrawalStatus[] = ["blocked", "rejected", "settled"];
-function isTerminal(s: WithdrawalStatus): boolean {
-  return TERMINAL.includes(s);
-}
-
-function statusBadge(status: WithdrawalStatus | string) {
-  const map: Record<string, { variant: "default" | "secondary" | "destructive" | "success" | "warning" | "outline"; label: string; icon: JSX.Element }> = {
-    screening: { variant: "secondary", label: "Screening", icon: <Loader2 className="h-3 w-3 animate-spin" /> },
-    pending_approval: { variant: "warning", label: "Pending approval", icon: <Clock className="h-3 w-3" /> },
-    signed: { variant: "success", label: "Signed", icon: <CircleCheck className="h-3 w-3" /> },
-    broadcast: { variant: "default", label: "Broadcast", icon: <ArrowUpFromLine className="h-3 w-3" /> },
-    settled: { variant: "success", label: "Settled", icon: <Check className="h-3 w-3" /> },
-    blocked: { variant: "destructive", label: "Blocked", icon: <Ban className="h-3 w-3" /> },
-    rejected: { variant: "destructive", label: "Rejected", icon: <XCircle className="h-3 w-3" /> },
-  };
-  const cfg = map[status] ?? { variant: "outline" as const, label: String(status), icon: <Clock className="h-3 w-3" /> };
-  return (
-    <Badge variant={cfg.variant} className="gap-1 whitespace-nowrap">
-      {cfg.icon}
-      {cfg.label}
-    </Badge>
-  );
 }
 
 function short(s?: string | null, head = 10, tail = 8): string {
@@ -176,10 +121,13 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
   );
 }
 
-function approvalsCount(w: Withdrawal): number {
-  if (typeof w.approvals_count === "number") return w.approvals_count;
-  if (Array.isArray(w.approvals)) return w.approvals.length;
-  return 0;
+/** Shared query for the vault balance. */
+function useBalanceQuery() {
+  return useQuery({
+    queryKey: ["custody", "balance"],
+    queryFn: getBalance,
+    staleTime: 15_000,
+  });
 }
 
 // ─── Balances / Overview ────────────────────────────────────────
@@ -188,31 +136,45 @@ function OverviewTab({
   onDeposit,
   onWithdraw,
 }: {
-  onDeposit: (a: CustodyAsset) => void;
-  onWithdraw: (a: CustodyAsset) => void;
+  onDeposit: (a: DisplayAsset) => void;
+  onWithdraw: (a: DisplayAsset) => void;
 }) {
-  const { data: assets, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ["custody", "assets"],
-    queryFn: listCustodyAssets,
-    staleTime: 15_000,
-  });
+  const { data, isLoading, isError, refetch, isFetching } = useBalanceQuery();
 
-  const nonZero = (assets ?? []).filter((a) => num(a.balance) > 0);
-  const totalAssets = (assets ?? []).length;
+  const rows = useMemo(() => mergeBalances(data?.balances), [data]);
+  const nonZero = rows.filter((a) => num(a.balance) > 0);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-lg font-semibold">Balances</h2>
           <p className="text-sm text-muted-foreground">
-            {nonZero.length} funded / {totalAssets} supported assets
+            {nonZero.length} funded / {rows.length} supported assets
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching} className="gap-1.5">
-          <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-3">
+          {data && (
+            <div className="text-right text-xs text-muted-foreground">
+              <div>
+                Vault <span className="font-mono">{short(data.vault, 8, 6)}</span>
+              </div>
+              <div>
+                Tier <Badge variant="outline" className="text-[10px]">{data.tier}</Badge>
+              </div>
+            </div>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="gap-1.5"
+          >
+            <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {isLoading && (
@@ -228,25 +190,22 @@ function OverviewTab({
           <CardContent className="flex flex-col items-center gap-2 py-10 text-center">
             <AlertTriangle className="h-8 w-8 text-destructive" />
             <p className="text-sm text-muted-foreground">Could not load balances.</p>
-            <Button size="sm" onClick={() => refetch()}>Retry</Button>
+            <Button size="sm" onClick={() => refetch()}>
+              Retry
+            </Button>
           </CardContent>
         </Card>
       )}
 
-      {!isLoading && !isError && totalAssets === 0 && (
-        <Card>
-          <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            No custody assets are available for your account yet.
-          </CardContent>
-        </Card>
-      )}
-
-      {!isLoading && !isError && totalAssets > 0 && (
+      {!isLoading && !isError && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {(assets ?? []).map((a) => {
+          {rows.map((a) => {
             const bal = num(a.balance);
             return (
-              <Card key={`${a.asset}-${a.chain}`} className={cn(bal > 0 && "ring-1 ring-primary/20")}>
+              <Card
+                key={`${a.symbol}-${a.chainId}-${a.token}`}
+                className={cn(bal > 0 && "ring-1 ring-primary/20")}
+              >
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -258,19 +217,35 @@ function OverviewTab({
                         <p className="text-xs text-muted-foreground">{a.network}</p>
                       </div>
                     </div>
-                    <Badge variant="outline" className="text-[10px]">{a.symbol}</Badge>
+                    <Badge variant="outline" className="text-[10px]">
+                      {a.symbol}
+                    </Badge>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div>
-                    <span className="text-xl font-semibold tabular-nums">{fmtAmount(a.balance)}</span>{" "}
+                    <span className="text-xl font-semibold tabular-nums">
+                      {fmtAmount(a.balance)}
+                    </span>{" "}
                     <span className="text-sm text-muted-foreground">{a.symbol}</span>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" variant="secondary" className="flex-1 gap-1" onClick={() => onDeposit(a)} disabled={!a.address_available}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="flex-1 gap-1"
+                      onClick={() => onDeposit(a)}
+                      disabled={a.unknown}
+                    >
                       <ArrowDownToLine className="h-3.5 w-3.5" /> Deposit
                     </Button>
-                    <Button size="sm" variant="secondary" className="flex-1 gap-1" onClick={() => onWithdraw(a)} disabled={bal <= 0}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="flex-1 gap-1"
+                      onClick={() => onWithdraw(a)}
+                      disabled={bal <= 0 || a.unknown}
+                    >
                       <ArrowUpFromLine className="h-3.5 w-3.5" /> Withdraw
                     </Button>
                   </div>
@@ -286,42 +261,34 @@ function OverviewTab({
 
 // ─── Deposit ────────────────────────────────────────────────────
 
-function DepositTab({ preselect }: { preselect?: CustodyAsset | null }) {
-  const { data: assets } = useQuery({
-    queryKey: ["custody", "assets"],
-    queryFn: listCustodyAssets,
-    staleTime: 15_000,
-  });
-  const withAddr = (assets ?? []).filter((a) => a.address_available);
+function DepositTab({ preselect }: { preselect?: DisplayAsset | null }) {
+  const { data } = useBalanceQuery();
+  const assets = useMemo(
+    () => mergeBalances(data?.balances).filter((a) => !a.unknown),
+    [data],
+  );
   const [selected, setSelected] = useState<string>("");
 
   useEffect(() => {
-    if (preselect) {
-      setSelected(`${preselect.asset}::${preselect.chain}`);
-    } else if (!selected && withAddr.length > 0) {
-      const first = withAddr[0]!;
-      setSelected(`${first.asset}::${first.chain}`);
+    if (preselect && !preselect.unknown) {
+      setSelected(preselect.symbol);
+    } else if (!selected && assets.length > 0) {
+      setSelected(assets[0]!.symbol);
     }
-  }, [preselect, withAddr, selected]);
+  }, [preselect, assets, selected]);
 
-  const [asset = "", chain = ""] = selected.split("::");
-  const chosen = (assets ?? []).find((a) => a.asset === asset && a.chain === chain);
+  const chosen = assets.find((a) => a.symbol === selected);
 
   const addrQuery = useQuery({
-    queryKey: ["custody", "deposit-address", asset, chain],
-    queryFn: () => getDepositAddress(asset, chain),
-    enabled: Boolean(asset && chain),
+    queryKey: ["custody", "deposit-address", chosen?.chainId],
+    queryFn: () => getDepositAddress(chosen!.chainId),
+    enabled: Boolean(chosen),
     retry: false,
-  });
-
-  const depositsQuery = useQuery({
-    queryKey: ["custody", "deposits"],
-    queryFn: listCustodyDeposits,
-    staleTime: 10_000,
+    staleTime: 60_000,
   });
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div className="mx-auto max-w-xl space-y-4">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -336,8 +303,8 @@ function DepositTab({ preselect }: { preselect?: CustodyAsset | null }) {
                 <SelectValue placeholder="Choose an asset" />
               </SelectTrigger>
               <SelectContent>
-                {withAddr.map((a) => (
-                  <SelectItem key={`${a.asset}::${a.chain}`} value={`${a.asset}::${a.chain}`}>
+                {assets.map((a) => (
+                  <SelectItem key={a.symbol} value={a.symbol}>
                     {a.name} ({a.symbol}) — {a.network}
                   </SelectItem>
                 ))}
@@ -349,11 +316,12 @@ function DepositTab({ preselect }: { preselect?: CustodyAsset | null }) {
 
           {addrQuery.isError && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-              {(addrQuery.error as ApiError)?.detail ?? "Deposit address unavailable for this asset."}
+              {(addrQuery.error as ApiError)?.detail ??
+                "Deposit address unavailable for this chain."}
             </div>
           )}
 
-          {addrQuery.data && (
+          {addrQuery.data && chosen && (
             <div className="space-y-4">
               <div className="flex justify-center rounded-xl border bg-white p-4">
                 <QRCode value={addrQuery.data.address} size={192} />
@@ -368,65 +336,31 @@ function DepositTab({ preselect }: { preselect?: CustodyAsset | null }) {
                 </div>
               </div>
 
-              {addrQuery.data.memo && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">Memo / tag (required)</Label>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 break-all rounded-lg border bg-muted/40 p-2 font-mono text-sm">
-                      {addrQuery.data.memo}
-                    </div>
-                    <CopyButton text={addrQuery.data.memo} label="Copy memo" />
-                  </div>
-                </div>
-              )}
-
               <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                 <span>
-                  Send only <strong>{chosen?.symbol ?? asset}</strong> on the{" "}
-                  <strong>{addrQuery.data.network}</strong> network to this address. Sending any other
-                  asset or using another network may result in permanent loss.
+                  This is a per-chain address. Send only assets on{" "}
+                  <strong>{chosen.chainName}</strong> (chain {chosen.chainId}) to
+                  this address. Sending assets from another network may result in
+                  permanent loss.
                 </span>
               </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Recent deposits</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {depositsQuery.isLoading && <Skeleton className="h-24 w-full" />}
-          {!depositsQuery.isLoading && (depositsQuery.data ?? []).length === 0 && (
-            <p className="py-8 text-center text-sm text-muted-foreground">No deposits yet.</p>
-          )}
-          {(depositsQuery.data ?? []).length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Asset</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Conf.</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(depositsQuery.data ?? []).map((d) => (
-                  <TableRow key={d.id}>
-                    <TableCell className="font-medium">{d.asset}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtAmount(d.amount)}</TableCell>
-                    <TableCell>
-                      <Badge variant={d.status === "confirmed" || d.status === "credited" ? "success" : "secondary"}>
-                        {d.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{d.confirmations}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+              <div className="grid grid-cols-1 gap-1 text-[11px] text-muted-foreground sm:grid-cols-3">
+                <div>
+                  <span className="block font-medium text-foreground/70">Family</span>
+                  {addrQuery.data.family}
+                </div>
+                <div>
+                  <span className="block font-medium text-foreground/70">Derivation</span>
+                  <span className="break-all">{addrQuery.data.derivation}</span>
+                </div>
+                <div>
+                  <span className="block font-medium text-foreground/70">Domain</span>
+                  <span className="break-all">{addrQuery.data.domain}</span>
+                </div>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -436,7 +370,7 @@ function DepositTab({ preselect }: { preselect?: CustodyAsset | null }) {
 
 // ─── Withdraw ───────────────────────────────────────────────────
 
-function WithdrawResultView({ result }: { result: WithdrawalCreateResult }) {
+function WithdrawResultView({ result }: { result: WithdrawResult }) {
   const status = result.status;
   if (status === "signed") {
     return (
@@ -444,27 +378,47 @@ function WithdrawResultView({ result }: { result: WithdrawalCreateResult }) {
         <div className="flex items-center gap-2 font-medium text-success">
           <CircleCheck className="h-5 w-5" /> Withdrawal signed
         </div>
+        {result.withdrawal_id && (
+          <p className="break-all font-mono text-xs text-muted-foreground">
+            id: {result.withdrawal_id}
+          </p>
+        )}
         {result.signature && (
-          <p className="break-all font-mono text-xs text-muted-foreground">sig: {short(result.signature, 14, 12)}</p>
+          <p className="break-all font-mono text-xs text-muted-foreground">
+            sig: {short(result.signature, 14, 12)}
+          </p>
         )}
         {result.digest && (
-          <p className="break-all font-mono text-xs text-muted-foreground">digest: {short(result.digest, 14, 12)}</p>
+          <p className="break-all font-mono text-xs text-muted-foreground">
+            digest: {short(result.digest, 14, 12)}
+          </p>
         )}
       </div>
     );
   }
   if (status === "pending_approval") {
-    const req = result.approvals_required ?? 2;
-    const have = Array.isArray(result.approvals) ? result.approvals.length : num(result.approvals);
+    const req = result.approvals_required;
+    const have = Array.isArray(result.approvals)
+      ? result.approvals.length
+      : typeof result.approvals === "number"
+        ? result.approvals
+        : undefined;
     return (
       <div className="space-y-2 rounded-lg border border-warning/40 bg-warning/10 p-4">
         <div className="flex items-center gap-2 font-medium text-warning">
           <Clock className="h-5 w-5" /> Awaiting officer approval
         </div>
         <p className="text-sm text-muted-foreground">
-          {have} of {req} approvals collected. A custody officer must approve before this transfer is signed.
+          This is a governed withdrawal. A custody officer must approve it before
+          it is signed and broadcast.
+          {typeof req === "number" &&
+            ` ${have ?? 0} of ${req} approvals collected.`}
         </p>
-        <Progress value={req > 0 ? (have / req) * 100 : 0} className="h-2" />
+        {result.intent_id && (
+          <p className="break-all font-mono text-xs text-muted-foreground">
+            intent: {result.intent_id}
+          </p>
+        )}
       </div>
     );
   }
@@ -475,7 +429,12 @@ function WithdrawResultView({ result }: { result: WithdrawalCreateResult }) {
           <Ban className="h-5 w-5" /> Blocked by screening
         </div>
         <p className="text-sm text-muted-foreground">
-          {result.detail || result.error || `This destination was flagged${result.category ? ` (${result.category})` : ""}. The transfer was blocked and not signed.`}
+          {result.detail ||
+            result.reason ||
+            result.error ||
+            `This destination was flagged${
+              result.category ? ` (${result.category})` : ""
+            }. The transfer was blocked and not signed.`}
         </p>
       </div>
     );
@@ -483,37 +442,45 @@ function WithdrawResultView({ result }: { result: WithdrawalCreateResult }) {
   return (
     <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/10 p-4">
       <div className="flex items-center gap-2 font-medium text-destructive">
-        <XCircle className="h-5 w-5" /> Rejected
+        <XCircle className="h-5 w-5" />{" "}
+        {status === "rejected" ? "Rejected" : "Withdrawal error"}
       </div>
-      <p className="text-sm text-muted-foreground">{result.detail || result.error || "The withdrawal was rejected."}</p>
+      <p className="text-sm text-muted-foreground">
+        {result.detail ||
+          result.reason ||
+          result.error ||
+          "The withdrawal was rejected."}
+      </p>
     </div>
   );
 }
 
-function WithdrawTab({ preselect }: { preselect?: CustodyAsset | null }) {
+function WithdrawTab({ preselect }: { preselect?: DisplayAsset | null }) {
   const qc = useQueryClient();
-  const { data: assets } = useQuery({
-    queryKey: ["custody", "assets"],
-    queryFn: listCustodyAssets,
-    staleTime: 15_000,
-  });
-  const funded = (assets ?? []).filter((a) => num(a.balance) > 0);
+  const { data } = useBalanceQuery();
+  const funded = useMemo(
+    () => mergeBalances(data?.balances).filter((a) => num(a.balance) > 0 && !a.unknown),
+    [data],
+  );
 
   const [selected, setSelected] = useState<string>("");
   const [amount, setAmount] = useState("");
   const [destination, setDestination] = useState("");
-  const [memo, setMemo] = useState("");
+  const [tokenOverride, setTokenOverride] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [result, setResult] = useState<WithdrawalCreateResult | null>(null);
+  const [result, setResult] = useState<WithdrawResult | null>(null);
 
   useEffect(() => {
-    if (preselect) setSelected(`${preselect.asset}::${preselect.chain}`);
-    else if (!selected && funded.length > 0) { const first = funded[0]!; setSelected(`${first.asset}::${first.chain}`); }
+    if (preselect && !preselect.unknown) setSelected(preselect.symbol);
+    else if (!selected && funded.length > 0) setSelected(funded[0]!.symbol);
   }, [preselect, funded, selected]);
 
-  const [asset = "", chain = ""] = selected.split("::");
-  const chosen = (assets ?? []).find((a) => a.asset === asset && a.chain === chain);
+  const chosen = funded.find((a) => a.symbol === selected);
   const balance = num(chosen?.balance);
+  const isErc20 = Boolean(chosen && chosen.token !== "native");
+  const effectiveToken =
+    (showAdvanced && tokenOverride.trim()) || chosen?.token || "native";
 
   const amt = num(amount);
   const amountError =
@@ -524,26 +491,35 @@ function WithdrawTab({ preselect }: { preselect?: CustodyAsset | null }) {
         : amt > balance
           ? "Amount exceeds your available balance."
           : "";
-  const destError = destination.trim() === "" ? "" : destination.trim().length < 8 ? "Destination address looks too short." : "";
-  const canSubmit = Boolean(asset) && amt > 0 && amt <= balance && destination.trim().length >= 8;
+  const destError =
+    destination.trim() === ""
+      ? ""
+      : destination.trim().length < 8
+        ? "Destination address looks too short."
+        : "";
+  const canSubmit =
+    Boolean(chosen) &&
+    amt > 0 &&
+    amt <= balance &&
+    destination.trim().length >= 8;
 
   const mutation = useMutation({
     mutationFn: () =>
-      createWithdrawal({
-        asset,
-        chain,
+      withdraw({
+        chain: String(chosen!.chainId),
+        to: destination.trim(),
         amount: String(amt),
-        destination: destination.trim(),
-        memo: memo.trim() || undefined,
+        token: effectiveToken,
       }),
     onSuccess: (res) => {
       setResult(res);
       setConfirmOpen(false);
-      qc.invalidateQueries({ queryKey: ["custody", "withdrawals"] });
-      qc.invalidateQueries({ queryKey: ["custody", "assets"] });
+      qc.invalidateQueries({ queryKey: ["custody", "balance"] });
       if (res.status === "signed") toast.success("Withdrawal signed");
-      else if (res.status === "pending_approval") toast.message("Withdrawal awaiting approval");
-      else if (res.status === "blocked") toast.error("Withdrawal blocked by screening");
+      else if (res.status === "pending_approval")
+        toast.message("Withdrawal awaiting approval");
+      else if (res.status === "blocked")
+        toast.error("Withdrawal blocked by screening");
       else toast.error("Withdrawal rejected");
     },
     onError: (err) => {
@@ -563,14 +539,25 @@ function WithdrawTab({ preselect }: { preselect?: CustodyAsset | null }) {
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label>Asset</Label>
-            <Select value={selected} onValueChange={(v) => { setSelected(v); setResult(null); }}>
+            <Select
+              value={selected}
+              onValueChange={(v) => {
+                setSelected(v);
+                setResult(null);
+                setTokenOverride("");
+              }}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Choose a funded asset" />
               </SelectTrigger>
               <SelectContent>
-                {funded.length === 0 && <SelectItem value="__none" disabled>No funded assets</SelectItem>}
+                {funded.length === 0 && (
+                  <SelectItem value="__none" disabled>
+                    No funded assets
+                  </SelectItem>
+                )}
                 {funded.map((a) => (
-                  <SelectItem key={`${a.asset}::${a.chain}`} value={`${a.asset}::${a.chain}`}>
+                  <SelectItem key={a.symbol} value={a.symbol}>
                     {a.name} ({a.symbol}) — {fmtAmount(a.balance)} available
                   </SelectItem>
                 ))}
@@ -611,12 +598,51 @@ function WithdrawTab({ preselect }: { preselect?: CustodyAsset | null }) {
             {destError && <p className="text-xs text-destructive">{destError}</p>}
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Memo / tag (optional)</Label>
-            <Input placeholder="Only if the network requires it" value={memo} onChange={(e) => setMemo(e.target.value)} />
-          </div>
+          {chosen && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <div className="flex justify-between">
+                <span>Chain</span>
+                <span className="font-medium text-foreground">
+                  {chosen.chainName} (chain {chosen.chainId})
+                </span>
+              </div>
+              <div className="mt-1 flex justify-between">
+                <span>Token</span>
+                <span className="font-mono text-foreground">
+                  {isErc20 ? short(effectiveToken, 8, 6) : "native"}
+                </span>
+              </div>
+            </div>
+          )}
 
-          <Button className="w-full gap-1.5" disabled={!canSubmit} onClick={() => { setResult(null); setConfirmOpen(true); }}>
+          {isErc20 && (
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                className="text-xs text-primary hover:underline"
+                onClick={() => setShowAdvanced((v) => !v)}
+              >
+                {showAdvanced ? "Hide" : "Advanced:"} token contract override
+              </button>
+              {showAdvanced && (
+                <Input
+                  placeholder={chosen?.token}
+                  value={tokenOverride}
+                  onChange={(e) => setTokenOverride(e.target.value)}
+                  className="font-mono text-xs"
+                />
+              )}
+            </div>
+          )}
+
+          <Button
+            className="w-full gap-1.5"
+            disabled={!canSubmit}
+            onClick={() => {
+              setResult(null);
+              setConfirmOpen(true);
+            }}
+          >
             <ArrowUpFromLine className="h-4 w-4" /> Review withdrawal
           </Button>
         </CardContent>
@@ -628,24 +654,54 @@ function WithdrawTab({ preselect }: { preselect?: CustodyAsset | null }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirm withdrawal</DialogTitle>
-            <DialogDescription>Review the details carefully — crypto transfers can't be reversed.</DialogDescription>
+            <DialogDescription>
+              Review the details carefully — crypto transfers can't be reversed.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
-            <div className="flex justify-between"><span className="text-muted-foreground">Asset</span><span className="font-medium">{chosen?.name} ({chosen?.symbol})</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Network</span><span className="font-medium">{chosen?.network}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span className="font-medium tabular-nums">{fmtAmount(amt)} {chosen?.symbol}</span></div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Asset</span>
+              <span className="font-medium">
+                {chosen?.name} ({chosen?.symbol})
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Chain</span>
+              <span className="font-medium">
+                {chosen?.chainName} ({chosen?.chainId})
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Amount</span>
+              <span className="font-medium tabular-nums">
+                {fmtAmount(amt)} {chosen?.symbol}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Token</span>
+              <span className="font-mono text-xs">
+                {isErc20 ? short(effectiveToken, 10, 8) : "native"}
+              </span>
+            </div>
             <Separator />
             <div className="space-y-1">
               <span className="text-muted-foreground">Destination</span>
               <div className="break-all font-mono text-xs">{destination.trim()}</div>
             </div>
-            {memo.trim() && (
-              <div className="flex justify-between"><span className="text-muted-foreground">Memo</span><span className="font-mono text-xs">{memo.trim()}</span></div>
-            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={mutation.isPending}>Cancel</Button>
-            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="gap-1.5">
+            <Button
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+              disabled={mutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={mutation.isPending}
+              className="gap-1.5"
+            >
               {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
               Confirm & send
             </Button>
@@ -656,307 +712,32 @@ function WithdrawTab({ preselect }: { preselect?: CustodyAsset | null }) {
   );
 }
 
-// ─── Activity / History ─────────────────────────────────────────
+// ─── Degraded (gateway-internal / officer-only) tabs ────────────
 
-function WithdrawalDetailDrawer({ id, open, onClose }: { id: string | null; open: boolean; onClose: () => void }) {
-  const [now, setNow] = useState(Date.now());
-  const detail = useQuery({
-    queryKey: ["custody", "withdrawal", id],
-    queryFn: () => getWithdrawal(id as string),
-    enabled: Boolean(id) && open,
-    refetchInterval: (q) => {
-      const w = q.state.data as Withdrawal | undefined;
-      return w && !isTerminal(w.status) ? 4000 : false;
-    },
-  });
-  const w = detail.data;
-
-  useEffect(() => {
-    if (!open) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [open]);
-
-  const timelockRemaining = w?.timelock_until_ms ? Math.max(0, w.timelock_until_ms - now) : 0;
-
+function NotAvailable({
+  icon,
+  title,
+  line,
+}: {
+  icon: JSX.Element;
+  title: string;
+  line: string;
+}) {
   return (
-    <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-md">
-        <SheetHeader>
-          <SheetTitle>Withdrawal detail</SheetTitle>
-          <SheetDescription>{id}</SheetDescription>
-        </SheetHeader>
-        {detail.isLoading && <Skeleton className="mt-4 h-40 w-full" />}
-        {w && (
-          <div className="mt-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Status</span>
-              {statusBadge(w.status)}
-            </div>
-            <Separator />
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-muted-foreground">Asset</span><span className="font-medium">{w.asset}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Network</span><span className="font-medium">{w.network ?? w.chain_ref ?? w.chain}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span className="font-medium tabular-nums">{fmtAmount(w.amount)}</span></div>
-              <div className="space-y-0.5">
-                <span className="text-muted-foreground">Recipient</span>
-                <div className="break-all font-mono text-xs">{w.recipient ?? w.destination}</div>
-              </div>
-            </div>
-
-            {(w.approvals_required ?? 0) > 0 && (
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Approvals</span>
-                  <span className="font-medium">{approvalsCount(w)} / {w.approvals_required}</span>
-                </div>
-                <Progress value={(approvalsCount(w) / (w.approvals_required || 1)) * 100} className="h-2" />
-                {Array.isArray(w.approvals) && w.approvals.length > 0 && (
-                  <p className="text-xs text-muted-foreground">by {w.approvals.map((a) => short(a, 6, 4)).join(", ")}</p>
-                )}
-              </div>
-            )}
-
-            {timelockRemaining > 0 && (
-              <div className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
-                <Clock className="h-4 w-4" />
-                Timelocked — releasable in {Math.ceil(timelockRemaining / 1000)}s
-              </div>
-            )}
-
-            {w.signature && (
-              <div className="space-y-0.5 rounded-lg border bg-muted/30 p-3">
-                <span className="text-xs text-muted-foreground">Signature</span>
-                <div className="break-all font-mono text-xs">{w.signature}</div>
-              </div>
-            )}
-            {w.digest && (
-              <div className="space-y-0.5 rounded-lg border bg-muted/30 p-3">
-                <span className="text-xs text-muted-foreground">Digest</span>
-                <div className="break-all font-mono text-xs">{w.digest}</div>
-              </div>
-            )}
-            {(w.error || w.category) && (
-              <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-                {w.category ? `[${w.category}] ` : ""}{w.error}
-              </div>
-            )}
-          </div>
-        )}
-      </SheetContent>
-    </Sheet>
-  );
-}
-
-function ActivityTab() {
-  const qc = useQueryClient();
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["custody", "withdrawals"],
-    queryFn: listWithdrawals,
-    refetchInterval: (q) => {
-      const rows = (q.state.data as Withdrawal[] | undefined) ?? [];
-      return rows.some((r) => !isTerminal(r.status)) ? 5000 : false;
-    },
-  });
-  const [openId, setOpenId] = useState<string | null>(null);
-
-  // Keep the list fresh when a detail drawer advances a status.
-  useEffect(() => {
-    if (!openId) qc.invalidateQueries({ queryKey: ["custody", "withdrawals"] });
-  }, [openId, qc]);
-
-  const rows = data ?? [];
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Withdrawal activity</h2>
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching} className="gap-1.5">
-          <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} /> Refresh
-        </Button>
-      </div>
-      <Card>
-        <CardContent className="p-0">
-          {isLoading && <div className="p-4"><Skeleton className="h-32 w-full" /></div>}
-          {!isLoading && rows.length === 0 && (
-            <p className="py-12 text-center text-sm text-muted-foreground">No withdrawals yet.</p>
-          )}
-          {rows.length > 0 && (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Asset</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead className="hidden md:table-cell">Recipient</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-16" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((w) => (
-                    <TableRow key={w.id} className="cursor-pointer" onClick={() => setOpenId(w.id)}>
-                      <TableCell className="font-medium">{w.asset}</TableCell>
-                      <TableCell className="text-right tabular-nums">{fmtAmount(w.amount)}</TableCell>
-                      <TableCell className="hidden font-mono text-xs md:table-cell">{short(w.recipient ?? w.destination)}</TableCell>
-                      <TableCell>{statusBadge(w.status)}</TableCell>
-                      <TableCell className="text-right"><Button variant="ghost" size="sm">View</Button></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      <WithdrawalDetailDrawer id={openId} open={Boolean(openId)} onClose={() => setOpenId(null)} />
-    </div>
-  );
-}
-
-// ─── Approvals + Audit (officer/admin) ──────────────────────────
-
-function ApprovalsTab() {
-  const qc = useQueryClient();
-  const approvals = useQuery({
-    queryKey: ["custody", "approvals"],
-    queryFn: listApprovals,
-    refetchInterval: 8000,
-  });
-
-  const approveM = useMutation({
-    mutationFn: (id: string) => approveWithdrawal(id),
-    onSuccess: (res) => {
-      toast.success(`Approved — ${typeof res.approvals === "number" ? res.approvals : (res.approvals?.length ?? 0)}/${res.approvals_required}`);
-      qc.invalidateQueries({ queryKey: ["custody", "approvals"] });
-      qc.invalidateQueries({ queryKey: ["custody", "withdrawals"] });
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.detail : "Approve failed"),
-  });
-
-  const releaseM = useMutation({
-    mutationFn: (id: string) => releaseWithdrawal(id),
-    onSuccess: () => {
-      toast.success("Released & signed");
-      qc.invalidateQueries({ queryKey: ["custody", "approvals"] });
-      qc.invalidateQueries({ queryKey: ["custody", "withdrawals"] });
-    },
-    onError: (err) => {
-      if (err instanceof ApiError && err.status === 425) toast.error("Timelocked — cannot release yet");
-      else if (err instanceof ApiError && err.status === 409) toast.error("Not enough approvals to release");
-      else toast.error(err instanceof ApiError ? err.detail : "Release failed");
-    },
-  });
-
-  const audit = useQuery({
-    queryKey: ["custody", "audit"],
-    queryFn: getCustodyAudit,
-    staleTime: 10_000,
-  });
-
-  const verifyM = useMutation({
-    mutationFn: verifyCustodyAudit,
-    onSuccess: (res) => {
-      if (res.ok) toast.success(`Audit chain verified — ${res.entries} entries intact`);
-      else toast.error("Audit chain verification FAILED");
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.detail : "Verify failed"),
-  });
-
-  const rows = approvals.data ?? [];
-
-  return (
-    <div className="space-y-6">
-      <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Approval queue</h2>
-        <Card>
-          <CardContent className="p-0">
-            {approvals.isLoading && <div className="p-4"><Skeleton className="h-24 w-full" /></div>}
-            {!approvals.isLoading && rows.length === 0 && (
-              <p className="py-10 text-center text-sm text-muted-foreground">Nothing awaiting approval.</p>
-            )}
-            {rows.length > 0 && (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Asset</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="hidden md:table-cell">Recipient</TableHead>
-                      <TableHead>Approvals</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {rows.map((w) => {
-                      const busy = (approveM.isPending && approveM.variables === w.id) || (releaseM.isPending && releaseM.variables === w.id);
-                      return (
-                        <TableRow key={w.id}>
-                          <TableCell className="font-medium">{w.asset}</TableCell>
-                          <TableCell className="text-right tabular-nums">{fmtAmount(w.amount)}</TableCell>
-                          <TableCell className="hidden font-mono text-xs md:table-cell">{short(w.recipient ?? w.destination)}</TableCell>
-                          <TableCell className="tabular-nums">{approvalsCount(w)}/{w.approvals_required ?? "?"}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-2">
-                              <Button size="sm" variant="outline" disabled={busy} onClick={() => approveM.mutate(w.id)}>Approve</Button>
-                              <Button size="sm" disabled={busy} onClick={() => releaseM.mutate(w.id)}>Release</Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-lg font-semibold"><ScrollText className="h-5 w-5" /> Audit trail</h2>
-          <Button size="sm" variant="outline" onClick={() => verifyM.mutate()} disabled={verifyM.isPending} className="gap-1.5">
-            {verifyM.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-            Verify chain
-          </Button>
+    <Card>
+      <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          {icon}
         </div>
-        <Card>
-          <CardContent className="p-0">
-            {audit.isLoading && <div className="p-4"><Skeleton className="h-24 w-full" /></div>}
-            {!audit.isLoading && (audit.data?.entries ?? []).length === 0 && (
-              <p className="py-10 text-center text-sm text-muted-foreground">No audit entries.</p>
-            )}
-            {(audit.data?.entries ?? []).length > 0 && (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-12">#</TableHead>
-                      <TableHead>Action</TableHead>
-                      <TableHead className="hidden md:table-cell">Detail</TableHead>
-                      <TableHead className="hidden sm:table-cell">Time</TableHead>
-                      <TableHead>Hash</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(audit.data?.entries ?? []).map((e) => (
-                      <TableRow key={e.seq}>
-                        <TableCell className="tabular-nums text-muted-foreground">{e.seq}</TableCell>
-                        <TableCell className="font-medium">{e.action}</TableCell>
-                        <TableCell className="hidden max-w-xs truncate text-xs text-muted-foreground md:table-cell">{e.detail}</TableCell>
-                        <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground sm:table-cell">{new Date(e.ts_ms).toLocaleString()}</TableCell>
-                        <TableCell className="font-mono text-xs">{short(e.hash, 8, 6)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+        <div className="space-y-1">
+          <p className="font-medium">{title}</p>
+          <p className="mx-auto max-w-md text-sm text-muted-foreground">{line}</p>
+        </div>
+        <Badge variant="outline" className="gap-1.5">
+          <Info className="h-3 w-3" /> Not available on this backend
+        </Badge>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -966,26 +747,47 @@ type TabKey = "overview" | "deposit" | "withdraw" | "activity" | "approvals";
 
 export default function CustodyPage() {
   const isMobile = useIsMobile(767);
-  const role = useAuthStore((s) => s.role);
-  const isAdmin = useAuthStore((s) => s.isAdmin);
-  const isOfficer = isAdmin || role === "admin" || role === "root";
 
   const [tab, setTab] = useState<TabKey>("overview");
-  const [depositAsset, setDepositAsset] = useState<CustodyAsset | null>(null);
-  const [withdrawAsset, setWithdrawAsset] = useState<CustodyAsset | null>(null);
+  const [depositAsset, setDepositAsset] = useState<DisplayAsset | null>(null);
+  const [withdrawAsset, setWithdrawAsset] = useState<DisplayAsset | null>(null);
 
-  const tabs: { key: TabKey; label: string; short: string; icon: JSX.Element }[] = useMemo(() => {
-    const base: { key: TabKey; label: string; short: string; icon: JSX.Element }[] = [
-      { key: "overview" as const, label: "Balances", short: "Balances", icon: <Wallet className="h-4 w-4" /> },
-      { key: "deposit" as const, label: "Deposit", short: "Deposit", icon: <ArrowDownToLine className="h-4 w-4" /> },
-      { key: "withdraw" as const, label: "Withdraw", short: "Withdraw", icon: <ArrowUpFromLine className="h-4 w-4" /> },
-      { key: "activity" as const, label: "Activity", short: "Activity", icon: <ListChecks className="h-4 w-4" /> },
-    ];
-    if (isOfficer) {
-      base.push({ key: "approvals" as const, label: "Approvals & Audit", short: "Approvals", icon: <ShieldCheck className="h-4 w-4" /> });
-    }
-    return base;
-  }, [isOfficer]);
+  const tabs: { key: TabKey; label: string; short: string; icon: JSX.Element }[] =
+    useMemo(
+      () => [
+        {
+          key: "overview" as const,
+          label: "Balances",
+          short: "Balances",
+          icon: <Wallet className="h-4 w-4" />,
+        },
+        {
+          key: "deposit" as const,
+          label: "Deposit",
+          short: "Deposit",
+          icon: <ArrowDownToLine className="h-4 w-4" />,
+        },
+        {
+          key: "withdraw" as const,
+          label: "Withdraw",
+          short: "Withdraw",
+          icon: <ArrowUpFromLine className="h-4 w-4" />,
+        },
+        {
+          key: "activity" as const,
+          label: "Activity",
+          short: "Activity",
+          icon: <ListChecks className="h-4 w-4" />,
+        },
+        {
+          key: "approvals" as const,
+          label: "Approvals & Audit",
+          short: "Approvals",
+          icon: <ShieldCheck className="h-4 w-4" />,
+        },
+      ],
+      [],
+    );
 
   return (
     <div className="mx-auto w-full max-w-6xl p-4 md:p-6">
@@ -995,12 +797,19 @@ export default function CustodyPage() {
         </div>
         <div>
           <h1 className="text-xl font-bold tracking-tight md:text-2xl">Custody</h1>
-          <p className="text-sm text-muted-foreground">Hold, receive and send crypto from your custodial wallet.</p>
+          <p className="text-sm text-muted-foreground">
+            Hold, receive and send crypto from your custodial vault.
+          </p>
         </div>
       </div>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)}>
-        <TabsList className={cn("mb-4 w-full", isMobile ? "grid grid-cols-4 gap-1" : "inline-flex", isMobile && isOfficer && "grid-cols-5")}>
+        <TabsList
+          className={cn(
+            "mb-4 w-full",
+            isMobile ? "grid grid-cols-5 gap-1" : "inline-flex",
+          )}
+        >
           {tabs.map((t) => (
             <TabsTrigger key={t.key} value={t.key} className="gap-1.5">
               {t.icon}
@@ -1012,8 +821,14 @@ export default function CustodyPage() {
 
         <TabsContent value="overview">
           <OverviewTab
-            onDeposit={(a) => { setDepositAsset(a); setTab("deposit"); }}
-            onWithdraw={(a) => { setWithdrawAsset(a); setTab("withdraw"); }}
+            onDeposit={(a) => {
+              setDepositAsset(a);
+              setTab("deposit");
+            }}
+            onWithdraw={(a) => {
+              setWithdrawAsset(a);
+              setTab("withdraw");
+            }}
           />
         </TabsContent>
         <TabsContent value="deposit">
@@ -1023,13 +838,19 @@ export default function CustodyPage() {
           <WithdrawTab preselect={withdrawAsset} />
         </TabsContent>
         <TabsContent value="activity">
-          <ActivityTab />
+          <NotAvailable
+            icon={<ListChecks className="h-6 w-6" />}
+            title="Transfer history isn't exposed here"
+            line="Deposit and withdrawal history is tracked inside the custody gateway and isn't served by the /me/custody API. Your live balances above reflect completed transfers."
+          />
         </TabsContent>
-        {isOfficer && (
-          <TabsContent value="approvals">
-            <ApprovalsTab />
-          </TabsContent>
-        )}
+        <TabsContent value="approvals">
+          <NotAvailable
+            icon={<ShieldCheck className="h-6 w-6" />}
+            title="Approvals & audit are officer-only"
+            line="The governed-withdrawal approval queue and hash-chained audit trail are internal custody-officer tools and aren't available on the account-facing /me/custody API."
+          />
+        </TabsContent>
       </Tabs>
     </div>
   );

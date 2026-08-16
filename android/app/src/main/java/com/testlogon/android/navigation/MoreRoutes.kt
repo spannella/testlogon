@@ -98,7 +98,7 @@ object MoreRoutes {
     const val FILES = FilesDest.ROUTE
 
 
-    // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /ui/custody/*.
+    // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /me/custody/*.
     const val CUSTODY = CustodyDest.ROUTE
 
     // AND-219: the purchase history list + search.
