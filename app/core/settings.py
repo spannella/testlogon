@@ -3799,24 +3799,4 @@ class Settings:
     marketing_unsubscribe_token_ttl_days: int = int(os.environ.get("MARKETING_UNSUBSCRIBE_TOKEN_TTL_DAYS", "30"))
 
     # ------------------------------------------------------------------
-    # CUSTODY (crypto-custody proxy -> external MPC custody gateway).
-    # Unconfigured (no URL/key) => the proxy falls back to an in-memory mock.
-    # Secrets/officer keys are server-to-server ONLY and never reach clients.
-    # ------------------------------------------------------------------
-    custody_gateway_url: str = os.environ.get("CUSTODY_GATEWAY_URL", "").rstrip("/")
-    custody_api_key: str = os.environ.get("CUSTODY_API_KEY", "")
-    custody_api_secret: str = os.environ.get("CUSTODY_API_SECRET", "")
-    custody_tenant: str = os.environ.get("CUSTODY_TENANT", "testlogon")
-    custody_wallet_name: str = os.environ.get("CUSTODY_WALLET_NAME", "main")
-    custody_verify_tls: bool = os.environ.get("CUSTODY_VERIFY_TLS", "0") not in ("0", "false", "False")
-    custody_timeout_seconds: float = float(os.environ.get("CUSTODY_TIMEOUT_SECONDS", "15"))
-    # JSON map: {"approver": {"key": "...", "secret": "..."}, ...}
-    custody_officer_keys: str = os.environ.get("CUSTODY_OFFICER_KEYS", "")
-    # Withdrawal amount (in asset units) at/above which multi-approval is required (mock + client-side hint).
-    custody_approval_threshold: float = float(os.environ.get("CUSTODY_APPROVAL_THRESHOLD", "1000"))
-    custody_approvals_required: int = int(os.environ.get("CUSTODY_APPROVALS_REQUIRED", "2"))
-    # Timelock (seconds) enforced by the gateway/mock before a pending withdrawal may be released.
-    custody_timelock_seconds: int = int(os.environ.get("CUSTODY_TIMELOCK_SECONDS", "0"))
-
-
 S = Settings()

@@ -1,128 +1,152 @@
 package com.testlogon.android.data.custody
 
 /*
- * Domain models for the custody feature: null-safe, UI-ready projections of the wire DTOs. The
- * repository maps DTO -> domain (defaulting blanks, parsing money strings to Double for validation /
- * Max, and normalizing status codes to a sealed enum) so composables never touch raw wire shapes.
+ * Domain models + the static asset registry for the custody feature: null-safe, UI-ready projections
+ * of the PRODUCTION /me/custody wire DTOs. The repository maps DTO -> domain (coercing balance
+ * number-or-string to a Double, resolving each symbol against the registry, normalizing the withdraw
+ * status to a sealed enum) so composables never touch raw wire shapes.
  */
 
-/** A custodial asset row (one asset on one chain) with its available balance. */
+// ---------------- Asset registry ----------------
+
+/**
+ * A known custodial asset: which chain it lives on and how it is addressed on the withdraw path.
+ * [token] is "native" for the chain's gas coin, or the ERC-20 contract address for a token.
+ */
 data class CustodyAsset(
-    val asset: String,
-    val chain: String,
-    val name: String,
     val symbol: String,
-    val decimals: Int,
+    val name: String,
+    val chainId: Int,
+    val chainName: String,
     val network: String,
-    val balanceText: String,
-    val balance: Double,
-    val addressAvailable: Boolean,
+    val token: String,
+    val decimals: Int,
 ) {
+    val isNative: Boolean get() = token.equals("native", ignoreCase = true)
     /** Stable list key. */
-    val key: String get() = "$asset::$chain"
+    val key: String get() = symbol
 }
 
+/**
+ * Static registry of the assets this client understands, plus helpers to resolve a symbol and to merge
+ * a live balance map into a full displayable list.
+ */
+object CustodyAssets {
+
+    const val NATIVE = "native"
+
+    val ALL: List<CustodyAsset> = listOf(
+        CustodyAsset("ETH", "Ether", 1, "Ethereum", "Ethereum Mainnet", NATIVE, 18),
+        CustodyAsset("USDC", "USD Coin", 1, "Ethereum", "Ethereum Mainnet", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6),
+        CustodyAsset("USDT", "Tether USD", 1, "Ethereum", "Ethereum Mainnet", "0xdAC17F958D2ee523a2206206994597C13D831ec7", 6),
+        CustodyAsset("BNB", "BNB", 56, "BNB Smart Chain", "BSC Mainnet", NATIVE, 18),
+        CustodyAsset("POL", "Polygon", 137, "Polygon", "Polygon Mainnet", NATIVE, 18),
+    )
+
+    /** Case-insensitive symbol lookup against the registry. */
+    fun findAsset(symbol: String?): CustodyAsset? {
+        val s = symbol?.trim() ?: return null
+        return ALL.firstOrNull { it.symbol.equals(s, ignoreCase = true) }
+    }
+
+    /**
+     * Produces a displayable balance row for EVERY registry asset (0 when absent from [balances]),
+     * followed by any balance key not in the registry — flagged [CustodyBalance.known] = false with
+     * safe fallbacks (chain 1 / native).
+     */
+    fun mergeBalances(balances: Map<String, Double>): List<CustodyBalance> {
+        val byUpper = balances.mapKeys { it.key.trim().uppercase() }
+        val registryRows = ALL.map { asset ->
+            val amt = byUpper[asset.symbol.uppercase()] ?: 0.0
+            CustodyBalance(asset = asset, amount = amt, known = true)
+        }
+        val extras = balances.keys
+            .filter { key -> ALL.none { it.symbol.equals(key.trim(), ignoreCase = true) } }
+            .map { key ->
+                val sym = key.trim().ifBlank { "?" }
+                CustodyBalance(
+                    asset = CustodyAsset(
+                        symbol = sym,
+                        name = sym,
+                        chainId = 1,
+                        chainName = "Ethereum",
+                        network = "Ethereum Mainnet",
+                        token = NATIVE,
+                        decimals = 18,
+                    ),
+                    amount = balances[key] ?: 0.0,
+                    known = false,
+                )
+            }
+        return registryRows + extras
+    }
+}
+
+/** One displayable balance row: a resolved asset + its amount, with an unknown-asset flag. */
+data class CustodyBalance(
+    val asset: CustodyAsset,
+    val amount: Double,
+    val known: Boolean,
+) {
+    val symbol: String get() = asset.symbol
+    val key: String get() = asset.symbol
+    /** Trimmed display text (drops a trailing ".0" for whole amounts). */
+    val amountText: String
+        get() = if (amount == amount.toLong().toDouble()) amount.toLong().toString() else amount.toString()
+}
+
+// ---------------- Balance / vault ----------------
+
+/** The whole custody balance response: the vault id, its tier, and the merged asset rows. */
+data class CustodyBalances(
+    val vault: String,
+    val tier: String,
+    val rows: List<CustodyBalance>,
+) {
+    /** Short vault id for a subtle header (keeps head + tail). */
+    val vaultShort: String
+        get() = if (vault.length <= 14) vault else "${vault.take(8)}…${vault.takeLast(4)}"
+
+    fun funded(): List<CustodyBalance> = rows.filter { it.amount > 0.0 }
+    fun rowFor(key: String?): CustodyBalance? = rows.firstOrNull { it.key == key }
+}
+
+// ---------------- Deposit ----------------
+
 data class CustodyDepositAddress(
-    val asset: String,
-    val chain: String,
-    val network: String,
     val address: String,
-    val memo: String?,
-)
-
-/** A pending/observed on-chain deposit. */
-data class CustodyDeposit(
-    val id: String,
-    val asset: String,
     val chain: String,
-    val amountText: String,
-    val status: String,
-    val confirmations: Int,
+    val family: String?,
+    val derivation: String?,
+    val domain: String?,
 )
 
-/** Normalized withdrawal lifecycle status. */
-enum class WithdrawalStatus(val wire: String, val label: String) {
-    SCREENING("screening", "Screening"),
+// ---------------- Withdraw ----------------
+
+/** Normalized immediate withdraw outcome. */
+enum class WithdrawStatus(val wire: String, val label: String) {
     SIGNED("signed", "Signed"),
     PENDING_APPROVAL("pending_approval", "Pending approval"),
     BLOCKED("blocked", "Blocked"),
     REJECTED("rejected", "Rejected"),
-    BROADCAST("broadcast", "Broadcast"),
-    SETTLED("settled", "Settled"),
+    ERROR("error", "Error"),
     UNKNOWN("", "Unknown");
 
-    /** Terminal statuses no longer advance, so the Activity poller can stop watching them. */
-    val isTerminal: Boolean
-        get() = this == BLOCKED || this == REJECTED || this == SETTLED
-
     companion object {
-        fun from(wire: String?): WithdrawalStatus =
+        fun from(wire: String?): WithdrawStatus =
             entries.firstOrNull { it.wire == wire?.trim()?.lowercase() } ?: UNKNOWN
     }
 }
 
-/** The immediate result of submitting a withdrawal. */
-data class CustodyWithdrawalResult(
-    val id: String,
-    val status: WithdrawalStatus,
-    val asset: String,
-    val chain: String,
-    val amountText: String,
-    val destination: String,
+/** The immediate result of submitting a withdrawal via the gateway. */
+data class CustodyWithdrawResult(
+    val status: WithdrawStatus,
+    val withdrawalId: String?,
     val signature: String?,
     val digest: String?,
-    val approvalsRequired: Int?,
-    val approvals: Int?,
-    /** Best-effort human reason on a blocked/rejected outcome (detail, else error). */
+    val clientRef: String?,
+    val intentId: String?,
+    /** Best-effort human reason on a blocked/rejected/error outcome. */
     val reason: String?,
     val category: String?,
-)
-
-/** A withdrawal record (list + detail projections share this shape). */
-data class CustodyWithdrawal(
-    val id: String,
-    val asset: String,
-    val chain: String,
-    val network: String,
-    val recipient: String,
-    val amountText: String,
-    val status: WithdrawalStatus,
-    val approvals: List<String>,
-    val approvalsCount: Int,
-    val approvalsRequired: Int,
-    val signature: String?,
-    val digest: String?,
-    val reason: String?,
-    val category: String?,
-    val timelockUntilMs: Long?,
-    val createdMs: Long?,
-)
-
-data class CustodyApproveResult(
-    val withdrawalId: String,
-    val status: WithdrawalStatus,
-    val approvals: List<String>,
-    val approvalsRequired: Int,
-)
-
-data class CustodyReleaseResult(
-    val withdrawalId: String,
-    val status: WithdrawalStatus,
-    val signature: String?,
-    val digest: String?,
-)
-
-data class CustodyAuditEntry(
-    val seq: Long,
-    val action: String,
-    val detail: String,
-    val tsMs: Long,
-    val prev: String,
-    val hash: String,
-)
-
-data class CustodyAudit(
-    val entries: List<CustodyAuditEntry>,
-    val verifiedOk: Boolean? = null,
-    val verifiedCount: Int? = null,
 )
