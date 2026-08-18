@@ -74,15 +74,15 @@ export function extractCells(
   const bboxHeader: string[] = [];
   const bboxColIds: string[] = [];
   for (let c = cMin; c <= cMax; c++) {
-    bboxHeader.push(header[c]);
-    bboxColIds.push(colIds[c]);
+    bboxHeader.push(header[c]!);
+    bboxColIds.push(colIds[c]!);
   }
   const outRows: string[][] = [];
   for (let r = rMin; r <= rMax; r++) {
     const rowVals: string[] = [];
-    const row = dataRows[r];
+    const row = dataRows[r]!;
     for (let c = cMin; c <= cMax; c++) {
-      const col = visibleCols[c];
+      const col = visibleCols[c]!;
       const key = `${row.original.clord}|${col.id}`;
       rowVals.push(picked.has(key) ? cellText(col, row) : '');
     }
@@ -195,7 +195,7 @@ export async function exportParquet(x: Extract, filename: string) {
     // file if apache-arrow isn't in the dep tree.
     const rows: any[] = x.rows.map(row => {
       const o: Record<string, string> = {};
-      x.header.forEach((h, i) => (o[h] = row[i]));
+      x.header.forEach((h, i) => (o[h] = row[i] ?? ''));
       return o;
     });
     const blob = rows.map(r => JSON.stringify(r)).join('\n');

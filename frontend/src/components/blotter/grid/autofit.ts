@@ -58,7 +58,9 @@ export function autoFitColumn(col: Column<Order, unknown>, rows: Row<Order>[]): 
 
   const n = Math.min(rows.length, SAMPLE_MAX);
   for (let i = 0; i < n; i++) {
-    const t = textFor(col, rows[i]);
+    const row = rows[i];
+    if (!row) continue;
+    const t = textFor(col, row);
     if (!t) continue;
     const cw = measure(CELL_FONT, t);
     if (cw > w) w = cw;

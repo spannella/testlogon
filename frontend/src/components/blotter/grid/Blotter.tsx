@@ -195,12 +195,15 @@ export const Blotter = forwardRef<BlotterRef, Props>(function BlotterImpl({
     overscan: 8,
     getItemKey: (idx) => {
       const r = rows[idx];
+      if (!r) return idx;
       return r.getIsGrouped() ? `g:${r.id}` : rowIdOf(r.original);
     },
   });
   const virtItems = rowVirt.getVirtualItems();
-  const padTop = virtItems.length ? virtItems[0].start : 0;
-  const padBot = rowVirt.getTotalSize() - (virtItems.length ? virtItems.at(-1)!.end : 0);
+  const firstItem = virtItems[0];
+  const lastItem = virtItems[virtItems.length - 1];
+  const padTop = firstItem ? firstItem.start : 0;
+  const padBot = rowVirt.getTotalSize() - (lastItem ? lastItem.end : 0);
 
   // ---- selection + keyboard nav ---------------------------------------
   // Data-only rows (skip group headers for arrow-key nav).
@@ -228,7 +231,7 @@ export const Blotter = forwardRef<BlotterRef, Props>(function BlotterImpl({
     const [c0, c1] = cA < cB ? [cA, cB] : [cB, cA];
     for (let r = r0; r <= r1; r++)
       for (let c = c0; c <= c1; c++)
-        out.add(cellKey(rowIds[r], colIds[c]));
+        out.add(cellKey(rowIds[r]!, colIds[c]!));
     return out;
   }, [rowIds, colIds, selectionMode]);
 
@@ -304,7 +307,8 @@ export const Blotter = forwardRef<BlotterRef, Props>(function BlotterImpl({
         const rr = rowsRef.current;
         let idx = -1;
         for (let i = 0; i < rr.length; i++) {
-          if (!rr[i].getIsGrouped() && rowIdOf(rr[i].original) === targetId) {
+          const ri = rr[i];
+          if (ri && !ri.getIsGrouped() && rowIdOf(ri.original) === targetId) {
             idx = i; break;
           }
         }
@@ -367,7 +371,9 @@ export const Blotter = forwardRef<BlotterRef, Props>(function BlotterImpl({
         let curGroupIdx = -1;
         if (current) {
           for (let g = 0; g < groupRows.length; g++) {
-            const subIds = groupRows[g]
+            const gr = groupRows[g];
+            if (!gr) continue;
+            const subIds = gr
               .getLeafRows()
               .map(r => rowIdOf(r.original));
             if (subIds.includes(current.rowId)) { curGroupIdx = g; break; }
@@ -378,12 +384,14 @@ export const Blotter = forwardRef<BlotterRef, Props>(function BlotterImpl({
             ? Math.min(groupRows.length - 1, curGroupIdx + 1)
             : Math.max(0, (curGroupIdx < 0 ? 0 : curGroupIdx - 1));
         const targetGroup = groupRows[nextIdx];
+        if (!targetGroup) return;
         const wasCollapsed = !targetGroup.getIsExpanded();
         if (wasCollapsed) targetGroup.toggleExpanded();
         const leaf = targetGroup.getLeafRows()[0];
         if (!leaf) return;
         const targetRowId = rowIdOf(leaf.original);
         const targetColId = current?.colId ?? colIds[0];
+        if (targetColId == null) return;
         const next: CellPos = { rowId: targetRowId, colId: targetColId };
         const shifted = e.shiftKey && !!anchor;
         const applySelection = () => {
@@ -410,8 +418,9 @@ export const Blotter = forwardRef<BlotterRef, Props>(function BlotterImpl({
     // rows.  Seed it if absent, then bail so the seeding is visible
     // before the arrow key acts on it.
     if (!current) {
-      if (!rowIds.length || !colIds.length) return;
-      const start = { rowId: rowIds[0], colId: colIds[0] };
+      const r0 = rowIds[0], c0 = colIds[0];
+      if (r0 == null || c0 == null) return;
+      const start = { rowId: r0, colId: c0 };
       setActiveCell(start);
       setAnchor(start);
       setSelection(new Set([cellKey(start.rowId, start.colId)]));
@@ -436,7 +445,9 @@ export const Blotter = forwardRef<BlotterRef, Props>(function BlotterImpl({
     }
     if (!handled) return;
     e.preventDefault();
-    const next: CellPos = { rowId: rowIds[nR], colId: colIds[nC] };
+    const nextRowId = rowIds[nR], nextColId = colIds[nC];
+    if (nextRowId == null || nextColId == null) return;
+    const next: CellPos = { rowId: nextRowId, colId: nextColId };
     setActiveCell(next);
     if (e.shiftKey && anchor) {
       setSelection(computeRange(anchor, next));
@@ -774,6 +785,7 @@ export const Blotter = forwardRef<BlotterRef, Props>(function BlotterImpl({
             {padTop > 0 && <tr style={{ height: padTop }}><td colSpan={visibleCols.length + 1}/></tr>}
             {virtItems.map(v => {
               const row = rows[v.index];
+              if (!row) return null;
               if (row.getIsGrouped()) {
                 const col = table.getColumn(row.groupingColumnId!);
                 const groupVal = String(row.getGroupingValue(row.groupingColumnId!) ?? '');

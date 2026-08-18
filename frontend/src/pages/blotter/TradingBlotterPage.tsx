@@ -15,12 +15,12 @@ const TIFS = ["DAY", "IOC", "GTX", "MOC"] as const;
 const SOURCES = ["MANL", "VWAP", "QUOT", ""];
 let seq = 0x1000;
 const rnd = () => Math.random();
-const pick = <T,>(a: readonly T[]): T => a[Math.floor(rnd() * a.length)];
+const pick = <T,>(a: readonly T[]): T => a[Math.floor(rnd() * a.length)]!;
 const nowNs = () => Date.now() * 1e6;
 
 function makeOrder(): Order {
   const sym = pick(SYMS);
-  const ref = REF[sym];
+  const ref = REF[sym]!;
   const side: Side = rnd() < 0.5 ? "B" : "S";
   const dp = sym.startsWith("PMKT") ? 2 : 2;
   const px = +(ref * (1 + (rnd() - 0.5) * 0.004)).toFixed(dp);
@@ -73,7 +73,9 @@ export default function TradingBlotterPage() {
         const t = new Set<string>();
         for (let k = 0; k < 24; k++) {
           const i = Math.floor(Math.random() * next.length);
-          const o = { ...next[i], lots: next[i].lots.slice() };
+          const cur = next[i];
+          if (!cur) continue;
+          const o = { ...cur, lots: cur.lots.slice() };
           o.px = +(o.px * (1 + (Math.random() - 0.5) * 0.0006)).toFixed(2);
           o.tLastUpd = nowNs();
           if (o.leaves > 0 && o.status !== "cancelled" && Math.random() < 0.3) {
