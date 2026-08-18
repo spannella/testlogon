@@ -106,6 +106,12 @@ export function usePlaceOco() {
   });
 }
 
+/** Admin-only per-symbol margin/fee config. Refreshes the account snapshot on success. */
+export function useMarginConfig() {
+  const invalidate = useInvalidateAccount();
+  return useMutation({ mutationFn: trading.marginConfig, onSuccess: invalidate });
+}
+
 export function usePlaceFunding() {
   const invalidate = useInvalidateAccount();
   return useMutation({ mutationFn: trading.placeFunding, onSuccess: invalidate });

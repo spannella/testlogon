@@ -86,6 +86,17 @@ export interface FundingRequest {
   symbolid?: number;
 }
 
+export interface MarginConfigRequest {
+  symbolid: number;
+  initial_margin_bps: number;
+  maintenance_margin_bps: number;
+  liquidation_fee_bps: number;
+  hourly_borrow_rate_bps: number;
+  maker_fee_bps: number;
+  taker_fee_bps: number;
+  max_position_qty: number;
+}
+
 // ── Acks / reads ─────────────────────────────────────────────────────
 
 export interface OrderAck {
@@ -185,6 +196,19 @@ export interface FundingAck {
   note?: string;
 }
 
+export interface MarginConfigAck {
+  status?: "ack" | "rejected" | string;
+  type?: string;
+  symbolid?: number;
+  /** 0 = applied; non-zero = rejected. */
+  result?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
 export interface Trigger {
   algo_id?: number;
   oto_id?: number;
@@ -240,6 +264,10 @@ export const bulkCancel = () => api.post<BulkCancelAck>("/me/bulk_cancel", {});
 export const getMarginAccount = () => api.get<MarginAccount>("/me/margin_account");
 
 export const marginDeposit = (amount: number) => api.post<DepositAck>("/me/margin_deposit", { amount });
+
+/** Admin-only: set per-symbol margin / fee parameters on the engine. */
+export const marginConfig = (body: MarginConfigRequest) =>
+  api.post<MarginConfigAck>("/me/margin_config", body);
 
 export const placeQuote = (body: QuoteRequest) => api.post<QuoteAck>("/me/quote", body);
 

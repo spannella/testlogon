@@ -6,7 +6,10 @@ import { api } from "@/api/client";
 //   GET  /me/custody/balance
 //   GET  /me/custody/deposit-address?chain=<id>
 //   POST /me/custody/withdraw
-// There is NO history / deposits / approvals / audit endpoint.
+//   GET  /me/custody/deposits   (scanner-fed incoming-transfer feed)
+// The deposit-scanner feed above lists incoming on-chain transfers the
+// custody gateway has observed and credited. There is still NO withdrawal
+// history / approvals / audit endpoint on the account-facing API.
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -29,6 +32,32 @@ export interface DepositAddress {
   derivation: string;
   /** Signing / attestation domain. */
   domain: string;
+}
+
+export interface CustodyDeposit {
+  /** Source chain id (as a string). Map to a name via CUSTODY_ASSETS. */
+  chain: string;
+  /** On-chain transaction hash of the incoming transfer. */
+  txhash: string;
+  /** Log index within the tx (as a string). */
+  log_index: string;
+  /** Credited asset symbol (e.g. "ETH", "USDC"). */
+  asset: string;
+  /** Amount as a string. */
+  amount: string;
+  /** "credited" once applied to the vault; "duplicate" if already seen. */
+  status: "credited" | "duplicate" | string;
+  /** Monotonic scanner sequence number. */
+  seq: number;
+  /** Unix timestamp — seconds if small, ms if large (detect on render). */
+  ts: number;
+}
+
+export interface CustodyDepositsResult {
+  /** Vault id these deposits credited into. */
+  vault: string;
+  /** Incoming transfers, newest first. */
+  deposits: CustodyDeposit[];
 }
 
 export type WithdrawalStatus =
@@ -84,6 +113,14 @@ export const getDepositAddress = (chainId: string | number) =>
 
 export const withdraw = (req: WithdrawRequest) =>
   api.post<WithdrawResult>("/me/custody/withdraw", req);
+
+/**
+ * The deposit-scanner feed of incoming on-chain transfers (newest first).
+ * NEW endpoint — may 404 on backends where the scanner isn't deployed yet;
+ * callers should render a graceful empty/unavailable state.
+ */
+export const getDeposits = () =>
+  api.get<CustodyDepositsResult>("/me/custody/deposits");
 
 // ─── Client-side asset registry ─────────────────────────────────
 // The /me/custody API is keyed by CHAIN (deposit addresses) and by

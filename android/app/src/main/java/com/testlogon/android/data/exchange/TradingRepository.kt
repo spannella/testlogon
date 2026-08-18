@@ -43,6 +43,17 @@ interface TradingRepository {
     suspend fun spotBalance(): ApiResult<SpotBalance>
     suspend fun spotDeposit(asset: Int, amount: Long): ApiResult<SpotDepositAck>
     suspend fun deposit(amount: Long): ApiResult<DepositAck>
+    /** ADMIN: apply per-symbol margin/fee/borrow config. */
+    suspend fun marginConfig(
+        symbolId: Int,
+        initialMarginBps: Long,
+        maintenanceMarginBps: Long,
+        liquidationFeeBps: Long,
+        hourlyBorrowRateBps: Long,
+        makerFeeBps: Long,
+        takerFeeBps: Long,
+        maxPositionQty: Long,
+    ): ApiResult<MarginConfigAck>
     suspend fun cancelAll(): ApiResult<BulkCancelResult>
     suspend fun placeQuote(symbolId: Int, bidPrice: Long, askPrice: Long, bidQty: Long, askQty: Long): ApiResult<QuoteAck>
     suspend fun placeAlgo(algoType: String, symbolId: Int, side: OrderSide, qty: Long, stopPrice: Long?, limitPrice: Long?): ApiResult<AlgoAck>
@@ -116,6 +127,32 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun deposit(amount: Long): ApiResult<DepositAck> =
         withContext(io) { apiCall { api.marginDeposit(MarginDepositDto(amount)).toDomain() } }
+
+    override suspend fun marginConfig(
+        symbolId: Int,
+        initialMarginBps: Long,
+        maintenanceMarginBps: Long,
+        liquidationFeeBps: Long,
+        hourlyBorrowRateBps: Long,
+        makerFeeBps: Long,
+        takerFeeBps: Long,
+        maxPositionQty: Long,
+    ): ApiResult<MarginConfigAck> = withContext(io) {
+        apiCall {
+            api.marginConfig(
+                MarginConfigDto(
+                    symbolId = symbolId,
+                    initialMarginBps = initialMarginBps,
+                    maintenanceMarginBps = maintenanceMarginBps,
+                    liquidationFeeBps = liquidationFeeBps,
+                    hourlyBorrowRateBps = hourlyBorrowRateBps,
+                    makerFeeBps = makerFeeBps,
+                    takerFeeBps = takerFeeBps,
+                    maxPositionQty = maxPositionQty,
+                ),
+            ).toDomain()
+        }
+    }
 
     override suspend fun cancelAll(): ApiResult<BulkCancelResult> =
         withContext(io) { apiCall { api.bulkCancel(emptyMap()).toDomain() } }

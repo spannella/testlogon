@@ -119,6 +119,21 @@ fun MarginAccountDto.toDomain(): MarginAccount {
     )
 }
 
+/** Result of an admin margin-config apply. [applied] reflects status == "ack" && result == 0. */
+data class MarginConfigAck(
+    val applied: Boolean,
+    val symbolId: Int?,
+    val result: Int?,
+    val message: String?,
+)
+
+fun MarginConfigAckDto.toDomain(): MarginConfigAck = MarginConfigAck(
+    applied = status == "ack" && (result ?: -1) == 0,
+    symbolId = symbolId,
+    result = result,
+    message = detail ?: error ?: note,
+)
+
 /** Result of a collateral deposit. */
 data class DepositAck(
     val accepted: Boolean,

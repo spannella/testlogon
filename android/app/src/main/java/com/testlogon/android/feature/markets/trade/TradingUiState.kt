@@ -4,6 +4,7 @@ import com.testlogon.android.data.exchange.Fill
 import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.data.exchange.SpotBalance
+import com.testlogon.android.data.exchange.MarginConfigAck
 
 /** Order entry type. LIMIT is the plain resting limit; the rest map to advanced engine endpoints. */
 enum class OrderType(val label: String) {
@@ -94,6 +95,8 @@ data class TradingUiState(
     val armed: String? = null,        // "market" | "close" -> a confirm is pending (skipped when oneTap)
     val oneTap: Boolean = false,      // when true, market/close fire without a confirm step
     val pm: com.testlogon.android.data.exchange.PmState? = null,   // set when this symbol is a binary prediction market
+    val isAdmin: Boolean = false,   // resolved from CurrentUserRepository; gates the margin-config panel
+    val marginConfig: MarginConfigForm = MarginConfigForm(),
 ) {
     val isAmending: Boolean get() = amendingClordid != null
     val depositLong: Long? get() = depositText.toLongOrNull()
@@ -143,4 +146,40 @@ data class TradingUiState(
         OrderType.OCO -> (priceLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L && (childPriceLong ?: 0L) > 0L && (childQtyLong ?: 0L) > 0L
         OrderType.FUNDING -> (fundingRateLong ?: 0L) > 0L && (fundingQtyLong ?: 0L) > 0L
     }
+}
+
+
+/**
+ * Admin-only per-symbol margin-config form. All numeric fields are entered as plain integers (bps or a
+ * raw qty). [symbolText] defaults to the ticket's symbol but is editable so an admin can retarget it.
+ */
+data class MarginConfigForm(
+    val symbolText: String = "",
+    val initialMarginText: String = "",
+    val maintenanceMarginText: String = "",
+    val liquidationFeeText: String = "",
+    val hourlyBorrowText: String = "",
+    val makerFeeText: String = "",
+    val takerFeeText: String = "",
+    val maxPositionText: String = "",
+    val submitting: Boolean = false,
+    val result: MarginConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val initialMarginLong: Long? get() = initialMarginText.toLongOrNull()
+    val maintenanceMarginLong: Long? get() = maintenanceMarginText.toLongOrNull()
+    val liquidationFeeLong: Long? get() = liquidationFeeText.toLongOrNull()
+    val hourlyBorrowLong: Long? get() = hourlyBorrowText.toLongOrNull()
+    val makerFeeLong: Long? get() = makerFeeText.toLongOrNull()
+    val takerFeeLong: Long? get() = takerFeeText.toLongOrNull()
+    val maxPositionLong: Long? get() = maxPositionText.toLongOrNull()
+
+    /** All eight fields must parse (bps may be 0; symbol + max position must be present). */
+    val canSubmit: Boolean get() = !submitting &&
+        symbolInt != null &&
+        initialMarginLong != null && maintenanceMarginLong != null &&
+        liquidationFeeLong != null && hourlyBorrowLong != null &&
+        makerFeeLong != null && takerFeeLong != null &&
+        maxPositionLong != null
 }

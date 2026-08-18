@@ -43,6 +43,15 @@ object CustodyAssets {
         CustodyAsset("POL", "Polygon", 137, "Polygon", "Polygon Mainnet", NATIVE, 18),
     )
 
+    /**
+     * Human chain name for a chain id (from the registry, else a generic "Chain <id>"). Used to label
+     * scanned deposits whose `chain` arrives as a numeric id string.
+     */
+    fun chainName(chainId: Int?): String {
+        if (chainId == null) return "Unknown chain"
+        return ALL.firstOrNull { it.chainId == chainId }?.chainName ?: "Chain $chainId"
+    }
+
     /** Case-insensitive symbol lookup against the registry. */
     fun findAsset(symbol: String?): CustodyAsset? {
         val s = symbol?.trim() ?: return null
@@ -120,6 +129,51 @@ data class CustodyDepositAddress(
     val derivation: String?,
     val domain: String?,
 )
+
+// ---------------- Incoming deposits (scanned) ----------------
+
+/** Whether a scanned incoming transfer was credited or ignored as a duplicate. */
+enum class DepositStatus(val wire: String, val label: String) {
+    CREDITED("credited", "Credited"),
+    DUPLICATE("duplicate", "Duplicate"),
+    UNKNOWN("", "Pending");
+
+    companion object {
+        fun from(wire: String?): DepositStatus =
+            entries.firstOrNull { it.wire == wire?.trim()?.lowercase() } ?: UNKNOWN
+    }
+}
+
+/** One scanned incoming on-chain transfer, resolved to a display-ready row. */
+data class CustodyDeposit(
+    val chainId: Int?,
+    val chainName: String,
+    val asset: String,
+    val amount: String,
+    val txHash: String,
+    val status: DepositStatus,
+    /** Unix epoch in MILLISECONDS (seconds-vs-ms detected at mapping time), or null if absent. */
+    val timestampMs: Long?,
+    val seq: Long?,
+) {
+    /** Short 0x… head+tail form of the tx hash for a compact row. */
+    val txShort: String
+        get() = txHash.let { if (it.length <= 14) it else "${it.take(8)}…${it.takeLast(4)}" }
+}
+
+/** The whole deposits response: the vault id + the (newest-first) rows, plus an "unavailable" flag. */
+data class CustodyDeposits(
+    val vault: String,
+    val rows: List<CustodyDeposit>,
+    /** True when the backend does not expose deposit scanning (endpoint 404) — a soft, non-error state. */
+    val unavailable: Boolean = false,
+) {
+    val isEmpty: Boolean get() = rows.isEmpty()
+
+    companion object {
+        fun unavailable(): CustodyDeposits = CustodyDeposits(vault = "", rows = emptyList(), unavailable = true)
+    }
+}
 
 // ---------------- Withdraw ----------------
 
