@@ -368,6 +368,42 @@ data class FillsFeesDto(
     @Json(name = "fills") val fills: List<FillFeeDto>? = null,
 )
 
+// ==== Live working orders (me/orders/live) — server-side order-management read ====
+
+/**
+ * One live (resting) working order from GET me/orders/live. Parsed defensively: every field is
+ * optional and numeric fields are lenient (the edge may stringify ids/prices). [side] is "buy"/"sell";
+ * [remainingQty]/[filledQty] may be absent (the engine only reports [qty] as the open quantity) — the
+ * mapper falls back to [qty] for the working amount. [tsNs] is a nanosecond timestamp when present.
+ */
+@JsonClass(generateAdapter = true)
+data class LiveOrderDto(
+    @Json(name = "clordid") val clordid: String? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "orderid") val orderId: Long? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "symbolid") val symbolId: Int? = null,
+    @Json(name = "side") val side: String? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "price") val price: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "qty") val qty: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "remaining_qty") val remainingQty: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "leaves_qty") val leavesQty: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "filled_qty") val filledQty: Long? = null,
+    @Json(name = "tif") val tif: String? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "ts_ns") val tsNs: Long? = null,
+)
+
+/**
+ * GET me/orders/live: {status, type, count, orders:[...]}. Both [orders] and the alternate [workingOrders]
+ * key are accepted so a shape drift ({working_orders:[...]}) still parses. 404 -> repository empty feed.
+ */
+@JsonClass(generateAdapter = true)
+data class LiveOrdersDto(
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "type") val type: String? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "count") val count: Int? = null,
+    @Json(name = "orders") val orders: List<LiveOrderDto>? = null,
+    @Json(name = "working_orders") val workingOrders: List<LiveOrderDto>? = null,
+)
+
 // ==== Liquidations (me/liquidations) — REAL ====
 
 /** One forced-liquidation event: symbol, qty closed, mark price, realized PnL (signed), fee, ts(ns). */
@@ -673,3 +709,17 @@ data class AuctionsBrowseDto(
     @Json(name = "note") val note: String? = null,
 )
 
+
+// ==== Reference USD prices (indicative). GET me/prices (STUB today). ====
+// {prices:{SYMBOL:"usd-string"}, quote:"USD", source, stub, note}. Values are strings (the edge may
+// stringify decimals) -> kept as String? and parsed tolerantly in the mapper. 404 -> repo degrades.
+
+/** GET me/prices envelope: a per-symbol USD reference price map + provenance (source/stub/note). */
+@JsonClass(generateAdapter = true)
+data class PricesDto(
+    @Json(name = "prices") val prices: Map<String, String>? = null,
+    @Json(name = "quote") val quote: String? = null,
+    @Json(name = "source") val source: String? = null,
+    @Json(name = "stub") val stub: Boolean? = null,
+    @Json(name = "note") val note: String? = null,
+)

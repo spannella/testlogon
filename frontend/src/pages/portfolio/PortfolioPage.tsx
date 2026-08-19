@@ -36,6 +36,7 @@ import {
 import {
   getSpotBalance,
   getMarginAccount,
+  getPrices,
   type MarginAccount,
 } from "@/api/endpoints/trading";
 import { getSymbols, type MarketSymbol } from "@/api/endpoints/marketData";
@@ -68,6 +69,19 @@ function fmtAmount(v: string | number | undefined | null): string {
   const n = num(v);
   if (n === 0) return "0";
   return n.toLocaleString(undefined, { maximumFractionDigits: 8 });
+}
+
+/** Format a USD value like "$1,234.56". */
+function fmtUsd(n: number): string {
+  return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Small muted USD sub-value shown next to an asset amount when a price exists. */
+function UsdSub({ usd }: { usd: number | undefined }) {
+  if (usd == null) return null;
+  return (
+    <span className="ml-2 text-[11px] text-muted-foreground tabular-nums">≈ {fmtUsd(usd)}</span>
+  );
 }
 
 /** True when an error is a 404/403 — the "not available on this backend" case. */
@@ -194,6 +208,13 @@ export default function PortfolioPage() {
     queryFn: getSymbols,
     retry: false,
   });
+  // USD valuation marks — STUB today; degrades on 404 (retry:false) so the total
+  // falls back to a source-native (un-converted) sum.
+  const pricesQ = useQuery({
+    queryKey: ["portfolio", "me", "prices"],
+    queryFn: getPrices,
+    retry: false,
+  });
 
   const refetchAll = () => {
     custodyQ.refetch();
@@ -201,6 +222,7 @@ export default function PortfolioPage() {
     spotQ.refetch();
     marginQ.refetch();
     symbolsQ.refetch();
+    pricesQ.refetch();
   };
 
   const anyFetching =
@@ -208,7 +230,8 @@ export default function PortfolioPage() {
     stakingQ.isFetching ||
     spotQ.isFetching ||
     marginQ.isFetching ||
-    symbolsQ.isFetching;
+    symbolsQ.isFetching ||
+    pricesQ.isFetching;
 
   // -- derived aggregates --
   const custodyRows = useMemo(
@@ -249,31 +272,93 @@ export default function PortfolioPage() {
     };
   }, [symbolsQ.data]);
 
+  // USD price marks keyed by asset symbol (case-insensitive). Returns undefined
+  // when no mark exists for the asset — callers then skip USD conversion for it.
+  const priceOf = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const [sym, px] of Object.entries(pricesQ.data?.prices ?? {})) {
+      const n = num(px);
+      if (Number.isFinite(n) && n > 0) map.set(sym.toUpperCase(), n);
+    }
+    return (symbol: string | undefined | null): number | undefined => {
+      if (!symbol) return undefined;
+      return map.get(String(symbol).toUpperCase());
+    };
+  }, [pricesQ.data]);
+
+  const pricesOk = pricesQ.isSuccess;
+  const pricesStub = pricesOk && (pricesQ.data?.stub === true || pricesQ.data?.source === "stub");
+  const pricesUnavailable = pricesQ.isError; // 404 / edge-undeployed
+
   const hasPosition = !!margin && num(margin.num_positions) > 0 && num(margin.pos_qty) !== 0;
 
-  // Cross-venue equity snapshot: sum only the numerically-comparable balances
-  // we can actually read. This is a raw notional sum across assets/venues (no
-  // FX/price conversion) — labelled clearly as an approximate snapshot.
+  // Cross-venue equity. When USD price marks are readable we FX-normalize every
+  // readable balance (amount * asset USD price) into a REAL USD total equity,
+  // summing only assets that HAVE a mark (others are excluded from the USD sum).
+  // When /me/prices 404s (edge-undeployed) we fall back to the prior source-native
+  // raw sum (no FX conversion). `usd` distinguishes the two modes for the label.
   const equity = useMemo(() => {
-    let sum = 0;
+    // Source-native raw sum (the historical fallback — no FX conversion).
+    let raw = 0;
     let sources = 0;
     if (custodyQ.isSuccess) {
-      sum += custodyRows.reduce((a, r) => a + num(r.balance), 0);
+      raw += custodyRows.reduce((a, r) => a + num(r.balance), 0);
       sources++;
     }
     if (spotQ.isSuccess) {
-      sum += spotRows.reduce((a, b) => a + num(b.balance), 0);
+      raw += spotRows.reduce((a, b) => a + num(b.balance), 0);
       sources++;
     }
     if (marginQ.isSuccess) {
-      sum += num(margin?.balance);
+      raw += num(margin?.balance);
       sources++;
     }
     if (stakingQ.isSuccess) {
-      sum += stakingTotals.total;
+      raw += stakingTotals.total;
       sources++;
     }
-    return { sum, sources };
+
+    if (!pricesOk) {
+      // No USD marks — degrade to the source-native raw sum.
+      return { sum: raw, sources, usd: false, valued: 0, unpriced: 0 };
+    }
+
+    // USD-normalized total: sum amount * USD price for every asset with a mark.
+    let usdSum = 0;
+    let valued = 0; // assets contributing a USD value
+    let unpriced = 0; // readable balances with no USD mark (excluded)
+
+    const addAsset = (symbol: string | undefined | null, amount: number) => {
+      if (amount === 0) return;
+      const px = priceOf(symbol);
+      if (px == null) {
+        unpriced++;
+        return;
+      }
+      usdSum += amount * px;
+      valued++;
+    };
+
+    if (custodyQ.isSuccess) {
+      for (const r of custodyRows) addAsset(r.symbol, num(r.balance));
+    }
+    if (spotQ.isSuccess) {
+      for (const b of spotRows) addAsset(b.symbol, num(b.balance));
+    }
+    if (marginQ.isSuccess) {
+      // Margin collateral balance is denominated in the quote currency (USD);
+      // count it directly toward the USD total.
+      const mb = num(margin?.balance);
+      if (mb !== 0) {
+        usdSum += mb;
+        valued++;
+      }
+    }
+    if (stakingQ.isSuccess) {
+      for (const pos of stakingTotals.positions) addAsset(pos.asset, num(pos.total));
+    }
+
+    return { sum: usdSum, sources, usd: true, valued, unpriced };
   }, [
     custodyQ.isSuccess,
     spotQ.isSuccess,
@@ -283,6 +368,9 @@ export default function PortfolioPage() {
     spotRows,
     margin,
     stakingTotals.total,
+    stakingTotals.positions,
+    pricesOk,
+    priceOf,
   ]);
 
   const anyLoading =
@@ -310,23 +398,50 @@ export default function PortfolioPage() {
       {/* Total equity */}
       <Card>
         <CardContent className="flex flex-col gap-1 py-6">
-          <span className="text-xs uppercase tracking-wide text-muted-foreground">
-            Total equity — cross-venue snapshot
+          <span className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+            Total equity — cross-venue{equity.usd ? " (USD)" : " snapshot"}
+            {equity.usd && pricesStub && (
+              <Badge variant="outline" className="gap-1 text-[10px] font-normal normal-case">
+                <Info className="h-3 w-3" /> indicative (stub prices)
+              </Badge>
+            )}
           </span>
           {anyLoading ? (
             <Skeleton className="h-9 w-48" />
           ) : (
             <div className="flex items-baseline gap-2">
+              {equity.usd && <span className="text-2xl font-semibold text-muted-foreground">$</span>}
               <span className="num text-3xl font-bold tabular-nums">
-                {equity.sum.toLocaleString(undefined, { maximumFractionDigits: 8 })}
+                {equity.sum.toLocaleString(undefined, {
+                  minimumFractionDigits: equity.usd ? 2 : 0,
+                  maximumFractionDigits: equity.usd ? 2 : 8,
+                })}
               </span>
               {anyFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
             </div>
           )}
           <span className="text-[11px] text-muted-foreground">
-            Approximate raw sum of readable balances from {equity.sources} of 4 venue
-            {equity.sources === 1 ? "" : "s"} — assets are NOT FX/price-converted; unavailable
-            sources are excluded.
+            {equity.usd ? (
+              <>
+                {pricesStub ? "Indicative " : "Real "}USD valuation ({equity.valued} priced asset
+                {equity.valued === 1 ? "" : "s"}
+                {equity.unpriced > 0
+                  ? `, ${equity.unpriced} unpriced balance${equity.unpriced === 1 ? "" : "s"} excluded`
+                  : ""}
+                ) across {equity.sources} of 4 venue{equity.sources === 1 ? "" : "s"}
+                {pricesStub
+                  ? " — stub prices, not a live mark."
+                  : "."}
+                {" "}Unavailable sources are excluded.
+              </>
+            ) : (
+              <>
+                {pricesUnavailable ? "USD valuation unavailable on this backend — a" : "A"}pproximate
+                raw sum of readable balances from {equity.sources} of 4 venue
+                {equity.sources === 1 ? "" : "s"} — assets are NOT FX/price-converted; unavailable
+                sources are excluded.
+              </>
+            )}
           </span>
         </CardContent>
       </Card>
@@ -348,9 +463,19 @@ export default function PortfolioPage() {
             <p className="py-4 text-sm text-muted-foreground">No vault balances.</p>
           ) : (
             <div className="divide-y divide-border/60">
-              {custodyRows.map((r) => (
-                <KV key={r.symbol} label={r.symbol} value={fmtAmount(r.balance)} />
-              ))}
+              {custodyRows.map((r) => {
+                const px = priceOf(r.symbol);
+                const usd = px != null ? num(r.balance) * px : undefined;
+                return (
+                  <div key={r.symbol} className="flex items-center justify-between gap-3 py-1">
+                    <span className="text-muted-foreground">{r.symbol}</span>
+                    <span className="text-right">
+                      <span className="num font-medium tabular-nums">{fmtAmount(r.balance)}</span>
+                      <UsdSub usd={usd} />
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
           {custodyQ.data?.vault && (
@@ -375,19 +500,24 @@ export default function PortfolioPage() {
             <p className="py-4 text-sm text-muted-foreground">No spot balances.</p>
           ) : (
             <div className="divide-y divide-border/60">
-              {spotRows.map((b, i) => (
-                <div key={b.symbol ?? b.asset ?? i} className="flex items-center justify-between gap-3 py-1">
-                  <span className="text-muted-foreground">{b.symbol ?? `asset ${b.asset ?? "?"}`}</span>
-                  <span className="text-right">
-                    <span className="num font-medium tabular-nums">{fmtAmount(b.balance)}</span>
-                    {b.available != null && (
-                      <span className="ml-2 text-[11px] text-muted-foreground">
-                        ({fmtAmount(b.available)} avail)
-                      </span>
-                    )}
-                  </span>
-                </div>
-              ))}
+              {spotRows.map((b, i) => {
+                const px = priceOf(b.symbol);
+                const usd = px != null ? num(b.balance) * px : undefined;
+                return (
+                  <div key={b.symbol ?? b.asset ?? i} className="flex items-center justify-between gap-3 py-1">
+                    <span className="text-muted-foreground">{b.symbol ?? `asset ${b.asset ?? "?"}`}</span>
+                    <span className="text-right">
+                      <span className="num font-medium tabular-nums">{fmtAmount(b.balance)}</span>
+                      <UsdSub usd={usd} />
+                      {b.available != null && (
+                        <span className="ml-2 text-[11px] text-muted-foreground">
+                          ({fmtAmount(b.available)} avail)
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </VenueCard>
@@ -405,7 +535,13 @@ export default function PortfolioPage() {
             <Unavailable line={errLine(marginQ.error, "The margin account isn't available on this backend yet.")} />
           ) : (
             <div className="divide-y divide-border/60">
-              <KV label="Balance" value={fmtAmount(margin?.balance)} />
+              <div className="flex items-center justify-between gap-3 py-1">
+                <span className="text-muted-foreground">Balance</span>
+                <span className="text-right">
+                  <span className="num font-medium tabular-nums">{fmtAmount(margin?.balance)}</span>
+                  <UsdSub usd={pricesOk && num(margin?.balance) !== 0 ? num(margin?.balance) : undefined} />
+                </span>
+              </div>
               <KV label="Available" value={fmtAmount(margin?.available_balance)} />
               <KV label="Reserved margin" value={fmtAmount(margin?.reserved_margin)} />
               <KV label="Open positions" value={String(num(margin?.num_positions))} />
@@ -435,7 +571,28 @@ export default function PortfolioPage() {
             <p className="py-4 text-sm text-muted-foreground">No staking positions.</p>
           ) : (
             <div className="divide-y divide-border/60">
-              <KV label="Total staked" value={fmtAmount(stakingTotals.total)} />
+              {(() => {
+                let usd = 0;
+                let priced = 0;
+                for (const pos of stakingTotals.positions) {
+                  const px = priceOf(pos.asset);
+                  if (px != null) {
+                    usd += num(pos.total) * px;
+                    priced++;
+                  }
+                }
+                return (
+                  <div className="flex items-center justify-between gap-3 py-1">
+                    <span className="text-muted-foreground">Total staked</span>
+                    <span className="text-right">
+                      <span className="num font-medium tabular-nums">
+                        {fmtAmount(stakingTotals.total)}
+                      </span>
+                      <UsdSub usd={priced > 0 ? usd : undefined} />
+                    </span>
+                  </div>
+                );
+              })()}
               <KV label="Principal" value={fmtAmount(stakingTotals.principal)} />
               <KV
                 label="Rewards"

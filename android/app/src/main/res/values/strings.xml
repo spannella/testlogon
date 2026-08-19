@@ -4247,6 +4247,7 @@
     <!-- AND-403: Read-only admin alerts/dashboards. -->
     <string name="more_entry_admin_dashboard">Admin alerts</string>
     <string name="more_entry_markets">Markets</string>
+    <string name="more_entry_trading_alerts">Trading alerts</string>
     <string name="admin_dashboard_title">Admin alerts</string>
     <string name="admin_dashboard_back">Back</string>
     <string name="admin_dashboard_refresh">Refresh</string>

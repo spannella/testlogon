@@ -383,6 +383,53 @@ fun FillsFeesDto.toDomain(): FillsFees = FillsFees(
     count = count ?: fills.orEmpty().size,
 )
 
+// ==== Live working orders (me/orders/live) — server-side order-management read ====
+
+/**
+ * One live (resting) working order read from the engine. [qty] is the open (working) quantity. [side]
+ * defaults to [OrderSide.BUY] when the wire omits/garbles it (defensive), but [rawSide] preserves the
+ * unknown case so a row with no usable side can still be shown without a misleading buy/sell colour.
+ */
+data class LiveOrder(
+    val clordid: String,
+    val orderId: Long?,
+    val symbolId: Int,
+    val side: OrderSide?,
+    val price: Long,
+    val qty: Long,
+    val tif: String?,
+    val tsNs: Long,
+) {
+    /** True when this order carries the id needed to amend/cancel it. */
+    val isActionable: Boolean get() = clordid.isNotBlank()
+}
+
+/** The account's live working-order set (GET me/orders/live). [count] is the server-reported row count. */
+data class LiveOrders(
+    val orders: List<LiveOrder>,
+    val count: Int,
+) {
+    val isEmpty: Boolean get() = orders.isEmpty()
+}
+
+fun LiveOrderDto.toDomain(): LiveOrder = LiveOrder(
+    clordid = clordid.orEmpty(),
+    orderId = orderId,
+    symbolId = symbolId ?: 0,
+    side = sideOf(side),
+    price = price ?: 0L,
+    // Prefer the explicit open/leaves/remaining quantity; fall back to qty (the engine's open amount).
+    qty = remainingQty ?: leavesQty ?: qty ?: 0L,
+    tif = tif?.trim()?.takeIf { it.isNotBlank() },
+    tsNs = tsNs ?: 0L,
+)
+
+fun LiveOrdersDto.toDomain(): LiveOrders {
+    // Accept either key; keep only rows that carry a client-order-id (needed to amend/cancel).
+    val rows = (orders ?: workingOrders).orEmpty().map { it.toDomain() }.filter { it.clordid.isNotBlank() }
+    return LiveOrders(orders = rows, count = count ?: rows.size)
+}
+
 // ==== Liquidations (me/liquidations) — REAL ====
 
 /** One forced-liquidation event. [realizedPnl] is signed (green when >=0). [tsNs] is nanoseconds. */
@@ -683,3 +730,53 @@ fun AuctionsBrowseDto.toDomain(): AuctionsBrowse {
     )
 }
 
+
+// ==== Reference USD prices (indicative) ====
+
+/**
+ * A per-asset USD reference price map used to FX-normalize cross-venue balances into a single USD equity
+ * figure on the read-only Portfolio. [source] is the provenance the edge reports ("stub" while the edge
+ * serves placeholder marks); [stub] mirrors it as a bool. [unavailable] is set when the route 404s
+ * (undeployed) so callers fall back to the source-native sum. Keys are normalized to UPPER-CASE symbols
+ * (e.g. BTC/ETH/USDC) and only strictly-positive, finite prices are kept.
+ */
+data class PriceMap(
+    val prices: Map<String, Double>,
+    val quote: String,
+    val source: String?,
+    val stub: Boolean,
+    val note: String?,
+    val unavailable: Boolean = false,
+) {
+    /** True when there is at least one usable price to value balances with. */
+    val hasPrices: Boolean get() = prices.isNotEmpty()
+
+    /** USD price for [symbol] (case-insensitive), or null when unpriced. */
+    fun priceFor(symbol: String?): Double? {
+        val key = symbol?.trim()?.uppercase().orEmpty()
+        if (key.isEmpty()) return null
+        return prices[key]
+    }
+
+    companion object {
+        /** The 404 / undeployed fallback: no prices, so callers keep the source-native sum. */
+        fun unavailable(): PriceMap =
+            PriceMap(prices = emptyMap(), quote = "USD", source = null, stub = false, note = null, unavailable = true)
+    }
+}
+
+fun PricesDto.toDomain(): PriceMap {
+    val cleaned = prices.orEmpty().entries.mapNotNull { (rawKey, rawVal) ->
+        val key = rawKey.trim().uppercase()
+        val price = rawVal.trim().toDoubleOrNull()
+        if (key.isEmpty() || price == null || !price.isFinite() || price <= 0.0) null else key to price
+    }.toMap()
+    return PriceMap(
+        prices = cleaned,
+        quote = quote?.trim()?.takeIf { it.isNotBlank() } ?: "USD",
+        source = source?.trim()?.takeIf { it.isNotBlank() },
+        stub = stub == true || source?.trim()?.equals("stub", ignoreCase = true) == true,
+        note = note?.trim()?.takeIf { it.isNotBlank() },
+        unavailable = false,
+    )
+}

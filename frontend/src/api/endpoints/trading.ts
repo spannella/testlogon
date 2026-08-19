@@ -261,6 +261,52 @@ export const cancelOrder = (clordid: string, symbolId: number) =>
 
 export const bulkCancel = () => api.post<BulkCancelAck>("/me/bulk_cancel", {});
 
+// ── Live working orders (GET /me/orders/live) ────────────────────────
+// A read of the caller's CURRENTLY WORKING (open / partially-filled) orders,
+// so a fresh session can manage orders it did not place this session (Android
+// tracks only its own session locally; the web management surface reads the
+// authoritative list here). The exact engine shape is not yet documented, so
+// every field is optional and we parse DEFENSIVELY: prices / qty / ts are int64
+// engine ticks and MUST be scaled via the markets formatters. The route MAY 404
+// until the exchange edge deploys it — callers degrade gracefully (retry:false).
+
+/** One currently-working order on the caller's account (defensive / all-optional). */
+export interface LiveOrder {
+  /** Client order id — the amend / cancel handle. */
+  clordid?: string;
+  /** Engine order id (when present). */
+  orderid?: number;
+  symbolid?: number;
+  side?: OrderSide | string;
+  /** int64 engine tick — the working limit price. */
+  price?: number;
+  /** int64 engine tick — original order qty. */
+  qty?: number;
+  /** int64 engine tick — remaining (unfilled) qty, when the engine reports it. */
+  leaves_qty?: number;
+  /** int64 engine tick — cumulative filled qty, when the engine reports it. */
+  cum_qty?: number;
+  tif?: TimeInForce | string;
+  /** Timestamp (seconds or ms — detect). */
+  ts?: number;
+  status?: string;
+  [k: string]: unknown;
+}
+
+export interface OrdersLiveResult {
+  status?: string;
+  type?: string;
+  mpid?: string;
+  count?: number;
+  orders?: LiveOrder[];
+}
+
+/**
+ * The caller's live working orders. Parse defensively off `orders`. 404s until
+ * the exchange edge deploys the route — callers degrade gracefully (retry:false).
+ */
+export const getOrdersLive = () => api.get<OrdersLiveResult>("/me/orders/live");
+
 export const getMarginAccount = () => api.get<MarginAccount>("/me/margin_account");
 
 export const marginDeposit = (amount: number) => api.post<DepositAck>("/me/margin_deposit", { amount });
@@ -773,3 +819,35 @@ export const getStakeRequests = () =>
  * listing. 404s until the edge deploys — callers degrade gracefully.
  */
 export const getOpenAuctions = () => api.get<AuctionsResult>("/me/auctions");
+
+
+// ── USD price marks (`GET /me/prices`) ───────────────────────────────
+// A read of per-asset USD valuation marks used to FX-normalize cross-venue
+// balances (custody / spot / margin / staking) into a single USD equity figure.
+// STUB today: the edge returns hard-coded/indicative marks with `source:"stub"`
+// + `stub:true` + a human `note`; when the valuation engine lands it returns
+// `source:"engine"` real marks. `prices` maps an ASSET SYMBOL (e.g. "BTC",
+// "ETH", "USDC") to a USD **decimal string**. The route MAY 404 until the edge
+// deploys — callers degrade gracefully (retry:false) and fall back to the prior
+// source-native (un-converted) sum.
+
+export interface PricesResult {
+  /** asset-symbol -> USD price as a decimal string (e.g. { BTC: "64000.00" }). */
+  prices: Record<string, string>;
+  /** Quote currency for every price. Always "USD" for now. */
+  quote: string;
+  /** "stub" = indicative/hard-coded marks; "engine" = real valuation marks. */
+  source: "stub" | "engine" | string;
+  /** True while the marks are indicative (source === "stub"). */
+  stub: boolean;
+  /** Human note explaining the stub / valuation source. */
+  note?: string;
+}
+
+/**
+ * Per-asset USD price marks for cross-venue valuation. STUB (indicative marks +
+ * stub:true + note) until the valuation engine lands. 404s until the edge
+ * deploys — callers degrade gracefully (retry:false) and fall back to the prior
+ * source-native sum.
+ */
+export const getPrices = () => api.get<PricesResult>("/me/prices");

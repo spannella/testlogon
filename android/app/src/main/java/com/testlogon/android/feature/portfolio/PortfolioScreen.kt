@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -127,13 +128,13 @@ private fun TotalEquityHeader(state: PortfolioUiState) {
     ) {
         Column(Modifier.padding(16.dp)) {
             Text(
-                "Total equity",
+                if (state.priced) "Total equity (USD)" else "Total equity",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = fmt(state.totalEquity),
+                text = if (state.priced) usd(state.totalEquityUsd) else fmt(state.totalEquity),
                 fontSize = 30.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
@@ -141,7 +142,15 @@ private fun TotalEquityHeader(state: PortfolioUiState) {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Cross-venue snapshot (readable sources, source-native units).",
+                if (state.priced) {
+                    if (state.pricesStub) {
+                        "USD-normalized equity - indicative (stub prices)."
+                    } else {
+                        "USD-normalized equity across readable sources."
+                    }
+                } else {
+                    "Cross-venue snapshot (readable sources, source-native units)."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
             )
@@ -196,13 +205,25 @@ private fun VenueCardView(card: VenueCard) {
                             .fillMaxWidth()
                             .padding(vertical = 2.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(line.label, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            line.value,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontFamily = FontFamily.Monospace,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            line.usdValue?.let { v ->
+                                Text(
+                                    "~" + usd(v),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(
+                                line.value,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
                     }
                 }
             }
@@ -300,3 +321,6 @@ private fun EmptyBlock() {
 /** Compact number format: drop a trailing .0 for whole numbers. */
 private fun fmt(v: Double): String =
     if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
+
+/** USD money format: '$' prefix, 2 decimals, grouped thousands (indicative reference value). */
+private fun usd(v: Double): String = "$" + String.format(java.util.Locale.US, "%,.2f", v)

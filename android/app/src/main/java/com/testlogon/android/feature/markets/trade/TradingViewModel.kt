@@ -65,6 +65,7 @@ class TradingViewModel @Inject constructor(
         pollAccount()
         refreshPm()
         loadFees()
+        refreshOrdersLive()
         resolveSymbols()
         loadStakeAuctionBrowse()
         if (TradingFeatures.SPOT_ENABLED) refreshSpot()
@@ -96,6 +97,21 @@ class TradingViewModel @Inject constructor(
         viewModelScope.launch {
             when (val r = repository.fundingPayments()) {
                 is ApiResult.Success -> _uiState.update { it.copy(fundingPayments = r.data) }
+                else -> Unit
+            }
+        }
+    }
+
+    /**
+     * Load the LIVE working-order set from the engine (order-management read). This is the source of
+     * truth for the Orders section when present: it survives app restarts and reflects quote/OTO legs
+     * the session list can't track. 404/undeployed or failure -> the section falls back to the local
+     * session-tracked orders (the state is left unchanged so nothing flickers).
+     */
+    fun refreshOrdersLive() {
+        viewModelScope.launch {
+            when (val r = repository.ordersLive()) {
+                is ApiResult.Success -> _uiState.update { it.copy(liveOrders = r.data) }
                 else -> Unit
             }
         }
@@ -568,6 +584,7 @@ class TradingViewModel @Inject constructor(
                             )
                         }
                         refreshAccount()
+                        refreshOrdersLive()
                         if (filled > 0) notifier.notifyFill("Order filled", "Filled $filled @ ${ack.fills.firstOrNull()?.price ?: price}") else notifier.success()
                     } else {
                         _uiState.update { it.copy(placing = false, message = ack.message ?: "Order rejected", messageIsError = true) }
@@ -592,6 +609,7 @@ class TradingViewModel @Inject constructor(
                         )
                     }
                     refreshAccount()
+                    refreshOrdersLive()
                 }
                 is ApiResult.Failure -> _uiState.update { it.copy(message = r.error.message, messageIsError = true) }
                 is ApiResult.NetworkError -> _uiState.update { it.copy(message = "Network error", messageIsError = true) }
@@ -658,8 +676,9 @@ class TradingViewModel @Inject constructor(
         viewModelScope.launch {
             when (val r = repository.cancelAll()) {
                 is ApiResult.Success -> {
-                    _uiState.update { it.copy(workingOrders = emptyList(), message = "Cancelled all (${r.data.cancelledCount})", messageIsError = false) }
+                    _uiState.update { it.copy(workingOrders = emptyList(), liveOrders = null, message = "Cancelled all (${r.data.cancelledCount})", messageIsError = false) }
                     refreshAccount()
+                    refreshOrdersLive()
                 }
                 is ApiResult.Failure -> _uiState.update { it.copy(message = r.error.message, messageIsError = true) }
                 is ApiResult.NetworkError -> _uiState.update { it.copy(message = "Network error", messageIsError = true) }
@@ -790,6 +809,7 @@ class TradingViewModel @Inject constructor(
                             )
                         }
                         refreshAccount()
+                        refreshOrdersLive()
                     } else _uiState.update { it.copy(placing = false, message = r.data.message ?: "Amend rejected", messageIsError = true) }
                     is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }
                     is ApiResult.NetworkError -> { _uiState.update { it.copy(placing = false, message = "Network error", messageIsError = true) }; notifier.error() }
@@ -814,6 +834,7 @@ class TradingViewModel @Inject constructor(
                                 )
                             }
                             refreshAccount()
+                            refreshOrdersLive()
                         } else _uiState.update { it.copy(placing = false, message = ack.message ?: "Replace rejected", messageIsError = true) }
                     }
                     is ApiResult.Failure -> { _uiState.update { it.copy(placing = false, message = r.error.message, messageIsError = true) }; notifier.error() }

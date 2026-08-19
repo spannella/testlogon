@@ -79,7 +79,7 @@ fun TradeTicket(
 
         SectionTabs(
             section = state.section,
-            ordersCount = state.workingOrders.size,
+            ordersCount = state.ordersBadgeCount,
             posCount = if (state.account?.position != null) 1 else 0,
             fillsCount = state.fillsFees?.fills?.size?.takeIf { it > 0 } ?: state.sessionFills.size,
             onSelect = viewModel::setSection,
@@ -336,12 +336,42 @@ private fun PositionsSection(state: TradingUiState, lastPrice: Long?, viewModel:
 
 @Composable
 private fun OrdersSection(state: TradingUiState, viewModel: TradingViewModel) {
-    if (state.workingOrders.isEmpty()) {
-        EmptyHint("No resting orders this session")
+    // Prefer the LIVE server feed (survives restarts + includes quote/OTO legs); the ViewModel falls
+    // back to the session-tracked list when the /me/orders/live read is unavailable/undeployed.
+    val orders = state.displayOrders
+    val live = state.liveOrders?.orders?.isNotEmpty() == true
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = if (live) "Working orders (live)" else "Working orders (this session)",
+            color = MarketColors.TextSecondary,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+        )
+        Text(
+            text = "Refresh",
+            color = MarketColors.Accent,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .border(1.dp, MarketColors.Border, RoundedCornerShape(6.dp))
+                .clickable { viewModel.refreshOrdersLive() }
+                .testTag("orders_refresh")
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+    if (orders.isEmpty()) {
+        EmptyHint(if (live) "No working orders" else "No resting orders this session")
     } else {
-        state.workingOrders.forEach { wo ->
+        orders.forEach { wo ->
+            val sideLabel = when (wo.side) { OrderSide.BUY -> "Buy"; OrderSide.SELL -> "Sell" }
             WorkingOrderRow(
-                label = "${if (wo.side == OrderSide.BUY) "Buy" else "Sell"}  ${fmt(wo.qty.toDouble())} @ ${fmt(wo.price.toDouble())}",
+                label = "$sideLabel  ${fmt(wo.qty.toDouble())} @ ${fmt(wo.price.toDouble())}",
                 sideColor = if (wo.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down,
                 onAmend = { viewModel.startAmend(wo); viewModel.setSection(TicketSection.TRADE) },
                 onCancel = { viewModel.cancel(wo.clordid) },

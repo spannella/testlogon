@@ -3,6 +3,8 @@ package com.testlogon.android.feature.portfolio
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.data.custody.CustodyRepository
+import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.exchange.PriceMap
 import com.testlogon.android.data.exchange.TradingRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
@@ -43,11 +45,13 @@ class PortfolioViewModel @Inject constructor(
                 val stakingDef = async { custody.getStaking() }
                 val spotDef = async { trading.spotBalance() }
                 val marginDef = async { trading.marginAccount() }
+                val pricesDef = async { trading.getPrices() }
                 PortfolioAggregator.aggregate(
                     custody = custodyDef.await(),
                     staking = stakingDef.await(),
                     spot = spotDef.await(),
                     margin = marginDef.await(),
+                    prices = (pricesDef.await() as? ApiResult.Success)?.data ?: PriceMap.unavailable(),
                 )
             }
             _uiState.value = snapshot

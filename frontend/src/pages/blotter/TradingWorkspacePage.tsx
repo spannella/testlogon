@@ -14,12 +14,13 @@ import {
 import "dockview-react/dist/styles/dockview.css";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Blotter } from "@/components/blotter/grid";
-import { orderColumns } from "@/components/blotter/grid/columns";
 import type { Order, Side, OrderStatus, Venue, Lot } from "@/components/blotter/types";
 import { useFillsFees, useLiquidations, useFundingPayments } from "@/hooks/useTrading";
 import { useSymbols } from "@/hooks/useMarketData";
 import type { MarketSymbol } from "@/api/endpoints/marketData";
 import type { FillFee, Liquidation, FundingPayment } from "@/api/endpoints/trading";
+import WorkingOrdersPanel from "@/pages/blotter/WorkingOrdersPanel";
+import TradeHistoryPanel from "@/pages/blotter/TradeHistoryPanel";
 import { formatPrice, formatQty } from "@/pages/markets/format";
 import "@/components/blotter/dock.css";
 
@@ -127,8 +128,6 @@ function fundingColumns(sym: SymLookup): ColumnDef<FundingPayment>[] {
 
 // Compact column sets for narrow (mobile) screens — fewer columns so rows are
 // readable without horizontal scrolling.
-const MOBILE_ORDER_IDS = new Set(["sym", "side", "px", "qty", "cumQty", "status"]);
-const mobileOrderColumns = orderColumns.filter((c) => MOBILE_ORDER_IDS.has((c as any).id));
 const mobileFilter = (cols: ColumnDef<any>[], ids: Set<string>) => cols.filter((c) => ids.has((c as any).id));
 
 function useIsMobile(bp = 767): boolean {
@@ -142,7 +141,7 @@ function useIsMobile(bp = 767): boolean {
   return m;
 }
 
-const LAYOUT_KEY = "testlogon.trading.dock.v2";
+const LAYOUT_KEY = "testlogon.trading.dock.v3";
 interface Ctx { orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; isMobile: boolean; sym: SymLookup; }
 const WsCtx = createContext<Ctx | null>(null);
 const useWs = (): Ctx => { const c = useContext(WsCtx); if (!c) throw new Error("WsCtx missing"); return c; };
@@ -152,7 +151,13 @@ function FeedNote({ children }: { children: React.ReactNode }) {
   return <div style={{ padding: "0.8rem 1rem", fontSize: "0.8rem", opacity: 0.55 }}>{children}</div>;
 }
 
-function OrdersPanel() { const c = useWs(); return <div className="tl-panel-body"><Blotter data={c.orders} columns={c.isMobile ? mobileOrderColumns : orderColumns} touched={c.touched} storageKeyPrefix="tl-ws-orders" onCancel={c.onCancel} /></div>; }
+// Orders — the REAL working-orders MANAGEMENT surface (GET /me/orders/live
+// with per-row Amend / Cancel + confirmed Cancel-all). Replaces the former
+// mock-generator grid; the mock still feeds the Positions panel below.
+function OrdersPanel() { return <WorkingOrdersPanel />; }
+
+// Trade history — the REAL executed-fills feed (GET /me/fills/fees).
+function HistoryPanel() { return <TradeHistoryPanel />; }
 
 // Fills — REAL /me/fills/fees feed: per-fill price/qty + the actual engine fee
 // (+ maker/taker). When the route 404s (or errors) the grid shows no rows and a
@@ -228,10 +233,11 @@ function PositionsPanel() {
   return <div className="tl-panel-body"><Blotter data={pos} columns={posColumns} storageKeyPrefix="tl-ws-pos" getRowId={(r: any) => r.sym} /></div>;
 }
 
-const COMPONENTS = { orders: OrdersPanel, fills: FillsPanel, positions: PositionsPanel, liquidations: LiquidationsPanel, funding: FundingPanel };
+const COMPONENTS = { orders: OrdersPanel, history: HistoryPanel, fills: FillsPanel, positions: PositionsPanel, liquidations: LiquidationsPanel, funding: FundingPanel };
 type PanelId = keyof typeof COMPONENTS;
 const PANEL_META: { id: PanelId; title: string }[] = [
   { id: "orders", title: "Orders" },
+  { id: "history", title: "Trade History" },
   { id: "fills", title: "Fills" },
   { id: "positions", title: "Positions" },
   { id: "liquidations", title: "Liquidations" },
@@ -288,6 +294,7 @@ export default function TradingWorkspacePage() {
   const addDefaults = (api: DockviewApi) => {
     api.addPanel({ id: "orders", title: "Orders", component: "orders", params: { ctx: stableCtx } });
     api.addPanel({ id: "fills", title: "Fills", component: "fills", params: { ctx: stableCtx }, position: { referencePanel: "orders", direction: "right" } });
+    api.addPanel({ id: "history", title: "Trade History", component: "history", params: { ctx: stableCtx }, position: { referencePanel: "fills", direction: "within" } });
     api.addPanel({ id: "positions", title: "Positions", component: "positions", params: { ctx: stableCtx }, position: { referencePanel: "fills", direction: "below" } });
     api.addPanel({ id: "liquidations", title: "Liquidations", component: "liquidations", params: { ctx: stableCtx }, position: { referencePanel: "positions", direction: "within" } });
     api.addPanel({ id: "funding", title: "Funding", component: "funding", params: { ctx: stableCtx }, position: { referencePanel: "liquidations", direction: "within" } });
