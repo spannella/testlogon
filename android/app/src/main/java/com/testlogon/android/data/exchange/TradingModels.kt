@@ -448,3 +448,133 @@ fun FundingPaymentsDto.toDomain(): FundingPayments = FundingPayments(
     payments = funding.orEmpty().map { it.toDomain() },
     count = count ?: funding.orEmpty().size,
 )
+
+/**
+ * Result of an admin engine-config apply (matching_algo / spread_config / trading_params / risk_config
+ * / spot_index / spot_config). [applied] is true when status == "ack" and, if the engine returns a
+ * [result], it is 0. [message] surfaces any detail/error/note the engine sent back.
+ */
+data class EngineConfigAck(
+    val applied: Boolean,
+    val symbolId: Int?,
+    val result: Int?,
+    val message: String?,
+)
+
+fun EngineConfigAckDto.toDomain(): EngineConfigAck = EngineConfigAck(
+    applied = status == "ack" && (result ?: 0) == 0,
+    symbolId = symbolId,
+    result = result,
+    message = detail ?: error ?: note,
+)
+
+
+// ==== Admin prediction-markets (exchange-admin-config) — domain + mappers ====
+
+/**
+ * Result of an admin PM config/resolve apply (pm_config / pm_group_config / pm_resolve /
+ * pm_group_resolve). [applied] is true when status == "ack" and, if a [result] is present, it is 0.
+ * [message] surfaces any detail/error/note (e.g. the resolver 403 message on pm_resolve).
+ */
+data class PmConfigAck(
+    val applied: Boolean,
+    val symbolId: Int?,
+    val groupId: Int?,
+    val result: Int?,
+    val message: String?,
+)
+
+fun PmConfigAckDto.toDomain(): PmConfigAck = PmConfigAck(
+    applied = status == "ack" && (result ?: 0) == 0,
+    symbolId = symbolId,
+    groupId = groupId,
+    result = result,
+    message = detail ?: error ?: note,
+)
+
+/**
+ * One PM resolution audit row. [isGroup] is true for a categorical resolution (carries [groupId] +
+ * [winningSymbolId]); otherwise it is a binary resolution (carries [symbolId] + [outcomeYes]).
+ */
+data class PmResolution(
+    val symbolId: Int?,
+    val groupId: Int?,
+    val winningSymbolId: Int?,
+    val outcome: String?,
+    val resolverId: String,
+    val ts: Long,
+    val source: String,
+) {
+    val isGroup: Boolean get() = groupId != null
+    /** For a binary row: true = YES won, false = NO, null when the outcome string is absent/unknown. */
+    val outcomeYes: Boolean? get() = when (outcome?.lowercase()) {
+        "yes" -> true
+        "no" -> false
+        else -> null
+    }
+    /** A compact human label for the resolved market ("#<sym>" or "group <id>"). */
+    val marketLabel: String get() = if (isGroup) "group $groupId" else "#" + (symbolId ?: 0)
+    /** A compact human label for the outcome (YES/NO for binary; the winning symbol for categorical). */
+    val outcomeLabel: String get() = if (isGroup) "#" + (winningSymbolId ?: 0) else (outcome?.uppercase() ?: "--")
+}
+
+fun PmResolutionDto.toDomain(): PmResolution = PmResolution(
+    symbolId = symbolId,
+    groupId = groupId,
+    winningSymbolId = winningSymbolId,
+    outcome = outcome,
+    resolverId = resolverId.orEmpty(),
+    ts = ts ?: 0L,
+    source = source.orEmpty(),
+)
+
+// ==== Trader staking + auctions (peer mechanisms) — domain + mapper ====
+
+/** Which peer mechanism produced an ack (drives the id label the UI surfaces). */
+enum class StakeAuctionKind { STAKE_REQUEST, STAKE_OFFER, AUCTION_REQUEST, AUCTION_BID }
+
+/**
+ * Result of a staking/auction action. [accepted] is true when the engine acked (status ack/ok and,
+ * if a numeric result is present, it is 0). [createdId] is the most relevant id the engine returned
+ * for [kind] (request_id / auction_id / offer_id / bid_id), surfaced prominently by the UI. [message]
+ * carries any engine detail/error/note.
+ */
+data class StakeAuctionAck(
+    val accepted: Boolean,
+    val kind: StakeAuctionKind,
+    val createdId: Long?,
+    val message: String?,
+) {
+    /** Human label for [createdId], e.g. "Request #42" / "Auction #7" (null when no id came back). */
+    val idLabel: String? get() = createdId?.let {
+        when (kind) {
+            StakeAuctionKind.STAKE_REQUEST -> "Request #$it"
+            StakeAuctionKind.STAKE_OFFER -> "Offer #$it"
+            StakeAuctionKind.AUCTION_REQUEST -> "Auction #$it"
+            StakeAuctionKind.AUCTION_BID -> "Bid #$it"
+        }
+    }
+}
+
+private fun ackAccepted(status: String?, result: Int?): Boolean {
+    val ok = when (status?.lowercase()) {
+        "ack", "ok", "accepted", "created" -> true
+        else -> false
+    }
+    return ok && (result ?: 0) == 0
+}
+
+fun StakeAuctionAckDto.toDomain(kind: StakeAuctionKind): StakeAuctionAck {
+    val createdId = when (kind) {
+        StakeAuctionKind.STAKE_REQUEST -> requestId
+        StakeAuctionKind.STAKE_OFFER -> offerId ?: requestId
+        StakeAuctionKind.AUCTION_REQUEST -> auctionId
+        StakeAuctionKind.AUCTION_BID -> bidId ?: auctionId
+    }
+    return StakeAuctionAck(
+        accepted = ackAccepted(status, result),
+        kind = kind,
+        createdId = createdId,
+        message = detail ?: error ?: note ?: reason,
+    )
+}

@@ -10,6 +10,7 @@ export const tradingKeys = {
   fillsFees: ["me", "fills_fees"] as const,
   liquidations: ["me", "liquidations"] as const,
   fundingPayments: ["me", "funding_payments"] as const,
+  pmResolutions: ["me", "pm_resolutions"] as const,
 };
 
 /** Exchange account-feed poll (fills-fees / liquidations / funding). */
@@ -178,4 +179,104 @@ export function useFundingPayments(enabled = true) {
     retry: false,
     refetchInterval: FEED_REFETCH_MS,
   });
+}
+
+
+// ── Admin engine-config mutations (`/me/*`) ──────────────────────────
+// Six admin-only engine-config POSTs. No account-invalidate needed (they tune
+// the engine, not the caller balance). Each route MAY 404 on backends without
+// the surface deployed — the calling UI reports that inline, no retry loop.
+
+/** Admin-only: per-symbol matching algorithm (price-time / pro-rata / specialist). */
+export function useMatchingAlgo() {
+  return useMutation({ mutationFn: trading.setMatchingAlgo });
+}
+
+/** Admin-only: define a two-leg spread symbol. */
+export function useSpreadConfig() {
+  return useMutation({ mutationFn: trading.setSpreadConfig });
+}
+
+/** Admin-only: per-symbol trading limits / price bands / circuit breaker. */
+export function useTradingParams() {
+  return useMutation({ mutationFn: trading.setTradingParams });
+}
+
+/** Admin-only: per-MPID notional kill switch. */
+export function useRiskConfig() {
+  return useMutation({ mutationFn: trading.setRiskConfig });
+}
+
+/** Admin-only: set the perp funding index (ack echoes recomputed funding_rate_bps). */
+export function useSpotIndex() {
+  return useMutation({ mutationFn: trading.setSpotIndex });
+}
+
+/** Admin-only: mark a symbol spot-enforced (base/quote asset pair). */
+export function useSpotConfig() {
+  return useMutation({ mutationFn: trading.setSpotConfig });
+}
+
+
+// ── Prediction-market admin surfaces (`/me/pm_*`) ────────────────────
+// Admin-only PM create/config + resolve mutations and the resolution audit-log
+// query. No account-invalidate (they tune markets, not the caller balance).
+// Routes MAY 404 (not deployed everywhere); resolve MAY 403 (not the resolver)
+// — the calling UI reports either inline, no retry loop.
+
+/** Admin-only: create/config a binary prediction market. */
+export function usePmConfig() {
+  return useMutation({ mutationFn: trading.pmConfig });
+}
+
+/** Admin-only: create/config a categorical (N linked binary outcomes). */
+export function usePmGroupConfig() {
+  return useMutation({ mutationFn: trading.pmGroupConfig });
+}
+
+/** Admin-only: settle a binary PM (403 if not the designated resolver). */
+export function usePmResolve() {
+  return useMutation({ mutationFn: trading.pmResolve });
+}
+
+/** Admin-only: resolve a categorical PM (403 if not the designated resolver). */
+export function usePmGroupResolve() {
+  return useMutation({ mutationFn: trading.pmGroupResolve });
+}
+
+/** PM resolution audit log. `retry: false` — the route 404s until the PM surface deploys. */
+export function usePmResolutions(enabled = true) {
+  return useQuery({
+    queryKey: tradingKeys.pmResolutions,
+    queryFn: trading.getPmResolutions,
+    enabled,
+    retry: false,
+    refetchInterval: ACCOUNT_REFETCH_MS,
+  });
+}
+
+
+// ── Staking & Auctions trader mutations (`/me/*`) ────────────────────
+// Two PEER trader mechanisms (NOT admin). No account-invalidate — the created
+// id (request_id / auction_id) is the caller-tracked handle. Each route MAY 404
+// (not deployed to prod); the calling UI reports that inline, no retry loop.
+
+/** Trader: create an outstanding stake request. */
+export function useStakeRequest() {
+  return useMutation({ mutationFn: trading.stakeRequest });
+}
+
+/** Trader: offer collateral to fill an outstanding stake request by id. */
+export function useStakeOffer() {
+  return useMutation({ mutationFn: trading.stakeOffer });
+}
+
+/** Trader: create an auction of a position qty. */
+export function useAuctionRequest() {
+  return useMutation({ mutationFn: trading.auctionRequest });
+}
+
+/** Trader: bid into an open auction by id. */
+export function useAuctionBid() {
+  return useMutation({ mutationFn: trading.auctionBid });
 }

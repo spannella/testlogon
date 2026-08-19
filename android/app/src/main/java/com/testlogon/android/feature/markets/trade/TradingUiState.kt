@@ -10,6 +10,8 @@ import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.data.exchange.SpotBalance
 import com.testlogon.android.data.exchange.MarginConfigAck
+import com.testlogon.android.data.exchange.EngineConfigAck
+import com.testlogon.android.core.model.ApiResult
 
 /** Order entry type. LIMIT is the plain resting limit; the rest map to advanced engine endpoints. */
 enum class OrderType(val label: String) {
@@ -104,12 +106,30 @@ data class TradingUiState(
     val pm: com.testlogon.android.data.exchange.PmState? = null,   // set when this symbol is a binary prediction market
     val isAdmin: Boolean = false,   // resolved from CurrentUserRepository; gates the margin-config panel
     val marginConfig: MarginConfigForm = MarginConfigForm(),
+    // Admin engine-config forms (exchange-admin-config); shown only when isAdmin.
+    val matchingAlgo: MatchingAlgoForm = MatchingAlgoForm(),
+    val spreadConfig: SpreadConfigForm = SpreadConfigForm(),
+    val tradingParams: TradingParamsForm = TradingParamsForm(),
+    val riskConfig: RiskConfigForm = RiskConfigForm(),
+    val spotIndex: SpotIndexForm = SpotIndexForm(),
+    val spotConfig: SpotConfigForm = SpotConfigForm(),
+    // Admin prediction-markets forms (exchange-admin-config); shown only when isAdmin.
+    val pmCreateBinary: PmCreateBinaryForm = PmCreateBinaryForm(),
+    val pmCreateCategorical: PmCreateCategoricalForm = PmCreateCategoricalForm(),
+    val pmResolveBinary: PmResolveBinaryForm = PmResolveBinaryForm(),
+    val pmResolveCategorical: PmResolveCategoricalForm = PmResolveCategoricalForm(),
+    val pmResolutions: List<com.testlogon.android.data.exchange.PmResolution> = emptyList(),
     val feeSchedule: FeeSchedule? = null,
     val fillsFees: FillsFees? = null,
     val liquidations: Liquidations? = null,
     val fundingPayments: FundingPayments? = null,
     /** symbolId -> ticker, for labelling the account-wide liquidation/funding/fills feeds. */
     val symbolNames: Map<Int, String> = emptyMap(),
+    // Trader staking + auctions forms (peer mechanisms); trader-facing (NOT admin-gated).
+    val stakeRequest: StakeRequestForm = StakeRequestForm(),
+    val stakeOffer: StakeOfferForm = StakeOfferForm(),
+    val auctionRequest: AuctionRequestForm = AuctionRequestForm(),
+    val auctionBid: AuctionBidForm = AuctionBidForm(),
 ) {
     /** Ticker for [symbolId] from the resolved catalogue, else "#<id>". */
     fun symbolLabel(symbolId: Int): String = symbolNames[symbolId] ?: ("#" + symbolId)
@@ -197,4 +217,349 @@ data class MarginConfigForm(
         liquidationFeeLong != null && hourlyBorrowLong != null &&
         makerFeeLong != null && takerFeeLong != null &&
         maxPositionLong != null
+}
+
+/**
+ * Admin engine-config forms (exchange-admin-config). Each mirrors [MarginConfigForm]: plain-integer
+ * text fields with parse accessors + a [canSubmit] gate + submitting/result/error. Optional engine
+ * params are left blank (null on the wire); required ones must parse.
+ */
+data class MatchingAlgoForm(
+    val symbolText: String = "",
+    val algo: Int = 0,                     // 0 = price-time, 1 = pro-rata, 2 = specialist
+    val specialistMpidText: String = "",
+    val specialistPctText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val specialistPctInt: Int? get() = specialistPctText.toIntOrNull()
+    val specialistMpid: String? get() = specialistMpidText.trim().ifEmpty { null }
+    val canSubmit: Boolean get() = !submitting && symbolInt != null
+}
+
+data class SpreadConfigForm(
+    val spreadSymbolText: String = "",
+    val leg1Text: String = "",
+    val leg2Text: String = "",
+    val leg1RatioText: String = "1",
+    val leg2RatioText: String = "-1",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val spreadSymbolInt: Int? get() = spreadSymbolText.toIntOrNull()
+    val leg1Int: Int? get() = leg1Text.toIntOrNull()
+    val leg2Int: Int? get() = leg2Text.toIntOrNull()
+    val leg1RatioInt: Int? get() = leg1RatioText.toIntOrNull()
+    val leg2RatioInt: Int? get() = leg2RatioText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting && spreadSymbolInt != null && leg1Int != null && leg2Int != null
+}
+
+data class TradingParamsForm(
+    val symbolText: String = "",
+    val maxQtyText: String = "",
+    val maxNotionalText: String = "",
+    val priceBandPctText: String = "",
+    val circuitBreakerPctText: String = "",
+    val minBlockSizeText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val maxQtyInt: Int? get() = maxQtyText.toIntOrNull()
+    val maxNotionalLong: Long? get() = maxNotionalText.toLongOrNull()
+    val priceBandPctLong: Long? get() = priceBandPctText.toLongOrNull()
+    val circuitBreakerPctLong: Long? get() = circuitBreakerPctText.toLongOrNull()
+    val minBlockSizeInt: Int? get() = minBlockSizeText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting && symbolInt != null
+}
+
+data class RiskConfigForm(
+    val maxNotionalText: String = "",
+    val windowSecondsText: String = "",
+    val mpidText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val maxNotionalLong: Long? get() = maxNotionalText.toLongOrNull()
+    val windowSecondsInt: Int? get() = windowSecondsText.toIntOrNull()
+    val mpid: String? get() = mpidText.trim().ifEmpty { null }
+    val canSubmit: Boolean get() = !submitting && maxNotionalLong != null && windowSecondsInt != null && windowSecondsInt!! > 0
+}
+
+data class SpotIndexForm(
+    val symbolText: String = "",
+    val spotIndexPriceText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val spotIndexPriceLong: Long? get() = spotIndexPriceText.toLongOrNull()
+    val canSubmit: Boolean get() = !submitting && symbolInt != null && spotIndexPriceLong != null
+}
+
+data class SpotConfigForm(
+    val symbolText: String = "",
+    val baseAssetText: String = "",
+    val quoteAssetText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val baseAssetInt: Int? get() = baseAssetText.toIntOrNull()
+    val quoteAssetInt: Int? get() = quoteAssetText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting && symbolInt != null && baseAssetInt != null && quoteAssetInt != null
+}
+
+private const val NET_ERR = "Network error. Check your connection and try again."
+
+fun MatchingAlgoForm.finish(r: ApiResult<EngineConfigAck>): MatchingAlgoForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun SpreadConfigForm.finish(r: ApiResult<EngineConfigAck>): SpreadConfigForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun TradingParamsForm.finish(r: ApiResult<EngineConfigAck>): TradingParamsForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun RiskConfigForm.finish(r: ApiResult<EngineConfigAck>): RiskConfigForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun SpotIndexForm.finish(r: ApiResult<EngineConfigAck>): SpotIndexForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun SpotConfigForm.finish(r: ApiResult<EngineConfigAck>): SpotConfigForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+// ==== Admin prediction-markets (exchange-admin-config) — form state ====
+
+/** Import alias: the PM admin ack + resolution domain types live in data.exchange. */
+
+/**
+ * Admin form: configure a BINARY PM on a symbol. [faceText] is the payout on YES (must parse and be
+ * > 1); [resolverText] is an optional designated resolver id (blank -> null on the wire).
+ */
+data class PmCreateBinaryForm(
+    val symbolText: String = "",
+    val faceText: String = "",
+    val resolverText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.PmConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val faceLong: Long? get() = faceText.toLongOrNull()
+    val resolver: String? get() = resolverText.trim().ifEmpty { null }
+    val canSubmit: Boolean get() = !submitting && symbolInt != null && (faceLong ?: 0L) > 1L
+}
+
+/**
+ * Admin form: configure a CATEGORICAL (grouped) PM. [outcomesText] is a comma/space-separated list of
+ * outcome symbol ids (>= 2 distinct); [faceText] the shared payout (> 1).
+ */
+data class PmCreateCategoricalForm(
+    val groupText: String = "",
+    val outcomesText: String = "",
+    val faceText: String = "",
+    val resolverText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.PmConfigAck? = null,
+    val error: String? = null,
+) {
+    val groupInt: Int? get() = groupText.toIntOrNull()
+    val faceLong: Long? get() = faceText.toLongOrNull()
+    val resolver: String? get() = resolverText.trim().ifEmpty { null }
+    /** Parse the outcome ids from a comma/space/newline-separated list, de-duplicated, order-preserving. */
+    val outcomes: List<Int> get() = outcomesText
+        .split(',', ' ', '\n', '\t')
+        .mapNotNull { it.trim().toIntOrNull() }
+        .distinct()
+    val canSubmit: Boolean get() = !submitting && (groupInt ?: 0) > 0 && (faceLong ?: 0L) > 1L && outcomes.size >= 2
+}
+
+/** Admin form: resolve a BINARY PM to yes/no. [yes] holds the selected outcome. */
+data class PmResolveBinaryForm(
+    val symbolText: String = "",
+    val yes: Boolean = true,
+    val sourceText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.PmConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val source: String? get() = sourceText.trim().ifEmpty { null }
+    val outcome: String get() = if (yes) "yes" else "no"
+    val canSubmit: Boolean get() = !submitting && symbolInt != null
+}
+
+/** Admin form: resolve a CATEGORICAL PM by its winning outcome symbol id. */
+data class PmResolveCategoricalForm(
+    val groupText: String = "",
+    val winningText: String = "",
+    val sourceText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.PmConfigAck? = null,
+    val error: String? = null,
+) {
+    val groupInt: Int? get() = groupText.toIntOrNull()
+    val winningInt: Int? get() = winningText.toIntOrNull()
+    val source: String? get() = sourceText.trim().ifEmpty { null }
+    val canSubmit: Boolean get() = !submitting && (groupInt ?: 0) > 0 && winningInt != null
+}
+
+private const val PM_NET_ERR = "Network error. Check your connection and try again."
+
+fun PmCreateBinaryForm.finish(r: ApiResult<com.testlogon.android.data.exchange.PmConfigAck>): PmCreateBinaryForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
+}
+
+fun PmCreateCategoricalForm.finish(r: ApiResult<com.testlogon.android.data.exchange.PmConfigAck>): PmCreateCategoricalForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
+}
+
+fun PmResolveBinaryForm.finish(r: ApiResult<com.testlogon.android.data.exchange.PmConfigAck>): PmResolveBinaryForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
+}
+
+fun PmResolveCategoricalForm.finish(r: ApiResult<com.testlogon.android.data.exchange.PmConfigAck>): PmResolveCategoricalForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
+}
+
+// ==== Trader staking + auctions (peer mechanisms) — form state ====
+
+/** Import alias: the staking/auction ack domain type lives in data.exchange. */
+
+/**
+ * Trader form: create a stake request. [symbolText] defaults to the ticket symbol but is editable.
+ * [minCollateralText]/[maxStakePctText] are raw integers; [lockupSecondsText]/[durationSecondsText]
+ * are seconds. [result] holds the last ack (which surfaces the returned request_id).
+ */
+data class StakeRequestForm(
+    val symbolText: String = "",
+    val minCollateralText: String = "",
+    val maxStakePctText: String = "",
+    val lockupSecondsText: String = "",
+    val durationSecondsText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.StakeAuctionAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val minCollateralLong: Long? get() = minCollateralText.toLongOrNull()
+    val maxStakePctLong: Long? get() = maxStakePctText.toLongOrNull()
+    val lockupSecondsInt: Int? get() = lockupSecondsText.toIntOrNull()
+    val durationSecondsInt: Int? get() = durationSecondsText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting &&
+        (minCollateralLong ?: 0L) > 0L && (maxStakePctLong ?: 0L) > 0L &&
+        (lockupSecondsInt ?: 0) > 0 && (durationSecondsInt ?: 0) > 0
+}
+
+/** Trader form: offer collateral to stake against an open stake request (by id). */
+data class StakeOfferForm(
+    val requestIdText: String = "",
+    val collateralText: String = "",
+    val stakePctText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.StakeAuctionAck? = null,
+    val error: String? = null,
+) {
+    val requestIdLong: Long? get() = requestIdText.toLongOrNull()
+    val collateralLong: Long? get() = collateralText.toLongOrNull()
+    val stakePctLong: Long? get() = stakePctText.toLongOrNull()
+    val canSubmit: Boolean get() = !submitting &&
+        (requestIdLong ?: 0L) > 0L && (collateralLong ?: 0L) > 0L && (stakePctLong ?: 0L) > 0L
+}
+
+/**
+ * Trader form: auction off a position quantity. [symbolText] defaults to the ticket symbol.
+ * [reservePriceText]/[durationSecondsText] are optional (blank -> null on the wire).
+ */
+data class AuctionRequestForm(
+    val symbolText: String = "",
+    val qtyText: String = "",
+    val reservePriceText: String = "",
+    val durationSecondsText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.StakeAuctionAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val qtyInt: Int? get() = qtyText.toIntOrNull()
+    val reservePriceLong: Long? get() = reservePriceText.toLongOrNull()
+    val durationSecondsInt: Int? get() = durationSecondsText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting && (qtyInt ?: 0) > 0
+}
+
+/** Trader form: bid on an open auction (by id). */
+data class AuctionBidForm(
+    val auctionIdText: String = "",
+    val priceText: String = "",
+    val qtyText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.StakeAuctionAck? = null,
+    val error: String? = null,
+) {
+    val auctionIdLong: Long? get() = auctionIdText.toLongOrNull()
+    val priceLong: Long? get() = priceText.toLongOrNull()
+    val qtyInt: Int? get() = qtyText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting &&
+        (auctionIdLong ?: 0L) > 0L && (priceLong ?: 0L) > 0L && (qtyInt ?: 0) > 0
+}
+
+private const val STAKE_NET_ERR = "Network error. Check your connection and try again."
+
+fun StakeRequestForm.finish(r: ApiResult<com.testlogon.android.data.exchange.StakeAuctionAck>): StakeRequestForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data, error = null)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = STAKE_NET_ERR)
+}
+
+fun StakeOfferForm.finish(r: ApiResult<com.testlogon.android.data.exchange.StakeAuctionAck>): StakeOfferForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data, error = null)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = STAKE_NET_ERR)
+}
+
+fun AuctionRequestForm.finish(r: ApiResult<com.testlogon.android.data.exchange.StakeAuctionAck>): AuctionRequestForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data, error = null)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = STAKE_NET_ERR)
+}
+
+fun AuctionBidForm.finish(r: ApiResult<com.testlogon.android.data.exchange.StakeAuctionAck>): AuctionBidForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data, error = null)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = STAKE_NET_ERR)
 }

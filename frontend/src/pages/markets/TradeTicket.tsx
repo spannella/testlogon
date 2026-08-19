@@ -38,6 +38,9 @@ import { formatPrice, formatQty, formatTimeNs } from "./format";
 import { vibrate, notify, ensureNotifyPermission } from "@/lib/tradeFeedback";
 import { tradingFeatures } from "./tradingFeatures";
 import { useAuthStore } from "@/stores/authStore";
+import { EngineConfigPanel } from "./EngineConfigPanel";
+import { PmAdminPanel } from "./PmAdminPanel";
+import { StakingAuctionsPanel } from "./StakingAuctionsPanel";
 
 type OrderType = "limit" | "market" | "stop" | "stop_limit" | "take_profit" | "quote" | "oto" | "oco" | "funding";
 type Section = "trade" | "positions" | "orders" | "fills";
@@ -1321,6 +1324,9 @@ export function TradeTicket({
     </Card>
     <FeeSchedulePanel symbolId={symbolId} />
     <MarginConfigPanel symbolId={symbolId} />
+    <EngineConfigPanel symbolId={symbolId} />
+    <PmAdminPanel symbolId={symbolId} />
+    <StakingAuctionsPanel symbolId={symbolId} scaler={scaler} />
     </div>
   );
 }

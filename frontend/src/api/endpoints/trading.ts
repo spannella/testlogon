@@ -415,3 +415,296 @@ export const getLiquidations = () => api.get<LiquidationsResult>("/me/liquidatio
 /** The caller's periodic funding payments (newest first). 404s until edge deploys. */
 export const getFundingPayments = () =>
   api.get<FundingPaymentsResult>("/me/funding/payments");
+
+
+// ── Admin engine-config surfaces (`/me/*`) ───────────────────────────
+// Six admin-only POST routes that tune the matching engine per-symbol. Each
+// returns an engine ack `{ status, ... }` where status is "ack" | "rejected"
+// (or carries a `result`/computed field). NOT deployed to every backend — the
+// route MAY 404; callers degrade gracefully (surface the failure inline, no crash).
+
+/** Generic admin engine-config ack. `status` "ack" | "rejected"; extra fields per-route. */
+export interface EngineConfigAck {
+  status?: "ack" | "rejected" | string;
+  type?: string;
+  symbolid?: number;
+  /** 0 = applied; non-zero = rejected (mirrors MarginConfigAck). */
+  result?: number;
+  /** Recomputed funding rate returned by /me/spot_index. */
+  funding_rate_bps?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Per-symbol matching algorithm. algo 0 = price-time (default); 1+ = pro-rata / specialist. */
+export interface MatchingAlgoRequest {
+  symbolid: number;
+  algo: number;
+  specialist_mpid?: string;
+  specialist_pct?: number;
+}
+
+/** Two-leg spread definition. leg1_ratio defaults 1, leg2_ratio defaults -1. */
+export interface SpreadConfigRequest {
+  spread_symbolid: number;
+  leg1: number;
+  leg2: number;
+  leg1_ratio?: number;
+  leg2_ratio?: number;
+}
+
+/** Per-symbol trading limits / bands / circuit breaker. */
+export interface TradingParamsRequest {
+  symbolid: number;
+  max_qty?: number;
+  max_notional?: number;
+  price_band_pct?: number;
+  circuit_breaker_pct?: number;
+  min_block_size?: number;
+}
+
+/** Per-MPID notional kill switch over a rolling window. */
+export interface RiskConfigRequest {
+  max_notional: number;
+  window_seconds: number;
+  mpid?: string;
+}
+
+/** Sets the perp funding index; engine recomputes funding_rate_bps (returned in ack). */
+export interface SpotIndexRequest {
+  symbolid: number;
+  spot_index_price: number;
+}
+
+/** Marks a symbol spot-enforced with a base/quote asset pair. */
+export interface SpotConfigRequest {
+  symbolid: number;
+  base_asset: number;
+  quote_asset: number;
+}
+
+/** Admin-only: set the per-symbol matching algorithm. */
+export const setMatchingAlgo = (body: MatchingAlgoRequest) =>
+  api.post<EngineConfigAck>("/me/matching_algo", body);
+
+/** Admin-only: define a two-leg spread symbol. */
+export const setSpreadConfig = (body: SpreadConfigRequest) =>
+  api.post<EngineConfigAck>("/me/spread_config", body);
+
+/** Admin-only: set per-symbol trading limits / price bands / circuit breaker. */
+export const setTradingParams = (body: TradingParamsRequest) =>
+  api.post<EngineConfigAck>("/me/trading_params", body);
+
+/** Admin-only: set a per-MPID notional kill switch over a rolling window. */
+export const setRiskConfig = (body: RiskConfigRequest) =>
+  api.post<EngineConfigAck>("/me/risk_config", body);
+
+/** Admin-only: set the perp funding index; ack echoes the recomputed funding_rate_bps. */
+export const setSpotIndex = (body: SpotIndexRequest) =>
+  api.post<EngineConfigAck>("/me/spot_index", body);
+
+/** Admin-only: mark a symbol spot-enforced with a base/quote asset pair. */
+export const setSpotConfig = (body: SpotConfigRequest) =>
+  api.post<EngineConfigAck>("/me/spot_config", body);
+
+
+// ── Prediction-market admin surfaces (`/me/pm_*`) ────────────────────
+// Admin-only routes that create/configure & resolve prediction markets. A binary
+// PM trades YES shares in (0, face_value); a YES share pays face_value on YES
+// resolution else 0 (implied probability = price / face_value). A categorical
+// market is N linked binaries sharing a group_id where exactly one wins. Each
+// route returns an engine ack `{ status, ... }` ("ack" | "rejected"); pm_resolve
+// / pm_group_resolve return 403 when the caller is not the designated resolver.
+// NOT deployed to every backend — the route MAY 404; callers degrade gracefully.
+
+/** Create/config a binary prediction market. `face_value` must be > 1. */
+export interface PmConfigRequest {
+  symbolid: number;
+  face_value: number;
+  resolver?: string;
+}
+
+/** Create/config a categorical (group of linked binary outcomes). */
+export interface PmGroupConfigRequest {
+  group_id: number;
+  outcomes: number[];
+  face_value: number;
+  resolver?: string;
+}
+
+/** Settle a binary PM: "yes" pays face, "no" pays 0. */
+export interface PmResolveRequest {
+  symbolid: number;
+  outcome: "yes" | "no";
+  source?: string;
+}
+
+/** Resolve a categorical: winning_symbolid pays face, the rest pay 0. */
+export interface PmGroupResolveRequest {
+  group_id: number;
+  winning_symbolid: number;
+  source?: string;
+}
+
+/** Generic PM admin ack. `status` "ack" | "rejected"; 403 surfaces via detail/error. */
+export interface PmAdminAck {
+  status?: "ack" | "rejected" | string;
+  type?: string;
+  symbolid?: number;
+  group_id?: number;
+  outcome?: string;
+  /** 0 = applied; non-zero = rejected (mirrors EngineConfigAck). */
+  result?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** One entry in the resolution audit log. */
+export interface PmResolution {
+  symbolid?: number;
+  group_id?: number;
+  outcome?: string;
+  winning_symbolid?: number;
+  resolver_id?: string;
+  ts?: number;
+  source?: string;
+}
+
+/** The resolution audit log (array). 404s until the PM surface deploys. */
+export interface PmResolutionsResult {
+  status?: string;
+  type?: string;
+  resolutions?: PmResolution[];
+}
+
+/** Admin-only: create/config a binary prediction market. */
+export const pmConfig = (body: PmConfigRequest) => api.post<PmAdminAck>("/me/pm_config", body);
+
+/** Admin-only: create/config a categorical (N linked binary outcomes). */
+export const pmGroupConfig = (body: PmGroupConfigRequest) =>
+  api.post<PmAdminAck>("/me/pm_group_config", body);
+
+/** Admin-only: settle a binary PM (403 if not the designated resolver). */
+export const pmResolve = (body: PmResolveRequest) => api.post<PmAdminAck>("/me/pm_resolve", body);
+
+/** Admin-only: resolve a categorical PM (403 if not the designated resolver). */
+export const pmGroupResolve = (body: PmGroupResolveRequest) =>
+  api.post<PmAdminAck>("/me/pm_group_resolve", body);
+
+/** The prediction-market resolution audit log. 404s until the PM surface deploys. */
+export const getPmResolutions = () => api.get<PmResolutionsResult>("/me/pm_resolutions");
+
+
+// ── Staking & Auctions trader surfaces (`/me/*`) ─────────────────────
+// Two PEER trader mechanisms on the matching engine (NOT admin): a collateral
+// staking market and distressed-position auctions. Each POST returns an engine
+// ack `{ status, ... }` that surfaces the created id (`request_id` / `auction_id`)
+// when present. There is NO server-side list/GET of open stake requests or open
+// auctions — callers can create + act-by-id but cannot browse open items.
+// Amounts/prices/qty are int64 engine ticks. Routes are NOT deployed to prod →
+// they MAY 404; callers degrade gracefully (surface the failure inline, no crash).
+
+/** Create an outstanding stake request (peer collateral-staking market). */
+export interface StakeRequestRequest {
+  symbolid?: number;
+  min_collateral: number;
+  max_stake_pct: number;
+  lockup_seconds: number;
+  duration_seconds: number;
+}
+
+/** Offer collateral to fill an outstanding stake request by id. */
+export interface StakeOfferRequest {
+  request_id: number;
+  collateral_amount: number;
+  stake_pct: number;
+}
+
+/** Create an auction of a (distressed) position qty. */
+export interface AuctionRequestRequest {
+  symbolid?: number;
+  qty: number;
+  reserve_price?: number;
+  duration_seconds?: number;
+}
+
+/** Bid into an open auction by id. */
+export interface AuctionBidRequest {
+  auction_id: number;
+  price: number;
+  qty: number;
+}
+
+/** Ack for a created stake request — surfaces `request_id` when present. */
+export interface StakeRequestAck {
+  status?: string;
+  type?: string;
+  request_id?: number;
+  symbolid?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Ack for an offer on a stake request. */
+export interface StakeOfferAck {
+  status?: string;
+  type?: string;
+  request_id?: number;
+  offer_id?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Ack for a created auction — surfaces `auction_id` when present. */
+export interface AuctionRequestAck {
+  status?: string;
+  type?: string;
+  auction_id?: number;
+  symbolid?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Ack for a bid into an auction. */
+export interface AuctionBidAck {
+  status?: string;
+  type?: string;
+  auction_id?: number;
+  bid_id?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Trader: create an outstanding stake request. 404s until the surface deploys. */
+export const stakeRequest = (body: StakeRequestRequest) =>
+  api.post<StakeRequestAck>("/me/stake_request", body);
+
+/** Trader: offer collateral to fill an outstanding stake request by id. */
+export const stakeOffer = (body: StakeOfferRequest) =>
+  api.post<StakeOfferAck>("/me/stake_offer", body);
+
+/** Trader: create an auction of a position qty. 404s until the surface deploys. */
+export const auctionRequest = (body: AuctionRequestRequest) =>
+  api.post<AuctionRequestAck>("/me/auction_request", body);
+
+/** Trader: bid into an open auction by id. */
+export const auctionBid = (body: AuctionBidRequest) =>
+  api.post<AuctionBidAck>("/me/auction_bid", body);

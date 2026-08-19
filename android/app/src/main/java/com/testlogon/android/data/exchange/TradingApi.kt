@@ -106,5 +106,74 @@ interface TradingApi {
     /** This account's recent perpetual funding payments (signed: negative=paid, positive=received). 404 when undeployed. */
     @GET("me/funding/payments")
     suspend fun getFundingPayments(): FundingPaymentsDto
+
+    // ==== Admin engine-config (exchange-admin-config); all admin-only, ack {status,...}; 404 -> degrade. ====
+
+    /** ADMIN: set per-symbol matching algorithm (0 = price-time; 1+ = pro-rata/specialist). */
+    @POST("me/matching_algo")
+    suspend fun matchingAlgo(@Body body: MatchingAlgoDto): EngineConfigAckDto
+
+    /** ADMIN: define a two-leg spread instrument. */
+    @POST("me/spread_config")
+    suspend fun spreadConfig(@Body body: SpreadConfigDto): EngineConfigAckDto
+
+    /** ADMIN: per-symbol trading-parameter / risk-limit overrides. */
+    @POST("me/trading_params")
+    suspend fun tradingParams(@Body body: TradingParamsDto): EngineConfigAckDto
+
+    /** ADMIN: aggregate notional cap over a rolling window. */
+    @POST("me/risk_config")
+    suspend fun riskConfig(@Body body: RiskConfigDto): EngineConfigAckDto
+
+    /** ADMIN: publish a spot index (mark) price for a symbol. */
+    @POST("me/spot_index")
+    suspend fun spotIndex(@Body body: SpotIndexDto): EngineConfigAckDto
+
+    /** ADMIN: bind a symbol to its base/quote asset ids (defines a spot pair). */
+    @POST("me/spot_config")
+    suspend fun spotConfig(@Body body: SpotConfigDto): EngineConfigAckDto
+
+    // ==== Admin prediction-markets (exchange-admin-config); admin-gated; ack {status,...}. ====
+    // Not deployed to prod -> the repository degrades on 404 (like the engine-config routes).
+
+    /** ADMIN: configure a binary PM on a symbol (face_value>1, optional designated resolver). */
+    @POST("me/pm_config")
+    suspend fun pmConfig(@Body body: PmConfigDto): PmConfigAckDto
+
+    /** ADMIN: configure a categorical (grouped) PM: a group of mutually-exclusive outcome symbols. */
+    @POST("me/pm_group_config")
+    suspend fun pmGroupConfig(@Body body: PmGroupConfigDto): PmConfigAckDto
+
+    /** ADMIN (designated resolver): resolve a binary PM to yes/no. 403 if the caller is not the resolver. */
+    @POST("me/pm_resolve")
+    suspend fun pmResolve(@Body body: PmResolveDto): PmConfigAckDto
+
+    /** ADMIN (designated resolver): resolve a categorical PM to its winning outcome symbol. */
+    @POST("me/pm_group_resolve")
+    suspend fun pmGroupResolve(@Body body: PmGroupResolveDto): PmConfigAckDto
+
+    /** ADMIN: the resolution audit log (symbol/group, outcome, resolver, ts, source). 404 -> empty. */
+    @GET("me/pm_resolutions")
+    suspend fun getPmResolutions(): List<PmResolutionDto>
+
+    // ==== Trader staking + auctions (peer mechanisms). Ack JSON carries the created id + status.
+    // Not deployed to prod yet -> the repository degrades on 404 (like the engine-config routes).
+    // There is NO list/GET for open stake requests or auctions -> action forms surface the returned id. ====
+
+    /** Create a stake request (offer your position as collateral for others to stake against). */
+    @POST("me/stake_request")
+    suspend fun stakeRequest(@Body body: StakeRequestDto): StakeAuctionAckDto
+
+    /** Offer collateral to stake against an open stake request (by request id). */
+    @POST("me/stake_offer")
+    suspend fun stakeOffer(@Body body: StakeOfferDto): StakeAuctionAckDto
+
+    /** Create an auction to sell a position quantity (optional reserve price + duration). */
+    @POST("me/auction_request")
+    suspend fun auctionRequest(@Body body: AuctionRequestDto): StakeAuctionAckDto
+
+    /** Place a bid on an open auction (by auction id). */
+    @POST("me/auction_bid")
+    suspend fun auctionBid(@Body body: AuctionBidDto): StakeAuctionAckDto
 }
 

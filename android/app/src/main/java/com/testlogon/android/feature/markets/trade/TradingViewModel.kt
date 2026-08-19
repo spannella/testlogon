@@ -45,7 +45,21 @@ class TradingViewModel @Inject constructor(
     private var seq = 0
 
     init {
-        _uiState.update { it.copy(marginConfig = it.marginConfig.copy(symbolText = symbolId.toString())) }
+        val sym = symbolId.toString()
+        _uiState.update {
+            it.copy(
+                marginConfig = it.marginConfig.copy(symbolText = sym),
+                matchingAlgo = it.matchingAlgo.copy(symbolText = sym),
+                spreadConfig = it.spreadConfig.copy(spreadSymbolText = sym),
+                tradingParams = it.tradingParams.copy(symbolText = sym),
+                spotIndex = it.spotIndex.copy(symbolText = sym),
+                spotConfig = it.spotConfig.copy(symbolText = sym),
+                pmCreateBinary = it.pmCreateBinary.copy(symbolText = sym),
+                pmResolveBinary = it.pmResolveBinary.copy(symbolText = sym),
+                stakeRequest = it.stakeRequest.copy(symbolText = sym),
+                auctionRequest = it.auctionRequest.copy(symbolText = sym),
+            )
+        }
         resolveAdmin()
         refreshAccount()
         pollAccount()
@@ -111,7 +125,7 @@ class TradingViewModel @Inject constructor(
     private fun resolveAdmin() {
         viewModelScope.launch {
             when (val r = currentUserRepository.isAdmin()) {
-                is ApiResult.Success -> _uiState.update { it.copy(isAdmin = r.data) }
+                is ApiResult.Success -> { _uiState.update { it.copy(isAdmin = r.data) }; if (r.data) loadPmResolutions() }
                 else -> Unit
             }
         }
@@ -156,6 +170,112 @@ class TradingViewModel @Inject constructor(
                 is ApiResult.Failure -> _uiState.update { it.copy(marginConfig = it.marginConfig.copy(submitting = false, error = r.error.message)) }
                 is ApiResult.NetworkError -> _uiState.update { it.copy(marginConfig = it.marginConfig.copy(submitting = false, error = "Network error. Check your connection and try again.")) }
             }
+        }
+    }
+
+    // ---- Admin engine-config forms (exchange-admin-config) ----
+
+    private fun mpid(t: String) = t.filter { it.isLetterOrDigit() }.take(12)
+
+    // Allow an optional leading '-' plus digits (for signed spread ratios).
+    private fun signed(t: String): String {
+        val neg = t.startsWith("-")
+        val d = t.filter { it.isDigit() }.take(6)
+        return if (neg) "-" + d else d
+    }
+
+    // matching_algo
+    fun setAlgoSymbol(t: String) = _uiState.update { it.copy(matchingAlgo = it.matchingAlgo.copy(symbolText = digits(t, 9), error = null)) }
+    fun setAlgo(v: Int) = _uiState.update { it.copy(matchingAlgo = it.matchingAlgo.copy(algo = v, error = null)) }
+    fun setAlgoSpecialistMpid(t: String) = _uiState.update { it.copy(matchingAlgo = it.matchingAlgo.copy(specialistMpidText = mpid(t), error = null)) }
+    fun setAlgoSpecialistPct(t: String) = _uiState.update { it.copy(matchingAlgo = it.matchingAlgo.copy(specialistPctText = digits(t, 3), error = null)) }
+    fun clearAlgoResult() = _uiState.update { it.copy(matchingAlgo = it.matchingAlgo.copy(result = null, error = null)) }
+    fun submitMatchingAlgo() {
+        val f = _uiState.value.matchingAlgo
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(matchingAlgo = it.matchingAlgo.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.matchingAlgo(f.symbolInt!!, f.algo, if (f.algo >= 2) f.specialistMpid else null, if (f.algo >= 2) f.specialistPctInt else null)
+            _uiState.update { it.copy(matchingAlgo = it.matchingAlgo.finish(r)) }
+        }
+    }
+
+    // spread_config
+    fun setSpreadSymbol(t: String) = _uiState.update { it.copy(spreadConfig = it.spreadConfig.copy(spreadSymbolText = digits(t, 9), error = null)) }
+    fun setSpreadLeg1(t: String) = _uiState.update { it.copy(spreadConfig = it.spreadConfig.copy(leg1Text = digits(t, 9), error = null)) }
+    fun setSpreadLeg2(t: String) = _uiState.update { it.copy(spreadConfig = it.spreadConfig.copy(leg2Text = digits(t, 9), error = null)) }
+    fun setSpreadLeg1Ratio(t: String) = _uiState.update { it.copy(spreadConfig = it.spreadConfig.copy(leg1RatioText = signed(t), error = null)) }
+    fun setSpreadLeg2Ratio(t: String) = _uiState.update { it.copy(spreadConfig = it.spreadConfig.copy(leg2RatioText = signed(t), error = null)) }
+    fun clearSpreadResult() = _uiState.update { it.copy(spreadConfig = it.spreadConfig.copy(result = null, error = null)) }
+    fun submitSpreadConfig() {
+        val f = _uiState.value.spreadConfig
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(spreadConfig = it.spreadConfig.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.spreadConfig(f.spreadSymbolInt!!, f.leg1Int!!, f.leg2Int!!, f.leg1RatioInt, f.leg2RatioInt)
+            _uiState.update { it.copy(spreadConfig = it.spreadConfig.finish(r)) }
+        }
+    }
+
+    // trading_params
+    fun setTpSymbol(t: String) = _uiState.update { it.copy(tradingParams = it.tradingParams.copy(symbolText = digits(t, 9), error = null)) }
+    fun setTpMaxQty(t: String) = _uiState.update { it.copy(tradingParams = it.tradingParams.copy(maxQtyText = digits(t, 9), error = null)) }
+    fun setTpMaxNotional(t: String) = _uiState.update { it.copy(tradingParams = it.tradingParams.copy(maxNotionalText = digits(t, 15), error = null)) }
+    fun setTpPriceBand(t: String) = _uiState.update { it.copy(tradingParams = it.tradingParams.copy(priceBandPctText = digits(t, 9), error = null)) }
+    fun setTpCircuitBreaker(t: String) = _uiState.update { it.copy(tradingParams = it.tradingParams.copy(circuitBreakerPctText = digits(t, 9), error = null)) }
+    fun setTpMinBlock(t: String) = _uiState.update { it.copy(tradingParams = it.tradingParams.copy(minBlockSizeText = digits(t, 9), error = null)) }
+    fun clearTpResult() = _uiState.update { it.copy(tradingParams = it.tradingParams.copy(result = null, error = null)) }
+    fun submitTradingParams() {
+        val f = _uiState.value.tradingParams
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(tradingParams = it.tradingParams.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.tradingParams(f.symbolInt!!, f.maxQtyInt, f.maxNotionalLong, f.priceBandPctLong, f.circuitBreakerPctLong, f.minBlockSizeInt)
+            _uiState.update { it.copy(tradingParams = it.tradingParams.finish(r)) }
+        }
+    }
+
+    // risk_config
+    fun setRiskMaxNotional(t: String) = _uiState.update { it.copy(riskConfig = it.riskConfig.copy(maxNotionalText = digits(t, 15), error = null)) }
+    fun setRiskWindow(t: String) = _uiState.update { it.copy(riskConfig = it.riskConfig.copy(windowSecondsText = digits(t, 9), error = null)) }
+    fun setRiskMpid(t: String) = _uiState.update { it.copy(riskConfig = it.riskConfig.copy(mpidText = mpid(t), error = null)) }
+    fun clearRiskResult() = _uiState.update { it.copy(riskConfig = it.riskConfig.copy(result = null, error = null)) }
+    fun submitRiskConfig() {
+        val f = _uiState.value.riskConfig
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(riskConfig = it.riskConfig.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.riskConfig(f.maxNotionalLong!!, f.windowSecondsInt!!, f.mpid)
+            _uiState.update { it.copy(riskConfig = it.riskConfig.finish(r)) }
+        }
+    }
+
+    // spot_index
+    fun setSpotIndexSymbol(t: String) = _uiState.update { it.copy(spotIndex = it.spotIndex.copy(symbolText = digits(t, 9), error = null)) }
+    fun setSpotIndexPrice(t: String) = _uiState.update { it.copy(spotIndex = it.spotIndex.copy(spotIndexPriceText = digits(t, 15), error = null)) }
+    fun clearSpotIndexResult() = _uiState.update { it.copy(spotIndex = it.spotIndex.copy(result = null, error = null)) }
+    fun submitSpotIndex() {
+        val f = _uiState.value.spotIndex
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(spotIndex = it.spotIndex.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.spotIndex(f.symbolInt!!, f.spotIndexPriceLong!!)
+            _uiState.update { it.copy(spotIndex = it.spotIndex.finish(r)) }
+        }
+    }
+
+    // spot_config
+    fun setSpotCfgSymbol(t: String) = _uiState.update { it.copy(spotConfig = it.spotConfig.copy(symbolText = digits(t, 9), error = null)) }
+    fun setSpotCfgBase(t: String) = _uiState.update { it.copy(spotConfig = it.spotConfig.copy(baseAssetText = digits(t, 9), error = null)) }
+    fun setSpotCfgQuote(t: String) = _uiState.update { it.copy(spotConfig = it.spotConfig.copy(quoteAssetText = digits(t, 9), error = null)) }
+    fun clearSpotCfgResult() = _uiState.update { it.copy(spotConfig = it.spotConfig.copy(result = null, error = null)) }
+    fun submitSpotConfig() {
+        val f = _uiState.value.spotConfig
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(spotConfig = it.spotConfig.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.spotConfig(f.symbolInt!!, f.baseAssetInt!!, f.quoteAssetInt!!)
+            _uiState.update { it.copy(spotConfig = it.spotConfig.finish(r)) }
         }
     }
 
@@ -701,4 +821,149 @@ class TradingViewModel @Inject constructor(
             }
         }
     }
+
+    // ---- Admin prediction-markets forms (exchange-admin-config) ----
+
+    // create binary
+    fun setPmBinSymbol(t: String) = _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(symbolText = digits(t, 9), error = null)) }
+    fun setPmBinFace(t: String) = _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(faceText = digits(t, 12), error = null)) }
+    fun setPmBinResolver(t: String) = _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(resolverText = mpid(t), error = null)) }
+    fun clearPmBinResult() = _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(result = null, error = null)) }
+    fun submitPmCreateBinary() {
+        val f = _uiState.value.pmCreateBinary
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.pmConfig(f.symbolInt!!, f.faceLong!!, f.resolver)
+            _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.finish(r)) }
+            if (r is ApiResult.Success && r.data.applied) refreshPm()
+        }
+    }
+
+    // create categorical (grouped)
+    fun setPmCatGroup(t: String) = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(groupText = digits(t, 9), error = null)) }
+    fun setPmCatOutcomes(t: String) = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(outcomesText = t.filter { c -> c.isDigit() || c == ',' || c == ' ' }.take(120), error = null)) }
+    fun setPmCatFace(t: String) = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(faceText = digits(t, 12), error = null)) }
+    fun setPmCatResolver(t: String) = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(resolverText = mpid(t), error = null)) }
+    fun clearPmCatResult() = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(result = null, error = null)) }
+    fun submitPmCreateCategorical() {
+        val f = _uiState.value.pmCreateCategorical
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.pmGroupConfig(f.groupInt!!, f.outcomes, f.faceLong!!, f.resolver)
+            _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.finish(r)) }
+        }
+    }
+
+    // resolve binary
+    fun setPmResolveSymbol(t: String) = _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(symbolText = digits(t, 9), error = null)) }
+    fun setPmResolveYes(yes: Boolean) = _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(yes = yes, error = null)) }
+    fun setPmResolveSource(t: String) = _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(sourceText = source(t), error = null)) }
+    fun clearPmResolveResult() = _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(result = null, error = null)) }
+    fun submitPmResolveBinary() {
+        val f = _uiState.value.pmResolveBinary
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.pmResolve(f.symbolInt!!, f.outcome, f.source)
+            _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.finish(r)) }
+            if (r is ApiResult.Success && r.data.applied) { refreshPm(); loadPmResolutions() }
+        }
+    }
+
+    // resolve categorical
+    fun setPmGroupResolveGroup(t: String) = _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(groupText = digits(t, 9), error = null)) }
+    fun setPmGroupResolveWinning(t: String) = _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(winningText = digits(t, 9), error = null)) }
+    fun setPmGroupResolveSource(t: String) = _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(sourceText = source(t), error = null)) }
+    fun clearPmGroupResolveResult() = _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(result = null, error = null)) }
+    fun submitPmResolveCategorical() {
+        val f = _uiState.value.pmResolveCategorical
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.pmGroupResolve(f.groupInt!!, f.winningInt!!, f.source)
+            _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.finish(r)) }
+            if (r is ApiResult.Success && r.data.applied) loadPmResolutions()
+        }
+    }
+
+    /** Load the PM resolution audit log (admin). 404 -> empty; failure leaves the list unchanged. */
+    fun loadPmResolutions() {
+        viewModelScope.launch {
+            when (val r = repository.pmResolutions()) {
+                is ApiResult.Success -> _uiState.update { it.copy(pmResolutions = r.data) }
+                else -> Unit
+            }
+        }
+    }
+
+    /** Sanitize an optional free-text resolution source (alnum + a few separators). */
+    private fun source(t: String): String = t.filter { it.isLetterOrDigit() || it == '-' || it == '_' || it == ' ' || it == '.' }.take(40)
+
+    // ---- Trader staking + auctions (peer mechanisms). Trader-facing; 404 -> un-applied ack. ----
+
+    // stake_request
+    fun setStakeReqSymbol(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(symbolText = digits(t, 9), error = null)) }
+    fun setStakeReqMinCollateral(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(minCollateralText = digits(t, 15), error = null)) }
+    fun setStakeReqMaxPct(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(maxStakePctText = digits(t, 6), error = null)) }
+    fun setStakeReqLockup(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(lockupSecondsText = digits(t, 9), error = null)) }
+    fun setStakeReqDuration(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(durationSecondsText = digits(t, 9), error = null)) }
+    fun clearStakeReqResult() = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(result = null, error = null)) }
+    fun submitStakeRequest() {
+        val f = _uiState.value.stakeRequest
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.stakeRequest(f.symbolInt, f.minCollateralLong!!, f.maxStakePctLong!!, f.lockupSecondsInt!!, f.durationSecondsInt!!)
+            _uiState.update { it.copy(stakeRequest = it.stakeRequest.finish(r)) }
+        }
+    }
+
+    // stake_offer
+    fun setStakeOfferRequestId(t: String) = _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(requestIdText = digits(t, 18), error = null)) }
+    fun setStakeOfferCollateral(t: String) = _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(collateralText = digits(t, 15), error = null)) }
+    fun setStakeOfferPct(t: String) = _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(stakePctText = digits(t, 6), error = null)) }
+    fun clearStakeOfferResult() = _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(result = null, error = null)) }
+    fun submitStakeOffer() {
+        val f = _uiState.value.stakeOffer
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.stakeOffer(f.requestIdLong!!, f.collateralLong!!, f.stakePctLong!!)
+            _uiState.update { it.copy(stakeOffer = it.stakeOffer.finish(r)) }
+        }
+    }
+
+    // auction_request
+    fun setAuctionReqSymbol(t: String) = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(symbolText = digits(t, 9), error = null)) }
+    fun setAuctionReqQty(t: String) = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(qtyText = digits(t, 9), error = null)) }
+    fun setAuctionReqReserve(t: String) = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(reservePriceText = digits(t, 15), error = null)) }
+    fun setAuctionReqDuration(t: String) = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(durationSecondsText = digits(t, 9), error = null)) }
+    fun clearAuctionReqResult() = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(result = null, error = null)) }
+    fun submitAuctionRequest() {
+        val f = _uiState.value.auctionRequest
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.auctionRequest(f.symbolInt, f.qtyInt!!, f.reservePriceLong, f.durationSecondsInt)
+            _uiState.update { it.copy(auctionRequest = it.auctionRequest.finish(r)) }
+        }
+    }
+
+    // auction_bid
+    fun setAuctionBidId(t: String) = _uiState.update { it.copy(auctionBid = it.auctionBid.copy(auctionIdText = digits(t, 18), error = null)) }
+    fun setAuctionBidPrice(t: String) = _uiState.update { it.copy(auctionBid = it.auctionBid.copy(priceText = digits(t, 15), error = null)) }
+    fun setAuctionBidQty(t: String) = _uiState.update { it.copy(auctionBid = it.auctionBid.copy(qtyText = digits(t, 9), error = null)) }
+    fun clearAuctionBidResult() = _uiState.update { it.copy(auctionBid = it.auctionBid.copy(result = null, error = null)) }
+    fun submitAuctionBid() {
+        val f = _uiState.value.auctionBid
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(auctionBid = it.auctionBid.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.auctionBid(f.auctionIdLong!!, f.priceLong!!, f.qtyInt!!)
+            _uiState.update { it.copy(auctionBid = it.auctionBid.finish(r)) }
+        }
+    }
+
 }

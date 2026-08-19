@@ -65,6 +65,27 @@ interface TradingRepository {
     suspend fun liquidations(): ApiResult<Liquidations>
     /** Recent perpetual funding payments (404 -> empty feed). */
     suspend fun fundingPayments(): ApiResult<FundingPayments>
+
+    // ---- ADMIN engine-config (exchange-admin-config); 404 (undeployed) -> un-applied ack. ----
+    suspend fun matchingAlgo(symbolId: Int, algo: Int, specialistMpid: String?, specialistPct: Int?): ApiResult<EngineConfigAck>
+    suspend fun spreadConfig(spreadSymbolId: Int, leg1: Int, leg2: Int, leg1Ratio: Int?, leg2Ratio: Int?): ApiResult<EngineConfigAck>
+    suspend fun tradingParams(symbolId: Int, maxQty: Int?, maxNotional: Long?, priceBandPct: Long?, circuitBreakerPct: Long?, minBlockSize: Int?): ApiResult<EngineConfigAck>
+    suspend fun riskConfig(maxNotional: Long, windowSeconds: Int, mpid: String?): ApiResult<EngineConfigAck>
+    suspend fun spotIndex(symbolId: Int, spotIndexPrice: Long): ApiResult<EngineConfigAck>
+    suspend fun spotConfig(symbolId: Int, baseAsset: Int, quoteAsset: Int): ApiResult<EngineConfigAck>
+
+    // ---- ADMIN prediction-markets (exchange-admin-config); 404 (undeployed) -> un-applied ack / empty log. ----
+    suspend fun pmConfig(symbolId: Int, faceValue: Long, resolver: String?): ApiResult<PmConfigAck>
+    suspend fun pmGroupConfig(groupId: Int, outcomes: List<Int>, faceValue: Long, resolver: String?): ApiResult<PmConfigAck>
+    suspend fun pmResolve(symbolId: Int, outcome: String, source: String?): ApiResult<PmConfigAck>
+    suspend fun pmGroupResolve(groupId: Int, winningSymbolId: Int, source: String?): ApiResult<PmConfigAck>
+    suspend fun pmResolutions(): ApiResult<List<PmResolution>>
+
+    // ---- Trader staking + auctions (peer mechanisms); 404 (undeployed) -> un-applied ack. ----
+    suspend fun stakeRequest(symbolId: Int?, minCollateral: Long, maxStakePct: Long, lockupSeconds: Int, durationSeconds: Int): ApiResult<StakeAuctionAck>
+    suspend fun stakeOffer(requestId: Long, collateralAmount: Long, stakePct: Long): ApiResult<StakeAuctionAck>
+    suspend fun auctionRequest(symbolId: Int?, qty: Int, reservePrice: Long?, durationSeconds: Int?): ApiResult<StakeAuctionAck>
+    suspend fun auctionBid(auctionId: Long, price: Long, qty: Int): ApiResult<StakeAuctionAck>
 }
 
 @Singleton
@@ -184,6 +205,80 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun fundingPayments(): ApiResult<FundingPayments> =
         withContext(io) { emptyOn404(FundingPayments(emptyList(), 0)) { api.getFundingPayments().toDomain() } }
+
+    // ---- ADMIN engine-config. Not deployed to prod -> a 404 folds to an un-applied ack. ----
+
+    private val notDeployedAck = EngineConfigAck(applied = false, symbolId = null, result = null, message = "Engine config endpoint not deployed")
+
+    override suspend fun matchingAlgo(symbolId: Int, algo: Int, specialistMpid: String?, specialistPct: Int?): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.matchingAlgo(MatchingAlgoDto(symbolId, algo, specialistMpid, specialistPct)).toDomain() } }
+
+    override suspend fun spreadConfig(spreadSymbolId: Int, leg1: Int, leg2: Int, leg1Ratio: Int?, leg2Ratio: Int?): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.spreadConfig(SpreadConfigDto(spreadSymbolId, leg1, leg2, leg1Ratio, leg2Ratio)).toDomain() } }
+
+    override suspend fun tradingParams(symbolId: Int, maxQty: Int?, maxNotional: Long?, priceBandPct: Long?, circuitBreakerPct: Long?, minBlockSize: Int?): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.tradingParams(TradingParamsDto(symbolId, maxQty, maxNotional, priceBandPct, circuitBreakerPct, minBlockSize)).toDomain() } }
+
+    override suspend fun riskConfig(maxNotional: Long, windowSeconds: Int, mpid: String?): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.riskConfig(RiskConfigDto(maxNotional, windowSeconds, mpid)).toDomain() } }
+
+    override suspend fun spotIndex(symbolId: Int, spotIndexPrice: Long): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.spotIndex(SpotIndexDto(symbolId, spotIndexPrice)).toDomain() } }
+
+    override suspend fun spotConfig(symbolId: Int, baseAsset: Int, quoteAsset: Int): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.spotConfig(SpotConfigDto(symbolId, baseAsset, quoteAsset)).toDomain() } }
+
+    // ---- ADMIN prediction-markets. Not deployed to prod -> a 404 folds to an un-applied ack / empty log. ----
+
+    private val notDeployedPmAck = PmConfigAck(applied = false, symbolId = null, groupId = null, result = null, message = "PM admin endpoint not deployed")
+
+    override suspend fun pmConfig(symbolId: Int, faceValue: Long, resolver: String?): ApiResult<PmConfigAck> =
+        withContext(io) { emptyOn404(notDeployedPmAck) { api.pmConfig(PmConfigDto(symbolId, faceValue, resolver)).toDomain() } }
+
+    override suspend fun pmGroupConfig(groupId: Int, outcomes: List<Int>, faceValue: Long, resolver: String?): ApiResult<PmConfigAck> =
+        withContext(io) { emptyOn404(notDeployedPmAck) { api.pmGroupConfig(PmGroupConfigDto(groupId, outcomes, faceValue, resolver)).toDomain() } }
+
+    override suspend fun pmResolve(symbolId: Int, outcome: String, source: String?): ApiResult<PmConfigAck> =
+        withContext(io) { emptyOn404(notDeployedPmAck) { api.pmResolve(PmResolveDto(symbolId, outcome, source)).toDomain() } }
+
+    override suspend fun pmGroupResolve(groupId: Int, winningSymbolId: Int, source: String?): ApiResult<PmConfigAck> =
+        withContext(io) { emptyOn404(notDeployedPmAck) { api.pmGroupResolve(PmGroupResolveDto(groupId, winningSymbolId, source)).toDomain() } }
+
+    override suspend fun pmResolutions(): ApiResult<List<PmResolution>> =
+        withContext(io) { emptyOn404(emptyList<PmResolution>()) { api.getPmResolutions().map { it.toDomain() } } }
+
+    // ---- Trader staking + auctions. Not deployed to prod -> a 404 folds to an un-applied ack. ----
+
+    private fun notDeployedStakeAck(kind: StakeAuctionKind) =
+        StakeAuctionAck(accepted = false, kind = kind, createdId = null, message = "Staking/auctions endpoint not deployed")
+
+    override suspend fun stakeRequest(symbolId: Int?, minCollateral: Long, maxStakePct: Long, lockupSeconds: Int, durationSeconds: Int): ApiResult<StakeAuctionAck> =
+        withContext(io) {
+            emptyOn404(notDeployedStakeAck(StakeAuctionKind.STAKE_REQUEST)) {
+                api.stakeRequest(StakeRequestDto(symbolId, minCollateral, maxStakePct, lockupSeconds, durationSeconds)).toDomain(StakeAuctionKind.STAKE_REQUEST)
+            }
+        }
+
+    override suspend fun stakeOffer(requestId: Long, collateralAmount: Long, stakePct: Long): ApiResult<StakeAuctionAck> =
+        withContext(io) {
+            emptyOn404(notDeployedStakeAck(StakeAuctionKind.STAKE_OFFER)) {
+                api.stakeOffer(StakeOfferDto(requestId, collateralAmount, stakePct)).toDomain(StakeAuctionKind.STAKE_OFFER)
+            }
+        }
+
+    override suspend fun auctionRequest(symbolId: Int?, qty: Int, reservePrice: Long?, durationSeconds: Int?): ApiResult<StakeAuctionAck> =
+        withContext(io) {
+            emptyOn404(notDeployedStakeAck(StakeAuctionKind.AUCTION_REQUEST)) {
+                api.auctionRequest(AuctionRequestDto(symbolId, qty, reservePrice, durationSeconds)).toDomain(StakeAuctionKind.AUCTION_REQUEST)
+            }
+        }
+
+    override suspend fun auctionBid(auctionId: Long, price: Long, qty: Int): ApiResult<StakeAuctionAck> =
+        withContext(io) {
+            emptyOn404(notDeployedStakeAck(StakeAuctionKind.AUCTION_BID)) {
+                api.auctionBid(AuctionBidDto(auctionId, price, qty)).toDomain(StakeAuctionKind.AUCTION_BID)
+            }
+        }
 
     /**
      * Like [apiCall] but a 404 (endpoint not deployed yet) folds to a Success carrying [emptyValue],

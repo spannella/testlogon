@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.data.exchange.OrderSide
+import com.testlogon.android.data.exchange.EngineConfigAck
 import com.testlogon.android.feature.markets.ui.MarketColors
 import java.util.Locale
 
@@ -118,6 +119,10 @@ fun TradeTicket(
         if (state.isAdmin) {
             Spacer(Modifier.height(16.dp))
             MarginConfigPanel(state.marginConfig, viewModel)
+            Spacer(Modifier.height(16.dp))
+            EngineConfigSection(state, viewModel)
+            Spacer(Modifier.height(16.dp))
+            PmAdminSection(state, viewModel)
         }
     }
 }
@@ -314,6 +319,9 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: Tra
         Spacer(Modifier.height(10.dp))
         SpotPanel(state, viewModel)
     }
+
+    Spacer(Modifier.height(20.dp))
+    StakingAuctionsSection(state, viewModel)
 }
 
 @Composable
@@ -1187,4 +1195,715 @@ private fun MarginConfigPanel(form: MarginConfigForm, viewModel: TradingViewMode
 private fun fmt(v: Double): String {
     val whole = v == v.toLong().toDouble()
     return if (whole) String.format(Locale.US, "%,d", v.toLong()) else String.format(Locale.US, "%,.2f", v)
+}
+
+// ======================= Admin engine-config (exchange-admin-config) =======================
+
+/**
+ * Admin-only "Engine config" section: six compact forms mirroring [MarginConfigPanel], one per engine
+ * config route. Each is a bordered card with labeled integer inputs, defaults, a validated Apply button,
+ * and inline ack/error feedback. Shown only when [TradingUiState.isAdmin]. Endpoints 404 until deployed
+ * -> the repository degrades to an un-applied ack surfaced here.
+ */
+@Composable
+private fun EngineConfigSection(state: TradingUiState, viewModel: TradingViewModel) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("engine_config_section")) {
+        Text("Engine config (admin)", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Matching-engine parameters. Not deployed to every venue; an undeployed route reports \"not deployed\".",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        MatchingAlgoPanel(state.matchingAlgo, viewModel)
+        Spacer(Modifier.height(12.dp))
+        SpreadConfigPanel(state.spreadConfig, viewModel)
+        Spacer(Modifier.height(12.dp))
+        TradingParamsPanel(state.tradingParams, viewModel)
+        Spacer(Modifier.height(12.dp))
+        RiskConfigPanel(state.riskConfig, viewModel)
+        Spacer(Modifier.height(12.dp))
+        SpotIndexPanel(state.spotIndex, viewModel)
+        Spacer(Modifier.height(12.dp))
+        SpotConfigPanel(state.spotConfig, viewModel)
+    }
+}
+
+/** Bordered card wrapper shared by every engine-config form (matches MarginConfigPanel styling). */
+@Composable
+private fun EngineCard(title: String, subtitle: String, content: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+    ) {
+        Text(title, color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(subtitle, color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(10.dp))
+        content()
+    }
+}
+
+/** Apply button + inline error/ack feedback, shared by every engine-config form. */
+@Composable
+private fun EngineApply(
+    label: String,
+    canSubmit: Boolean,
+    submitting: Boolean,
+    error: String?,
+    result: EngineConfigAck?,
+    testTag: String,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = if (submitting) "Applying…" else label,
+        color = if (canSubmit) Color.Black else MarketColors.TextFaint,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (canSubmit) MarketColors.Accent else MarketColors.SurfaceAlt)
+            .then(if (canSubmit) Modifier.clickable { onSubmit() } else Modifier)
+            .testTag(testTag)
+            .padding(vertical = 12.dp),
+        textAlign = TextAlign.Center,
+    )
+    error?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MarketColors.Down, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    }
+    result?.let { r ->
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = if (r.applied) "Applied (result ${r.result ?: 0})" else (r.message ?: "Rejected (result ${r.result ?: "?"})"),
+            color = if (r.applied) MarketColors.Up else MarketColors.Down,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Dismiss",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+            modifier = Modifier.clickable { onDismiss() }.padding(vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun MatchingAlgoPanel(form: MatchingAlgoForm, viewModel: TradingViewModel) {
+    EngineCard("Matching algorithm", "Order-allocation model for a symbol.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setAlgoSymbol)
+        Spacer(Modifier.height(8.dp))
+        Text("Algorithm", color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AlgoChip("Price-time", form.algo == 0) { viewModel.setAlgo(0) }
+            AlgoChip("Pro-rata", form.algo == 1) { viewModel.setAlgo(1) }
+            AlgoChip("Specialist", form.algo == 2) { viewModel.setAlgo(2) }
+        }
+        if (form.algo >= 2) {
+            Spacer(Modifier.height(8.dp))
+            TextInputField("Specialist MPID", form.specialistMpidText, viewModel::setAlgoSpecialistMpid)
+            Spacer(Modifier.height(8.dp))
+            NumberField("Specialist %", form.specialistPctText, viewModel::setAlgoSpecialistPct)
+        }
+        EngineApply(
+            label = "Apply matching algo",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_matching_algo",
+            onSubmit = viewModel::submitMatchingAlgo,
+            onDismiss = viewModel::clearAlgoResult,
+        )
+    }
+}
+
+@Composable
+private fun AlgoChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text = label,
+        color = if (selected) Color.Black else MarketColors.TextSecondary,
+        fontSize = 12.sp,
+        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (selected) MarketColors.Accent else MarketColors.SurfaceAlt)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .testTag("algo_$label")
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
+}
+
+@Composable
+private fun SpreadConfigPanel(form: SpreadConfigForm, viewModel: TradingViewModel) {
+    EngineCard("Spread instrument", "Two-leg spread (signed ratios; e.g. 1 / -1).") {
+        NumberField("Spread symbol id", form.spreadSymbolText, viewModel::setSpreadSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Leg 1 symbol id", form.leg1Text, viewModel::setSpreadLeg1)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Leg 2 symbol id", form.leg2Text, viewModel::setSpreadLeg2)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Leg 1 ratio", form.leg1RatioText, viewModel::setSpreadLeg1Ratio)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Leg 2 ratio", form.leg2RatioText, viewModel::setSpreadLeg2Ratio)
+        EngineApply(
+            label = "Apply spread config",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_spread_config",
+            onSubmit = viewModel::submitSpreadConfig,
+            onDismiss = viewModel::clearSpreadResult,
+        )
+    }
+}
+
+@Composable
+private fun TradingParamsPanel(form: TradingParamsForm, viewModel: TradingViewModel) {
+    EngineCard("Trading params", "Per-symbol risk limits (leave blank to skip a param).") {
+        NumberField("Symbol id", form.symbolText, viewModel::setTpSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Max qty", form.maxQtyText, viewModel::setTpMaxQty)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Max notional", form.maxNotionalText, viewModel::setTpMaxNotional)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Price band %", form.priceBandPctText, viewModel::setTpPriceBand)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Circuit breaker %", form.circuitBreakerPctText, viewModel::setTpCircuitBreaker)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Min block size", form.minBlockSizeText, viewModel::setTpMinBlock)
+        EngineApply(
+            label = "Apply trading params",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_trading_params",
+            onSubmit = viewModel::submitTradingParams,
+            onDismiss = viewModel::clearTpResult,
+        )
+    }
+}
+
+@Composable
+private fun RiskConfigPanel(form: RiskConfigForm, viewModel: TradingViewModel) {
+    EngineCard("Risk config", "Aggregate notional cap over a rolling window.") {
+        NumberField("Max notional", form.maxNotionalText, viewModel::setRiskMaxNotional)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Window seconds", form.windowSecondsText, viewModel::setRiskWindow)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("MPID (optional)", form.mpidText, viewModel::setRiskMpid)
+        EngineApply(
+            label = "Apply risk config",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_risk_config",
+            onSubmit = viewModel::submitRiskConfig,
+            onDismiss = viewModel::clearRiskResult,
+        )
+    }
+}
+
+@Composable
+private fun SpotIndexPanel(form: SpotIndexForm, viewModel: TradingViewModel) {
+    EngineCard("Spot index", "Publish a spot index (mark) price.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setSpotIndexSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Spot index price", form.spotIndexPriceText, viewModel::setSpotIndexPrice)
+        EngineApply(
+            label = "Apply spot index",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_spot_index",
+            onSubmit = viewModel::submitSpotIndex,
+            onDismiss = viewModel::clearSpotIndexResult,
+        )
+    }
+}
+
+@Composable
+private fun SpotConfigPanel(form: SpotConfigForm, viewModel: TradingViewModel) {
+    EngineCard("Spot config", "Bind a symbol to its base/quote asset ids.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setSpotCfgSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Base asset id", form.baseAssetText, viewModel::setSpotCfgBase)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Quote asset id", form.quoteAssetText, viewModel::setSpotCfgQuote)
+        EngineApply(
+            label = "Apply spot config",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_spot_config",
+            onSubmit = viewModel::submitSpotConfig,
+            onDismiss = viewModel::clearSpotCfgResult,
+        )
+    }
+}
+
+/** Like [NumberField] but accepts free text (for signed ratios / alphanumeric MPIDs). */
+@Composable
+private fun TextInputField(label: String, value: String, onValue: (String) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(label, color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(3.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MarketColors.Surface)
+                .border(1.dp, MarketColors.Border, RoundedCornerShape(8.dp))
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValue,
+                singleLine = true,
+                textStyle = TextStyle(color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 16.sp),
+                cursorBrush = SolidColor(MarketColors.Accent),
+                modifier = Modifier.fillMaxWidth().testTag("field_$label"),
+            )
+        }
+    }
+}
+
+
+/**
+ * Admin prediction-markets section (exchange-admin-config). Compact create/resolve forms for binary +
+ * categorical PMs plus a resolution-history list. isAdmin-gated by the caller. Endpoints 404 until
+ * deployed -> the repository degrades to an un-applied ack surfaced inline; a 403 on resolve (caller is
+ * not the designated resolver) is surfaced as the engine's error message.
+ */
+@Composable
+private fun PmAdminSection(state: TradingUiState, viewModel: TradingViewModel) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("pm_admin_section")) {
+        Text("Prediction markets (admin)", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Configure and resolve prediction markets. Resolving requires the designated resolver (else 403).",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        PmCreateBinaryPanel(state.pmCreateBinary, viewModel)
+        Spacer(Modifier.height(12.dp))
+        PmCreateCategoricalPanel(state.pmCreateCategorical, viewModel)
+        Spacer(Modifier.height(12.dp))
+        PmResolveBinaryPanel(state.pmResolveBinary, viewModel)
+        Spacer(Modifier.height(12.dp))
+        PmResolveCategoricalPanel(state.pmResolveCategorical, viewModel)
+        Spacer(Modifier.height(12.dp))
+        PmResolutionHistory(state.pmResolutions, viewModel)
+    }
+}
+
+/** Apply button + inline error/ack feedback for the PM admin forms (mirrors [EngineApply]). */
+@Composable
+private fun PmApply(
+    label: String,
+    canSubmit: Boolean,
+    submitting: Boolean,
+    error: String?,
+    result: com.testlogon.android.data.exchange.PmConfigAck?,
+    testTag: String,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = if (submitting) "Applying" else label,
+        color = if (canSubmit) Color.Black else MarketColors.TextFaint,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (canSubmit) MarketColors.Accent else MarketColors.SurfaceAlt)
+            .then(if (canSubmit) Modifier.clickable { onSubmit() } else Modifier)
+            .testTag(testTag)
+            .padding(vertical = 12.dp),
+        textAlign = TextAlign.Center,
+    )
+    error?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MarketColors.Down, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    }
+    result?.let { r ->
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = if (r.applied) "Applied (result ${r.result ?: 0})" else (r.message ?: "Rejected (result ${r.result ?: "?"})"),
+            color = if (r.applied) MarketColors.Up else MarketColors.Down,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Dismiss",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+            modifier = Modifier.clickable { onDismiss() }.padding(vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun PmCreateBinaryPanel(form: PmCreateBinaryForm, viewModel: TradingViewModel) {
+    EngineCard("Create binary market", "YES pays the face value on YES; face value must be > 1.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setPmBinSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Face value (payout)", form.faceText, viewModel::setPmBinFace)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Resolver id (optional)", form.resolverText, viewModel::setPmBinResolver)
+        PmApply(
+            label = "Create binary market",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_pm_create_binary",
+            onSubmit = viewModel::submitPmCreateBinary,
+            onDismiss = viewModel::clearPmBinResult,
+        )
+    }
+}
+
+@Composable
+private fun PmCreateCategoricalPanel(form: PmCreateCategoricalForm, viewModel: TradingViewModel) {
+    EngineCard("Create categorical market", "A group of >= 2 mutually-exclusive outcome symbols.") {
+        NumberField("Group id", form.groupText, viewModel::setPmCatGroup)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Outcome symbol ids (comma-separated)", form.outcomesText, viewModel::setPmCatOutcomes)
+        Spacer(Modifier.height(4.dp))
+        Text("${form.outcomes.size} outcome(s): ${form.outcomes.joinToString(", ")}", color = MarketColors.TextFaint, fontSize = 10.sp)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Face value (payout)", form.faceText, viewModel::setPmCatFace)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Resolver id (optional)", form.resolverText, viewModel::setPmCatResolver)
+        PmApply(
+            label = "Create categorical market",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_pm_create_categorical",
+            onSubmit = viewModel::submitPmCreateCategorical,
+            onDismiss = viewModel::clearPmCatResult,
+        )
+    }
+}
+
+@Composable
+private fun PmResolveBinaryPanel(form: PmResolveBinaryForm, viewModel: TradingViewModel) {
+    EngineCard("Resolve binary market", "Settle a binary PM. Requires the designated resolver.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setPmResolveSymbol)
+        Spacer(Modifier.height(8.dp))
+        Text("Outcome", color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AlgoChip("YES", form.yes) { viewModel.setPmResolveYes(true) }
+            AlgoChip("NO", !form.yes) { viewModel.setPmResolveYes(false) }
+        }
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Source (optional)", form.sourceText, viewModel::setPmResolveSource)
+        PmApply(
+            label = "Resolve ${form.outcome.uppercase()}",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_pm_resolve_binary",
+            onSubmit = viewModel::submitPmResolveBinary,
+            onDismiss = viewModel::clearPmResolveResult,
+        )
+    }
+}
+
+@Composable
+private fun PmResolveCategoricalPanel(form: PmResolveCategoricalForm, viewModel: TradingViewModel) {
+    EngineCard("Resolve categorical market", "Settle a group to its winning outcome symbol.") {
+        NumberField("Group id", form.groupText, viewModel::setPmGroupResolveGroup)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Winning symbol id", form.winningText, viewModel::setPmGroupResolveWinning)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Source (optional)", form.sourceText, viewModel::setPmGroupResolveSource)
+        PmApply(
+            label = "Resolve group",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_pm_resolve_categorical",
+            onSubmit = viewModel::submitPmResolveCategorical,
+            onDismiss = viewModel::clearPmGroupResolveResult,
+        )
+    }
+}
+
+@Composable
+private fun PmResolutionHistory(resolutions: List<com.testlogon.android.data.exchange.PmResolution>, viewModel: TradingViewModel) {
+    EngineCard("Resolution history", "The most recent PM resolutions (audit log).") {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("${resolutions.size} resolution(s)", color = MarketColors.TextSecondary, fontSize = 11.sp)
+            Text(
+                "Refresh",
+                color = MarketColors.Accent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { viewModel.loadPmResolutions() }.testTag("pm_resolutions_refresh").padding(vertical = 2.dp),
+            )
+        }
+        if (resolutions.isEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("No resolutions yet.", color = MarketColors.TextFaint, fontSize = 11.sp)
+        } else {
+            resolutions.take(20).forEach { r ->
+                Spacer(Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "${r.marketLabel} -> ${r.outcomeLabel}",
+                            color = MarketColors.TextPrimary,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                        )
+                        val meta = listOfNotNull(
+                            r.resolverId.takeIf { it.isNotBlank() }?.let { "by $it" },
+                            r.source.takeIf { it.isNotBlank() }?.let { "src $it" },
+                        ).joinToString(" · ")
+                        if (meta.isNotBlank()) {
+                            Text(meta, color = MarketColors.TextFaint, fontSize = 10.sp)
+                        }
+                    }
+                    Text(
+                        if (r.isGroup) "GROUP" else (r.outcome?.uppercase() ?: "--"),
+                        color = when {
+                            r.isGroup -> MarketColors.Accent
+                            r.outcomeYes == true -> MarketColors.Up
+                            r.outcomeYes == false -> MarketColors.Down
+                            else -> MarketColors.TextSecondary
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Trader-facing Staking & Auctions section (peer mechanisms). NOT admin-gated. Four compact forms:
+ * create a stake request, offer on an open request (by id), auction a position qty, and bid on an
+ * auction (by id). Each surfaces the engine's returned request_id / auction_id prominently. There is
+ * no list/GET for open items yet, so an honest "browsing open items isn't available yet" note is shown;
+ * the routes 404 until deployed -> the repository degrades to an un-applied ack surfaced inline.
+ */
+@Composable
+private fun StakingAuctionsSection(state: TradingUiState, viewModel: TradingViewModel) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("staking_auctions_section")) {
+        Text("Staking & auctions", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Peer mechanisms: stake against another trader's request, or auction a position. Browsing open " +
+                "requests/auctions isn't available yet — act on an id you already have, or create one and share " +
+                "the id it returns.",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        StakeRequestPanel(state.stakeRequest, viewModel)
+        Spacer(Modifier.height(12.dp))
+        StakeOfferPanel(state.stakeOffer, viewModel)
+        Spacer(Modifier.height(12.dp))
+        AuctionRequestPanel(state.auctionRequest, viewModel)
+        Spacer(Modifier.height(12.dp))
+        AuctionBidPanel(state.auctionBid, viewModel)
+    }
+}
+
+/**
+ * Apply button + inline feedback for a staking/auction form. On accept it surfaces the created id
+ * ([StakeAuctionAck.idLabel]) prominently so the trader can copy/share it (there's no list view yet).
+ */
+@Composable
+private fun StakeApply(
+    label: String,
+    canSubmit: Boolean,
+    submitting: Boolean,
+    error: String?,
+    result: com.testlogon.android.data.exchange.StakeAuctionAck?,
+    testTag: String,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = if (submitting) "Submitting…" else label,
+        color = if (canSubmit) Color.Black else MarketColors.TextFaint,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (canSubmit) MarketColors.Accent else MarketColors.SurfaceAlt)
+            .then(if (canSubmit) Modifier.clickable { onSubmit() } else Modifier)
+            .testTag(testTag)
+            .padding(vertical = 12.dp),
+        textAlign = TextAlign.Center,
+    )
+    error?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MarketColors.Down, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    }
+    result?.let { r ->
+        Spacer(Modifier.height(8.dp))
+        if (r.accepted) {
+            r.idLabel?.let { idLabel ->
+                Text(
+                    text = idLabel,
+                    color = Color.Black,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MarketColors.Up)
+                        .testTag(testTag + "_id")
+                        .padding(vertical = 10.dp),
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+            Text(
+                text = if (r.idLabel != null) "Accepted — save this id (no open-items list yet)." else "Accepted.",
+                color = MarketColors.Up,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+            )
+        } else {
+            Text(
+                text = r.message ?: "Rejected",
+                color = MarketColors.Down,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Dismiss",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+            modifier = Modifier.clickable { onDismiss() }.padding(vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun StakeRequestPanel(form: StakeRequestForm, viewModel: TradingViewModel) {
+    EngineCard("Create stake request", "Invite others to stake against your position.") {
+        NumberField("Symbol id (optional)", form.symbolText, viewModel::setStakeReqSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Min collateral", form.minCollateralText, viewModel::setStakeReqMinCollateral)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Max stake %", form.maxStakePctText, viewModel::setStakeReqMaxPct)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Lockup seconds", form.lockupSecondsText, viewModel::setStakeReqLockup)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Duration seconds", form.durationSecondsText, viewModel::setStakeReqDuration)
+        StakeApply(
+            label = "Create stake request",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "create_stake_request",
+            onSubmit = viewModel::submitStakeRequest,
+            onDismiss = viewModel::clearStakeReqResult,
+        )
+    }
+}
+
+@Composable
+private fun StakeOfferPanel(form: StakeOfferForm, viewModel: TradingViewModel) {
+    EngineCard("Offer on stake request", "Stake against an open request by its id.") {
+        NumberField("Request id", form.requestIdText, viewModel::setStakeOfferRequestId)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Collateral amount", form.collateralText, viewModel::setStakeOfferCollateral)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Stake %", form.stakePctText, viewModel::setStakeOfferPct)
+        StakeApply(
+            label = "Submit offer",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "submit_stake_offer",
+            onSubmit = viewModel::submitStakeOffer,
+            onDismiss = viewModel::clearStakeOfferResult,
+        )
+    }
+}
+
+@Composable
+private fun AuctionRequestPanel(form: AuctionRequestForm, viewModel: TradingViewModel) {
+    EngineCard("Create auction", "Auction a position quantity (optional reserve + duration).") {
+        NumberField("Symbol id (optional)", form.symbolText, viewModel::setAuctionReqSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Quantity", form.qtyText, viewModel::setAuctionReqQty)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Reserve price (optional)", form.reservePriceText, viewModel::setAuctionReqReserve)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Duration seconds (optional)", form.durationSecondsText, viewModel::setAuctionReqDuration)
+        StakeApply(
+            label = "Create auction",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "create_auction_request",
+            onSubmit = viewModel::submitAuctionRequest,
+            onDismiss = viewModel::clearAuctionReqResult,
+        )
+    }
+}
+
+@Composable
+private fun AuctionBidPanel(form: AuctionBidForm, viewModel: TradingViewModel) {
+    EngineCard("Bid on auction", "Bid on an open auction by its id.") {
+        NumberField("Auction id", form.auctionIdText, viewModel::setAuctionBidId)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Price", form.priceText, viewModel::setAuctionBidPrice)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Quantity", form.qtyText, viewModel::setAuctionBidQty)
+        StakeApply(
+            label = "Submit bid",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "submit_auction_bid",
+            onSubmit = viewModel::submitAuctionBid,
+            onDismiss = viewModel::clearAuctionBidResult,
+        )
+    }
 }
