@@ -18,6 +18,7 @@ import com.testlogon.android.feature.saved.SavedRoute
 import com.testlogon.android.feature.sessions.ActiveSessionsRoute
 import com.testlogon.android.feature.settings.account.AccountSettingsRoute
 import com.testlogon.android.feature.settings.appearance.AppearanceSettingsRoute
+import com.testlogon.android.feature.settings.trading.TradingPreferencesRoute
 import com.testlogon.android.feature.settings.hub.SettingsHubRoute
 import com.testlogon.android.feature.settings.language.LanguagePickerRoute
 import com.testlogon.android.feature.settings.media.MediaPreferencesRoute
@@ -589,6 +590,9 @@ private fun NavGraphBuilder.settingsDestinations(navController: NavHostControlle
     }
     composable(MainDest.SettingsAppearance.route) {
         AppearanceSettingsRoute(onBack = { navController.popBackStack() })
+    }
+    composable(MainDest.SettingsTrading.route) {
+        TradingPreferencesRoute(onBack = { navController.popBackStack() })
     }
     composable(MainDest.SettingsLanguage.route) {
         LanguagePickerRoute(onBack = { navController.popBackStack() })

@@ -9,7 +9,7 @@ import com.testlogon.android.R
  * the nav route so reordering/gating never touches navigation code.
  */
 enum class SettingsSectionKey {
-    ACCOUNT, SECURITY, NOTIFICATIONS, PUSH_EVENTS, ALERTS, MEDIA, APPEARANCE, LANGUAGE, PRIVACY, EMOJIS, GEO, CALL_RATE
+    ACCOUNT, SECURITY, NOTIFICATIONS, PUSH_EVENTS, ALERTS, TRADING, MEDIA, APPEARANCE, LANGUAGE, PRIVACY, EMOJIS, GEO, CALL_RATE
 }
 
 /**

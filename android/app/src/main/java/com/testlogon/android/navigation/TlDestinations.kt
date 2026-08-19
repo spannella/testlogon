@@ -238,6 +238,9 @@ sealed class MainDest(val route: String) {
     /** Settings → Call rate (paid-calls per-minute rate). Web parity: settings/call-rate. */
     data object SettingsCallRate : MainDest("settings/call-rate")
 
+    /** Settings -> Trading preferences (theme + default market + alert-kind toggles + reset). */
+    data object SettingsTrading : MainDest("settings/trading")
+
     /** Settings → Message privacy (TIP-B4 pay-to-message gate + tip-free allowlist). */
     data object SettingsMessagePrivacy : MainDest("settings/message-privacy")
 

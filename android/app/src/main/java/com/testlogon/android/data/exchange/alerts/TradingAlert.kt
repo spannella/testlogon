@@ -83,7 +83,12 @@ data class TradingAlertsResult(
  */
 object TradingAlertsDetector {
 
-    fun detect(feeds: TradingFeeds, marker: TradingAlertsMarker, nowMs: Long): TradingAlertsResult {
+    fun detect(
+        feeds: TradingFeeds,
+        marker: TradingAlertsMarker,
+        nowMs: Long,
+        enabledKinds: Set<TradingAlertKind> = TradingAlertKind.entries.toSet(),
+    ): TradingAlertsResult {
         val maxFill = feeds.fills.fills.maxOfOrNull { it.tsNs } ?: 0L
         val maxLiq = feeds.liquidations.events.maxOfOrNull { it.tsNs } ?: 0L
         val maxFund = feeds.funding.payments.maxOfOrNull { it.tsNs } ?: 0L
@@ -191,6 +196,11 @@ object TradingAlertsDetector {
             }
         }
 
+        // Drop alerts whose kind the user has disabled. The marker still advances below for ALL
+        // kinds, so re-enabling a kind never back-fires the events it missed while it was off.
+        val emitted = if (enabledKinds.size == TradingAlertKind.entries.size) out
+            else out.filterTo(ArrayList()) { it.kind in enabledKinds }
+
         val nextMarker = marker.copy(
             lastFillTsNs = maxOf(marker.lastFillTsNs, maxFill),
             lastLiquidationTsNs = maxOf(marker.lastLiquidationTsNs, maxLiq),
@@ -200,6 +210,6 @@ object TradingAlertsDetector {
             marginLiquidating = liquidating,
             pmResolutionCount = maxOf(marker.pmResolutionCount, pmCount),
         )
-        return TradingAlertsResult(newAlerts = out, marker = nextMarker)
+        return TradingAlertsResult(newAlerts = emitted, marker = nextMarker)
     }
 }

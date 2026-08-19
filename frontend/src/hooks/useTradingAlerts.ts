@@ -1,5 +1,7 @@
 import * as React from "react";
 import { toast } from "sonner";
+import { notify } from "@/lib/tradeFeedback";
+import { loadAlertPrefs, ALERT_PREFS_KEY, type AlertPrefs } from "@/lib/tradingPrefs";
 import {
   useFillsFees,
   useLiquidations,
@@ -142,6 +144,24 @@ export function useTradingAlerts(enabled = true) {
   );
   const seenRef = React.useRef<SeenMarkers>(loadJson<SeenMarkers>(LS_SEEN, {}));
 
+  // Per-kind alert preferences (Settings > Trading). Missing = enabled.
+  const [alertPrefs, setAlertPrefs] = React.useState<AlertPrefs>(() => loadAlertPrefs());
+  const prefsRef = React.useRef(alertPrefs);
+  prefsRef.current = alertPrefs;
+  React.useEffect(() => {
+    const reload = () => setAlertPrefs(loadAlertPrefs());
+    // Cross-tab changes fire "storage"; same-tab Settings edits fire a custom event.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === ALERT_PREFS_KEY || e.key === null) reload();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("tl:alertPrefsChanged", reload);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("tl:alertPrefsChanged", reload);
+    };
+  }, []);
+
   // Persist alerts whenever they change.
   React.useEffect(() => {
     saveJson(LS_ALERTS, alerts.slice(0, MAX_ALERTS));
@@ -150,14 +170,18 @@ export function useTradingAlerts(enabled = true) {
   const pushAlerts = React.useCallback(
     (incoming: Omit<TradingAlert, "read">[], primed: boolean) => {
       if (incoming.length === 0) return;
+      const prefs = prefsRef.current;
       setAlerts((prev) => {
         const have = new Set(prev.map((a) => a.id));
-        const fresh = incoming.filter((a) => !have.has(a.id));
+        // Suppress alert kinds the user disabled in Settings > Trading.
+        const fresh = incoming.filter((a) => !have.has(a.id) && prefs[a.kind] !== false);
         if (fresh.length === 0) return prev;
         // Only toast once the feed is primed (not on the seeding first fetch).
         if (primed) {
           for (const a of fresh) {
             toast(a.title, { description: a.message });
+            // Surface as an OS notification too (no-op unless permission granted).
+            notify(a.title, a.message);
           }
         }
         const merged = [

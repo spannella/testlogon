@@ -26,6 +26,7 @@ import javax.inject.Singleton
 class TradingAlertsPoller @Inject constructor(
     private val trading: TradingRepository,
     private val store: TradingAlertsStore,
+    private val prefs: TradingAlertPrefsStore,
     private val clock: AlertClock,
 ) {
     /** The persisted recent-alerts list (newest first). */
@@ -50,7 +51,7 @@ class TradingAlertsPoller @Inject constructor(
             margin = (trading.marginAccount() as? ApiResult.Success)?.data,
             pmResolutions = (trading.pmResolutions() as? ApiResult.Success)?.data ?: emptyList<PmResolution>(),
         )
-        val result = TradingAlertsDetector.detect(feeds, store.marker(), clock.nowMs())
+        val result = TradingAlertsDetector.detect(feeds, store.marker(), clock.nowMs(), prefs.enabledKinds())
         store.setMarker(result.marker)
         if (result.newAlerts.isNotEmpty()) store.addAlerts(result.newAlerts)
         return result.newAlerts
