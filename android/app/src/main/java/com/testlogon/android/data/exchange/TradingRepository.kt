@@ -80,6 +80,12 @@ interface TradingRepository {
     suspend fun pmResolve(symbolId: Int, outcome: String, source: String?): ApiResult<PmConfigAck>
     suspend fun pmGroupResolve(groupId: Int, winningSymbolId: Int, source: String?): ApiResult<PmConfigAck>
     suspend fun pmResolutions(): ApiResult<List<PmResolution>>
+
+    // ---- Trader staking + auctions (peer mechanisms); 404 (undeployed) -> un-applied ack. ----
+    suspend fun stakeRequest(symbolId: Int?, minCollateral: Long, maxStakePct: Long, lockupSeconds: Int, durationSeconds: Int): ApiResult<StakeAuctionAck>
+    suspend fun stakeOffer(requestId: Long, collateralAmount: Long, stakePct: Long): ApiResult<StakeAuctionAck>
+    suspend fun auctionRequest(symbolId: Int?, qty: Int, reservePrice: Long?, durationSeconds: Int?): ApiResult<StakeAuctionAck>
+    suspend fun auctionBid(auctionId: Long, price: Long, qty: Int): ApiResult<StakeAuctionAck>
 }
 
 @Singleton
@@ -240,6 +246,39 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun pmResolutions(): ApiResult<List<PmResolution>> =
         withContext(io) { emptyOn404(emptyList<PmResolution>()) { api.getPmResolutions().map { it.toDomain() } } }
+
+    // ---- Trader staking + auctions. Not deployed to prod -> a 404 folds to an un-applied ack. ----
+
+    private fun notDeployedStakeAck(kind: StakeAuctionKind) =
+        StakeAuctionAck(accepted = false, kind = kind, createdId = null, message = "Staking/auctions endpoint not deployed")
+
+    override suspend fun stakeRequest(symbolId: Int?, minCollateral: Long, maxStakePct: Long, lockupSeconds: Int, durationSeconds: Int): ApiResult<StakeAuctionAck> =
+        withContext(io) {
+            emptyOn404(notDeployedStakeAck(StakeAuctionKind.STAKE_REQUEST)) {
+                api.stakeRequest(StakeRequestDto(symbolId, minCollateral, maxStakePct, lockupSeconds, durationSeconds)).toDomain(StakeAuctionKind.STAKE_REQUEST)
+            }
+        }
+
+    override suspend fun stakeOffer(requestId: Long, collateralAmount: Long, stakePct: Long): ApiResult<StakeAuctionAck> =
+        withContext(io) {
+            emptyOn404(notDeployedStakeAck(StakeAuctionKind.STAKE_OFFER)) {
+                api.stakeOffer(StakeOfferDto(requestId, collateralAmount, stakePct)).toDomain(StakeAuctionKind.STAKE_OFFER)
+            }
+        }
+
+    override suspend fun auctionRequest(symbolId: Int?, qty: Int, reservePrice: Long?, durationSeconds: Int?): ApiResult<StakeAuctionAck> =
+        withContext(io) {
+            emptyOn404(notDeployedStakeAck(StakeAuctionKind.AUCTION_REQUEST)) {
+                api.auctionRequest(AuctionRequestDto(symbolId, qty, reservePrice, durationSeconds)).toDomain(StakeAuctionKind.AUCTION_REQUEST)
+            }
+        }
+
+    override suspend fun auctionBid(auctionId: Long, price: Long, qty: Int): ApiResult<StakeAuctionAck> =
+        withContext(io) {
+            emptyOn404(notDeployedStakeAck(StakeAuctionKind.AUCTION_BID)) {
+                api.auctionBid(AuctionBidDto(auctionId, price, qty)).toDomain(StakeAuctionKind.AUCTION_BID)
+            }
+        }
 
     /**
      * Like [apiCall] but a 404 (endpoint not deployed yet) folds to a Success carrying [emptyValue],

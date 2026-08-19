@@ -557,3 +557,72 @@ data class PmResolutionDto(
     @com.testlogon.android.core.network.json.LenientLong @Json(name = "ts") val ts: Long? = null,
     @Json(name = "source") val source: String? = null,
 )
+
+// ==== Trader staking + auctions (peer mechanisms) ====
+// Two peer trader mechanisms. All four POST routes ack with a JSON body carrying a status + the
+// created id (request_id / auction_id). Numeric ids may be stringified by the edge -> lenient. Not
+// deployed to prod yet -> the repository degrades on 404 (like the engine-config routes). There is NO
+// list/GET for open stake requests or auctions, so the forms surface the returned id.
+
+/**
+ * POST me/stake_request: create a stake request. [minCollateral] is the minimum collateral an offeror
+ * must post; [maxStakePct] caps the stake percentage; [lockupSeconds] / [durationSeconds] bound the
+ * lockup and request lifetime. [symbolId] is optional (defaults to the ticket symbol on the wire).
+ */
+@JsonClass(generateAdapter = true)
+data class StakeRequestDto(
+    @Json(name = "symbolid") val symbolId: Int? = null,
+    @Json(name = "min_collateral") val minCollateral: Long,
+    @Json(name = "max_stake_pct") val maxStakePct: Long,
+    @Json(name = "lockup_seconds") val lockupSeconds: Int,
+    @Json(name = "duration_seconds") val durationSeconds: Int,
+)
+
+/** POST me/stake_offer: offer collateral to stake against an open stake request (by [requestId]). */
+@JsonClass(generateAdapter = true)
+data class StakeOfferDto(
+    @Json(name = "request_id") val requestId: Long,
+    @Json(name = "collateral_amount") val collateralAmount: Long,
+    @Json(name = "stake_pct") val stakePct: Long,
+)
+
+/**
+ * POST me/auction_request: auction off a position [qty]. [reservePrice] is an optional floor; the
+ * [durationSeconds] bounds the auction lifetime. [symbolId] is optional (defaults to the ticket symbol).
+ */
+@JsonClass(generateAdapter = true)
+data class AuctionRequestDto(
+    @Json(name = "symbolid") val symbolId: Int? = null,
+    @Json(name = "qty") val qty: Int,
+    @Json(name = "reserve_price") val reservePrice: Long? = null,
+    @Json(name = "duration_seconds") val durationSeconds: Int? = null,
+)
+
+/** POST me/auction_bid: bid [price] for [qty] on an open auction (by [auctionId]). */
+@JsonClass(generateAdapter = true)
+data class AuctionBidDto(
+    @Json(name = "auction_id") val auctionId: Long,
+    @Json(name = "price") val price: Long,
+    @Json(name = "qty") val qty: Int,
+)
+
+/**
+ * Shared ack for the four staking/auction routes. status = "ack"/"ok"/... ; the created id comes back
+ * as [requestId] (stake_request) or [auctionId] (auction_request); offer/bid acks may echo the parent
+ * id + an [offerId]/[bidId]. All numeric fields lenient (the edge may stringify) + all optional so an
+ * unexpected/partial shape still parses. detail/error/note/reason carry any engine message.
+ */
+@JsonClass(generateAdapter = true)
+data class StakeAuctionAckDto(
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "type") val type: String? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "request_id") val requestId: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "auction_id") val auctionId: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "offer_id") val offerId: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "bid_id") val bidId: Long? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "result") val result: Int? = null,
+    @Json(name = "detail") val detail: String? = null,
+    @Json(name = "error") val error: String? = null,
+    @Json(name = "note") val note: String? = null,
+    @Json(name = "reason") val reason: String? = null,
+)

@@ -599,3 +599,112 @@ export const pmGroupResolve = (body: PmGroupResolveRequest) =>
 
 /** The prediction-market resolution audit log. 404s until the PM surface deploys. */
 export const getPmResolutions = () => api.get<PmResolutionsResult>("/me/pm_resolutions");
+
+
+// ── Staking & Auctions trader surfaces (`/me/*`) ─────────────────────
+// Two PEER trader mechanisms on the matching engine (NOT admin): a collateral
+// staking market and distressed-position auctions. Each POST returns an engine
+// ack `{ status, ... }` that surfaces the created id (`request_id` / `auction_id`)
+// when present. There is NO server-side list/GET of open stake requests or open
+// auctions — callers can create + act-by-id but cannot browse open items.
+// Amounts/prices/qty are int64 engine ticks. Routes are NOT deployed to prod →
+// they MAY 404; callers degrade gracefully (surface the failure inline, no crash).
+
+/** Create an outstanding stake request (peer collateral-staking market). */
+export interface StakeRequestRequest {
+  symbolid?: number;
+  min_collateral: number;
+  max_stake_pct: number;
+  lockup_seconds: number;
+  duration_seconds: number;
+}
+
+/** Offer collateral to fill an outstanding stake request by id. */
+export interface StakeOfferRequest {
+  request_id: number;
+  collateral_amount: number;
+  stake_pct: number;
+}
+
+/** Create an auction of a (distressed) position qty. */
+export interface AuctionRequestRequest {
+  symbolid?: number;
+  qty: number;
+  reserve_price?: number;
+  duration_seconds?: number;
+}
+
+/** Bid into an open auction by id. */
+export interface AuctionBidRequest {
+  auction_id: number;
+  price: number;
+  qty: number;
+}
+
+/** Ack for a created stake request — surfaces `request_id` when present. */
+export interface StakeRequestAck {
+  status?: string;
+  type?: string;
+  request_id?: number;
+  symbolid?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Ack for an offer on a stake request. */
+export interface StakeOfferAck {
+  status?: string;
+  type?: string;
+  request_id?: number;
+  offer_id?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Ack for a created auction — surfaces `auction_id` when present. */
+export interface AuctionRequestAck {
+  status?: string;
+  type?: string;
+  auction_id?: number;
+  symbolid?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Ack for a bid into an auction. */
+export interface AuctionBidAck {
+  status?: string;
+  type?: string;
+  auction_id?: number;
+  bid_id?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Trader: create an outstanding stake request. 404s until the surface deploys. */
+export const stakeRequest = (body: StakeRequestRequest) =>
+  api.post<StakeRequestAck>("/me/stake_request", body);
+
+/** Trader: offer collateral to fill an outstanding stake request by id. */
+export const stakeOffer = (body: StakeOfferRequest) =>
+  api.post<StakeOfferAck>("/me/stake_offer", body);
+
+/** Trader: create an auction of a position qty. 404s until the surface deploys. */
+export const auctionRequest = (body: AuctionRequestRequest) =>
+  api.post<AuctionRequestAck>("/me/auction_request", body);
+
+/** Trader: bid into an open auction by id. */
+export const auctionBid = (body: AuctionBidRequest) =>
+  api.post<AuctionBidAck>("/me/auction_bid", body);

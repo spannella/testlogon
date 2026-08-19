@@ -527,3 +527,54 @@ fun PmResolutionDto.toDomain(): PmResolution = PmResolution(
     ts = ts ?: 0L,
     source = source.orEmpty(),
 )
+
+// ==== Trader staking + auctions (peer mechanisms) — domain + mapper ====
+
+/** Which peer mechanism produced an ack (drives the id label the UI surfaces). */
+enum class StakeAuctionKind { STAKE_REQUEST, STAKE_OFFER, AUCTION_REQUEST, AUCTION_BID }
+
+/**
+ * Result of a staking/auction action. [accepted] is true when the engine acked (status ack/ok and,
+ * if a numeric result is present, it is 0). [createdId] is the most relevant id the engine returned
+ * for [kind] (request_id / auction_id / offer_id / bid_id), surfaced prominently by the UI. [message]
+ * carries any engine detail/error/note.
+ */
+data class StakeAuctionAck(
+    val accepted: Boolean,
+    val kind: StakeAuctionKind,
+    val createdId: Long?,
+    val message: String?,
+) {
+    /** Human label for [createdId], e.g. "Request #42" / "Auction #7" (null when no id came back). */
+    val idLabel: String? get() = createdId?.let {
+        when (kind) {
+            StakeAuctionKind.STAKE_REQUEST -> "Request #$it"
+            StakeAuctionKind.STAKE_OFFER -> "Offer #$it"
+            StakeAuctionKind.AUCTION_REQUEST -> "Auction #$it"
+            StakeAuctionKind.AUCTION_BID -> "Bid #$it"
+        }
+    }
+}
+
+private fun ackAccepted(status: String?, result: Int?): Boolean {
+    val ok = when (status?.lowercase()) {
+        "ack", "ok", "accepted", "created" -> true
+        else -> false
+    }
+    return ok && (result ?: 0) == 0
+}
+
+fun StakeAuctionAckDto.toDomain(kind: StakeAuctionKind): StakeAuctionAck {
+    val createdId = when (kind) {
+        StakeAuctionKind.STAKE_REQUEST -> requestId
+        StakeAuctionKind.STAKE_OFFER -> offerId ?: requestId
+        StakeAuctionKind.AUCTION_REQUEST -> auctionId
+        StakeAuctionKind.AUCTION_BID -> bidId ?: auctionId
+    }
+    return StakeAuctionAck(
+        accepted = ackAccepted(status, result),
+        kind = kind,
+        createdId = createdId,
+        message = detail ?: error ?: note ?: reason,
+    )
+}

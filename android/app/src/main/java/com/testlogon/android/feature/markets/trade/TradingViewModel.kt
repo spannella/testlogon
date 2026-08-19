@@ -56,6 +56,8 @@ class TradingViewModel @Inject constructor(
                 spotConfig = it.spotConfig.copy(symbolText = sym),
                 pmCreateBinary = it.pmCreateBinary.copy(symbolText = sym),
                 pmResolveBinary = it.pmResolveBinary.copy(symbolText = sym),
+                stakeRequest = it.stakeRequest.copy(symbolText = sym),
+                auctionRequest = it.auctionRequest.copy(symbolText = sym),
             )
         }
         resolveAdmin()
@@ -898,5 +900,70 @@ class TradingViewModel @Inject constructor(
 
     /** Sanitize an optional free-text resolution source (alnum + a few separators). */
     private fun source(t: String): String = t.filter { it.isLetterOrDigit() || it == '-' || it == '_' || it == ' ' || it == '.' }.take(40)
+
+    // ---- Trader staking + auctions (peer mechanisms). Trader-facing; 404 -> un-applied ack. ----
+
+    // stake_request
+    fun setStakeReqSymbol(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(symbolText = digits(t, 9), error = null)) }
+    fun setStakeReqMinCollateral(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(minCollateralText = digits(t, 15), error = null)) }
+    fun setStakeReqMaxPct(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(maxStakePctText = digits(t, 6), error = null)) }
+    fun setStakeReqLockup(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(lockupSecondsText = digits(t, 9), error = null)) }
+    fun setStakeReqDuration(t: String) = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(durationSecondsText = digits(t, 9), error = null)) }
+    fun clearStakeReqResult() = _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(result = null, error = null)) }
+    fun submitStakeRequest() {
+        val f = _uiState.value.stakeRequest
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(stakeRequest = it.stakeRequest.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.stakeRequest(f.symbolInt, f.minCollateralLong!!, f.maxStakePctLong!!, f.lockupSecondsInt!!, f.durationSecondsInt!!)
+            _uiState.update { it.copy(stakeRequest = it.stakeRequest.finish(r)) }
+        }
+    }
+
+    // stake_offer
+    fun setStakeOfferRequestId(t: String) = _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(requestIdText = digits(t, 18), error = null)) }
+    fun setStakeOfferCollateral(t: String) = _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(collateralText = digits(t, 15), error = null)) }
+    fun setStakeOfferPct(t: String) = _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(stakePctText = digits(t, 6), error = null)) }
+    fun clearStakeOfferResult() = _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(result = null, error = null)) }
+    fun submitStakeOffer() {
+        val f = _uiState.value.stakeOffer
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(stakeOffer = it.stakeOffer.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.stakeOffer(f.requestIdLong!!, f.collateralLong!!, f.stakePctLong!!)
+            _uiState.update { it.copy(stakeOffer = it.stakeOffer.finish(r)) }
+        }
+    }
+
+    // auction_request
+    fun setAuctionReqSymbol(t: String) = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(symbolText = digits(t, 9), error = null)) }
+    fun setAuctionReqQty(t: String) = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(qtyText = digits(t, 9), error = null)) }
+    fun setAuctionReqReserve(t: String) = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(reservePriceText = digits(t, 15), error = null)) }
+    fun setAuctionReqDuration(t: String) = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(durationSecondsText = digits(t, 9), error = null)) }
+    fun clearAuctionReqResult() = _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(result = null, error = null)) }
+    fun submitAuctionRequest() {
+        val f = _uiState.value.auctionRequest
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(auctionRequest = it.auctionRequest.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.auctionRequest(f.symbolInt, f.qtyInt!!, f.reservePriceLong, f.durationSecondsInt)
+            _uiState.update { it.copy(auctionRequest = it.auctionRequest.finish(r)) }
+        }
+    }
+
+    // auction_bid
+    fun setAuctionBidId(t: String) = _uiState.update { it.copy(auctionBid = it.auctionBid.copy(auctionIdText = digits(t, 18), error = null)) }
+    fun setAuctionBidPrice(t: String) = _uiState.update { it.copy(auctionBid = it.auctionBid.copy(priceText = digits(t, 15), error = null)) }
+    fun setAuctionBidQty(t: String) = _uiState.update { it.copy(auctionBid = it.auctionBid.copy(qtyText = digits(t, 9), error = null)) }
+    fun clearAuctionBidResult() = _uiState.update { it.copy(auctionBid = it.auctionBid.copy(result = null, error = null)) }
+    fun submitAuctionBid() {
+        val f = _uiState.value.auctionBid
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(auctionBid = it.auctionBid.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.auctionBid(f.auctionIdLong!!, f.priceLong!!, f.qtyInt!!)
+            _uiState.update { it.copy(auctionBid = it.auctionBid.finish(r)) }
+        }
+    }
 
 }

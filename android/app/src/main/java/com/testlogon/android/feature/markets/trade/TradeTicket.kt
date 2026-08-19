@@ -319,6 +319,9 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: Tra
         Spacer(Modifier.height(10.dp))
         SpotPanel(state, viewModel)
     }
+
+    Spacer(Modifier.height(20.dp))
+    StakingAuctionsSection(state, viewModel)
 }
 
 @Composable
@@ -1704,5 +1707,203 @@ private fun PmResolutionHistory(resolutions: List<com.testlogon.android.data.exc
                 }
             }
         }
+    }
+}
+
+/**
+ * Trader-facing Staking & Auctions section (peer mechanisms). NOT admin-gated. Four compact forms:
+ * create a stake request, offer on an open request (by id), auction a position qty, and bid on an
+ * auction (by id). Each surfaces the engine's returned request_id / auction_id prominently. There is
+ * no list/GET for open items yet, so an honest "browsing open items isn't available yet" note is shown;
+ * the routes 404 until deployed -> the repository degrades to an un-applied ack surfaced inline.
+ */
+@Composable
+private fun StakingAuctionsSection(state: TradingUiState, viewModel: TradingViewModel) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("staking_auctions_section")) {
+        Text("Staking & auctions", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Peer mechanisms: stake against another trader's request, or auction a position. Browsing open " +
+                "requests/auctions isn't available yet — act on an id you already have, or create one and share " +
+                "the id it returns.",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        StakeRequestPanel(state.stakeRequest, viewModel)
+        Spacer(Modifier.height(12.dp))
+        StakeOfferPanel(state.stakeOffer, viewModel)
+        Spacer(Modifier.height(12.dp))
+        AuctionRequestPanel(state.auctionRequest, viewModel)
+        Spacer(Modifier.height(12.dp))
+        AuctionBidPanel(state.auctionBid, viewModel)
+    }
+}
+
+/**
+ * Apply button + inline feedback for a staking/auction form. On accept it surfaces the created id
+ * ([StakeAuctionAck.idLabel]) prominently so the trader can copy/share it (there's no list view yet).
+ */
+@Composable
+private fun StakeApply(
+    label: String,
+    canSubmit: Boolean,
+    submitting: Boolean,
+    error: String?,
+    result: com.testlogon.android.data.exchange.StakeAuctionAck?,
+    testTag: String,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = if (submitting) "Submitting…" else label,
+        color = if (canSubmit) Color.Black else MarketColors.TextFaint,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (canSubmit) MarketColors.Accent else MarketColors.SurfaceAlt)
+            .then(if (canSubmit) Modifier.clickable { onSubmit() } else Modifier)
+            .testTag(testTag)
+            .padding(vertical = 12.dp),
+        textAlign = TextAlign.Center,
+    )
+    error?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MarketColors.Down, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    }
+    result?.let { r ->
+        Spacer(Modifier.height(8.dp))
+        if (r.accepted) {
+            r.idLabel?.let { idLabel ->
+                Text(
+                    text = idLabel,
+                    color = Color.Black,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MarketColors.Up)
+                        .testTag(testTag + "_id")
+                        .padding(vertical = 10.dp),
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+            Text(
+                text = if (r.idLabel != null) "Accepted — save this id (no open-items list yet)." else "Accepted.",
+                color = MarketColors.Up,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+            )
+        } else {
+            Text(
+                text = r.message ?: "Rejected",
+                color = MarketColors.Down,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Dismiss",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+            modifier = Modifier.clickable { onDismiss() }.padding(vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun StakeRequestPanel(form: StakeRequestForm, viewModel: TradingViewModel) {
+    EngineCard("Create stake request", "Invite others to stake against your position.") {
+        NumberField("Symbol id (optional)", form.symbolText, viewModel::setStakeReqSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Min collateral", form.minCollateralText, viewModel::setStakeReqMinCollateral)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Max stake %", form.maxStakePctText, viewModel::setStakeReqMaxPct)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Lockup seconds", form.lockupSecondsText, viewModel::setStakeReqLockup)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Duration seconds", form.durationSecondsText, viewModel::setStakeReqDuration)
+        StakeApply(
+            label = "Create stake request",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "create_stake_request",
+            onSubmit = viewModel::submitStakeRequest,
+            onDismiss = viewModel::clearStakeReqResult,
+        )
+    }
+}
+
+@Composable
+private fun StakeOfferPanel(form: StakeOfferForm, viewModel: TradingViewModel) {
+    EngineCard("Offer on stake request", "Stake against an open request by its id.") {
+        NumberField("Request id", form.requestIdText, viewModel::setStakeOfferRequestId)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Collateral amount", form.collateralText, viewModel::setStakeOfferCollateral)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Stake %", form.stakePctText, viewModel::setStakeOfferPct)
+        StakeApply(
+            label = "Submit offer",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "submit_stake_offer",
+            onSubmit = viewModel::submitStakeOffer,
+            onDismiss = viewModel::clearStakeOfferResult,
+        )
+    }
+}
+
+@Composable
+private fun AuctionRequestPanel(form: AuctionRequestForm, viewModel: TradingViewModel) {
+    EngineCard("Create auction", "Auction a position quantity (optional reserve + duration).") {
+        NumberField("Symbol id (optional)", form.symbolText, viewModel::setAuctionReqSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Quantity", form.qtyText, viewModel::setAuctionReqQty)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Reserve price (optional)", form.reservePriceText, viewModel::setAuctionReqReserve)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Duration seconds (optional)", form.durationSecondsText, viewModel::setAuctionReqDuration)
+        StakeApply(
+            label = "Create auction",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "create_auction_request",
+            onSubmit = viewModel::submitAuctionRequest,
+            onDismiss = viewModel::clearAuctionReqResult,
+        )
+    }
+}
+
+@Composable
+private fun AuctionBidPanel(form: AuctionBidForm, viewModel: TradingViewModel) {
+    EngineCard("Bid on auction", "Bid on an open auction by its id.") {
+        NumberField("Auction id", form.auctionIdText, viewModel::setAuctionBidId)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Price", form.priceText, viewModel::setAuctionBidPrice)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Quantity", form.qtyText, viewModel::setAuctionBidQty)
+        StakeApply(
+            label = "Submit bid",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "submit_auction_bid",
+            onSubmit = viewModel::submitAuctionBid,
+            onDismiss = viewModel::clearAuctionBidResult,
+        )
     }
 }

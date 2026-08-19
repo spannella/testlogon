@@ -254,3 +254,29 @@ export function usePmResolutions(enabled = true) {
     refetchInterval: ACCOUNT_REFETCH_MS,
   });
 }
+
+
+// ── Staking & Auctions trader mutations (`/me/*`) ────────────────────
+// Two PEER trader mechanisms (NOT admin). No account-invalidate — the created
+// id (request_id / auction_id) is the caller-tracked handle. Each route MAY 404
+// (not deployed to prod); the calling UI reports that inline, no retry loop.
+
+/** Trader: create an outstanding stake request. */
+export function useStakeRequest() {
+  return useMutation({ mutationFn: trading.stakeRequest });
+}
+
+/** Trader: offer collateral to fill an outstanding stake request by id. */
+export function useStakeOffer() {
+  return useMutation({ mutationFn: trading.stakeOffer });
+}
+
+/** Trader: create an auction of a position qty. */
+export function useAuctionRequest() {
+  return useMutation({ mutationFn: trading.auctionRequest });
+}
+
+/** Trader: bid into an open auction by id. */
+export function useAuctionBid() {
+  return useMutation({ mutationFn: trading.auctionBid });
+}

@@ -125,6 +125,11 @@ data class TradingUiState(
     val fundingPayments: FundingPayments? = null,
     /** symbolId -> ticker, for labelling the account-wide liquidation/funding/fills feeds. */
     val symbolNames: Map<Int, String> = emptyMap(),
+    // Trader staking + auctions forms (peer mechanisms); trader-facing (NOT admin-gated).
+    val stakeRequest: StakeRequestForm = StakeRequestForm(),
+    val stakeOffer: StakeOfferForm = StakeOfferForm(),
+    val auctionRequest: AuctionRequestForm = AuctionRequestForm(),
+    val auctionBid: AuctionBidForm = AuctionBidForm(),
 ) {
     /** Ticker for [symbolId] from the resolved catalogue, else "#<id>". */
     fun symbolLabel(symbolId: Int): String = symbolNames[symbolId] ?: ("#" + symbolId)
@@ -450,4 +455,111 @@ fun PmResolveCategoricalForm.finish(r: ApiResult<com.testlogon.android.data.exch
     is ApiResult.Success -> copy(submitting = false, result = r.data)
     is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
     is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
+}
+
+// ==== Trader staking + auctions (peer mechanisms) — form state ====
+
+/** Import alias: the staking/auction ack domain type lives in data.exchange. */
+
+/**
+ * Trader form: create a stake request. [symbolText] defaults to the ticket symbol but is editable.
+ * [minCollateralText]/[maxStakePctText] are raw integers; [lockupSecondsText]/[durationSecondsText]
+ * are seconds. [result] holds the last ack (which surfaces the returned request_id).
+ */
+data class StakeRequestForm(
+    val symbolText: String = "",
+    val minCollateralText: String = "",
+    val maxStakePctText: String = "",
+    val lockupSecondsText: String = "",
+    val durationSecondsText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.StakeAuctionAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val minCollateralLong: Long? get() = minCollateralText.toLongOrNull()
+    val maxStakePctLong: Long? get() = maxStakePctText.toLongOrNull()
+    val lockupSecondsInt: Int? get() = lockupSecondsText.toIntOrNull()
+    val durationSecondsInt: Int? get() = durationSecondsText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting &&
+        (minCollateralLong ?: 0L) > 0L && (maxStakePctLong ?: 0L) > 0L &&
+        (lockupSecondsInt ?: 0) > 0 && (durationSecondsInt ?: 0) > 0
+}
+
+/** Trader form: offer collateral to stake against an open stake request (by id). */
+data class StakeOfferForm(
+    val requestIdText: String = "",
+    val collateralText: String = "",
+    val stakePctText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.StakeAuctionAck? = null,
+    val error: String? = null,
+) {
+    val requestIdLong: Long? get() = requestIdText.toLongOrNull()
+    val collateralLong: Long? get() = collateralText.toLongOrNull()
+    val stakePctLong: Long? get() = stakePctText.toLongOrNull()
+    val canSubmit: Boolean get() = !submitting &&
+        (requestIdLong ?: 0L) > 0L && (collateralLong ?: 0L) > 0L && (stakePctLong ?: 0L) > 0L
+}
+
+/**
+ * Trader form: auction off a position quantity. [symbolText] defaults to the ticket symbol.
+ * [reservePriceText]/[durationSecondsText] are optional (blank -> null on the wire).
+ */
+data class AuctionRequestForm(
+    val symbolText: String = "",
+    val qtyText: String = "",
+    val reservePriceText: String = "",
+    val durationSecondsText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.StakeAuctionAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val qtyInt: Int? get() = qtyText.toIntOrNull()
+    val reservePriceLong: Long? get() = reservePriceText.toLongOrNull()
+    val durationSecondsInt: Int? get() = durationSecondsText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting && (qtyInt ?: 0) > 0
+}
+
+/** Trader form: bid on an open auction (by id). */
+data class AuctionBidForm(
+    val auctionIdText: String = "",
+    val priceText: String = "",
+    val qtyText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.StakeAuctionAck? = null,
+    val error: String? = null,
+) {
+    val auctionIdLong: Long? get() = auctionIdText.toLongOrNull()
+    val priceLong: Long? get() = priceText.toLongOrNull()
+    val qtyInt: Int? get() = qtyText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting &&
+        (auctionIdLong ?: 0L) > 0L && (priceLong ?: 0L) > 0L && (qtyInt ?: 0) > 0
+}
+
+private const val STAKE_NET_ERR = "Network error. Check your connection and try again."
+
+fun StakeRequestForm.finish(r: ApiResult<com.testlogon.android.data.exchange.StakeAuctionAck>): StakeRequestForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data, error = null)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = STAKE_NET_ERR)
+}
+
+fun StakeOfferForm.finish(r: ApiResult<com.testlogon.android.data.exchange.StakeAuctionAck>): StakeOfferForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data, error = null)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = STAKE_NET_ERR)
+}
+
+fun AuctionRequestForm.finish(r: ApiResult<com.testlogon.android.data.exchange.StakeAuctionAck>): AuctionRequestForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data, error = null)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = STAKE_NET_ERR)
+}
+
+fun AuctionBidForm.finish(r: ApiResult<com.testlogon.android.data.exchange.StakeAuctionAck>): AuctionBidForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data, error = null)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = STAKE_NET_ERR)
 }

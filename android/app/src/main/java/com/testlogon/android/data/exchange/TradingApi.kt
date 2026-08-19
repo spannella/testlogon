@@ -155,5 +155,25 @@ interface TradingApi {
     /** ADMIN: the resolution audit log (symbol/group, outcome, resolver, ts, source). 404 -> empty. */
     @GET("me/pm_resolutions")
     suspend fun getPmResolutions(): List<PmResolutionDto>
+
+    // ==== Trader staking + auctions (peer mechanisms). Ack JSON carries the created id + status.
+    // Not deployed to prod yet -> the repository degrades on 404 (like the engine-config routes).
+    // There is NO list/GET for open stake requests or auctions -> action forms surface the returned id. ====
+
+    /** Create a stake request (offer your position as collateral for others to stake against). */
+    @POST("me/stake_request")
+    suspend fun stakeRequest(@Body body: StakeRequestDto): StakeAuctionAckDto
+
+    /** Offer collateral to stake against an open stake request (by request id). */
+    @POST("me/stake_offer")
+    suspend fun stakeOffer(@Body body: StakeOfferDto): StakeAuctionAckDto
+
+    /** Create an auction to sell a position quantity (optional reserve price + duration). */
+    @POST("me/auction_request")
+    suspend fun auctionRequest(@Body body: AuctionRequestDto): StakeAuctionAckDto
+
+    /** Place a bid on an open auction (by auction id). */
+    @POST("me/auction_bid")
+    suspend fun auctionBid(@Body body: AuctionBidDto): StakeAuctionAckDto
 }
 
