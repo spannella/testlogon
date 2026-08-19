@@ -73,8 +73,11 @@ export const getSymbols = () => api.get<SymbolsResponse>("/md/symbols");
 export const getOrderBook = (symbolId: number, depth = 20) =>
   api.get<OrderBookResponse>(`/md/book/${symbolId}`, { depth: String(depth) });
 
-export const getCandles = (symbolId: number, interval = 60) =>
-  api.get<CandlesResponse>(`/md/candles/${symbolId}`, { interval: String(interval) });
+export const getCandles = (symbolId: number, interval = 60, limit = 200) =>
+  api.get<CandlesResponse>(`/md/candles/${symbolId}`, {
+    interval: String(interval),
+    limit: String(limit),
+  });
 
 export const getTrades = (symbolId: number) =>
   api.get<TradesResponse>(`/md/trades/${symbolId}`);

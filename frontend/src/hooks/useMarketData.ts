@@ -34,10 +34,10 @@ export function useOrderBook(
   });
 }
 
-export function useCandles(symbolId: number, interval = 60, enabled = true) {
+export function useCandles(symbolId: number, interval = 60, enabled = true, limit = 200) {
   return useQuery({
-    queryKey: ["md", "candles", symbolId, interval],
-    queryFn: () => getCandles(symbolId, interval),
+    queryKey: ["md", "candles", symbolId, interval, limit],
+    queryFn: () => getCandles(symbolId, interval, limit),
     enabled: enabled && Number.isFinite(symbolId) && symbolId > 0,
     refetchInterval: LIVE_REFETCH_MS,
   });
