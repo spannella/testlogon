@@ -66,3 +66,47 @@
   transition: border-color 100ms, color 100ms, background 100ms;
 }
 .tl-mobile-tabs button.active { background: color-mix(in oklab, var(--accent) 18%, var(--bg-2)); border-color: var(--accent); color: var(--accent); }
+
+/* ── Working-orders management + trade-history panels ──────────────── */
+.tl-wo { font: var(--font-ui); }
+.tl-wo-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px; border-bottom: 1px solid var(--line);
+  font-size: 11px; flex: none;
+}
+.tl-wo-note {
+  padding: 3px 8px; font-size: 11px; flex: none;
+  color: var(--accent); background: color-mix(in oklab, var(--accent) 10%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+.tl-wo-scroll { flex: 1; min-height: 0; overflow: auto; }
+.tl-wo-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.tl-wo-table thead th {
+  position: sticky; top: 0; z-index: 1; text-align: left;
+  padding: 3px 8px; background: var(--bg-2); border-bottom: 1px solid var(--line-2);
+  color: var(--fg-dim, #8b97a7); font-weight: 600; white-space: nowrap;
+}
+.tl-wo-table tbody td { padding: 2px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.tl-wo-table tbody tr:hover td { background: var(--bg-3, #171c24); }
+.tl-wo-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.tl-wo-table .dim { color: var(--fg-dim, #8b97a7); }
+.tl-wo-table .sym { font-weight: 600; }
+.tl-wo-btn {
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--fg, #c9d3e0);
+  padding: 1px 7px; margin-left: 4px; border-radius: 5px; font: 600 10.5px var(--font-ui);
+  cursor: pointer; transition: border-color 100ms, color 100ms;
+}
+.tl-wo-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tl-wo-btn:disabled { opacity: 0.4; cursor: default; }
+.tl-wo-btn.danger:hover:not(:disabled) { border-color: #ff9a9a; color: #ff9a9a; }
+.tl-wo-btn.accent { border-color: var(--accent); color: var(--accent); }
+.tl-wo-confirm { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: #ff9a9a; }
+.tl-wo-edit td { background: var(--bg-3, #171c24); }
+.tl-wo-editrow { display: flex; align-items: center; gap: 10px; padding: 4px 4px; flex-wrap: wrap; }
+.tl-wo-editrow label { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--fg-dim, #8b97a7); }
+.tl-wo-editrow input {
+  width: 90px; background: var(--bg-2); border: 1px solid var(--line-2);
+  color: var(--fg, #c9d3e0); padding: 2px 5px; border-radius: 5px; font: 12px var(--font-ui);
+}
+.tl-wo-editrow input:focus { outline: none; border-color: var(--accent); }
+.tl-wo-empty { padding: 0.8rem 1rem; font-size: 0.8rem; opacity: 0.55; }

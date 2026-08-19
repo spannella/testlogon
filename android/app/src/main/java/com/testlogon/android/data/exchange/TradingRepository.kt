@@ -41,6 +41,8 @@ interface TradingRepository {
     suspend fun placeOco(symbolId: Int, aSide: OrderSide, aPrice: Long, aQty: Long, bSide: OrderSide, bPrice: Long, bQty: Long): ApiResult<OcoAck>
     suspend fun placeFunding(rateBps: Long, qty: Long, isBorrow: Boolean, durationSeconds: Long?, symbolId: Int?): ApiResult<FundingAck>
     suspend fun spotBalance(): ApiResult<SpotBalance>
+    /** Reference USD prices for cross-venue valuation (indicative). 404 (undeployed) -> unavailable [PriceMap]. */
+    suspend fun getPrices(): ApiResult<PriceMap>
     suspend fun spotDeposit(asset: Int, amount: Long): ApiResult<SpotDepositAck>
     suspend fun deposit(amount: Long): ApiResult<DepositAck>
     /** ADMIN: apply per-symbol margin/fee/borrow config. */
@@ -61,6 +63,8 @@ interface TradingRepository {
     /** Fees (custody-exchange-gaps): the caller's fee schedule + the enriched fills-fees feed. */
     suspend fun feeSchedule(symbolId: Int): ApiResult<FeeSchedule>
     suspend fun fillsFees(): ApiResult<FillsFees>
+    /** LIVE working orders straight from the engine (order-management read; 404 -> empty feed). */
+    suspend fun ordersLive(): ApiResult<LiveOrders>
     /** Recent forced-liquidation events (404 -> empty feed). */
     suspend fun liquidations(): ApiResult<Liquidations>
     /** Recent perpetual funding payments (404 -> empty feed). */
@@ -154,6 +158,9 @@ class TradingRepositoryImpl @Inject constructor(
     override suspend fun spotBalance(): ApiResult<SpotBalance> =
         withContext(io) { apiCall { api.spotBalance().toDomain() } }
 
+    override suspend fun getPrices(): ApiResult<PriceMap> =
+        withContext(io) { emptyOn404(PriceMap.unavailable()) { api.getPrices().toDomain() } }
+
     override suspend fun spotDeposit(asset: Int, amount: Long): ApiResult<SpotDepositAck> =
         withContext(io) { apiCall { api.spotDeposit(SpotDepositDto(asset, amount)).toDomain() } }
 
@@ -203,6 +210,9 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun fillsFees(): ApiResult<FillsFees> =
         withContext(io) { emptyOn404(FillsFees(emptyList(), 0)) { api.getFillsFees().toDomain() } }
+
+    override suspend fun ordersLive(): ApiResult<LiveOrders> =
+        withContext(io) { emptyOn404(LiveOrders(emptyList(), 0)) { api.getOrdersLive().toDomain() } }
 
     override suspend fun liquidations(): ApiResult<Liquidations> =
         withContext(io) { emptyOn404(Liquidations(emptyList(), 0)) { api.getLiquidations().toDomain() } }

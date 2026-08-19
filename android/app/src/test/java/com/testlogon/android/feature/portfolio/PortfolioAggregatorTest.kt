@@ -9,11 +9,13 @@ import com.testlogon.android.data.custody.StakingDashboard
 import com.testlogon.android.data.custody.StakingPosition
 import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.PositionSnapshot
+import com.testlogon.android.data.exchange.PriceMap
 import com.testlogon.android.data.exchange.SpotAsset
 import com.testlogon.android.data.exchange.SpotBalance
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -79,6 +81,17 @@ class PortfolioAggregatorTest {
 
     private val networkErr: ApiResult<Nothing> =
         ApiResult.NetworkError(IOException("offline"))
+
+    /** A readable USD price map (source defaults to a non-stub "ref"). */
+    private fun prices(vararg pairs: Pair<String, Double>, source: String = "ref", stub: Boolean = false): PriceMap =
+        PriceMap(
+            prices = pairs.associate { it.first.uppercase() to it.second },
+            quote = "USD",
+            source = source,
+            stub = stub,
+            note = null,
+            unavailable = false,
+        )
 
     @Test
     fun aggregate_sumsReadableVenuesIntoTotalEquity() {
@@ -184,5 +197,87 @@ class PortfolioAggregatorTest {
         // custody readable but empty, spot readable but empty, margin+staking unavailable, no positions
         assertTrue(state.allEmpty)
         assertEquals(0.0, state.totalEquity, 0.0001)
+    }
+
+    @Test
+    fun aggregate_pricedEquitySumsUsdAcrossVenues() {
+        val state = PortfolioAggregator.aggregate(
+            custody = custody("ETH" to 2.0, "USDC" to 100.0),
+            staking = stakingWith("5"), // staking positions are asset "ETH" (see stakingWith)
+            spot = spot("BTC" to 3L),
+            margin = margin(balance = 50L),
+            prices = prices("ETH" to 3000.0, "USDC" to 1.0, "BTC" to 60000.0),
+        )
+        assertTrue(state.priced)
+        assertFalse(state.pricesStub)
+        // custody: 2*3000 + 100*1 = 6100 ; staking: 5*3000 = 15000 ; spot: 3*60000 = 180000 ; margin: 50*1 = 50
+        assertEquals(6100.0 + 15000.0 + 180000.0 + 50.0, state.totalEquityUsd, 0.0001)
+        // per-line USD present on a priced row
+        val eth = state.card(PortfolioVenue.CUSTODY)!!.lines.first { it.label == "ETH" }
+        assertEquals(6000.0, eth.usdValue!!, 0.0001)
+        assertTrue(eth.isPriced)
+    }
+
+    @Test
+    fun aggregate_stubPricesFlaggedIndicative() {
+        val state = PortfolioAggregator.aggregate(
+            custody = custody("ETH" to 1.0),
+            staking = stakingUnavailable,
+            spot = spot(),
+            margin = failure(404),
+            prices = prices("ETH" to 2500.0, source = "stub", stub = true),
+        )
+        assertTrue(state.priced)
+        assertTrue(state.pricesStub)
+        assertEquals(2500.0, state.totalEquityUsd, 0.0001)
+    }
+
+    @Test
+    fun aggregate_unavailablePricesFallBackToNativeTotal() {
+        val state = PortfolioAggregator.aggregate(
+            custody = custody("ETH" to 2.0),
+            staking = stakingUnavailable,
+            spot = spot("BTC" to 4L),
+            margin = margin(balance = 10L),
+            prices = PriceMap.unavailable(),
+        )
+        assertFalse(state.priced)
+        assertFalse(state.pricesStub)
+        // native coarse total still works (2 + 4 + 10)
+        assertEquals(16.0, state.totalEquity, 0.0001)
+        // nothing valued
+        assertEquals(0.0, state.totalEquityUsd, 0.0001)
+        assertNull(state.card(PortfolioVenue.CUSTODY)!!.lines.first().usdValue)
+    }
+
+    @Test
+    fun aggregate_partialPricingValuesOnlyKnownAssets() {
+        val state = PortfolioAggregator.aggregate(
+            custody = custody("ETH" to 2.0, "DOGE" to 500.0), // DOGE unpriced
+            staking = stakingUnavailable,
+            spot = spot(),
+            margin = failure(404),
+            prices = prices("ETH" to 3000.0),
+        )
+        assertTrue(state.priced) // ETH valued
+        assertEquals(6000.0, state.totalEquityUsd, 0.0001)
+        val card = state.card(PortfolioVenue.CUSTODY)!!
+        assertEquals(6000.0, card.equityUsd, 0.0001)
+        val doge = card.lines.first { it.label == "DOGE" }
+        assertNull(doge.usdValue) // unpriced -> no USD chip
+    }
+
+    @Test
+    fun aggregate_pricesReadableButValueNothingStaysUnpriced() {
+        // Prices map is non-empty but none of the funded assets match -> priced stays false.
+        val state = PortfolioAggregator.aggregate(
+            custody = custody("DOGE" to 500.0),
+            staking = stakingUnavailable,
+            spot = spot(),
+            margin = failure(404),
+            prices = prices("ETH" to 3000.0),
+        )
+        assertFalse(state.priced)
+        assertEquals(0.0, state.totalEquityUsd, 0.0001)
     }
 }

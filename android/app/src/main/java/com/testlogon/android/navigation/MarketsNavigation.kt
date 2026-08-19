@@ -7,6 +7,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.markets.MarketsRoute
 import com.testlogon.android.feature.markets.SymbolDetailRoute
+import com.testlogon.android.feature.markets.alerts.TradingAlertsRoute
 
 /**
  * Markets (exchange market-data, VIEW-ONLY) destinations, registered in the AUTHENTICATED nav graph.
@@ -25,6 +26,11 @@ data object SymbolDetailDest {
     fun build(symbolId: Int): String = "markets/$symbolId"
 }
 
+/** Trading Alerts (derived notifications) list — reachable from the Markets header bell + More hub. */
+data object TradingAlertsDest {
+    const val ROUTE = "markets/alerts"
+}
+
 /** Registers the Markets list + per-symbol detail destinations (Back pops the back stack). */
 fun NavGraphBuilder.marketsDestinations(navController: NavHostController) {
     composable(MarketsDest.ROUTE) {
@@ -33,7 +39,13 @@ fun NavGraphBuilder.marketsDestinations(navController: NavHostController) {
             onOpenSymbol = { symbolId ->
                 navController.navigate(SymbolDetailDest.build(symbolId)) { launchSingleTop = true }
             },
+            onOpenAlerts = {
+                navController.navigate(TradingAlertsDest.ROUTE) { launchSingleTop = true }
+            },
         )
+    }
+    composable(TradingAlertsDest.ROUTE) {
+        TradingAlertsRoute(onBack = { navController.popBackStack() })
     }
     composable(
         route = SymbolDetailDest.ROUTE,

@@ -11,6 +11,7 @@ export const tradingKeys = {
   liquidations: ["me", "liquidations"] as const,
   fundingPayments: ["me", "funding_payments"] as const,
   pmResolutions: ["me", "pm_resolutions"] as const,
+  ordersLive: ["me", "orders_live"] as const,
 };
 
 /** Exchange account-feed poll (fills-fees / liquidations / funding). */
@@ -83,6 +84,21 @@ export function useCancelOrder() {
 export function useBulkCancel() {
   const invalidate = useInvalidateAccount();
   return useMutation({ mutationFn: trading.bulkCancel, onSuccess: invalidate });
+}
+
+/**
+ * The caller's live WORKING orders (open / partially-filled). Polls ~5s.
+ * `retry: false` because the route 404s until the exchange edge deploys it —
+ * the management surface degrades to an honest "unavailable" empty state.
+ */
+export function useOrdersLive(enabled = true) {
+  return useQuery({
+    queryKey: tradingKeys.ordersLive,
+    queryFn: trading.getOrdersLive,
+    enabled,
+    retry: false,
+    refetchInterval: 5000,
+  });
 }
 
 export function useDeposit() {
@@ -306,5 +322,21 @@ export function useOpenAuctions(enabled = true) {
     enabled,
     retry: false,
     refetchInterval: FEED_REFETCH_MS,
+  });
+}
+
+/**
+ * Per-asset USD price marks for cross-venue valuation (`GET /me/prices`).
+ * STUB today (indicative marks) → `source:"engine"` when the valuation engine
+ * lands. `retry:false` so a 404 (edge-undeployed) degrades gracefully and the
+ * caller can fall back to a source-native sum.
+ */
+export function usePrices(enabled = true) {
+  return useQuery({
+    queryKey: ["me", "prices"] as const,
+    queryFn: trading.getPrices,
+    enabled,
+    retry: false,
+    refetchInterval: ACCOUNT_REFETCH_MS,
   });
 }

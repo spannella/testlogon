@@ -6,6 +6,11 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.Instrument
+import com.testlogon.android.data.exchange.alerts.TradingAlertKind
+import com.testlogon.android.data.exchange.alerts.TradingAlertsPoller
+import com.testlogon.android.feature.markets.trade.TradingNotifier
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
@@ -26,8 +31,14 @@ import javax.inject.Inject
 @HiltViewModel
 class MarketsViewModel @Inject constructor(
     private val repository: ExchangeRepository,
+    private val alertsPoller: TradingAlertsPoller,
+    private val notifier: TradingNotifier,
     @ApplicationContext appContext: Context,
 ) : ViewModel() {
+
+    /** Unread trading-alerts count for the header bell badge. */
+    val unreadAlerts = alertsPoller.unreadCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -36,6 +47,24 @@ class MarketsViewModel @Inject constructor(
 
     init {
         load()
+        pollAlerts()
+    }
+
+    /** Poll the derived-alerts feeds while the Markets screen is alive; notify on each new alert. */
+    private fun pollAlerts() {
+        viewModelScope.launch {
+            while (isActive) {
+                alertsPoller.refresh().forEach { alert ->
+                    notifier.notifyTradingAlert(
+                        title = alert.title,
+                        body = alert.body,
+                        distress = alert.kind == TradingAlertKind.MARGIN_DISTRESS ||
+                            alert.kind == TradingAlertKind.LIQUIDATION,
+                    )
+                }
+                delay(ALERTS_POLL_MS)
+            }
+        }
     }
 
     fun onRetry() = load()
@@ -142,5 +171,6 @@ class MarketsViewModel @Inject constructor(
         const val OFFLINE_FALLBACK = "Couldn't reach the market-data service. Tap retry."
         const val PREFS = "markets_prefs"
         const val KEY_FAV = "favorites"
+        const val ALERTS_POLL_MS = 8_000L
     }
 }

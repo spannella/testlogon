@@ -3,6 +3,8 @@ package com.testlogon.android.feature.markets.trade
 import com.testlogon.android.data.exchange.Fill
 import com.testlogon.android.data.exchange.FeeSchedule
 import com.testlogon.android.data.exchange.FillsFees
+import com.testlogon.android.data.exchange.LiveOrders
+import com.testlogon.android.data.exchange.LiveOrder
 import com.testlogon.android.data.exchange.Liquidations
 import com.testlogon.android.data.exchange.FundingPayments
 import com.testlogon.android.data.exchange.feeFor
@@ -121,6 +123,7 @@ data class TradingUiState(
     val pmResolutions: List<com.testlogon.android.data.exchange.PmResolution> = emptyList(),
     val feeSchedule: FeeSchedule? = null,
     val fillsFees: FillsFees? = null,
+    val liveOrders: LiveOrders? = null,
     val liquidations: Liquidations? = null,
     val fundingPayments: FundingPayments? = null,
     /** symbolId -> ticker, for labelling the account-wide liquidation/funding/fills feeds. */
@@ -136,6 +139,22 @@ data class TradingUiState(
 ) {
     /** Ticker for [symbolId] from the resolved catalogue, else "#<id>". */
     fun symbolLabel(symbolId: Int): String = symbolNames[symbolId] ?: ("#" + symbolId)
+
+    /**
+     * The working orders to display + manage. Prefers the LIVE server feed (survives restarts, includes
+     * quote/OTO legs) when it has loaded; otherwise falls back to this session's locally-tracked list.
+     * Both expose a clordid so per-row Amend/Cancel + Cancel-all work identically either way.
+     */
+    val displayOrders: List<WorkingOrder> get() {
+        val live = liveOrders?.orders
+        return if (live != null && live.isNotEmpty()) {
+            live.map { lo -> WorkingOrder(lo.clordid, lo.side ?: OrderSide.BUY, lo.price, lo.qty, lo.orderId) }
+        } else {
+            workingOrders
+        }
+    }
+    /** Count for the Orders tab badge: the live feed's count when loaded, else the session list size. */
+    val ordersBadgeCount: Int get() = liveOrders?.orders?.size?.takeIf { it > 0 } ?: workingOrders.size
     val isAmending: Boolean get() = amendingClordid != null
     val depositLong: Long? get() = depositText.toLongOrNull()
     val canDeposit: Boolean get() = !depositing && (depositLong ?: 0L) > 0L

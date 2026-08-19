@@ -1549,6 +1549,16 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // Trading Alerts: derived notifications (fills / liquidations / funding / margin-distress / PM-resolved)
+        // detected from the trader feed reads. Reachable here and from the Markets header bell.
+        MoreEntry(
+            id = "trading_alerts",
+            labelRes = R.string.more_entry_trading_alerts,
+            icon = Icons.Outlined.Notifications,
+            route = MoreRoutes.TRADING_ALERTS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // AND-404: READ-ONLY admin EMAIL delivery dashboard (per-channel stats + recent activity). Self-gates
         // via the backend 403 -> the screen's Forbidden state; a non-admin sees no admin data.
         MoreEntry(

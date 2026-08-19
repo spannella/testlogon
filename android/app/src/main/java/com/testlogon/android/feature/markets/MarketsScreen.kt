@@ -28,9 +28,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Text
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -73,12 +76,19 @@ import kotlin.math.abs
 fun MarketsRoute(
     onBack: () -> Unit,
     onOpenSymbol: (symbolId: Int) -> Unit,
+    onOpenAlerts: () -> Unit = {},
     viewModel: MarketsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val unreadAlerts by viewModel.unreadAlerts.collectAsStateWithLifecycle()
     MarketSurface {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-            MarketsHeader(onBack = onBack, count = state.rows.size)
+            MarketsHeader(
+                onBack = onBack,
+                count = state.rows.size,
+                unreadAlerts = unreadAlerts,
+                onOpenAlerts = onOpenAlerts,
+            )
             Box(modifier = Modifier.fillMaxSize()) {
                 when (state.phase) {
                     MarketsUiState.Phase.Loading -> LoadingState(message = "Loading markets")
@@ -103,7 +113,12 @@ fun MarketsRoute(
 }
 
 @Composable
-private fun MarketsHeader(onBack: () -> Unit, count: Int) {
+private fun MarketsHeader(
+    onBack: () -> Unit,
+    count: Int,
+    unreadAlerts: Int = 0,
+    onOpenAlerts: () -> Unit = {},
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -129,6 +144,23 @@ private fun MarketsHeader(onBack: () -> Unit, count: Int) {
                 color = MarketColors.TextSecondary,
                 fontSize = 12.sp,
             )
+        }
+        IconButton(onClick = onOpenAlerts, modifier = Modifier.testTag("markets_alerts_bell")) {
+            BadgedBox(
+                badge = {
+                    if (unreadAlerts > 0) {
+                        Badge(containerColor = MarketColors.Down, contentColor = MarketColors.TextPrimary) {
+                            Text(if (unreadAlerts > 99) "99+" else unreadAlerts.toString(), fontSize = 9.sp)
+                        }
+                    }
+                },
+            ) {
+                Icon(
+                    Icons.Filled.Notifications,
+                    contentDescription = "Trading alerts",
+                    tint = MarketColors.TextPrimary,
+                )
+            }
         }
     }
 }

@@ -89,6 +89,16 @@ class TradingNotifier @Inject constructor(
         post(title, body)
     }
 
+    /**
+     * Post a derived trading alert (fill / liquidation / funding / margin-distress / PM-resolved). The
+     * distress/liquidation kinds buzz [warn]; the rest buzz [success]. Routes to the same permission-
+     * gated [post] as the other notify* methods, so it is silently a no-op without POST_NOTIFICATIONS.
+     */
+    fun notifyTradingAlert(title: String, body: String, distress: Boolean) {
+        if (distress) warn() else success()
+        post(title, body)
+    }
+
     @SuppressLint("MissingPermission") // gated by NotificationPermissionState.isGranted()
     private fun post(title: String, body: String) {
         if (!permission.isGranted()) return

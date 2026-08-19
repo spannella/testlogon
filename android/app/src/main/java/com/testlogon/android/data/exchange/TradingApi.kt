@@ -76,6 +76,14 @@ interface TradingApi {
     @POST("me/funding_order")
     suspend fun placeFunding(@Body body: FundingOrderDto): FundingAckDto
 
+    /**
+     * Reference USD prices for cross-venue valuation (indicative). STUB today:
+     * {prices:{SYMBOL:"usd-string"}, quote:"USD", source, stub, note}. 404 until deployed -> the
+     * repository degrades to an unavailable [PriceMap] (callers keep the source-native sum).
+     */
+    @GET("me/prices")
+    suspend fun getPrices(): PricesDto
+
     /** Read spot (cash) balances per asset. */
     @GET("me/spot_balance")
     suspend fun spotBalance(): SpotBalanceDto
@@ -98,6 +106,14 @@ interface TradingApi {
      */
     @GET("me/fills/fees")
     suspend fun getFillsFees(): FillsFeesDto
+
+    /**
+     * The account's LIVE working (resting) orders straight from the engine (order-management read).
+     * Unlike the session-tracked list, this survives app restarts + reflects quote/OTO legs. Parsed
+     * defensively ({orders:[{clordid,symbolid,side,price,qty,...}]}); 404/undeployed -> empty feed.
+     */
+    @GET("me/orders/live")
+    suspend fun getOrdersLive(): LiveOrdersDto
 
     /** This account's recent forced-liquidation events (symbol, qty, mark, realized PnL, fee). 404 when undeployed. */
     @GET("me/liquidations")
