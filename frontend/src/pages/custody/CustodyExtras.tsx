@@ -4,7 +4,7 @@
 // (retry:false) and every simulated (stub:true) response is surfaced honestly
 // with a "simulated / not settled" badge so a user never mistakes a no-op for
 // a real settled transfer.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Layers,
@@ -46,6 +46,21 @@ import {
 } from "@/api/endpoints/custody";
 
 // ─── small shared bits ──────────────────────────────────────────
+
+function useIsMobile(bp = 767): boolean {
+  const [m, setM] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia(`(max-width: ${bp}px)`).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const h = () => setM(mq.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, [bp]);
+  return m;
+}
 
 function num(v: string | number | undefined | null): number {
   if (v == null) return 0;
@@ -175,6 +190,7 @@ function useSubaccountsQuery() {
 // ─── Sub-accounts tab ───────────────────────────────────────────
 
 export function SubaccountsTab() {
+  const isMobile = useIsMobile();
   const qc = useQueryClient();
   const q = useSubaccountsQuery();
   const [label, setLabel] = useState("");
@@ -232,7 +248,10 @@ export function SubaccountsTab() {
               type="button"
               onClick={() => setSelected(null)}
               className={cn(
-                "flex w-full items-center justify-between rounded-lg border p-3 text-left transition",
+                "flex w-full rounded-lg border p-3 text-left transition",
+                isMobile
+                  ? "flex-col gap-1"
+                  : "items-center justify-between",
                 selected === null ? "ring-1 ring-primary/40" : "hover:bg-muted/40",
               )}
             >
@@ -241,7 +260,7 @@ export function SubaccountsTab() {
                 <span className="text-sm font-medium">Base vault</span>
                 <Badge variant="outline" className="text-[10px]">default</Badge>
               </span>
-              <span className="font-mono text-xs text-muted-foreground">
+              <span className="break-all font-mono text-xs text-muted-foreground">
                 {q.data.default_vault}
               </span>
             </button>
@@ -285,7 +304,14 @@ export function SubaccountsTab() {
                       : "hover:bg-muted/40",
                   )}
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div
+                    className={cn(
+                      "flex gap-2",
+                      isMobile
+                        ? "flex-col"
+                        : "items-center justify-between",
+                    )}
+                  >
                     <span className="flex items-center gap-2">
                       <Layers className="h-4 w-4 text-muted-foreground" />
                       <span className="text-sm font-medium">{s.label}</span>
@@ -294,7 +320,7 @@ export function SubaccountsTab() {
                       )}
                     </span>
                     {s.vault && (
-                      <span className="font-mono text-xs text-muted-foreground">
+                      <span className="break-all font-mono text-xs text-muted-foreground">
                         {s.vault}
                       </span>
                     )}
@@ -552,6 +578,7 @@ function BridgeTransfer() {
 const BASE = "__base__";
 
 function InternalTransfer() {
+  const isMobile = useIsMobile();
   const q = useSubaccountsQuery();
   const subs: Subaccount[] = q.data?.subaccounts ?? [];
 
@@ -609,7 +636,7 @@ function InternalTransfer() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className={cn("grid gap-3", isMobile ? "grid-cols-1" : "grid-cols-2")}>
             <div className="space-y-1.5">
               <Label>From</Label>
               <Select value={fromLabel} onValueChange={(v) => { setFromLabel(v); setResult(null); }}>

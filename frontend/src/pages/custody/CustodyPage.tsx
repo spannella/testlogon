@@ -1031,14 +1031,23 @@ export default function CustodyPage() {
         <TabsList
           className={cn(
             "mb-4 w-full",
-            isMobile ? "grid grid-cols-7 gap-1" : "inline-flex",
+            isMobile
+              ? "flex justify-start gap-1 overflow-x-auto"
+              : "inline-flex",
           )}
         >
           {tabs.map((t) => (
-            <TabsTrigger key={t.key} value={t.key} className="gap-1.5">
+            <TabsTrigger
+              key={t.key}
+              value={t.key}
+              className={cn(
+                "gap-1.5",
+                isMobile && "flex-none shrink-0 px-2.5",
+              )}
+            >
               {t.icon}
               <span className={cn(isMobile && "sr-only")}>{t.label}</span>
-              {isMobile && <span className="text-[10px]">{t.short}</span>}
+              {isMobile && <span className="text-[11px]">{t.short}</span>}
             </TabsTrigger>
           ))}
         </TabsList>

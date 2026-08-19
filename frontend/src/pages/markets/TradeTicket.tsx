@@ -142,7 +142,23 @@ const MARGIN_CONFIG_FIELDS: {
 // /me/fees/schedule route; 404s until the exchange edge deploys, in which
 // case the card hides itself entirely (retry:false, graceful). When the
 // backend flags the row as a stub it is labelled clearly as venue defaults.
+function useIsMobile(bp = 767): boolean {
+  const [m, setM] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia(`(max-width: ${bp}px)`).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const h = () => setM(mq.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, [bp]);
+  return m;
+}
+
 function FeeSchedulePanel() {
+  const isMobile = useIsMobile();
   const q = useQuery({
     queryKey: ["fees", "schedule"],
     queryFn: getFeeSchedule,
@@ -178,7 +194,7 @@ function FeeSchedulePanel() {
         {q.isLoading ? (
           <p className="py-2 text-center text-xs text-muted-foreground">Loading…</p>
         ) : (
-          <div className="grid grid-cols-3 gap-2 text-center">
+          <div className={cn("grid gap-2 text-center", isMobile ? "grid-cols-1" : "grid-cols-3")}>
             <div className="rounded-md border bg-muted/30 p-2">
               <div className="text-[10px] uppercase text-muted-foreground">Maker</div>
               <div className="text-sm font-semibold tabular-nums">{maker ?? "—"} bps</div>
@@ -205,6 +221,7 @@ function FeeSchedulePanel() {
 }
 
 function MarginConfigPanel({ symbolId }: { symbolId: number }) {
+  const isMobile = useIsMobile();
   const isAdmin = useAuthStore((st) => st.isAdmin);
   const configM = useMarginConfig();
   const [open, setOpen] = useState(false);
@@ -274,7 +291,7 @@ function MarginConfigPanel({ symbolId }: { symbolId: number }) {
         {open && (
           <div className="mt-3 space-y-2">
             <Field label="Symbol id" value={symId} onChange={setSymId} />
-            <div className="grid grid-cols-2 gap-2">
+            <div className={cn("grid gap-2", isMobile ? "grid-cols-1" : "grid-cols-2")}>
               {MARGIN_CONFIG_FIELDS.map((f) => (
                 <Field
                   key={f.key}
