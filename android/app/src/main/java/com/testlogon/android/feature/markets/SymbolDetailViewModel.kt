@@ -8,6 +8,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.exchange.Candle
 import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.ExchangeStream
+import com.testlogon.android.data.exchange.MdEvent
 import com.testlogon.android.feature.markets.chart.Anchor
 import com.testlogon.android.feature.markets.chart.ChartDrawing
 import com.testlogon.android.feature.markets.chart.DrawingTool
@@ -152,15 +153,29 @@ class SymbolDetailViewModel @Inject constructor(
         streamJob?.cancel()
         val intervalSec = _uiState.value.intervalSec
         streamJob = viewModelScope.launch {
-            exchangeStream.marketData(symbolId, intervalSec).collect { frame ->
-                _uiState.update { state ->
-                    state.copy(
-                        phase = SymbolDetailUiState.Phase.Content,
-                        orderBook = frame.orderBook,
-                        candles = frame.candle?.let { mergeCandle(state.candles, it) } ?: state.candles,
-                        live = true,
-                        errorMessage = null,
-                    )
+            exchangeStream.marketData(symbolId, intervalSec).collect { event ->
+                when (event) {
+                    is MdEvent.Frame -> {
+                        val frame = event.frame
+                        _uiState.update { state ->
+                            state.copy(
+                                phase = SymbolDetailUiState.Phase.Content,
+                                orderBook = frame.orderBook,
+                                candles = frame.candle?.let { mergeCandle(state.candles, it) } ?: state.candles,
+                                live = true,
+                                streamStatus = SymbolDetailUiState.StreamStatus.LIVE,
+                                errorMessage = null,
+                            )
+                        }
+                    }
+                    // Stream dropped (server cap / blip). Show "reconnecting"; the REST poll below and
+                    // the last-known book keep the screen usable until the next frame re-arrives.
+                    MdEvent.Disconnected -> _uiState.update { state ->
+                        state.copy(
+                            live = false,
+                            streamStatus = SymbolDetailUiState.StreamStatus.RECONNECTING,
+                        )
+                    }
                 }
             }
         }

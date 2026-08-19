@@ -1,0 +1,61 @@
+appId: com.testlogon.android
+---
+- stopApp
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: "login_screen"
+- tapOn:
+    id: "login_email"
+- inputText: "a_par35_1785838888@example.com"
+- tapOn:
+    id: "login_password"
+- inputText: "Passw0rd!123"
+- hideKeyboard
+- tapOn:
+    id: "login_submit"
+- extendedWaitUntil:
+    visible:
+      id: "tab_more"
+    timeout: 30000
+- tapOn:
+    id: "tab_more"
+- assertVisible:
+    id: "more_screen"
+- tapOn:
+    id: "more_hub_community"
+- assertVisible:
+    id: "more_hub_screen"
+- scrollUntilVisible:
+    element:
+      id: "more_entry_organizations"
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: "more_entry_organizations"
+- assertVisible:
+    id: "org_overview_screen"
+- assertVisible:
+    id: "org_overview_name"
+- extendedWaitUntil:
+    visible:
+      id: "org_overview_transfer"
+    timeout: 15000
+- tapOn:
+    id: "org_overview_transfer"
+- assertVisible:
+    id: "org_transfer_screen"
+- extendedWaitUntil:
+    visible:
+      id: "org_transfer_row_z4ECcb0WPb-LU9cL"
+    timeout: 15000
+- tapOn:
+    id: "org_transfer_row_z4ECcb0WPb-LU9cL"
+- assertVisible:
+    text: "Transfer"
+- tapOn:
+    text: "Transfer"
+- extendedWaitUntil:
+    visible:
+      id: "org_overview_screen"
+    timeout: 20000

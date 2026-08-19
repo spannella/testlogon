@@ -21,9 +21,17 @@ data class SymbolDetailUiState(
     val orderBook: OrderBook? = null,
     val trades: List<Trade> = emptyList(),
     val live: Boolean = false,
+    val streamStatus: StreamStatus = StreamStatus.OFFLINE,
     val drawings: List<ChartDrawing> = emptyList(),
     val activeTool: DrawingTool = DrawingTool.NONE,
     val errorMessage: String? = null,
 ) {
     enum class Phase { Loading, Content, Error }
+
+    /**
+     * Live-stream connection state, surfaced as a subtle top-bar indicator.
+     * OFFLINE before the first frame; LIVE while frames flow; RECONNECTING after the stream drops
+     * (the screen keeps rendering the last book + the trades REST poll as fallback).
+     */
+    enum class StreamStatus { OFFLINE, LIVE, RECONNECTING }
 }

@@ -1,0 +1,43 @@
+appId: com.testlogon.android
+---
+- stopApp
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: "login_screen"
+- tapOn:
+    id: "login_email"
+- inputText: "tax_par24_1785839005@example.com"
+- tapOn:
+    id: "login_password"
+- inputText: "Passw0rd!123"
+- hideKeyboard
+- tapOn:
+    id: "login_submit"
+- extendedWaitUntil:
+    visible:
+      id: "tab_more"
+    timeout: 30000
+- tapOn:
+    id: "tab_more"
+- assertVisible:
+    id: "more_screen"
+- tapOn:
+    id: "more_hub_wallet"
+- assertVisible:
+    id: "more_hub_screen"
+- scrollUntilVisible:
+    element:
+      id: "more_entry_tax_documents"
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: "more_entry_tax_documents"
+- assertVisible:
+    id: "tax_docs_screen"
+- extendedWaitUntil:
+    visible:
+      id: "tax_docs_summary"
+    timeout: 20000
+- assertVisible:
+    id: "tax_docs_summary"
