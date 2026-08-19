@@ -165,6 +165,9 @@ private fun MarketsHeader(
     }
 }
 
+/** Which slice of the market list is shown: everything, or just the starred watchlist. */
+private enum class MarketsFilter { All, Watchlist }
+
 @Composable
 private fun MarketsList(
     rows: List<MarketRow>,
@@ -173,17 +176,24 @@ private fun MarketsList(
     onToggleFavorite: (Int) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    // Filter by symbol, then float starred instruments to the top (stable within each group).
-    val displayed = remember(rows, favorites, query) {
-        rows.filter { query.isBlank() || it.instrument.symbol.contains(query.trim(), ignoreCase = true) }
+    var filter by remember { mutableStateOf(MarketsFilter.All) }
+    // Apply the watchlist tab, then the search text, then float starred instruments to the top
+    // (stable within each group so the starred order is deterministic across quote ticks).
+    val displayed = remember(rows, favorites, query, filter) {
+        rows.filter { filter == MarketsFilter.All || favorites.contains(it.instrument.symbolId) }
+            .filter { query.isBlank() || it.instrument.symbol.contains(query.trim(), ignoreCase = true) }
             .sortedByDescending { favorites.contains(it.instrument.symbolId) }
     }
     Column(modifier = Modifier.fillMaxSize()) {
         MarketSearchField(query = query, onQuery = { query = it })
+        MarketsFilterTabs(
+            filter = filter,
+            allCount = rows.size,
+            watchCount = favorites.size,
+            onSelect = { filter = it },
+        )
         if (displayed.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No markets match \"$query\".", color = MarketColors.TextSecondary, fontSize = 13.sp)
-            }
+            MarketsEmpty(filter = filter, query = query)
             return@Column
         }
         LazyColumn(
@@ -199,6 +209,103 @@ private fun MarketsList(
                     onToggleFavorite = { onToggleFavorite(row.instrument.symbolId) },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun MarketsFilterTabs(
+    filter: MarketsFilter,
+    allCount: Int,
+    watchCount: Int,
+    onSelect: (MarketsFilter) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag("markets_filter_tabs"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MarketFilterChip(
+            label = "All",
+            count = allCount,
+            selected = filter == MarketsFilter.All,
+            onClick = { onSelect(MarketsFilter.All) },
+            tag = "filter_all",
+        )
+        MarketFilterChip(
+            label = "Watchlist",
+            count = watchCount,
+            selected = filter == MarketsFilter.Watchlist,
+            onClick = { onSelect(MarketsFilter.Watchlist) },
+            tag = "filter_watchlist",
+        )
+    }
+}
+
+@Composable
+private fun MarketFilterChip(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    onClick: () -> Unit,
+    tag: String,
+) {
+    val bg = if (selected) MarketColors.Accent.copy(alpha = 0.16f) else MarketColors.Surface
+    val border = if (selected) MarketColors.Accent else MarketColors.Border
+    val fg = if (selected) MarketColors.Accent else MarketColors.TextSecondary
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .border(1.dp, border, RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (label == "Watchlist") {
+            Icon(
+                Icons.Filled.Star,
+                contentDescription = null,
+                tint = fg,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(5.dp))
+        }
+        Text(text = label, color = fg, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(5.dp))
+        Text(text = count.toString(), color = fg.copy(alpha = 0.7f), fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun MarketsEmpty(filter: MarketsFilter, query: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val text = when {
+            query.isNotBlank() -> "No markets match \"$query\"."
+            filter == MarketsFilter.Watchlist ->
+                "Your watchlist is empty. Tap the star on any market to add it."
+            else -> "No markets available."
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+            if (filter == MarketsFilter.Watchlist && query.isBlank()) {
+                Icon(
+                    Icons.Filled.StarBorder,
+                    contentDescription = null,
+                    tint = MarketColors.TextFaint,
+                    modifier = Modifier.size(40.dp),
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            Text(
+                text = text,
+                color = MarketColors.TextSecondary,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.testTag("markets_empty"),
+            )
         }
     }
 }

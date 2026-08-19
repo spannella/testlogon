@@ -122,11 +122,9 @@ class MarketsViewModel @Inject constructor(
                     val candles = (repository.candles(instrument.symbolId, SPARK_INTERVAL_SEC)
                         as? ApiResult.Success)?.data
                     if (!candles.isNullOrEmpty()) {
-                        val window = candles.takeLast(SPARK_POINTS)
-                        spark = window.map { instrument.display(it.close).toFloat() }
-                        val firstOpen = instrument.display(window.first().open)
-                        val lastClose = instrument.display(window.last().close)
-                        if (firstOpen != 0.0) changePct = (lastClose - firstOpen) / firstOpen * 100.0
+                        val closes = candles.map { instrument.display(it.close) }
+                        spark = MarketSummaryMath.spark(closes, SPARK_POINTS)
+                        changePct = MarketSummaryMath.changePctOf(closes, SPARK_POINTS)
                     }
                 }
 
