@@ -105,6 +105,10 @@ data class TradingUiState(
     val section: TicketSection = TicketSection.TRADE,
     val armed: String? = null,        // "market" | "close" -> a confirm is pending (skipped when oneTap)
     val oneTap: Boolean = false,      // when true, market/close fire without a confirm step
+    // Position-size / risk calculator (collapsible). riskAmount + stop -> qty via OrderMath.
+    val riskCalcOpen: Boolean = false,
+    val riskAmountText: String = "",
+    val riskStopText: String = "",
     val pm: com.testlogon.android.data.exchange.PmState? = null,   // set when this symbol is a binary prediction market
     val isAdmin: Boolean = false,   // resolved from CurrentUserRepository; gates the margin-config panel
     val marginConfig: MarginConfigForm = MarginConfigForm(),
@@ -203,6 +207,37 @@ data class TradingUiState(
         OrderType.OCO -> (priceLong ?: 0L) > 0L && (qtyLong ?: 0L) > 0L && (childPriceLong ?: 0L) > 0L && (childQtyLong ?: 0L) > 0L
         OrderType.FUNDING -> (fundingRateLong ?: 0L) > 0L && (fundingQtyLong ?: 0L) > 0L
     }
+
+    // ---- Order-entry math (client-computed preview + sizing) ----
+
+    /** Available margin balance, or null when the account hasn't loaded. */
+    val availableBalance: Long? get() = account?.availableBalance
+
+    /** The price used for preview/sizing: the entered limit price, else the stop/trigger. */
+    val entryRefPrice: Long? get() = priceLong ?: stopLong
+
+    /** Exact notional (price x qty) for the ticket preview. */
+    val previewNotional: Long? get() = OrderMath.notional(entryRefPrice, qtyLong)
+
+    /** Max whole qty affordable at the reference price from available balance (no leverage). */
+    fun maxAffordableQty(refPrice: Long?): Long =
+        OrderMath.maxQtyForBalance(availableBalance, refPrice ?: entryRefPrice)
+
+    /** Risk-calculator inputs. */
+    val riskAmountLong: Long? get() = riskAmountText.toLongOrNull()
+    val riskStopLong: Long? get() = riskStopText.toLongOrNull()
+
+    /** qty implied by the risk budget + stop distance (0 when inputs are incomplete). */
+    fun riskSizedQty(refPrice: Long?): Long =
+        OrderMath.riskSizedQty(riskAmountLong, refPrice ?: entryRefPrice, riskStopLong)
+
+    /** Initial margin the current order would lock, using [initialMarginBps]. */
+    fun previewMarginRequired(initialMarginBps: Long): Long =
+        OrderMath.marginRequired(previewNotional, initialMarginBps)
+
+    /** Estimated liquidation price of the current order, using [maintenanceMarginBps]. */
+    fun previewLiquidationPrice(maintenanceMarginBps: Long): Long? =
+        OrderMath.estLiquidationPrice(entryRefPrice, side, maintenanceMarginBps)
 }
 
 

@@ -222,7 +222,12 @@ private fun SymbolDetailContent(
             }
 
             DetailTab.TRADE -> item {
-                TradeTicket(lastPrice = state.candles.lastOrNull()?.close, viewModel = tradingViewModel)
+                TradeTicket(
+                    lastPrice = state.candles.lastOrNull()?.close,
+                    bestBid = state.orderBook?.bestBid,
+                    bestAsk = state.orderBook?.bestAsk,
+                    viewModel = tradingViewModel,
+                )
             }
         }
     }

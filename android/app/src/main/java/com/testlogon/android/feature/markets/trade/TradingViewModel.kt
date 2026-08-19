@@ -332,6 +332,54 @@ class TradingViewModel @Inject constructor(
         _uiState.update { it.copy(qtyText = q.toString(), armed = null) }
     }
 
+    /** Set qty to the maximum affordable at [refPrice] from available balance (no leverage). */
+    fun setMaxQty(refPrice: Long?) {
+        val avail = _uiState.value.account?.availableBalance
+        val max = OrderMath.maxQtyForBalance(avail, refPrice ?: _uiState.value.entryRefPrice)
+        if (max <= 0L) return
+        notifier.tick()
+        _uiState.update { it.copy(qtyText = max.toString(), armed = null) }
+    }
+
+    // ---- Position-size / risk calculator ----
+
+    fun toggleRiskCalc() = _uiState.update { it.copy(riskCalcOpen = !it.riskCalcOpen) }
+    fun setRiskAmount(text: String) = _uiState.update { it.copy(riskAmountText = digits(text, 15)) }
+    fun setRiskStop(text: String) = _uiState.update { it.copy(riskStopText = digits(text, 12)) }
+
+    /** Apply the risk-sized qty to the ticket (qty = riskAmount / |entry - stop|). No-op when it's 0. */
+    fun applyRiskSize(refPrice: Long?) {
+        val st = _uiState.value
+        val q = st.riskSizedQty(refPrice)
+        if (q <= 0L) return
+        notifier.tick()
+        _uiState.update { it.copy(qtyText = q.toString(), armed = null) }
+    }
+
+    // ---- One-click bid/ask / market prefills (the user still submits via the normal flow) ----
+
+    /** Prefill a Buy limit at the best bid. */
+    fun prefillBuyAtBid(bestBid: Long?) {
+        val px = bestBid ?: return
+        if (px <= 0L) return
+        notifier.tick()
+        _uiState.update { it.copy(orderType = OrderType.LIMIT, side = OrderSide.BUY, priceText = px.toString(), armed = null) }
+    }
+
+    /** Prefill a Sell limit at the best ask. */
+    fun prefillSellAtAsk(bestAsk: Long?) {
+        val px = bestAsk ?: return
+        if (px <= 0L) return
+        notifier.tick()
+        _uiState.update { it.copy(orderType = OrderType.LIMIT, side = OrderSide.SELL, priceText = px.toString(), armed = null) }
+    }
+
+    /** Switch the ticket to a Market order on [side] (qty preserved; user submits via the normal flow). */
+    fun prefillMarket(side: OrderSide) {
+        notifier.tick()
+        _uiState.update { it.copy(orderType = OrderType.MARKET, side = side, message = null, amendingClordid = null, armed = null) }
+    }
+
     fun stepQty(delta: Long) {
         notifier.tick()
         val n = ((_uiState.value.qtyText.toLongOrNull() ?: 0L) + delta).coerceAtLeast(0L)

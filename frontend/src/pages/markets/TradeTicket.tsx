@@ -35,6 +35,7 @@ import {
 import { isAck, ackMessage, impliedYes, marginUsedFraction } from "@/api/endpoints/trading";
 import type { OrderSide, Fill, PlaceOrderRequest, MarginConfigRequest } from "@/api/endpoints/trading";
 import { formatPrice, formatQty, formatTimeNs } from "./format";
+import { notional as calcNotional, maxQtyForBalance, riskSizedQty, pctOfBuyingPowerQty, estLiquidationPrice } from "@/lib/orderMath";
 import { vibrate, notify, ensureNotifyPermission } from "@/lib/tradeFeedback";
 import { tradingFeatures } from "./tradingFeatures";
 import { useAuthStore } from "@/stores/authStore";
@@ -351,11 +352,15 @@ export function TradeTicket({
   symbolId,
   scaler,
   lastPrice,
+  bestBid,
+  bestAsk,
   prefill,
 }: {
   symbolId: number;
   scaler: number;
   lastPrice?: number;
+  bestBid?: number;
+  bestAsk?: number;
   prefill?: { price?: number; side?: OrderSide; nonce: number };
 }) {
   const account = useMarginAccount();
@@ -407,6 +412,10 @@ export function TradeTicket({
   const [workingOrders, setWorkingOrders] = useState<WorkingOrder[]>([]);
   const [fills, setFills] = useState<Fill[]>([]);
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
+  // Position-size / risk calculator (collapsible) local inputs.
+  const [riskOpen, setRiskOpen] = useState(false);
+  const [riskAmt, setRiskAmt] = useState("");
+  const [riskStop, setRiskStop] = useState("");
 
   const seq = useRef(0);
   const nextClordid = () => `t${Date.now()}${seq.current++ % 100}`;
@@ -459,6 +468,78 @@ export function TradeTicket({
   const refPrice = priceN || stopN || lastPrice || 0;
   const avail = acct?.available_balance ?? 0;
   const orderValue = priceN > 0 && qtyN > 0 ? priceN * qtyN : undefined;
+  // ── Order preview math (all client-side, EXACT except the clearly-labeled est.) ──
+  // Notional uses the effective ticket price: limit/stop-limit use the entered
+  // price; market/stop use the best available quote or last trade as a proxy.
+  const previewPrice =
+    orderType === "market"
+      ? (side === "buy" ? bestAsk : bestBid) ?? lastPrice ?? refPrice
+      : refPrice;
+  const previewNotional = calcNotional(previewPrice, qtyN);
+  const maxAffordableQty = maxQtyForBalance(avail, previewPrice);
+  // The exchange does NOT expose initial/maintenance margin bps to the client
+  // (the fee schedule only carries maker/taker/liquidation-fee bps). So any
+  // liquidation number here is a ROUGH estimate under an assumed default margin,
+  // shown with an explicit "(est.)" tag — never presented as authoritative.
+  const ASSUMED_INITIAL_MARGIN_BPS = 1000; // 10% — venue-default placeholder
+  const ASSUMED_MAINT_MARGIN_BPS = 500; // 5% — venue-default placeholder
+  const estMarginRequired =
+    previewNotional > 0 ? Math.ceil((previewNotional * ASSUMED_INITIAL_MARGIN_BPS) / 10000) : 0;
+  const estLiq =
+    previewPrice > 0 && qtyN > 0
+      ? estLiquidationPrice(previewPrice, side, ASSUMED_INITIAL_MARGIN_BPS, ASSUMED_MAINT_MARGIN_BPS)
+      : null;
+
+  // Fill the qty to the max affordable at the current price for the current side.
+  const fillMaxQty = () => {
+    if (maxAffordableQty <= 0) return;
+    setQty(String(maxAffordableQty));
+    vibrate("tick");
+    resetArmed();
+  };
+
+  // Position-size calculator outputs.
+  const riskAmtN = parseInt(riskAmt) || 0;
+  const riskStopN = parseInt(riskStop) || 0;
+  const riskEntry = refPrice;
+  const suggestedQty = riskSizedQty(riskAmtN, riskEntry, riskStopN);
+  const applyRiskQty = () => {
+    if (suggestedQty <= 0) return;
+    setQty(String(suggestedQty));
+    vibrate("tick");
+    resetArmed();
+  };
+
+  // One-click bid/ask/market prefill — sets side + price only; the user still
+  // confirms and submits through the existing money-safety path.
+  const prefillBid = () => {
+    if (!(bestBid && bestBid > 0)) return;
+    setOrderType("limit");
+    setSide("buy");
+    setPrice(String(bestBid));
+    resetArmed();
+    vibrate("tick");
+  };
+  const prefillAsk = () => {
+    if (!(bestAsk && bestAsk > 0)) return;
+    setOrderType("limit");
+    setSide("sell");
+    setPrice(String(bestAsk));
+    resetArmed();
+    vibrate("tick");
+  };
+  const prefillMarketBuy = () => {
+    setOrderType("market");
+    setSide("buy");
+    resetArmed();
+    vibrate("tick");
+  };
+  const prefillMarketSell = () => {
+    setOrderType("market");
+    setSide("sell");
+    resetArmed();
+    vibrate("tick");
+  };
   const posQty = acct?.pos_qty ?? 0;
   const hasPosition = (acct?.num_positions ?? 0) > 0 || posQty !== 0;
   const liqPrice = acct?.pos_liquidation_price ?? 0;
@@ -921,6 +1002,47 @@ export function TradeTicket({
               ))}
             </div>
 
+            {/* One-click bid/ask + market quick-actions (prefill only — the
+                user still confirms/submits via the existing path). */}
+            {!isPm && orderType !== "quote" && orderType !== "funding" && (bestBid || bestAsk) && (
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  data-testid="quick_bid"
+                  disabled={!(bestBid && bestBid > 0)}
+                  onClick={prefillBid}
+                  className="flex-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-semibold tabular-nums text-emerald-600 disabled:opacity-40 dark:text-emerald-400"
+                >
+                  Buy @ bid {bestBid ? formatPrice(bestBid, scaler) : "—"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="quick_ask"
+                  disabled={!(bestAsk && bestAsk > 0)}
+                  onClick={prefillAsk}
+                  className="flex-1 rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-xs font-semibold tabular-nums text-rose-600 disabled:opacity-40 dark:text-rose-400"
+                >
+                  Sell @ ask {bestAsk ? formatPrice(bestAsk, scaler) : "—"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="quick_market_buy"
+                  onClick={prefillMarketBuy}
+                  className="rounded-md border px-2 py-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                >
+                  Mkt buy
+                </button>
+                <button
+                  type="button"
+                  data-testid="quick_market_sell"
+                  onClick={prefillMarketSell}
+                  className="rounded-md border px-2 py-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                >
+                  Mkt sell
+                </button>
+              </div>
+            )}
+
             {/* Side (hidden for quote / funding) */}
             {orderType !== "quote" && orderType !== "funding" && (
               <div className="flex gap-2">
@@ -1118,6 +1240,137 @@ export function TradeTicket({
                     <div className="grid grid-cols-2 gap-2">
                       <Field label="Display qty (iceberg)" value={displayQty} onChange={setDisplayQty} />
                       <Field label="Min qty" value={minQty} onChange={setMinQty} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Order preview — live, computed client-side. */}
+            {orderType !== "funding" && orderType !== "quote" && (
+              <div className="space-y-1.5 rounded-lg border bg-muted/20 p-3 text-sm" data-testid="order_preview">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Order preview
+                  </span>
+                  {orderType === "market" && (
+                    <span className="text-[10px] text-muted-foreground">at {previewPrice ? formatPrice(previewPrice, scaler) : "—"} (proxy)</span>
+                  )}
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Notional</span>
+                  <span className="tabular-nums" data-testid="preview_notional">
+                    {previewNotional > 0 ? formatPrice(previewNotional, scaler) : "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Buying power</span>
+                  <span className="tabular-nums">
+                    {formatPrice(avail, scaler)}
+                    {maxAffordableQty > 0 && (
+                      <span className="text-muted-foreground"> · max {formatQty(maxAffordableQty, scaler)}</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Max qty affordable</span>
+                  <button
+                    type="button"
+                    data-testid="preview_max"
+                    disabled={maxAffordableQty <= 0}
+                    onClick={fillMaxQty}
+                    className="rounded border px-2 py-0.5 text-xs font-semibold text-primary disabled:opacity-40"
+                  >
+                    Max {maxAffordableQty > 0 ? formatQty(maxAffordableQty, scaler) : ""}
+                  </button>
+                </div>
+                {/* Margin impact + est. liquidation — margin bps are NOT readable
+                    client-side, so these are ROUGH estimates under an assumed
+                    default, clearly tagged. */}
+                {previewNotional > 0 && (
+                  <div className="mt-1 border-t pt-1.5">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        Est. margin <span className="text-[10px]">({(ASSUMED_INITIAL_MARGIN_BPS / 100).toFixed(0)}% assumed)</span>
+                      </span>
+                      <span className="tabular-nums">~{formatPrice(estMarginRequired, scaler)} (est.)</span>
+                    </div>
+                    {estLiq != null && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Est. liq. price</span>
+                        <span className="tabular-nums">~{formatPrice(Math.round(estLiq), scaler)} (est.)</span>
+                      </div>
+                    )}
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">
+                      Margin figures are rough estimates — the venue's real margin
+                      rates aren't exposed to the client.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Position-size / risk calculator (collapsible). */}
+            {orderType !== "funding" && orderType !== "quote" && (
+              <div className="rounded-lg border p-3">
+                <button
+                  type="button"
+                  aria-expanded={riskOpen}
+                  data-testid="risk_calc_toggle"
+                  className="flex w-full items-center justify-between text-xs font-semibold text-primary"
+                  onClick={() => setRiskOpen((v) => !v)}
+                >
+                  <span>Position-size calculator</span>
+                  <span aria-hidden>{riskOpen ? "▲" : "▼"}</span>
+                </button>
+                {riskOpen && (
+                  <div className="mt-2 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="Risk amount (quote)" value={riskAmt} onChange={setRiskAmt} />
+                      <Field label="Stop price" value={riskStop} onChange={setRiskStop} />
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">
+                        Entry {riskEntry ? formatPrice(riskEntry, scaler) : "—"} · suggested qty
+                      </span>
+                      <span className="font-semibold tabular-nums" data-testid="risk_suggested_qty">
+                        {suggestedQty > 0 ? formatQty(suggestedQty, scaler) : "—"}
+                      </span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="w-full"
+                      data-testid="risk_apply"
+                      disabled={suggestedQty <= 0}
+                      onClick={applyRiskQty}
+                    >
+                      Apply qty
+                    </Button>
+                    <div>
+                      <label className="text-xs text-muted-foreground">% of buying power</label>
+                      <div className="mt-1 flex gap-1.5">
+                        {[25, 50, 100].map((pct) => (
+                          <button
+                            key={pct}
+                            type="button"
+                            data-testid={`risk_bp_${pct}`}
+                            disabled={maxAffordableQty <= 0}
+                            onClick={() => {
+                              const q = pctOfBuyingPowerQty(avail, previewPrice, pct);
+                              if (q > 0) {
+                                setQty(String(q));
+                                vibrate("tick");
+                                resetArmed();
+                              }
+                            }}
+                            className="flex-1 rounded-md border py-1 text-xs tabular-nums text-muted-foreground hover:text-foreground disabled:opacity-40"
+                          >
+                            {pct}%
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}

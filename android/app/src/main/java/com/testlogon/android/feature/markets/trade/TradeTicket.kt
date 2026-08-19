@@ -56,6 +56,8 @@ import java.util.Locale
 fun TradeTicket(
     lastPrice: Long?,
     modifier: Modifier = Modifier,
+    bestBid: Long? = null,
+    bestAsk: Long? = null,
     viewModel: TradingViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -87,7 +89,7 @@ fun TradeTicket(
         Spacer(Modifier.height(12.dp))
 
         when (state.section) {
-            TicketSection.TRADE -> TradeSection(state, lastPrice, viewModel)
+            TicketSection.TRADE -> TradeSection(state, lastPrice, bestBid, bestAsk, viewModel)
             TicketSection.POSITIONS -> PositionsSection(state, lastPrice, viewModel)
             TicketSection.ORDERS -> OrdersSection(state, viewModel)
             TicketSection.FILLS -> FillsSection(state)
@@ -130,7 +132,7 @@ fun TradeTicket(
 // ======================= Sections =======================
 
 @Composable
-private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: TradingViewModel) {
+private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?, bestAsk: Long?, viewModel: TradingViewModel) {
     val sideColor = if (state.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down
     var showDepositConfirm by remember { mutableStateOf(false) }
 
@@ -150,6 +152,18 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: Tra
     // Reference price for %-of-buying-power sizing.
     val refPrice = state.priceLong ?: state.stopLong ?: lastPrice
 
+    // One-click bid/ask/market prefill (limit-order types only; the user still submits via the normal flow).
+    if (state.pm == null && state.orderType != OrderType.QUOTE && state.orderType != OrderType.FUNDING) {
+        QuickQuoteRow(
+            bestBid = bestBid,
+            bestAsk = bestAsk,
+            onBuyBid = { viewModel.prefillBuyAtBid(bestBid) },
+            onSellAsk = { viewModel.prefillSellAtAsk(bestAsk) },
+            onMarket = { viewModel.prefillMarket(state.side) },
+        )
+        Spacer(Modifier.height(10.dp))
+    }
+
     when (state.orderType) {
         OrderType.LIMIT -> {
             StepperField("Price", state.priceText, viewModel::setPrice) { viewModel.stepPrice(it) }
@@ -163,7 +177,8 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: Tra
                 NumberField("Expires in (minutes)", state.expiryMinText, viewModel::setExpiryMin)
             }
             Spacer(Modifier.height(8.dp))
-            OrderValueRow(state.orderValue, state.account?.availableBalance)
+            OrderPreview(state, refPrice, viewModel)
+            RiskCalculator(state, refPrice, viewModel)
             AdvancedSection(state, viewModel)
         }
         OrderType.MARKET -> {
@@ -171,6 +186,9 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: Tra
             QtyPercentRow { viewModel.setQtyPercent(it, refPrice) }
             Spacer(Modifier.height(4.dp))
             Text("Market order — fills immediately at the best available price.", color = MarketColors.TextSecondary, fontSize = 11.sp)
+            Spacer(Modifier.height(8.dp))
+            OrderPreview(state, refPrice, viewModel)
+            RiskCalculator(state, refPrice, viewModel)
             AdvancedSection(state, viewModel)
         }
         OrderType.STOP -> {
@@ -923,6 +941,218 @@ private fun OrderTypeRow(selected: OrderType, onSelect: (OrderType) -> Unit) {
                     .testTag("otype_${t.name}")
                     .padding(horizontal = 12.dp, vertical = 7.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun QuickQuoteRow(
+    bestBid: Long?,
+    bestAsk: Long?,
+    onBuyBid: () -> Unit,
+    onSellAsk: () -> Unit,
+    onMarket: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Text("One-click", color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(3.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            QuickQuoteBtn(
+                label = "Buy @ bid",
+                sub = bestBid?.let { fmt(it.toDouble()) } ?: "--",
+                color = MarketColors.Up,
+                enabled = bestBid != null && bestBid > 0L,
+                tag = "quick_buy_bid",
+                modifier = Modifier.weight(1f),
+                onClick = onBuyBid,
+            )
+            QuickQuoteBtn(
+                label = "Sell @ ask",
+                sub = bestAsk?.let { fmt(it.toDouble()) } ?: "--",
+                color = MarketColors.Down,
+                enabled = bestAsk != null && bestAsk > 0L,
+                tag = "quick_sell_ask",
+                modifier = Modifier.weight(1f),
+                onClick = onSellAsk,
+            )
+            QuickQuoteBtn(
+                label = "Market",
+                sub = "now",
+                color = MarketColors.Accent,
+                enabled = true,
+                tag = "quick_market",
+                modifier = Modifier.weight(1f),
+                onClick = onMarket,
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuickQuoteBtn(
+    label: String,
+    sub: String,
+    color: Color,
+    enabled: Boolean,
+    tag: String,
+    modifier: Modifier,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, if (enabled) color else MarketColors.Border, RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .testTag(tag)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(label, color = if (enabled) color else MarketColors.TextFaint, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        Text(sub, color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+    }
+}
+
+/**
+ * Live order preview: exact notional, buying power (max affordable qty) with a Max action, and - tagged
+ * "(est.)" because the symbol's real initial/maintenance margin bps aren't exposed to the client - the
+ * initial margin the order would lock plus a first-order estimated liquidation price.
+ */
+@Composable
+private fun OrderPreview(state: TradingUiState, refPrice: Long?, viewModel: TradingViewModel) {
+    val notional = OrderMath.notional(refPrice, state.qtyLong)
+    val avail = state.account?.availableBalance
+    val maxQty = OrderMath.maxQtyForBalance(avail, refPrice)
+    val exceeds = notional != null && avail != null && notional > avail
+    val imBps = OrderMath.DEFAULT_INITIAL_MARGIN_BPS
+    val mmBps = OrderMath.DEFAULT_MAINTENANCE_MARGIN_BPS
+    val margin = OrderMath.marginRequired(notional, imBps)
+    val liq = OrderMath.estLiquidationPrice(refPrice, state.side, mmBps)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(8.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("order_preview"),
+    ) {
+        PreviewLine("Notional", notional?.let { fmt(it.toDouble()) } ?: "--", if (exceeds) MarketColors.Down else MarketColors.TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Buying power", color = MarketColors.TextSecondary, fontSize = 12.sp)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (maxQty > 0L) "$maxQty @ ${refPrice?.let { fmt(it.toDouble()) } ?: "--"}" else "--",
+                    color = MarketColors.TextPrimary,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                )
+                Text(
+                    text = "Max",
+                    color = if (maxQty > 0L) MarketColors.Accent else MarketColors.TextFaint,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .border(1.dp, if (maxQty > 0L) MarketColors.Accent else MarketColors.Border, RoundedCornerShape(6.dp))
+                        .clickable(enabled = maxQty > 0L) { viewModel.setMaxQty(refPrice) }
+                        .testTag("preview_max")
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        PreviewLine("Margin impact (est.)", if (margin > 0L) fmt(margin.toDouble()) else "--", MarketColors.TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        PreviewLine("Est. liquidation (est.)", liq?.let { fmt(it.toDouble()) } ?: "--", MarketColors.TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Margin/liq. use assumed ${imBps / 100}%/${mmBps / 100}% (venue margin bps not exposed) - indicative only.",
+            color = MarketColors.TextFaint,
+            fontSize = 10.sp,
+        )
+    }
+}
+
+@Composable
+private fun PreviewLine(label: String, value: String, valueColor: Color) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MarketColors.TextSecondary, fontSize = 12.sp)
+        Text(value, color = valueColor, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+    }
+}
+
+/**
+ * Collapsible position-size / risk calculator: risk amount + stop price -> qty = risk / |entry - stop|
+ * with an apply-to-ticket action, plus 25/50/100% of buying-power quick-size shortcuts.
+ */
+@Composable
+private fun RiskCalculator(state: TradingUiState, refPrice: Long?, viewModel: TradingViewModel) {
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = if (state.riskCalcOpen) "Risk calculator ▲" else "Risk calculator ▼",
+        color = MarketColors.Accent,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.clickable { viewModel.toggleRiskCalc() }.testTag("risk_calc_toggle").padding(vertical = 4.dp),
+    )
+    if (!state.riskCalcOpen) return
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.weight(1f)) { NumberField("Risk amount", state.riskAmountText, viewModel::setRiskAmount) }
+        Box(Modifier.weight(1f)) { NumberField("Stop price", state.riskStopText, viewModel::setRiskStop) }
+    }
+    Spacer(Modifier.height(4.dp))
+    val entry = refPrice
+    val sizedQty = state.riskSizedQty(refPrice)
+    val dist = if (entry != null && state.riskStopLong != null) kotlin.math.abs(entry - state.riskStopLong!!) else null
+    Text(
+        text = when {
+            entry == null -> "Enter a price (entry) first."
+            state.riskStopLong == null || state.riskAmountLong == null -> "Enter risk amount + stop price."
+            dist != null && dist <= 0L -> "Stop must differ from entry."
+            sizedQty <= 0L -> "Risk too small for one unit at this stop distance."
+            else -> "Suggested size: $sizedQty units  (entry ${fmt(entry.toDouble())}, stop distance ${fmt((dist ?: 0L).toDouble())})"
+        },
+        color = if (sizedQty > 0L) MarketColors.TextPrimary else MarketColors.TextFaint,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+    )
+    Spacer(Modifier.height(6.dp))
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (sizedQty > 0L) MarketColors.Accent else MarketColors.SurfaceAlt)
+                .clickable(enabled = sizedQty > 0L) { viewModel.applyRiskSize(refPrice) }
+                .testTag("risk_apply")
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("Apply to ticket", color = if (sizedQty > 0L) Color.Black else MarketColors.TextFaint, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    Text("Or size by buying power", color = MarketColors.TextSecondary, fontSize = 11.sp)
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(25, 50, 100).forEach { pct ->
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MarketColors.Surface)
+                    .border(1.dp, MarketColors.Border, RoundedCornerShape(6.dp))
+                    .clickable { viewModel.setQtyPercent(pct, refPrice) }
+                    .testTag("risk_pct_$pct")
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(if (pct == 100) "Max" else "$pct%", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            }
         }
     }
 }
