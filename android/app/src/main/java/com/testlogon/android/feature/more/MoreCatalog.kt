@@ -957,6 +957,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.APP,
         ),
         MoreEntry(
+            id = "home",
+            labelRes = R.string.more_entry_home,
+            icon = Icons.Outlined.Dashboard,
+            route = MoreRoutes.HOME,
+            hub = MoreHub.WALLET,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
             id = "custody",
             labelRes = R.string.more_entry_custody,
             icon = Icons.Outlined.AccountBalance,

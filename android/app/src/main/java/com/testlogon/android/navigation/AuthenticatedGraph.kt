@@ -216,6 +216,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         blotterDestination(navController)
         // Custody: native crypto custody surface wired to /me/custody/* (officer approvals self-gate on the admin signal).
         custodyDestination(navController)
+        // Trading Home / Dashboard: read-only launch surface (reached from More -> Wallet hub top).
+        homeDestination(navController)
         portfolioDestination(navController)
         // PnL & performance: read-only realized/unrealized analytics, equity curve, per-symbol breakdown.
         pnlDestination(navController)
