@@ -4,9 +4,10 @@ import { CandlestickChart, Star } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { useSymbols, useOrderBook, useTrades } from "@/hooks/useMarketData";
+import { useSymbols, useCandles } from "@/hooks/useMarketData";
 import type { MarketSymbol } from "@/api/endpoints/marketData";
 import { formatPrice } from "./format";
 
@@ -17,20 +18,63 @@ const FALLBACK_SYMBOLS: MarketSymbol[] = [
   { symbol: "SOLUSDC", symbol_id: 3, instrument_id: 3, price_scaler: 1, lot_size: 1, reference_price: 150, matching_algo: "price_time", is_perpetual: false, funding_interval_s: 0 },
 ];
 
-const FAV_KEY = "markets_favorites";
+// Client-side watchlist. Stable insertion order preserved as an id array.
+const WATCHLIST_KEY = "md.watchlist.v1";
+
+function loadWatchlist(): number[] {
+  try {
+    const raw = localStorage.getItem(WATCHLIST_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Tiny inline SVG sparkline of recent closes. */
+function Sparkline({ closes, up }: { closes: number[]; up: boolean }) {
+  const width = 88;
+  const height = 28;
+  if (closes.length < 2) {
+    return <svg width={width} height={height} aria-hidden />;
+  }
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+  const step = width / (closes.length - 1);
+  const points = closes
+    .map((c, i) => {
+      const x = i * step;
+      const y = height - 2 - ((c - min) / range) * (height - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="overflow-visible" aria-hidden>
+      <polyline
+        points={points}
+        fill="none"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        className={up ? "stroke-emerald-500" : "stroke-rose-500"}
+      />
+    </svg>
+  );
+}
 
 function MarketRow({ sym, fav, onToggleFav }: { sym: MarketSymbol; fav: boolean; onToggleFav: (id: number) => void }) {
   const navigate = useNavigate();
   const scaler = sym.price_scaler || 1;
-  const book = useOrderBook(sym.symbol_id);
-  const trades = useTrades(sym.symbol_id);
+  // 60s candles, most-recent window; bars are ordered oldest -> newest.
+  const candles = useCandles(sym.symbol_id, 60, true, 60);
+  const bars = candles.data?.bars ?? [];
 
-  const bestBid = book.data?.bid_px ?? book.data?.bids?.[0]?.[0];
-  const bestAsk = book.data?.ask_px ?? book.data?.asks?.[0]?.[0];
-  const lastTrade = trades.data?.trades?.[0]?.price;
-  const mid = bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : undefined;
-  const last = lastTrade ?? mid ?? sym.reference_price;
-  const spread = bestBid != null && bestAsk != null ? bestAsk - bestBid : undefined;
+  const closes = bars.map((b) => b.close);
+  const last = closes.length ? closes[closes.length - 1]! : sym.reference_price;
+  const first = closes.length ? closes[0]! : undefined;
+  const changePct = first != null && first !== 0 ? ((last - first) / first) * 100 : undefined;
+  const up = (changePct ?? 0) >= 0;
 
   return (
     <TableRow className="cursor-pointer" onClick={() => navigate(`/markets/${sym.symbol_id}`)}>
@@ -48,18 +92,24 @@ function MarketRow({ sym, fav, onToggleFav }: { sym: MarketSymbol; fav: boolean;
       </TableCell>
       <TableCell className="font-medium">{sym.symbol}</TableCell>
       <TableCell className="text-right tabular-nums">{formatPrice(last, scaler)}</TableCell>
-      <TableCell className="text-right tabular-nums text-emerald-600 dark:text-emerald-400">
-        {bestBid != null ? formatPrice(bestBid, scaler) : "—"}
+      <TableCell
+        className={cn(
+          "text-right tabular-nums",
+          changePct == null ? "text-muted-foreground" : up ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+        )}
+      >
+        {changePct == null ? "—" : `${up ? "+" : ""}${changePct.toFixed(2)}%`}
       </TableCell>
-      <TableCell className="text-right tabular-nums text-rose-600 dark:text-rose-400">
-        {bestAsk != null ? formatPrice(bestAsk, scaler) : "—"}
-      </TableCell>
-      <TableCell className="text-right tabular-nums text-muted-foreground">
-        {spread != null ? formatPrice(spread, scaler) : "—"}
+      <TableCell className="hidden text-right sm:table-cell">
+        <div className="flex justify-end">
+          <Sparkline closes={closes} up={up} />
+        </div>
       </TableCell>
     </TableRow>
   );
 }
+
+type FilterTab = "all" | "watchlist";
 
 export default function MarketsPage() {
   const symbolsQuery = useSymbols();
@@ -67,31 +117,36 @@ export default function MarketsPage() {
   const base = apiSymbols.length > 0 ? apiSymbols : FALLBACK_SYMBOLS;
 
   const [query, setQuery] = useState("");
-  const [favorites, setFavorites] = useState<number[]>(() => {
-    try {
-      const raw = localStorage.getItem(FAV_KEY);
-      return raw ? (JSON.parse(raw) as number[]) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [tab, setTab] = useState<FilterTab>("all");
+  const [watchlist, setWatchlist] = useState<number[]>(loadWatchlist);
+
   useEffect(() => {
     try {
-      localStorage.setItem(FAV_KEY, JSON.stringify(favorites));
+      localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
     } catch {
       /* ignore */
     }
-  }, [favorites]);
+  }, [watchlist]);
+
   const toggleFav = (id: number) =>
-    setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
+    setWatchlist((w) => (w.includes(id) ? w.filter((x) => x !== id) : [...w, id]));
+
+  const isFav = (id: number) => watchlist.includes(id);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const filtered = q ? base.filter((s) => s.symbol.toLowerCase().includes(q)) : base;
-    return [...filtered].sort(
-      (a, b) => (favorites.includes(a.symbol_id) ? 0 : 1) - (favorites.includes(b.symbol_id) ? 0 : 1)
-    );
-  }, [base, query, favorites]);
+    let filtered = q ? base.filter((s) => s.symbol.toLowerCase().includes(q)) : base.slice();
+    if (tab === "watchlist") {
+      // Preserve stable starred order (order in which they were added).
+      const order = new Map(watchlist.map((id, i) => [id, i]));
+      filtered = filtered
+        .filter((s) => order.has(s.symbol_id))
+        .sort((a, b) => order.get(a.symbol_id)! - order.get(b.symbol_id)!);
+    }
+    return filtered;
+  }, [base, query, tab, watchlist]);
+
+  const emptyWatchlist = tab === "watchlist" && watchlist.length === 0;
 
   return (
     <div className="space-y-6">
@@ -106,10 +161,18 @@ export default function MarketsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Instruments</CardTitle>
-          <CardDescription>Prices update every 2 seconds. Star a market to pin it.</CardDescription>
+          <CardDescription>Prices update live. Star a market to add it to your watchlist.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="mb-3">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Tabs value={tab} onValueChange={(v) => setTab(v as FilterTab)}>
+              <TabsList>
+                <TabsTrigger value="all">All</TabsTrigger>
+                <TabsTrigger value="watchlist">
+                  Watchlist{watchlist.length > 0 ? ` (${watchlist.length})` : ""}
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
             <Input
               placeholder="Search symbol…"
               value={query}
@@ -123,6 +186,14 @@ export default function MarketsPage() {
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
             </div>
+          ) : emptyWatchlist ? (
+            <div className="flex flex-col items-center gap-2 py-10 text-center">
+              <Star className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-medium">Your watchlist is empty</p>
+              <p className="text-sm text-muted-foreground">
+                Tap the star on any market in the “All” tab to add it here.
+              </p>
+            </div>
           ) : (
             <Table>
               <TableHeader>
@@ -130,9 +201,8 @@ export default function MarketsPage() {
                   <TableHead className="w-8" />
                   <TableHead>Symbol</TableHead>
                   <TableHead className="text-right">Last</TableHead>
-                  <TableHead className="text-right">Bid</TableHead>
-                  <TableHead className="text-right">Ask</TableHead>
-                  <TableHead className="text-right">Spread</TableHead>
+                  <TableHead className="text-right">Chg %</TableHead>
+                  <TableHead className="hidden text-right sm:table-cell">Trend</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -140,13 +210,13 @@ export default function MarketsPage() {
                   <MarketRow
                     key={sym.symbol_id}
                     sym={sym}
-                    fav={favorites.includes(sym.symbol_id)}
+                    fav={isFav(sym.symbol_id)}
                     onToggleFav={toggleFav}
                   />
                 ))}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-4 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={5} className="py-4 text-center text-sm text-muted-foreground">
                       No symbols match “{query}”.
                     </TableCell>
                   </TableRow>

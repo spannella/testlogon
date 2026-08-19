@@ -99,11 +99,12 @@ function SubForm({ title, children }: { title: string; children: React.ReactNode
     <div className="rounded-md border">
       <button
         type="button"
+        aria-expanded={open}
         className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold"
         onClick={() => setOpen((v) => !v)}
       >
         <span>{title}</span>
-        <span className="text-muted-foreground">{open ? "▲" : "▼"}</span>
+        <span className="text-muted-foreground" aria-hidden>{open ? "▲" : "▼"}</span>
       </button>
       {open && <div className="space-y-2 border-t px-3 py-3">{children}</div>}
     </div>
@@ -251,6 +252,7 @@ function PmResolveForm({ symbolId }: { symbolId: number }) {
         <select
           value={outcome}
           onChange={(e) => setOutcome(e.target.value as "yes" | "no")}
+          aria-label="Resolution outcome"
           className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
         >
           <option value="yes">YES — pays face value</option>
@@ -380,11 +382,12 @@ export function PmAdminPanel({ symbolId }: { symbolId: number }) {
       <CardContent className="pt-4">
         <button
           type="button"
+          aria-expanded={open}
           className="flex w-full items-center justify-between text-sm font-semibold text-amber-600 dark:text-amber-400"
           onClick={() => setOpen((v) => !v)}
         >
           <span>Prediction markets (admin)</span>
-          <span>{open ? "▲" : "▼"}</span>
+          <span aria-hidden>{open ? "▲" : "▼"}</span>
         </button>
         {open && (
           <div className="mt-3 space-y-2">

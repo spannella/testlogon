@@ -48,7 +48,7 @@ class SymbolDetailViewModel @Inject constructor(
     private val drawingPrefs = appContext.getSharedPreferences(DRAW_PREFS, Context.MODE_PRIVATE)
 
     private val _uiState = MutableStateFlow(
-        SymbolDetailUiState(symbolId = symbolId, drawings = loadDrawings()),
+        SymbolDetailUiState(symbolId = symbolId, intervalSec = loadInterval(), drawings = loadDrawings()),
     )
     val uiState: StateFlow<SymbolDetailUiState> = _uiState.asStateFlow()
 
@@ -92,6 +92,7 @@ class SymbolDetailViewModel @Inject constructor(
     fun setInterval(intervalSec: Int) {
         if (intervalSec == _uiState.value.intervalSec) return
         _uiState.update { it.copy(intervalSec = intervalSec, candles = emptyList()) }
+        saveInterval(intervalSec)
         refetchCandles(intervalSec)
         streamMarketData()
     }
@@ -234,8 +235,24 @@ class SymbolDetailViewModel @Inject constructor(
 
     private fun key() = "sym_$symbolId"
 
+    // ---- timeframe persistence (the last-selected candle interval per symbol) ----
+
+    private fun loadInterval(): Int {
+        val saved = drawingPrefs.getInt(intervalKey(), DEFAULT_INTERVAL_SEC)
+        // Guard against a stale/invalid stored value: fall back to the default.
+        return if (saved in VALID_INTERVALS) saved else DEFAULT_INTERVAL_SEC
+    }
+
+    private fun saveInterval(intervalSec: Int) {
+        drawingPrefs.edit().putInt(intervalKey(), intervalSec).apply()
+    }
+
+    private fun intervalKey() = "interval_sym_$symbolId"
+
     private companion object {
         const val TRADES_POLL_MS = 4_000L
         const val DRAW_PREFS = "chart_drawings"
+        const val DEFAULT_INTERVAL_SEC = 60
+        val VALID_INTERVALS = setOf(60, 300, 900, 3_600, 86_400)
     }
 }

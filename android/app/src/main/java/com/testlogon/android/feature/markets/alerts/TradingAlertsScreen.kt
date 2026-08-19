@@ -37,6 +37,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -161,8 +163,17 @@ private fun AlertCard(alert: TradingAlert, onClick: () -> Unit) {
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                 )
-                Spacer(Modifier.weight(1f))
-                Text(alert.title, color = MarketColors.TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    alert.title,
+                    color = MarketColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.weight(1f),
+                )
             }
             Spacer(Modifier.size(3.dp))
             Text(alert.body, color = MarketColors.TextSecondary, fontSize = 13.sp)

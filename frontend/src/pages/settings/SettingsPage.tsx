@@ -10,6 +10,7 @@ import { Account } from "./Account";
 import { Appearance } from "./Appearance";
 import { AppearanceSection } from "./AppearanceSection";
 import { JiraIntegrationSettings } from "./JiraIntegrationSettings";
+import { TradingSettings } from "./TradingSettings";
 
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -90,6 +91,8 @@ export default function SettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      <TradingSettings />
 
       <Account />
 

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.ShowChart
 import androidx.compose.material.icons.outlined.Security
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -84,6 +85,14 @@ class SettingsHubViewModel @Inject constructor() : ViewModel() {
                 subtitleRes = R.string.settings_section_alerts_subtitle,
                 icon = Icons.Outlined.Campaign,
                 route = MainDest.SettingsAlerts.route,
+                available = true,
+            ),
+            SettingsSection(
+                key = SettingsSectionKey.TRADING,
+                titleRes = R.string.settings_section_trading_title,
+                subtitleRes = R.string.settings_section_trading_subtitle,
+                icon = Icons.Outlined.ShowChart,
+                route = MainDest.SettingsTrading.route,
                 available = true,
             ),
             SettingsSection(

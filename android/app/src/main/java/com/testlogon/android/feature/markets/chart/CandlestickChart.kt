@@ -4,6 +4,8 @@ import android.graphics.Paint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -46,7 +48,6 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 
 private val UpColor = MarketColors.Up
 private val DownColor = MarketColors.Down
@@ -115,6 +116,14 @@ private val MA_SPECS = listOf(
     MaSpec("MA99", 99, sma = true, color = Color(0xFF8C7CFF)), // violet
 )
 
+// Exponential moving averages 9 / 21 / 50 on the close price. Off by default; toggled from the
+// legend. Kept separate from [MA_SPECS] so the simple + exponential families each get their own row.
+private val EMA_SPECS = listOf(
+    MaSpec("EMA9", 9, sma = false, color = Color(0xFF00E5B0)),   // teal
+    MaSpec("EMA21", 21, sma = false, color = Color(0xFF37B6FF)), // sky
+    MaSpec("EMA50", 50, sma = false, color = Color(0xFFFF6D6D)), // coral
+)
+
 // Bollinger Bands (20, 2σ) and session VWAP — price-pane overlays, off by default.
 private const val BB_PERIOD = 20
 private const val BB_MULT = 2.0
@@ -124,6 +133,7 @@ private val VwapColor = Color(0xFFFF9F40) // orange
 /** Precomputed overlay series aligned 1:1 with the full candle list. */
 private data class Overlays(
     val ma: List<List<Double?>>,
+    val ema: List<List<Double?>>,
     val bbMid: List<Double?>,
     val bbUpper: List<Double?>,
     val bbLower: List<Double?>,
@@ -229,6 +239,8 @@ private fun CandlestickCanvas(
     var crosshairY by remember { mutableFloatStateOf(-1f) }
     // Per-MA visibility, toggled from the legend chips. Defaults all on.
     val maVisible = remember { mutableStateListOf(true, true, true) }
+    // EMA 9/21/50 overlays, off by default (toggled from the legend).
+    val emaVisible = remember { mutableStateListOf(false, false, false) }
     var bbOn by remember { mutableStateOf(false) }
     var vwapOn by remember { mutableStateOf(false) }
     // First anchor of a 2-point drawing awaiting its second tap.
@@ -240,13 +252,14 @@ private fun CandlestickCanvas(
     val overlays = remember(candles) {
         val closes = candles.map { it.close.toDouble() }
         val ma = MA_SPECS.map { spec -> if (spec.sma) sma(closes, spec.period) else ema(closes, spec.period) }
+        val emaSeries = EMA_SPECS.map { spec -> ema(closes, spec.period) }
         val mid = sma(closes, BB_PERIOD)
         val sd = stdDev(closes, BB_PERIOD)
         val upper = mid.mapIndexed { i, m -> if (m != null && sd[i] != null) m + BB_MULT * sd[i]!! else null }
         val lower = mid.mapIndexed { i, m -> if (m != null && sd[i] != null) m - BB_MULT * sd[i]!! else null }
         val (macdLine, macdSignal, macdHist) = macd(closes)
         val volMa = sma(candles.map { it.volume.toDouble() }, VOL_MA_PERIOD)
-        Overlays(ma, mid, upper, lower, vwap(candles), rsi(closes, 14), macdLine, macdSignal, macdHist, volMa)
+        Overlays(ma, emaSeries, mid, upper, lower, vwap(candles), rsi(closes, 14), macdLine, macdSignal, macdHist, volMa)
     }
     val maSeries = overlays.ma
 
@@ -550,6 +563,21 @@ private fun CandlestickCanvas(
                 }
             }
 
+            // ---- EMA 9/21/50 overlays (over the price pane) ----
+            overlays.ema.forEachIndexed { specIdx, series ->
+                if (!emaVisible.getOrElse(specIdx) { false }) return@forEachIndexed
+                val color = EMA_SPECS[specIdx].color
+                var prev: Offset? = null
+                for (i in 0 until n) {
+                    val v = series.getOrNull(startIdx + i)
+                    if (v == null) { prev = null; continue }
+                    val cur = Offset(slot * i + slot / 2f, yOfPriceD(v))
+                    val p = prev
+                    if (p != null) drawLine(color, p, cur, strokeWidth = 1.5f)
+                    prev = cur
+                }
+            }
+
             // ---- oscillator sub-pane (RSI or MACD) ----
             if (hasOsc && oscHeight > 4f) {
                 val labelPaint = Paint().apply {
@@ -708,14 +736,20 @@ private fun CandlestickCanvas(
             }
         }
 
-        // ---- MA legend (top-start), each chip toggles its overlay ----
+        // ---- MA / EMA legend (top-start), each chip toggles its overlay ----
         Row(
-            modifier = Modifier.padding(start = 6.dp, top = 4.dp),
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(start = 6.dp, top = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             MA_SPECS.forEachIndexed { i, spec ->
                 val on = maVisible.getOrElse(i) { true }
                 LegendChip(spec.label, spec.color, on) { maVisible[i] = !on }
+            }
+            EMA_SPECS.forEachIndexed { i, spec ->
+                val on = emaVisible.getOrElse(i) { false }
+                LegendChip(spec.label, spec.color, on) { emaVisible[i] = !on }
             }
             LegendChip("BB", BbColor, bbOn) { bbOn = !bbOn }
             LegendChip("VWAP", VwapColor, vwapOn) { vwapOn = !vwapOn }
@@ -793,119 +827,21 @@ private fun DrawScope.drawCrosshairTooltip(
     }
 }
 
-/** Simple moving average aligned 1:1 with [closes]; null until [period] samples are available. */
-private fun sma(closes: List<Double>, period: Int): List<Double?> {
-    if (period <= 0) return closes.map { null }
-    val out = ArrayList<Double?>(closes.size)
-    var sum = 0.0
-    for (i in closes.indices) {
-        sum += closes[i]
-        if (i >= period) sum -= closes[i - period]
-        out.add(if (i >= period - 1) sum / period else null)
-    }
-    return out
-}
+/*
+ * The indicator math lives in [ChartIndicators] (a pure, unit-tested object). These thin private
+ * aliases keep the call sites in this file short and unchanged.
+ */
+private fun sma(closes: List<Double>, period: Int) = ChartIndicators.sma(closes, period)
+private fun ema(closes: List<Double>, period: Int) = ChartIndicators.ema(closes, period)
+private fun stdDev(closes: List<Double>, period: Int) = ChartIndicators.stdDev(closes, period)
+private fun rsi(closes: List<Double>, period: Int) = ChartIndicators.rsi(closes, period)
+private fun macd(closes: List<Double>) = ChartIndicators.macd(closes)
 
-/** Exponential moving average aligned 1:1 with [closes]; seeded at the first sample. */
-private fun ema(closes: List<Double>, period: Int): List<Double?> {
-    if (period <= 0 || closes.isEmpty()) return closes.map { null }
-    val k = 2.0 / (period + 1)
-    val out = ArrayList<Double?>(closes.size)
-    var prev = closes[0]
-    for (i in closes.indices) {
-        prev = if (i == 0) closes[0] else closes[i] * k + prev * (1 - k)
-        out.add(if (i >= period - 1) prev else null)
-    }
-    return out
-}
-
-/** Rolling population standard deviation over [period], aligned 1:1 with [closes]. */
-private fun stdDev(closes: List<Double>, period: Int): List<Double?> {
-    if (period <= 0) return closes.map { null }
-    val out = ArrayList<Double?>(closes.size)
-    for (i in closes.indices) {
-        if (i < period - 1) { out.add(null); continue }
-        val window = closes.subList(i - period + 1, i + 1)
-        val mean = window.average()
-        val variance = window.sumOf { (it - mean) * (it - mean) } / period
-        out.add(sqrt(variance))
-    }
-    return out
-}
-
-/** Session VWAP: cumulative Σ(typicalPrice·volume)/Σ(volume) from the start of the loaded series. */
-private fun vwap(candles: List<Candle>): List<Double?> {
-    var cumPv = 0.0
-    var cumV = 0.0
-    return candles.map { c ->
-        val typical = (c.high + c.low + c.close).toDouble() / 3.0
-        val v = c.volume.toDouble()
-        cumPv += typical * v
-        cumV += v
-        if (cumV > 0.0) cumPv / cumV else null
-    }
-}
-
-/** Wilder RSI over [period], aligned 1:1 with [closes]; null until enough samples. */
-private fun rsi(closes: List<Double>, period: Int): List<Double?> {
-    val out = arrayOfNulls<Double>(closes.size).toMutableList()
-    if (closes.size <= period) return out
-    var gain = 0.0
-    var loss = 0.0
-    for (i in 1..period) {
-        val ch = closes[i] - closes[i - 1]
-        if (ch >= 0) gain += ch else loss -= ch
-    }
-    var avgGain = gain / period
-    var avgLoss = loss / period
-    out[period] = if (avgLoss == 0.0) 100.0 else 100.0 - 100.0 / (1 + avgGain / avgLoss)
-    for (i in period + 1 until closes.size) {
-        val ch = closes[i] - closes[i - 1]
-        val g = if (ch >= 0) ch else 0.0
-        val l = if (ch < 0) -ch else 0.0
-        avgGain = (avgGain * (period - 1) + g) / period
-        avgLoss = (avgLoss * (period - 1) + l) / period
-        out[i] = if (avgLoss == 0.0) 100.0 else 100.0 - 100.0 / (1 + avgGain / avgLoss)
-    }
-    return out
-}
-
-/** MACD(12,26,9): returns (macd line, signal, histogram) each aligned 1:1 with [closes]. */
-private fun macd(closes: List<Double>): Triple<List<Double?>, List<Double?>, List<Double?>> {
-    val fast = emaSeeded(closes, 12)
-    val slow = emaSeeded(closes, 26)
-    val macdLine = closes.indices.map { i -> if (i >= 25) fast[i] - slow[i] else null }
-    val signal = emaNullable(macdLine, 9)
-    val hist = closes.indices.map { i ->
-        val m = macdLine[i]
-        val s = signal[i]
-        if (m != null && s != null) m - s else null
-    }
-    return Triple(macdLine, signal, hist)
-}
-
-/** Continuous EMA seeded at the first sample (no leading nulls). */
-private fun emaSeeded(closes: List<Double>, period: Int): DoubleArray {
-    val k = 2.0 / (period + 1)
-    val out = DoubleArray(closes.size)
-    for (i in closes.indices) out[i] = if (i == 0) closes[0] else closes[i] * k + out[i - 1] * (1 - k)
-    return out
-}
-
-/** EMA over a series that may have leading nulls; starts once [period] real samples are seen. */
-private fun emaNullable(src: List<Double?>, period: Int): List<Double?> {
-    val k = 2.0 / (period + 1)
-    val out = arrayOfNulls<Double>(src.size).toMutableList()
-    var prev: Double? = null
-    var count = 0
-    for (i in src.indices) {
-        val v = src[i] ?: continue
-        prev = if (prev == null) v else v * k + prev!! * (1 - k)
-        count++
-        if (count >= period) out[i] = prev
-    }
-    return out
-}
+/** Session VWAP over the candle series: builds the typical-price + volume inputs, then delegates. */
+private fun vwap(candles: List<Candle>): List<Double?> = ChartIndicators.vwap(
+    typical = candles.map { (it.high + it.low + it.close).toDouble() / 3.0 },
+    volume = candles.map { it.volume.toDouble() },
+)
 
 private fun formatAxisPrice(v: Double): String {
     val whole = v == v.toLong().toDouble()

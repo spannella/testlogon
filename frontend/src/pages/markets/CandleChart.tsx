@@ -6,6 +6,8 @@ interface CandleChartProps {
   bars: Candle[];
   scaler?: number;
   height?: number;
+  /** Second bar interval hint (for the crosshair time readout only). */
+  intervalSec?: number;
   /** Click anywhere on the chart to prefill the ticket at that price level. */
   onPriceClick?: (price: number) => void;
 }
@@ -22,7 +24,7 @@ const PAD_TOP = 8;
 const PAD_BOTTOM = 8;
 const PAD_LEFT = 8;
 const PAD_RIGHT = 56;
-const SUB_GAP = 8; // gap between price pane and oscillator sub-pane
+const SUB_GAP = 8; // gap between panes
 
 const MAS = [
   { period: 7, color: "#f59e0b" }, // amber
@@ -30,7 +32,14 @@ const MAS = [
   { period: 99, color: "#0ea5e9" }, // sky
 ];
 
-type Oscillator = "none" | "rsi" | "macd";
+const EMAS = [
+  { period: 9, color: "#22d3ee" }, // cyan
+  { period: 21, color: "#ec4899" }, // pink
+  { period: 50, color: "#84cc16" }, // lime
+];
+
+const MA_CHIP_COLOR = "#f59e0b"; // amber (MA legend/chip)
+const EMA_CHIP_COLOR = "#22d3ee"; // cyan (EMA legend/chip)
 
 /** Simple moving average over `vals`; the first (period-1) entries are null. */
 function sma(vals: number[], period: number): (number | null)[] {
@@ -79,7 +88,7 @@ function ema(vals: number[], period: number): (number | null)[] {
   return out;
 }
 
-/** Wilder's RSI(period), 0..100; entries before the first computable point are null. */
+/** Wilder RSI(period), 0..100; entries before the first computable point are null. */
 function rsi(closes: number[], period: number): (number | null)[] {
   const out: (number | null)[] = new Array(closes.length).fill(null);
   if (closes.length <= period) return out;
@@ -137,6 +146,7 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={cn(
         "rounded border px-1.5 py-0.5 text-[10px] leading-none transition-colors",
         active ? "border-transparent bg-foreground/10 font-medium" : "border-border text-muted-foreground hover:bg-foreground/5",
@@ -149,25 +159,46 @@ function Chip({
   );
 }
 
-/** Hand-rolled SVG candlestick chart (auto-scaled) with MA/BB/VWAP overlays, an
- *  RSI/MACD sub-pane, a horizontal-line drawing tool, and click-to-trade. */
-export default function CandleChart({ bars, scaler = 1, height = 320, onPriceClick }: CandleChartProps) {
+/** A stacked sub-pane definition produced by the layout memo. */
+interface SubPane {
+  kind: "volume" | "rsi" | "macd";
+  top: number;
+  height: number;
+  title: string;
+  lines: { points: string; color: string; width: number }[];
+  hist: { x: number; y: number; w: number; h: number; color: string; opacity: number }[];
+  guides: { y: number; label: string }[];
+  zeroY: number | null;
+}
+
+/** Hand-rolled SVG candlestick chart (auto-scaled) with MA/EMA/BB/VWAP overlays,
+ *  stacked Volume / RSI / MACD sub-panes, a crosshair readout, a horizontal-line
+ *  drawing tool, and click-to-trade. */
+export default function CandleChart({ bars, scaler = 1, height = 320, intervalSec, onPriceClick }: CandleChartProps) {
   const width = 720;
 
+  const [showMa, setShowMa] = useState(true);
+  const [showEma, setShowEma] = useState(false);
   const [showBB, setShowBB] = useState(false);
   const [showVwap, setShowVwap] = useState(false);
-  const [osc, setOsc] = useState<Oscillator>("none");
+  const [showVol, setShowVol] = useState(true);
+  const [showRsi, setShowRsi] = useState(false);
+  const [showMacd, setShowMacd] = useState(false);
   const [lineTool, setLineTool] = useState(false);
   const [lines, setLines] = useState<number[]>([]); // horizontal price lines (raw integer prices)
-
-  const oscActive = osc !== "none";
+  const [hover, setHover] = useState<number | null>(null); // hovered bar index
 
   const layout = useMemo(() => {
     if (!bars.length) return null;
 
-    // Split the vertical space between the price pane and (optional) oscillator pane.
-    const oscH = oscActive ? Math.round(height * 0.28) : 0;
-    const priceAreaH = height - oscH - (oscActive ? SUB_GAP : 0);
+    // Reserve vertical space for each active sub-pane (equal split of the extra area).
+    const activePanes: ("volume" | "rsi" | "macd")[] = [];
+    if (showVol) activePanes.push("volume");
+    if (showRsi) activePanes.push("rsi");
+    if (showMacd) activePanes.push("macd");
+    const paneUnit = Math.round(height * 0.24);
+    const totalSubH = activePanes.length ? activePanes.length * paneUnit + activePanes.length * SUB_GAP : 0;
+    const priceAreaH = Math.max(80, height - totalSubH);
 
     const highs = bars.map((b) => b.high);
     const lows = bars.map((b) => b.low);
@@ -204,9 +235,14 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
         .filter((p): p is string => p !== null)
         .join(" ");
 
-    const maLines = MAS.map((m) => ({ period: m.period, color: m.color, points: polyFrom(sma(closes, m.period)) })).filter(
-      (m) => m.points.length > 0,
-    );
+    const maSeries = MAS.map((m) => ({ ...m, values: sma(closes, m.period) }));
+    const emaSeries = EMAS.map((m) => ({ ...m, values: ema(closes, m.period) }));
+    const maLines = showMa
+      ? maSeries.map((m) => ({ period: m.period, color: m.color, points: polyFrom(m.values) })).filter((m) => m.points.length > 0)
+      : [];
+    const emaLines = showEma
+      ? emaSeries.map((m) => ({ period: m.period, color: m.color, points: polyFrom(m.values) })).filter((m) => m.points.length > 0)
+      : [];
 
     // Bollinger Bands: SMA(20) +/- 2 * stdDev(20).
     let bb: { upper: string; lower: string; areaPath: string } | null = null;
@@ -229,7 +265,8 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
     }
 
     // VWAP.
-    const vwapPoints = polyFrom(vwap(bars));
+    const vwapValues = vwap(bars);
+    const vwapPoints = polyFrom(vwapValues);
 
     const ticks = 4;
     const labels = Array.from({ length: ticks + 1 }, (_, i) => {
@@ -240,94 +277,108 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
     // Horizontal drawing lines (only those inside the visible price range render on-scale).
     const drawnLines = lines.map((p, i) => ({ key: i, y: yOf(p), price: p }));
 
-    // ---- Oscillator sub-pane -------------------------------------------------
-    const oscTop = priceAreaH + SUB_GAP;
-    const oscInnerH = oscH - PAD_TOP - PAD_BOTTOM;
-    let oscPane: {
-      kind: "rsi" | "macd";
-      lines: { points: string; color: string; width: number }[];
-      hist: { x: number; y: number; w: number; h: number; color: string }[];
-      guides: { y: number; label: string }[];
-      zeroY: number | null;
-    } | null = null;
+    // ---- Stacked sub-panes ---------------------------------------------------
+    const rsiValues = rsi(closes, 14);
 
-    if (oscActive && oscInnerH > 0) {
-      const oscY = (frac: number) => oscTop + PAD_TOP + (1 - frac) * oscInnerH; // frac 0..1 bottom..top
+    // MACD(12,26,9).
+    const e12 = ema(closes, 12);
+    const e26 = ema(closes, 26);
+    const macdLine: (number | null)[] = closes.map((_, i) =>
+      e12[i] != null && e26[i] != null ? (e12[i] as number) - (e26[i] as number) : null,
+    );
+    const firstDef = macdLine.findIndex((v) => v != null);
+    const signalLine: (number | null)[] = new Array(closes.length).fill(null);
+    if (firstDef >= 0) {
+      const defVals = macdLine.slice(firstDef).map((v) => v as number);
+      const sig = ema(defVals, 9);
+      for (let i = 0; i < sig.length; i++) signalLine[firstDef + i] = sig[i] ?? null;
+    }
 
-      if (osc === "rsi") {
-        const series = rsi(closes, 14);
-        const pts = series
-          .map((v, i) => (v == null ? null : `${xOf(i).toFixed(1)},${oscY(v / 100).toFixed(1)}`))
+    const subPanes: SubPane[] = [];
+    let cursor = priceAreaH;
+    for (const kind of activePanes) {
+      const top = cursor + SUB_GAP;
+      const paneH = paneUnit;
+      const innerH = paneH - PAD_TOP - PAD_BOTTOM;
+      const yAt = (frac: number) => top + PAD_TOP + (1 - frac) * innerH; // frac 0..1 bottom..top
+
+      if (kind === "volume") {
+        const vols = bars.map((b) => b.volume || 0);
+        const maxVol = Math.max(1, ...vols);
+        const hist = bars.map((b, i) => {
+          const up = b.close >= b.open;
+          const frac = (b.volume || 0) / maxVol;
+          const yTop = yAt(frac);
+          const yBase = yAt(0);
+          return { x: xOf(i) - bodyW / 2, y: yTop, w: bodyW, h: Math.max(1, yBase - yTop), color: up ? UP : DOWN, opacity: 0.5 };
+        });
+        subPanes.push({ kind, top, height: paneH, title: "Vol", lines: [], hist, guides: [], zeroY: null });
+      } else if (kind === "rsi") {
+        const pts = rsiValues
+          .map((v, i) => (v == null ? null : `${xOf(i).toFixed(1)},${yAt(v / 100).toFixed(1)}`))
           .filter((p): p is string => p !== null)
           .join(" ");
-        oscPane = {
-          kind: "rsi",
+        subPanes.push({
+          kind,
+          top,
+          height: paneH,
+          title: "RSI 14",
           lines: pts ? [{ points: pts, color: RSI_COLOR, width: 1.25 }] : [],
           hist: [],
           guides: [
-            { y: oscY(0.7), label: "70" },
-            { y: oscY(0.3), label: "30" },
+            { y: yAt(0.7), label: "70" },
+            { y: yAt(0.3), label: "30" },
           ],
           zeroY: null,
-        };
+        });
       } else {
-        // MACD(12,26,9).
-        const e12 = ema(closes, 12);
-        const e26 = ema(closes, 26);
-        const macd: (number | null)[] = closes.map((_, i) =>
-          e12[i] != null && e26[i] != null ? (e12[i] as number) - (e26[i] as number) : null,
-        );
-        // Signal = EMA(9) over the defined portion of the MACD line.
-        const firstDef = macd.findIndex((v) => v != null);
-        const signal: (number | null)[] = new Array(closes.length).fill(null);
-        if (firstDef >= 0) {
-          const defVals = macd.slice(firstDef).map((v) => v as number);
-          const sig = ema(defVals, 9);
-          for (let i = 0; i < sig.length; i++) signal[firstDef + i] = sig[i] ?? null;
-        }
+        // MACD pane scaling.
         let lo = Infinity;
         let hi = -Infinity;
         for (let i = 0; i < closes.length; i++) {
-          for (const v of [macd[i], signal[i]]) {
+          for (const v of [macdLine[i], signalLine[i]]) {
             if (v == null) continue;
             if (v < lo) lo = v;
             if (v > hi) hi = v;
           }
-          if (macd[i] != null && signal[i] != null) {
-            const h = (macd[i] as number) - (signal[i] as number);
+          if (macdLine[i] != null && signalLine[i] != null) {
+            const h = (macdLine[i] as number) - (signalLine[i] as number);
             if (h < lo) lo = h;
             if (h > hi) hi = h;
           }
         }
         if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-          oscPane = { kind: "macd", lines: [], hist: [], guides: [], zeroY: null };
+          subPanes.push({ kind, top, height: paneH, title: "MACD", lines: [], hist: [], guides: [], zeroY: null });
         } else {
           if (lo === hi) {
             lo -= 1;
             hi += 1;
           }
           const span = hi - lo;
-          const oscVal = (v: number) => oscY((v - lo) / span);
-          const macdPts = macd
+          const oscVal = (v: number) => yAt((v - lo) / span);
+          const macdPts = macdLine
             .map((v, i) => (v == null ? null : `${xOf(i).toFixed(1)},${oscVal(v).toFixed(1)}`))
             .filter((p): p is string => p !== null)
             .join(" ");
-          const sigPts = signal
+          const sigPts = signalLine
             .map((v, i) => (v == null ? null : `${xOf(i).toFixed(1)},${oscVal(v).toFixed(1)}`))
             .filter((p): p is string => p !== null)
             .join(" ");
           const zeroY = lo <= 0 && hi >= 0 ? oscVal(0) : null;
-          const hist: { x: number; y: number; w: number; h: number; color: string }[] = [];
+          const hist: SubPane["hist"] = [];
           for (let i = 0; i < closes.length; i++) {
-            if (macd[i] == null || signal[i] == null) continue;
-            const hVal = (macd[i] as number) - (signal[i] as number);
+            if (macdLine[i] == null || signalLine[i] == null) continue;
+            const hVal = (macdLine[i] as number) - (signalLine[i] as number);
             const base = zeroY ?? oscVal(0 >= lo && 0 <= hi ? 0 : lo);
             const yTop = Math.min(base, oscVal(hVal));
             const h = Math.max(1, Math.abs(oscVal(hVal) - base));
-            hist.push({ x: xOf(i) - bodyW / 2, y: yTop, w: bodyW, h, color: hVal >= 0 ? UP : DOWN });
+            hist.push({ x: xOf(i) - bodyW / 2, y: yTop, w: bodyW, h, color: hVal >= 0 ? UP : DOWN, opacity: 0.5 });
           }
-          oscPane = {
-            kind: "macd",
+          subPanes.push({
+            kind,
+            top,
+            height: paneH,
+            title: "MACD",
             lines: [
               ...(macdPts ? [{ points: macdPts, color: MACD_COLOR, width: 1.25 }] : []),
               ...(sigPts ? [{ points: sigPts, color: SIGNAL_COLOR, width: 1.25 }] : []),
@@ -335,13 +386,22 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
             hist,
             guides: [],
             zeroY,
-          };
+          });
         }
       }
+      cursor = top + paneH;
     }
 
-    return { candles, labels, maLines, bb, vwapPoints, drawnLines, oscPane, max, range, priceAreaH, plotH };
-  }, [bars, height, scaler, showBB, showVwap, osc, oscActive, lines]);
+    // Per-bar indicator readouts for the crosshair.
+    const readAt = (i: number) => ({
+      ma: maSeries.filter((m) => m.values[i] != null).map((m) => ({ label: `MA${m.period}`, color: m.color, value: m.values[i] as number })),
+      ema: emaSeries.filter((m) => m.values[i] != null).map((m) => ({ label: `EMA${m.period}`, color: m.color, value: m.values[i] as number })),
+      vwap: vwapValues[i] ?? null,
+      rsi: rsiValues[i] ?? null,
+    });
+
+    return { candles, labels, maLines, emaLines, bb, vwapPoints, drawnLines, subPanes, max, min, range, priceAreaH, plotH, plotW, slot, xOf, readAt };
+  }, [bars, height, scaler, showMa, showEma, showBB, showVwap, showVol, showRsi, showMacd, lines]);
 
   if (!layout) {
     return (
@@ -349,6 +409,17 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
         No candles available.
       </div>
     );
+  }
+
+  const fmt = (v: number) => (v / (scaler || 1)).toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+  function barIndexFromEvent(e: React.MouseEvent<SVGSVGElement>): number | null {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect.width) return null;
+    const xView = ((e.clientX - rect.left) / rect.width) * width;
+    const i = Math.floor((xView - PAD_LEFT) / layout!.slot);
+    if (i < 0 || i >= bars.length) return null;
+    return i;
   }
 
   function handleClick(e: React.MouseEvent<SVGSVGElement>) {
@@ -368,15 +439,29 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
 
   const interactive = !!onPriceClick || lineTool;
 
+  const hoverBar = hover != null ? bars[hover] : null;
+  const hoverRead = hover != null ? layout.readAt(hover) : null;
+  const hoverX = hover != null ? layout.xOf(hover) : null;
+  const hoverTime =
+    hoverBar && Number.isFinite(hoverBar.ts_start_ns)
+      ? new Date(Math.floor(hoverBar.ts_start_ns / 1_000_000)).toLocaleString([], {
+          month: "short",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          ...(intervalSec && intervalSec < 60 ? { second: "2-digit" } : {}),
+        })
+      : null;
+
   return (
     <div>
       <div className="mb-1 flex flex-wrap items-center gap-1.5">
-        {layout.maLines.map((m) => (
-          <span key={m.period} className="text-[10px]" style={{ color: m.color }}>
-            MA{m.period}
-          </span>
-        ))}
-        <span className="mx-0.5 text-[10px] text-muted-foreground">|</span>
+        <Chip active={showMa} onClick={() => setShowMa((v) => !v)} color={MA_CHIP_COLOR}>
+          MA
+        </Chip>
+        <Chip active={showEma} onClick={() => setShowEma((v) => !v)} color={EMA_CHIP_COLOR}>
+          EMA
+        </Chip>
         <Chip active={showBB} onClick={() => setShowBB((v) => !v)} color={BB_COLOR}>
           BB
         </Chip>
@@ -384,13 +469,13 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
           VWAP
         </Chip>
         <span className="mx-0.5 text-[10px] text-muted-foreground">|</span>
-        <Chip active={osc === "none"} onClick={() => setOsc("none")}>
-          None
+        <Chip active={showVol} onClick={() => setShowVol((v) => !v)}>
+          Vol
         </Chip>
-        <Chip active={osc === "rsi"} onClick={() => setOsc("rsi")} color={RSI_COLOR}>
+        <Chip active={showRsi} onClick={() => setShowRsi((v) => !v)} color={RSI_COLOR}>
           RSI
         </Chip>
-        <Chip active={osc === "macd"} onClick={() => setOsc("macd")} color={MACD_COLOR}>
+        <Chip active={showMacd} onClick={() => setShowMacd((v) => !v)} color={MACD_COLOR}>
           MACD
         </Chip>
         <span className="mx-0.5 text-[10px] text-muted-foreground">|</span>
@@ -402,7 +487,51 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
             Clear
           </Chip>
         )}
+        {/* Active MA/EMA legend */}
+        {layout.maLines.map((m) => (
+          <span key={`lm${m.period}`} className="text-[10px]" style={{ color: m.color }}>
+            MA{m.period}
+          </span>
+        ))}
+        {layout.emaLines.map((m) => (
+          <span key={`le${m.period}`} className="text-[10px]" style={{ color: m.color }}>
+            EMA{m.period}
+          </span>
+        ))}
       </div>
+
+      {/* Crosshair OHLC readout */}
+      <div className="mb-1 flex h-4 flex-wrap items-center gap-2 text-[10px] tabular-nums text-muted-foreground">
+        {hoverBar && (
+          <>
+            {hoverTime && <span className="text-foreground/80">{hoverTime}</span>}
+            <span>O {fmt(hoverBar.open)}</span>
+            <span>H {fmt(hoverBar.high)}</span>
+            <span>L {fmt(hoverBar.low)}</span>
+            <span className={hoverBar.close >= hoverBar.open ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}>
+              C {fmt(hoverBar.close)}
+            </span>
+            <span>V {(hoverBar.volume || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+            {hoverRead?.ma.map((r) => (
+              <span key={r.label} style={{ color: r.color }}>
+                {r.label} {fmt(r.value)}
+              </span>
+            ))}
+            {hoverRead?.ema.map((r) => (
+              <span key={r.label} style={{ color: r.color }}>
+                {r.label} {fmt(r.value)}
+              </span>
+            ))}
+            {showVwap && hoverRead?.vwap != null && (
+              <span style={{ color: VWAP_COLOR }}>VWAP {fmt(hoverRead.vwap)}</span>
+            )}
+            {showRsi && hoverRead?.rsi != null && (
+              <span style={{ color: RSI_COLOR }}>RSI {hoverRead.rsi.toFixed(1)}</span>
+            )}
+          </>
+        )}
+      </div>
+
       <svg
         viewBox={`0 0 ${width} ${height}`}
         className={interactive ? "w-full cursor-crosshair" : "w-full"}
@@ -411,6 +540,8 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
         role="img"
         aria-label="Candlestick chart"
         onClick={handleClick}
+        onMouseMove={(e) => setHover(barIndexFromEvent(e))}
+        onMouseLeave={() => setHover(null)}
       >
         {layout.labels.map((l, i) => (
           <g key={`g${i}`}>
@@ -453,12 +584,25 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
 
         {layout.maLines.map((m) => (
           <polyline
-            key={m.period}
+            key={`ma${m.period}`}
             points={m.points}
             fill="none"
             stroke={m.color}
             strokeWidth={1.25}
             strokeOpacity={0.9}
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+
+        {layout.emaLines.map((m) => (
+          <polyline
+            key={`ema${m.period}`}
+            points={m.points}
+            fill="none"
+            stroke={m.color}
+            strokeWidth={1.25}
+            strokeOpacity={0.9}
+            strokeDasharray="5 2"
             vectorEffect="non-scaling-stroke"
           />
         ))}
@@ -490,24 +634,27 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
               vectorEffect="non-scaling-stroke"
             />
             <text x={PAD_LEFT + 2} y={dl.y - 2} fontSize={9} fill={LINE_COLOR} fillOpacity={0.9}>
-              {(dl.price / (scaler || 1)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              {fmt(dl.price)}
             </text>
           </g>
         ))}
 
-        {/* Oscillator sub-pane */}
-        {layout.oscPane && (
-          <g>
+        {/* Stacked sub-panes */}
+        {layout.subPanes.map((pane, pi) => (
+          <g key={`pane${pi}`}>
             <line
               x1={PAD_LEFT}
               x2={width - PAD_RIGHT}
-              y1={layout.priceAreaH + SUB_GAP / 2}
-              y2={layout.priceAreaH + SUB_GAP / 2}
+              y1={pane.top - SUB_GAP / 2}
+              y2={pane.top - SUB_GAP / 2}
               stroke="currentColor"
               strokeOpacity={0.15}
             />
-            {layout.oscPane.guides.map((g, i) => (
-              <g key={`og${i}`}>
+            <text x={PAD_LEFT + 2} y={pane.top + 10} fontSize={9} fill="currentColor" fillOpacity={0.5}>
+              {pane.title}
+            </text>
+            {pane.guides.map((g, i) => (
+              <g key={`pg${pi}-${i}`}>
                 <line
                   x1={PAD_LEFT}
                   x2={width - PAD_RIGHT}
@@ -522,22 +669,15 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
                 </text>
               </g>
             ))}
-            {layout.oscPane.zeroY != null && (
-              <line
-                x1={PAD_LEFT}
-                x2={width - PAD_RIGHT}
-                y1={layout.oscPane.zeroY}
-                y2={layout.oscPane.zeroY}
-                stroke="currentColor"
-                strokeOpacity={0.15}
-              />
+            {pane.zeroY != null && (
+              <line x1={PAD_LEFT} x2={width - PAD_RIGHT} y1={pane.zeroY} y2={pane.zeroY} stroke="currentColor" strokeOpacity={0.15} />
             )}
-            {layout.oscPane.hist.map((h, i) => (
-              <rect key={`oh${i}`} x={h.x} y={h.y} width={h.w} height={h.h} fill={h.color} fillOpacity={0.5} />
+            {pane.hist.map((h, i) => (
+              <rect key={`ph${pi}-${i}`} x={h.x} y={h.y} width={h.w} height={h.h} fill={h.color} fillOpacity={h.opacity} />
             ))}
-            {layout.oscPane.lines.map((ln, i) => (
+            {pane.lines.map((ln, i) => (
               <polyline
-                key={`ol${i}`}
+                key={`pl${pi}-${i}`}
                 points={ln.points}
                 fill="none"
                 stroke={ln.color}
@@ -547,6 +687,21 @@ export default function CandleChart({ bars, scaler = 1, height = 320, onPriceCli
               />
             ))}
           </g>
+        ))}
+
+        {/* Crosshair vertical guide */}
+        {hoverX != null && (
+          <line
+            x1={hoverX}
+            x2={hoverX}
+            y1={PAD_TOP}
+            y2={height - PAD_BOTTOM}
+            stroke="currentColor"
+            strokeOpacity={0.35}
+            strokeDasharray="3 3"
+            vectorEffect="non-scaling-stroke"
+            pointerEvents="none"
+          />
         )}
       </svg>
     </div>

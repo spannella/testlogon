@@ -17,6 +17,24 @@ import { formatPrice, formatQty, formatTimeNs } from "./format";
 /** Trades still poll (SSE carries no trades), relaxed since the book is live. */
 const TRADES_REFETCH_MS = 4000;
 
+/** Chart timeframe options: label -> candle interval in seconds. */
+const TIMEFRAMES = [
+  { label: "1m", sec: 60 },
+  { label: "5m", sec: 300 },
+  { label: "15m", sec: 900 },
+  { label: "1h", sec: 3600 },
+  { label: "1d", sec: 86400 },
+] as const;
+
+const TF_STORAGE_KEY = "md.chart.timeframe";
+
+function loadTimeframe(): number {
+  if (typeof window === "undefined") return 60;
+  const raw = window.localStorage.getItem(TF_STORAGE_KEY);
+  const n = raw ? Number(raw) : NaN;
+  return TIMEFRAMES.some((t) => t.sec === n) ? n : 60;
+}
+
 function DepthRow({
   level,
   side,
@@ -115,6 +133,15 @@ export default function SymbolDetailPage() {
   const id = Number(symbolId);
 
   const [bookStyle, setBookStyle] = useState<"ladder" | "columns">("ladder");
+  const [timeframe, setTimeframe] = useState<number>(() => loadTimeframe());
+  const selectTimeframe = (sec: number) => {
+    setTimeframe(sec);
+    try {
+      window.localStorage.setItem(TF_STORAGE_KEY, String(sec));
+    } catch {
+      /* ignore storage failures (private mode etc.) */
+    }
+  };
   const [prefill, setPrefill] = useState<{ price?: number; side?: OrderSide; nonce: number }>({ nonce: 0 });
   const prefillTicket = (price: number, side?: OrderSide) =>
     setPrefill((p) => ({ price, side, nonce: p.nonce + 1 }));
@@ -123,10 +150,10 @@ export default function SymbolDetailPage() {
   // SSE drives the book; keep an initial React Query fetch for the first paint
   // but stop the 2s poll now that the stream pushes updates.
   const book = useOrderBook(id, 20, true, false);
-  const candles = useCandles(id, 60);
+  const candles = useCandles(id, timeframe);
   // SSE has no trades, so this keeps polling (relaxed to 4s).
   const trades = useTrades(id, true, TRADES_REFETCH_MS);
-  const stream = useMdStream(id);
+  const stream = useMdStream(id, timeframe);
 
   const meta = useMemo(
     () => symbolsQuery.data?.symbols.find((s) => s.symbol_id === id),
@@ -134,6 +161,7 @@ export default function SymbolDetailPage() {
   );
   const scaler = meta?.price_scaler || 1;
   const label = meta?.symbol ?? ("Symbol " + id);
+  const tfLabel = TIMEFRAMES.find((t) => t.sec === timeframe)?.label ?? "1m";
 
   // Prefer the live streamed book; fall back to the initial React Query fetch
   // until the first SSE frame arrives.
@@ -202,15 +230,38 @@ export default function SymbolDetailPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Price (1m candles)</CardTitle>
-          <CardDescription>Green = up, red = down. Live via streaming feed.</CardDescription>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">Price ({tfLabel} candles)</CardTitle>
+              <CardDescription>Green = up, red = down. Live via streaming feed.</CardDescription>
+            </div>
+            <div className="flex items-center gap-1">
+              {TIMEFRAMES.map((t) => (
+                <Button
+                  key={t.sec}
+                  type="button"
+                  size="sm"
+                  variant={timeframe === t.sec ? "default" : "outline"}
+                  className="h-7 px-2 text-xs"
+                  onClick={() => selectTimeframe(t.sec)}
+                >
+                  {t.label}
+                </Button>
+              ))}
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
-          {candles.isLoading ? (
+          {candles.isLoading && bars.length === 0 ? (
             <Skeleton className="h-[320px] w-full" />
           ) : (
             <div className="text-muted-foreground">
-              <CandleChart bars={bars} scaler={scaler} onPriceClick={(p) => prefillTicket(p)} />
+              <CandleChart
+                bars={bars}
+                scaler={scaler}
+                intervalSec={timeframe}
+                onPriceClick={(p) => prefillTicket(p)}
+              />
             </div>
           )}
         </CardContent>

@@ -21,6 +21,7 @@ class SettingsHubViewModelTest {
                 SettingsSectionKey.NOTIFICATIONS,
                 SettingsSectionKey.PUSH_EVENTS,
                 SettingsSectionKey.ALERTS, // AND-088 — email/SMS alert-target management
+                SettingsSectionKey.TRADING, // trading prefs: theme + default market + alert-kind toggles
                 SettingsSectionKey.MEDIA,
                 SettingsSectionKey.APPEARANCE,
                 SettingsSectionKey.LANGUAGE, // AND-114 — in-app locale picker
