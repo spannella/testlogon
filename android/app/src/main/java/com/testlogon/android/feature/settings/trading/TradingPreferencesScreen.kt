@@ -152,7 +152,7 @@ fun TradingPreferencesScreen(
 
             // ---- Alert kinds ----
             SectionHeader(stringResource(R.string.trading_prefs_alerts_section))
-            TradingAlertKind.entries.forEach { kind ->
+            TradingAlertKind.entries.filter { it != TradingAlertKind.PRICE }.forEach { kind ->
                 val checked = state.alertPrefs.isEnabled(kind)
                 ListItem(
                     modifier = Modifier
@@ -308,4 +308,6 @@ private fun alertKindLabel(kind: TradingAlertKind): Int = when (kind) {
     TradingAlertKind.FUNDING -> R.string.trading_prefs_alert_funding
     TradingAlertKind.MARGIN_DISTRESS -> R.string.trading_prefs_alert_margin
     TradingAlertKind.PM_RESOLVED -> R.string.trading_prefs_alert_pm
+    // PRICE alerts are user-authored (managed on the Price Alerts screen), not a derived-feed opt-out.
+    TradingAlertKind.PRICE -> R.string.trading_prefs_alert_pm
 }

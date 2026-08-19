@@ -244,7 +244,7 @@ export default function SymbolDetailPage() {
         </div>
       </div>
 
-      <TradeTicket symbolId={id} scaler={scaler} lastPrice={lastPrice} prefill={prefill} />
+      <TradeTicket symbolId={id} scaler={scaler} lastPrice={lastPrice} bestBid={bestBid} bestAsk={bestAsk} prefill={prefill} />
 
       <Card>
         <CardHeader>

@@ -39,6 +39,7 @@ const ALERT_KINDS: { kind: TradingAlertKind; label: string; hint: string }[] = [
   { kind: "funding", label: "Funding", hint: "Perpetual funding settlements" },
   { kind: "margin", label: "Margin distress", hint: "Your account nears liquidation" },
   { kind: "pm_resolved", label: "PM resolutions", hint: "A prediction market resolves" },
+  { kind: "price", label: "Price alerts", hint: "A market crosses your target price" },
 ];
 
 type NotifyStatus = "unsupported" | NotificationPermission;

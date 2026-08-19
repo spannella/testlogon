@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/command";
 import ShortcutHelpDialog from "@/components/shared/ShortcutHelpDialog";
 import TradingAlertsBell from "@/components/layout/TradingAlertsBell";
+import PriceAlertEvaluator from "@/components/layout/PriceAlertEvaluator";
 import { useGlobalShortcuts, useChordShortcuts, useChordIndicator, type Shortcut, type ChordMapping } from "@/hooks/useGlobalShortcuts";
 import {
   Popover,
@@ -365,6 +366,7 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
 
         {/* Trading alerts bell (client-derived from /me/* feeds) */}
         <TradingAlertsBell enabled={!!userId} />
+        <PriceAlertEvaluator enabled={!!userId} />
 
         {/* Alert bell with popover */}
         <Popover open={alertsOpen} onOpenChange={setAlertsOpen}>

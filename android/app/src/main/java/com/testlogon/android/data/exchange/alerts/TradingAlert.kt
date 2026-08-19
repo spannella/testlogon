@@ -11,7 +11,7 @@ import com.testlogon.android.data.exchange.PmResolution
  * no backend notifications route — each kind is inferred from a new event appearing in one of the
  * polled feeds (fills / liquidations / funding / margin-distress / PM-resolution).
  */
-enum class TradingAlertKind { FILL, LIQUIDATION, FUNDING, MARGIN_DISTRESS, PM_RESOLVED }
+enum class TradingAlertKind { FILL, LIQUIDATION, FUNDING, MARGIN_DISTRESS, PM_RESOLVED, PRICE }
 
 /**
  * One derived, render-ready trading alert. [id] is a stable de-dupe key (kind + event identity) so the

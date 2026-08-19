@@ -1,6 +1,8 @@
 import * as React from "react";
+import { Link } from "react-router-dom";
 import {
   Bell,
+  BellRing,
   TrendingUp,
   AlertTriangle,
   Coins,
@@ -38,6 +40,8 @@ function KindIcon({ kind }: { kind: TradingAlertKind }) {
       return <ShieldAlert className={cn(cls, "text-destructive")} />;
     case "pm_resolved":
       return <Gavel className={cn(cls, "text-sky-500")} />;
+    case "price":
+      return <BellRing className={cn(cls, "text-primary")} />;
     default:
       return <Bell className={cls} />;
   }
@@ -171,6 +175,14 @@ export default function TradingAlertsBell({ enabled = true }: { enabled?: boolea
             </div>
           </ScrollArea>
         )}
+        <div className="border-t px-4 py-2">
+          <Button asChild variant="ghost" size="sm" className="h-7 w-full justify-start gap-2 px-2 text-xs">
+            <Link to="/markets/price-alerts" onClick={() => setOpen(false)}>
+              <BellRing className="h-3.5 w-3.5" />
+              Manage price alerts
+            </Link>
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );

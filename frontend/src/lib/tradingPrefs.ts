@@ -25,6 +25,7 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   funding: true,
   margin: true,
   pm_resolved: true,
+  price: true,
 };
 
 export function loadAlertPrefs(): AlertPrefs {

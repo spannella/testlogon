@@ -16,6 +16,10 @@ abstract class TradingAlertsModule {
     @Singleton
     abstract fun bindTradingAlertsStore(impl: DataStoreTradingAlertsStore): TradingAlertsStore
 
+    @Binds
+    @Singleton
+    abstract fun bindPriceAlertsStore(impl: DataStorePriceAlertsStore): PriceAlertsStore
+
     companion object {
         @Provides
         @Singleton

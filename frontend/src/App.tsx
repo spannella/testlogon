@@ -42,6 +42,7 @@ const TradingBlotterPage = lazy(() => import("@/pages/blotter/TradingBlotterPage
 const TradingWorkspacePage = lazy(() => import("@/pages/blotter/TradingWorkspacePage"));
 const CustodyPage = lazy(() => import("@/pages/custody/CustodyPage"));
 const PortfolioPage = lazy(() => import("@/pages/portfolio/PortfolioPage"));
+const PnLPage = lazy(() => import("@/pages/pnl/PnLPage"));
 const CatalogPage = lazy(() => import("@/pages/shop/CatalogPage"));
 const ProductDetail = lazy(() => import("@/pages/shop/ProductDetail"));
 const CartPage = lazy(() => import("@/pages/shop/CartPage"));
@@ -53,8 +54,10 @@ const ShopShippingAdminPage = lazy(() => import("@/pages/shop/admin/ShippingAdmi
 const FeedPage = lazy(() => import("@/pages/feed/FeedPage"));
 const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
 const DelegateFeedPage = lazy(() => import("@/pages/feed/DelegateFeedPage"));
+const HomePage = lazy(() => import("@/pages/home/HomePage"));
 const MarketsPage = lazy(() => import("@/pages/markets/MarketsPage"));
 const SymbolDetailPage = lazy(() => import("@/pages/markets/SymbolDetailPage"));
+const PriceAlertsPage = lazy(() => import("@/pages/alerts/PriceAlertsPage"));
 const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
 const SyndicateProfilePage = lazy(() => import("@/pages/syndicates/SyndicateProfilePage"));
 const SyndicateDetailPage = lazy(() => import("@/pages/syndicates/SyndicateDetailPage"));
@@ -722,6 +725,7 @@ export default function App() {
           <Route path="blotter/single" element={<TradingBlotterPage />} />
           <Route path="custody" element={<CustodyPage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="pnl" element={<PnLPage />} />
           <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="agents/memory/:workerId" element={<AgentMemoryPage />} />
           <Route path="agents/feedback" element={<AgentFeedbackPage />} />
@@ -734,8 +738,10 @@ export default function App() {
           <Route path="cart" element={<CartPage />} />
           <Route path="cart/checkout" element={<Checkout />} />
           <Route path="feed" element={<FeedPage />} />
+          <Route path="home" element={<HomePage />} />
           <Route path="markets" element={<MarketsPage />} />
           <Route path="markets/:symbolId" element={<SymbolDetailPage />} />
+          <Route path="markets/price-alerts" element={<PriceAlertsPage />} />
           <Route path="discover" element={<DiscoverPage />} />
           <Route path="discover/tags/:tag" element={<TagPage />} />
           <Route path="search" element={<SearchPage />} />
