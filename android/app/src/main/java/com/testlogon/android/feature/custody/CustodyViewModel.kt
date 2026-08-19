@@ -17,6 +17,10 @@ import com.testlogon.android.data.custody.CustodyDepositAddress
 import com.testlogon.android.data.custody.CustodyDeposits
 import com.testlogon.android.data.custody.CustodyRepository
 import com.testlogon.android.data.custody.CustodyWithdrawResult
+import com.testlogon.android.data.exchange.MarginAccount
+import com.testlogon.android.data.exchange.SpotBalance
+import com.testlogon.android.data.exchange.TradingRepository
+import com.testlogon.android.core.model.ApiResult.Success
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -105,15 +109,35 @@ data class CustodyUiState(
     val withdraw: WithdrawUiState = WithdrawUiState(),
     val subAccounts: SubAccountsUiState = SubAccountsUiState(),
     val transfer: TransferUiState = TransferUiState(),
+    /** Best-effort exchange-side balances for the bridge settle path (source-balance guidance only). */
+    val spot: Async<SpotBalance> = Async(),
+    val margin: Async<MarginAccount> = Async(),
 ) {
     val rows: List<CustodyBalance> get() = balances.data?.rows.orEmpty()
     val fundedRows: List<CustodyBalance> get() = balances.data?.funded().orEmpty()
     fun rowFor(key: String?): CustodyBalance? = rows.firstOrNull { it.key == key }
+
+    /** Custody-side available for a bridge/transfer token symbol (EXACT). Null when not in the balance map. */
+    fun custodyAvailableFor(symbol: String?): Double? {
+        val s = symbol?.trim()?.uppercase()?.takeIf { it.isNotBlank() } ?: return null
+        return rows.firstOrNull { it.symbol.equals(s, ignoreCase = true) }?.amount
+    }
+
+    /** Best-effort spot available for a token symbol (guidance only; null when unknown/unavailable). */
+    fun spotAvailableFor(symbol: String?): Double? {
+        val s = symbol?.trim()?.uppercase()?.takeIf { it.isNotBlank() } ?: return null
+        val a = spot.data?.assets?.firstOrNull { it.symbol.equals(s, ignoreCase = true) } ?: return null
+        return a.available.toDouble()
+    }
+
+    /** Best-effort margin available (single collateral pool; symbol-agnostic guidance). */
+    val marginAvailable: Double? get() = margin.data?.availableBalance?.toDouble()
 }
 
 @HiltViewModel
 class CustodyViewModel @Inject constructor(
     private val repo: CustodyRepository,
+    private val trading: TradingRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CustodyUiState())
@@ -123,6 +147,26 @@ class CustodyViewModel @Inject constructor(
         loadBalance()
         loadDeposits()
         loadSubAccounts()
+        loadExchangeBalances()
+    }
+
+    /**
+     * Best-effort read of the exchange-side spot/margin balances used for source-balance guidance on the
+     * settle path. Any failure leaves the slice empty (the UI degrades to "unavailable" guidance).
+     */
+    fun loadExchangeBalances() {
+        viewModelScope.launch {
+            when (val r = trading.spotBalance()) {
+                is Success -> _uiState.update { it.copy(spot = Async(data = r.data)) }
+                else -> _uiState.update { it.copy(spot = Async(error = "unavailable")) }
+            }
+        }
+        viewModelScope.launch {
+            when (val r = trading.marginAccount()) {
+                is Success -> _uiState.update { it.copy(margin = Async(data = r.data)) }
+                else -> _uiState.update { it.copy(margin = Async(error = "unavailable")) }
+            }
+        }
     }
 
     // ---- tab + selection ----
@@ -290,12 +334,60 @@ class CustodyViewModel @Inject constructor(
     fun onBridgeAmountChanged(v: String) =
         _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAmountText = sanitizeDecimal(v), bridgeError = null)) }
 
-    fun submitBridgeTransfer() {
+    /**
+     * The source available for the current bridge action + token, and whether it is an EXACT figure.
+     * fund-spot / fund-margin draw from custody (EXACT). settle-spot / settle-margin draw from the
+     * exchange-side balance (best-effort guidance). Returns null when the source balance is unknown.
+     */
+    data class SourceBalance(val amount: Double?, val exact: Boolean, val label: String)
+
+    fun bridgeSource(): SourceBalance {
+        val st = _uiState.value
+        val t = st.transfer
+        return when (t.bridgeAction) {
+            BridgeAction.FUND_SPOT, BridgeAction.FUND_MARGIN ->
+                SourceBalance(st.custodyAvailableFor(t.bridgeToken), exact = true, label = "Custody")
+            BridgeAction.SETTLE_SPOT ->
+                SourceBalance(st.spotAvailableFor(t.bridgeToken), exact = false, label = "Spot")
+            BridgeAction.SETTLE_MARGIN ->
+                SourceBalance(st.marginAvailable, exact = false, label = "Margin")
+        }
+    }
+
+    /** Whether a Max action is meaningful for the current action (only when the source is EXACT + known). */
+    fun bridgeCanMax(): Boolean {
+        val src = bridgeSource()
+        return src.exact && src.amount != null
+    }
+
+    fun onBridgeMax() {
+        val src = bridgeSource()
+        val amt = src.amount ?: return
+        if (!src.exact) return
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAmountText = trimDecimal(amt), bridgeError = null)) }
+    }
+
+    /** Returns a validation error string, or null if the bridge form is OK to review. */
+    fun validateBridge(): String? {
         val t = _uiState.value.transfer
-        if (!t.canBridge) {
-            _uiState.update { it.copy(transfer = it.transfer.copy(bridgeError = "Choose a token and an amount greater than 0.")) }
+        if (t.bridgeToken.trim().isEmpty()) return "Choose a token."
+        val amt = t.bridgeAmountDouble
+        if (amt == null || amt <= 0.0) return "Enter an amount greater than 0."
+        val src = bridgeSource()
+        // Only block over-spend when the source figure is EXACT (fund path). Settle guidance never blocks.
+        if (src.exact && src.amount != null && amt > src.amount) {
+            return "Amount exceeds your ${t.bridgeToken} custody balance."
+        }
+        return null
+    }
+
+    fun submitBridgeTransfer() {
+        val err = validateBridge()
+        if (err != null) {
+            _uiState.update { it.copy(transfer = it.transfer.copy(bridgeError = err)) }
             return
         }
+        val t = _uiState.value.transfer
         val action = t.bridgeAction
         val token = t.bridgeToken
         val amount = t.bridgeAmountText.trim()
@@ -305,6 +397,7 @@ class CustodyViewModel @Inject constructor(
                 is ApiResult.Success -> {
                     _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = false, bridgeResult = r.data)) }
                     loadBalance()
+                    loadExchangeBalances()
                 }
                 is ApiResult.Failure -> _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = false, bridgeError = r.error.messageFor())) }
                 is ApiResult.NetworkError -> _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = false, bridgeError = "Network error. Check your connection and try again.")) }
@@ -322,16 +415,55 @@ class CustodyViewModel @Inject constructor(
     fun onSubAssetChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(subAsset = v.trim().uppercase().take(12), subError = null)) }
     fun onSubAmountChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(subAmountText = sanitizeDecimal(v), subError = null)) }
 
-    fun submitSubAccountTransfer() {
+    /**
+     * Source available for the between-sub-accounts move. Only the BASE vault (blank from-label) exposes
+     * an EXACT custody balance for the entered asset; a named sub-account has no per-asset balance
+     * endpoint here, so its source is unknown (Max hidden, over-spend not blocked). Requires amount > 0.
+     */
+    fun subSource(): SourceBalance {
+        val st = _uiState.value
+        val t = st.transfer
+        val fromBase = t.fromLabel.trim().isEmpty()
+        return if (fromBase) {
+            SourceBalance(st.custodyAvailableFor(t.subAsset), exact = true, label = "Base vault")
+        } else {
+            SourceBalance(amount = null, exact = false, label = t.fromLabel.trim())
+        }
+    }
+
+    fun subCanMax(): Boolean {
+        val src = subSource()
+        return src.exact && src.amount != null
+    }
+
+    fun onSubMax() {
+        val src = subSource()
+        val amt = src.amount ?: return
+        if (!src.exact) return
+        _uiState.update { it.copy(transfer = it.transfer.copy(subAmountText = trimDecimal(amt), subError = null)) }
+    }
+
+    /** Returns a validation error string, or null if the sub-account form is OK to review. */
+    fun validateSubTransfer(): String? {
         val t = _uiState.value.transfer
-        if (t.fromLabel.trim() == t.toLabel.trim()) {
-            _uiState.update { it.copy(transfer = it.transfer.copy(subError = "Choose two different vaults.")) }
+        if (t.fromLabel.trim() == t.toLabel.trim()) return "Choose two different vaults."
+        if (t.subAsset.trim().isEmpty()) return "Enter an asset."
+        val amt = t.subAmountDouble
+        if (amt == null || amt <= 0.0) return "Enter an amount greater than 0."
+        val src = subSource()
+        if (src.exact && src.amount != null && amt > src.amount) {
+            return "Amount exceeds your ${t.subAsset} base-vault balance."
+        }
+        return null
+    }
+
+    fun submitSubAccountTransfer() {
+        val err = validateSubTransfer()
+        if (err != null) {
+            _uiState.update { it.copy(transfer = it.transfer.copy(subError = err)) }
             return
         }
-        if (!t.canSubTransfer) {
-            _uiState.update { it.copy(transfer = it.transfer.copy(subError = "Enter an asset and an amount greater than 0.")) }
-            return
-        }
+        val t = _uiState.value.transfer
         val from = t.fromLabel.trim()
         val to = t.toLabel.trim()
         val asset = t.subAsset.trim()
@@ -342,6 +474,7 @@ class CustodyViewModel @Inject constructor(
                 is ApiResult.Success -> {
                     _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subResult = r.data)) }
                     loadSubAccounts()
+                    loadBalance()
                 }
                 is ApiResult.Failure -> _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subError = r.error.messageFor())) }
                 is ApiResult.NetworkError -> _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subError = "Network error. Check your connection and try again.")) }
@@ -359,6 +492,10 @@ class CustodyViewModel @Inject constructor(
         }
     }
 }
+
+/** Trim a Double to a compact decimal string (drops a trailing .0 for whole numbers). */
+private fun trimDecimal(v: Double): String =
+    if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
 
 /** Keep digits + a single decimal point, capped to a sane length. */
 private fun sanitizeDecimal(v: String): String {

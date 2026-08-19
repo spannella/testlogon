@@ -18,10 +18,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -119,6 +125,7 @@ fun TradeTicket(
 @Composable
 private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: TradingViewModel) {
     val sideColor = if (state.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down
+    var showDepositConfirm by remember { mutableStateOf(false) }
 
     OrderTypeRow(selected = state.orderType, onSelect = viewModel::setOrderType)
     Spacer(Modifier.height(10.dp))
@@ -272,8 +279,35 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: Tra
         canDeposit = state.canDeposit,
         depositing = state.depositing,
         onValue = viewModel::setDeposit,
-        onDeposit = viewModel::deposit,
+        onDeposit = { if (state.canDeposit) showDepositConfirm = true },
     )
+
+    if (showDepositConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDepositConfirm = false },
+            title = { Text("Confirm deposit") },
+            text = {
+                Column {
+                    ConfirmLine("Action", "Deposit collateral")
+                    ConfirmLine("Amount", state.depositText.ifBlank { "0" })
+                    state.account?.let { ConfirmLine("Current balance", fmt(it.balance.toDouble())) }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Funds move from your wallet into the margin account and become available for trading.",
+                        color = MarketColors.TextSecondary,
+                        fontSize = 11.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDepositConfirm = false
+                    viewModel.deposit()
+                }, modifier = Modifier.testTag("trade_deposit_confirm")) { Text("Confirm") }
+            },
+            dismissButton = { TextButton(onClick = { showDepositConfirm = false }) { Text("Cancel") } },
+        )
+    }
     if (TradingFeatures.SPOT_ENABLED) {
         Spacer(Modifier.height(10.dp))
         SpotPanel(state, viewModel)
@@ -896,6 +930,14 @@ private fun FundRow(
                 fontSize = 13.sp,
             )
         }
+    }
+}
+
+@Composable
+private fun ConfirmLine(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MarketColors.TextSecondary, fontSize = 12.sp)
+        Text(value, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
     }
 }
 

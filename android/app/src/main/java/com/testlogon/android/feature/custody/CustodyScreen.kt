@@ -719,6 +719,8 @@ private fun SubAccountCard(sub: CustodySubAccount) {
 @Composable
 private fun TransferTab(state: CustodyUiState, viewModel: CustodyViewModel) {
     val t = state.transfer
+    var showBridgeConfirm by remember { mutableStateOf(false) }
+    var showSubConfirm by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -753,18 +755,28 @@ private fun TransferTab(state: CustodyUiState, viewModel: CustodyViewModel) {
                         )
                     }
                 }
+                val bridgeSrc = viewModel.bridgeSource()
+                SourceBalanceLine(src = bridgeSrc, symbol = t.bridgeToken)
                 OutlinedTextField(
                     value = t.bridgeAmountText,
                     onValueChange = viewModel::onBridgeAmountChanged,
                     label = { Text("Amount") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("bridge_amount"),
+                    trailingIcon = {
+                        if (viewModel.bridgeCanMax()) {
+                            TextButton(onClick = { viewModel.onBridgeMax() }, modifier = Modifier.testTag("bridge_max")) { Text("Max") }
+                        }
+                    },
                 )
                 if (t.bridgeError != null) {
                     Text(t.bridgeError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 Button(
-                    onClick = { viewModel.submitBridgeTransfer() },
+                    onClick = {
+                        val err = viewModel.validateBridge()
+                        if (err == null) showBridgeConfirm = true else viewModel.onBridgeAmountChanged(t.bridgeAmountText)
+                    },
                     enabled = t.canBridge,
                     modifier = Modifier.fillMaxWidth().testTag("bridge_submit"),
                 ) {
@@ -772,7 +784,7 @@ private fun TransferTab(state: CustodyUiState, viewModel: CustodyViewModel) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(t.bridgeAction.label)
+                    Text("Review · ${t.bridgeAction.label}")
                 }
                 t.bridgeResult?.let { r -> BridgeResultCard(r) { viewModel.clearBridgeResult() } }
             }
@@ -793,18 +805,28 @@ private fun TransferTab(state: CustodyUiState, viewModel: CustodyViewModel) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("sub_asset"),
                 )
+                val subSrc = viewModel.subSource()
+                SourceBalanceLine(src = subSrc, symbol = t.subAsset)
                 OutlinedTextField(
                     value = t.subAmountText,
                     onValueChange = viewModel::onSubAmountChanged,
                     label = { Text("Amount") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("sub_amount"),
+                    trailingIcon = {
+                        if (viewModel.subCanMax()) {
+                            TextButton(onClick = { viewModel.onSubMax() }, modifier = Modifier.testTag("sub_max")) { Text("Max") }
+                        }
+                    },
                 )
                 if (t.subError != null) {
                     Text(t.subError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 Button(
-                    onClick = { viewModel.submitSubAccountTransfer() },
+                    onClick = {
+                        val err = viewModel.validateSubTransfer()
+                        if (err == null) showSubConfirm = true else viewModel.onSubAmountChanged(t.subAmountText)
+                    },
                     enabled = t.canSubTransfer,
                     modifier = Modifier.fillMaxWidth().testTag("sub_submit"),
                 ) {
@@ -812,13 +834,100 @@ private fun TransferTab(state: CustodyUiState, viewModel: CustodyViewModel) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text("Move")
+                    Text("Review move")
                 }
                 t.subResult?.let { r -> SubTransferResultCard(r) { viewModel.clearSubTransferResult() } }
             }
         }
     }
+
+    if (showBridgeConfirm) {
+        val src = viewModel.bridgeSource()
+        AlertDialog(
+            onDismissRequest = { showBridgeConfirm = false },
+            title = { Text("Confirm ${t.bridgeAction.label.lowercase()}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ConfirmRow("Action", t.bridgeAction.label)
+                    ConfirmRow("Token", t.bridgeToken)
+                    ConfirmRow("Amount", "${t.bridgeAmountText} ${t.bridgeToken}")
+                    val dir = if (t.bridgeAction.isSettle) "${t.bridgeAction.venue.label} -> Custody" else "Custody -> ${t.bridgeAction.venue.label}"
+                    ConfirmRow("Move", dir)
+                    src.amount?.let {
+                        ConfirmRow(if (src.exact) "Available" else "Approx", "${amountShort(it)} ${t.bridgeToken}")
+                    }
+                    if (!src.exact) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Settle amounts are checked by the exchange; the figure above is a best-effort guide.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showBridgeConfirm = false
+                    viewModel.submitBridgeTransfer()
+                }, modifier = Modifier.testTag("bridge_confirm")) { Text("Confirm") }
+            },
+            dismissButton = { TextButton(onClick = { showBridgeConfirm = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showSubConfirm) {
+        val src = viewModel.subSource()
+        AlertDialog(
+            onDismissRequest = { showSubConfirm = false },
+            title = { Text("Confirm transfer") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ConfirmRow("Asset", t.subAsset)
+                    ConfirmRow("Amount", "${t.subAmountText} ${t.subAsset}")
+                    ConfirmRow("From", t.fromLabel.ifBlank { "Base vault" })
+                    ConfirmRow("To", t.toLabel.ifBlank { "Base vault" })
+                    src.amount?.let { ConfirmRow("Available", "${amountShort(it)} ${t.subAsset}") }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Moves value between your own vaults.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showSubConfirm = false
+                    viewModel.submitSubAccountTransfer()
+                }, modifier = Modifier.testTag("sub_confirm")) { Text("Confirm") }
+            },
+            dismissButton = { TextButton(onClick = { showSubConfirm = false }) { Text("Cancel") } },
+        )
+    }
 }
+
+/** Source-available line shown beside the amount entry for a bridge/transfer form. */
+@Composable
+private fun SourceBalanceLine(src: CustodyViewModel.SourceBalance, symbol: String) {
+    val text = when {
+        symbol.isBlank() -> "Enter an asset to see the available ${src.label.lowercase()} balance."
+        src.amount != null -> {
+            val prefix = if (src.exact) "Available" else "Approx"
+            "$prefix (${src.label}): ${amountShort(src.amount)} $symbol"
+        }
+        else -> "${src.label} balance for $symbol is not available here."
+    }
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Compact decimal display (drops a trailing .0 for whole amounts). */
+private fun amountShort(v: Double): String =
+    if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
 
 @Composable
 private fun VaultChips(labels: List<String>, selected: String, onSelect: (String) -> Unit, tagPrefix: String) {
