@@ -65,6 +65,14 @@ interface TradingRepository {
     suspend fun liquidations(): ApiResult<Liquidations>
     /** Recent perpetual funding payments (404 -> empty feed). */
     suspend fun fundingPayments(): ApiResult<FundingPayments>
+
+    // ---- ADMIN engine-config (exchange-admin-config); 404 (undeployed) -> un-applied ack. ----
+    suspend fun matchingAlgo(symbolId: Int, algo: Int, specialistMpid: String?, specialistPct: Int?): ApiResult<EngineConfigAck>
+    suspend fun spreadConfig(spreadSymbolId: Int, leg1: Int, leg2: Int, leg1Ratio: Int?, leg2Ratio: Int?): ApiResult<EngineConfigAck>
+    suspend fun tradingParams(symbolId: Int, maxQty: Int?, maxNotional: Long?, priceBandPct: Long?, circuitBreakerPct: Long?, minBlockSize: Int?): ApiResult<EngineConfigAck>
+    suspend fun riskConfig(maxNotional: Long, windowSeconds: Int, mpid: String?): ApiResult<EngineConfigAck>
+    suspend fun spotIndex(symbolId: Int, spotIndexPrice: Long): ApiResult<EngineConfigAck>
+    suspend fun spotConfig(symbolId: Int, baseAsset: Int, quoteAsset: Int): ApiResult<EngineConfigAck>
 }
 
 @Singleton
@@ -184,6 +192,28 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun fundingPayments(): ApiResult<FundingPayments> =
         withContext(io) { emptyOn404(FundingPayments(emptyList(), 0)) { api.getFundingPayments().toDomain() } }
+
+    // ---- ADMIN engine-config. Not deployed to prod -> a 404 folds to an un-applied ack. ----
+
+    private val notDeployedAck = EngineConfigAck(applied = false, symbolId = null, result = null, message = "Engine config endpoint not deployed")
+
+    override suspend fun matchingAlgo(symbolId: Int, algo: Int, specialistMpid: String?, specialistPct: Int?): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.matchingAlgo(MatchingAlgoDto(symbolId, algo, specialistMpid, specialistPct)).toDomain() } }
+
+    override suspend fun spreadConfig(spreadSymbolId: Int, leg1: Int, leg2: Int, leg1Ratio: Int?, leg2Ratio: Int?): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.spreadConfig(SpreadConfigDto(spreadSymbolId, leg1, leg2, leg1Ratio, leg2Ratio)).toDomain() } }
+
+    override suspend fun tradingParams(symbolId: Int, maxQty: Int?, maxNotional: Long?, priceBandPct: Long?, circuitBreakerPct: Long?, minBlockSize: Int?): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.tradingParams(TradingParamsDto(symbolId, maxQty, maxNotional, priceBandPct, circuitBreakerPct, minBlockSize)).toDomain() } }
+
+    override suspend fun riskConfig(maxNotional: Long, windowSeconds: Int, mpid: String?): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.riskConfig(RiskConfigDto(maxNotional, windowSeconds, mpid)).toDomain() } }
+
+    override suspend fun spotIndex(symbolId: Int, spotIndexPrice: Long): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.spotIndex(SpotIndexDto(symbolId, spotIndexPrice)).toDomain() } }
+
+    override suspend fun spotConfig(symbolId: Int, baseAsset: Int, quoteAsset: Int): ApiResult<EngineConfigAck> =
+        withContext(io) { emptyOn404(notDeployedAck) { api.spotConfig(SpotConfigDto(symbolId, baseAsset, quoteAsset)).toDomain() } }
 
     /**
      * Like [apiCall] but a 404 (endpoint not deployed yet) folds to a Success carrying [emptyValue],

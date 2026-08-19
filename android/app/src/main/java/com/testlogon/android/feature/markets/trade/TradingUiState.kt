@@ -10,6 +10,8 @@ import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.data.exchange.SpotBalance
 import com.testlogon.android.data.exchange.MarginConfigAck
+import com.testlogon.android.data.exchange.EngineConfigAck
+import com.testlogon.android.core.model.ApiResult
 
 /** Order entry type. LIMIT is the plain resting limit; the rest map to advanced engine endpoints. */
 enum class OrderType(val label: String) {
@@ -104,6 +106,13 @@ data class TradingUiState(
     val pm: com.testlogon.android.data.exchange.PmState? = null,   // set when this symbol is a binary prediction market
     val isAdmin: Boolean = false,   // resolved from CurrentUserRepository; gates the margin-config panel
     val marginConfig: MarginConfigForm = MarginConfigForm(),
+    // Admin engine-config forms (exchange-admin-config); shown only when isAdmin.
+    val matchingAlgo: MatchingAlgoForm = MatchingAlgoForm(),
+    val spreadConfig: SpreadConfigForm = SpreadConfigForm(),
+    val tradingParams: TradingParamsForm = TradingParamsForm(),
+    val riskConfig: RiskConfigForm = RiskConfigForm(),
+    val spotIndex: SpotIndexForm = SpotIndexForm(),
+    val spotConfig: SpotConfigForm = SpotConfigForm(),
     val feeSchedule: FeeSchedule? = null,
     val fillsFees: FillsFees? = null,
     val liquidations: Liquidations? = null,
@@ -197,4 +206,140 @@ data class MarginConfigForm(
         liquidationFeeLong != null && hourlyBorrowLong != null &&
         makerFeeLong != null && takerFeeLong != null &&
         maxPositionLong != null
+}
+
+/**
+ * Admin engine-config forms (exchange-admin-config). Each mirrors [MarginConfigForm]: plain-integer
+ * text fields with parse accessors + a [canSubmit] gate + submitting/result/error. Optional engine
+ * params are left blank (null on the wire); required ones must parse.
+ */
+data class MatchingAlgoForm(
+    val symbolText: String = "",
+    val algo: Int = 0,                     // 0 = price-time, 1 = pro-rata, 2 = specialist
+    val specialistMpidText: String = "",
+    val specialistPctText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val specialistPctInt: Int? get() = specialistPctText.toIntOrNull()
+    val specialistMpid: String? get() = specialistMpidText.trim().ifEmpty { null }
+    val canSubmit: Boolean get() = !submitting && symbolInt != null
+}
+
+data class SpreadConfigForm(
+    val spreadSymbolText: String = "",
+    val leg1Text: String = "",
+    val leg2Text: String = "",
+    val leg1RatioText: String = "1",
+    val leg2RatioText: String = "-1",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val spreadSymbolInt: Int? get() = spreadSymbolText.toIntOrNull()
+    val leg1Int: Int? get() = leg1Text.toIntOrNull()
+    val leg2Int: Int? get() = leg2Text.toIntOrNull()
+    val leg1RatioInt: Int? get() = leg1RatioText.toIntOrNull()
+    val leg2RatioInt: Int? get() = leg2RatioText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting && spreadSymbolInt != null && leg1Int != null && leg2Int != null
+}
+
+data class TradingParamsForm(
+    val symbolText: String = "",
+    val maxQtyText: String = "",
+    val maxNotionalText: String = "",
+    val priceBandPctText: String = "",
+    val circuitBreakerPctText: String = "",
+    val minBlockSizeText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val maxQtyInt: Int? get() = maxQtyText.toIntOrNull()
+    val maxNotionalLong: Long? get() = maxNotionalText.toLongOrNull()
+    val priceBandPctLong: Long? get() = priceBandPctText.toLongOrNull()
+    val circuitBreakerPctLong: Long? get() = circuitBreakerPctText.toLongOrNull()
+    val minBlockSizeInt: Int? get() = minBlockSizeText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting && symbolInt != null
+}
+
+data class RiskConfigForm(
+    val maxNotionalText: String = "",
+    val windowSecondsText: String = "",
+    val mpidText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val maxNotionalLong: Long? get() = maxNotionalText.toLongOrNull()
+    val windowSecondsInt: Int? get() = windowSecondsText.toIntOrNull()
+    val mpid: String? get() = mpidText.trim().ifEmpty { null }
+    val canSubmit: Boolean get() = !submitting && maxNotionalLong != null && windowSecondsInt != null && windowSecondsInt!! > 0
+}
+
+data class SpotIndexForm(
+    val symbolText: String = "",
+    val spotIndexPriceText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val spotIndexPriceLong: Long? get() = spotIndexPriceText.toLongOrNull()
+    val canSubmit: Boolean get() = !submitting && symbolInt != null && spotIndexPriceLong != null
+}
+
+data class SpotConfigForm(
+    val symbolText: String = "",
+    val baseAssetText: String = "",
+    val quoteAssetText: String = "",
+    val submitting: Boolean = false,
+    val result: EngineConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val baseAssetInt: Int? get() = baseAssetText.toIntOrNull()
+    val quoteAssetInt: Int? get() = quoteAssetText.toIntOrNull()
+    val canSubmit: Boolean get() = !submitting && symbolInt != null && baseAssetInt != null && quoteAssetInt != null
+}
+
+private const val NET_ERR = "Network error. Check your connection and try again."
+
+fun MatchingAlgoForm.finish(r: ApiResult<EngineConfigAck>): MatchingAlgoForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun SpreadConfigForm.finish(r: ApiResult<EngineConfigAck>): SpreadConfigForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun TradingParamsForm.finish(r: ApiResult<EngineConfigAck>): TradingParamsForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun RiskConfigForm.finish(r: ApiResult<EngineConfigAck>): RiskConfigForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun SpotIndexForm.finish(r: ApiResult<EngineConfigAck>): SpotIndexForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+fun SpotConfigForm.finish(r: ApiResult<EngineConfigAck>): SpotConfigForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
 }

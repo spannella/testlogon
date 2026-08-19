@@ -415,3 +415,97 @@ export const getLiquidations = () => api.get<LiquidationsResult>("/me/liquidatio
 /** The caller's periodic funding payments (newest first). 404s until edge deploys. */
 export const getFundingPayments = () =>
   api.get<FundingPaymentsResult>("/me/funding/payments");
+
+
+// ── Admin engine-config surfaces (`/me/*`) ───────────────────────────
+// Six admin-only POST routes that tune the matching engine per-symbol. Each
+// returns an engine ack `{ status, ... }` where status is "ack" | "rejected"
+// (or carries a `result`/computed field). NOT deployed to every backend — the
+// route MAY 404; callers degrade gracefully (surface the failure inline, no crash).
+
+/** Generic admin engine-config ack. `status` "ack" | "rejected"; extra fields per-route. */
+export interface EngineConfigAck {
+  status?: "ack" | "rejected" | string;
+  type?: string;
+  symbolid?: number;
+  /** 0 = applied; non-zero = rejected (mirrors MarginConfigAck). */
+  result?: number;
+  /** Recomputed funding rate returned by /me/spot_index. */
+  funding_rate_bps?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** Per-symbol matching algorithm. algo 0 = price-time (default); 1+ = pro-rata / specialist. */
+export interface MatchingAlgoRequest {
+  symbolid: number;
+  algo: number;
+  specialist_mpid?: string;
+  specialist_pct?: number;
+}
+
+/** Two-leg spread definition. leg1_ratio defaults 1, leg2_ratio defaults -1. */
+export interface SpreadConfigRequest {
+  spread_symbolid: number;
+  leg1: number;
+  leg2: number;
+  leg1_ratio?: number;
+  leg2_ratio?: number;
+}
+
+/** Per-symbol trading limits / bands / circuit breaker. */
+export interface TradingParamsRequest {
+  symbolid: number;
+  max_qty?: number;
+  max_notional?: number;
+  price_band_pct?: number;
+  circuit_breaker_pct?: number;
+  min_block_size?: number;
+}
+
+/** Per-MPID notional kill switch over a rolling window. */
+export interface RiskConfigRequest {
+  max_notional: number;
+  window_seconds: number;
+  mpid?: string;
+}
+
+/** Sets the perp funding index; engine recomputes funding_rate_bps (returned in ack). */
+export interface SpotIndexRequest {
+  symbolid: number;
+  spot_index_price: number;
+}
+
+/** Marks a symbol spot-enforced with a base/quote asset pair. */
+export interface SpotConfigRequest {
+  symbolid: number;
+  base_asset: number;
+  quote_asset: number;
+}
+
+/** Admin-only: set the per-symbol matching algorithm. */
+export const setMatchingAlgo = (body: MatchingAlgoRequest) =>
+  api.post<EngineConfigAck>("/me/matching_algo", body);
+
+/** Admin-only: define a two-leg spread symbol. */
+export const setSpreadConfig = (body: SpreadConfigRequest) =>
+  api.post<EngineConfigAck>("/me/spread_config", body);
+
+/** Admin-only: set per-symbol trading limits / price bands / circuit breaker. */
+export const setTradingParams = (body: TradingParamsRequest) =>
+  api.post<EngineConfigAck>("/me/trading_params", body);
+
+/** Admin-only: set a per-MPID notional kill switch over a rolling window. */
+export const setRiskConfig = (body: RiskConfigRequest) =>
+  api.post<EngineConfigAck>("/me/risk_config", body);
+
+/** Admin-only: set the perp funding index; ack echoes the recomputed funding_rate_bps. */
+export const setSpotIndex = (body: SpotIndexRequest) =>
+  api.post<EngineConfigAck>("/me/spot_index", body);
+
+/** Admin-only: mark a symbol spot-enforced with a base/quote asset pair. */
+export const setSpotConfig = (body: SpotConfigRequest) =>
+  api.post<EngineConfigAck>("/me/spot_config", body);

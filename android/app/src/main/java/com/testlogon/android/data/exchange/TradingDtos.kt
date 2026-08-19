@@ -415,3 +415,75 @@ data class FundingPaymentsDto(
     @com.testlogon.android.core.network.json.LenientInt @Json(name = "count") val count: Int? = null,
     @Json(name = "funding") val funding: List<FundingPaymentDto>? = null,
 )
+
+// ==== Admin engine-config (exchange-admin-config) — POST me/{matching_algo,spread_config,...} ====
+// All six are admin-only and return the shared engine ack [EngineConfigAckDto] ({status, ...}).
+// Not deployed to prod yet -> the repository degrades on 404 (see marginConfig-style handling).
+
+/** POST me/matching_algo: set the per-symbol matching algorithm (0 = price-time; 1+ = pro-rata/specialist). */
+@JsonClass(generateAdapter = true)
+data class MatchingAlgoDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "algo") val algo: Int,
+    @Json(name = "specialist_mpid") val specialistMpid: String? = null,
+    @Json(name = "specialist_pct") val specialistPct: Int? = null,
+)
+
+/** POST me/spread_config: define a two-leg spread instrument (leg1/leg2 symbol ids + signed ratios). */
+@JsonClass(generateAdapter = true)
+data class SpreadConfigDto(
+    @Json(name = "spread_symbolid") val spreadSymbolId: Int,
+    @Json(name = "leg1") val leg1: Int,
+    @Json(name = "leg2") val leg2: Int,
+    @Json(name = "leg1_ratio") val leg1Ratio: Int? = null,
+    @Json(name = "leg2_ratio") val leg2Ratio: Int? = null,
+)
+
+/** POST me/trading_params: per-symbol risk-limit / trading-parameter overrides (all optional but symbolid). */
+@JsonClass(generateAdapter = true)
+data class TradingParamsDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "max_qty") val maxQty: Int? = null,
+    @Json(name = "max_notional") val maxNotional: Long? = null,
+    @Json(name = "price_band_pct") val priceBandPct: Long? = null,
+    @Json(name = "circuit_breaker_pct") val circuitBreakerPct: Long? = null,
+    @Json(name = "min_block_size") val minBlockSize: Int? = null,
+)
+
+/** POST me/risk_config: an aggregate notional cap over a rolling window (optionally scoped to an mpid). */
+@JsonClass(generateAdapter = true)
+data class RiskConfigDto(
+    @Json(name = "max_notional") val maxNotional: Long,
+    @Json(name = "window_seconds") val windowSeconds: Int,
+    @Json(name = "mpid") val mpid: String? = null,
+)
+
+/** POST me/spot_index: publish a spot index (mark) price for a symbol. */
+@JsonClass(generateAdapter = true)
+data class SpotIndexDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "spot_index_price") val spotIndexPrice: Long,
+)
+
+/** POST me/spot_config: bind a symbol to its base/quote asset ids (defines a spot pair). */
+@JsonClass(generateAdapter = true)
+data class SpotConfigDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "base_asset") val baseAsset: Int,
+    @Json(name = "quote_asset") val quoteAsset: Int,
+)
+
+/**
+ * Shared engine-config ack for the six admin routes. status = "ack" | "rejected"; result == 0 (when
+ * present) means applied. detail/error/note carry any engine message. Tolerant: all fields optional.
+ */
+@JsonClass(generateAdapter = true)
+data class EngineConfigAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "symbolid") val symbolId: Int? = null,
+    val result: Int? = null,
+    val detail: String? = null,
+    val error: String? = null,
+    val note: String? = null,
+)

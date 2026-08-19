@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.data.exchange.OrderSide
+import com.testlogon.android.data.exchange.EngineConfigAck
 import com.testlogon.android.feature.markets.ui.MarketColors
 import java.util.Locale
 
@@ -118,6 +119,8 @@ fun TradeTicket(
         if (state.isAdmin) {
             Spacer(Modifier.height(16.dp))
             MarginConfigPanel(state.marginConfig, viewModel)
+            Spacer(Modifier.height(16.dp))
+            EngineConfigSection(state, viewModel)
         }
     }
 }
@@ -1187,4 +1190,292 @@ private fun MarginConfigPanel(form: MarginConfigForm, viewModel: TradingViewMode
 private fun fmt(v: Double): String {
     val whole = v == v.toLong().toDouble()
     return if (whole) String.format(Locale.US, "%,d", v.toLong()) else String.format(Locale.US, "%,.2f", v)
+}
+
+// ======================= Admin engine-config (exchange-admin-config) =======================
+
+/**
+ * Admin-only "Engine config" section: six compact forms mirroring [MarginConfigPanel], one per engine
+ * config route. Each is a bordered card with labeled integer inputs, defaults, a validated Apply button,
+ * and inline ack/error feedback. Shown only when [TradingUiState.isAdmin]. Endpoints 404 until deployed
+ * -> the repository degrades to an un-applied ack surfaced here.
+ */
+@Composable
+private fun EngineConfigSection(state: TradingUiState, viewModel: TradingViewModel) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("engine_config_section")) {
+        Text("Engine config (admin)", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Matching-engine parameters. Not deployed to every venue; an undeployed route reports \"not deployed\".",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        MatchingAlgoPanel(state.matchingAlgo, viewModel)
+        Spacer(Modifier.height(12.dp))
+        SpreadConfigPanel(state.spreadConfig, viewModel)
+        Spacer(Modifier.height(12.dp))
+        TradingParamsPanel(state.tradingParams, viewModel)
+        Spacer(Modifier.height(12.dp))
+        RiskConfigPanel(state.riskConfig, viewModel)
+        Spacer(Modifier.height(12.dp))
+        SpotIndexPanel(state.spotIndex, viewModel)
+        Spacer(Modifier.height(12.dp))
+        SpotConfigPanel(state.spotConfig, viewModel)
+    }
+}
+
+/** Bordered card wrapper shared by every engine-config form (matches MarginConfigPanel styling). */
+@Composable
+private fun EngineCard(title: String, subtitle: String, content: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+    ) {
+        Text(title, color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(subtitle, color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(10.dp))
+        content()
+    }
+}
+
+/** Apply button + inline error/ack feedback, shared by every engine-config form. */
+@Composable
+private fun EngineApply(
+    label: String,
+    canSubmit: Boolean,
+    submitting: Boolean,
+    error: String?,
+    result: EngineConfigAck?,
+    testTag: String,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = if (submitting) "Applying…" else label,
+        color = if (canSubmit) Color.Black else MarketColors.TextFaint,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (canSubmit) MarketColors.Accent else MarketColors.SurfaceAlt)
+            .then(if (canSubmit) Modifier.clickable { onSubmit() } else Modifier)
+            .testTag(testTag)
+            .padding(vertical = 12.dp),
+        textAlign = TextAlign.Center,
+    )
+    error?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MarketColors.Down, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    }
+    result?.let { r ->
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = if (r.applied) "Applied (result ${r.result ?: 0})" else (r.message ?: "Rejected (result ${r.result ?: "?"})"),
+            color = if (r.applied) MarketColors.Up else MarketColors.Down,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Dismiss",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+            modifier = Modifier.clickable { onDismiss() }.padding(vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun MatchingAlgoPanel(form: MatchingAlgoForm, viewModel: TradingViewModel) {
+    EngineCard("Matching algorithm", "Order-allocation model for a symbol.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setAlgoSymbol)
+        Spacer(Modifier.height(8.dp))
+        Text("Algorithm", color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AlgoChip("Price-time", form.algo == 0) { viewModel.setAlgo(0) }
+            AlgoChip("Pro-rata", form.algo == 1) { viewModel.setAlgo(1) }
+            AlgoChip("Specialist", form.algo == 2) { viewModel.setAlgo(2) }
+        }
+        if (form.algo >= 2) {
+            Spacer(Modifier.height(8.dp))
+            TextInputField("Specialist MPID", form.specialistMpidText, viewModel::setAlgoSpecialistMpid)
+            Spacer(Modifier.height(8.dp))
+            NumberField("Specialist %", form.specialistPctText, viewModel::setAlgoSpecialistPct)
+        }
+        EngineApply(
+            label = "Apply matching algo",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_matching_algo",
+            onSubmit = viewModel::submitMatchingAlgo,
+            onDismiss = viewModel::clearAlgoResult,
+        )
+    }
+}
+
+@Composable
+private fun AlgoChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text = label,
+        color = if (selected) Color.Black else MarketColors.TextSecondary,
+        fontSize = 12.sp,
+        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (selected) MarketColors.Accent else MarketColors.SurfaceAlt)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .testTag("algo_$label")
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
+}
+
+@Composable
+private fun SpreadConfigPanel(form: SpreadConfigForm, viewModel: TradingViewModel) {
+    EngineCard("Spread instrument", "Two-leg spread (signed ratios; e.g. 1 / -1).") {
+        NumberField("Spread symbol id", form.spreadSymbolText, viewModel::setSpreadSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Leg 1 symbol id", form.leg1Text, viewModel::setSpreadLeg1)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Leg 2 symbol id", form.leg2Text, viewModel::setSpreadLeg2)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Leg 1 ratio", form.leg1RatioText, viewModel::setSpreadLeg1Ratio)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Leg 2 ratio", form.leg2RatioText, viewModel::setSpreadLeg2Ratio)
+        EngineApply(
+            label = "Apply spread config",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_spread_config",
+            onSubmit = viewModel::submitSpreadConfig,
+            onDismiss = viewModel::clearSpreadResult,
+        )
+    }
+}
+
+@Composable
+private fun TradingParamsPanel(form: TradingParamsForm, viewModel: TradingViewModel) {
+    EngineCard("Trading params", "Per-symbol risk limits (leave blank to skip a param).") {
+        NumberField("Symbol id", form.symbolText, viewModel::setTpSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Max qty", form.maxQtyText, viewModel::setTpMaxQty)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Max notional", form.maxNotionalText, viewModel::setTpMaxNotional)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Price band %", form.priceBandPctText, viewModel::setTpPriceBand)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Circuit breaker %", form.circuitBreakerPctText, viewModel::setTpCircuitBreaker)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Min block size", form.minBlockSizeText, viewModel::setTpMinBlock)
+        EngineApply(
+            label = "Apply trading params",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_trading_params",
+            onSubmit = viewModel::submitTradingParams,
+            onDismiss = viewModel::clearTpResult,
+        )
+    }
+}
+
+@Composable
+private fun RiskConfigPanel(form: RiskConfigForm, viewModel: TradingViewModel) {
+    EngineCard("Risk config", "Aggregate notional cap over a rolling window.") {
+        NumberField("Max notional", form.maxNotionalText, viewModel::setRiskMaxNotional)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Window seconds", form.windowSecondsText, viewModel::setRiskWindow)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("MPID (optional)", form.mpidText, viewModel::setRiskMpid)
+        EngineApply(
+            label = "Apply risk config",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_risk_config",
+            onSubmit = viewModel::submitRiskConfig,
+            onDismiss = viewModel::clearRiskResult,
+        )
+    }
+}
+
+@Composable
+private fun SpotIndexPanel(form: SpotIndexForm, viewModel: TradingViewModel) {
+    EngineCard("Spot index", "Publish a spot index (mark) price.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setSpotIndexSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Spot index price", form.spotIndexPriceText, viewModel::setSpotIndexPrice)
+        EngineApply(
+            label = "Apply spot index",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_spot_index",
+            onSubmit = viewModel::submitSpotIndex,
+            onDismiss = viewModel::clearSpotIndexResult,
+        )
+    }
+}
+
+@Composable
+private fun SpotConfigPanel(form: SpotConfigForm, viewModel: TradingViewModel) {
+    EngineCard("Spot config", "Bind a symbol to its base/quote asset ids.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setSpotCfgSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Base asset id", form.baseAssetText, viewModel::setSpotCfgBase)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Quote asset id", form.quoteAssetText, viewModel::setSpotCfgQuote)
+        EngineApply(
+            label = "Apply spot config",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_spot_config",
+            onSubmit = viewModel::submitSpotConfig,
+            onDismiss = viewModel::clearSpotCfgResult,
+        )
+    }
+}
+
+/** Like [NumberField] but accepts free text (for signed ratios / alphanumeric MPIDs). */
+@Composable
+private fun TextInputField(label: String, value: String, onValue: (String) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(label, color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(3.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MarketColors.Surface)
+                .border(1.dp, MarketColors.Border, RoundedCornerShape(8.dp))
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValue,
+                singleLine = true,
+                textStyle = TextStyle(color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 16.sp),
+                cursorBrush = SolidColor(MarketColors.Accent),
+                modifier = Modifier.fillMaxWidth().testTag("field_$label"),
+            )
+        }
+    }
 }

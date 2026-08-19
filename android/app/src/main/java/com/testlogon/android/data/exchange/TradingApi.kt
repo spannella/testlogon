@@ -106,5 +106,31 @@ interface TradingApi {
     /** This account's recent perpetual funding payments (signed: negative=paid, positive=received). 404 when undeployed. */
     @GET("me/funding/payments")
     suspend fun getFundingPayments(): FundingPaymentsDto
+
+    // ==== Admin engine-config (exchange-admin-config); all admin-only, ack {status,...}; 404 -> degrade. ====
+
+    /** ADMIN: set per-symbol matching algorithm (0 = price-time; 1+ = pro-rata/specialist). */
+    @POST("me/matching_algo")
+    suspend fun matchingAlgo(@Body body: MatchingAlgoDto): EngineConfigAckDto
+
+    /** ADMIN: define a two-leg spread instrument. */
+    @POST("me/spread_config")
+    suspend fun spreadConfig(@Body body: SpreadConfigDto): EngineConfigAckDto
+
+    /** ADMIN: per-symbol trading-parameter / risk-limit overrides. */
+    @POST("me/trading_params")
+    suspend fun tradingParams(@Body body: TradingParamsDto): EngineConfigAckDto
+
+    /** ADMIN: aggregate notional cap over a rolling window. */
+    @POST("me/risk_config")
+    suspend fun riskConfig(@Body body: RiskConfigDto): EngineConfigAckDto
+
+    /** ADMIN: publish a spot index (mark) price for a symbol. */
+    @POST("me/spot_index")
+    suspend fun spotIndex(@Body body: SpotIndexDto): EngineConfigAckDto
+
+    /** ADMIN: bind a symbol to its base/quote asset ids (defines a spot pair). */
+    @POST("me/spot_config")
+    suspend fun spotConfig(@Body body: SpotConfigDto): EngineConfigAckDto
 }
 

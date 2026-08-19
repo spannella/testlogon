@@ -448,3 +448,22 @@ fun FundingPaymentsDto.toDomain(): FundingPayments = FundingPayments(
     payments = funding.orEmpty().map { it.toDomain() },
     count = count ?: funding.orEmpty().size,
 )
+
+/**
+ * Result of an admin engine-config apply (matching_algo / spread_config / trading_params / risk_config
+ * / spot_index / spot_config). [applied] is true when status == "ack" and, if the engine returns a
+ * [result], it is 0. [message] surfaces any detail/error/note the engine sent back.
+ */
+data class EngineConfigAck(
+    val applied: Boolean,
+    val symbolId: Int?,
+    val result: Int?,
+    val message: String?,
+)
+
+fun EngineConfigAckDto.toDomain(): EngineConfigAck = EngineConfigAck(
+    applied = status == "ack" && (result ?: 0) == 0,
+    symbolId = symbolId,
+    result = result,
+    message = detail ?: error ?: note,
+)
