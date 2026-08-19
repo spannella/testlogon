@@ -8,6 +8,8 @@ import {
   useStakeOffer,
   useAuctionRequest,
   useAuctionBid,
+  useStakeRequests,
+  useOpenAuctions,
 } from "@/hooks/useTrading";
 import { formatPrice, formatQty } from "./format";
 
@@ -350,6 +352,116 @@ function AuctionBidForm({ scaler }: { scaler: number }) {
   );
 }
 
+// ─── Browse open items (read, STUB-backed) ─────────────────────────
+// Two read-only "browse open" sections for the peer staking/auction market.
+// The listing endpoints are STUB today (empty + stub:true + note) — render the
+// list when present, otherwise show an honest empty state using the returned
+// `note`. Routes MAY 404 (not deployed) — degrade gracefully (retry:false).
+
+/** Honest empty / unavailable state for a browse section. */
+function BrowseEmpty({ note, error }: { note?: string; error?: unknown }) {
+  const msg =
+    error != null
+      ? errText(error)
+      : note ||
+        "Browsing open items isn't available yet — backend listing pending.";
+  return (
+    <p className="rounded-md border border-dashed bg-muted/20 px-3 py-3 text-[11px] text-muted-foreground">
+      {msg}
+    </p>
+  );
+}
+
+/** Browse open stake requests (read). */
+function OpenStakeRequests({ scaler }: { scaler: number }) {
+  const q = useStakeRequests();
+  const items = q.data?.stake_requests ?? [];
+  return (
+    <div className="space-y-2">
+      {q.isLoading ? (
+        <p className="text-[11px] text-muted-foreground">Loading…</p>
+      ) : q.isError || items.length === 0 ? (
+        <BrowseEmpty note={q.data?.note} error={q.isError ? q.error : undefined} />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b text-left text-[10px] uppercase text-muted-foreground">
+                <th className="py-1.5 pr-2 font-medium">Req id</th>
+                <th className="py-1.5 pr-2 font-medium">Symbol</th>
+                <th className="py-1.5 pr-2 text-right font-medium">Min collateral</th>
+                <th className="py-1.5 pr-2 text-right font-medium">Max stake %</th>
+                <th className="py-1.5 pr-2 text-right font-medium">Lockup (s)</th>
+                <th className="py-1.5 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((r, i) => (
+                <tr key={r.request_id ?? i} className="border-b last:border-0">
+                  <td className="py-1.5 pr-2 font-mono tabular-nums">{r.request_id ?? "—"}</td>
+                  <td className="py-1.5 pr-2 tabular-nums">{r.symbolid ?? "—"}</td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums">
+                    {r.min_collateral != null ? formatPrice(r.min_collateral, scaler) : "—"}
+                  </td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums">{r.max_stake_pct ?? "—"}</td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums">{r.lockup_seconds ?? "—"}</td>
+                  <td className="py-1.5">{r.status ?? "open"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Browse open auctions (read). */
+function OpenAuctions({ scaler }: { scaler: number }) {
+  const q = useOpenAuctions();
+  const items = q.data?.auctions ?? [];
+  return (
+    <div className="space-y-2">
+      {q.isLoading ? (
+        <p className="text-[11px] text-muted-foreground">Loading…</p>
+      ) : q.isError || items.length === 0 ? (
+        <BrowseEmpty note={q.data?.note} error={q.isError ? q.error : undefined} />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b text-left text-[10px] uppercase text-muted-foreground">
+                <th className="py-1.5 pr-2 font-medium">Auction id</th>
+                <th className="py-1.5 pr-2 font-medium">Symbol</th>
+                <th className="py-1.5 pr-2 text-right font-medium">Qty</th>
+                <th className="py-1.5 pr-2 text-right font-medium">Reserve</th>
+                <th className="py-1.5 pr-2 text-right font-medium">Duration (s)</th>
+                <th className="py-1.5 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((a, i) => (
+                <tr key={a.auction_id ?? i} className="border-b last:border-0">
+                  <td className="py-1.5 pr-2 font-mono tabular-nums">{a.auction_id ?? "—"}</td>
+                  <td className="py-1.5 pr-2 tabular-nums">{a.symbolid ?? "—"}</td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums">
+                    {a.qty != null ? formatQty(a.qty, scaler) : "—"}
+                  </td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums">
+                    {a.reserve_price != null ? formatPrice(a.reserve_price, scaler) : "—"}
+                  </td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums">{a.duration_seconds ?? "—"}</td>
+                  <td className="py-1.5">{a.status ?? "open"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Panel: groups the four trader forms (NOT admin-gated) ─────────
 export function StakingAuctionsPanel({ symbolId, scaler }: { symbolId: number; scaler: number }) {
   const [open, setOpen] = useState(false);
@@ -373,9 +485,16 @@ export function StakingAuctionsPanel({ symbolId, scaler }: { symbolId: number; s
               Routes may be unavailable (404) on backends without the surface deployed — failures show inline.
             </p>
             <p className="rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-[10px] text-muted-foreground">
-              Note: browsing open stake requests / open auctions isn&apos;t available yet — there is no list
-              endpoint. You can create items and act on a specific id, then share the id shown below.
+              Note: browsing open stake requests / open auctions is backed by a stub listing today — items
+              appear here when the engine exposes them. You can always create items and act on a specific id,
+              then share the id shown below.
             </p>
+            <SubForm title="Browse open stake requests">
+              <OpenStakeRequests scaler={scaler} />
+            </SubForm>
+            <SubForm title="Browse open auctions">
+              <OpenAuctions scaler={scaler} />
+            </SubForm>
             <SubForm title="Create stake request">
               <StakeRequestForm symbolId={symbolId} scaler={scaler} />
             </SubForm>

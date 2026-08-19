@@ -195,3 +195,72 @@ data class SettleResultDto(
     @Json(name = "detail") val detail: String? = null,
     @Json(name = "error") val error: String? = null,
 )
+
+// ==== Staking (custody-gated; real gateway-backed) ====
+// The custody edge proxies these to the MPC staking gateway. Providers + positions are reads; stake is
+// a write. Amounts arrive as strings. Not deployed on every backend -> a 404/403 folds to a graceful
+// "unavailable" empty state in the repository. All fields nullable/optional so a partial shape parses.
+
+/** One stakeable provider (a chain/protocol staking contract). */
+@JsonClass(generateAdapter = true)
+data class StakingProviderDto(
+    @Json(name = "id") val id: String? = null,
+    @Json(name = "chain") val chain: String? = null,
+    @Json(name = "contract") val contract: String? = null,
+    @Json(name = "kind") val kind: String? = null,
+    @Json(name = "asset") val asset: String? = null,
+)
+
+/** GET me/staking/providers envelope. */
+@JsonClass(generateAdapter = true)
+data class StakingProvidersDto(
+    @Json(name = "providers") val providers: List<StakingProviderDto>? = null,
+)
+
+/**
+ * One open staking position. amounts (principal/rewards/total) are decimal strings; the gateway echoes
+ * the provider id + vault + status.
+ */
+@JsonClass(generateAdapter = true)
+data class StakingPositionDto(
+    @Json(name = "position_id") val positionId: String? = null,
+    @Json(name = "vault") val vault: String? = null,
+    @Json(name = "provider") val provider: String? = null,
+    @Json(name = "chain") val chain: String? = null,
+    @Json(name = "asset") val asset: String? = null,
+    @Json(name = "principal") val principal: String? = null,
+    @Json(name = "rewards") val rewards: String? = null,
+    @Json(name = "total") val total: String? = null,
+    @Json(name = "status") val status: String? = null,
+)
+
+/** GET me/staking/positions envelope. */
+@JsonClass(generateAdapter = true)
+data class StakingPositionsDto(
+    @Json(name = "positions") val positions: List<StakingPositionDto>? = null,
+    @Json(name = "count") val count: Int? = null,
+    @Json(name = "vault") val vault: String? = null,
+)
+
+/** Body for POST me/staking/stake: {provider, amount (decimal string)}. */
+@JsonClass(generateAdapter = true)
+data class StakeRequestBodyDto(
+    @Json(name = "provider") val provider: String,
+    @Json(name = "amount") val amount: String,
+)
+
+/**
+ * POST me/staking/stake ack. staked=true on success; the gateway may echo the created position_id +
+ * provider + amount + status. On rejection staked=false and detail/error/reason carries the message.
+ */
+@JsonClass(generateAdapter = true)
+data class StakeAckDto(
+    @Json(name = "staked") val staked: Boolean? = null,
+    @Json(name = "position_id") val positionId: String? = null,
+    @Json(name = "provider") val provider: String? = null,
+    @Json(name = "amount") val amount: String? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "detail") val detail: String? = null,
+    @Json(name = "error") val error: String? = null,
+    @Json(name = "reason") val reason: String? = null,
+)

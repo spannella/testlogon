@@ -279,3 +279,62 @@ data class SubAccountTransferResult(
     val toBalance: String?,
     val reason: String?,
 )
+
+// ---------------- Staking (custody-gated) ----------------
+
+/** One stakeable provider (chain/protocol staking contract), display-ready. */
+data class StakingProvider(
+    val id: String,
+    val chain: String,
+    val contract: String,
+    val kind: String,
+    val asset: String,
+) {
+    val displayId: String get() = id.ifBlank { "provider" }
+    val contractShort: String
+        get() = if (contract.length <= 14) contract else "${contract.take(8)}…${contract.takeLast(4)}"
+}
+
+/** One open staking position, display-ready. Amounts stay as backend decimal strings. */
+data class StakingPosition(
+    val positionId: String,
+    val vault: String,
+    val provider: String,
+    val chain: String,
+    val asset: String,
+    val principal: String,
+    val rewards: String,
+    val total: String,
+    val status: String,
+) {
+    val statusLabel: String get() = status.ifBlank { "—" }
+}
+
+/**
+ * The staking dashboard read (providers + positions). [unavailable] is true when the backend does not
+ * expose staking (404/403) — a soft, non-error empty state the UI degrades to.
+ */
+data class StakingDashboard(
+    val vault: String,
+    val providers: List<StakingProvider>,
+    val positions: List<StakingPosition>,
+    val unavailable: Boolean = false,
+) {
+    val hasProviders: Boolean get() = providers.isNotEmpty()
+    val hasPositions: Boolean get() = positions.isNotEmpty()
+
+    companion object {
+        fun unavailable(): StakingDashboard =
+            StakingDashboard(vault = "", providers = emptyList(), positions = emptyList(), unavailable = true)
+    }
+}
+
+/** Result of submitting a stake. [ok] reflects staked=true; [reason] carries any gateway message. */
+data class StakeResult(
+    val ok: Boolean,
+    val positionId: String?,
+    val provider: String?,
+    val amount: String?,
+    val status: String?,
+    val reason: String?,
+)

@@ -175,5 +175,13 @@ interface TradingApi {
     /** Place a bid on an open auction (by auction id). */
     @POST("me/auction_bid")
     suspend fun auctionBid(@Body body: AuctionBidDto): StakeAuctionAckDto
-}
+    // ==== Discovery browse (STUB; empty + stub:true + note). 404 -> repository degrades to empty. ====
 
+    /** Browse open stake requests (STUB: empty list + note until the matching backend ships). */
+    @GET("me/stake_requests")
+    suspend fun getStakeRequests(): StakeRequestsBrowseDto
+
+    /** Browse open auctions (STUB: empty list + note until the matching backend ships). */
+    @GET("me/auctions")
+    suspend fun getAuctions(): AuctionsBrowseDto
+}

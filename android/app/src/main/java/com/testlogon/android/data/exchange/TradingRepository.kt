@@ -86,6 +86,10 @@ interface TradingRepository {
     suspend fun stakeOffer(requestId: Long, collateralAmount: Long, stakePct: Long): ApiResult<StakeAuctionAck>
     suspend fun auctionRequest(symbolId: Int?, qty: Int, reservePrice: Long?, durationSeconds: Int?): ApiResult<StakeAuctionAck>
     suspend fun auctionBid(auctionId: Long, price: Long, qty: Int): ApiResult<StakeAuctionAck>
+
+    // ---- Discovery browse (STUB; empty + note). 404 (undeployed) -> unavailable. ----
+    suspend fun stakeRequestsBrowse(): ApiResult<StakeRequestsBrowse>
+    suspend fun auctionsBrowse(): ApiResult<AuctionsBrowse>
 }
 
 @Singleton
@@ -279,6 +283,14 @@ class TradingRepositoryImpl @Inject constructor(
                 api.auctionBid(AuctionBidDto(auctionId, price, qty)).toDomain(StakeAuctionKind.AUCTION_BID)
             }
         }
+
+    // ---- Discovery browse (STUB; 404 -> unavailable). ----
+
+    override suspend fun stakeRequestsBrowse(): ApiResult<StakeRequestsBrowse> =
+        withContext(io) { emptyOn404(StakeRequestsBrowse.unavailable()) { api.getStakeRequests().toDomain() } }
+
+    override suspend fun auctionsBrowse(): ApiResult<AuctionsBrowse> =
+        withContext(io) { emptyOn404(AuctionsBrowse.unavailable()) { api.getAuctions().toDomain() } }
 
     /**
      * Like [apiCall] but a 404 (endpoint not deployed yet) folds to a Success carrying [emptyValue],

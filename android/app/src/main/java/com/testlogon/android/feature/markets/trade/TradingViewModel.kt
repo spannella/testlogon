@@ -66,6 +66,7 @@ class TradingViewModel @Inject constructor(
         refreshPm()
         loadFees()
         resolveSymbols()
+        loadStakeAuctionBrowse()
         if (TradingFeatures.SPOT_ENABLED) refreshSpot()
     }
 
@@ -900,6 +901,25 @@ class TradingViewModel @Inject constructor(
 
     /** Sanitize an optional free-text resolution source (alnum + a few separators). */
     private fun source(t: String): String = t.filter { it.isLetterOrDigit() || it == '-' || it == '_' || it == ' ' || it == '.' }.take(40)
+
+    /**
+     * Load the STUB discovery browse feeds (open stake requests + auctions). Both return an empty list +
+     * a note today (or 404 -> unavailable); a failure just leaves the browse subsections empty.
+     */
+    fun loadStakeAuctionBrowse() {
+        viewModelScope.launch {
+            when (val r = repository.stakeRequestsBrowse()) {
+                is ApiResult.Success -> _uiState.update { it.copy(stakeRequestsBrowse = r.data) }
+                else -> Unit
+            }
+        }
+        viewModelScope.launch {
+            when (val r = repository.auctionsBrowse()) {
+                is ApiResult.Success -> _uiState.update { it.copy(auctionsBrowse = r.data) }
+                else -> Unit
+            }
+        }
+    }
 
     // ---- Trader staking + auctions (peer mechanisms). Trader-facing; 404 -> un-applied ack. ----
 

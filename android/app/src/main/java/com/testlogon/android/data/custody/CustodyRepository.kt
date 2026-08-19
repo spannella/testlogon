@@ -132,6 +132,39 @@ class CustodyRepository @Inject constructor(
         }
     }
 
+    /**
+     * Staking dashboard read: providers + the caller's positions. Like [getDeposits], a 404/403 (route
+     * not deployed or not custody-gated for this account) folds into a soft "unavailable" success so the
+     * Staking tab can degrade to an explanatory empty state instead of an error. Network errors still
+     * surface. Providers + positions are fetched sequentially; if positions 404 but providers succeed the
+     * providers still render (positions default empty).
+     */
+    suspend fun getStaking(): ApiResult<StakingDashboard> = withContext(io) {
+        try {
+            val providers = api.stakingProviders().providers.orEmpty().map { it.toDomain() }
+            val posDto = api.stakingPositions()
+            StakingDashboard(
+                vault = posDto.vault?.trim().orEmpty(),
+                providers = providers,
+                positions = posDto.positions.orEmpty().map { it.toDomain() },
+                unavailable = false,
+            ).let { ApiResult.Success(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Success(StakingDashboard.unavailable())
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
+    /** Submit a stake (custody value -> a provider's staking contract). A gateway rejection surfaces as a Failure. */
+    suspend fun stake(provider: String, amount: String): ApiResult<StakeResult> = call {
+        api.stake(
+            StakeRequestBodyDto(provider = provider.trim(), amount = amount.trim()),
+        ).toDomain()
+    }
+
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = withContext(io) {
         try {
             ApiResult.Success(block())
@@ -258,6 +291,35 @@ private fun SettleResultDto.toDomain(action: BridgeAction): CustodyBridgeResult 
         custody = custody?.trim()?.takeIf { it.isNotBlank() },
         reason = listOfNotNull(reason, detail, error).firstOrNull { it.isNotBlank() },
     )
+
+private fun StakingProviderDto.toDomain(): StakingProvider = StakingProvider(
+    id = id?.trim().orEmpty(),
+    chain = chain?.trim().orEmpty(),
+    contract = contract?.trim().orEmpty(),
+    kind = kind?.trim().orEmpty(),
+    asset = asset?.trim().orEmpty(),
+)
+
+private fun StakingPositionDto.toDomain(): StakingPosition = StakingPosition(
+    positionId = positionId?.trim().orEmpty(),
+    vault = vault?.trim().orEmpty(),
+    provider = provider?.trim().orEmpty(),
+    chain = chain?.trim().orEmpty(),
+    asset = asset?.trim().orEmpty(),
+    principal = principal?.trim().orEmpty().ifBlank { "0" },
+    rewards = rewards?.trim().orEmpty().ifBlank { "0" },
+    total = total?.trim().orEmpty().ifBlank { "0" },
+    status = status?.trim().orEmpty(),
+)
+
+private fun StakeAckDto.toDomain(): StakeResult = StakeResult(
+    ok = staked == true,
+    positionId = positionId?.trim()?.takeIf { it.isNotBlank() },
+    provider = provider?.trim()?.takeIf { it.isNotBlank() },
+    amount = amount?.trim()?.takeIf { it.isNotBlank() },
+    status = status?.trim()?.takeIf { it.isNotBlank() },
+    reason = listOfNotNull(detail, error, reason).firstOrNull { it.isNotBlank() },
+)
 
 /** Provides the custody Retrofit API (mirrors the auth data module's provider style). */
 @Module

@@ -383,3 +383,82 @@ export interface FeeScheduleResult {
 /** The maker/taker/liquidation fee schedule for a symbol. */
 export const getFeeSchedule = (symbolid: number) =>
   api.get<FeeScheduleResult>("/me/fees/schedule", { symbolid: String(symbolid) });
+
+
+// ─── Staking (real gateway-backed yield staking) ───────────────────
+// Three custody-side routes served by the exchange edge (which HMACs to the
+// custody gateway itself). Every one MAY 404/403 on backends where the staking
+// surface isn't deployed / the caller isn't custody-gated — all callers must
+// degrade gracefully (retry:false + a "not available" state). principal/rewards/
+// total are decimal STRING amounts.
+
+/** A staking provider the gateway offers (a yield vault / validator contract). */
+export interface StakingProvider {
+  id: string;
+  chain: string;
+  contract: string;
+  /** e.g. "validator", "vault", "liquid". */
+  kind: string;
+  asset: string;
+}
+
+export interface StakingProvidersResult {
+  providers: StakingProvider[];
+}
+
+/** One of the caller's staking positions. Amounts are decimal strings. */
+export interface StakingPosition {
+  position_id: string;
+  vault: string;
+  provider: string;
+  chain: string;
+  asset: string;
+  /** Staked principal (decimal string). */
+  principal: string;
+  /** Accrued rewards (decimal string). */
+  rewards: string;
+  /** principal + rewards (decimal string). */
+  total: string;
+  status: string;
+}
+
+export interface StakingPositionsResult {
+  positions: StakingPosition[];
+  count: number;
+  vault: string;
+}
+
+export interface StakeRequestBody {
+  provider: string;
+  /** Amount as a decimal string. */
+  amount: string;
+}
+
+/** Gateway stake acknowledgement. Extra fields may be present. */
+export interface StakeAck {
+  status?: string;
+  position_id?: string;
+  provider?: string;
+  asset?: string;
+  amount?: string | number;
+  vault?: string;
+  detail?: string;
+  error?: string;
+  reason?: string;
+  [k: string]: unknown;
+}
+
+/**
+ * The staking providers the gateway offers. 404/403s until the edge deploys /
+ * the caller is custody-gated — render a graceful "not available" state (retry:false).
+ */
+export const getStakingProviders = () =>
+  api.get<StakingProvidersResult>("/me/staking/providers");
+
+/** The caller's staking positions (principal/rewards/total as decimal strings). */
+export const getStakingPositions = () =>
+  api.get<StakingPositionsResult>("/me/staking/positions");
+
+/** Stake `amount` of the given provider's asset. Returns the gateway stake ack. */
+export const stake = (body: StakeRequestBody) =>
+  api.post<StakeAck>("/me/staking/stake", body);

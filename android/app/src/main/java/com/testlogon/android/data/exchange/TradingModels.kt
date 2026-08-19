@@ -578,3 +578,108 @@ fun StakeAuctionAckDto.toDomain(kind: StakeAuctionKind): StakeAuctionAck {
         message = detail ?: error ?: note ?: reason,
     )
 }
+// ==== Discovery browse (STUB) — domain + mappers ====
+
+/** One open stake request (browse row), display-ready. Amounts stay as backend strings. */
+data class StakeRequestBrowseItem(
+    val requestId: Long?,
+    val symbolId: Int?,
+    val symbol: String?,
+    val minCollateral: String?,
+    val maxStakePct: String?,
+    val status: String?,
+    val owner: String?,
+) {
+    val idLabel: String get() = requestId?.let { "Request #$it" } ?: "Request"
+    val symbolLabel: String? get() = symbol?.takeIf { it.isNotBlank() } ?: symbolId?.let { "Symbol $it" }
+}
+
+/** One open auction (browse row), display-ready. */
+data class AuctionBrowseItem(
+    val auctionId: Long?,
+    val symbolId: Int?,
+    val symbol: String?,
+    val qty: String?,
+    val reservePrice: String?,
+    val status: String?,
+    val owner: String?,
+) {
+    val idLabel: String get() = auctionId?.let { "Auction #$it" } ?: "Auction"
+    val symbolLabel: String? get() = symbol?.takeIf { it.isNotBlank() } ?: symbolId?.let { "Symbol $it" }
+}
+
+/**
+ * Browse result for open stake requests / auctions. [stub] is true while the backend returns the stub
+ * (empty + note); [note] is the honest human explanation to render when [items] is empty. [unavailable]
+ * is set when the route 404s (undeployed) so the UI degrades the same way.
+ */
+data class StakeRequestsBrowse(
+    val items: List<StakeRequestBrowseItem>,
+    val count: Int,
+    val stub: Boolean,
+    val note: String?,
+    val unavailable: Boolean = false,
+) {
+    val isEmpty: Boolean get() = items.isEmpty()
+    companion object {
+        fun unavailable(): StakeRequestsBrowse =
+            StakeRequestsBrowse(items = emptyList(), count = 0, stub = false, note = null, unavailable = true)
+    }
+}
+
+data class AuctionsBrowse(
+    val items: List<AuctionBrowseItem>,
+    val count: Int,
+    val stub: Boolean,
+    val note: String?,
+    val unavailable: Boolean = false,
+) {
+    val isEmpty: Boolean get() = items.isEmpty()
+    companion object {
+        fun unavailable(): AuctionsBrowse =
+            AuctionsBrowse(items = emptyList(), count = 0, stub = false, note = null, unavailable = true)
+    }
+}
+
+fun StakeRequestBrowseItemDto.toDomain(): StakeRequestBrowseItem = StakeRequestBrowseItem(
+    requestId = requestId,
+    symbolId = symbolId,
+    symbol = symbol?.trim()?.takeIf { it.isNotBlank() },
+    minCollateral = minCollateral?.trim()?.takeIf { it.isNotBlank() },
+    maxStakePct = maxStakePct?.trim()?.takeIf { it.isNotBlank() },
+    status = status?.trim()?.takeIf { it.isNotBlank() },
+    owner = owner?.trim()?.takeIf { it.isNotBlank() },
+)
+
+fun AuctionBrowseItemDto.toDomain(): AuctionBrowseItem = AuctionBrowseItem(
+    auctionId = auctionId,
+    symbolId = symbolId,
+    symbol = symbol?.trim()?.takeIf { it.isNotBlank() },
+    qty = qty?.trim()?.takeIf { it.isNotBlank() },
+    reservePrice = reservePrice?.trim()?.takeIf { it.isNotBlank() },
+    status = status?.trim()?.takeIf { it.isNotBlank() },
+    owner = owner?.trim()?.takeIf { it.isNotBlank() },
+)
+
+fun StakeRequestsBrowseDto.toDomain(): StakeRequestsBrowse {
+    val rows = stakeRequests.orEmpty().map { it.toDomain() }
+    return StakeRequestsBrowse(
+        items = rows,
+        count = count ?: rows.size,
+        stub = stub == true,
+        note = note?.trim()?.takeIf { it.isNotBlank() },
+        unavailable = false,
+    )
+}
+
+fun AuctionsBrowseDto.toDomain(): AuctionsBrowse {
+    val rows = auctions.orEmpty().map { it.toDomain() }
+    return AuctionsBrowse(
+        items = rows,
+        count = count ?: rows.size,
+        stub = stub == true,
+        note = note?.trim()?.takeIf { it.isNotBlank() },
+        unavailable = false,
+    )
+}
+

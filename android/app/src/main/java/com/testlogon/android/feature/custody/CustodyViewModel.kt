@@ -16,6 +16,8 @@ import com.testlogon.android.data.custody.SubAccountTransferResult
 import com.testlogon.android.data.custody.CustodyDepositAddress
 import com.testlogon.android.data.custody.CustodyDeposits
 import com.testlogon.android.data.custody.CustodyRepository
+import com.testlogon.android.data.custody.StakingDashboard
+import com.testlogon.android.data.custody.StakeResult
 import com.testlogon.android.data.custody.CustodyWithdrawResult
 import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.SpotBalance
@@ -33,7 +35,7 @@ import javax.inject.Inject
  * The seven in-screen custody tabs. Activity + Approvals have no backing endpoint on this backend and
  * render a static "not available" state; they are always shown (no role gating).
  */
-enum class CustodyTab { BALANCES, SUBACCOUNTS, TRANSFER, DEPOSIT, WITHDRAW, ACTIVITY, APPROVALS }
+enum class CustodyTab { BALANCES, STAKING, SUBACCOUNTS, TRANSFER, DEPOSIT, WITHDRAW, ACTIVITY, APPROVALS }
 
 /** A generic async slice: loading / error(message) / data. */
 data class Async<out T>(
@@ -102,12 +104,31 @@ data class TransferUiState(
         fromLabel.trim() != toLabel.trim()
 }
 
+/**
+ * Staking tab: the providers + positions read (soft-unavailable when the backend lacks the endpoint)
+ * plus the stake form (selected provider id + amount + in-flight/result).
+ */
+data class StakingUiState(
+    val dashboard: Async<StakingDashboard> = Async(loading = true),
+    val selectedProvider: String = "",
+    val amountText: String = "",
+    val submitting: Boolean = false,
+    val submitError: String? = null,
+    val result: StakeResult? = null,
+) {
+    val amountDouble: Double? get() = amountText.trim().toDoubleOrNull()
+    val canStake: Boolean get() = !submitting &&
+        selectedProvider.trim().isNotEmpty() &&
+        (amountDouble ?: 0.0) > 0.0
+}
+
 data class CustodyUiState(
     val tab: CustodyTab = CustodyTab.BALANCES,
     val balances: Async<CustodyBalances> = Async(loading = true),
     val deposit: DepositUiState = DepositUiState(),
     val withdraw: WithdrawUiState = WithdrawUiState(),
     val subAccounts: SubAccountsUiState = SubAccountsUiState(),
+    val staking: StakingUiState = StakingUiState(),
     val transfer: TransferUiState = TransferUiState(),
     /** Best-effort exchange-side balances for the bridge settle path (source-balance guidance only). */
     val spot: Async<SpotBalance> = Async(),
@@ -147,6 +168,7 @@ class CustodyViewModel @Inject constructor(
         loadBalance()
         loadDeposits()
         loadSubAccounts()
+        loadStaking()
         loadExchangeBalances()
     }
 
@@ -165,6 +187,46 @@ class CustodyViewModel @Inject constructor(
             when (val r = trading.marginAccount()) {
                 is Success -> _uiState.update { it.copy(margin = Async(data = r.data)) }
                 else -> _uiState.update { it.copy(margin = Async(error = "unavailable")) }
+            }
+        }
+    }
+
+    // ---- staking (custody-gated; 404/403 -> soft unavailable) ----
+
+    fun loadStaking() {
+        _uiState.update { it.copy(staking = it.staking.copy(dashboard = it.staking.dashboard.copy(loading = true, error = null))) }
+        viewModelScope.launch {
+            _uiState.update { st -> st.copy(staking = st.staking.copy(dashboard = repo.getStaking().toAsync())) }
+        }
+    }
+
+    fun onStakeProviderSelected(providerId: String) {
+        _uiState.update { it.copy(staking = it.staking.copy(selectedProvider = providerId, submitError = null)) }
+    }
+
+    fun onStakeAmountChanged(v: String) {
+        _uiState.update { it.copy(staking = it.staking.copy(amountText = sanitizeDecimal(v), submitError = null)) }
+    }
+
+    fun clearStakeResult() {
+        _uiState.update { it.copy(staking = it.staking.copy(result = null, submitError = null)) }
+    }
+
+    fun submitStake() {
+        val f = _uiState.value.staking
+        if (!f.canStake) return
+        _uiState.update { it.copy(staking = it.staking.copy(submitting = true, submitError = null, result = null)) }
+        viewModelScope.launch {
+            when (val r = repo.stake(f.selectedProvider.trim(), f.amountText.trim())) {
+                is Success -> {
+                    _uiState.update { it.copy(staking = it.staking.copy(submitting = false, result = r.data)) }
+                    // Refresh positions so a newly-created stake shows up.
+                    loadStaking()
+                }
+                is ApiResult.Failure ->
+                    _uiState.update { it.copy(staking = it.staking.copy(submitting = false, submitError = r.error.messageFor())) }
+                is ApiResult.NetworkError ->
+                    _uiState.update { it.copy(staking = it.staking.copy(submitting = false, submitError = "Network error. Check your connection and try again.")) }
             }
         }
     }

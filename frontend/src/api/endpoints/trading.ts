@@ -708,3 +708,68 @@ export const auctionRequest = (body: AuctionRequestRequest) =>
 /** Trader: bid into an open auction by id. */
 export const auctionBid = (body: AuctionBidRequest) =>
   api.post<AuctionBidAck>("/me/auction_bid", body);
+
+
+// ── Discovery browse (open stake requests / open auctions) ──────────
+// Read-only "browse open items" feeds for the peer staking/auction market.
+// STUB today — the engine has no listing endpoint yet, so the edge returns an
+// EMPTY array plus `stub:true` + a human `note`. Callers render the list when
+// present and otherwise show an honest empty state using `note`. Routes MAY
+// 404 until the edge deploys — callers degrade gracefully (retry:false).
+
+/** One browsable open stake request (shape mirrors the engine when it lands). */
+export interface OpenStakeRequest {
+  request_id?: number;
+  symbolid?: number;
+  /** int64 engine tick. */
+  min_collateral?: number;
+  max_stake_pct?: number;
+  lockup_seconds?: number;
+  duration_seconds?: number;
+  status?: string;
+  [k: string]: unknown;
+}
+
+export interface StakeRequestsResult {
+  stake_requests: OpenStakeRequest[];
+  count: number;
+  /** True while the engine has no listing endpoint (empty results). */
+  stub: boolean;
+  /** Human note explaining the stub / why the list is empty. */
+  note?: string;
+}
+
+/** One browsable open auction (shape mirrors the engine when it lands). */
+export interface OpenAuction {
+  auction_id?: number;
+  symbolid?: number;
+  /** int64 engine tick. */
+  qty?: number;
+  /** int64 engine tick. */
+  reserve_price?: number;
+  duration_seconds?: number;
+  status?: string;
+  [k: string]: unknown;
+}
+
+export interface AuctionsResult {
+  auctions: OpenAuction[];
+  count: number;
+  /** True while the engine has no listing endpoint (empty results). */
+  stub: boolean;
+  /** Human note explaining the stub / why the list is empty. */
+  note?: string;
+}
+
+/**
+ * Browse open stake requests. STUB (empty + stub:true + note) until the engine
+ * adds a listing. 404s until the edge deploys — callers degrade gracefully.
+ */
+export const getStakeRequests = () =>
+  api.get<StakeRequestsResult>("/me/stake_requests");
+
+/**
+ * Browse open auctions. STUB (empty + stub:true + note) until the engine adds a
+ * listing. 404s until the edge deploys — callers degrade gracefully.
+ */
+export const getOpenAuctions = () => api.get<AuctionsResult>("/me/auctions");
