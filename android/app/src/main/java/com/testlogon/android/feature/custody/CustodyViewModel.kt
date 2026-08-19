@@ -341,6 +341,8 @@ class CustodyViewModel @Inject constructor(
      */
     data class SourceBalance(val amount: Double?, val exact: Boolean, val label: String)
 
+    private fun SourceBalance.toSafety(): MoneySafety.Source = MoneySafety.Source(amount, exact)
+
     fun bridgeSource(): SourceBalance {
         val st = _uiState.value
         val t = st.transfer
@@ -355,27 +357,20 @@ class CustodyViewModel @Inject constructor(
     }
 
     /** Whether a Max action is meaningful for the current action (only when the source is EXACT + known). */
-    fun bridgeCanMax(): Boolean {
-        val src = bridgeSource()
-        return src.exact && src.amount != null
-    }
+    fun bridgeCanMax(): Boolean = MoneySafety.canMax(bridgeSource().toSafety())
 
     fun onBridgeMax() {
-        val src = bridgeSource()
-        val amt = src.amount ?: return
-        if (!src.exact) return
-        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAmountText = trimDecimal(amt), bridgeError = null)) }
+        val v = MoneySafety.maxValue(bridgeSource().toSafety()) ?: return
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAmountText = v, bridgeError = null)) }
     }
 
     /** Returns a validation error string, or null if the bridge form is OK to review. */
     fun validateBridge(): String? {
         val t = _uiState.value.transfer
         if (t.bridgeToken.trim().isEmpty()) return "Choose a token."
-        val amt = t.bridgeAmountDouble
-        if (amt == null || amt <= 0.0) return "Enter an amount greater than 0."
-        val src = bridgeSource()
+        if (MoneySafety.positiveAmount(t.bridgeAmountText) == null) return "Enter an amount greater than 0."
         // Only block over-spend when the source figure is EXACT (fund path). Settle guidance never blocks.
-        if (src.exact && src.amount != null && amt > src.amount) {
+        if (MoneySafety.overspends(t.bridgeAmountText, bridgeSource().toSafety())) {
             return "Amount exceeds your ${t.bridgeToken} custody balance."
         }
         return null
@@ -431,16 +426,11 @@ class CustodyViewModel @Inject constructor(
         }
     }
 
-    fun subCanMax(): Boolean {
-        val src = subSource()
-        return src.exact && src.amount != null
-    }
+    fun subCanMax(): Boolean = MoneySafety.canMax(subSource().toSafety())
 
     fun onSubMax() {
-        val src = subSource()
-        val amt = src.amount ?: return
-        if (!src.exact) return
-        _uiState.update { it.copy(transfer = it.transfer.copy(subAmountText = trimDecimal(amt), subError = null)) }
+        val v = MoneySafety.maxValue(subSource().toSafety()) ?: return
+        _uiState.update { it.copy(transfer = it.transfer.copy(subAmountText = v, subError = null)) }
     }
 
     /** Returns a validation error string, or null if the sub-account form is OK to review. */
@@ -448,10 +438,8 @@ class CustodyViewModel @Inject constructor(
         val t = _uiState.value.transfer
         if (t.fromLabel.trim() == t.toLabel.trim()) return "Choose two different vaults."
         if (t.subAsset.trim().isEmpty()) return "Enter an asset."
-        val amt = t.subAmountDouble
-        if (amt == null || amt <= 0.0) return "Enter an amount greater than 0."
-        val src = subSource()
-        if (src.exact && src.amount != null && amt > src.amount) {
+        if (MoneySafety.positiveAmount(t.subAmountText) == null) return "Enter an amount greater than 0."
+        if (MoneySafety.overspends(t.subAmountText, subSource().toSafety())) {
             return "Amount exceeds your ${t.subAsset} base-vault balance."
         }
         return null
@@ -494,18 +482,10 @@ class CustodyViewModel @Inject constructor(
 }
 
 /** Trim a Double to a compact decimal string (drops a trailing .0 for whole numbers). */
-private fun trimDecimal(v: Double): String =
-    if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
+private fun trimDecimal(v: Double): String = MoneySafety.trimDecimal(v)
 
 /** Keep digits + a single decimal point, capped to a sane length. */
-private fun sanitizeDecimal(v: String): String {
-    val filtered = v.filter { it.isDigit() || it == '.' }
-    val firstDot = filtered.indexOf('.')
-    val cleaned = if (firstDot < 0) filtered else {
-        filtered.substring(0, firstDot + 1) + filtered.substring(firstDot + 1).replace(".", "")
-    }
-    return cleaned.take(24)
-}
+private fun sanitizeDecimal(v: String): String = MoneySafety.sanitizeDecimal(v)
 
 // ---- ApiResult -> Async projection ----
 

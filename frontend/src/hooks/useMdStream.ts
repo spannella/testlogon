@@ -37,6 +37,35 @@ function derivePrice(book: OrderBookResponse | null, bars: Candle[] | null): num
   return ask ?? bid ?? null;
 }
 
+/** The subset of {@link MdStreamState} carried by a single parsed frame. */
+export interface ParsedMdFrame {
+  book: OrderBookResponse | null;
+  bars: Candle[] | null;
+  lastPrice: number | null;
+}
+
+/**
+ * Pure parser for a single SSE `md` frame payload. Returns the merged
+ * book/bars/lastPrice (falling back to the previous values for anything the
+ * frame omits), or `null` for malformed / non-JSON payloads (heartbeats,
+ * comments) so callers can ignore them without mutating state.
+ */
+export function parseMdData(
+  raw: string,
+  prev: { book: OrderBookResponse | null; bars: Candle[] | null } = { book: null, bars: null },
+): ParsedMdFrame | null {
+  let frame: MarketDataFrame;
+  try {
+    frame = JSON.parse(raw) as MarketDataFrame;
+  } catch {
+    return null; // ignore non-JSON frames (heartbeats / comments)
+  }
+  if (frame == null || typeof frame !== "object") return null;
+  const book = frame.book ?? prev.book;
+  const bars = frame.bars?.bars ?? prev.bars;
+  return { book, bars, lastPrice: derivePrice(book, bars) };
+}
+
 /**
  * SSE hook for real-time market data (order book + candles).
  *
@@ -70,16 +99,10 @@ export function useMdStream(symbolId: number, interval = 1): MdStreamState {
 
     function handleFrame(event: MessageEvent) {
       if (!mounted) return;
-      let frame: MarketDataFrame;
-      try {
-        frame = JSON.parse(event.data) as MarketDataFrame;
-      } catch {
-        return; // ignore non-JSON frames (heartbeats / comments)
-      }
       setState((prev) => {
-        const book = frame.book ?? prev.book;
-        const bars = frame.bars?.bars ?? prev.bars;
-        return { book, bars, lastPrice: derivePrice(book, bars), connected: true };
+        const parsed = parseMdData(event.data, prev);
+        if (!parsed) return prev;
+        return { ...parsed, connected: true };
       });
     }
 

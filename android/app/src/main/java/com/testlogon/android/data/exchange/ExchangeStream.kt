@@ -113,7 +113,12 @@ class ExchangeStream @Inject constructor(
         }
     }
 
-    private fun parseFrame(data: String): MdFrame? {
+    /**
+     * Decode one SSE `data:` payload into an [MdFrame]. Package-visible (an [internal] test seam) so
+     * the raw-JSON -> domain-frame mapping can be unit-tested: a well-formed frame decodes; a frame
+     * with no order book, or malformed/non-JSON data, yields null (never throws).
+     */
+    internal fun parseFrame(data: String): MdFrame? {
         val dto = runCatching { frameAdapter.fromJson(data) }.getOrNull() ?: return null
         val book = dto.book?.toDomain() ?: return null
         val candle = dto.bars?.bars?.lastOrNull()?.toDomain()

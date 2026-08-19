@@ -95,9 +95,12 @@ function fmtAmount(v: string | number | undefined | null): string {
 }
 
 /** Trim a decimal string to an asset's decimals (for the Max button). */
-function trimToDecimals(v: number, decimals: number): string {
+export function trimToDecimals(v: number, decimals: number): string {
   if (!Number.isFinite(v) || v <= 0) return "0";
-  const s = v.toFixed(Math.min(decimals, 8));
+  const d = Math.min(decimals, 8);
+  const factor = 10 ** d;
+  // truncate toward zero so a Max value can never round UP past the source balance
+  const s = (Math.floor(v * factor) / factor).toFixed(d);
   return s.replace(/\.?0+$/, "");
 }
 
@@ -132,7 +135,7 @@ function useCustodyBalanceQuery() {
 }
 
 /** Read a custody per-token balance (case-insensitive) from the balance map. */
-function custodyBalanceOf(
+export function custodyBalanceOf(
   balances: Record<string, number | string> | undefined,
   symbol: string,
 ): number {
