@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { useSymbols, useCandles } from "@/hooks/useMarketData";
 import type { MarketSymbol } from "@/api/endpoints/marketData";
 import { formatPrice } from "./format";
+import { loadDefaultSymbol } from "@/lib/tradingPrefs";
 
 // Fallback catalog if the symbols endpoint errors or returns empty.
 const FALLBACK_SYMBOLS: MarketSymbol[] = [
@@ -115,6 +116,23 @@ export default function MarketsPage() {
   const symbolsQuery = useSymbols();
   const apiSymbols = symbolsQuery.data?.symbols ?? [];
   const base = apiSymbols.length > 0 ? apiSymbols : FALLBACK_SYMBOLS;
+
+  // One-time-per-session auto-open of the saved default market. Fires only
+  // after real symbols have loaded and only if the saved id is still valid.
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!symbolsQuery.data) return; // wait for the query to resolve
+    if (sessionStorage.getItem("md.defaultOpened") === "1") return;
+    const id = loadDefaultSymbol();
+    if (id == null) return;
+    if (!apiSymbols.some((s) => s.symbol_id === id)) return; // stale/removed
+    try {
+      sessionStorage.setItem("md.defaultOpened", "1");
+    } catch {
+      /* ignore */
+    }
+    navigate(`/markets/${id}`, { replace: true });
+  }, [symbolsQuery.data, apiSymbols, navigate]);
 
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<FilterTab>("all");
