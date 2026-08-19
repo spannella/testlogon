@@ -103,6 +103,9 @@ object MoreRoutes {
     // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /me/custody/*.
     const val CUSTODY = CustodyDest.ROUTE
 
+    // Portfolio: read-only cross-venue account overview (custody / spot / margin / staking snapshot).
+    const val PORTFOLIO = PortfolioDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
@@ -556,6 +559,7 @@ object MoreRoutes {
             FILES,
             TRADING_BLOTTER,
             CUSTODY,
+            PORTFOLIO,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,

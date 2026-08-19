@@ -215,6 +215,7 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         blotterDestination(navController)
         // Custody: native crypto custody surface wired to /me/custody/* (officer approvals self-gate on the admin signal).
         custodyDestination(navController)
+        portfolioDestination(navController)
         // AND-336: backend-mediated Google Drive import picker (authenticated-only).
         driveImportDestination(navController)
         // AND-335: owner share sheet (create/list/revoke share links) + the public share screen
