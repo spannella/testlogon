@@ -880,8 +880,8 @@ export function TradeTicket({
           </div>
         )}
 
-        {/* Section tabs */}
-        <div className="flex gap-1 rounded-lg bg-muted p-1">
+        {/* Section tabs — horizontally scrollable on mobile, equal-width segmented on sm+ */}
+        <div className="flex gap-1 overflow-x-auto rounded-lg bg-muted p-1 scrollbar-hide">
           {sections.map((s) => (
             <button
               key={s.id}
@@ -891,7 +891,7 @@ export function TradeTicket({
                 resetArmed();
               }}
               className={cn(
-                "flex-1 rounded-md py-1.5 text-xs font-medium transition-colors",
+                "shrink-0 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:flex-1 sm:shrink sm:px-0",
                 section === s.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
               )}
             >

@@ -53,8 +53,17 @@ function DepthRow({
   const isBid = side === "bid";
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`${isBid ? "Bid" : "Ask"} ${formatPrice(price, scaler)} size ${formatQty(qty, scaler)}`}
       className="relative flex cursor-pointer items-center justify-between px-2 py-0.5 text-sm tabular-nums hover:bg-muted/40"
       onClick={() => onPick?.(price, isBid ? "sell" : "buy")}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          if (e.key === " ") e.preventDefault();
+          onPick?.(price, isBid ? "sell" : "buy");
+        }
+      }}
     >
       <div
         className={cn(
@@ -96,11 +105,20 @@ function ColumnRow({
   const isBid = side === "bid";
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`${isBid ? "Bid" : "Ask"} ${formatPrice(price, scaler)} size ${formatQty(qty, scaler)}`}
       className={cn(
         "relative flex cursor-pointer items-center px-2 py-0.5 text-sm tabular-nums hover:bg-muted/40",
         isBid ? "justify-end text-right" : "justify-start text-left"
       )}
       onClick={() => onPick?.(price, isBid ? "sell" : "buy")}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          if (e.key === " ") e.preventDefault();
+          onPick?.(price, isBid ? "sell" : "buy");
+        }
+      }}
     >
       <div
         className={cn(
