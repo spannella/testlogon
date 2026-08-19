@@ -61,16 +61,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.testlogon.android.data.custody.BridgeAction
 import com.testlogon.android.data.custody.CustodyAssets
 import com.testlogon.android.data.custody.CustodyBalance
-import com.testlogon.android.data.custody.BridgeDirection
 import com.testlogon.android.data.custody.CustodyBridgeResult
 import com.testlogon.android.data.custody.CustodySubAccount
-import com.testlogon.android.data.custody.CustodySubAccounts
-import com.testlogon.android.data.custody.SubAccountTransferResult
 import com.testlogon.android.data.custody.CustodyDeposit
 import com.testlogon.android.data.custody.CustodyDeposits
-import com.testlogon.android.data.custody.DepositStatus
+import com.testlogon.android.data.custody.SubAccountTransferResult
 import com.testlogon.android.data.custody.CustodyWithdrawResult
 import com.testlogon.android.data.custody.WithdrawStatus
 
@@ -578,16 +576,13 @@ private fun DepositRow(d: CustodyDeposit) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = if (d.amount.isNotBlank()) "+${d.amount} ${d.asset}" else d.asset,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                DepositStatusChip(d.status)
-            }
-            Text("${d.chainName} · ${relativeTime(d.timestampMs)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = if (d.amount.isNotBlank()) "+${d.amount} ${d.asset}" else d.asset,
+                style = MaterialTheme.typography.titleSmall,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(d.chainName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (d.txHash.isNotBlank()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(d.txShort, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
@@ -597,34 +592,6 @@ private fun DepositRow(d: CustodyDeposit) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun DepositStatusChip(status: DepositStatus) {
-    val (bg, fg) = when (status) {
-        DepositStatus.CREDITED -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
-        DepositStatus.DUPLICATE -> MaterialTheme.colorScheme.surface to MaterialTheme.colorScheme.onSurfaceVariant
-        DepositStatus.UNKNOWN -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-    }
-    Box(
-        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(bg).padding(horizontal = 8.dp, vertical = 3.dp),
-    ) {
-        Text(status.label, style = MaterialTheme.typography.labelSmall, color = fg)
-    }
-}
-
-/** Coarse relative time ("just now" / "5m ago" / "3h ago" / "2d ago") from an epoch-ms timestamp. */
-private fun relativeTime(timestampMs: Long?): String {
-    if (timestampMs == null || timestampMs <= 0L) return "—"
-    val deltaMs = System.currentTimeMillis() - timestampMs
-    if (deltaMs < 0L) return "just now"
-    val mins = deltaMs / 60000L
-    return when {
-        mins < 1L -> "just now"
-        mins < 60L -> "${mins}m ago"
-        mins < 1440L -> "${mins / 60L}h ago"
-        else -> "${mins / 1440L}d ago"
     }
 }
 
@@ -727,7 +694,6 @@ private fun SubAccountsTab(state: CustodyUiState, viewModel: CustodyViewModel) {
             )
             else -> {
                 val data = list.data
-                Text("Base vault: ${data.defaultVault.short().ifBlank { "—" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
                 if (data.subAccounts.isEmpty()) {
                     EmptyBox("No sub-accounts yet.")
                 } else {
@@ -741,24 +707,9 @@ private fun SubAccountsTab(state: CustodyUiState, viewModel: CustodyViewModel) {
 @Composable
 private fun SubAccountCard(sub: CustodySubAccount) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(sub.displayLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Text("Tier: ${sub.tier}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text(sub.idShort, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
-            val funded = sub.funded()
-            if (funded.isEmpty()) {
-                Text("No balances", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
-            } else {
-                Spacer(Modifier.height(6.dp))
-                funded.forEach { row ->
-                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
-                        Text(row.symbol, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                        Text(row.amountText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                    }
-                }
-            }
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(sub.displayLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(sub.vaultShort, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
         }
     }
 }
@@ -774,28 +725,38 @@ private fun TransferTab(state: CustodyUiState, viewModel: CustodyViewModel) {
     ) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Custody ↔ Trading bridge", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BridgeDirection.entries.forEach { d ->
+                Text("Custody ↔ Trading", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Fund moves value from custody into the exchange; settle moves it back to custody.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text("Action", style = MaterialTheme.typography.labelMedium)
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BridgeAction.entries.forEach { a ->
                         FilterChip(
-                            selected = d == t.direction,
-                            onClick = { if (d != t.direction) viewModel.onBridgeDirectionToggle() },
-                            label = { Text(d.label) },
-                            modifier = Modifier.testTag("bridge_dir_${d.name}"),
+                            selected = a == t.bridgeAction,
+                            onClick = { viewModel.onBridgeActionSelected(a) },
+                            label = { Text(a.label) },
+                            modifier = Modifier.testTag("bridge_action_${a.name}"),
+                        )
+                    }
+                }
+                Text("Token", style = MaterialTheme.typography.labelMedium)
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CustodyAssets.BRIDGE_TOKENS.forEach { sym ->
+                        FilterChip(
+                            selected = sym == t.bridgeToken,
+                            onClick = { viewModel.onBridgeTokenSelected(sym) },
+                            label = { Text(sym) },
+                            modifier = Modifier.testTag("bridge_token_$sym"),
                         )
                     }
                 }
                 OutlinedTextField(
-                    value = t.bridgeAssetText,
-                    onValueChange = viewModel::onBridgeAssetChanged,
-                    label = { Text("Engine asset id") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("bridge_asset"),
-                )
-                OutlinedTextField(
                     value = t.bridgeAmountText,
                     onValueChange = viewModel::onBridgeAmountChanged,
-                    label = { Text("Amount (integer)") },
+                    label = { Text("Amount") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("bridge_amount"),
                 )
@@ -811,7 +772,7 @@ private fun TransferTab(state: CustodyUiState, viewModel: CustodyViewModel) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text("Transfer")
+                    Text(t.bridgeAction.label)
                 }
                 t.bridgeResult?.let { r -> BridgeResultCard(r) { viewModel.clearBridgeResult() } }
             }
@@ -876,20 +837,29 @@ private fun VaultChips(labels: List<String>, selected: String, onSelect: (String
 
 @Composable
 private fun BridgeResultCard(r: CustodyBridgeResult, onDismiss: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth().testTag("bridge_result")) {
+    val (container, content) = if (r.ok) {
+        MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = container, contentColor = content), modifier = Modifier.fillMaxWidth().testTag("bridge_result")) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (r.ok) "Submitted" else "Rejected", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                if (r.simulated) SimulatedChip()
-            }
-            r.direction?.let { DetailRow("Direction", it.label) }
-            r.asset?.let { DetailRow("Asset id", it.toString()) }
-            r.amount?.let { DetailRow("Amount", it.toString()) }
-            if (r.direction == BridgeDirection.TO_TRADING) {
-                DetailRow("Trading credited", if (r.tradingCredited) "yes" else "no")
-            }
-            r.note?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val verb = if (r.action.isSettle) "Settled" else "Funded"
+            Text(
+                if (r.ok) "$verb ✓" else "Rejected",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            DetailRow("Action", r.action.label)
+            r.token?.let { DetailRow("Token", it) }
+            r.amount?.let { DetailRow("Amount", it) }
+            r.meAmount?.let { DetailRow("Engine amt", it) }
+            r.ledger?.let { DetailRow(r.action.venue.label, it) }
+            r.custody?.let { DetailRow("Custody", it) }
+            if (!r.ok) {
+                r.reason?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
             }
             TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Dismiss") }
         }
@@ -898,39 +868,31 @@ private fun BridgeResultCard(r: CustodyBridgeResult, onDismiss: () -> Unit) {
 
 @Composable
 private fun SubTransferResultCard(r: SubAccountTransferResult, onDismiss: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth().testTag("sub_result")) {
+    val (container, content) = if (r.ok) {
+        MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = container, contentColor = content), modifier = Modifier.fillMaxWidth().testTag("sub_result")) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (r.ok) "Submitted" else "Rejected", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                if (r.simulated) SimulatedChip()
-            }
+            Text(
+                if (r.ok) "Transferred ✓" else "Rejected",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
             r.from?.let { DetailRow("From", it.short()) }
             r.to?.let { DetailRow("To", it.short()) }
             r.asset?.let { DetailRow("Asset", it) }
             r.amount?.let { DetailRow("Amount", it) }
-            r.note?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            r.fromBalance?.let { DetailRow("From bal", it) }
+            r.toBalance?.let { DetailRow("To bal", it) }
+            if (!r.ok) {
+                r.reason?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
             }
             TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Dismiss") }
         }
-    }
-}
-
-/** Honest "not settled" marker shown whenever a transfer response carries stub:true. */
-@Composable
-private fun SimulatedChip() {
-    Box(
-        modifier = Modifier
-            .background(MaterialTheme.colorScheme.tertiaryContainer, RoundedCornerShape(50))
-            .padding(horizontal = 10.dp, vertical = 3.dp)
-            .testTag("simulated_chip"),
-    ) {
-        Text(
-            "Simulated · not settled",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onTertiaryContainer,
-            fontWeight = FontWeight.Medium,
-        )
     }
 }
 

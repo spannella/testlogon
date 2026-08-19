@@ -8,7 +8,7 @@ import com.testlogon.android.data.custody.CustodyAsset
 import com.testlogon.android.data.custody.CustodyAssets
 import com.testlogon.android.data.custody.CustodyBalance
 import com.testlogon.android.data.custody.CustodyBalances
-import com.testlogon.android.data.custody.BridgeDirection
+import com.testlogon.android.data.custody.BridgeAction
 import com.testlogon.android.data.custody.CustodyBridgeResult
 import com.testlogon.android.data.custody.CustodySubAccount
 import com.testlogon.android.data.custody.CustodySubAccounts
@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * The five in-screen custody tabs. Activity + Approvals have no backing endpoint on this backend and
+ * The seven in-screen custody tabs. Activity + Approvals have no backing endpoint on this backend and
  * render a static "not available" state; they are always shown (no role gating).
  */
 enum class CustodyTab { BALANCES, SUBACCOUNTS, TRANSFER, DEPOSIT, WITHDRAW, ACTIVITY, APPROVALS }
@@ -66,14 +66,14 @@ data class SubAccountsUiState(
 )
 
 /**
- * Transfer tab. Two independent forms: the custody<->trading bridge (direction + engine-asset-id +
- * amount) and the between-sub-accounts move (from/to labels + asset symbol + amount). Each holds its
- * own in-flight flag, error, and last (honest, possibly-simulated) result.
+ * Transfer tab. Two independent forms: the custody<->trading bridge (action = fund/settle x
+ * spot/margin + a token symbol + a decimal amount) and the between-sub-accounts move (from/to labels +
+ * asset symbol + amount). Each holds its own in-flight flag, error, and last (real) result.
  */
 data class TransferUiState(
     // Bridge (custody <-> trading)
-    val direction: BridgeDirection = BridgeDirection.TO_TRADING,
-    val bridgeAssetText: String = "",
+    val bridgeAction: BridgeAction = BridgeAction.FUND_SPOT,
+    val bridgeToken: String = CustodyAssets.BRIDGE_TOKENS.firstOrNull() ?: "ETH",
     val bridgeAmountText: String = "",
     val bridgeSubmitting: Boolean = false,
     val bridgeError: String? = null,
@@ -87,9 +87,10 @@ data class TransferUiState(
     val subError: String? = null,
     val subResult: SubAccountTransferResult? = null,
 ) {
-    val bridgeAssetInt: Int? get() = bridgeAssetText.trim().toIntOrNull()
-    val bridgeAmountLong: Long? get() = bridgeAmountText.trim().toLongOrNull()
-    val canBridge: Boolean get() = !bridgeSubmitting && (bridgeAssetInt ?: -1) >= 0 && (bridgeAmountLong ?: 0L) > 0L
+    val bridgeAmountDouble: Double? get() = bridgeAmountText.trim().toDoubleOrNull()
+    val canBridge: Boolean get() = !bridgeSubmitting &&
+        bridgeToken.trim().isNotEmpty() &&
+        (bridgeAmountDouble ?: 0.0) > 0.0
     val subAmountDouble: Double? get() = subAmountText.trim().toDoubleOrNull()
     val canSubTransfer: Boolean get() = !subSubmitting &&
         subAsset.trim().isNotEmpty() &&
@@ -280,27 +281,27 @@ class CustodyViewModel @Inject constructor(
 
     // ---- transfer: custody <-> trading bridge ----
 
-    fun onBridgeDirectionToggle() =
-        _uiState.update { it.copy(transfer = it.transfer.copy(direction = it.transfer.direction.toggle(), bridgeError = null, bridgeResult = null)) }
+    fun onBridgeActionSelected(action: BridgeAction) =
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAction = action, bridgeError = null, bridgeResult = null)) }
 
-    fun onBridgeAssetChanged(v: String) =
-        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAssetText = v.filter { c -> c.isDigit() }.take(6), bridgeError = null)) }
+    fun onBridgeTokenSelected(token: String) =
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeToken = token.trim().uppercase(), bridgeError = null)) }
 
     fun onBridgeAmountChanged(v: String) =
-        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAmountText = v.filter { c -> c.isDigit() }.take(15), bridgeError = null)) }
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAmountText = sanitizeDecimal(v), bridgeError = null)) }
 
     fun submitBridgeTransfer() {
         val t = _uiState.value.transfer
         if (!t.canBridge) {
-            _uiState.update { it.copy(transfer = it.transfer.copy(bridgeError = "Enter an asset id and an amount greater than 0.")) }
+            _uiState.update { it.copy(transfer = it.transfer.copy(bridgeError = "Choose a token and an amount greater than 0.")) }
             return
         }
-        val asset = t.bridgeAssetInt!!
-        val amount = t.bridgeAmountLong!!
-        val direction = t.direction
+        val action = t.bridgeAction
+        val token = t.bridgeToken
+        val amount = t.bridgeAmountText.trim()
         _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = true, bridgeError = null, bridgeResult = null)) }
         viewModelScope.launch {
-            when (val r = repo.bridgeTransfer(direction, asset, amount)) {
+            when (val r = repo.bridge(action, token, amount)) {
                 is ApiResult.Success -> {
                     _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = false, bridgeResult = r.data)) }
                     loadBalance()
@@ -319,7 +320,7 @@ class CustodyViewModel @Inject constructor(
     fun onFromLabelChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(fromLabel = v, subError = null)) }
     fun onToLabelChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(toLabel = v, subError = null)) }
     fun onSubAssetChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(subAsset = v.trim().uppercase().take(12), subError = null)) }
-    fun onSubAmountChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(subAmountText = v, subError = null)) }
+    fun onSubAmountChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(subAmountText = sanitizeDecimal(v), subError = null)) }
 
     fun submitSubAccountTransfer() {
         val t = _uiState.value.transfer
@@ -338,7 +339,10 @@ class CustodyViewModel @Inject constructor(
         _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = true, subError = null, subResult = null)) }
         viewModelScope.launch {
             when (val r = repo.subAccountTransfer(from.ifBlank { null }, to.ifBlank { null }, asset, amount)) {
-                is ApiResult.Success -> _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subResult = r.data)) }
+                is ApiResult.Success -> {
+                    _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subResult = r.data)) }
+                    loadSubAccounts()
+                }
                 is ApiResult.Failure -> _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subError = r.error.messageFor())) }
                 is ApiResult.NetworkError -> _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subError = "Network error. Check your connection and try again.")) }
             }
@@ -354,6 +358,16 @@ class CustodyViewModel @Inject constructor(
             it.copy(withdraw = it.withdraw.copy(result = null, amount = "", destination = "", tokenOverride = "", submitError = null))
         }
     }
+}
+
+/** Keep digits + a single decimal point, capped to a sane length. */
+private fun sanitizeDecimal(v: String): String {
+    val filtered = v.filter { it.isDigit() || it == '.' }
+    val firstDot = filtered.indexOf('.')
+    val cleaned = if (firstDot < 0) filtered else {
+        filtered.substring(0, firstDot + 1) + filtered.substring(firstDot + 1).replace(".", "")
+    }
+    return cleaned.take(24)
 }
 
 // ---- ApiResult -> Async projection ----

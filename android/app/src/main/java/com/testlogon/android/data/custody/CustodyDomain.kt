@@ -2,9 +2,10 @@ package com.testlogon.android.data.custody
 
 /*
  * Domain models + the static asset registry for the custody feature: null-safe, UI-ready projections
- * of the PRODUCTION /me/custody wire DTOs. The repository maps DTO -> domain (coercing balance
- * number-or-string to a Double, resolving each symbol against the registry, normalizing the withdraw
- * status to a sealed enum) so composables never touch raw wire shapes.
+ * of the PRODUCTION /me/custody wire DTOs (now repointed to the REAL merged backend). The repository
+ * maps DTO -> domain (coercing balance number-or-string to a Double, resolving each symbol against the
+ * registry, normalizing the withdraw status to a sealed enum) so composables never touch raw wire
+ * shapes. Nothing here is "simulated" any more - the bridge and vault<->vault transfer are real.
  */
 
 // ---------------- Asset registry ----------------
@@ -43,6 +44,9 @@ object CustodyAssets {
         CustodyAsset("POL", "Polygon", 137, "Polygon", "Polygon Mainnet", NATIVE, 18),
     )
 
+    /** The asset symbols accepted by the custody<->trading bridge (fund/settle spot/margin). */
+    val BRIDGE_TOKENS: List<String> = ALL.map { it.symbol }
+
     /**
      * Human chain name for a chain id (from the registry, else a generic "Chain <id>"). Used to label
      * scanned deposits whose `chain` arrives as a numeric id string.
@@ -60,7 +64,7 @@ object CustodyAssets {
 
     /**
      * Produces a displayable balance row for EVERY registry asset (0 when absent from [balances]),
-     * followed by any balance key not in the registry — flagged [CustodyBalance.known] = false with
+     * followed by any balance key not in the registry - flagged [CustodyBalance.known] = false with
      * safe fallbacks (chain 1 / native).
      */
     fun mergeBalances(balances: Map<String, Double>): List<CustodyBalance> {
@@ -132,40 +136,29 @@ data class CustodyDepositAddress(
 
 // ---------------- Incoming deposits (scanned) ----------------
 
-/** Whether a scanned incoming transfer was credited or ignored as a duplicate. */
-enum class DepositStatus(val wire: String, val label: String) {
-    CREDITED("credited", "Credited"),
-    DUPLICATE("duplicate", "Duplicate"),
-    UNKNOWN("", "Pending");
-
-    companion object {
-        fun from(wire: String?): DepositStatus =
-            entries.firstOrNull { it.wire == wire?.trim()?.lowercase() } ?: UNKNOWN
-    }
-}
-
-/** One scanned incoming on-chain transfer, resolved to a display-ready row. */
+/**
+ * One scanned incoming on-chain transfer, resolved to a display-ready row. The REAL backend exposes
+ * {vault, asset, amount, chain, txhash, log_index, dedup_key} - there is no status or timestamp.
+ */
 data class CustodyDeposit(
     val chainId: Int?,
     val chainName: String,
     val asset: String,
     val amount: String,
     val txHash: String,
-    val status: DepositStatus,
-    /** Unix epoch in MILLISECONDS (seconds-vs-ms detected at mapping time), or null if absent. */
-    val timestampMs: Long?,
-    val seq: Long?,
+    val logIndex: String?,
+    val dedupKey: String?,
 ) {
     /** Short 0x… head+tail form of the tx hash for a compact row. */
     val txShort: String
         get() = txHash.let { if (it.length <= 14) it else "${it.take(8)}…${it.takeLast(4)}" }
 }
 
-/** The whole deposits response: the vault id + the (newest-first) rows, plus an "unavailable" flag. */
+/** The whole deposits response: the vault id + the rows, plus an "unavailable" flag. */
 data class CustodyDeposits(
     val vault: String,
     val rows: List<CustodyDeposit>,
-    /** True when the backend does not expose deposit scanning (endpoint 404) — a soft, non-error state. */
+    /** True when the backend does not expose deposit scanning (endpoint 404) - a soft, non-error state. */
     val unavailable: Boolean = false,
 ) {
     val isEmpty: Boolean get() = rows.isEmpty()
@@ -208,78 +201,81 @@ data class CustodyWithdrawResult(
 // ---------------- Sub-accounts ----------------
 
 /**
- * A custody sub-account vault: the base ("default") vault or a named sub-account. [balances] are the
- * merged, display-ready rows (same registry treatment as the main balance view).
+ * A custody sub-account vault. The REAL backend returns only {label, vault} - no tier / balances.
  */
 data class CustodySubAccount(
-    val id: String,
     val label: String,
-    val tier: String,
-    val isDefault: Boolean,
-    val rows: List<CustodyBalance>,
+    val vault: String,
 ) {
-    val displayLabel: String get() = if (isDefault) "Base vault" else label.ifBlank { "Sub-account" }
-    val idShort: String get() = if (id.length <= 14) id else "${id.take(8)}…${id.takeLast(4)}"
-    fun funded(): List<CustodyBalance> = rows.filter { it.amount > 0.0 }
+    val displayLabel: String get() = label.ifBlank { "Sub-account" }
+    val vaultShort: String get() = if (vault.length <= 14) vault else "${vault.take(8)}…${vault.takeLast(4)}"
 }
 
 /**
- * The sub-accounts response: the default (base) vault + the named sub-accounts, plus an "unavailable"
- * flag for when the backend does not expose the route (404 -> soft empty state).
+ * The sub-accounts response: the named sub-accounts, plus an "unavailable" flag for when the backend
+ * does not expose the route (404 -> soft empty state).
  */
 data class CustodySubAccounts(
-    val defaultVault: String,
     val subAccounts: List<CustodySubAccount>,
     val unavailable: Boolean = false,
 ) {
-    /** Base vault + named sub-accounts, so a picker can offer every OWN vault as a transfer endpoint. */
-    val all: List<CustodySubAccount>
-        get() = listOf(
-            CustodySubAccount(id = defaultVault, label = "", tier = "—", isDefault = true, rows = emptyList()),
-        ) + subAccounts
-
     val isEmpty: Boolean get() = subAccounts.isEmpty()
 
     companion object {
         fun unavailable(): CustodySubAccounts =
-            CustodySubAccounts(defaultVault = "", subAccounts = emptyList(), unavailable = true)
+            CustodySubAccounts(subAccounts = emptyList(), unavailable = true)
     }
 }
 
-// ---------------- Transfers ----------------
+// ---------------- Custody <-> trading bridge ----------------
 
-/** Which side of the custody<->trading bridge a transfer moves value toward. */
-enum class BridgeDirection(val wire: String, val label: String) {
-    TO_TRADING("to_trading", "Custody → Trading"),
-    TO_CUSTODY("to_custody", "Trading → Custody");
+/**
+ * The four custody<->trading bridge actions. [fund] moves custody value INTO an exchange ledger;
+ * [settle] moves it BACK to custody. [venue] is which exchange ledger (spot or margin).
+ */
+enum class BridgeVenue(val label: String) { SPOT("Spot"), MARGIN("Margin") }
 
-    fun toggle(): BridgeDirection = if (this == TO_TRADING) TO_CUSTODY else TO_TRADING
+enum class BridgeAction(val venue: BridgeVenue, val fund: Boolean, val label: String) {
+    FUND_SPOT(BridgeVenue.SPOT, true, "Fund spot"),
+    SETTLE_SPOT(BridgeVenue.SPOT, false, "Settle spot"),
+    FUND_MARGIN(BridgeVenue.MARGIN, true, "Fund margin"),
+    SETTLE_MARGIN(BridgeVenue.MARGIN, false, "Settle margin");
+
+    val isSettle: Boolean get() = !fund
 }
 
 /**
- * Result of the custody<->trading bridge. [simulated] (stub) is expected true today; [tradingCredited]
- * is only meaningful on the to_trading path. [note] is the honest "not settled" explanation.
+ * Result of a bridge fund/settle. [ok] reflects funded/settled=true; on a 200 the ledger + custody
+ * balances are echoed. On a 422 [ok] is false and [reason] carries the rejection (e.g.
+ * "insufficient_spot_available"). All amounts are decimal strings as returned by the backend.
  */
 data class CustodyBridgeResult(
     val ok: Boolean,
-    val simulated: Boolean,
-    val direction: BridgeDirection?,
-    val asset: Int?,
-    val amount: Long?,
-    val tradingCredited: Boolean,
-    val note: String?,
+    val action: BridgeAction,
+    val token: String?,
+    val amount: String?,
+    /** The engine-side amount actually moved (me_amount), when returned. */
+    val meAmount: String?,
+    /** The resulting spot/margin ledger balance (whichever this action touched), when returned. */
+    val ledger: String?,
+    /** The resulting custody balance (settle path), when returned. */
+    val custody: String?,
+    val reason: String?,
 )
 
+// ---------------- Sub-account transfer ----------------
+
 /**
- * Result of a between-sub-accounts transfer. This route is a documented no-op, so [simulated] is
- * expected true and no balance moves; [note] carries the honest explanation.
+ * Result of a between-sub-accounts transfer (REAL - balance moves). On success the resulting from/to
+ * balances are echoed; on failure [reason] carries the gateway message.
  */
 data class SubAccountTransferResult(
     val ok: Boolean,
-    val simulated: Boolean,
     val from: String?,
     val to: String?,
     val asset: String?,
     val amount: String?,
-    val note: String?,
+    val fromBalance: String?,
+    val toBalance: String?,
+    val reason: String?,
 )

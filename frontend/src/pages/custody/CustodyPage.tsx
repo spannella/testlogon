@@ -115,33 +115,6 @@ function chainName(chain: string | number | undefined): string {
   return String(chain);
 }
 
-/** ts may be seconds (small) or ms (large) — normalise to ms. */
-function tsToMs(ts: number): number {
-  if (!Number.isFinite(ts) || ts <= 0) return 0;
-  // ~1e12 ms == year 2001; anything below that is almost certainly seconds.
-  return ts > 1e12 ? ts : ts * 1000;
-}
-
-function relTime(ts: number): string {
-  const ms = tsToMs(ts);
-  if (!ms) return "";
-  const diff = Date.now() - ms;
-  const abs = Math.abs(diff);
-  const mins = Math.round(abs / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(ms).toLocaleDateString();
-}
-
-function absTime(ts: number): string {
-  const ms = tsToMs(ts);
-  return ms ? new Date(ms).toLocaleString() : "";
-}
-
 function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -307,28 +280,6 @@ function OverviewTab({
 
 // ─── Incoming transfers (deposit-scanner feed) ──────────────────
 
-function DepositStatusBadge({ status }: { status: string }) {
-  if (status === "credited") {
-    return (
-      <Badge className="gap-1 border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-        <CircleCheck className="h-3 w-3" /> Credited
-      </Badge>
-    );
-  }
-  if (status === "duplicate") {
-    return (
-      <Badge variant="outline" className="gap-1 text-muted-foreground">
-        <Info className="h-3 w-3" /> Duplicate
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="outline" className="text-muted-foreground">
-      {status}
-    </Badge>
-  );
-}
-
 function TxHashCell({ txhash }: { txhash: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -397,18 +348,14 @@ function IncomingTransfers() {
             <div className="space-y-2">
               {deposits.map((d) => (
                 <div
-                  key={`${d.txhash}-${d.log_index}-${d.seq}`}
+                  key={`${d.txhash}-${d.log_index}`}
                   className="rounded-lg border p-3 text-sm"
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-semibold tabular-nums">
                       {fmtAmount(d.amount)} {d.asset}
                     </span>
-                    <DepositStatusBadge status={d.status} />
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-                    <span>{chainName(d.chain)}</span>
-                    <span title={absTime(d.ts)}>{relTime(d.ts)}</span>
+                    <span className="text-xs text-muted-foreground">{chainName(d.chain)}</span>
                   </div>
                   <div className="mt-1">
                     <TxHashCell txhash={d.txhash} />
@@ -424,15 +371,13 @@ function IncomingTransfers() {
                     <th className="py-2 pr-3 font-medium">Chain</th>
                     <th className="py-2 pr-3 font-medium">Asset</th>
                     <th className="py-2 pr-3 text-right font-medium">Amount</th>
-                    <th className="py-2 pr-3 font-medium">Tx</th>
-                    <th className="py-2 pr-3 font-medium">Status</th>
-                    <th className="py-2 text-right font-medium">Time</th>
+                    <th className="py-2 font-medium">Tx</th>
                   </tr>
                 </thead>
                 <tbody>
                   {deposits.map((d) => (
                     <tr
-                      key={`${d.txhash}-${d.log_index}-${d.seq}`}
+                      key={`${d.txhash}-${d.log_index}`}
                       className="border-b last:border-0"
                     >
                       <td className="py-2 pr-3">{chainName(d.chain)}</td>
@@ -440,14 +385,8 @@ function IncomingTransfers() {
                       <td className="py-2 pr-3 text-right tabular-nums">
                         {fmtAmount(d.amount)}
                       </td>
-                      <td className="py-2 pr-3">
+                      <td className="py-2">
                         <TxHashCell txhash={d.txhash} />
-                      </td>
-                      <td className="py-2 pr-3">
-                        <DepositStatusBadge status={d.status} />
-                      </td>
-                      <td className="py-2 text-right text-muted-foreground" title={absTime(d.ts)}>
-                        {relTime(d.ts)}
                       </td>
                     </tr>
                   ))}

@@ -35,29 +35,29 @@ export interface DepositAddress {
 }
 
 export interface CustodyDeposit {
+  /** Vault the deposit credited into. */
+  vault?: string;
   /** Source chain id (as a string). Map to a name via CUSTODY_ASSETS. */
   chain: string;
   /** On-chain transaction hash of the incoming transfer. */
   txhash: string;
-  /** Log index within the tx (as a string). */
-  log_index: string;
+  /** Log index within the tx (as a string or number). */
+  log_index: string | number;
   /** Credited asset symbol (e.g. "ETH", "USDC"). */
   asset: string;
   /** Amount as a string. */
   amount: string;
-  /** "credited" once applied to the vault; "duplicate" if already seen. */
-  status: "credited" | "duplicate" | string;
-  /** Monotonic scanner sequence number. */
-  seq: number;
-  /** Unix timestamp — seconds if small, ms if large (detect on render). */
-  ts: number;
+  /** Idempotency key for the credited transfer. */
+  dedup_key?: string;
 }
 
 export interface CustodyDepositsResult {
   /** Vault id these deposits credited into. */
   vault: string;
-  /** Incoming transfers, newest first. */
+  /** Incoming transfers. */
   deposits: CustodyDeposit[];
+  /** Count of deposits. */
+  count?: number;
 }
 
 export type WithdrawalStatus =
@@ -237,108 +237,152 @@ export function mergeBalances(
 
 
 // ─── Sub-accounts, custody<->trading bridge, and fee endpoints ───────────
-// NEW gap-closing endpoints (from the exchange-edge custody phase). Every one
-// of these MAY 404 on backends where the edge isn't deployed yet — all callers
-// must degrade gracefully (retry:false + an "unavailable" empty state) and the
-// stub/simulated responses below carry a `stub:true` flag the UI surfaces
-// honestly so a user never mistakes a simulated move for a settled one.
-
-export interface SubaccountBalancesMap {
-  [asset: string]: number | string;
-}
+// Gap-closing endpoints from the exchange-edge custody phase. Every one MAY
+// 404 on backends where the edge isn't deployed yet — all callers must degrade
+// gracefully (retry:false + an "unavailable" empty state). These routes are
+// REAL (atomic, reversal-on-failure) — there is NO stub/simulated flag.
 
 export interface Subaccount {
-  id: string;
+  /** Sub-account label (base vault has no label). */
   label: string;
-  tier?: string;
-  balances?: SubaccountBalancesMap;
-  /** Full vault name (present on create). */
-  vault?: string;
+  /** Full vault name. */
+  vault: string;
 }
 
 export interface SubaccountsResult {
-  /** The caller's base (default) vault name. */
-  default_vault: string;
   subaccounts: Subaccount[];
 }
 
 /**
- * List the caller's sub-account vaults (default base vault + named ones).
+ * List the caller's sub-account vaults (label + vault only — no balances/tier).
  * 404s until the edge deploys — callers should render a graceful
  * "not available on this backend yet" state (retry:false).
  */
 export const getSubaccounts = () =>
   api.get<SubaccountsResult>("/me/custody/subaccounts");
 
+export interface CreateSubaccountResult {
+  created: true;
+  label: string;
+  vault: string;
+}
+
 /** Create a named sub-account vault under the caller's base vault. */
 export const createSubaccount = (label: string) =>
-  api.post<Subaccount>("/me/custody/subaccounts", { label });
+  api.post<CreateSubaccountResult>("/me/custody/subaccounts", { label });
 
-/** Response to a simulated transfer — carries stub:true when not settled. */
-export interface TransferResult {
-  status: string;
-  stub?: boolean;
-  note?: string;
-  from?: string;
-  to?: string;
-  asset?: string | number;
-  amount?: string | number;
-  direction?: "to_trading" | "to_custody" | string;
-  trading_credited?: boolean;
-  [k: string]: unknown;
+/** Real atomic vault->vault transfer result. No stub flag. */
+export interface SubaccountTransferResult {
+  transferred: true;
+  asset: string;
+  amount: string | number;
+  from: string;
+  to: string;
+  from_balance: string | number;
+  to_balance: string | number;
 }
 
 export interface SubaccountTransferRequest {
   from_label?: string;
   to_label?: string;
-  asset: string | number;
+  /** Defaults to "native" when omitted. */
+  asset?: string;
   amount: number | string;
 }
 
 /**
  * Move an asset between two of the caller's OWN sub-account vaults (or the
- * base vault). Deliberately a documented no-op on the backend (stub:true).
+ * base vault when a label is omitted). REAL atomic move — no stub.
  */
 export const transferBetweenSubaccounts = (req: SubaccountTransferRequest) =>
-  api.post<TransferResult>("/me/custody/subaccounts/transfer", req);
+  api.post<SubaccountTransferResult>("/me/custody/subaccounts/transfer", req);
 
-export interface CustodyTradingTransferRequest {
-  direction: "to_trading" | "to_custody";
-  /** Engine asset id for the credit path. */
-  asset: number;
-  /** Positive integer amount. */
-  amount: number;
+// ─── Custody <-> trading bridge (FOUR real routes) ───────────────────────
+// Move value between the custody vault and the exchange spot/margin ledgers.
+// REAL (atomic, reversal-on-failure). Body is keyed by asset SYMBOL.
+
+export interface BridgeRequest {
+  /** Asset symbol from CUSTODY_ASSETS ("ETH","USDC","USDT","BNB","POL"). */
+  token: string;
+  /** Amount as a decimal string. */
+  amount: string;
 }
 
-/**
- * Custody<->trading bridge: move value between the custody vault and the
- * exchange spot ledger. Best-effort / simulated (stub:true) — see the
- * returned `note`.
- */
-export const custodyTradingTransfer = (req: CustodyTradingTransferRequest) =>
-  api.post<TransferResult>("/me/custody/transfer", req);
+/** custody -> spot: 200. */
+export interface FundSpotResult {
+  funded: true;
+  token: string;
+  asset_id: number | string;
+  amount: string | number;
+  me_amount: string | number;
+  spot: unknown;
+}
+
+/** spot -> custody: 200 | 422 {settled:false, reason, spot}. */
+export interface SettleSpotResult {
+  settled: boolean;
+  token?: string;
+  amount?: string | number;
+  me_amount?: string | number;
+  spot?: unknown;
+  custody?: unknown;
+  reason?: string;
+}
+
+/** custody -> margin: 200 | 422 {funded:false, reason, margin}. */
+export interface FundMarginResult {
+  funded: boolean;
+  token?: string;
+  asset_id?: number | string;
+  amount?: string | number;
+  me_amount?: string | number;
+  margin?: unknown;
+  reason?: string;
+}
+
+/** margin -> custody: 200 | 422. */
+export interface SettleMarginResult {
+  settled: boolean;
+  token?: string;
+  amount?: string | number;
+  me_amount?: string | number;
+  margin?: unknown;
+  custody?: unknown;
+  reason?: string;
+}
+
+/** custody -> spot */
+export const fundSpot = (req: BridgeRequest) =>
+  api.post<FundSpotResult>("/me/custody/fund-spot", req);
+
+/** spot -> custody */
+export const settleSpot = (req: BridgeRequest) =>
+  api.post<SettleSpotResult>("/me/custody/settle-spot", req);
+
+/** custody -> margin */
+export const fundMargin = (req: BridgeRequest) =>
+  api.post<FundMarginResult>("/me/custody/fund-margin", req);
+
+/** margin -> custody */
+export const settleMargin = (req: BridgeRequest) =>
+  api.post<SettleMarginResult>("/me/custody/settle-margin", req);
 
 // ─── Fees ────────────────────────────────────────────────────────────────
 
-export interface FeeScheduleRow {
-  symbolid?: number;
-  maker_fee_bps: number;
-  taker_fee_bps: number;
-  liquidation_fee_bps: number;
-}
-
 export interface FeeScheduleResult {
-  schedule: FeeScheduleRow[];
+  status: "ok" | string;
+  type?: string;
+  symbolid: number;
   maker_fee_bps: number;
   taker_fee_bps: number;
   liquidation_fee_bps: number;
-  source?: string;
-  stub?: boolean;
+  source: "engine" | "venue_default" | string;
+  configured: boolean;
 }
 
-/** The caller's maker/taker/liquidation fee schedule (venue defaults when stub). */
-export const getFeeSchedule = () =>
-  api.get<FeeScheduleResult>("/me/fees/schedule");
+/** The maker/taker/liquidation fee schedule for a symbol. */
+export const getFeeSchedule = (symbolid: number) =>
+  api.get<FeeScheduleResult>("/me/fees/schedule", { symbolid: String(symbolid) });
 
 export interface EnrichedFill {
   price?: number;

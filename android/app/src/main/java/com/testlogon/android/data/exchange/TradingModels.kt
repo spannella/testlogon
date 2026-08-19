@@ -299,8 +299,15 @@ data class FeeSchedule(
     val makerFeeBps: Int,
     val takerFeeBps: Int,
     val liquidationFeeBps: Int,
-    val isStub: Boolean,
+    /** "engine" (a configured rate) or "venue_default". */
+    val source: String,
+    /** Whether this symbol has an explicit fee override (vs. inheriting the venue default). */
+    val configured: Boolean,
 ) {
+    /** True when these are the venue defaults (not a configured per-caller/engine rate). */
+    val isVenueDefault: Boolean get() = source.equals("venue_default", ignoreCase = true) || !configured
+    /** Human label for the source ("engine" / "venue default"). */
+    val sourceLabel: String get() = if (isVenueDefault) "venue default" else "engine"
     /** bps -> a percent string, e.g. 20 -> "0.20%". */
     fun makerPct(): String = bpsToPct(makerFeeBps)
     fun takerPct(): String = bpsToPct(takerFeeBps)
@@ -310,7 +317,7 @@ data class FeeSchedule(
     fun takerFeeFor(price: Long, qty: Long): Long = feeFor(price * qty, takerFeeBps)
 
     companion object {
-        fun default(): FeeSchedule = FeeSchedule(DEFAULT_MAKER_BPS, DEFAULT_TAKER_BPS, DEFAULT_LIQ_BPS, isStub = true)
+        fun default(): FeeSchedule = FeeSchedule(DEFAULT_MAKER_BPS, DEFAULT_TAKER_BPS, DEFAULT_LIQ_BPS, source = "venue_default", configured = false)
     }
 }
 
@@ -321,15 +328,13 @@ fun feeFor(notional: Long, bps: Int): Long =
 private fun bpsToPct(bps: Int): String = String.format(java.util.Locale.US, "%.2f%%", bps / 100.0)
 
 fun FeeScheduleDto.toDomain(): FeeSchedule {
-    val row = schedule.orEmpty().firstOrNull()
-    val maker = row?.makerFeeBps ?: makerFeeBps ?: DEFAULT_MAKER_BPS
-    val taker = row?.takerFeeBps ?: takerFeeBps ?: DEFAULT_TAKER_BPS
-    val liq = row?.liquidationFeeBps ?: liquidationFeeBps ?: DEFAULT_LIQ_BPS
+    val src = source?.trim()?.takeIf { it.isNotBlank() }?.lowercase() ?: "venue_default"
     return FeeSchedule(
-        makerFeeBps = maker,
-        takerFeeBps = taker,
-        liquidationFeeBps = liq,
-        isStub = stub == true || (source?.trim()?.lowercase() == "stub"),
+        makerFeeBps = makerFeeBps ?: DEFAULT_MAKER_BPS,
+        takerFeeBps = takerFeeBps ?: DEFAULT_TAKER_BPS,
+        liquidationFeeBps = liquidationFeeBps ?: DEFAULT_LIQ_BPS,
+        source = src,
+        configured = configured ?: (src == "engine"),
     )
 }
 

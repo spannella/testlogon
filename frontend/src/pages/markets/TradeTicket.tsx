@@ -139,9 +139,9 @@ const MARGIN_CONFIG_FIELDS: {
 ];
 
 // Compact maker/taker/liquidation fee schedule card. Sourced from the
-// /me/fees/schedule route; 404s until the exchange edge deploys, in which
-// case the card hides itself entirely (retry:false, graceful). When the
-// backend flags the row as a stub it is labelled clearly as venue defaults.
+// /me/fees/schedule route (per-symbol); 404s until the exchange edge deploys,
+// in which case the card hides itself entirely (retry:false, graceful). When
+// the backend has no engine-configured row it echoes venue-default rates.
 function useIsMobile(bp = 767): boolean {
   const [m, setM] = useState(
     () =>
@@ -157,11 +157,12 @@ function useIsMobile(bp = 767): boolean {
   return m;
 }
 
-function FeeSchedulePanel() {
+function FeeSchedulePanel({ symbolId }: { symbolId: number }) {
   const isMobile = useIsMobile();
   const q = useQuery({
-    queryKey: ["fees", "schedule"],
-    queryFn: getFeeSchedule,
+    queryKey: ["fees", "schedule", symbolId],
+    queryFn: () => getFeeSchedule(symbolId),
+    enabled: symbolId > 0,
     retry: false,
     staleTime: 60_000,
   });
@@ -169,11 +170,11 @@ function FeeSchedulePanel() {
   // Hide entirely when the route isn't available on this backend yet.
   if (q.isError || (!q.isLoading && !q.data)) return null;
 
-  const row = q.data?.schedule?.[0];
-  const maker = row?.maker_fee_bps ?? q.data?.maker_fee_bps;
-  const taker = row?.taker_fee_bps ?? q.data?.taker_fee_bps;
-  const liq = row?.liquidation_fee_bps ?? q.data?.liquidation_fee_bps;
-  const isStub = q.data?.stub === true || q.data?.source === "stub";
+  const maker = q.data?.maker_fee_bps;
+  const taker = q.data?.taker_fee_bps;
+  const liq = q.data?.liquidation_fee_bps;
+  const venueDefault = q.data?.source === "venue_default" || q.data?.configured === false;
+  const sourceLabel = venueDefault ? "venue default" : "engine";
 
   return (
     <Card className="mt-3">
@@ -182,14 +183,17 @@ function FeeSchedulePanel() {
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Fee schedule
           </span>
-          {isStub && (
-            <Badge
-              variant="outline"
-              className="gap-1 border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-600 dark:text-amber-400"
-            >
-              venue defaults
-            </Badge>
-          )}
+          <Badge
+            variant="outline"
+            className={cn(
+              "gap-1 text-[10px]",
+              venueDefault
+                ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                : "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+            )}
+          >
+            {sourceLabel}
+          </Badge>
         </div>
         {q.isLoading ? (
           <p className="py-2 text-center text-xs text-muted-foreground">Loading…</p>
@@ -209,10 +213,10 @@ function FeeSchedulePanel() {
             </div>
           </div>
         )}
-        {isStub && (
+        {venueDefault && (
           <p className="text-[10px] text-muted-foreground">
-            Shown fees are venue defaults; per-symbol rates apply when the engine
-            exposes a per-caller fee query.
+            Shown fees are venue defaults; engine-configured per-symbol rates
+            apply once this symbol has a fee schedule set.
           </p>
         )}
       </CardContent>
@@ -1254,7 +1258,7 @@ export function TradeTicket({
         {msg && <p className={cn("text-xs font-mono", msg.error ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400")}>{msg.text}</p>}
       </CardContent>
     </Card>
-    <FeeSchedulePanel />
+    <FeeSchedulePanel symbolId={symbolId} />
     <MarginConfigPanel symbolId={symbolId} />
     </div>
   );

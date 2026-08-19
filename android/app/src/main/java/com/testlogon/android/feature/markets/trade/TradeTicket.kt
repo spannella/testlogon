@@ -349,8 +349,8 @@ private fun FillsSection(state: TradingUiState) {
 }
 
 /**
- * Fee schedule card (GET /me/fees/schedule). When the schedule is the venue-default stub (source=stub)
- * a small "estimated" marker is shown so the rate is not mistaken for a negotiated per-caller quote.
+ * Fee schedule card (GET /me/fees/schedule?symbolid=<n>). A small source marker shows whether these are
+ * the engine-configured rates or the venue defaults, so the rate is read correctly.
  */
 @Composable
 private fun FeeScheduleCard(fee: com.testlogon.android.data.exchange.FeeSchedule) {
@@ -364,15 +364,13 @@ private fun FeeScheduleCard(fee: com.testlogon.android.data.exchange.FeeSchedule
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Fee schedule", color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
-            if (fee.isStub) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(MarketColors.Surface)
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                ) {
-                    Text("venue default · est.", color = MarketColors.TextFaint, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
-                }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MarketColors.Surface)
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            ) {
+                Text(fee.sourceLabel, color = MarketColors.TextFaint, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
             }
         }
         Spacer(Modifier.height(8.dp))

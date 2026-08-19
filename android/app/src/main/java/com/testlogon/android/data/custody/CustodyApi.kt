@@ -7,13 +7,14 @@ import retrofit2.http.POST
 import retrofit2.http.Query
 
 /**
- * Retrofit interface for the PRODUCTION custody surface (the me/custody endpoints). The exchange edge proxies
- * these to the MPC gateway. Paths are relative (no leading slash) so they resolve against the shared
- * Retrofit base URL; the session cookie + CSRF header are attached by the core-network interceptor
- * chain. All methods are suspend and return the typed DTO; a non-2xx surfaces as
+ * Retrofit interface for the PRODUCTION custody surface (the me/custody endpoints). The exchange edge
+ * proxies these to the MPC gateway. Paths are relative (no leading slash) so they resolve against the
+ * shared Retrofit base URL; the session cookie + CSRF header are attached by the core-network
+ * interceptor chain. All methods are suspend and return the typed DTO; a non-2xx surfaces as
  * retrofit2.HttpException.
  *
- * Only three endpoints exist on this backend — there is NO history / deposits list / approvals / audit.
+ * The custody<->trading bridge is now FOUR real routes (fund/settle x spot/margin). The old single
+ * POST me/custody/transfer no longer exists.
  */
 interface CustodyApi {
 
@@ -26,8 +27,8 @@ interface CustodyApi {
     suspend fun depositAddress(@Query("chain") chain: Int): DepositAddressDto
 
     /**
-     * Recent scanned incoming transfers into the vault (newest first). NOT deployed on every backend:
-     * a 404 is handled by the repository as a graceful "unavailable" empty state.
+     * Recent scanned incoming transfers into the vault. NOT deployed on every backend: a 404 is handled
+     * by the repository as a graceful "unavailable" empty state.
      */
     @GET("me/custody/deposits")
     suspend fun getDeposits(): CustodyDepositsDto
@@ -36,28 +37,45 @@ interface CustodyApi {
     @Headers("Content-Type: application/json")
     @POST("me/custody/withdraw")
     suspend fun withdraw(@Body body: WithdrawRequestDto): WithdrawResultDto
-    // ==== Sub-accounts + transfers (custody-exchange-gaps) ====
+
+    // ==== Sub-accounts + transfers ====
 
     /**
-     * List the caller's sub-account vaults (base/default vault id + named sub-accounts). NOT deployed
-     * on every backend -> a 404 is handled by the repository as a graceful "unavailable" empty state.
+     * List the caller's sub-account vaults ({label, vault}). NOT deployed on every backend -> a 404 is
+     * handled by the repository as a graceful "unavailable" empty state.
      */
     @GET("me/custody/subaccounts")
     suspend fun getSubAccounts(): SubAccountsDto
 
-    /** Create a named sub-account vault under the caller's base vault. */
+    /** Create a named sub-account vault under the caller's base vault (201 {created, label, vault}). */
     @Headers("Content-Type: application/json")
     @POST("me/custody/subaccounts")
     suspend fun createSubAccount(@Body body: CreateSubAccountDto): CreateSubAccountResultDto
 
-    /** Move an asset between two of the caller's OWN sub-account vaults (documented stub / no-op). */
+    /** Move an asset between two of the caller's OWN sub-account vaults (REAL; echoes new balances). */
     @Headers("Content-Type: application/json")
     @POST("me/custody/subaccounts/transfer")
     suspend fun subAccountTransfer(@Body body: SubAccountTransferDto): SubAccountTransferResultDto
 
-    /** Custody<->trading bridge: move value between the custody vault and the exchange spot ledger. */
-    @Headers("Content-Type: application/json")
-    @POST("me/custody/transfer")
-    suspend fun bridgeTransfer(@Body body: CustodyBridgeTransferDto): CustodyBridgeTransferResultDto
-}
+    // ==== Custody <-> trading bridge (four real routes) ====
 
+    /** Move custody vault value INTO the exchange spot ledger. */
+    @Headers("Content-Type: application/json")
+    @POST("me/custody/fund-spot")
+    suspend fun fundSpot(@Body body: BridgeRequestDto): FundResultDto
+
+    /** Move spot-ledger value BACK into the custody vault (422 when insufficient spot available). */
+    @Headers("Content-Type: application/json")
+    @POST("me/custody/settle-spot")
+    suspend fun settleSpot(@Body body: BridgeRequestDto): SettleResultDto
+
+    /** Move custody vault value INTO the margin ledger (422 with reason on rejection). */
+    @Headers("Content-Type: application/json")
+    @POST("me/custody/fund-margin")
+    suspend fun fundMargin(@Body body: BridgeRequestDto): FundResultDto
+
+    /** Move margin-ledger value BACK into the custody vault (422 with reason on rejection). */
+    @Headers("Content-Type: application/json")
+    @POST("me/custody/settle-margin")
+    suspend fun settleMargin(@Body body: BridgeRequestDto): SettleResultDto
+}
