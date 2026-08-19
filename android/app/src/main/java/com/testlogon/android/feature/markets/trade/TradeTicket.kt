@@ -484,7 +484,12 @@ private fun EmptyHint(text: String) {
 @Composable
 private fun SectionTabs(section: TicketSection, ordersCount: Int, posCount: Int, fillsCount: Int, onSelect: (TicketSection) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(MarketColors.SurfaceAlt).padding(3.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MarketColors.SurfaceAlt)
+            .horizontalScroll(rememberScrollState())
+            .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         TicketSection.values().forEach { s ->
@@ -498,12 +503,11 @@ private fun SectionTabs(section: TicketSection, ordersCount: Int, posCount: Int,
             val on = s == section
             Box(
                 modifier = Modifier
-                    .weight(1f)
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (on) MarketColors.Surface else Color.Transparent)
                     .clickable { onSelect(s) }
                     .testTag("section_${s.name}")
-                    .padding(vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
