@@ -36,4 +36,28 @@ interface CustodyApi {
     @Headers("Content-Type: application/json")
     @POST("me/custody/withdraw")
     suspend fun withdraw(@Body body: WithdrawRequestDto): WithdrawResultDto
+    // ==== Sub-accounts + transfers (custody-exchange-gaps) ====
+
+    /**
+     * List the caller's sub-account vaults (base/default vault id + named sub-accounts). NOT deployed
+     * on every backend -> a 404 is handled by the repository as a graceful "unavailable" empty state.
+     */
+    @GET("me/custody/subaccounts")
+    suspend fun getSubAccounts(): SubAccountsDto
+
+    /** Create a named sub-account vault under the caller's base vault. */
+    @Headers("Content-Type: application/json")
+    @POST("me/custody/subaccounts")
+    suspend fun createSubAccount(@Body body: CreateSubAccountDto): CreateSubAccountResultDto
+
+    /** Move an asset between two of the caller's OWN sub-account vaults (documented stub / no-op). */
+    @Headers("Content-Type: application/json")
+    @POST("me/custody/subaccounts/transfer")
+    suspend fun subAccountTransfer(@Body body: SubAccountTransferDto): SubAccountTransferResultDto
+
+    /** Custody<->trading bridge: move value between the custody vault and the exchange spot ledger. */
+    @Headers("Content-Type: application/json")
+    @POST("me/custody/transfer")
+    suspend fun bridgeTransfer(@Body body: CustodyBridgeTransferDto): CustodyBridgeTransferResultDto
 }
+

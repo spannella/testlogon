@@ -322,6 +322,10 @@ private fun OrdersSection(state: TradingUiState, viewModel: TradingViewModel) {
 
 @Composable
 private fun FillsSection(state: TradingUiState) {
+    state.feeSchedule?.let {
+        FeeScheduleCard(it)
+        Spacer(Modifier.height(10.dp))
+    }
     if (state.sessionFills.isEmpty()) {
         EmptyHint("No fills this session")
         return
@@ -329,9 +333,62 @@ private fun FillsSection(state: TradingUiState) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Text("Price", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1.2f))
         Text("Qty", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("Fee", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
         Text("Time", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
     }
-    state.sessionFills.take(60).forEach { f -> FillRow(f) }
+    state.sessionFills.take(60).forEach { f -> FillRow(f, state.feeForFill(f.price, f.qty)) }
+    state.fillsFees?.takeIf { it.isStub }?.let {
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Fee = ${it.feeFormula ?: "round(price*qty*taker_bps/10000)"} · computed client-side (est.)",
+            color = MarketColors.TextFaint,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+        )
+    }
+}
+
+/**
+ * Fee schedule card (GET /me/fees/schedule). When the schedule is the venue-default stub (source=stub)
+ * a small "estimated" marker is shown so the rate is not mistaken for a negotiated per-caller quote.
+ */
+@Composable
+private fun FeeScheduleCard(fee: com.testlogon.android.data.exchange.FeeSchedule) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MarketColors.SurfaceAlt)
+            .padding(12.dp)
+            .testTag("fee_schedule_card"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Fee schedule", color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            if (fee.isStub) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(MarketColors.Surface)
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text("venue default · est.", color = MarketColors.TextFaint, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        FeeRow("Maker", fee.makerPct(), fee.makerFeeBps)
+        FeeRow("Taker", fee.takerPct(), fee.takerFeeBps)
+        FeeRow("Liquidation", fee.liquidationPct(), fee.liquidationFeeBps)
+    }
+}
+
+@Composable
+private fun FeeRow(label: String, pct: String, bps: Int) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        Text(label, color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(pct, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text("$bps bps", color = MarketColors.TextFaint, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    }
 }
 
 @Composable
@@ -453,7 +510,7 @@ private fun StepBtn(sym: String, tag: String, onClick: () -> Unit) {
 private val fillTimeFmt = java.text.SimpleDateFormat("HH:mm:ss", Locale.US)
 
 @Composable
-private fun FillRow(fill: com.testlogon.android.data.exchange.Fill) {
+private fun FillRow(fill: com.testlogon.android.data.exchange.Fill, fee: Long) {
     val color = when (fill.side) {
         OrderSide.BUY -> MarketColors.Up
         OrderSide.SELL -> MarketColors.Down
@@ -462,6 +519,7 @@ private fun FillRow(fill: com.testlogon.android.data.exchange.Fill) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
         Text(fmt(fill.price.toDouble()), color = color, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1.2f))
         Text(fill.qty.toString(), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(fmt(fee.toDouble()), color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
         Text(
             text = if (fill.tsNs > 0) fillTimeFmt.format(java.util.Date(fill.tsNs / 1_000_000L)) else "--",
             color = MarketColors.TextFaint,

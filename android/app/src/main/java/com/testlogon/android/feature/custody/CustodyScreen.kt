@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +63,11 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.data.custody.CustodyAssets
 import com.testlogon.android.data.custody.CustodyBalance
+import com.testlogon.android.data.custody.BridgeDirection
+import com.testlogon.android.data.custody.CustodyBridgeResult
+import com.testlogon.android.data.custody.CustodySubAccount
+import com.testlogon.android.data.custody.CustodySubAccounts
+import com.testlogon.android.data.custody.SubAccountTransferResult
 import com.testlogon.android.data.custody.CustodyDeposit
 import com.testlogon.android.data.custody.CustodyDeposits
 import com.testlogon.android.data.custody.DepositStatus
@@ -94,6 +100,8 @@ fun CustodyScreen(
     val tabs = remember {
         listOf(
             CustodyTab.BALANCES,
+            CustodyTab.SUBACCOUNTS,
+            CustodyTab.TRANSFER,
             CustodyTab.DEPOSIT,
             CustodyTab.WITHDRAW,
             CustodyTab.ACTIVITY,
@@ -127,6 +135,8 @@ fun CustodyScreen(
             }
             when (state.tab) {
                 CustodyTab.BALANCES -> BalancesTab(state, viewModel)
+                CustodyTab.SUBACCOUNTS -> SubAccountsTab(state, viewModel)
+                CustodyTab.TRANSFER -> TransferTab(state, viewModel)
                 CustodyTab.DEPOSIT -> DepositTab(state, viewModel)
                 CustodyTab.WITHDRAW -> WithdrawTab(state, viewModel)
                 CustodyTab.ACTIVITY -> UnavailableTab(
@@ -144,6 +154,8 @@ fun CustodyScreen(
 
 private fun CustodyTab.title(): String = when (this) {
     CustodyTab.BALANCES -> "Balances"
+    CustodyTab.SUBACCOUNTS -> "Sub-accounts"
+    CustodyTab.TRANSFER -> "Transfer"
     CustodyTab.DEPOSIT -> "Deposit"
     CustodyTab.WITHDRAW -> "Withdraw"
     CustodyTab.ACTIVITY -> "Activity"
@@ -664,3 +676,271 @@ private fun HintText(text: String) {
 
 // short hash/address display helper.
 private fun String.short(): String = if (length <= 16) this else "${take(8)}…${takeLast(6)}"
+
+// ---------------- Sub-accounts ----------------
+
+@Composable
+private fun SubAccountsTab(state: CustodyUiState, viewModel: CustodyViewModel) {
+    val sa = state.subAccounts
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Create sub-account", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "A named vault under your base vault. Letters, digits, _ and - only.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = sa.newLabel,
+                    onValueChange = viewModel::onNewSubAccountLabelChanged,
+                    label = { Text("Label") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("subaccount_label"),
+                )
+                if (sa.createError != null) {
+                    Text(sa.createError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Button(
+                    onClick = { viewModel.createSubAccount() },
+                    enabled = !sa.creating && sa.newLabel.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().testTag("subaccount_create"),
+                ) {
+                    if (sa.creating) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Create sub-account")
+                }
+            }
+        }
+
+        val list = sa.list
+        when {
+            list.loading && list.data == null -> LoadingBox()
+            list.error != null && list.data == null -> ErrorBox(list.error) { viewModel.loadSubAccounts() }
+            list.data == null || list.data.unavailable -> UnavailableCard(
+                "Sub-accounts are not available on this backend yet. Creating one will start working once the gateway route is deployed.",
+            )
+            else -> {
+                val data = list.data
+                Text("Base vault: ${data.defaultVault.short().ifBlank { "—" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+                if (data.subAccounts.isEmpty()) {
+                    EmptyBox("No sub-accounts yet.")
+                } else {
+                    data.subAccounts.forEach { sub -> SubAccountCard(sub) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubAccountCard(sub: CustodySubAccount) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(sub.displayLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text("Tier: ${sub.tier}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(sub.idShort, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+            val funded = sub.funded()
+            if (funded.isEmpty()) {
+                Text("No balances", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+            } else {
+                Spacer(Modifier.height(6.dp))
+                funded.forEach { row ->
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                        Text(row.symbol, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                        Text(row.amountText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------- Transfer ----------------
+
+@Composable
+private fun TransferTab(state: CustodyUiState, viewModel: CustodyViewModel) {
+    val t = state.transfer
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Custody ↔ Trading bridge", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BridgeDirection.entries.forEach { d ->
+                        FilterChip(
+                            selected = d == t.direction,
+                            onClick = { if (d != t.direction) viewModel.onBridgeDirectionToggle() },
+                            label = { Text(d.label) },
+                            modifier = Modifier.testTag("bridge_dir_${d.name}"),
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = t.bridgeAssetText,
+                    onValueChange = viewModel::onBridgeAssetChanged,
+                    label = { Text("Engine asset id") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("bridge_asset"),
+                )
+                OutlinedTextField(
+                    value = t.bridgeAmountText,
+                    onValueChange = viewModel::onBridgeAmountChanged,
+                    label = { Text("Amount (integer)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("bridge_amount"),
+                )
+                if (t.bridgeError != null) {
+                    Text(t.bridgeError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Button(
+                    onClick = { viewModel.submitBridgeTransfer() },
+                    enabled = t.canBridge,
+                    modifier = Modifier.fillMaxWidth().testTag("bridge_submit"),
+                ) {
+                    if (t.bridgeSubmitting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Transfer")
+                }
+                t.bridgeResult?.let { r -> BridgeResultCard(r) { viewModel.clearBridgeResult() } }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Between sub-accounts", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                val labels = viewModel.subAccountLabels()
+                Text("From", style = MaterialTheme.typography.labelMedium)
+                VaultChips(labels = labels, selected = t.fromLabel, onSelect = viewModel::onFromLabelChanged, tagPrefix = "from")
+                Text("To", style = MaterialTheme.typography.labelMedium)
+                VaultChips(labels = labels, selected = t.toLabel, onSelect = viewModel::onToLabelChanged, tagPrefix = "to")
+                OutlinedTextField(
+                    value = t.subAsset,
+                    onValueChange = viewModel::onSubAssetChanged,
+                    label = { Text("Asset (e.g. ETH)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("sub_asset"),
+                )
+                OutlinedTextField(
+                    value = t.subAmountText,
+                    onValueChange = viewModel::onSubAmountChanged,
+                    label = { Text("Amount") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("sub_amount"),
+                )
+                if (t.subError != null) {
+                    Text(t.subError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Button(
+                    onClick = { viewModel.submitSubAccountTransfer() },
+                    enabled = t.canSubTransfer,
+                    modifier = Modifier.fillMaxWidth().testTag("sub_submit"),
+                ) {
+                    if (t.subSubmitting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Move")
+                }
+                t.subResult?.let { r -> SubTransferResultCard(r) { viewModel.clearSubTransferResult() } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VaultChips(labels: List<String>, selected: String, onSelect: (String) -> Unit, tagPrefix: String) {
+    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        labels.forEach { lbl ->
+            val display = if (lbl.isBlank()) "Base vault" else lbl
+            FilterChip(
+                selected = lbl == selected,
+                onClick = { onSelect(lbl) },
+                label = { Text(display) },
+                modifier = Modifier.testTag("vault_${tagPrefix}_${if (lbl.isBlank()) "base" else lbl}"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun BridgeResultCard(r: CustodyBridgeResult, onDismiss: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth().testTag("bridge_result")) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (r.ok) "Submitted" else "Rejected", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                if (r.simulated) SimulatedChip()
+            }
+            r.direction?.let { DetailRow("Direction", it.label) }
+            r.asset?.let { DetailRow("Asset id", it.toString()) }
+            r.amount?.let { DetailRow("Amount", it.toString()) }
+            if (r.direction == BridgeDirection.TO_TRADING) {
+                DetailRow("Trading credited", if (r.tradingCredited) "yes" else "no")
+            }
+            r.note?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Dismiss") }
+        }
+    }
+}
+
+@Composable
+private fun SubTransferResultCard(r: SubAccountTransferResult, onDismiss: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth().testTag("sub_result")) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (r.ok) "Submitted" else "Rejected", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                if (r.simulated) SimulatedChip()
+            }
+            r.from?.let { DetailRow("From", it.short()) }
+            r.to?.let { DetailRow("To", it.short()) }
+            r.asset?.let { DetailRow("Asset", it) }
+            r.amount?.let { DetailRow("Amount", it) }
+            r.note?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Dismiss") }
+        }
+    }
+}
+
+/** Honest "not settled" marker shown whenever a transfer response carries stub:true. */
+@Composable
+private fun SimulatedChip() {
+    Box(
+        modifier = Modifier
+            .background(MaterialTheme.colorScheme.tertiaryContainer, RoundedCornerShape(50))
+            .padding(horizontal = 10.dp, vertical = 3.dp)
+            .testTag("simulated_chip"),
+    ) {
+        Text(
+            "Simulated · not settled",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun UnavailableCard(text: String) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(10.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}

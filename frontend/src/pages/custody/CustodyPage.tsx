@@ -12,6 +12,8 @@ import {
   ArrowUpFromLine,
   ListChecks,
   ShieldCheck,
+  Layers,
+  ArrowLeftRight,
   Copy,
   Check,
   RefreshCw,
@@ -64,6 +66,7 @@ import {
   type DisplayAsset,
   type WithdrawResult,
 } from "@/api/endpoints/custody";
+import { SubaccountsTab, TransferTab } from "./CustodyExtras";
 
 // ─── helpers ────────────────────────────────────────────────────
 
@@ -945,7 +948,14 @@ function NotAvailable({
 
 // ─── Page ───────────────────────────────────────────────────────
 
-type TabKey = "overview" | "deposit" | "withdraw" | "activity" | "approvals";
+type TabKey =
+  | "overview"
+  | "deposit"
+  | "withdraw"
+  | "subaccounts"
+  | "transfer"
+  | "activity"
+  | "approvals";
 
 export default function CustodyPage() {
   const isMobile = useIsMobile(767);
@@ -974,6 +984,18 @@ export default function CustodyPage() {
           label: "Withdraw",
           short: "Withdraw",
           icon: <ArrowUpFromLine className="h-4 w-4" />,
+        },
+        {
+          key: "subaccounts" as const,
+          label: "Sub-accounts",
+          short: "Subaccts",
+          icon: <Layers className="h-4 w-4" />,
+        },
+        {
+          key: "transfer" as const,
+          label: "Transfer",
+          short: "Transfer",
+          icon: <ArrowLeftRight className="h-4 w-4" />,
         },
         {
           key: "activity" as const,
@@ -1009,7 +1031,7 @@ export default function CustodyPage() {
         <TabsList
           className={cn(
             "mb-4 w-full",
-            isMobile ? "grid grid-cols-5 gap-1" : "inline-flex",
+            isMobile ? "grid grid-cols-7 gap-1" : "inline-flex",
           )}
         >
           {tabs.map((t) => (
@@ -1038,6 +1060,12 @@ export default function CustodyPage() {
         </TabsContent>
         <TabsContent value="withdraw">
           <WithdrawTab preselect={withdrawAsset} />
+        </TabsContent>
+        <TabsContent value="subaccounts">
+          <SubaccountsTab />
+        </TabsContent>
+        <TabsContent value="transfer">
+          <TransferTab />
         </TabsContent>
         <TabsContent value="activity">
           <NotAvailable

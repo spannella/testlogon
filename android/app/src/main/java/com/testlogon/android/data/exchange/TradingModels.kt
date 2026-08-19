@@ -282,3 +282,90 @@ fun PmStateDto.toDomain(): PmState = PmState(
     faceValue = faceValue ?: 0L,
     resolverId = resolverId.orEmpty(),
 )
+
+// ==== Fees (custody-exchange-gaps) ====
+
+/** Venue default bps used when the backend/stub omits an explicit fee. */
+private const val DEFAULT_MAKER_BPS = 10
+private const val DEFAULT_TAKER_BPS = 20
+private const val DEFAULT_LIQ_BPS = 100
+
+/**
+ * The caller's fee schedule: maker/taker/liquidation in basis points. [isStub] is true when the value
+ * is the venue default (source == "stub") rather than a real per-caller/per-symbol quote — the UI
+ * labels it so the number isn't mistaken for a negotiated rate.
+ */
+data class FeeSchedule(
+    val makerFeeBps: Int,
+    val takerFeeBps: Int,
+    val liquidationFeeBps: Int,
+    val isStub: Boolean,
+) {
+    /** bps -> a percent string, e.g. 20 -> "0.20%". */
+    fun makerPct(): String = bpsToPct(makerFeeBps)
+    fun takerPct(): String = bpsToPct(takerFeeBps)
+    fun liquidationPct(): String = bpsToPct(liquidationFeeBps)
+
+    /** Fee for a notional (price*qty) at the taker rate, using the stub'"'"'s round(notional*bps/10000). */
+    fun takerFeeFor(price: Long, qty: Long): Long = feeFor(price * qty, takerFeeBps)
+
+    companion object {
+        fun default(): FeeSchedule = FeeSchedule(DEFAULT_MAKER_BPS, DEFAULT_TAKER_BPS, DEFAULT_LIQ_BPS, isStub = true)
+    }
+}
+
+/** round(notional * bps / 10000), matching the backend fee_formula. */
+fun feeFor(notional: Long, bps: Int): Long =
+    Math.round(notional.toDouble() * bps.toDouble() / 10000.0)
+
+private fun bpsToPct(bps: Int): String = String.format(java.util.Locale.US, "%.2f%%", bps / 100.0)
+
+fun FeeScheduleDto.toDomain(): FeeSchedule {
+    val row = schedule.orEmpty().firstOrNull()
+    val maker = row?.makerFeeBps ?: makerFeeBps ?: DEFAULT_MAKER_BPS
+    val taker = row?.takerFeeBps ?: takerFeeBps ?: DEFAULT_TAKER_BPS
+    val liq = row?.liquidationFeeBps ?: liquidationFeeBps ?: DEFAULT_LIQ_BPS
+    return FeeSchedule(
+        makerFeeBps = maker,
+        takerFeeBps = taker,
+        liquidationFeeBps = liq,
+        isStub = stub == true || (source?.trim()?.lowercase() == "stub"),
+    )
+}
+
+/** One fill enriched with a fee. When the server feed is empty the UI computes [fee] client-side. */
+data class FillFee(
+    val price: Long,
+    val qty: Long,
+    val fee: Long,
+    val tsNs: Long,
+    val side: OrderSide?,
+)
+
+/**
+ * The enriched fills-fees feed. [fills] is empty today (engine exposes no per-fill fee); [takerFeeBps]
+ * + [feeFormula] let the UI compute fees for its own session fills. [isStub] marks that honesty.
+ */
+data class FillsFees(
+    val fills: List<FillFee>,
+    val takerFeeBps: Int,
+    val feeFormula: String?,
+    val isStub: Boolean,
+    val note: String?,
+)
+
+fun FillFeeDto.toDomain(): FillFee = FillFee(
+    price = price ?: 0L,
+    qty = qty ?: 0L,
+    fee = fee ?: 0L,
+    tsNs = tsNs ?: 0L,
+    side = when (side?.lowercase()) { "buy" -> OrderSide.BUY; "sell" -> OrderSide.SELL; else -> null },
+)
+
+fun FillsFeesDto.toDomain(): FillsFees = FillsFees(
+    fills = fills.orEmpty().map { it.toDomain() },
+    takerFeeBps = takerFeeBps ?: DEFAULT_TAKER_BPS,
+    feeFormula = feeFormula?.takeIf { it.isNotBlank() },
+    isStub = stub == true || (source?.trim()?.lowercase() == "stub"),
+    note = note?.takeIf { it.isNotBlank() },
+)

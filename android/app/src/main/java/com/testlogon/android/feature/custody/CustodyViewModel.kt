@@ -8,6 +8,11 @@ import com.testlogon.android.data.custody.CustodyAsset
 import com.testlogon.android.data.custody.CustodyAssets
 import com.testlogon.android.data.custody.CustodyBalance
 import com.testlogon.android.data.custody.CustodyBalances
+import com.testlogon.android.data.custody.BridgeDirection
+import com.testlogon.android.data.custody.CustodyBridgeResult
+import com.testlogon.android.data.custody.CustodySubAccount
+import com.testlogon.android.data.custody.CustodySubAccounts
+import com.testlogon.android.data.custody.SubAccountTransferResult
 import com.testlogon.android.data.custody.CustodyDepositAddress
 import com.testlogon.android.data.custody.CustodyDeposits
 import com.testlogon.android.data.custody.CustodyRepository
@@ -24,7 +29,7 @@ import javax.inject.Inject
  * The five in-screen custody tabs. Activity + Approvals have no backing endpoint on this backend and
  * render a static "not available" state; they are always shown (no role gating).
  */
-enum class CustodyTab { BALANCES, DEPOSIT, WITHDRAW, ACTIVITY, APPROVALS }
+enum class CustodyTab { BALANCES, SUBACCOUNTS, TRANSFER, DEPOSIT, WITHDRAW, ACTIVITY, APPROVALS }
 
 /** A generic async slice: loading / error(message) / data. */
 data class Async<out T>(
@@ -52,11 +57,53 @@ data class WithdrawUiState(
     val submitError: String? = null,
 )
 
+/** Sub-accounts tab: the vault list + the create-form field / in-flight flag. */
+data class SubAccountsUiState(
+    val list: Async<CustodySubAccounts> = Async(loading = true),
+    val newLabel: String = "",
+    val creating: Boolean = false,
+    val createError: String? = null,
+)
+
+/**
+ * Transfer tab. Two independent forms: the custody<->trading bridge (direction + engine-asset-id +
+ * amount) and the between-sub-accounts move (from/to labels + asset symbol + amount). Each holds its
+ * own in-flight flag, error, and last (honest, possibly-simulated) result.
+ */
+data class TransferUiState(
+    // Bridge (custody <-> trading)
+    val direction: BridgeDirection = BridgeDirection.TO_TRADING,
+    val bridgeAssetText: String = "",
+    val bridgeAmountText: String = "",
+    val bridgeSubmitting: Boolean = false,
+    val bridgeError: String? = null,
+    val bridgeResult: CustodyBridgeResult? = null,
+    // Between sub-accounts
+    val fromLabel: String = "",
+    val toLabel: String = "",
+    val subAsset: String = "",
+    val subAmountText: String = "",
+    val subSubmitting: Boolean = false,
+    val subError: String? = null,
+    val subResult: SubAccountTransferResult? = null,
+) {
+    val bridgeAssetInt: Int? get() = bridgeAssetText.trim().toIntOrNull()
+    val bridgeAmountLong: Long? get() = bridgeAmountText.trim().toLongOrNull()
+    val canBridge: Boolean get() = !bridgeSubmitting && (bridgeAssetInt ?: -1) >= 0 && (bridgeAmountLong ?: 0L) > 0L
+    val subAmountDouble: Double? get() = subAmountText.trim().toDoubleOrNull()
+    val canSubTransfer: Boolean get() = !subSubmitting &&
+        subAsset.trim().isNotEmpty() &&
+        (subAmountDouble ?: 0.0) > 0.0 &&
+        fromLabel.trim() != toLabel.trim()
+}
+
 data class CustodyUiState(
     val tab: CustodyTab = CustodyTab.BALANCES,
     val balances: Async<CustodyBalances> = Async(loading = true),
     val deposit: DepositUiState = DepositUiState(),
     val withdraw: WithdrawUiState = WithdrawUiState(),
+    val subAccounts: SubAccountsUiState = SubAccountsUiState(),
+    val transfer: TransferUiState = TransferUiState(),
 ) {
     val rows: List<CustodyBalance> get() = balances.data?.rows.orEmpty()
     val fundedRows: List<CustodyBalance> get() = balances.data?.funded().orEmpty()
@@ -74,6 +121,7 @@ class CustodyViewModel @Inject constructor(
     init {
         loadBalance()
         loadDeposits()
+        loadSubAccounts()
     }
 
     // ---- tab + selection ----
@@ -185,6 +233,120 @@ class CustodyViewModel @Inject constructor(
             }
         }
     }
+
+    // ---- sub-accounts ----
+
+    fun loadSubAccounts() {
+        _uiState.update { it.copy(subAccounts = it.subAccounts.copy(list = it.subAccounts.list.copy(loading = true, error = null))) }
+        viewModelScope.launch {
+            _uiState.update { st -> st.copy(subAccounts = st.subAccounts.copy(list = repo.getSubAccounts().toAsync())) }
+        }
+    }
+
+    fun onNewSubAccountLabelChanged(v: String) {
+        // Mirror the server sanitizer client-side: [A-Za-z0-9_-], capped 48.
+        val sanitized = v.filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(48)
+        _uiState.update { it.copy(subAccounts = it.subAccounts.copy(newLabel = sanitized, createError = null)) }
+    }
+
+    fun createSubAccount() {
+        val label = _uiState.value.subAccounts.newLabel.trim()
+        if (label.isEmpty()) {
+            _uiState.update { it.copy(subAccounts = it.subAccounts.copy(createError = "Enter a label.")) }
+            return
+        }
+        _uiState.update { it.copy(subAccounts = it.subAccounts.copy(creating = true, createError = null)) }
+        viewModelScope.launch {
+            when (val r = repo.createSubAccount(label)) {
+                is ApiResult.Success -> {
+                    _uiState.update { it.copy(subAccounts = it.subAccounts.copy(creating = false, newLabel = "")) }
+                    loadSubAccounts()
+                }
+                is ApiResult.Failure -> _uiState.update {
+                    it.copy(subAccounts = it.subAccounts.copy(creating = false, createError = r.error.messageFor()))
+                }
+                is ApiResult.NetworkError -> _uiState.update {
+                    it.copy(subAccounts = it.subAccounts.copy(creating = false, createError = "Network error. Check your connection and try again."))
+                }
+            }
+        }
+    }
+
+    /** Sub-account labels available as transfer endpoints (base vault + named), for the picker chips. */
+    fun subAccountLabels(): List<String> {
+        val subs = _uiState.value.subAccounts.list.data?.subAccounts.orEmpty().map { it.label }.filter { it.isNotBlank() }
+        return listOf("") + subs   // "" == base vault
+    }
+
+    // ---- transfer: custody <-> trading bridge ----
+
+    fun onBridgeDirectionToggle() =
+        _uiState.update { it.copy(transfer = it.transfer.copy(direction = it.transfer.direction.toggle(), bridgeError = null, bridgeResult = null)) }
+
+    fun onBridgeAssetChanged(v: String) =
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAssetText = v.filter { c -> c.isDigit() }.take(6), bridgeError = null)) }
+
+    fun onBridgeAmountChanged(v: String) =
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeAmountText = v.filter { c -> c.isDigit() }.take(15), bridgeError = null)) }
+
+    fun submitBridgeTransfer() {
+        val t = _uiState.value.transfer
+        if (!t.canBridge) {
+            _uiState.update { it.copy(transfer = it.transfer.copy(bridgeError = "Enter an asset id and an amount greater than 0.")) }
+            return
+        }
+        val asset = t.bridgeAssetInt!!
+        val amount = t.bridgeAmountLong!!
+        val direction = t.direction
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = true, bridgeError = null, bridgeResult = null)) }
+        viewModelScope.launch {
+            when (val r = repo.bridgeTransfer(direction, asset, amount)) {
+                is ApiResult.Success -> {
+                    _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = false, bridgeResult = r.data)) }
+                    loadBalance()
+                }
+                is ApiResult.Failure -> _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = false, bridgeError = r.error.messageFor())) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(transfer = it.transfer.copy(bridgeSubmitting = false, bridgeError = "Network error. Check your connection and try again.")) }
+            }
+        }
+    }
+
+    fun clearBridgeResult() =
+        _uiState.update { it.copy(transfer = it.transfer.copy(bridgeResult = null, bridgeAmountText = "")) }
+
+    // ---- transfer: between sub-accounts ----
+
+    fun onFromLabelChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(fromLabel = v, subError = null)) }
+    fun onToLabelChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(toLabel = v, subError = null)) }
+    fun onSubAssetChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(subAsset = v.trim().uppercase().take(12), subError = null)) }
+    fun onSubAmountChanged(v: String) = _uiState.update { it.copy(transfer = it.transfer.copy(subAmountText = v, subError = null)) }
+
+    fun submitSubAccountTransfer() {
+        val t = _uiState.value.transfer
+        if (t.fromLabel.trim() == t.toLabel.trim()) {
+            _uiState.update { it.copy(transfer = it.transfer.copy(subError = "Choose two different vaults.")) }
+            return
+        }
+        if (!t.canSubTransfer) {
+            _uiState.update { it.copy(transfer = it.transfer.copy(subError = "Enter an asset and an amount greater than 0.")) }
+            return
+        }
+        val from = t.fromLabel.trim()
+        val to = t.toLabel.trim()
+        val asset = t.subAsset.trim()
+        val amount = t.subAmountText.trim()
+        _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = true, subError = null, subResult = null)) }
+        viewModelScope.launch {
+            when (val r = repo.subAccountTransfer(from.ifBlank { null }, to.ifBlank { null }, asset, amount)) {
+                is ApiResult.Success -> _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subResult = r.data)) }
+                is ApiResult.Failure -> _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subError = r.error.messageFor())) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(transfer = it.transfer.copy(subSubmitting = false, subError = "Network error. Check your connection and try again.")) }
+            }
+        }
+    }
+
+    fun clearSubTransferResult() =
+        _uiState.update { it.copy(transfer = it.transfer.copy(subResult = null, subAmountText = "")) }
 
     /** Clears the withdraw result/form after the user acknowledges the outcome. */
     fun clearWithdrawResult() {

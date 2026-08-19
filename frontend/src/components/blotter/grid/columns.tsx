@@ -598,4 +598,15 @@ export const orderColumns: ColumnDef<Order>[] = [
       );
     },
   },
+  {
+    id: 'fee', header: 'Fee', accessorKey: 'fee', size: 84,
+    filterFn: numFilter, meta: { filterKind: 'num' },
+    cell: info => {
+      const v = info.getValue<number | undefined>();
+      return v == null || !Number.isFinite(v)
+        ? <span className="dim">—</span>
+        : <span className="num">{fmtQty(v)}</span>;
+    },
+    aggregatedCell: ({ getValue }) => <span className="num dim">{String(getValue() ?? '')}</span>,
+  },
 ];

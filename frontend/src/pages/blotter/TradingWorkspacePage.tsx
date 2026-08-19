@@ -2,6 +2,8 @@
 // hosting the testlogon blotter: Orders, Fills, and Positions panels. Drag tabs
 // to split or float; the "+ Panel" menu reopens closed panels; layout persists.
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getFillsFees, computeFee } from "@/api/endpoints/custody";
 import {
   DockviewReact,
   type DockviewReadyEvent,
@@ -61,7 +63,7 @@ const posColumns: ColumnDef<any>[] = [
 // Compact column sets for narrow (mobile) screens — fewer columns so rows are
 // readable without horizontal scrolling.
 const MOBILE_ORDER_IDS = new Set(["sym", "side", "px", "qty", "cumQty", "status"]);
-const MOBILE_FILL_IDS = new Set(["sym", "side", "px", "qty", "avgPx", "status"]);
+const MOBILE_FILL_IDS = new Set(["sym", "side", "px", "qty", "avgPx", "fee", "status"]);
 const mobileOrderColumns = orderColumns.filter((c) => MOBILE_ORDER_IDS.has((c as any).id));
 const mobileFillsColumns = fillsColumns.filter((c) => MOBILE_FILL_IDS.has((c as any).id));
 
@@ -77,12 +79,12 @@ function useIsMobile(bp = 767): boolean {
 }
 
 const LAYOUT_KEY = "testlogon.trading.dock.v1";
-interface Ctx { orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; isMobile: boolean; }
+interface Ctx { orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; isMobile: boolean; takerFeeBps: number | null; }
 const WsCtx = createContext<Ctx | null>(null);
 const useWs = (): Ctx => { const c = useContext(WsCtx); if (!c) throw new Error("WsCtx missing"); return c; };
 
 function OrdersPanel() { const c = useWs(); return <div className="tl-panel-body"><Blotter data={c.orders} columns={c.isMobile ? mobileOrderColumns : orderColumns} touched={c.touched} storageKeyPrefix="tl-ws-orders" onCancel={c.onCancel} /></div>; }
-function FillsPanel() { const c = useWs(); const fills = useMemo(() => c.orders.filter((o) => o.cumQty > 0), [c.orders]); return <div className="tl-panel-body"><Blotter data={fills} columns={c.isMobile ? mobileFillsColumns : fillsColumns} touched={c.touched} storageKeyPrefix="tl-ws-fills" /></div>; }
+function FillsPanel() { const c = useWs(); const fills = useMemo(() => c.orders.filter((o) => o.cumQty > 0).map((o) => (c.takerFeeBps == null ? o : { ...o, fee: computeFee(o.avgPx, o.cumQty, c.takerFeeBps) })), [c.orders, c.takerFeeBps]); return <div className="tl-panel-body"><Blotter data={fills} columns={c.isMobile ? mobileFillsColumns : fillsColumns} touched={c.touched} storageKeyPrefix="tl-ws-fills" /></div>; }
 function PositionsPanel() {
   const c = useWs();
   const pos = useMemo(() => {
@@ -115,6 +117,10 @@ export default function TradingWorkspacePage() {
   const cancel = (clord: string) => setOrders((prev) => prev.map((o) => (o.clord === clord ? { ...o, status: "cancelled" as OrderStatus, leaves: 0 } : o)));
   const isMobile = useIsMobile();
   const [activeTab, setActiveTab] = useState<PanelId>("orders");
+  // Enriched fills-fee feed. 404s until the edge deploys -> null taker rate,
+  // and the Fills grid then hides its Fee column gracefully (no error).
+  const feesQuery = useQuery({ queryKey: ["fills", "fees"], queryFn: getFillsFees, retry: false, staleTime: 60_000 });
+  const takerFeeBps = feesQuery.data?.taker_fee_bps ?? null;
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -144,8 +150,8 @@ export default function TradingWorkspacePage() {
     return () => { clearInterval(id); if (clearTimer.current) clearTimeout(clearTimer.current); };
   }, []);
 
-  const ctxRef = useRef<Ctx>({ orders, touched, onCancel: cancel, isMobile });
-  ctxRef.current = { orders, touched, onCancel: cancel, isMobile };
+  const ctxRef = useRef<Ctx>({ orders, touched, onCancel: cancel, isMobile, takerFeeBps });
+  ctxRef.current = { orders, touched, onCancel: cancel, isMobile, takerFeeBps };
   const stableCtx = useMemo(() => new Proxy({} as Ctx, { get(_, k: string) { return (ctxRef.current as any)[k]; } }), []);
 
   const [dockApi, setDockApi] = useState<DockviewApi | null>(null);

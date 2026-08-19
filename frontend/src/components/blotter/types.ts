@@ -66,6 +66,10 @@ export interface Order {
   linkExecid?:   string;  // hedge lineage: quoter execid this hedge traces to (hex string)
   impliedPx?:    number;  // implied hedge price from linked quoter fill
   slipBp?:       number;  // + = FAVOURABLE (we did better than implied), − = adverse
+  // Computed taker fee for the fill = round(avgPx*cumQty*takerFeeBps/10000),
+  // sourced from the /me/fills/fees taker rate. Undefined until enriched;
+  // the Fee column hides entirely when no fee rate is available.
+  fee?:          number;
   // display-only derived: milliseconds since last update, refreshed each tick.
   // Not stored in mock data — computed at render time.
 }

@@ -1,6 +1,9 @@
 package com.testlogon.android.feature.markets.trade
 
 import com.testlogon.android.data.exchange.Fill
+import com.testlogon.android.data.exchange.FeeSchedule
+import com.testlogon.android.data.exchange.FillsFees
+import com.testlogon.android.data.exchange.feeFor
 import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.data.exchange.SpotBalance
@@ -97,7 +100,13 @@ data class TradingUiState(
     val pm: com.testlogon.android.data.exchange.PmState? = null,   // set when this symbol is a binary prediction market
     val isAdmin: Boolean = false,   // resolved from CurrentUserRepository; gates the margin-config panel
     val marginConfig: MarginConfigForm = MarginConfigForm(),
+    val feeSchedule: FeeSchedule? = null,
+    val fillsFees: FillsFees? = null,
 ) {
+    /** The taker bps used to compute a per-fill fee client-side (enriched feed, else schedule, else 20). */
+    val effectiveTakerBps: Int get() = fillsFees?.takerFeeBps ?: feeSchedule?.takerFeeBps ?: 20
+    /** round(price*qty*takerBps/10000) for a session fill, matching the backend fee_formula. */
+    fun feeForFill(price: Long, qty: Long): Long = feeFor(price * qty, effectiveTakerBps)
     val isAmending: Boolean get() = amendingClordid != null
     val depositLong: Long? get() = depositText.toLongOrNull()
     val canDeposit: Boolean get() = !depositing && (depositLong ?: 0L) > 0L
