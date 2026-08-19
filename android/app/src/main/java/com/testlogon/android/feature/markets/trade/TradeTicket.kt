@@ -32,6 +32,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -104,6 +105,11 @@ fun TradeTicket(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
             )
+        }
+
+        if (state.isAdmin) {
+            Spacer(Modifier.height(16.dp))
+            MarginConfigPanel(state.marginConfig, viewModel)
         }
     }
 }
@@ -280,7 +286,7 @@ private fun PositionsSection(state: TradingUiState, lastPrice: Long?, viewModel:
     if (pos == null) {
         EmptyHint("No open position")
     } else {
-        PositionCard(pos = pos, armed = state.armed == "close", onClose = { lastPrice?.let { viewModel.closePositionRequested(it) } })
+        PositionCard(pos = pos, liquidating = state.account?.isLiquidating == true, armed = state.armed == "close", onClose = { lastPrice?.let { viewModel.closePositionRequested(it) } })
     }
 }
 
@@ -475,7 +481,7 @@ private fun WalletRow(label: String, value: Long) {
 }
 
 @Composable
-private fun PositionCard(pos: com.testlogon.android.data.exchange.PositionSnapshot, armed: Boolean, onClose: () -> Unit) {
+private fun PositionCard(pos: com.testlogon.android.data.exchange.PositionSnapshot, liquidating: Boolean, armed: Boolean, onClose: () -> Unit) {
     val long = pos.qty > 0
     val sideColor = if (long) MarketColors.Up else MarketColors.Down
     val pnlColor = if (pos.unrealizedPnl >= 0) MarketColors.Up else MarketColors.Down
@@ -511,7 +517,11 @@ private fun PositionCard(pos: com.testlogon.android.data.exchange.PositionSnapsh
         }
         Spacer(Modifier.height(6.dp))
         PosStat("Entry", fmt(pos.entryPrice.toDouble()))
-        PosStat("Liq. price", if (pos.liquidationPrice > 0) fmt(pos.liquidationPrice.toDouble()) else "--")
+        PosStat(
+            "Liq. price",
+            if (pos.liquidationPrice > 0) fmt(pos.liquidationPrice.toDouble()) else "--",
+            valueColor = if (liquidating) MarketColors.Down else MarketColors.TextPrimary,
+        )
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Unrealized PnL", color = MarketColors.TextSecondary, fontSize = 11.sp)
             Text(
@@ -526,10 +536,10 @@ private fun PositionCard(pos: com.testlogon.android.data.exchange.PositionSnapsh
 }
 
 @Composable
-private fun PosStat(label: String, value: String) {
+private fun PosStat(label: String, value: String, valueColor: Color = MarketColors.TextPrimary) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = MarketColors.TextSecondary, fontSize = 11.sp)
-        Text(value, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        Text(value, color = valueColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
     }
 }
 
@@ -894,6 +904,77 @@ private fun WorkingOrderRow(label: String, sideColor: Color, onAmend: () -> Unit
                     .clickable(onClick = onCancel)
                     .testTag("wo_cancel")
                     .padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MarginConfigPanel(form: MarginConfigForm, viewModel: TradingViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MarketColors.Surface)
+            .border(1.dp, MarketColors.Border, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+    ) {
+        Text("Admin · Margin config", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Per-symbol margin, fee and borrow parameters (basis points).",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        NumberField("Symbol id", form.symbolText, viewModel::setMcSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Initial margin (bps)", form.initialMarginText, viewModel::setMcInitialMargin)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Maintenance margin (bps)", form.maintenanceMarginText, viewModel::setMcMaintenanceMargin)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Liquidation fee (bps)", form.liquidationFeeText, viewModel::setMcLiquidationFee)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Hourly borrow rate (bps)", form.hourlyBorrowText, viewModel::setMcHourlyBorrow)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Maker fee (bps)", form.makerFeeText, viewModel::setMcMakerFee)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Taker fee (bps)", form.takerFeeText, viewModel::setMcTakerFee)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Max position qty", form.maxPositionText, viewModel::setMcMaxPosition)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = if (form.submitting) "Applying…" else "Apply margin config",
+            color = if (form.canSubmit) Color.Black else MarketColors.TextFaint,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (form.canSubmit) MarketColors.Accent else MarketColors.SurfaceAlt)
+                .then(if (form.canSubmit) Modifier.clickable { viewModel.submitMarginConfig() } else Modifier)
+                .testTag("apply_margin_config")
+                .padding(vertical = 12.dp),
+            textAlign = TextAlign.Center,
+        )
+        form.error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = MarketColors.Down, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        }
+        form.result?.let { r ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = if (r.applied) "Applied (result 0)" else (r.message ?: "Rejected (result ${r.result ?: "?"})"),
+                color = if (r.applied) MarketColors.Up else MarketColors.Down,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Dismiss",
+                color = MarketColors.TextSecondary,
+                fontSize = 11.sp,
+                modifier = Modifier.clickable { viewModel.clearMcResult() }.padding(vertical = 2.dp),
             )
         }
     }

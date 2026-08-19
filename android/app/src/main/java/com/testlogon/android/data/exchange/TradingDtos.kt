@@ -77,6 +77,36 @@ data class MarginAccountDto(
     val type: String? = null,
 )
 
+/**
+ * ADMIN margin-config request (POST /me/margin_config). All bps params + max position qty are int64.
+ * initial/maintenance margin are the per-symbol collateral requirement in basis points; fees are the
+ * per-fill maker/taker charge in bps; hourly_borrow_rate is the funding accrual; max_position_qty caps
+ * the net position.
+ */
+@JsonClass(generateAdapter = true)
+data class MarginConfigDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "initial_margin_bps") val initialMarginBps: Long,
+    @Json(name = "maintenance_margin_bps") val maintenanceMarginBps: Long,
+    @Json(name = "liquidation_fee_bps") val liquidationFeeBps: Long,
+    @Json(name = "hourly_borrow_rate_bps") val hourlyBorrowRateBps: Long,
+    @Json(name = "maker_fee_bps") val makerFeeBps: Long,
+    @Json(name = "taker_fee_bps") val takerFeeBps: Long,
+    @Json(name = "max_position_qty") val maxPositionQty: Long,
+)
+
+/** Margin-config ack. status = "ack" | "rejected"; result == 0 means applied. */
+@JsonClass(generateAdapter = true)
+data class MarginConfigAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "symbolid") val symbolId: Int? = null,
+    val result: Int? = null,
+    val detail: String? = null,
+    val error: String? = null,
+    val note: String? = null,
+)
+
 /** Deposit request: raw integer [amount] of collateral to credit. */
 @JsonClass(generateAdapter = true)
 data class MarginDepositDto(val amount: Long)

@@ -52,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -61,6 +62,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.data.custody.CustodyAssets
 import com.testlogon.android.data.custody.CustodyBalance
+import com.testlogon.android.data.custody.CustodyDeposit
+import com.testlogon.android.data.custody.CustodyDeposits
+import com.testlogon.android.data.custody.DepositStatus
 import com.testlogon.android.data.custody.CustodyWithdrawResult
 import com.testlogon.android.data.custody.WithdrawStatus
 
@@ -306,6 +310,7 @@ private fun DepositTab(state: CustodyUiState, viewModel: CustodyViewModel) {
                 MetadataCard(family = data.family, derivation = data.derivation, domain = data.domain)
             }
         }
+        DepositsSection(state.deposit.deposits, onRetry = viewModel::loadDeposits)
     }
 }
 
@@ -531,6 +536,85 @@ private fun UnavailableTab(title: String, explanation: String) {
 }
 
 // ---------------- shared bits ----------------
+
+@Composable
+private fun DepositsSection(deposits: Async<CustodyDeposits>, onRetry: () -> Unit) {
+    Spacer(Modifier.height(4.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(12.dp))
+    Text("Recent incoming transfers", style = MaterialTheme.typography.labelLarge)
+    Spacer(Modifier.height(8.dp))
+    val data = deposits.data
+    when {
+        deposits.loading && data == null -> LoadingBox()
+        deposits.error != null && data == null -> ErrorBox(deposits.error, onRetry)
+        data == null || data.unavailable ->
+            HintText("Deposit scanning isn't available on this backend yet.")
+        data.isEmpty ->
+            HintText("No incoming transfers detected yet.")
+        else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            data.rows.forEach { DepositRow(it) }
+        }
+    }
+}
+
+@Composable
+private fun DepositRow(d: CustodyDeposit) {
+    val clipboard = LocalClipboardManager.current
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = if (d.amount.isNotBlank()) "+${d.amount} ${d.asset}" else d.asset,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                DepositStatusChip(d.status)
+            }
+            Text("${d.chainName} · ${relativeTime(d.timestampMs)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (d.txHash.isNotBlank()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(d.txShort, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    IconButton(onClick = { clipboard.setText(AnnotatedString(d.txHash)) }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = "Copy tx hash", modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DepositStatusChip(status: DepositStatus) {
+    val (bg, fg) = when (status) {
+        DepositStatus.CREDITED -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+        DepositStatus.DUPLICATE -> MaterialTheme.colorScheme.surface to MaterialTheme.colorScheme.onSurfaceVariant
+        DepositStatus.UNKNOWN -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    Box(
+        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(bg).padding(horizontal = 8.dp, vertical = 3.dp),
+    ) {
+        Text(status.label, style = MaterialTheme.typography.labelSmall, color = fg)
+    }
+}
+
+/** Coarse relative time ("just now" / "5m ago" / "3h ago" / "2d ago") from an epoch-ms timestamp. */
+private fun relativeTime(timestampMs: Long?): String {
+    if (timestampMs == null || timestampMs <= 0L) return "—"
+    val deltaMs = System.currentTimeMillis() - timestampMs
+    if (deltaMs < 0L) return "just now"
+    val mins = deltaMs / 60000L
+    return when {
+        mins < 1L -> "just now"
+        mins < 60L -> "${mins}m ago"
+        mins < 1440L -> "${mins / 60L}h ago"
+        else -> "${mins / 1440L}d ago"
+    }
+}
 
 @Composable
 private fun DetailRow(label: String, value: String) {

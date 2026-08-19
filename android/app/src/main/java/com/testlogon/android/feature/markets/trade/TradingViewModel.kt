@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.data.exchange.TradingRepository
+import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.navigation.SymbolDetailDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -26,6 +27,7 @@ import javax.inject.Inject
 class TradingViewModel @Inject constructor(
     private val repository: TradingRepository,
     private val notifier: TradingNotifier,
+    private val currentUserRepository: CurrentUserRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -39,6 +41,8 @@ class TradingViewModel @Inject constructor(
     private var seq = 0
 
     init {
+        _uiState.update { it.copy(marginConfig = it.marginConfig.copy(symbolText = symbolId.toString())) }
+        resolveAdmin()
         refreshAccount()
         pollAccount()
         refreshPm()
@@ -55,7 +59,59 @@ class TradingViewModel @Inject constructor(
         }
     }
 
-    /** Keep the wallet / margin / position fresh while the VM is alive. */
+    /** Resolve whether the caller is an admin (gates the margin-config panel). Failure -> stays false. */
+    private fun resolveAdmin() {
+        viewModelScope.launch {
+            when (val r = currentUserRepository.isAdmin()) {
+                is ApiResult.Success -> _uiState.update { it.copy(isAdmin = r.data) }
+                else -> Unit
+            }
+        }
+    }
+
+    // ---- Admin margin-config form ----
+
+    private fun updateMc(block: (MarginConfigForm) -> MarginConfigForm) {
+        _uiState.update { it.copy(marginConfig = block(it.marginConfig).let { f -> f.copy(error = null) }) }
+    }
+
+    fun setMcSymbol(text: String) = updateMc { it.copy(symbolText = digits(text, 9)) }
+    fun setMcInitialMargin(text: String) = updateMc { it.copy(initialMarginText = digits(text, 9)) }
+    fun setMcMaintenanceMargin(text: String) = updateMc { it.copy(maintenanceMarginText = digits(text, 9)) }
+    fun setMcLiquidationFee(text: String) = updateMc { it.copy(liquidationFeeText = digits(text, 9)) }
+    fun setMcHourlyBorrow(text: String) = updateMc { it.copy(hourlyBorrowText = digits(text, 9)) }
+    fun setMcMakerFee(text: String) = updateMc { it.copy(makerFeeText = digits(text, 9)) }
+    fun setMcTakerFee(text: String) = updateMc { it.copy(takerFeeText = digits(text, 9)) }
+    fun setMcMaxPosition(text: String) = updateMc { it.copy(maxPositionText = digits(text, 12)) }
+
+    fun clearMcResult() = _uiState.update { it.copy(marginConfig = it.marginConfig.copy(result = null, error = null)) }
+
+    /** Submit the admin margin-config form. Only fires when [MarginConfigForm.canSubmit]. */
+    fun submitMarginConfig() {
+        val f = _uiState.value.marginConfig
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(marginConfig = it.marginConfig.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            when (
+                val r = repository.marginConfig(
+                    symbolId = f.symbolInt!!,
+                    initialMarginBps = f.initialMarginLong!!,
+                    maintenanceMarginBps = f.maintenanceMarginLong!!,
+                    liquidationFeeBps = f.liquidationFeeLong!!,
+                    hourlyBorrowRateBps = f.hourlyBorrowLong!!,
+                    makerFeeBps = f.makerFeeLong!!,
+                    takerFeeBps = f.takerFeeLong!!,
+                    maxPositionQty = f.maxPositionLong!!,
+                )
+            ) {
+                is ApiResult.Success -> _uiState.update { it.copy(marginConfig = it.marginConfig.copy(submitting = false, result = r.data)) }
+                is ApiResult.Failure -> _uiState.update { it.copy(marginConfig = it.marginConfig.copy(submitting = false, error = r.error.message)) }
+                is ApiResult.NetworkError -> _uiState.update { it.copy(marginConfig = it.marginConfig.copy(submitting = false, error = "Network error. Check your connection and try again.")) }
+            }
+        }
+    }
+
+        /** Keep the wallet / margin / position fresh while the VM is alive. */
     private fun pollAccount() {
         viewModelScope.launch {
             while (isActive) {

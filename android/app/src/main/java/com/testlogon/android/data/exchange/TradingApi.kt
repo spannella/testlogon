@@ -34,6 +34,10 @@ interface TradingApi {
     @GET("me/margin_account")
     suspend fun getMarginAccount(): MarginAccountDto
 
+    /** ADMIN: set per-symbol margin/fee/borrow parameters. result == 0 means applied. */
+    @POST("me/margin_config")
+    suspend fun marginConfig(@Body body: MarginConfigDto): MarginConfigAckDto
+
     /** Deposit collateral into the margin account (credits balance/available; enables margin mode). */
     @POST("me/margin_deposit")
     suspend fun marginDeposit(@Body body: MarginDepositDto): MarginDepositAckDto

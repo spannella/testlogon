@@ -1423,6 +1423,7 @@
     <!-- AND-199 / AND-200: Stories tray + viewer -->
     <string name="more_entry_gallery">Gallery</string>
     <string name="more_entry_files">Files</string>
+    <string name="more_entry_trading_blotter">Trading Blotter</string>
     <string name="more_entry_custody">Custody</string>
     <string name="story_ring_unseen">Story from %1$s, unseen</string>
     <string name="story_ring_seen">Story from %1$s, seen</string>

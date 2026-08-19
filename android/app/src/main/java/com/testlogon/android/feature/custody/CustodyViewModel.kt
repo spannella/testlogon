@@ -9,6 +9,7 @@ import com.testlogon.android.data.custody.CustodyAssets
 import com.testlogon.android.data.custody.CustodyBalance
 import com.testlogon.android.data.custody.CustodyBalances
 import com.testlogon.android.data.custody.CustodyDepositAddress
+import com.testlogon.android.data.custody.CustodyDeposits
 import com.testlogon.android.data.custody.CustodyRepository
 import com.testlogon.android.data.custody.CustodyWithdrawResult
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -36,6 +37,8 @@ data class Async<out T>(
 data class DepositUiState(
     val selectedKey: String? = null,
     val address: Async<CustodyDepositAddress> = Async(),
+    /** Recent scanned incoming transfers (soft-unavailable when the backend lacks the endpoint). */
+    val deposits: Async<CustodyDeposits> = Async(),
 )
 
 /** Withdraw form + submit result. */
@@ -70,6 +73,7 @@ class CustodyViewModel @Inject constructor(
 
     init {
         loadBalance()
+        loadDeposits()
     }
 
     // ---- tab + selection ----
@@ -82,6 +86,14 @@ class CustodyViewModel @Inject constructor(
         _uiState.update { it.copy(balances = it.balances.copy(loading = true, error = null)) }
         viewModelScope.launch {
             _uiState.update { st -> st.copy(balances = repo.getBalance().toAsync()) }
+        }
+    }
+
+    /** Fetch recent incoming transfers for the deposit tab (404 -> a soft "unavailable" data state). */
+    fun loadDeposits() {
+        _uiState.update { it.copy(deposit = it.deposit.copy(deposits = it.deposit.deposits.copy(loading = true, error = null))) }
+        viewModelScope.launch {
+            _uiState.update { st -> st.copy(deposit = st.deposit.copy(deposits = repo.getDeposits().toAsync())) }
         }
     }
 

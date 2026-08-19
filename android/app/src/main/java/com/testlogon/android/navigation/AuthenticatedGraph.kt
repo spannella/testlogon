@@ -211,6 +211,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         videoUploadDestination(navController)
         // AND-332: read-only file-manager browse (path nav + breadcrumbs + search + sort + paged listing).
         filesDestination(navController)
+        // Trading Blotter: native orders/fills/positions blotter (web parity; sample data + ticker).
+        blotterDestination(navController)
         // Custody: native crypto custody surface wired to /me/custody/* (officer approvals self-gate on the admin signal).
         custodyDestination(navController)
         // AND-336: backend-mediated Google Drive import picker (authenticated-only).

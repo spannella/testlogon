@@ -22,6 +22,7 @@ import {
   Ban,
   XCircle,
   Info,
+  History,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
@@ -55,8 +56,11 @@ import QRCode from "@/components/custody/QRCode";
 import {
   getBalance,
   getDepositAddress,
+  getDeposits,
   withdraw,
   mergeBalances,
+  CUSTODY_ASSETS,
+  type CustodyDeposit,
   type DisplayAsset,
   type WithdrawResult,
 } from "@/api/endpoints/custody";
@@ -94,6 +98,45 @@ function short(s?: string | null, head = 10, tail = 8): string {
   if (!s) return "";
   if (s.length <= head + tail + 1) return s;
   return `${s.slice(0, head)}…${s.slice(-tail)}`;
+}
+
+/** Map a chain id (string or number) to a human name via the asset registry. */
+function chainName(chain: string | number | undefined): string {
+  if (chain == null) return "Unknown";
+  const id = Number(chain);
+  if (Number.isFinite(id)) {
+    const hit = CUSTODY_ASSETS.find((a) => a.chainId === id);
+    if (hit) return hit.chainName;
+    return `Chain ${chain}`;
+  }
+  return String(chain);
+}
+
+/** ts may be seconds (small) or ms (large) — normalise to ms. */
+function tsToMs(ts: number): number {
+  if (!Number.isFinite(ts) || ts <= 0) return 0;
+  // ~1e12 ms == year 2001; anything below that is almost certainly seconds.
+  return ts > 1e12 ? ts : ts * 1000;
+}
+
+function relTime(ts: number): string {
+  const ms = tsToMs(ts);
+  if (!ms) return "";
+  const diff = Date.now() - ms;
+  const abs = Math.abs(diff);
+  const mins = Math.round(abs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(ms).toLocaleDateString();
+}
+
+function absTime(ts: number): string {
+  const ms = tsToMs(ts);
+  return ms ? new Date(ms).toLocaleString() : "";
 }
 
 function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
@@ -259,6 +302,163 @@ function OverviewTab({
   );
 }
 
+// ─── Incoming transfers (deposit-scanner feed) ──────────────────
+
+function DepositStatusBadge({ status }: { status: string }) {
+  if (status === "credited") {
+    return (
+      <Badge className="gap-1 border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+        <CircleCheck className="h-3 w-3" /> Credited
+      </Badge>
+    );
+  }
+  if (status === "duplicate") {
+    return (
+      <Badge variant="outline" className="gap-1 text-muted-foreground">
+        <Info className="h-3 w-3" /> Duplicate
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-muted-foreground">
+      {status}
+    </Badge>
+  );
+}
+
+function TxHashCell({ txhash }: { txhash: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      title={txhash}
+      className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(txhash);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        } catch {
+          /* ignore */
+        }
+      }}
+    >
+      {short(txhash, 8, 6)}
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+    </button>
+  );
+}
+
+function IncomingTransfers() {
+  const isMobile = useIsMobile(767);
+  const q = useQuery({
+    queryKey: ["custody", "deposits"],
+    queryFn: getDeposits,
+    refetchInterval: 15_000,
+    retry: false,
+  });
+
+  const deposits: CustodyDeposit[] = q.data?.deposits ?? [];
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <History className="h-5 w-5 text-primary" /> Recent incoming transfers
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {q.isLoading && (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full rounded-lg" />
+            ))}
+          </div>
+        )}
+
+        {!q.isLoading && q.isError && (
+          <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>Deposit scanning isn&apos;t available on this backend yet.</span>
+          </div>
+        )}
+
+        {!q.isLoading && !q.isError && deposits.length === 0 && (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            No incoming transfers detected yet — send funds to the address above.
+          </p>
+        )}
+
+        {!q.isLoading && !q.isError && deposits.length > 0 && (
+          isMobile ? (
+            <div className="space-y-2">
+              {deposits.map((d) => (
+                <div
+                  key={`${d.txhash}-${d.log_index}-${d.seq}`}
+                  className="rounded-lg border p-3 text-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold tabular-nums">
+                      {fmtAmount(d.amount)} {d.asset}
+                    </span>
+                    <DepositStatusBadge status={d.status} />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{chainName(d.chain)}</span>
+                    <span title={absTime(d.ts)}>{relTime(d.ts)}</span>
+                  </div>
+                  <div className="mt-1">
+                    <TxHashCell txhash={d.txhash} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs uppercase text-muted-foreground">
+                    <th className="py-2 pr-3 font-medium">Chain</th>
+                    <th className="py-2 pr-3 font-medium">Asset</th>
+                    <th className="py-2 pr-3 text-right font-medium">Amount</th>
+                    <th className="py-2 pr-3 font-medium">Tx</th>
+                    <th className="py-2 pr-3 font-medium">Status</th>
+                    <th className="py-2 text-right font-medium">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deposits.map((d) => (
+                    <tr
+                      key={`${d.txhash}-${d.log_index}-${d.seq}`}
+                      className="border-b last:border-0"
+                    >
+                      <td className="py-2 pr-3">{chainName(d.chain)}</td>
+                      <td className="py-2 pr-3 font-medium">{d.asset}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {fmtAmount(d.amount)}
+                      </td>
+                      <td className="py-2 pr-3">
+                        <TxHashCell txhash={d.txhash} />
+                      </td>
+                      <td className="py-2 pr-3">
+                        <DepositStatusBadge status={d.status} />
+                      </td>
+                      <td className="py-2 text-right text-muted-foreground" title={absTime(d.ts)}>
+                        {relTime(d.ts)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+
 // ─── Deposit ────────────────────────────────────────────────────
 
 function DepositTab({ preselect }: { preselect?: DisplayAsset | null }) {
@@ -364,6 +564,8 @@ function DepositTab({ preselect }: { preselect?: DisplayAsset | null }) {
           )}
         </CardContent>
       </Card>
+
+      <IncomingTransfers />
     </div>
   );
 }

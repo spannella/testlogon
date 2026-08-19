@@ -38,6 +38,23 @@ class CustodyRepository @Inject constructor(
         api.depositAddress(chainId).toDomain()
     }
 
+    /**
+     * Recent scanned incoming transfers. This endpoint is not on every backend: a 404 (or any HTTP
+     * error) is folded into a soft "unavailable" success rather than a Failure, so the deposit tab can
+     * degrade to an explanatory empty state instead of an error. Network errors still surface as such.
+     */
+    suspend fun getDeposits(): ApiResult<CustodyDeposits> = withContext(io) {
+        try {
+            ApiResult.Success(api.getDeposits().toDomain())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Success(CustodyDeposits.unavailable())
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
     suspend fun withdraw(
         chain: String,
         to: String,
@@ -103,6 +120,29 @@ private fun DepositAddressDto.toDomain(): CustodyDepositAddress =
         derivation = derivation?.takeIf { it.isNotBlank() },
         domain = domain?.takeIf { it.isNotBlank() },
     )
+
+private fun CustodyDepositsDto.toDomain(): CustodyDeposits = CustodyDeposits(
+    vault = vault?.trim().orEmpty(),
+    rows = deposits.orEmpty().map { it.toDomain() },
+    unavailable = false,
+)
+
+private fun CustodyDepositDto.toDomain(): CustodyDeposit {
+    val chainId = chain?.trim()?.toIntOrNull()
+    return CustodyDeposit(
+        chainId = chainId,
+        chainName = if (chainId != null) CustodyAssets.chainName(chainId) else (chain?.trim().orEmpty().ifBlank { "Unknown chain" }),
+        asset = asset?.trim().orEmpty().ifBlank { "?" },
+        amount = amount?.trim().orEmpty(),
+        txHash = txhash?.trim().orEmpty(),
+        status = DepositStatus.from(status),
+        timestampMs = ts?.let { normalizeToMs(it) },
+        seq = seq,
+    )
+}
+
+/** ts may arrive in seconds or milliseconds; anything below ~1e12 is treated as seconds. */
+private fun normalizeToMs(ts: Long): Long = if (ts in 1L until 100_000_000_000L) ts * 1000L else ts
 
 private fun WithdrawResultDto.toDomain(): CustodyWithdrawResult =
     CustodyWithdrawResult(

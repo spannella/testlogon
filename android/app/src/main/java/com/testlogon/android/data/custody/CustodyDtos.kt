@@ -2,6 +2,7 @@ package com.testlogon.android.data.custody
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import com.testlogon.android.core.network.json.LenientLong
 
 /*
  * Wire DTOs for the PRODUCTION custody surface (the three /me/custody endpoints).
@@ -26,6 +27,31 @@ data class BalanceDto(
 )
 
 /** GET me/custody/deposit-address?chain=<id> -> a per-chain deposit address + provenance metadata. */
+/**
+ * GET me/custody/deposits (NEW; not on every backend -> 404 handled as graceful-empty by the repo).
+ * A scanned incoming on-chain transfer credited (or de-duplicated) into the vault. amount/txhash/asset
+ * are strings; seq/ts are int64 but the edge may stringify them, so both use @LenientLong. ts is a unix
+ * time whose unit (seconds vs ms) is detected at the domain edge. Newest first.
+ */
+@JsonClass(generateAdapter = true)
+data class CustodyDepositDto(
+    @Json(name = "chain") val chain: String? = null,
+    @Json(name = "txhash") val txhash: String? = null,
+    @Json(name = "log_index") val logIndex: String? = null,
+    @Json(name = "asset") val asset: String? = null,
+    @Json(name = "amount") val amount: String? = null,
+    @Json(name = "status") val status: String? = null,
+    @LenientLong @Json(name = "seq") val seq: Long? = null,
+    @LenientLong @Json(name = "ts") val ts: Long? = null,
+)
+
+/** GET me/custody/deposits envelope: the vault id + the (newest-first) list of scanned deposits. */
+@JsonClass(generateAdapter = true)
+data class CustodyDepositsDto(
+    @Json(name = "vault") val vault: String? = null,
+    @Json(name = "deposits") val deposits: List<CustodyDepositDto>? = null,
+)
+
 @JsonClass(generateAdapter = true)
 data class DepositAddressDto(
     @Json(name = "address") val address: String? = null,

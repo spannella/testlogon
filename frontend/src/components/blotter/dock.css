@@ -1,0 +1,68 @@
+/* Trading workspace docking layout (dockview) — testlogon dense theme.
+   Vars (--bg / --accent / --font-ui …) come from blotter.css. */
+.tl-dock-host { position: absolute; inset: 0; overflow: hidden; display: flex; flex-direction: column; }
+.tl-trading-dock {
+  --dv-tabs-and-actions-container-background-color: var(--bg-2);
+  --dv-tabs-container-scrollbar-color: var(--line-2);
+  --dv-tab-divider-color: var(--line);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--bg-3, #171c24);
+  --dv-activegroup-visiblepanel-tab-color: var(--accent);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--bg-2);
+  --dv-activegroup-hiddenpanel-tab-color: var(--fg-dim, #8b97a7);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--bg-3, #171c24);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--fg);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--bg-2);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--fg-dim, #8b97a7);
+  --dv-separator-border: var(--line-2);
+  --dv-paneview-active-outline-color: var(--accent);
+  --dv-drag-over-background-color: color-mix(in oklab, var(--accent) 22%, transparent);
+  --dv-drag-over-border-color: var(--accent);
+  --dv-icon-hover-background-color: color-mix(in oklab, var(--accent) 20%, transparent);
+  --dv-tab-close-icon: var(--fg-dim, #8b97a7);
+  --dv-active-sash-color: var(--accent);
+  --dv-background-color: var(--bg);
+  --dv-group-view-background-color: var(--bg);
+  flex: 1; min-height: 0; min-width: 0; height: 100%;
+  color: var(--fg); font-family: var(--font-ui);
+}
+.tl-trading-dock .dv-tabs-container .dv-tab { font-size: 11.5px; padding: 4px 12px; border-bottom: 2px solid transparent; }
+.tl-trading-dock .dv-tabs-container .dv-tab.dv-active-tab { border-bottom-color: var(--accent); }
+/* "+ Panel" reopen menu */
+.tl-panel-menu { position: absolute; top: 4px; right: 8px; z-index: 5; font-size: 10px; }
+.tl-panel-btn {
+  background: color-mix(in oklab, var(--bg-3, #171c24) 85%, transparent);
+  border: 1px solid var(--line-2); color: var(--fg-dim, #8b97a7);
+  padding: 1px 8px; height: 20px; border-radius: 3px; cursor: pointer;
+  font: 500 10px var(--font-ui); letter-spacing: 0.02em; backdrop-filter: blur(4px);
+  transition: border-color 100ms, color 100ms;
+}
+.tl-panel-btn:hover, .tl-panel-menu.open .tl-panel-btn { border-color: var(--accent); color: var(--accent); }
+.tl-panel-list {
+  position: absolute; right: 0; top: 22px; min-width: 200px;
+  background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35); padding: 4px;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.tl-panel-list hr { border: none; border-top: 1px solid var(--line); margin: 4px 0; }
+.tl-panel-item {
+  background: transparent; border: none; color: var(--fg); text-align: left;
+  padding: 5px 8px; border-radius: 3px; cursor: pointer; font: 11px var(--font-ui);
+  display: flex; align-items: center; gap: 6px;
+}
+.tl-panel-item:hover:not(:disabled) { background: var(--bg-3, #171c24); }
+.tl-panel-item:disabled { color: var(--fg-dim, #8b97a7); cursor: default; }
+.tl-panel-item .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.tl-panel-item .dot.on { background: var(--accent); }
+.tl-panel-item .dot.off { background: var(--line-2); }
+.tl-panel-item .chip { margin-left: auto; font-size: 9px; color: var(--fg-dim, #8b97a7); }
+.tl-panel-item.danger { color: #ff9a9a; }
+.tl-panel-body { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+
+/* Mobile: full-width single-panel tab switcher (replaces dockview split). */
+.tl-mobile-tabs { display: flex; gap: 4px; padding: 2px 8px 8px; }
+.tl-mobile-tabs button {
+  flex: 1; background: var(--bg-2); border: 1px solid var(--line-2); color: var(--fg-dim, #8b97a7);
+  padding: 9px 4px; border-radius: 7px; font: 600 12.5px var(--font-ui); cursor: pointer;
+  transition: border-color 100ms, color 100ms, background 100ms;
+}
+.tl-mobile-tabs button.active { background: color-mix(in oklab, var(--accent) 18%, var(--bg-2)); border-color: var(--accent); color: var(--accent); }

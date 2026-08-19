@@ -97,6 +97,8 @@ object MoreRoutes {
     // AND-332: the server file manager (path-based browse + upload/download/share/Drive-import).
     const val FILES = FilesDest.ROUTE
 
+    // Trading Blotter: native orders/fills/positions blotter (web parity). Sample data only.
+    const val TRADING_BLOTTER = BlotterDest.ROUTE
 
     // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /me/custody/*.
     const val CUSTODY = CustodyDest.ROUTE
@@ -552,6 +554,7 @@ object MoreRoutes {
             SELLER_ORDERS,
             SELLER_SALES,
             FILES,
+            TRADING_BLOTTER,
             CUSTODY,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,

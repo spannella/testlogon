@@ -18,12 +18,14 @@ import {
   usePlaceFunding,
   useSpotBalance,
   useSpotDeposit,
+  useMarginConfig,
 } from "@/hooks/useTrading";
 import { isAck, ackMessage, impliedYes, marginUsedFraction } from "@/api/endpoints/trading";
-import type { OrderSide, Fill, PlaceOrderRequest } from "@/api/endpoints/trading";
+import type { OrderSide, Fill, PlaceOrderRequest, MarginConfigRequest } from "@/api/endpoints/trading";
 import { formatPrice, formatQty, formatTimeNs } from "./format";
 import { vibrate, notify, ensureNotifyPermission } from "@/lib/tradeFeedback";
 import { tradingFeatures } from "./tradingFeatures";
+import { useAuthStore } from "@/stores/authStore";
 
 type OrderType = "limit" | "market" | "stop" | "stop_limit" | "take_profit" | "quote" | "oto" | "oco" | "funding";
 type Section = "trade" | "positions" | "orders" | "fills";
@@ -115,6 +117,132 @@ function Field({
     </div>
   );
 }
+
+
+// ─── Admin: per-symbol margin/fee config ───────────────────────
+
+const MARGIN_CONFIG_FIELDS: {
+  key: keyof Omit<MarginConfigRequest, "symbolid">;
+  label: string;
+  def: string;
+}[] = [
+  { key: "initial_margin_bps", label: "Initial margin (bps)", def: "1000" },
+  { key: "maintenance_margin_bps", label: "Maintenance margin (bps)", def: "500" },
+  { key: "liquidation_fee_bps", label: "Liquidation fee (bps)", def: "100" },
+  { key: "hourly_borrow_rate_bps", label: "Hourly borrow rate (bps)", def: "1" },
+  { key: "maker_fee_bps", label: "Maker fee (bps)", def: "2" },
+  { key: "taker_fee_bps", label: "Taker fee (bps)", def: "5" },
+  { key: "max_position_qty", label: "Max position qty", def: "1000000" },
+];
+
+function MarginConfigPanel({ symbolId }: { symbolId: number }) {
+  const isAdmin = useAuthStore((st) => st.isAdmin);
+  const configM = useMarginConfig();
+  const [open, setOpen] = useState(false);
+  const [symId, setSymId] = useState(String(symbolId || ""));
+  const [vals, setVals] = useState<Record<string, string>>(() =>
+    Object.fromEntries(MARGIN_CONFIG_FIELDS.map((f) => [f.key, f.def]))
+  );
+  const [ack, setAck] = useState<{ text: string; error: boolean } | null>(null);
+
+  // Keep the symbol id defaulted to the currently viewed symbol until edited.
+  useEffect(() => {
+    setSymId(String(symbolId || ""));
+  }, [symbolId]);
+
+  if (!isAdmin) return null;
+
+  const symN = parseInt(symId) || 0;
+  const nums = Object.fromEntries(
+    MARGIN_CONFIG_FIELDS.map((f) => [f.key, parseInt(vals[f.key] ?? "") || 0])
+  ) as Record<keyof Omit<MarginConfigRequest, "symbolid">, number>;
+  const allValid =
+    symN > 0 && MARGIN_CONFIG_FIELDS.every((f) => (parseInt(vals[f.key] ?? "") || 0) >= 0);
+
+  const submit = () => {
+    if (!allValid) {
+      setAck({ text: "Symbol id must be > 0 and all bps values ≥ 0.", error: true });
+      return;
+    }
+    setAck(null);
+    const body: MarginConfigRequest = {
+      symbolid: symN,
+      initial_margin_bps: nums.initial_margin_bps,
+      maintenance_margin_bps: nums.maintenance_margin_bps,
+      liquidation_fee_bps: nums.liquidation_fee_bps,
+      hourly_borrow_rate_bps: nums.hourly_borrow_rate_bps,
+      maker_fee_bps: nums.maker_fee_bps,
+      taker_fee_bps: nums.taker_fee_bps,
+      max_position_qty: nums.max_position_qty,
+    };
+    configM.mutate(body, {
+      onSuccess: (a) => {
+        const okd = a.status === "ack" && (a.result ?? 0) === 0;
+        setAck({
+          text: okd
+            ? `Applied to symbol ${a.symbolid ?? symN}.`
+            : `Rejected${a.result != null ? ` (result ${a.result})` : ""}${
+                a.detail || a.error || a.note ? `: ${a.detail || a.error || a.note}` : ""
+              }`,
+          error: !okd,
+        });
+      },
+      onError: (e) => setAck({ text: (e as Error)?.message ?? "Request failed", error: true }),
+    });
+  };
+
+  return (
+    <Card className="border-amber-500/40">
+      <CardContent className="pt-4">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between text-sm font-semibold text-amber-600 dark:text-amber-400"
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span>Margin config (admin)</span>
+          <span>{open ? "▲" : "▼"}</span>
+        </button>
+        {open && (
+          <div className="mt-3 space-y-2">
+            <Field label="Symbol id" value={symId} onChange={setSymId} />
+            <div className="grid grid-cols-2 gap-2">
+              {MARGIN_CONFIG_FIELDS.map((f) => (
+                <Field
+                  key={f.key}
+                  label={f.label}
+                  value={vals[f.key] ?? ""}
+                  onChange={(v) => setVals((prev) => ({ ...prev, [f.key]: v }))}
+                />
+              ))}
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full"
+              disabled={configM.isPending || !allValid}
+              onClick={submit}
+            >
+              {configM.isPending ? "Applying…" : "Apply margin config"}
+            </Button>
+            {ack && (
+              <p
+                className={cn(
+                  "text-xs font-mono",
+                  ack.error
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-emerald-600 dark:text-emerald-400"
+                )}
+              >
+                {ack.text}
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 
 export function TradeTicket({
   symbolId,
@@ -228,6 +356,10 @@ export function TradeTicket({
   const avail = acct?.available_balance ?? 0;
   const orderValue = priceN > 0 && qtyN > 0 ? priceN * qtyN : undefined;
   const posQty = acct?.pos_qty ?? 0;
+  const hasPosition = (acct?.num_positions ?? 0) > 0 || posQty !== 0;
+  const liqPrice = acct?.pos_liquidation_price ?? 0;
+  const upnl = acct?.pos_unrealized_pnl ?? 0;
+  const liqNear = !!acct?.is_liquidating || (acct?.distress_level ?? 0) > 0;
   const marginPct = Math.round(marginUsedFraction(acct) * 100);
 
   const resetArmed = () => armed && setArmed(null);
@@ -521,6 +653,7 @@ export function TradeTicket({
   ];
 
   return (
+    <div className="space-y-3">
     <Card>
       <CardContent className="space-y-3 pt-6">
         {/* Prediction-market banner */}
@@ -589,6 +722,49 @@ export function TradeTicket({
               <p className="mt-1 text-xs font-bold text-rose-600 dark:text-rose-400">
                 ⚠ {acct.is_liquidating ? "Liquidating" : `Distress ${acct.distress_level}`}
               </p>
+            )}
+            {hasPosition && (
+              <div className="mt-2 border-t pt-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-muted-foreground">Position</span>
+                  <span
+                    className={cn(
+                      "text-xs font-bold tabular-nums",
+                      posQty > 0
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : posQty < 0
+                        ? "text-rose-600 dark:text-rose-400"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    {posQty > 0 ? "Long" : posQty < 0 ? "Short" : "Flat"} {formatQty(Math.abs(posQty), scaler)}
+                  </span>
+                </div>
+                <div className="mt-1 grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <div className="text-muted-foreground">Entry</div>
+                    <div className="tabular-nums">{formatPrice(acct.pos_entry_price, scaler)}</div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">Liq.</div>
+                    <div className={cn("tabular-nums font-medium", liqNear && "text-rose-600 dark:text-rose-400")}>
+                      {liqPrice ? formatPrice(liqPrice, scaler) : "—"}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-muted-foreground">uPnL</div>
+                    <div
+                      className={cn(
+                        "tabular-nums font-medium",
+                        upnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+                      )}
+                    >
+                      {upnl >= 0 ? "+" : ""}
+                      {formatPrice(upnl, scaler)}
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -992,5 +1168,7 @@ export function TradeTicket({
         {msg && <p className={cn("text-xs font-mono", msg.error ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400")}>{msg.text}</p>}
       </CardContent>
     </Card>
+    <MarginConfigPanel symbolId={symbolId} />
+    </div>
   );
 }

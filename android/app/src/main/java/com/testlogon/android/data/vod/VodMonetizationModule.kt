@@ -3,6 +3,8 @@ package com.testlogon.android.data.vod
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedApi
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedRepository
 import com.testlogon.android.data.vod.adsupported.VodAdSupportedRepositoryImpl
+import com.testlogon.android.data.vod.adsupported.VodAdBaseUrlProvider
+import com.testlogon.android.core.network.SettingsStore
 import com.testlogon.android.data.vod.download.VodWatermarkDownloadApi
 import com.testlogon.android.data.vod.download.WatermarkDownloadRepository
 import com.testlogon.android.data.vod.download.WatermarkDownloadRepositoryImpl
@@ -50,6 +52,12 @@ object VodMonetizationApiModule {
     @Singleton
     fun provideVodWatermarkDownloadApi(retrofit: Retrofit): VodWatermarkDownloadApi =
         retrofit.create(VodWatermarkDownloadApi::class.java)
+
+    /** AND-194 — absolutizes relative ad creative URLs against the runtime base URL. */
+    @Provides
+    @Singleton
+    fun provideVodAdBaseUrlProvider(settingsStore: SettingsStore): VodAdBaseUrlProvider =
+        VodAdBaseUrlProvider { settingsStore.baseUrl }
 }
 
 @Module

@@ -25,6 +25,13 @@ interface CustodyApi {
     @GET("me/custody/deposit-address")
     suspend fun depositAddress(@Query("chain") chain: Int): DepositAddressDto
 
+    /**
+     * Recent scanned incoming transfers into the vault (newest first). NOT deployed on every backend:
+     * a 404 is handled by the repository as a graceful "unavailable" empty state.
+     */
+    @GET("me/custody/deposits")
+    suspend fun getDeposits(): CustodyDepositsDto
+
     /** Submit a withdrawal intent; the gateway signs, holds for approval, or blocks/rejects it. */
     @Headers("Content-Type: application/json")
     @POST("me/custody/withdraw")
