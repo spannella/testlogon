@@ -113,11 +113,12 @@ function SubForm({ title, children }: { title: string; children: React.ReactNode
     <div className="rounded-md border">
       <button
         type="button"
+        aria-expanded={open}
         className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold"
         onClick={() => setOpen((v) => !v)}
       >
         <span>{title}</span>
-        <span className="text-muted-foreground">{open ? "▲" : "▼"}</span>
+        <span className="text-muted-foreground" aria-hidden>{open ? "▲" : "▼"}</span>
       </button>
       {open && <div className="space-y-2 border-t px-3 py-3">{children}</div>}
     </div>
@@ -471,11 +472,12 @@ export function StakingAuctionsPanel({ symbolId, scaler }: { symbolId: number; s
       <CardContent className="pt-4">
         <button
           type="button"
+          aria-expanded={open}
           className="flex w-full items-center justify-between text-sm font-semibold text-sky-600 dark:text-sky-400"
           onClick={() => setOpen((v) => !v)}
         >
           <span>Staking &amp; Auctions</span>
-          <span>{open ? "▲" : "▼"}</span>
+          <span aria-hidden>{open ? "▲" : "▼"}</span>
         </button>
         {open && (
           <div className="mt-3 space-y-2">

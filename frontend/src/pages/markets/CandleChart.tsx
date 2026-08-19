@@ -146,6 +146,7 @@ function Chip({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={cn(
         "rounded border px-1.5 py-0.5 text-[10px] leading-none transition-colors",
         active ? "border-transparent bg-foreground/10 font-medium" : "border-border text-muted-foreground hover:bg-foreground/5",

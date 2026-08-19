@@ -112,7 +112,7 @@ function Field({
       <label className="text-xs text-muted-foreground">{label}</label>
       <div className="mt-1 flex items-center gap-1.5">
         {onStep && (
-          <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" onClick={() => onStep(-1)}>
+          <Button type="button" variant="outline" size="icon" aria-label={`Decrease ${label}`} className="h-9 w-9 shrink-0" onClick={() => onStep(-1)}>
             −
           </Button>
         )}
@@ -124,7 +124,7 @@ function Field({
           className="tabular-nums"
         />
         {onStep && (
-          <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" onClick={() => onStep(1)}>
+          <Button type="button" variant="outline" size="icon" aria-label={`Increase ${label}`} className="h-9 w-9 shrink-0" onClick={() => onStep(1)}>
             +
           </Button>
         )}
@@ -298,11 +298,12 @@ function MarginConfigPanel({ symbolId }: { symbolId: number }) {
       <CardContent className="pt-4">
         <button
           type="button"
+          aria-expanded={open}
           className="flex w-full items-center justify-between text-sm font-semibold text-amber-600 dark:text-amber-400"
           onClick={() => setOpen((v) => !v)}
         >
           <span>Margin config (admin)</span>
-          <span>{open ? "▲" : "▼"}</span>
+          <span aria-hidden>{open ? "▲" : "▼"}</span>
         </button>
         {open && (
           <div className="mt-3 space-y-2">
@@ -1093,8 +1094,8 @@ export function TradeTicket({
             {/* Advanced */}
             {(orderType === "limit" || orderType === "market") && (
               <div>
-                <button type="button" className="text-xs font-semibold text-primary" onClick={() => setAdvancedOpen((v) => !v)}>
-                  Advanced {advancedOpen ? "▲" : "▼"}
+                <button type="button" aria-expanded={advancedOpen} className="text-xs font-semibold text-primary" onClick={() => setAdvancedOpen((v) => !v)}>
+                  Advanced <span aria-hidden>{advancedOpen ? "▲" : "▼"}</span>
                 </button>
                 {advancedOpen && (
                   <div className="mt-2 space-y-2">

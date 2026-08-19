@@ -529,17 +529,6 @@ private fun OrderBookHeader(style: BookStyle, onStyle: (BookStyle) -> Unit) {
 }
 
 @Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        color = MarketColors.TextPrimary,
-        fontWeight = FontWeight.Bold,
-        fontSize = 14.sp,
-        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 8.dp),
-    )
-}
-
-@Composable
 private fun TradesHeader() {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
