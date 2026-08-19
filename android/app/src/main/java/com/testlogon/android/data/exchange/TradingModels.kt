@@ -338,39 +338,113 @@ fun FeeScheduleDto.toDomain(): FeeSchedule {
     )
 }
 
-/** One fill enriched with a fee. When the server feed is empty the UI computes [fee] client-side. */
+/** Maker vs. taker liquidity flag on a fill. */
+enum class Liquidity(val label: String) { MAKER("maker"), TAKER("taker"), UNKNOWN("--") }
+
+private fun liquidityOf(s: String?): Liquidity = when (s?.lowercase()) {
+    "maker" -> Liquidity.MAKER
+    "taker" -> Liquidity.TAKER
+    else -> Liquidity.UNKNOWN
+}
+
+/** One fill enriched with the engine's REAL [fee] + [liquidity]. [tsNs] is a nanosecond timestamp. */
 data class FillFee(
+    val symbolId: Int,
     val price: Long,
     val qty: Long,
-    val fee: Long,
-    val tsNs: Long,
     val side: OrderSide?,
+    val liquidity: Liquidity,
+    val fee: Long,
+    val feeAsset: Int,
+    val tsNs: Long,
 )
 
-/**
- * The enriched fills-fees feed. [fills] is empty today (engine exposes no per-fill fee); [takerFeeBps]
- * + [feeFormula] let the UI compute fees for its own session fills. [isStub] marks that honesty.
- */
+/** The REAL enriched fills-fees feed (GET me/fills/fees). [count] is the server-reported row count. */
 data class FillsFees(
     val fills: List<FillFee>,
-    val takerFeeBps: Int,
-    val feeFormula: String?,
-    val isStub: Boolean,
-    val note: String?,
-)
+    val count: Int,
+) {
+    val isEmpty: Boolean get() = fills.isEmpty()
+}
 
 fun FillFeeDto.toDomain(): FillFee = FillFee(
+    symbolId = symbolId ?: 0,
     price = price ?: 0L,
     qty = qty ?: 0L,
+    side = sideOf(side),
+    liquidity = liquidityOf(liquidity),
     fee = fee ?: 0L,
-    tsNs = tsNs ?: 0L,
-    side = when (side?.lowercase()) { "buy" -> OrderSide.BUY; "sell" -> OrderSide.SELL; else -> null },
+    feeAsset = feeAsset ?: 0,
+    tsNs = ts ?: 0L,
 )
 
 fun FillsFeesDto.toDomain(): FillsFees = FillsFees(
     fills = fills.orEmpty().map { it.toDomain() },
-    takerFeeBps = takerFeeBps ?: DEFAULT_TAKER_BPS,
-    feeFormula = feeFormula?.takeIf { it.isNotBlank() },
-    isStub = stub == true || (source?.trim()?.lowercase() == "stub"),
-    note = note?.takeIf { it.isNotBlank() },
+    count = count ?: fills.orEmpty().size,
+)
+
+// ==== Liquidations (me/liquidations) — REAL ====
+
+/** One forced-liquidation event. [realizedPnl] is signed (green when >=0). [tsNs] is nanoseconds. */
+data class Liquidation(
+    val symbolId: Int,
+    val qty: Long,
+    val markPrice: Long,
+    val realizedPnl: Long,
+    val fee: Long,
+    val tsNs: Long,
+)
+
+data class Liquidations(val events: List<Liquidation>, val count: Int) {
+    val isEmpty: Boolean get() = events.isEmpty()
+}
+
+fun LiquidationDto.toDomain(): Liquidation = Liquidation(
+    symbolId = symbolId ?: 0,
+    qty = qty ?: 0L,
+    markPrice = markPrice ?: 0L,
+    realizedPnl = realizedPnl ?: 0L,
+    fee = fee ?: 0L,
+    tsNs = ts ?: 0L,
+)
+
+fun LiquidationsDto.toDomain(): Liquidations = Liquidations(
+    events = liquidations.orEmpty().map { it.toDomain() },
+    count = count ?: liquidations.orEmpty().size,
+)
+
+// ==== Funding payments (me/funding/payments) — REAL ====
+
+/**
+ * One perpetual funding payment. [payment] is SIGNED: negative = paid out, positive = received;
+ * [received] mirrors that. [fundingRateBps] is the applied rate, [positionQty] the charged position.
+ */
+data class FundingPayment(
+    val symbolId: Int,
+    val fundingRateBps: Int,
+    val markPrice: Long,
+    val positionQty: Long,
+    val payment: Long,
+    val received: Boolean,
+    val tsNs: Long,
+)
+
+data class FundingPayments(val payments: List<FundingPayment>, val count: Int) {
+    val isEmpty: Boolean get() = payments.isEmpty()
+}
+
+fun FundingPaymentDto.toDomain(): FundingPayment = FundingPayment(
+    symbolId = symbolId ?: 0,
+    fundingRateBps = fundingRateBps ?: 0,
+    markPrice = markPrice ?: 0L,
+    positionQty = positionQty ?: 0L,
+    payment = payment ?: 0L,
+    // Trust the explicit flag when present, else derive from the sign of the signed amount.
+    received = received ?: ((payment ?: 0L) > 0L),
+    tsNs = ts ?: 0L,
+)
+
+fun FundingPaymentsDto.toDomain(): FundingPayments = FundingPayments(
+    payments = funding.orEmpty().map { it.toDomain() },
+    count = count ?: funding.orEmpty().size,
 )

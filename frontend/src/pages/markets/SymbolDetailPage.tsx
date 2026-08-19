@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useSymbols, useOrderBook, useCandles, useTrades } from "@/hooks/useMarketData";
-import { useMarketDataStream } from "@/hooks/useMarketDataStream";
+import { useMdStream } from "@/hooks/useMdStream";
 import type { BookLevel, Candle } from "@/api/endpoints/marketData";
 import type { OrderSide } from "@/api/endpoints/trading";
 import CandleChart from "./CandleChart";
@@ -126,7 +126,7 @@ export default function SymbolDetailPage() {
   const candles = useCandles(id, 60);
   // SSE has no trades, so this keeps polling (relaxed to 4s).
   const trades = useTrades(id, true, TRADES_REFETCH_MS);
-  const stream = useMarketDataStream(id);
+  const stream = useMdStream(id);
 
   const meta = useMemo(
     () => symbolsQuery.data?.symbols.find((s) => s.symbol_id === id),
@@ -160,7 +160,8 @@ export default function SymbolDetailPage() {
   // bar if its ts_start_ns matches, else append.
   const bars = useMemo<Candle[]>(() => {
     const base = candles.data?.bars ?? [];
-    const live = stream.latestCandle;
+    const streamed = stream.bars ?? [];
+    const live = streamed.length ? streamed[streamed.length - 1]! : null;
     if (!live) return base;
     if (base.length === 0) return [live];
     const last = base[base.length - 1]!;
@@ -171,10 +172,10 @@ export default function SymbolDetailPage() {
       return [...base, live];
     }
     return base;
-  }, [candles.data, stream.latestCandle]);
+  }, [candles.data, stream.bars]);
 
   const recentTrades = trades.data?.trades ?? [];
-  const lastPrice = recentTrades[0]?.price ?? bestAsk ?? bestBid;
+  const lastPrice = recentTrades[0]?.price ?? stream.lastPrice ?? bestAsk ?? bestBid;
 
   return (
     <div className="space-y-6">
@@ -221,7 +222,7 @@ export default function SymbolDetailPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <CardTitle className="text-base">Order Book</CardTitle>
-                {stream.live && (
+                {stream.connected ? (
                   <Badge
                     variant="outline"
                     className="gap-1 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
@@ -231,6 +232,14 @@ export default function SymbolDetailPage() {
                       <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
                     </span>
                     LIVE
+                  </Badge>
+                ) : (
+                  <Badge
+                    variant="outline"
+                    className="gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400"
+                  >
+                    <span className="relative inline-flex h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+                    Reconnecting
                   </Badge>
                 )}
               </div>

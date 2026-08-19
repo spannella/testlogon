@@ -1,9 +1,11 @@
 // Trading Workspace — a dockable/splittable/floatable panel layout (dockview)
-// hosting the testlogon blotter: Orders, Fills, and Positions panels. Drag tabs
-// to split or float; the "+ Panel" menu reopens closed panels; layout persists.
+// hosting the testlogon blotter: Orders, Fills, Positions, Liquidations, and
+// Funding panels. Drag tabs to split or float; the "+ Panel" menu reopens closed
+// panels; layout persists. Orders/Positions are a live mock generator; Fills,
+// Liquidations and Funding are wired to the REAL exchange account feeds
+// (/me/fills/fees · /me/liquidations · /me/funding/payments) and degrade
+// gracefully (empty "unavailable" state) while those routes 404.
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { getFillsFees, computeFee } from "@/api/endpoints/custody";
 import {
   DockviewReact,
   type DockviewReadyEvent,
@@ -13,8 +15,12 @@ import "dockview-react/dist/styles/dockview.css";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Blotter } from "@/components/blotter/grid";
 import { orderColumns } from "@/components/blotter/grid/columns";
-import { fillsColumns } from "@/components/blotter/grid/fillsColumns";
 import type { Order, Side, OrderStatus, Venue, Lot } from "@/components/blotter/types";
+import { useFillsFees, useLiquidations, useFundingPayments } from "@/hooks/useTrading";
+import { useSymbols } from "@/hooks/useMarketData";
+import type { MarketSymbol } from "@/api/endpoints/marketData";
+import type { FillFee, Liquidation, FundingPayment } from "@/api/endpoints/trading";
+import { formatPrice, formatQty } from "@/pages/markets/format";
 import "@/components/blotter/dock.css";
 
 const SYMS = ["BTC-USD", "ETH-USD", "SOL-USD", "PMKT-2028"];
@@ -60,12 +66,70 @@ const posColumns: ColumnDef<any>[] = [
   { id: "unrealized", header: "uPnL", accessorKey: "unrealized", size: 110 },
 ];
 
+// ── Real-feed shared helpers (int64 engine ticks + ts detection + symbol lookup) ──
+// `ts` may be seconds or ms — anything below this threshold (~ year 2001 in ms)
+// is treated as seconds and scaled up.
+const MS_THRESHOLD = 1e12;
+function formatFeedTime(ts: number | undefined): string {
+  if (ts == null || !Number.isFinite(ts)) return "—";
+  const ms = ts < MS_THRESHOLD ? ts * 1000 : ts;
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+const POS = "var(--pos)";
+const NEG = "var(--neg)";
+const signColor = (v: number | undefined) => (v == null || v === 0 ? undefined : v > 0 ? POS : NEG);
+
+/** Look up a symbol's display name + price scaler from the /md/symbols catalog. */
+type SymLookup = (symbolid: number) => { name: string; scaler: number };
+function makeSymLookup(symbols: MarketSymbol[] | undefined): SymLookup {
+  const byId = new Map<number, MarketSymbol>();
+  for (const s of symbols ?? []) byId.set(s.symbol_id, s);
+  return (symbolid: number) => {
+    const s = byId.get(symbolid);
+    return { name: s?.symbol ?? `#${symbolid}`, scaler: s?.price_scaler || 1 };
+  };
+}
+
+// Column builders take the symbol lookup so int64 ticks scale per-symbol.
+function fillFeeColumns(sym: SymLookup): ColumnDef<FillFee>[] {
+  return [
+    { id: "sym", header: "Sym", accessorKey: "symbolid", size: 100, cell: (c) => <span className="sym">{sym(c.getValue<number>()).name}</span> },
+    { id: "side", header: "Side", accessorKey: "side", size: 60, cell: (c) => { const v = c.getValue<string>(); return <span style={{ color: v === "buy" ? POS : NEG, textTransform: "uppercase" }}>{v}</span>; } },
+    { id: "price", header: "Price", accessorKey: "price", size: 110, cell: (c) => <span className="num">{formatPrice(c.getValue<number>(), sym(c.row.original.symbolid).scaler)}</span> },
+    { id: "qty", header: "Qty", accessorKey: "qty", size: 100, cell: (c) => <span className="num">{formatQty(c.getValue<number>(), sym(c.row.original.symbolid).scaler)}</span> },
+    { id: "liquidity", header: "Liq", accessorKey: "liquidity", size: 70, cell: (c) => <span className="dim" style={{ textTransform: "capitalize" }}>{c.getValue<string>()}</span> },
+    { id: "fee", header: "Fee", accessorKey: "fee", size: 100, cell: (c) => <span className="num">{formatQty(c.getValue<number>(), sym(c.row.original.symbolid).scaler)}</span> },
+    { id: "ts", header: "Time", accessorKey: "ts", size: 100, cell: (c) => <span className="num dim">{formatFeedTime(c.getValue<number>())}</span> },
+  ];
+}
+
+function liquidationColumns(sym: SymLookup): ColumnDef<Liquidation>[] {
+  return [
+    { id: "sym", header: "Sym", accessorKey: "symbolid", size: 100, cell: (c) => <span className="sym">{sym(c.getValue<number>()).name}</span> },
+    { id: "qty", header: "Qty", accessorKey: "qty", size: 100, cell: (c) => <span className="num">{formatQty(c.getValue<number>(), sym(c.row.original.symbolid).scaler)}</span> },
+    { id: "mark_price", header: "Mark", accessorKey: "mark_price", size: 110, cell: (c) => <span className="num">{formatPrice(c.getValue<number>(), sym(c.row.original.symbolid).scaler)}</span> },
+    { id: "realized_pnl", header: "Realized PnL", accessorKey: "realized_pnl", size: 130, cell: (c) => { const v = c.getValue<number>(); return <span className="num" style={{ color: signColor(v) }}>{formatPrice(v, sym(c.row.original.symbolid).scaler)}</span>; } },
+    { id: "fee", header: "Liq Fee", accessorKey: "fee", size: 100, cell: (c) => <span className="num">{formatQty(c.getValue<number>(), sym(c.row.original.symbolid).scaler)}</span> },
+    { id: "ts", header: "Time", accessorKey: "ts", size: 100, cell: (c) => <span className="num dim">{formatFeedTime(c.getValue<number>())}</span> },
+  ];
+}
+
+function fundingColumns(sym: SymLookup): ColumnDef<FundingPayment>[] {
+  return [
+    { id: "sym", header: "Sym", accessorKey: "symbolid", size: 100, cell: (c) => <span className="sym">{sym(c.getValue<number>()).name}</span> },
+    { id: "funding_rate_bps", header: "Rate (bps)", accessorKey: "funding_rate_bps", size: 100, cell: (c) => <span className="num">{c.getValue<number>()}</span> },
+    { id: "mark_price", header: "Mark", accessorKey: "mark_price", size: 110, cell: (c) => <span className="num">{formatPrice(c.getValue<number>(), sym(c.row.original.symbolid).scaler)}</span> },
+    { id: "position_qty", header: "Position", accessorKey: "position_qty", size: 110, cell: (c) => <span className="num">{formatQty(c.getValue<number>(), sym(c.row.original.symbolid).scaler)}</span> },
+    { id: "payment", header: "Payment", accessorKey: "payment", size: 120, cell: (c) => { const v = c.getValue<number>(); return <span className="num" style={{ color: signColor(v) }}>{formatPrice(v, sym(c.row.original.symbolid).scaler)}</span>; } },
+    { id: "ts", header: "Time", accessorKey: "ts", size: 100, cell: (c) => <span className="num dim">{formatFeedTime(c.getValue<number>())}</span> },
+  ];
+}
+
 // Compact column sets for narrow (mobile) screens — fewer columns so rows are
 // readable without horizontal scrolling.
 const MOBILE_ORDER_IDS = new Set(["sym", "side", "px", "qty", "cumQty", "status"]);
-const MOBILE_FILL_IDS = new Set(["sym", "side", "px", "qty", "avgPx", "fee", "status"]);
 const mobileOrderColumns = orderColumns.filter((c) => MOBILE_ORDER_IDS.has((c as any).id));
-const mobileFillsColumns = fillsColumns.filter((c) => MOBILE_FILL_IDS.has((c as any).id));
+const mobileFilter = (cols: ColumnDef<any>[], ids: Set<string>) => cols.filter((c) => ids.has((c as any).id));
 
 function useIsMobile(bp = 767): boolean {
   const [m, setM] = useState(() => typeof window !== "undefined" && window.matchMedia(`(max-width: ${bp}px)`).matches);
@@ -78,13 +142,75 @@ function useIsMobile(bp = 767): boolean {
   return m;
 }
 
-const LAYOUT_KEY = "testlogon.trading.dock.v1";
-interface Ctx { orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; isMobile: boolean; takerFeeBps: number | null; }
+const LAYOUT_KEY = "testlogon.trading.dock.v2";
+interface Ctx { orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; isMobile: boolean; sym: SymLookup; }
 const WsCtx = createContext<Ctx | null>(null);
 const useWs = (): Ctx => { const c = useContext(WsCtx); if (!c) throw new Error("WsCtx missing"); return c; };
 
+// A small unavailable/empty placeholder for the real-feed panels.
+function FeedNote({ children }: { children: React.ReactNode }) {
+  return <div style={{ padding: "0.8rem 1rem", fontSize: "0.8rem", opacity: 0.55 }}>{children}</div>;
+}
+
 function OrdersPanel() { const c = useWs(); return <div className="tl-panel-body"><Blotter data={c.orders} columns={c.isMobile ? mobileOrderColumns : orderColumns} touched={c.touched} storageKeyPrefix="tl-ws-orders" onCancel={c.onCancel} /></div>; }
-function FillsPanel() { const c = useWs(); const fills = useMemo(() => c.orders.filter((o) => o.cumQty > 0).map((o) => (c.takerFeeBps == null ? o : { ...o, fee: computeFee(o.avgPx, o.cumQty, c.takerFeeBps) })), [c.orders, c.takerFeeBps]); return <div className="tl-panel-body"><Blotter data={fills} columns={c.isMobile ? mobileFillsColumns : fillsColumns} touched={c.touched} storageKeyPrefix="tl-ws-fills" /></div>; }
+
+// Fills — REAL /me/fills/fees feed: per-fill price/qty + the actual engine fee
+// (+ maker/taker). When the route 404s (or errors) the grid shows no rows and a
+// note; the former client-side estimate is retired.
+function FillsPanel() {
+  const c = useWs();
+  const q = useFillsFees();
+  const cols = useMemo(() => {
+    const full = fillFeeColumns(c.sym);
+    return c.isMobile ? mobileFilter(full as ColumnDef<any>[], new Set(["sym", "side", "price", "qty", "fee"])) : full;
+  }, [c.sym, c.isMobile]);
+  const rows = q.data?.fills ?? [];
+  return (
+    <div className="tl-panel-body">
+      <Blotter data={rows} columns={cols} storageKeyPrefix="tl-ws-fills" getRowId={(r: any) => `${r.symbolid}:${r.ts}:${r.price}:${r.qty}:${r.side}`} />
+      {q.isLoading ? <FeedNote>Loading fills…</FeedNote>
+        : q.isError ? <FeedNote>Fills-fee feed not available on this backend yet.</FeedNote>
+        : rows.length === 0 ? <FeedNote>No fills yet.</FeedNote> : null}
+    </div>
+  );
+}
+
+function LiquidationsPanel() {
+  const c = useWs();
+  const q = useLiquidations();
+  const cols = useMemo(() => {
+    const full = liquidationColumns(c.sym);
+    return c.isMobile ? mobileFilter(full as ColumnDef<any>[], new Set(["sym", "qty", "realized_pnl", "ts"])) : full;
+  }, [c.sym, c.isMobile]);
+  const rows = q.data?.liquidations ?? [];
+  return (
+    <div className="tl-panel-body">
+      <Blotter data={rows} columns={cols} storageKeyPrefix="tl-ws-liqs" getRowId={(r: any) => `${r.symbolid}:${r.ts}:${r.qty}:${r.mark_price}`} />
+      {q.isLoading ? <FeedNote>Loading liquidations…</FeedNote>
+        : q.isError ? <FeedNote>Liquidations feed not available on this backend yet.</FeedNote>
+        : rows.length === 0 ? <FeedNote>No liquidations.</FeedNote> : null}
+    </div>
+  );
+}
+
+function FundingPanel() {
+  const c = useWs();
+  const q = useFundingPayments();
+  const cols = useMemo(() => {
+    const full = fundingColumns(c.sym);
+    return c.isMobile ? mobileFilter(full as ColumnDef<any>[], new Set(["sym", "funding_rate_bps", "payment", "ts"])) : full;
+  }, [c.sym, c.isMobile]);
+  const rows = q.data?.funding ?? [];
+  return (
+    <div className="tl-panel-body">
+      <Blotter data={rows} columns={cols} storageKeyPrefix="tl-ws-funding" getRowId={(r: any) => `${r.symbolid}:${r.ts}:${r.payment}:${r.position_qty}`} />
+      {q.isLoading ? <FeedNote>Loading funding payments…</FeedNote>
+        : q.isError ? <FeedNote>Funding-payments feed not available on this backend yet.</FeedNote>
+        : rows.length === 0 ? <FeedNote>No funding payments.</FeedNote> : null}
+    </div>
+  );
+}
+
 function PositionsPanel() {
   const c = useWs();
   const pos = useMemo(() => {
@@ -102,12 +228,14 @@ function PositionsPanel() {
   return <div className="tl-panel-body"><Blotter data={pos} columns={posColumns} storageKeyPrefix="tl-ws-pos" getRowId={(r: any) => r.sym} /></div>;
 }
 
-const COMPONENTS = { orders: OrdersPanel, fills: FillsPanel, positions: PositionsPanel };
+const COMPONENTS = { orders: OrdersPanel, fills: FillsPanel, positions: PositionsPanel, liquidations: LiquidationsPanel, funding: FundingPanel };
 type PanelId = keyof typeof COMPONENTS;
 const PANEL_META: { id: PanelId; title: string }[] = [
   { id: "orders", title: "Orders" },
   { id: "fills", title: "Fills" },
   { id: "positions", title: "Positions" },
+  { id: "liquidations", title: "Liquidations" },
+  { id: "funding", title: "Funding" },
 ];
 
 export default function TradingWorkspacePage() {
@@ -117,10 +245,9 @@ export default function TradingWorkspacePage() {
   const cancel = (clord: string) => setOrders((prev) => prev.map((o) => (o.clord === clord ? { ...o, status: "cancelled" as OrderStatus, leaves: 0 } : o)));
   const isMobile = useIsMobile();
   const [activeTab, setActiveTab] = useState<PanelId>("orders");
-  // Enriched fills-fee feed. 404s until the edge deploys -> null taker rate,
-  // and the Fills grid then hides its Fee column gracefully (no error).
-  const feesQuery = useQuery({ queryKey: ["fills", "fees"], queryFn: getFillsFees, retry: false, staleTime: 60_000 });
-  const takerFeeBps = feesQuery.data?.taker_fee_bps ?? null;
+  // Symbol catalog for mapping symbolid -> name + price scaler on the real feeds.
+  const symbolsQuery = useSymbols();
+  const sym = useMemo(() => makeSymLookup(symbolsQuery.data?.symbols), [symbolsQuery.data]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -150,8 +277,8 @@ export default function TradingWorkspacePage() {
     return () => { clearInterval(id); if (clearTimer.current) clearTimeout(clearTimer.current); };
   }, []);
 
-  const ctxRef = useRef<Ctx>({ orders, touched, onCancel: cancel, isMobile, takerFeeBps });
-  ctxRef.current = { orders, touched, onCancel: cancel, isMobile, takerFeeBps };
+  const ctxRef = useRef<Ctx>({ orders, touched, onCancel: cancel, isMobile, sym });
+  ctxRef.current = { orders, touched, onCancel: cancel, isMobile, sym };
   const stableCtx = useMemo(() => new Proxy({} as Ctx, { get(_, k: string) { return (ctxRef.current as any)[k]; } }), []);
 
   const [dockApi, setDockApi] = useState<DockviewApi | null>(null);
@@ -162,6 +289,8 @@ export default function TradingWorkspacePage() {
     api.addPanel({ id: "orders", title: "Orders", component: "orders", params: { ctx: stableCtx } });
     api.addPanel({ id: "fills", title: "Fills", component: "fills", params: { ctx: stableCtx }, position: { referencePanel: "orders", direction: "right" } });
     api.addPanel({ id: "positions", title: "Positions", component: "positions", params: { ctx: stableCtx }, position: { referencePanel: "fills", direction: "below" } });
+    api.addPanel({ id: "liquidations", title: "Liquidations", component: "liquidations", params: { ctx: stableCtx }, position: { referencePanel: "positions", direction: "within" } });
+    api.addPanel({ id: "funding", title: "Funding", component: "funding", params: { ctx: stableCtx }, position: { referencePanel: "liquidations", direction: "within" } });
     api.getPanel("orders")?.api.setActive();
   };
   const onReady = (ev: DockviewReadyEvent) => {
@@ -196,7 +325,7 @@ export default function TradingWorkspacePage() {
       <WsCtx.Provider value={ctxRef.current}>
         <div style={{ height: "calc(100vh - 3.5rem)", display: "flex", flexDirection: "column" }}>
           <h1 style={{ fontSize: "1rem", fontWeight: 600, padding: "0.5rem 0.7rem 0.35rem" }}>Trading Workspace</h1>
-          <div className="tl-mobile-tabs">
+          <div className="tl-mobile-tabs" style={{ overflowX: "auto" }}>
             {PANEL_META.map((m) => (
               <button key={m.id} type="button" className={activeTab === m.id ? "active" : ""} onClick={() => setActiveTab(m.id)}>{m.title}</button>
             ))}

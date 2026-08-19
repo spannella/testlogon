@@ -3,6 +3,12 @@
 // query/mutation degrades gracefully to an "unavailable" state (retry:false).
 // The custody<->trading bridge (fund/settle x spot/margin) and the vault<->vault
 // transfer are now REAL (atomic, reversal-on-failure) — no "simulated" framing.
+//
+// SAFETY LAYER (frontend-hardening): every money-moving action shows the SOURCE
+// balance, offers a Max button (where the source is known exactly), blocks
+// over-spend / non-positive amounts, gates the network call behind a
+// review/confirm dialog, and renders a clear success receipt (what moved +
+// resulting balances). Endpoint calls + the 4 bridge routes are UNCHANGED.
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -26,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -33,8 +40,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 import {
+  getBalance,
   getSubaccounts,
   createSubaccount,
   transferBetweenSubaccounts,
@@ -42,10 +58,12 @@ import {
   settleSpot,
   fundMargin,
   settleMargin,
+  findAsset,
   CUSTODY_ASSETS,
   type Subaccount,
   type SubaccountTransferResult,
 } from "@/api/endpoints/custody";
+import { getSpotBalance, getMarginAccount } from "@/api/endpoints/trading";
 
 // ─── small shared bits ──────────────────────────────────────────
 
@@ -76,6 +94,16 @@ function fmtAmount(v: string | number | undefined | null): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: 8 });
 }
 
+/** Trim a decimal string to an asset's decimals (for the Max button). */
+export function trimToDecimals(v: number, decimals: number): string {
+  if (!Number.isFinite(v) || v <= 0) return "0";
+  const d = Math.min(decimals, 8);
+  const factor = 10 ** d;
+  // truncate toward zero so a Max value can never round UP past the source balance
+  const s = (Math.floor(v * factor) / factor).toFixed(d);
+  return s.replace(/\.?0+$/, "");
+}
+
 function isUnavailable(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 404 || err.status === 501);
 }
@@ -93,6 +121,60 @@ function UnavailableCard({ line }: { line: string }) {
         </Badge>
       </CardContent>
     </Card>
+  );
+}
+
+/** Shared custody balance query — the source for fund-* and base-vault transfers. */
+function useCustodyBalanceQuery() {
+  return useQuery({
+    queryKey: ["custody", "balance"],
+    queryFn: getBalance,
+    staleTime: 15_000,
+    retry: false,
+  });
+}
+
+/** Read a custody per-token balance (case-insensitive) from the balance map. */
+export function custodyBalanceOf(
+  balances: Record<string, number | string> | undefined,
+  symbol: string,
+): number {
+  const bal = balances ?? {};
+  const up = symbol.toUpperCase();
+  const hit =
+    bal[symbol] ?? bal[up] ??
+    Object.entries(bal).find(([k]) => k.toUpperCase() === up)?.[1];
+  return num(hit as number | string | undefined);
+}
+
+/** A small "Available: N SYM   [Max]" row shown beside an amount field. */
+function BalanceHint({
+  available,
+  symbol,
+  onMax,
+  note,
+}: {
+  available?: number;
+  symbol: string;
+  onMax?: () => void;
+  note?: string;
+}) {
+  if (available == null) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        {note ?? "balance unavailable"}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="text-xs text-primary hover:underline disabled:opacity-50 disabled:no-underline"
+      onClick={onMax}
+      disabled={!onMax || available <= 0}
+    >
+      Max: {fmtAmount(available)} {symbol}
+    </button>
   );
 }
 
@@ -340,11 +422,17 @@ interface BridgeResultView {
   reason?: string;
 }
 
-const BRIDGE_ACTIONS: { value: BridgeAction; label: string; verb: string }[] = [
-  { value: "fund-spot", label: "Custody → Spot", verb: "Fund spot" },
-  { value: "settle-spot", label: "Spot → Custody", verb: "Settle spot" },
-  { value: "fund-margin", label: "Custody → Margin", verb: "Fund margin" },
-  { value: "settle-margin", label: "Margin → Custody", verb: "Settle margin" },
+const BRIDGE_ACTIONS: {
+  value: BridgeAction;
+  label: string;
+  verb: string;
+  from: string;
+  to: string;
+}[] = [
+  { value: "fund-spot", label: "Custody → Spot", verb: "Fund spot", from: "Custody vault", to: "Spot ledger" },
+  { value: "settle-spot", label: "Spot → Custody", verb: "Settle spot", from: "Spot ledger", to: "Custody vault" },
+  { value: "fund-margin", label: "Custody → Margin", verb: "Fund margin", from: "Custody vault", to: "Margin collateral" },
+  { value: "settle-margin", label: "Margin → Custody", verb: "Settle margin", from: "Margin collateral", to: "Custody vault" },
 ];
 
 function reasonText(reason?: string): string {
@@ -354,15 +442,75 @@ function reasonText(reason?: string): string {
 }
 
 function BridgeTransfer() {
+  const qc = useQueryClient();
   const [action, setAction] = useState<BridgeAction>("fund-spot");
   const [assetSymbol, setAssetSymbol] = useState<string>(CUSTODY_ASSETS[0]!.symbol);
   const [amount, setAmount] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [result, setResult] = useState<BridgeResultView | null>(null);
 
+  const custody = useCustodyBalanceQuery();
+  // Spot / margin only needed for the two settle directions.
+  const isSettleSpot = action === "settle-spot";
+  const isSettleMargin = action === "settle-margin";
+  const spot = useQuery({
+    queryKey: ["spot", "balance"],
+    queryFn: getSpotBalance,
+    enabled: isSettleSpot,
+    retry: false,
+    staleTime: 15_000,
+  });
+  const margin = useQuery({
+    queryKey: ["margin", "account"],
+    queryFn: getMarginAccount,
+    enabled: isSettleMargin,
+    retry: false,
+    staleTime: 15_000,
+  });
+
+  const meta = findAsset(assetSymbol);
+  const decimals = meta?.decimals ?? 8;
+  const current = BRIDGE_ACTIONS.find((a) => a.value === action)!;
+
+  // Resolve the SOURCE available balance for this action (undefined = unknown).
+  const sourceAvailable: number | undefined = useMemo(() => {
+    if (action === "fund-spot" || action === "fund-margin") {
+      return custody.isSuccess
+        ? custodyBalanceOf(custody.data?.balances, assetSymbol)
+        : undefined;
+    }
+    if (isSettleSpot) {
+      if (!spot.isSuccess) return undefined;
+      const up = assetSymbol.toUpperCase();
+      const row = (spot.data?.balances ?? []).find(
+        (b) => (b.symbol ?? "").toUpperCase() === up,
+      );
+      // Only validate when we can cleanly resolve the asset; else leave the field open.
+      return row ? num(row.available ?? row.balance) : undefined;
+    }
+    if (isSettleMargin) {
+      // Aggregate available collateral — guidance only (not per-asset).
+      return margin.isSuccess ? num(margin.data?.available_balance) : undefined;
+    }
+    return undefined;
+  }, [action, isSettleSpot, isSettleMargin, custody.isSuccess, custody.data, spot.isSuccess, spot.data, margin.isSuccess, margin.data, assetSymbol]);
+
+  const sourceLoading =
+    ((action === "fund-spot" || action === "fund-margin") && custody.isLoading) ||
+    (isSettleSpot && spot.isLoading) ||
+    (isSettleMargin && margin.isLoading);
+
   const amt = num(amount);
+  const overSpend = sourceAvailable != null && amt > sourceAvailable;
   const amtError =
-    amount.trim() === "" ? "" : amt <= 0 ? "Amount must be greater than 0." : "";
-  const canSubmit = amt > 0;
+    amount.trim() === ""
+      ? ""
+      : amt <= 0
+        ? "Amount must be greater than 0."
+        : overSpend
+          ? `Amount exceeds available ${fmtAmount(sourceAvailable)} ${assetSymbol}.`
+          : "";
+  const canSubmit = amt > 0 && !overSpend;
 
   const mutation = useMutation({
     mutationFn: async (): Promise<BridgeResultView> => {
@@ -388,10 +536,16 @@ function BridgeTransfer() {
     },
     onSuccess: (res) => {
       setResult(res);
+      setConfirmOpen(false);
+      // Resulting balances moved — refresh whatever the action touched.
+      qc.invalidateQueries({ queryKey: ["custody", "balance"] });
+      qc.invalidateQueries({ queryKey: ["spot", "balance"] });
+      qc.invalidateQueries({ queryKey: ["margin", "account"] });
       if (res.ok) toast.success("Transfer settled");
       else toast.error(reasonText(res.reason));
     },
     onError: (err) => {
+      setConfirmOpen(false);
       if (err instanceof ApiError && err.status === 422) {
         const reason = (err.body as { reason?: string } | undefined)?.reason;
         setResult({ ok: false, reason });
@@ -403,8 +557,6 @@ function BridgeTransfer() {
       }
     },
   });
-
-  const current = BRIDGE_ACTIONS.find((a) => a.value === action)!;
 
   return (
     <div className="space-y-4">
@@ -422,6 +574,7 @@ function BridgeTransfer() {
               onValueChange={(v) => {
                 setAction(v as BridgeAction);
                 setResult(null);
+                setAmount("");
               }}
             >
               <SelectTrigger>
@@ -439,7 +592,7 @@ function BridgeTransfer() {
 
           <div className="space-y-1.5">
             <Label>Asset</Label>
-            <Select value={assetSymbol} onValueChange={setAssetSymbol}>
+            <Select value={assetSymbol} onValueChange={(v) => { setAssetSymbol(v); setResult(null); }}>
               <SelectTrigger>
                 <SelectValue placeholder="Choose an asset" />
               </SelectTrigger>
@@ -454,7 +607,23 @@ function BridgeTransfer() {
           </div>
 
           <div className="space-y-1.5">
-            <Label>Amount</Label>
+            <div className="flex items-center justify-between">
+              <Label>Amount</Label>
+              {sourceLoading ? (
+                <span className="text-xs text-muted-foreground">loading balance…</span>
+              ) : (
+                <BalanceHint
+                  available={sourceAvailable}
+                  symbol={assetSymbol}
+                  note={isSettleMargin ? "available unknown" : "balance unavailable"}
+                  onMax={
+                    sourceAvailable != null
+                      ? () => setAmount(trimToDecimals(sourceAvailable, decimals))
+                      : undefined
+                  }
+                />
+              )}
+            </div>
             <Input
               inputMode="decimal"
               placeholder="0.00"
@@ -462,6 +631,22 @@ function BridgeTransfer() {
               onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
             />
             {amtError && <p className="text-xs text-destructive">{amtError}</p>}
+            {isSettleMargin && sourceAvailable != null && (
+              <p className="text-xs text-muted-foreground">
+                Aggregate collateral available: {fmtAmount(sourceAvailable)} (guidance)
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <div className="flex justify-between">
+              <span>From</span>
+              <span className="font-medium text-foreground">{current.from}</span>
+            </div>
+            <div className="mt-1 flex justify-between">
+              <span>To</span>
+              <span className="font-medium text-foreground">{current.to}</span>
+            </div>
           </div>
 
           <Button
@@ -469,25 +654,74 @@ function BridgeTransfer() {
             disabled={!canSubmit || mutation.isPending}
             onClick={() => {
               setResult(null);
-              mutation.mutate();
+              setConfirmOpen(true);
             }}
           >
-            {mutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ArrowLeftRight className="h-4 w-4" />
-            )}
-            {current.verb}
+            <ArrowLeftRight className="h-4 w-4" />
+            Review {current.verb.toLowerCase()}
           </Button>
         </CardContent>
       </Card>
 
-      {result && <BridgeResultCard result={result} symbol={assetSymbol} />}
+      {result && <BridgeResultCard result={result} symbol={assetSymbol} action={current} />}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm {current.verb.toLowerCase()}</DialogTitle>
+            <DialogDescription>
+              Review the movement before it settles between your ledgers.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Asset</span>
+              <span className="font-medium">{meta?.name ?? assetSymbol} ({assetSymbol})</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Amount</span>
+              <span className="font-medium tabular-nums">{fmtAmount(amt)} {assetSymbol}</span>
+            </div>
+            <Separator />
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">From</span>
+              <span className="font-medium">{current.from}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">To</span>
+              <span className="font-medium">{current.to}</span>
+            </div>
+            {sourceAvailable != null && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Source available</span>
+                <span className="tabular-nums">{fmtAmount(sourceAvailable)} {assetSymbol}</span>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={mutation.isPending}>
+              Cancel
+            </Button>
+            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="gap-1.5">
+              {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+              Confirm {current.verb.toLowerCase()}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function BridgeResultCard({ result, symbol }: { result: BridgeResultView; symbol: string }) {
+function BridgeResultCard({
+  result,
+  symbol,
+  action,
+}: {
+  result: BridgeResultView;
+  symbol: string;
+  action: { from: string; to: string };
+}) {
   if (!result.ok) {
     return (
       <div className="space-y-1 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
@@ -505,6 +739,10 @@ function BridgeResultCard({ result, symbol }: { result: BridgeResultView; symbol
         Transfer settled
       </span>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <div className="col-span-2 flex justify-between">
+          <dt>Route</dt>
+          <dd className="text-foreground">{action.from} → {action.to}</dd>
+        </div>
         {result.amount != null && (
           <div className="flex justify-between">
             <dt>Amount</dt>
@@ -542,7 +780,9 @@ const BASE = "__base__";
 
 function InternalTransfer() {
   const isMobile = useIsMobile();
+  const qc = useQueryClient();
   const q = useSubaccountsQuery();
+  const custody = useCustodyBalanceQuery();
   const named: Subaccount[] = (q.data?.subaccounts ?? []).filter(
     (s) => s.label && s.label.trim() !== "",
   );
@@ -551,6 +791,7 @@ function InternalTransfer() {
   const [toLabel, setToLabel] = useState<string>(BASE);
   const [assetSymbol, setAssetSymbol] = useState<string>(CUSTODY_ASSETS[0]!.symbol);
   const [amount, setAmount] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [result, setResult] = useState<SubaccountTransferResult | null>(null);
 
   const options = useMemo(
@@ -561,11 +802,31 @@ function InternalTransfer() {
     [named],
   );
 
+  const meta = findAsset(assetSymbol);
+  const decimals = meta?.decimals ?? 8;
+  const fromLabelText = fromLabel === BASE ? "Base vault (default)" : fromLabel;
+  const toLabelText = toLabel === BASE ? "Base vault (default)" : toLabel;
+
+  // Source balance is only known for the base vault (sub-account balances
+  // aren't exposed by any route) — else show "balance unavailable", skip Max.
+  const sourceAvailable: number | undefined =
+    fromLabel === BASE && custody.isSuccess
+      ? custodyBalanceOf(custody.data?.balances, assetSymbol)
+      : undefined;
+  const sourceLoading = fromLabel === BASE && custody.isLoading;
+
   const amt = num(amount);
   const sameError = fromLabel === toLabel ? "From and To must differ." : "";
+  const overSpend = sourceAvailable != null && amt > sourceAvailable;
   const amtError =
-    amount.trim() === "" ? "" : amt <= 0 ? "Amount must be greater than 0." : "";
-  const canSubmit = amt > 0 && fromLabel !== toLabel;
+    amount.trim() === ""
+      ? ""
+      : amt <= 0
+        ? "Amount must be greater than 0."
+        : overSpend
+          ? `Amount exceeds available ${fmtAmount(sourceAvailable)} ${assetSymbol}.`
+          : "";
+  const canSubmit = amt > 0 && fromLabel !== toLabel && !overSpend;
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -577,9 +838,12 @@ function InternalTransfer() {
       }),
     onSuccess: (res) => {
       setResult(res);
+      setConfirmOpen(false);
+      qc.invalidateQueries({ queryKey: ["custody", "balance"] });
       toast.success("Transfer settled");
     },
     onError: (err) => {
+      setConfirmOpen(false);
       if (isUnavailable(err)) {
         toast.error("Sub-account transfers aren't available on this backend yet");
       } else {
@@ -639,7 +903,7 @@ function InternalTransfer() {
 
           <div className="space-y-1.5">
             <Label>Asset</Label>
-            <Select value={assetSymbol} onValueChange={setAssetSymbol}>
+            <Select value={assetSymbol} onValueChange={(v) => { setAssetSymbol(v); setResult(null); }}>
               <SelectTrigger>
                 <SelectValue placeholder="Choose an asset" />
               </SelectTrigger>
@@ -654,7 +918,23 @@ function InternalTransfer() {
           </div>
 
           <div className="space-y-1.5">
-            <Label>Amount</Label>
+            <div className="flex items-center justify-between">
+              <Label>Amount</Label>
+              {sourceLoading ? (
+                <span className="text-xs text-muted-foreground">loading balance…</span>
+              ) : (
+                <BalanceHint
+                  available={sourceAvailable}
+                  symbol={assetSymbol}
+                  note={"balance unavailable"}
+                  onMax={
+                    sourceAvailable != null
+                      ? () => setAmount(trimToDecimals(sourceAvailable, decimals))
+                      : undefined
+                  }
+                />
+              )}
+            </div>
             <Input
               inputMode="decimal"
               placeholder="0.00"
@@ -662,6 +942,11 @@ function InternalTransfer() {
               onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
             />
             {amtError && <p className="text-xs text-destructive">{amtError}</p>}
+            {fromLabel !== BASE && (
+              <p className="text-xs text-muted-foreground">
+                Sub-account balances aren't exposed — amount is validated server-side.
+              </p>
+            )}
           </div>
 
           <Button
@@ -669,15 +954,11 @@ function InternalTransfer() {
             disabled={!canSubmit || mutation.isPending}
             onClick={() => {
               setResult(null);
-              mutation.mutate();
+              setConfirmOpen(true);
             }}
           >
-            {mutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ArrowLeftRight className="h-4 w-4" />
-            )}
-            Transfer
+            <ArrowLeftRight className="h-4 w-4" />
+            Review transfer
           </Button>
         </CardContent>
       </Card>
@@ -716,6 +997,51 @@ function InternalTransfer() {
           </dl>
         </div>
       )}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm transfer</DialogTitle>
+            <DialogDescription>
+              Move assets between your own vaults. This is an atomic internal move.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Asset</span>
+              <span className="font-medium">{meta?.name ?? assetSymbol} ({assetSymbol})</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Amount</span>
+              <span className="font-medium tabular-nums">{fmtAmount(amt)} {assetSymbol}</span>
+            </div>
+            <Separator />
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">From</span>
+              <span className="font-medium">{fromLabelText}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">To</span>
+              <span className="font-medium">{toLabelText}</span>
+            </div>
+            {sourceAvailable != null && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Source available</span>
+                <span className="tabular-nums">{fmtAmount(sourceAvailable)} {assetSymbol}</span>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={mutation.isPending}>
+              Cancel
+            </Button>
+            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} className="gap-1.5">
+              {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+              Confirm transfer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

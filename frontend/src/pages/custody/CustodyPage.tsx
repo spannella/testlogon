@@ -286,6 +286,7 @@ function TxHashCell({ txhash }: { txhash: string }) {
     <button
       type="button"
       title={txhash}
+      aria-label={copied ? "Transaction hash copied" : "Copy transaction hash"}
       className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
       onClick={async () => {
         try {

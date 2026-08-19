@@ -7,7 +7,13 @@ export const tradingKeys = {
   execEvents: ["me", "algo_events"] as const,
   pmState: (symbolId: number) => ["me", "pm_state", symbolId] as const,
   spotBalance: ["me", "spot_balance"] as const,
+  fillsFees: ["me", "fills_fees"] as const,
+  liquidations: ["me", "liquidations"] as const,
+  fundingPayments: ["me", "funding_payments"] as const,
 };
+
+/** Exchange account-feed poll (fills-fees / liquidations / funding). */
+const FEED_REFETCH_MS = 10_000;
 
 const ACCOUNT_REFETCH_MS = 5000;
 
@@ -133,5 +139,43 @@ export function useSpotDeposit() {
   return useMutation({
     mutationFn: (args: { asset: number; amount: number }) => trading.spotDeposit(args.asset, args.amount),
     onSuccess: invalidate,
+  });
+}
+
+
+// ── Exchange account feeds (REAL /me/fills/fees · /me/liquidations · /me/funding/payments) ──
+// Poll ~10s; `retry: false` because each route 404s until the exchange edge
+// deploys — callers render a graceful "unavailable" empty state on error.
+
+/** Recent fills with the REAL per-fill engine fee + maker/taker flag. */
+export function useFillsFees(enabled = true) {
+  return useQuery({
+    queryKey: tradingKeys.fillsFees,
+    queryFn: trading.getFillsFees,
+    enabled,
+    retry: false,
+    refetchInterval: FEED_REFETCH_MS,
+  });
+}
+
+/** The caller's forced-liquidation events. */
+export function useLiquidations(enabled = true) {
+  return useQuery({
+    queryKey: tradingKeys.liquidations,
+    queryFn: trading.getLiquidations,
+    enabled,
+    retry: false,
+    refetchInterval: FEED_REFETCH_MS,
+  });
+}
+
+/** The caller's periodic funding payments. */
+export function useFundingPayments(enabled = true) {
+  return useQuery({
+    queryKey: tradingKeys.fundingPayments,
+    queryFn: trading.getFundingPayments,
+    enabled,
+    retry: false,
+    refetchInterval: FEED_REFETCH_MS,
   });
 }

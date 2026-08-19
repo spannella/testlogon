@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.data.exchange.TradingRepository
+import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.FeeSchedule
 import com.testlogon.android.data.exchange.FillsFees
 import com.testlogon.android.data.feed.CurrentUserRepository
@@ -28,6 +29,7 @@ import javax.inject.Inject
 @HiltViewModel
 class TradingViewModel @Inject constructor(
     private val repository: TradingRepository,
+    private val exchangeRepository: ExchangeRepository,
     private val notifier: TradingNotifier,
     private val currentUserRepository: CurrentUserRepository,
     savedStateHandle: SavedStateHandle,
@@ -49,6 +51,7 @@ class TradingViewModel @Inject constructor(
         pollAccount()
         refreshPm()
         loadFees()
+        resolveSymbols()
         if (TradingFeatures.SPOT_ENABLED) refreshSpot()
     }
 
@@ -66,6 +69,29 @@ class TradingViewModel @Inject constructor(
         viewModelScope.launch {
             when (val r = repository.fillsFees()) {
                 is ApiResult.Success -> _uiState.update { it.copy(fillsFees = r.data) }
+                else -> Unit
+            }
+        }
+        viewModelScope.launch {
+            when (val r = repository.liquidations()) {
+                is ApiResult.Success -> _uiState.update { it.copy(liquidations = r.data) }
+                else -> Unit
+            }
+        }
+        viewModelScope.launch {
+            when (val r = repository.fundingPayments()) {
+                is ApiResult.Success -> _uiState.update { it.copy(fundingPayments = r.data) }
+                else -> Unit
+            }
+        }
+    }
+
+    /** Resolve symbolId -> ticker so the account-wide liquidation/funding/fills feeds label symbols. */
+    private fun resolveSymbols() {
+        viewModelScope.launch {
+            when (val r = exchangeRepository.symbols()) {
+                is ApiResult.Success ->
+                    _uiState.update { it.copy(symbolNames = r.data.associate { i -> i.symbolId to i.symbol }) }
                 else -> Unit
             }
         }

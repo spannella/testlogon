@@ -1,0 +1,30 @@
+appId: com.testlogon.android
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "tab_feed"
+    timeout: 20000
+- tapOn:
+    id: "tab_feed"
+- assertVisible:
+    id: "feed_screen"
+- tapOn:
+    id: "feed_scheduled_posts_action"
+- assertVisible:
+    id: "scheduled_posts_screen"
+- extendedWaitUntil:
+    visible:
+      id: "scheduled_post_row_post_ZjCu2YV9CL5ljpZf"
+    timeout: 15000
+- tapOn:
+    id: "scheduled_post_cancel_post_ZjCu2YV9CL5ljpZf"
+# AlertDialog confirm — match by text (reliable for system dialogs)
+- assertVisible:
+    text: "Cancel this scheduled post?"
+- tapOn:
+    text: "Cancel post"
+- extendedWaitUntil:
+    notVisible:
+      id: "scheduled_post_row_post_ZjCu2YV9CL5ljpZf"
+    timeout: 15000

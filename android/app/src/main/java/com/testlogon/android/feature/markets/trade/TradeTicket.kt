@@ -18,10 +18,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,7 +80,7 @@ fun TradeTicket(
             section = state.section,
             ordersCount = state.workingOrders.size,
             posCount = if (state.account?.position != null) 1 else 0,
-            fillsCount = state.sessionFills.size,
+            fillsCount = state.fillsFees?.fills?.size?.takeIf { it > 0 } ?: state.sessionFills.size,
             onSelect = viewModel::setSection,
         )
         Spacer(Modifier.height(12.dp))
@@ -84,6 +90,8 @@ fun TradeTicket(
             TicketSection.POSITIONS -> PositionsSection(state, lastPrice, viewModel)
             TicketSection.ORDERS -> OrdersSection(state, viewModel)
             TicketSection.FILLS -> FillsSection(state)
+            TicketSection.LIQUIDATIONS -> LiquidationsSection(state)
+            TicketSection.FUNDING -> FundingSection(state)
         }
 
         if (state.isAmending) {
@@ -119,6 +127,7 @@ fun TradeTicket(
 @Composable
 private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: TradingViewModel) {
     val sideColor = if (state.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down
+    var showDepositConfirm by remember { mutableStateOf(false) }
 
     OrderTypeRow(selected = state.orderType, onSelect = viewModel::setOrderType)
     Spacer(Modifier.height(10.dp))
@@ -272,8 +281,35 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, viewModel: Tra
         canDeposit = state.canDeposit,
         depositing = state.depositing,
         onValue = viewModel::setDeposit,
-        onDeposit = viewModel::deposit,
+        onDeposit = { if (state.canDeposit) showDepositConfirm = true },
     )
+
+    if (showDepositConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDepositConfirm = false },
+            title = { Text("Confirm deposit") },
+            text = {
+                Column {
+                    ConfirmLine("Action", "Deposit collateral")
+                    ConfirmLine("Amount", state.depositText.ifBlank { "0" })
+                    state.account?.let { ConfirmLine("Current balance", fmt(it.balance.toDouble())) }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Funds move from your wallet into the margin account and become available for trading.",
+                        color = MarketColors.TextSecondary,
+                        fontSize = 11.sp,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDepositConfirm = false
+                    viewModel.deposit()
+                }, modifier = Modifier.testTag("trade_deposit_confirm")) { Text("Confirm") }
+            },
+            dismissButton = { TextButton(onClick = { showDepositConfirm = false }) { Text("Cancel") } },
+        )
+    }
     if (TradingFeatures.SPOT_ENABLED) {
         Spacer(Modifier.height(10.dp))
         SpotPanel(state, viewModel)
@@ -326,6 +362,21 @@ private fun FillsSection(state: TradingUiState) {
         FeeScheduleCard(it)
         Spacer(Modifier.height(10.dp))
     }
+    // Prefer the REAL enriched feed (engine-charged fee + maker/taker liquidity); fall back to this
+    // session's own fills (fee unknown) only when the feed is empty/undeployed.
+    val feed = state.fillsFees?.fills.orEmpty()
+    if (feed.isNotEmpty()) {
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+            Text("Sym", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            Text("Price", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1.2f))
+            Text("Qty", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.8f))
+            Text("Liq", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.7f))
+            Text("Fee", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.9f))
+            Text("Time", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        }
+        feed.take(60).forEach { f -> FillFeeRow(f, state.symbolLabel(f.symbolId)) }
+        return
+    }
     if (state.sessionFills.isEmpty()) {
         EmptyHint("No fills this session")
         return
@@ -333,21 +384,17 @@ private fun FillsSection(state: TradingUiState) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Text("Price", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1.2f))
         Text("Qty", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
-        Text("Fee", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
         Text("Time", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
     }
-    state.sessionFills.take(60).forEach { f -> FillRow(f, state.feeForFill(f.price, f.qty)) }
-    state.fillsFees?.takeIf { it.isStub }?.let {
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Fee = ${it.feeFormula ?: "round(price*qty*taker_bps/10000)"} · computed client-side (est.)",
-            color = MarketColors.TextFaint,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
-        )
-    }
+    state.sessionFills.take(60).forEach { f -> SessionFillRow(f) }
+    Spacer(Modifier.height(6.dp))
+    Text(
+        "Per-fill fees appear here from the engine feed once it reports them.",
+        color = MarketColors.TextFaint,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 10.sp,
+    )
 }
-
 /**
  * Fee schedule card (GET /me/fees/schedule?symbolid=<n>). A small source marker shows whether these are
  * the engine-configured rates or the venue defaults, so the rate is read correctly.
@@ -507,8 +554,31 @@ private fun StepBtn(sym: String, tag: String, onClick: () -> Unit) {
 
 private val fillTimeFmt = java.text.SimpleDateFormat("HH:mm:ss", Locale.US)
 
+/** Format an int64 nanosecond timestamp at the domain edge, matching the session-fill formatting. */
+private fun fmtTsNs(tsNs: Long): String =
+    if (tsNs > 0) fillTimeFmt.format(java.util.Date(tsNs / 1_000_000L)) else "--"
+
+/** One REAL enriched fill: symbol, price, qty, maker/taker liquidity, engine fee, time. */
 @Composable
-private fun FillRow(fill: com.testlogon.android.data.exchange.Fill, fee: Long) {
+private fun FillFeeRow(fill: com.testlogon.android.data.exchange.FillFee, symbol: String) {
+    val color = when (fill.side) {
+        OrderSide.BUY -> MarketColors.Up
+        OrderSide.SELL -> MarketColors.Down
+        null -> MarketColors.TextPrimary
+    }
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        Text(symbol, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, modifier = Modifier.weight(1f))
+        Text(fmt(fill.price.toDouble()), color = color, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1.2f))
+        Text(fill.qty.toString(), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(0.8f))
+        Text(fill.liquidity.label, color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.7f))
+        Text(fmt(fill.fee.toDouble()), color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(0.9f))
+        Text(fmtTsNs(fill.tsNs), color = MarketColors.TextFaint, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    }
+}
+
+/** A this-session fill (no server fee available); shown only when the enriched feed is empty. */
+@Composable
+private fun SessionFillRow(fill: com.testlogon.android.data.exchange.Fill) {
     val color = when (fill.side) {
         OrderSide.BUY -> MarketColors.Up
         OrderSide.SELL -> MarketColors.Down
@@ -517,14 +587,84 @@ private fun FillRow(fill: com.testlogon.android.data.exchange.Fill, fee: Long) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
         Text(fmt(fill.price.toDouble()), color = color, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1.2f))
         Text(fill.qty.toString(), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
-        Text(fmt(fee.toDouble()), color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
-        Text(
-            text = if (fill.tsNs > 0) fillTimeFmt.format(java.util.Date(fill.tsNs / 1_000_000L)) else "--",
-            color = MarketColors.TextFaint,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            modifier = Modifier.weight(1f),
-        )
+        Text(fmtTsNs(fill.tsNs), color = MarketColors.TextFaint, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    }
+}
+
+// ======================= Liquidations (me/liquidations) =======================
+
+@Composable
+private fun LiquidationsSection(state: TradingUiState) {
+    val events = state.liquidations?.events.orEmpty()
+    if (events.isEmpty()) {
+        EmptyHint("No liquidations")
+        return
+    }
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text("Sym", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("Qty", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.9f))
+        Text("Mark", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1.1f))
+        Text("PnL", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("Fee", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.8f))
+        Text("Time", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+    }
+    events.take(60).forEach { e -> LiquidationRow(e, state.symbolLabel(e.symbolId)) }
+}
+
+@Composable
+private fun LiquidationRow(e: com.testlogon.android.data.exchange.Liquidation, symbol: String) {
+    val pnlColor = if (e.realizedPnl >= 0) MarketColors.Up else MarketColors.Down
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        Text(symbol, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, modifier = Modifier.weight(1f))
+        Text(e.qty.toString(), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(0.9f))
+        Text(fmt(e.markPrice.toDouble()), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1.1f))
+        Text(fmtSigned(e.realizedPnl), color = pnlColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(fmt(e.fee.toDouble()), color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(0.8f))
+        Text(fmtTsNs(e.tsNs), color = MarketColors.TextFaint, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    }
+}
+
+// ======================= Funding (me/funding/payments) =======================
+
+@Composable
+private fun FundingSection(state: TradingUiState) {
+    val payments = state.fundingPayments?.payments.orEmpty()
+    if (payments.isEmpty()) {
+        EmptyHint("No funding payments")
+        return
+    }
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text("Sym", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("Rate", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.9f))
+        Text("Mark", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1.1f))
+        Text("Pos", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.9f))
+        Text("Pay", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("Time", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+    }
+    payments.take(60).forEach { fp -> FundingRow(fp, state.symbolLabel(fp.symbolId)) }
+}
+
+@Composable
+private fun FundingRow(fp: com.testlogon.android.data.exchange.FundingPayment, symbol: String) {
+    // received (positive) is green, paid (negative) is red.
+    val payColor = if (fp.received || fp.payment > 0) MarketColors.Up else MarketColors.Down
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        Text(symbol, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, modifier = Modifier.weight(1f))
+        Text("${fp.fundingRateBps} bps", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(0.9f))
+        Text(fmt(fp.markPrice.toDouble()), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1.1f))
+        Text(fp.positionQty.toString(), color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(0.9f))
+        Text(fmtSigned(fp.payment), color = payColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(fmtTsNs(fp.tsNs), color = MarketColors.TextFaint, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    }
+}
+
+/** Signed integer formatting for PnL / funding payments (keeps a leading + on positives). */
+private fun fmtSigned(v: Long): String {
+    val body = fmt(kotlin.math.abs(v).toDouble())
+    return when {
+        v > 0 -> "+" + body
+        v < 0 -> "-" + body
+        else -> body
     }
 }
 
@@ -896,6 +1036,14 @@ private fun FundRow(
                 fontSize = 13.sp,
             )
         }
+    }
+}
+
+@Composable
+private fun ConfirmLine(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MarketColors.TextSecondary, fontSize = 12.sp)
+        Text(value, color = MarketColors.TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
     }
 }
 

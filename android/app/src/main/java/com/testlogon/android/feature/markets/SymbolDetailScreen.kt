@@ -75,7 +75,7 @@ fun SymbolDetailRoute(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     MarketSurface {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-            DetailTopBar(title = state.symbolName.ifBlank { "Symbol" }, live = state.live, onBack = onBack)
+            DetailTopBar(title = state.symbolName.ifBlank { "Symbol" }, streamStatus = state.streamStatus, onBack = onBack)
             Box(modifier = Modifier.fillMaxSize()) {
                 when (state.phase) {
                     SymbolDetailUiState.Phase.Loading -> LoadingState(message = "Loading market data")
@@ -97,7 +97,11 @@ fun SymbolDetailRoute(
 }
 
 @Composable
-private fun DetailTopBar(title: String, live: Boolean, onBack: () -> Unit) {
+private fun DetailTopBar(
+    title: String,
+    streamStatus: SymbolDetailUiState.StreamStatus,
+    onBack: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -106,15 +110,23 @@ private fun DetailTopBar(title: String, live: Boolean, onBack: () -> Unit) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MarketColors.TextPrimary)
         }
         Text(title, color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        if (live) {
+        // Subtle live-stream indicator: green LIVE while frames flow, a muted RECONNECTING pill when
+        // the stream has dropped (the screen keeps rendering the last book + polled trades meanwhile).
+        val pill: Pair<String, Color>? = when (streamStatus) {
+            SymbolDetailUiState.StreamStatus.LIVE -> "LIVE" to MarketColors.Up
+            SymbolDetailUiState.StreamStatus.RECONNECTING -> "RECONNECTING" to MarketColors.TextSecondary
+            SymbolDetailUiState.StreamStatus.OFFLINE -> null
+        }
+        if (pill != null) {
+            val (label, color) = pill
             Spacer(Modifier.width(8.dp))
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(4.dp))
-                    .background(MarketColors.UpPill)
+                    .background(if (streamStatus == SymbolDetailUiState.StreamStatus.LIVE) MarketColors.UpPill else MarketColors.SurfaceAlt)
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             ) {
-                Text("LIVE", color = MarketColors.Up, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

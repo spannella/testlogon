@@ -7,6 +7,15 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
+import {
   useMarginAccount,
   usePmState,
   useExecEvents,
@@ -382,6 +391,7 @@ export function TradeTicket({
   const [minQty, setMinQty] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [depositAmt, setDepositAmt] = useState("");
+  const [depositConfirmOpen, setDepositConfirmOpen] = useState(false);
   const [isBorrow, setIsBorrow] = useState(true);
   const [rateBps, setRateBps] = useState("");
   const [fundingQty, setFundingQty] = useState("");
@@ -692,15 +702,22 @@ export function TradeTicket({
         account.refetch();
       },
     });
+  const depositAmtN = parseInt(depositAmt) || 0;
   const deposit = () => {
-    const amt = parseInt(depositAmt) || 0;
+    const amt = depositAmtN;
     if (amt <= 0) return;
     depositM.mutate(amt, {
       onSuccess: (a) => {
         setDepositAmt("");
+        setDepositConfirmOpen(false);
         vibrate(isAck(a) ? "success" : "error");
-        setMsg({ text: isAck(a) ? `Deposited (balance ${a.new_balance})` : ackMessage(a) ?? "Deposit rejected", error: !isAck(a) });
+        setMsg({ text: isAck(a) ? `Deposited ${amt} collateral (available ${a.available_balance ?? a.new_balance})` : ackMessage(a) ?? "Deposit rejected", error: !isAck(a) });
         account.refetch();
+      },
+      onError: () => {
+        setDepositConfirmOpen(false);
+        vibrate("error");
+        setMsg({ text: "Deposit failed", error: true });
       },
     });
   };
@@ -1126,10 +1143,54 @@ export function TradeTicket({
               <div className="flex-1">
                 <Field label="Deposit collateral" value={depositAmt} onChange={setDepositAmt} />
               </div>
-              <Button type="button" variant="secondary" onClick={deposit} disabled={depositM.isPending}>
-                Deposit
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setDepositConfirmOpen(true)}
+                disabled={depositM.isPending || depositAmtN <= 0}
+              >
+                Review
               </Button>
             </div>
+            {depositAmt.trim() !== "" && depositAmtN <= 0 && (
+              <p className="text-xs text-rose-600 dark:text-rose-400">Amount must be greater than 0.</p>
+            )}
+
+            <Dialog open={depositConfirmOpen} onOpenChange={setDepositConfirmOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Confirm collateral deposit</DialogTitle>
+                  <DialogDescription>
+                    Add collateral to your margin account for this market.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Amount</span>
+                    <span className="font-medium tabular-nums">{depositAmtN}</span>
+                  </div>
+                  <Separator />
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Destination</span>
+                    <span className="font-medium">Margin collateral</span>
+                  </div>
+                  {acct && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Available before</span>
+                      <span className="tabular-nums">{formatPrice(acct.available_balance, scaler)}</span>
+                    </div>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDepositConfirmOpen(false)} disabled={depositM.isPending}>
+                    Cancel
+                  </Button>
+                  <Button onClick={deposit} disabled={depositM.isPending || depositAmtN <= 0}>
+                    Confirm deposit
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* Spot wallet (staged surface) */}
             {tradingFeatures.SPOT_ENABLED && (

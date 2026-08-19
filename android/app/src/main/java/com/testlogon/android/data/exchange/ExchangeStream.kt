@@ -59,7 +59,7 @@ class ExchangeStream @Inject constructor(
      * Cold flow of live [MdFrame]s for [symbolId]. Re-opens the stream on end/IO error after a short
      * backoff; cancelling the collector cancels the call and stops reconnecting.
      */
-    fun marketData(symbolId: Int, intervalSec: Int = 60): Flow<MdFrame> = callbackFlow {
+    fun marketData(symbolId: Int, intervalSec: Int = 60): Flow<MdEvent> = callbackFlow {
         var running = true
         val url = settingsStore.baseUrl.trimEnd('/') + "/" + STREAM_PATH_PREFIX + symbolId +
             "?interval=" + intervalSec
@@ -81,7 +81,7 @@ class ExchangeStream @Inject constructor(
                         lineParser.readFrames(body.source()) { frame ->
                             if (!running) return@readFrames false
                             if (frame.event == EVENT_MD) {
-                                parseFrame(frame.data)?.let { trySend(it) }
+                                parseFrame(frame.data)?.let { trySend(MdEvent.Frame(it)) }
                             }
                             true
                         }
@@ -94,6 +94,9 @@ class ExchangeStream @Inject constructor(
                     call.cancel()
                 }
                 if (!running) break
+                // The stream ended (server ~300s cap, network blip, or non-2xx). Tell the collector
+                // so the UI can show "reconnecting" and lean on polling until the next frame lands.
+                trySend(MdEvent.Disconnected)
                 try {
                     Thread.sleep(RECONNECT_BACKOFF_MS)
                 } catch (_: InterruptedException) {
@@ -110,7 +113,12 @@ class ExchangeStream @Inject constructor(
         }
     }
 
-    private fun parseFrame(data: String): MdFrame? {
+    /**
+     * Decode one SSE `data:` payload into an [MdFrame]. Package-visible (an [internal] test seam) so
+     * the raw-JSON -> domain-frame mapping can be unit-tested: a well-formed frame decodes; a frame
+     * with no order book, or malformed/non-JSON data, yields null (never throws).
+     */
+    internal fun parseFrame(data: String): MdFrame? {
         val dto = runCatching { frameAdapter.fromJson(data) }.getOrNull() ?: return null
         val book = dto.book?.toDomain() ?: return null
         val candle = dto.bars?.bars?.lastOrNull()?.toDomain()
@@ -131,6 +139,16 @@ data class MdFrame(
     val orderBook: OrderBook,
     val candle: Candle?,
 )
+
+/**
+ * A live-stream event. [Frame] carries fresh book+candle data (stream is up); [Disconnected] is
+ * emitted whenever the underlying stream ends before the next reconnect attempt, so the collector
+ * can flip to a "reconnecting" indicator and keep the REST poll as the fallback.
+ */
+sealed interface MdEvent {
+    data class Frame(val frame: MdFrame) : MdEvent
+    data object Disconnected : MdEvent
+}
 
 /** Wire shape of the SSE `event: md` `data:` payload. Reuses [OrderBookDto] + [CandlesResponseDto]. */
 @JsonClass(generateAdapter = true)

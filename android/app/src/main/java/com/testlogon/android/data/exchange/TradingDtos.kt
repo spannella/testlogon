@@ -339,26 +339,79 @@ data class FeeScheduleDto(
     @Json(name = "configured") val configured: Boolean? = null,
 )
 
-/** One enriched fill from GET me/fills/fees, with a server-computed [fee]. */
+/**
+ * One enriched fill from GET me/fills/fees (REAL contract). [fee] is the engine-charged fee (not a
+ * client estimate); [liquidity] is "maker"|"taker"; [ts] is a nanosecond timestamp. bps/int64 fields
+ * may be stringified by the edge -> lenient.
+ */
 @JsonClass(generateAdapter = true)
 data class FillFeeDto(
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "symbolid") val symbolId: Int? = null,
     @com.testlogon.android.core.network.json.LenientLong @Json(name = "price") val price: Long? = null,
     @com.testlogon.android.core.network.json.LenientLong @Json(name = "qty") val qty: Long? = null,
-    @com.testlogon.android.core.network.json.LenientLong @Json(name = "fee") val fee: Long? = null,
-    @com.testlogon.android.core.network.json.LenientLong @Json(name = "ts_ns") val tsNs: Long? = null,
     @Json(name = "side") val side: String? = null,
+    @Json(name = "liquidity") val liquidity: String? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "fee") val fee: Long? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "fee_asset") val feeAsset: Int? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "ts") val ts: Long? = null,
 )
 
 /**
- * GET me/fills/fees. Today the enriched [fills] feed is empty (the engine exposes no per-fill fee), so
- * the UI computes fees client-side using [takerFeeBps] + [feeFormula]. source/stub mark it honest.
+ * GET me/fills/fees (REAL): {status, type:"fills", count, fills:[...]}. The [fills] carry the engine's
+ * real per-fill [FillFeeDto.fee] + maker/taker liquidity -> the client no longer estimates the fee.
  */
 @JsonClass(generateAdapter = true)
 data class FillsFeesDto(
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "type") val type: String? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "count") val count: Int? = null,
     @Json(name = "fills") val fills: List<FillFeeDto>? = null,
-    @com.testlogon.android.core.network.json.LenientInt @Json(name = "taker_fee_bps") val takerFeeBps: Int? = null,
-    @Json(name = "fee_formula") val feeFormula: String? = null,
-    @Json(name = "source") val source: String? = null,
-    @Json(name = "stub") val stub: Boolean? = null,
-    @Json(name = "note") val note: String? = null,
+)
+
+// ==== Liquidations (me/liquidations) — REAL ====
+
+/** One forced-liquidation event: symbol, qty closed, mark price, realized PnL (signed), fee, ts(ns). */
+@JsonClass(generateAdapter = true)
+data class LiquidationDto(
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "symbolid") val symbolId: Int? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "qty") val qty: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "mark_price") val markPrice: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "realized_pnl") val realizedPnl: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "fee") val fee: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "ts") val ts: Long? = null,
+)
+
+/** GET me/liquidations: {status, type:"liquidations", count, liquidations:[...]}. */
+@JsonClass(generateAdapter = true)
+data class LiquidationsDto(
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "type") val type: String? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "count") val count: Int? = null,
+    @Json(name = "liquidations") val liquidations: List<LiquidationDto>? = null,
+)
+
+// ==== Funding payments (me/funding/payments) — REAL ====
+
+/**
+ * One perpetual funding payment. [payment] is SIGNED (negative = paid out, positive = received);
+ * [received] mirrors the sign. [fundingRateBps] is the applied rate; [positionQty] the position charged.
+ */
+@JsonClass(generateAdapter = true)
+data class FundingPaymentDto(
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "symbolid") val symbolId: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "funding_rate_bps") val fundingRateBps: Int? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "mark_price") val markPrice: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "position_qty") val positionQty: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "payment") val payment: Long? = null,
+    @Json(name = "received") val received: Boolean? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "ts") val ts: Long? = null,
+)
+
+/** GET me/funding/payments: {status, type:"funding", count, funding:[...]}. */
+@JsonClass(generateAdapter = true)
+data class FundingPaymentsDto(
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "type") val type: String? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "count") val count: Int? = null,
+    @Json(name = "funding") val funding: List<FundingPaymentDto>? = null,
 )

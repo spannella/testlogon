@@ -320,3 +320,98 @@ export const marginUsedFraction = (a: MarginAccount | undefined): number => {
   const res = a?.reserved_margin ?? 0;
   return bal > 0 ? Math.min(1, Math.max(0, res / bal)) : 0;
 };
+
+// ── Exchange account feeds (`/me/fills/fees`, `/me/liquidations`, `/me/funding/payments`) ──
+// REAL per-caller feeds served by the exchange edge. Every field (price/qty/fee/
+// pnl/payment/mark) is an int64 engine tick — scale/format with the markets
+// `formatPrice`/`formatQty` scaler. `ts` is a timestamp (seconds OR ms — detect).
+// `symbolid` maps to a symbol via the /md/symbols catalog. All THREE routes MAY
+// 404 until the edge deploys — callers must degrade gracefully (retry:false).
+
+export type Liquidity = "maker" | "taker";
+
+/** One executed fill enriched with its REAL engine-charged fee. */
+export interface FillFee {
+  symbolid: number;
+  /** int64 engine tick. */
+  price: number;
+  /** int64 engine tick. */
+  qty: number;
+  side: OrderSide;
+  liquidity: Liquidity;
+  /** int64 engine tick — the fee actually charged (NOT an estimate). */
+  fee: number;
+  /** Asset id the fee was charged in. */
+  fee_asset: number;
+  /** Timestamp (seconds or ms — detect). */
+  ts: number;
+}
+
+export interface FillsFeesResult {
+  status: string;
+  type: "fills";
+  mpid?: string;
+  count: number;
+  fills: FillFee[];
+}
+
+/** One forced-liquidation event on the caller's account. */
+export interface Liquidation {
+  symbolid: number;
+  /** int64 engine tick (position size closed). */
+  qty: number;
+  /** int64 engine tick. */
+  mark_price: number;
+  /** int64 engine tick (signed — green when >0, red when <0). */
+  realized_pnl: number;
+  /** int64 engine tick — the liquidation fee. */
+  fee: number;
+  /** Timestamp (seconds or ms — detect). */
+  ts: number;
+}
+
+export interface LiquidationsResult {
+  status: string;
+  type: "liquidations";
+  mpid?: string;
+  count: number;
+  liquidations: Liquidation[];
+}
+
+/** One periodic funding payment on a perpetual position. */
+export interface FundingPayment {
+  symbolid: number;
+  /** Funding rate in basis points. */
+  funding_rate_bps: number;
+  /** int64 engine tick. */
+  mark_price: number;
+  /** int64 engine tick (signed position size). */
+  position_qty: number;
+  /** int64 engine tick, SIGNED — negative = paid, positive = received. */
+  payment: number;
+  /** Convenience flag: true when this account received the payment. */
+  received: boolean;
+  /** Timestamp (seconds or ms — detect). */
+  ts: number;
+}
+
+export interface FundingPaymentsResult {
+  status: string;
+  type: "funding";
+  mpid?: string;
+  count: number;
+  funding: FundingPayment[];
+}
+
+/**
+ * Recent fills with the REAL engine-charged fee + maker/taker flag per fill.
+ * Replaces the former client-side estimate. 404s until the edge deploys.
+ */
+export const getFillsFees = () => api.get<FillsFeesResult>("/me/fills/fees");
+
+/** The caller's forced-liquidation events (newest first). 404s until edge deploys. */
+export const getLiquidations = () => api.get<LiquidationsResult>("/me/liquidations");
+
+/** The caller's periodic funding payments (newest first). 404s until edge deploys. */
+export const getFundingPayments = () =>
+  api.get<FundingPaymentsResult>("/me/funding/payments");

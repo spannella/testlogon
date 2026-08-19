@@ -383,38 +383,3 @@ export interface FeeScheduleResult {
 /** The maker/taker/liquidation fee schedule for a symbol. */
 export const getFeeSchedule = (symbolid: number) =>
   api.get<FeeScheduleResult>("/me/fees/schedule", { symbolid: String(symbolid) });
-
-export interface EnrichedFill {
-  price?: number;
-  qty?: number;
-  fee?: number;
-  [k: string]: unknown;
-}
-
-export interface FillsFeesResult {
-  fills: EnrichedFill[];
-  taker_fee_bps: number;
-  fee_formula?: string;
-  source?: string;
-  stub?: boolean;
-  note?: string;
-}
-
-/**
- * Recent fills enriched with a computed fee (thin wrapper). Returns an empty
- * feed + the fee formula / taker rate that WOULD apply until the engine
- * exposes a per-caller fills feed. 404s until the edge deploys.
- */
-export const getFillsFees = () => api.get<FillsFeesResult>("/me/fills/fees");
-
-/** round(price*qty*taker_fee_bps/10000) — the documented fee formula. */
-export function computeFee(
-  price: number | undefined | null,
-  qty: number | undefined | null,
-  takerFeeBps: number,
-): number {
-  const p = typeof price === "number" ? price : 0;
-  const q = typeof qty === "number" ? qty : 0;
-  if (!(p > 0) || !(q > 0) || !(takerFeeBps > 0)) return 0;
-  return Math.round((p * q * takerFeeBps) / 10000);
-}
