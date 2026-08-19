@@ -21,7 +21,8 @@ import javax.inject.Singleton
  * Data layer for the PRODUCTION custody surface. Maps wire DTOs to null-safe domain models and folds
  * transport failures into [ApiResult] (HttpException -> Failure carrying the HTTP status; IOException
  * -> NetworkError). CancellationException is always re-thrown. Reads are safe to retry; the withdraw
- * POST is not auto-retried.
+ * POST is not auto-retried. The custody<->trading bridge is four real routes (fund/settle x
+ * spot/margin); a 422 rejection surfaces as a Failure whose parsed reason the ViewModel renders.
  */
 @Singleton
 class CustodyRepository @Inject constructor(
@@ -94,15 +95,12 @@ class CustodyRepository @Inject constructor(
     suspend fun createSubAccount(label: String): ApiResult<CustodySubAccount> = call {
         val res = api.createSubAccount(CreateSubAccountDto(label = label.trim()))
         CustodySubAccount(
-            id = (res.vault ?: res.name ?: res.id).orEmpty().trim(),
             label = (res.label ?: label).trim(),
-            tier = "\u2014",
-            isDefault = false,
-            rows = emptyList(),
+            vault = res.vault.orEmpty().trim(),
         )
     }
 
-    /** Move an asset between two OWN sub-account vaults (documented no-op; result carries stub=true). */
+    /** Move an asset between two OWN sub-account vaults (REAL - balance moves; echoes new balances). */
     suspend fun subAccountTransfer(
         fromLabel: String?,
         toLabel: String?,
@@ -113,21 +111,25 @@ class CustodyRepository @Inject constructor(
             SubAccountTransferDto(
                 fromLabel = fromLabel?.trim()?.takeIf { it.isNotBlank() },
                 toLabel = toLabel?.trim()?.takeIf { it.isNotBlank() },
-                asset = asset.trim(),
+                asset = asset.trim().takeIf { it.isNotBlank() },
                 amount = amount.trim(),
             ),
         ).toDomain()
     }
 
-    /** Custody<->trading bridge transfer (hybrid; result carries stub=true + trading_credited). */
-    suspend fun bridgeTransfer(
-        direction: BridgeDirection,
-        asset: Int,
-        amount: Long,
-    ): ApiResult<CustodyBridgeResult> = call {
-        api.bridgeTransfer(
-            CustodyBridgeTransferDto(direction = direction.wire, asset = asset, amount = amount),
-        ).toDomain()
+    /**
+     * Custody<->trading bridge (four real routes). [action] selects fund/settle x spot/margin; the body
+     * is {token (asset symbol), amount (decimal string)}. A 200 maps to funded/settled; a 422 rejection
+     * surfaces as a Failure whose parsed body carries the reason.
+     */
+    suspend fun bridge(action: BridgeAction, token: String, amount: String): ApiResult<CustodyBridgeResult> = call {
+        val body = BridgeRequestDto(token = token.trim().uppercase(), amount = amount.trim())
+        when (action) {
+            BridgeAction.FUND_SPOT -> api.fundSpot(body).toDomain(action)
+            BridgeAction.SETTLE_SPOT -> api.settleSpot(body).toDomain(action)
+            BridgeAction.FUND_MARGIN -> api.fundMargin(body).toDomain(action)
+            BridgeAction.SETTLE_MARGIN -> api.settleMargin(body).toDomain(action)
+        }
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = withContext(io) {
@@ -192,14 +194,10 @@ private fun CustodyDepositDto.toDomain(): CustodyDeposit {
         asset = asset?.trim().orEmpty().ifBlank { "?" },
         amount = amount?.trim().orEmpty(),
         txHash = txhash?.trim().orEmpty(),
-        status = DepositStatus.from(status),
-        timestampMs = ts?.let { normalizeToMs(it) },
-        seq = seq,
+        logIndex = logIndex?.trim()?.takeIf { it.isNotBlank() },
+        dedupKey = dedupKey?.trim()?.takeIf { it.isNotBlank() },
     )
 }
-
-/** ts may arrive in seconds or milliseconds; anything below ~1e12 is treated as seconds. */
-private fun normalizeToMs(ts: Long): Long = if (ts in 1L until 100_000_000_000L) ts * 1000L else ts
 
 private fun WithdrawResultDto.toDomain(): CustodyWithdrawResult =
     CustodyWithdrawResult(
@@ -215,45 +213,50 @@ private fun WithdrawResultDto.toDomain(): CustodyWithdrawResult =
     )
 
 private fun SubAccountsDto.toDomain(): CustodySubAccounts {
-    val default = defaultVault?.trim().orEmpty()
     val rows = subaccounts.orEmpty().map { it.toDomain() }
-    return CustodySubAccounts(defaultVault = default, subAccounts = rows, unavailable = false)
+    return CustodySubAccounts(subAccounts = rows, unavailable = false)
 }
 
-private fun SubAccountDto.toDomain(): CustodySubAccount {
-    val coerced: Map<String, Double> = balances.orEmpty()
-        .entries
-        .filter { it.key.isNotBlank() }
-        .associate { it.key.trim() to coerceAmount(it.value) }
-    return CustodySubAccount(
-        id = id?.trim().orEmpty(),
+private fun SubAccountDto.toDomain(): CustodySubAccount =
+    CustodySubAccount(
         label = label?.trim().orEmpty(),
-        tier = tier?.trim()?.takeIf { it.isNotBlank() } ?: "\u2014",
-        isDefault = false,
-        rows = CustodyAssets.mergeBalances(coerced).filter { it.amount > 0.0 },
+        vault = vault?.trim().orEmpty(),
     )
-}
 
 private fun SubAccountTransferResultDto.toDomain(): SubAccountTransferResult =
     SubAccountTransferResult(
-        ok = (status?.trim()?.lowercase() ?: "ok") == "ok",
-        simulated = stub == true,
+        ok = transferred == true,
         from = from?.trim()?.takeIf { it.isNotBlank() },
         to = to?.trim()?.takeIf { it.isNotBlank() },
         asset = asset?.trim()?.takeIf { it.isNotBlank() },
         amount = amount?.trim()?.takeIf { it.isNotBlank() },
-        note = listOfNotNull(note, detail, error).firstOrNull { it.isNotBlank() },
+        fromBalance = fromBalance?.trim()?.takeIf { it.isNotBlank() },
+        toBalance = toBalance?.trim()?.takeIf { it.isNotBlank() },
+        reason = listOfNotNull(detail, error).firstOrNull { it.isNotBlank() },
     )
 
-private fun CustodyBridgeTransferResultDto.toDomain(): CustodyBridgeResult =
+private fun FundResultDto.toDomain(action: BridgeAction): CustodyBridgeResult =
     CustodyBridgeResult(
-        ok = (status?.trim()?.lowercase() ?: "ok") == "ok",
-        simulated = stub == true,
-        direction = direction?.let { d -> BridgeDirection.entries.firstOrNull { it.wire == d.trim().lowercase() } },
-        asset = asset,
-        amount = amount,
-        tradingCredited = tradingCredited == true,
-        note = listOfNotNull(note, detail, error).firstOrNull { it.isNotBlank() },
+        ok = funded == true,
+        action = action,
+        token = token?.trim()?.takeIf { it.isNotBlank() },
+        amount = amount?.trim()?.takeIf { it.isNotBlank() },
+        meAmount = meAmount?.trim()?.takeIf { it.isNotBlank() },
+        ledger = (if (action.venue == BridgeVenue.SPOT) spot else margin)?.trim()?.takeIf { it.isNotBlank() },
+        custody = null,
+        reason = listOfNotNull(reason, detail, error).firstOrNull { it.isNotBlank() },
+    )
+
+private fun SettleResultDto.toDomain(action: BridgeAction): CustodyBridgeResult =
+    CustodyBridgeResult(
+        ok = settled == true,
+        action = action,
+        token = token?.trim()?.takeIf { it.isNotBlank() },
+        amount = amount?.trim()?.takeIf { it.isNotBlank() },
+        meAmount = meAmount?.trim()?.takeIf { it.isNotBlank() },
+        ledger = (if (action.venue == BridgeVenue.SPOT) spot else margin)?.trim()?.takeIf { it.isNotBlank() },
+        custody = custody?.trim()?.takeIf { it.isNotBlank() },
+        reason = listOfNotNull(reason, detail, error).firstOrNull { it.isNotBlank() },
     )
 
 /** Provides the custody Retrofit API (mirrors the auth data module's provider style). */

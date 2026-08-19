@@ -59,7 +59,7 @@ interface TradingRepository {
     suspend fun placeAlgo(algoType: String, symbolId: Int, side: OrderSide, qty: Long, stopPrice: Long?, limitPrice: Long?): ApiResult<AlgoAck>
     suspend fun placeOto(symbolId: Int, parentSide: OrderSide, parentPrice: Long, parentQty: Long, childSide: OrderSide, childPrice: Long, childQty: Long): ApiResult<OtoAck>
     /** Fees (custody-exchange-gaps): the caller's fee schedule + the enriched fills-fees feed. */
-    suspend fun feeSchedule(): ApiResult<FeeSchedule>
+    suspend fun feeSchedule(symbolId: Int): ApiResult<FeeSchedule>
     suspend fun fillsFees(): ApiResult<FillsFees>
 }
 
@@ -169,8 +169,8 @@ class TradingRepositoryImpl @Inject constructor(
     override suspend fun placeOto(symbolId: Int, parentSide: OrderSide, parentPrice: Long, parentQty: Long, childSide: OrderSide, childPrice: Long, childQty: Long): ApiResult<OtoAck> =
         withContext(io) { apiCall { api.placeOto(OtoOrderDto(symbolId, parentSide.wire, parentPrice, parentQty, childSide.wire, childPrice, childQty)).toDomain() } }
 
-    override suspend fun feeSchedule(): ApiResult<FeeSchedule> =
-        withContext(io) { apiCall { api.getFeeSchedule().toDomain() } }
+    override suspend fun feeSchedule(symbolId: Int): ApiResult<FeeSchedule> =
+        withContext(io) { apiCall { api.getFeeSchedule(symbolId).toDomain() } }
 
     override suspend fun fillsFees(): ApiResult<FillsFees> =
         withContext(io) { apiCall { api.getFillsFees().toDomain() } }

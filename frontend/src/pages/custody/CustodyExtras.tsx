@@ -1,9 +1,8 @@
 // Custody gap-closing surfaces: Sub-accounts + Transfers.
-// Both wire to NEW exchange-edge routes that 404 until the edge deploys, so
-// every query/mutation degrades gracefully to an "unavailable" state
-// (retry:false) and every simulated (stub:true) response is surfaced honestly
-// with a "simulated / not settled" badge so a user never mistakes a no-op for
-// a real settled transfer.
+// These wire to exchange-edge routes that 404 until the edge deploys, so every
+// query/mutation degrades gracefully to an "unavailable" state (retry:false).
+// The custody<->trading bridge (fund/settle x spot/margin) and the vault<->vault
+// transfer are now REAL (atomic, reversal-on-failure) — no "simulated" framing.
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -39,10 +38,13 @@ import {
   getSubaccounts,
   createSubaccount,
   transferBetweenSubaccounts,
-  custodyTradingTransfer,
+  fundSpot,
+  settleSpot,
+  fundMargin,
+  settleMargin,
   CUSTODY_ASSETS,
   type Subaccount,
-  type TransferResult,
+  type SubaccountTransferResult,
 } from "@/api/endpoints/custody";
 
 // ─── small shared bits ──────────────────────────────────────────
@@ -94,88 +96,6 @@ function UnavailableCard({ line }: { line: string }) {
   );
 }
 
-/** Honest "this move is simulated, not settled" badge for stub responses. */
-function SimulatedBadge() {
-  return (
-    <Badge
-      variant="outline"
-      className="gap-1 border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-    >
-      <AlertTriangle className="h-3 w-3" /> Simulated · not settled
-    </Badge>
-  );
-}
-
-function TransferResultView({ result }: { result: TransferResult }) {
-  const stub = result.stub === true;
-  return (
-    <div
-      className={cn(
-        "space-y-2 rounded-lg border p-4",
-        stub
-          ? "border-amber-500/40 bg-amber-500/5"
-          : "border-success/40 bg-success/10",
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="flex items-center gap-2 font-medium">
-          <CircleCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-          Transfer accepted
-        </span>
-        {stub && <SimulatedBadge />}
-      </div>
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        {result.from != null && (
-          <div className="col-span-2 flex justify-between">
-            <dt>From</dt>
-            <dd className="font-mono text-foreground">{String(result.from)}</dd>
-          </div>
-        )}
-        {result.to != null && (
-          <div className="col-span-2 flex justify-between">
-            <dt>To</dt>
-            <dd className="font-mono text-foreground">{String(result.to)}</dd>
-          </div>
-        )}
-        {result.direction != null && (
-          <div className="flex justify-between">
-            <dt>Direction</dt>
-            <dd className="text-foreground">{String(result.direction)}</dd>
-          </div>
-        )}
-        {result.asset != null && (
-          <div className="flex justify-between">
-            <dt>Asset</dt>
-            <dd className="text-foreground">{String(result.asset)}</dd>
-          </div>
-        )}
-        {result.amount != null && (
-          <div className="flex justify-between">
-            <dt>Amount</dt>
-            <dd className="tabular-nums text-foreground">
-              {fmtAmount(result.amount as number | string)}
-            </dd>
-          </div>
-        )}
-        {result.trading_credited != null && (
-          <div className="flex justify-between">
-            <dt>Trading credited</dt>
-            <dd className="text-foreground">
-              {result.trading_credited ? "yes" : "no"}
-            </dd>
-          </div>
-        )}
-      </dl>
-      {result.note && (
-        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          {result.note}
-        </p>
-      )}
-    </div>
-  );
-}
-
 // ─── shared subaccounts query ───────────────────────────────────
 
 function useSubaccountsQuery() {
@@ -196,7 +116,10 @@ export function SubaccountsTab() {
   const [label, setLabel] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
 
-  const subs: Subaccount[] = q.data?.subaccounts ?? [];
+  const all: Subaccount[] = q.data?.subaccounts ?? [];
+  // The base vault is the entry with an empty label; named ones have a label.
+  const baseVault = all.find((s) => !s.label || s.label.trim() === "");
+  const named = all.filter((s) => s.label && s.label.trim() !== "");
 
   const sanitized = label.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 48);
   const labelError =
@@ -243,15 +166,13 @@ export function SubaccountsTab() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {q.data?.default_vault && (
+          {baseVault && (
             <button
               type="button"
               onClick={() => setSelected(null)}
               className={cn(
                 "flex w-full rounded-lg border p-3 text-left transition",
-                isMobile
-                  ? "flex-col gap-1"
-                  : "items-center justify-between",
+                isMobile ? "flex-col gap-1" : "items-center justify-between",
                 selected === null ? "ring-1 ring-primary/40" : "hover:bg-muted/40",
               )}
             >
@@ -261,7 +182,7 @@ export function SubaccountsTab() {
                 <Badge variant="outline" className="text-[10px]">default</Badge>
               </span>
               <span className="break-all font-mono text-xs text-muted-foreground">
-                {q.data.default_vault}
+                {baseVault.vault}
               </span>
             </button>
           )}
@@ -281,7 +202,7 @@ export function SubaccountsTab() {
             </div>
           )}
 
-          {!q.isLoading && !q.isError && subs.length === 0 && (
+          {!q.isLoading && !q.isError && named.length === 0 && (
             <p className="py-4 text-center text-sm text-muted-foreground">
               No named sub-accounts yet — create one below to organise balances.
             </p>
@@ -289,59 +210,34 @@ export function SubaccountsTab() {
 
           {!q.isLoading &&
             !q.isError &&
-            subs.map((s) => {
-              const bal = s.balances ?? {};
-              const funded = Object.entries(bal).filter(([, v]) => num(v) > 0);
-              return (
-                <button
-                  key={s.id ?? s.label}
-                  type="button"
-                  onClick={() => setSelected(s.label)}
+            named.map((s) => (
+              <button
+                key={s.label}
+                type="button"
+                onClick={() => setSelected(s.label)}
+                className={cn(
+                  "flex w-full flex-col gap-1 rounded-lg border p-3 text-left transition",
+                  selected === s.label ? "ring-1 ring-primary/40" : "hover:bg-muted/40",
+                )}
+              >
+                <div
                   className={cn(
-                    "flex w-full flex-col gap-1 rounded-lg border p-3 text-left transition",
-                    selected === s.label
-                      ? "ring-1 ring-primary/40"
-                      : "hover:bg-muted/40",
+                    "flex gap-2",
+                    isMobile ? "flex-col" : "items-center justify-between",
                   )}
                 >
-                  <div
-                    className={cn(
-                      "flex gap-2",
-                      isMobile
-                        ? "flex-col"
-                        : "items-center justify-between",
-                    )}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Layers className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm font-medium">{s.label}</span>
-                      {s.tier && (
-                        <Badge variant="outline" className="text-[10px]">{s.tier}</Badge>
-                      )}
+                  <span className="flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">{s.label}</span>
+                  </span>
+                  {s.vault && (
+                    <span className="break-all font-mono text-xs text-muted-foreground">
+                      {s.vault}
                     </span>
-                    {s.vault && (
-                      <span className="break-all font-mono text-xs text-muted-foreground">
-                        {s.vault}
-                      </span>
-                    )}
-                  </div>
-                  {funded.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5 pt-0.5">
-                      {funded.map(([asset, v]) => (
-                        <span
-                          key={asset}
-                          className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground"
-                        >
-                          {fmtAmount(v)} {asset}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <span className="text-[11px] text-muted-foreground">No balances</span>
                   )}
-                </button>
-              );
-            })}
+                </div>
+              </button>
+            ))}
         </CardContent>
       </Card>
 
@@ -431,46 +327,84 @@ export function TransferTab() {
   );
 }
 
-// ─── (a) custody <-> trading bridge ─────────────────────────────
+// ─── (a) custody <-> trading bridge (fund/settle x spot/margin) ──
+
+type BridgeAction = "fund-spot" | "settle-spot" | "fund-margin" | "settle-margin";
+
+interface BridgeResultView {
+  ok: boolean;
+  amount?: string | number;
+  me_amount?: string | number;
+  spot?: unknown;
+  margin?: unknown;
+  reason?: string;
+}
+
+const BRIDGE_ACTIONS: { value: BridgeAction; label: string; verb: string }[] = [
+  { value: "fund-spot", label: "Custody → Spot", verb: "Fund spot" },
+  { value: "settle-spot", label: "Spot → Custody", verb: "Settle spot" },
+  { value: "fund-margin", label: "Custody → Margin", verb: "Fund margin" },
+  { value: "settle-margin", label: "Margin → Custody", verb: "Settle margin" },
+];
+
+function reasonText(reason?: string): string {
+  if (!reason) return "Transfer failed";
+  if (reason === "insufficient_spot_available") return "Insufficient spot available";
+  return reason.replace(/_/g, " ");
+}
 
 function BridgeTransfer() {
-  const [direction, setDirection] = useState<"to_trading" | "to_custody">("to_trading");
+  const [action, setAction] = useState<BridgeAction>("fund-spot");
   const [assetSymbol, setAssetSymbol] = useState<string>(CUSTODY_ASSETS[0]!.symbol);
   const [amount, setAmount] = useState("");
-  const [result, setResult] = useState<TransferResult | null>(null);
-
-  const asset = CUSTODY_ASSETS.find((a) => a.symbol === assetSymbol);
-  // The bridge credit path is keyed by an engine asset id (int). We map the
-  // registry chainId as the engine asset id proxy (asset id 0 = no-op).
-  const engineAssetId = asset ? asset.chainId : 0;
+  const [result, setResult] = useState<BridgeResultView | null>(null);
 
   const amt = num(amount);
   const amtError =
-    amount.trim() === ""
-      ? ""
-      : amt <= 0
-        ? "Amount must be greater than 0."
-        : !Number.isInteger(amt)
-          ? "Bridge amount must be a whole number."
-          : "";
-  const canSubmit = amt > 0 && Number.isInteger(amt);
+    amount.trim() === "" ? "" : amt <= 0 ? "Amount must be greater than 0." : "";
+  const canSubmit = amt > 0;
 
   const mutation = useMutation({
-    mutationFn: () =>
-      custodyTradingTransfer({ direction, asset: engineAssetId, amount: amt }),
+    mutationFn: async (): Promise<BridgeResultView> => {
+      const req = { token: assetSymbol, amount: amount.trim() };
+      switch (action) {
+        case "fund-spot": {
+          const r = await fundSpot(req);
+          return { ok: r.funded === true, amount: r.amount, me_amount: r.me_amount, spot: r.spot };
+        }
+        case "settle-spot": {
+          const r = await settleSpot(req);
+          return { ok: r.settled === true, amount: r.amount, me_amount: r.me_amount, spot: r.spot, reason: r.reason };
+        }
+        case "fund-margin": {
+          const r = await fundMargin(req);
+          return { ok: r.funded === true, amount: r.amount, me_amount: r.me_amount, margin: r.margin, reason: r.reason };
+        }
+        case "settle-margin": {
+          const r = await settleMargin(req);
+          return { ok: r.settled === true, amount: r.amount, me_amount: r.me_amount, margin: r.margin, reason: r.reason };
+        }
+      }
+    },
     onSuccess: (res) => {
       setResult(res);
-      if (res.stub) toast.message("Transfer accepted (simulated)");
-      else toast.success("Transfer accepted");
+      if (res.ok) toast.success("Transfer settled");
+      else toast.error(reasonText(res.reason));
     },
     onError: (err) => {
-      if (isUnavailable(err)) {
+      if (err instanceof ApiError && err.status === 422) {
+        const reason = (err.body as { reason?: string } | undefined)?.reason;
+        setResult({ ok: false, reason });
+        toast.error(reasonText(reason));
+      } else if (isUnavailable(err)) {
         toast.error("Custody ↔ trading bridge isn't available on this backend yet");
       } else {
         toast.error(err instanceof ApiError ? err.detail : "Transfer failed");
       }
     },
   });
+
+  const current = BRIDGE_ACTIONS.find((a) => a.value === action)!;
 
   return (
     <div className="space-y-4">
@@ -481,37 +415,26 @@ function BridgeTransfer() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-1 rounded-lg border bg-muted/30 p-1">
-            <button
-              type="button"
-              onClick={() => {
-                setDirection("to_trading");
+          <div className="space-y-1.5">
+            <Label>Action</Label>
+            <Select
+              value={action}
+              onValueChange={(v) => {
+                setAction(v as BridgeAction);
                 setResult(null);
               }}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium transition",
-                direction === "to_trading"
-                  ? "bg-background shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
             >
-              To trading
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDirection("to_custody");
-                setResult(null);
-              }}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium transition",
-                direction === "to_custody"
-                  ? "bg-background shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              To custody
-            </button>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BRIDGE_ACTIONS.map((a) => (
+                  <SelectItem key={a.value} value={a.value}>
+                    {a.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-1.5">
@@ -533,21 +456,12 @@ function BridgeTransfer() {
           <div className="space-y-1.5">
             <Label>Amount</Label>
             <Input
-              inputMode="numeric"
-              placeholder="0"
+              inputMode="decimal"
+              placeholder="0.00"
               value={amount}
-              onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ""))}
+              onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
             />
             {amtError && <p className="text-xs text-destructive">{amtError}</p>}
-          </div>
-
-          <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-            <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>
-              The custody vault and the exchange spot ledger are separate systems.
-              This bridge is a best-effort, non-atomic operation and is reported as
-              simulated until the atomic bridge is wired end-to-end.
-            </span>
           </div>
 
           <Button
@@ -563,34 +477,88 @@ function BridgeTransfer() {
             ) : (
               <ArrowLeftRight className="h-4 w-4" />
             )}
-            {direction === "to_trading" ? "Move to trading" : "Move to custody"}
+            {current.verb}
           </Button>
         </CardContent>
       </Card>
 
-      {result && <TransferResultView result={result} />}
+      {result && <BridgeResultCard result={result} symbol={assetSymbol} />}
     </div>
   );
 }
 
-// ─── (b) between sub-accounts ───────────────────────────────────
+function BridgeResultCard({ result, symbol }: { result: BridgeResultView; symbol: string }) {
+  if (!result.ok) {
+    return (
+      <div className="space-y-1 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
+        <span className="flex items-center gap-2 font-medium">
+          <AlertTriangle className="h-5 w-5 text-destructive" />
+          {reasonText(result.reason)}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2 rounded-lg border border-success/40 bg-success/10 p-4">
+      <span className="flex items-center gap-2 font-medium">
+        <CircleCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+        Transfer settled
+      </span>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {result.amount != null && (
+          <div className="flex justify-between">
+            <dt>Amount</dt>
+            <dd className="tabular-nums text-foreground">
+              {fmtAmount(result.amount)} {symbol}
+            </dd>
+          </div>
+        )}
+        {result.me_amount != null && (
+          <div className="flex justify-between">
+            <dt>Engine amount</dt>
+            <dd className="tabular-nums text-foreground">{fmtAmount(result.me_amount)}</dd>
+          </div>
+        )}
+        {result.spot != null && (
+          <div className="col-span-2 flex justify-between">
+            <dt>Spot</dt>
+            <dd className="break-all text-foreground">{String(result.spot)}</dd>
+          </div>
+        )}
+        {result.margin != null && (
+          <div className="col-span-2 flex justify-between">
+            <dt>Margin</dt>
+            <dd className="break-all text-foreground">{String(result.margin)}</dd>
+          </div>
+        )}
+      </dl>
+    </div>
+  );
+}
+
+// ─── (b) between sub-accounts (REAL atomic move) ────────────────
 
 const BASE = "__base__";
 
 function InternalTransfer() {
   const isMobile = useIsMobile();
   const q = useSubaccountsQuery();
-  const subs: Subaccount[] = q.data?.subaccounts ?? [];
+  const named: Subaccount[] = (q.data?.subaccounts ?? []).filter(
+    (s) => s.label && s.label.trim() !== "",
+  );
 
   const [fromLabel, setFromLabel] = useState<string>(BASE);
   const [toLabel, setToLabel] = useState<string>(BASE);
   const [assetSymbol, setAssetSymbol] = useState<string>(CUSTODY_ASSETS[0]!.symbol);
   const [amount, setAmount] = useState("");
-  const [result, setResult] = useState<TransferResult | null>(null);
+  const [result, setResult] = useState<SubaccountTransferResult | null>(null);
 
   const options = useMemo(
-    () => [{ value: BASE, label: "Base vault (default)" }, ...subs.map((s) => ({ value: s.label, label: s.label }))],
-    [subs],
+    () => [
+      { value: BASE, label: "Base vault (default)" },
+      ...named.map((s) => ({ value: s.label, label: s.label })),
+    ],
+    [named],
   );
 
   const amt = num(amount);
@@ -602,15 +570,14 @@ function InternalTransfer() {
   const mutation = useMutation({
     mutationFn: () =>
       transferBetweenSubaccounts({
-        from_label: fromLabel === BASE ? "" : fromLabel,
-        to_label: toLabel === BASE ? "" : toLabel,
+        from_label: fromLabel === BASE ? undefined : fromLabel,
+        to_label: toLabel === BASE ? undefined : toLabel,
         asset: assetSymbol,
-        amount: amt,
+        amount: amount.trim(),
       }),
     onSuccess: (res) => {
       setResult(res);
-      if (res.stub) toast.message("Transfer accepted (simulated)");
-      else toast.success("Transfer accepted");
+      toast.success("Transfer settled");
     },
     onError: (err) => {
       if (isUnavailable(err)) {
@@ -697,15 +664,6 @@ function InternalTransfer() {
             {amtError && <p className="text-xs text-destructive">{amtError}</p>}
           </div>
 
-          <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-            <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>
-              The custody gateway has no vault↔vault move route, so this transfer
-              is validated but performs no balance change — it is reported as
-              simulated so it can never mint or destroy funds.
-            </span>
-          </div>
-
           <Button
             className="w-full gap-1.5"
             disabled={!canSubmit || mutation.isPending}
@@ -724,7 +682,40 @@ function InternalTransfer() {
         </CardContent>
       </Card>
 
-      {result && <TransferResultView result={result} />}
+      {result && (
+        <div className="space-y-2 rounded-lg border border-success/40 bg-success/10 p-4">
+          <span className="flex items-center gap-2 font-medium">
+            <CircleCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            Transfer settled
+          </span>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <div className="flex justify-between">
+              <dt>Asset</dt>
+              <dd className="text-foreground">{String(result.asset)}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt>Amount</dt>
+              <dd className="tabular-nums text-foreground">{fmtAmount(result.amount)}</dd>
+            </div>
+            <div className="col-span-2 flex justify-between">
+              <dt>From</dt>
+              <dd className="font-mono text-foreground">{String(result.from)}</dd>
+            </div>
+            <div className="flex justify-between pl-4">
+              <dt>New balance</dt>
+              <dd className="tabular-nums text-foreground">{fmtAmount(result.from_balance)}</dd>
+            </div>
+            <div className="col-span-2 flex justify-between">
+              <dt>To</dt>
+              <dd className="font-mono text-foreground">{String(result.to)}</dd>
+            </div>
+            <div className="flex justify-between pl-4">
+              <dt>New balance</dt>
+              <dd className="tabular-nums text-foreground">{fmtAmount(result.to_balance)}</dd>
+            </div>
+          </dl>
+        </div>
+      )}
     </div>
   );
 }

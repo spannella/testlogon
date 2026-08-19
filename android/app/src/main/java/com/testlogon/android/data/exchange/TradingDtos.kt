@@ -321,28 +321,22 @@ data class PmStateDto(
 
 // ==== Fees (custody-exchange-gaps) ====
 
-/** One row of the fee schedule. bps fields may be stringified by the edge, so all use @LenientInt. */
+/**
+ * GET me/fees/schedule?symbolid=<n> (REAL). {status, type, symbolid, maker_fee_bps, taker_fee_bps,
+ * liquidation_fee_bps, source, configured}. source is "engine" (a configured rate) or "venue_default";
+ * configured tells whether this symbol has an explicit override. bps fields may be stringified by the
+ * edge, so all use @LenientInt.
+ */
 @JsonClass(generateAdapter = true)
-data class FeeScheduleRowDto(
+data class FeeScheduleDto(
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "type") val type: String? = null,
     @com.testlogon.android.core.network.json.LenientInt @Json(name = "symbolid") val symbolId: Int? = null,
     @com.testlogon.android.core.network.json.LenientInt @Json(name = "maker_fee_bps") val makerFeeBps: Int? = null,
     @com.testlogon.android.core.network.json.LenientInt @Json(name = "taker_fee_bps") val takerFeeBps: Int? = null,
     @com.testlogon.android.core.network.json.LenientInt @Json(name = "liquidation_fee_bps") val liquidationFeeBps: Int? = null,
-)
-
-/**
- * GET me/fees/schedule. The stub returns a single venue-default row plus the top-level bps mirrors and
- * source/stub markers. Both the [schedule] rows and the flat mirrors are tolerated (either may be
- * present); the repo prefers the first schedule row and falls back to the mirrors.
- */
-@JsonClass(generateAdapter = true)
-data class FeeScheduleDto(
-    @Json(name = "schedule") val schedule: List<FeeScheduleRowDto>? = null,
-    @com.testlogon.android.core.network.json.LenientInt @Json(name = "maker_fee_bps") val makerFeeBps: Int? = null,
-    @com.testlogon.android.core.network.json.LenientInt @Json(name = "taker_fee_bps") val takerFeeBps: Int? = null,
-    @com.testlogon.android.core.network.json.LenientInt @Json(name = "liquidation_fee_bps") val liquidationFeeBps: Int? = null,
     @Json(name = "source") val source: String? = null,
-    @Json(name = "stub") val stub: Boolean? = null,
+    @Json(name = "configured") val configured: Boolean? = null,
 )
 
 /** One enriched fill from GET me/fills/fees, with a server-computed [fee]. */

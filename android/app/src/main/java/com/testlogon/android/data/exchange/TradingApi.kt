@@ -85,9 +85,12 @@ interface TradingApi {
     suspend fun spotDeposit(@Body body: SpotDepositDto): SpotDepositAckDto
     // ==== Fees (custody-exchange-gaps) ====
 
-    /** The caller's maker/taker/liquidation fee schedule (venue defaults today; source=stub). */
+    /**
+     * The maker/taker/liquidation fee schedule for a symbol. source is "engine" (a configured
+     * per-symbol/venue rate) or "venue_default"; configured tells whether this symbol has an override.
+     */
     @GET("me/fees/schedule")
-    suspend fun getFeeSchedule(): FeeScheduleDto
+    suspend fun getFeeSchedule(@Query("symbolid") symbolId: Int): FeeScheduleDto
 
     /** Recent fills enriched with a computed fee (empty feed today + the client-side fee formula). */
     @GET("me/fills/fees")

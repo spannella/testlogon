@@ -58,7 +58,7 @@ class TradingViewModel @Inject constructor(
      */
     fun loadFees() {
         viewModelScope.launch {
-            when (val r = repository.feeSchedule()) {
+            when (val r = repository.feeSchedule(symbolId)) {
                 is ApiResult.Success -> _uiState.update { it.copy(feeSchedule = r.data) }
                 else -> Unit
             }
