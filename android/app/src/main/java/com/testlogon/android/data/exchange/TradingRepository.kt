@@ -73,6 +73,13 @@ interface TradingRepository {
     suspend fun riskConfig(maxNotional: Long, windowSeconds: Int, mpid: String?): ApiResult<EngineConfigAck>
     suspend fun spotIndex(symbolId: Int, spotIndexPrice: Long): ApiResult<EngineConfigAck>
     suspend fun spotConfig(symbolId: Int, baseAsset: Int, quoteAsset: Int): ApiResult<EngineConfigAck>
+
+    // ---- ADMIN prediction-markets (exchange-admin-config); 404 (undeployed) -> un-applied ack / empty log. ----
+    suspend fun pmConfig(symbolId: Int, faceValue: Long, resolver: String?): ApiResult<PmConfigAck>
+    suspend fun pmGroupConfig(groupId: Int, outcomes: List<Int>, faceValue: Long, resolver: String?): ApiResult<PmConfigAck>
+    suspend fun pmResolve(symbolId: Int, outcome: String, source: String?): ApiResult<PmConfigAck>
+    suspend fun pmGroupResolve(groupId: Int, winningSymbolId: Int, source: String?): ApiResult<PmConfigAck>
+    suspend fun pmResolutions(): ApiResult<List<PmResolution>>
 }
 
 @Singleton
@@ -214,6 +221,25 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun spotConfig(symbolId: Int, baseAsset: Int, quoteAsset: Int): ApiResult<EngineConfigAck> =
         withContext(io) { emptyOn404(notDeployedAck) { api.spotConfig(SpotConfigDto(symbolId, baseAsset, quoteAsset)).toDomain() } }
+
+    // ---- ADMIN prediction-markets. Not deployed to prod -> a 404 folds to an un-applied ack / empty log. ----
+
+    private val notDeployedPmAck = PmConfigAck(applied = false, symbolId = null, groupId = null, result = null, message = "PM admin endpoint not deployed")
+
+    override suspend fun pmConfig(symbolId: Int, faceValue: Long, resolver: String?): ApiResult<PmConfigAck> =
+        withContext(io) { emptyOn404(notDeployedPmAck) { api.pmConfig(PmConfigDto(symbolId, faceValue, resolver)).toDomain() } }
+
+    override suspend fun pmGroupConfig(groupId: Int, outcomes: List<Int>, faceValue: Long, resolver: String?): ApiResult<PmConfigAck> =
+        withContext(io) { emptyOn404(notDeployedPmAck) { api.pmGroupConfig(PmGroupConfigDto(groupId, outcomes, faceValue, resolver)).toDomain() } }
+
+    override suspend fun pmResolve(symbolId: Int, outcome: String, source: String?): ApiResult<PmConfigAck> =
+        withContext(io) { emptyOn404(notDeployedPmAck) { api.pmResolve(PmResolveDto(symbolId, outcome, source)).toDomain() } }
+
+    override suspend fun pmGroupResolve(groupId: Int, winningSymbolId: Int, source: String?): ApiResult<PmConfigAck> =
+        withContext(io) { emptyOn404(notDeployedPmAck) { api.pmGroupResolve(PmGroupResolveDto(groupId, winningSymbolId, source)).toDomain() } }
+
+    override suspend fun pmResolutions(): ApiResult<List<PmResolution>> =
+        withContext(io) { emptyOn404(emptyList<PmResolution>()) { api.getPmResolutions().map { it.toDomain() } } }
 
     /**
      * Like [apiCall] but a 404 (endpoint not deployed yet) folds to a Success carrying [emptyValue],

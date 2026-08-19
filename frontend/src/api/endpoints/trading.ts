@@ -509,3 +509,93 @@ export const setSpotIndex = (body: SpotIndexRequest) =>
 /** Admin-only: mark a symbol spot-enforced with a base/quote asset pair. */
 export const setSpotConfig = (body: SpotConfigRequest) =>
   api.post<EngineConfigAck>("/me/spot_config", body);
+
+
+// ── Prediction-market admin surfaces (`/me/pm_*`) ────────────────────
+// Admin-only routes that create/configure & resolve prediction markets. A binary
+// PM trades YES shares in (0, face_value); a YES share pays face_value on YES
+// resolution else 0 (implied probability = price / face_value). A categorical
+// market is N linked binaries sharing a group_id where exactly one wins. Each
+// route returns an engine ack `{ status, ... }` ("ack" | "rejected"); pm_resolve
+// / pm_group_resolve return 403 when the caller is not the designated resolver.
+// NOT deployed to every backend — the route MAY 404; callers degrade gracefully.
+
+/** Create/config a binary prediction market. `face_value` must be > 1. */
+export interface PmConfigRequest {
+  symbolid: number;
+  face_value: number;
+  resolver?: string;
+}
+
+/** Create/config a categorical (group of linked binary outcomes). */
+export interface PmGroupConfigRequest {
+  group_id: number;
+  outcomes: number[];
+  face_value: number;
+  resolver?: string;
+}
+
+/** Settle a binary PM: "yes" pays face, "no" pays 0. */
+export interface PmResolveRequest {
+  symbolid: number;
+  outcome: "yes" | "no";
+  source?: string;
+}
+
+/** Resolve a categorical: winning_symbolid pays face, the rest pay 0. */
+export interface PmGroupResolveRequest {
+  group_id: number;
+  winning_symbolid: number;
+  source?: string;
+}
+
+/** Generic PM admin ack. `status` "ack" | "rejected"; 403 surfaces via detail/error. */
+export interface PmAdminAck {
+  status?: "ack" | "rejected" | string;
+  type?: string;
+  symbolid?: number;
+  group_id?: number;
+  outcome?: string;
+  /** 0 = applied; non-zero = rejected (mirrors EngineConfigAck). */
+  result?: number;
+  detail?: string;
+  error?: string;
+  note?: string;
+  reason?: string | number;
+  reasoncode?: number;
+}
+
+/** One entry in the resolution audit log. */
+export interface PmResolution {
+  symbolid?: number;
+  group_id?: number;
+  outcome?: string;
+  winning_symbolid?: number;
+  resolver_id?: string;
+  ts?: number;
+  source?: string;
+}
+
+/** The resolution audit log (array). 404s until the PM surface deploys. */
+export interface PmResolutionsResult {
+  status?: string;
+  type?: string;
+  resolutions?: PmResolution[];
+}
+
+/** Admin-only: create/config a binary prediction market. */
+export const pmConfig = (body: PmConfigRequest) => api.post<PmAdminAck>("/me/pm_config", body);
+
+/** Admin-only: create/config a categorical (N linked binary outcomes). */
+export const pmGroupConfig = (body: PmGroupConfigRequest) =>
+  api.post<PmAdminAck>("/me/pm_group_config", body);
+
+/** Admin-only: settle a binary PM (403 if not the designated resolver). */
+export const pmResolve = (body: PmResolveRequest) => api.post<PmAdminAck>("/me/pm_resolve", body);
+
+/** Admin-only: resolve a categorical PM (403 if not the designated resolver). */
+export const pmGroupResolve = (body: PmGroupResolveRequest) =>
+  api.post<PmAdminAck>("/me/pm_group_resolve", body);
+
+/** The prediction-market resolution audit log. 404s until the PM surface deploys. */
+export const getPmResolutions = () => api.get<PmResolutionsResult>("/me/pm_resolutions");

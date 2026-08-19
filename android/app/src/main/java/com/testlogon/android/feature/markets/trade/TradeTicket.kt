@@ -121,6 +121,8 @@ fun TradeTicket(
             MarginConfigPanel(state.marginConfig, viewModel)
             Spacer(Modifier.height(16.dp))
             EngineConfigSection(state, viewModel)
+            Spacer(Modifier.height(16.dp))
+            PmAdminSection(state, viewModel)
         }
     }
 }
@@ -1476,6 +1478,231 @@ private fun TextInputField(label: String, value: String, onValue: (String) -> Un
                 cursorBrush = SolidColor(MarketColors.Accent),
                 modifier = Modifier.fillMaxWidth().testTag("field_$label"),
             )
+        }
+    }
+}
+
+
+/**
+ * Admin prediction-markets section (exchange-admin-config). Compact create/resolve forms for binary +
+ * categorical PMs plus a resolution-history list. isAdmin-gated by the caller. Endpoints 404 until
+ * deployed -> the repository degrades to an un-applied ack surfaced inline; a 403 on resolve (caller is
+ * not the designated resolver) is surfaced as the engine's error message.
+ */
+@Composable
+private fun PmAdminSection(state: TradingUiState, viewModel: TradingViewModel) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("pm_admin_section")) {
+        Text("Prediction markets (admin)", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Configure and resolve prediction markets. Resolving requires the designated resolver (else 403).",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        PmCreateBinaryPanel(state.pmCreateBinary, viewModel)
+        Spacer(Modifier.height(12.dp))
+        PmCreateCategoricalPanel(state.pmCreateCategorical, viewModel)
+        Spacer(Modifier.height(12.dp))
+        PmResolveBinaryPanel(state.pmResolveBinary, viewModel)
+        Spacer(Modifier.height(12.dp))
+        PmResolveCategoricalPanel(state.pmResolveCategorical, viewModel)
+        Spacer(Modifier.height(12.dp))
+        PmResolutionHistory(state.pmResolutions, viewModel)
+    }
+}
+
+/** Apply button + inline error/ack feedback for the PM admin forms (mirrors [EngineApply]). */
+@Composable
+private fun PmApply(
+    label: String,
+    canSubmit: Boolean,
+    submitting: Boolean,
+    error: String?,
+    result: com.testlogon.android.data.exchange.PmConfigAck?,
+    testTag: String,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = if (submitting) "Applying" else label,
+        color = if (canSubmit) Color.Black else MarketColors.TextFaint,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (canSubmit) MarketColors.Accent else MarketColors.SurfaceAlt)
+            .then(if (canSubmit) Modifier.clickable { onSubmit() } else Modifier)
+            .testTag(testTag)
+            .padding(vertical = 12.dp),
+        textAlign = TextAlign.Center,
+    )
+    error?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = MarketColors.Down, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    }
+    result?.let { r ->
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = if (r.applied) "Applied (result ${r.result ?: 0})" else (r.message ?: "Rejected (result ${r.result ?: "?"})"),
+            color = if (r.applied) MarketColors.Up else MarketColors.Down,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Dismiss",
+            color = MarketColors.TextSecondary,
+            fontSize = 11.sp,
+            modifier = Modifier.clickable { onDismiss() }.padding(vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun PmCreateBinaryPanel(form: PmCreateBinaryForm, viewModel: TradingViewModel) {
+    EngineCard("Create binary market", "YES pays the face value on YES; face value must be > 1.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setPmBinSymbol)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Face value (payout)", form.faceText, viewModel::setPmBinFace)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Resolver id (optional)", form.resolverText, viewModel::setPmBinResolver)
+        PmApply(
+            label = "Create binary market",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_pm_create_binary",
+            onSubmit = viewModel::submitPmCreateBinary,
+            onDismiss = viewModel::clearPmBinResult,
+        )
+    }
+}
+
+@Composable
+private fun PmCreateCategoricalPanel(form: PmCreateCategoricalForm, viewModel: TradingViewModel) {
+    EngineCard("Create categorical market", "A group of >= 2 mutually-exclusive outcome symbols.") {
+        NumberField("Group id", form.groupText, viewModel::setPmCatGroup)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Outcome symbol ids (comma-separated)", form.outcomesText, viewModel::setPmCatOutcomes)
+        Spacer(Modifier.height(4.dp))
+        Text("${form.outcomes.size} outcome(s): ${form.outcomes.joinToString(", ")}", color = MarketColors.TextFaint, fontSize = 10.sp)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Face value (payout)", form.faceText, viewModel::setPmCatFace)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Resolver id (optional)", form.resolverText, viewModel::setPmCatResolver)
+        PmApply(
+            label = "Create categorical market",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_pm_create_categorical",
+            onSubmit = viewModel::submitPmCreateCategorical,
+            onDismiss = viewModel::clearPmCatResult,
+        )
+    }
+}
+
+@Composable
+private fun PmResolveBinaryPanel(form: PmResolveBinaryForm, viewModel: TradingViewModel) {
+    EngineCard("Resolve binary market", "Settle a binary PM. Requires the designated resolver.") {
+        NumberField("Symbol id", form.symbolText, viewModel::setPmResolveSymbol)
+        Spacer(Modifier.height(8.dp))
+        Text("Outcome", color = MarketColors.TextSecondary, fontSize = 11.sp)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AlgoChip("YES", form.yes) { viewModel.setPmResolveYes(true) }
+            AlgoChip("NO", !form.yes) { viewModel.setPmResolveYes(false) }
+        }
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Source (optional)", form.sourceText, viewModel::setPmResolveSource)
+        PmApply(
+            label = "Resolve ${form.outcome.uppercase()}",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_pm_resolve_binary",
+            onSubmit = viewModel::submitPmResolveBinary,
+            onDismiss = viewModel::clearPmResolveResult,
+        )
+    }
+}
+
+@Composable
+private fun PmResolveCategoricalPanel(form: PmResolveCategoricalForm, viewModel: TradingViewModel) {
+    EngineCard("Resolve categorical market", "Settle a group to its winning outcome symbol.") {
+        NumberField("Group id", form.groupText, viewModel::setPmGroupResolveGroup)
+        Spacer(Modifier.height(8.dp))
+        NumberField("Winning symbol id", form.winningText, viewModel::setPmGroupResolveWinning)
+        Spacer(Modifier.height(8.dp))
+        TextInputField("Source (optional)", form.sourceText, viewModel::setPmGroupResolveSource)
+        PmApply(
+            label = "Resolve group",
+            canSubmit = form.canSubmit,
+            submitting = form.submitting,
+            error = form.error,
+            result = form.result,
+            testTag = "apply_pm_resolve_categorical",
+            onSubmit = viewModel::submitPmResolveCategorical,
+            onDismiss = viewModel::clearPmGroupResolveResult,
+        )
+    }
+}
+
+@Composable
+private fun PmResolutionHistory(resolutions: List<com.testlogon.android.data.exchange.PmResolution>, viewModel: TradingViewModel) {
+    EngineCard("Resolution history", "The most recent PM resolutions (audit log).") {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("${resolutions.size} resolution(s)", color = MarketColors.TextSecondary, fontSize = 11.sp)
+            Text(
+                "Refresh",
+                color = MarketColors.Accent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { viewModel.loadPmResolutions() }.testTag("pm_resolutions_refresh").padding(vertical = 2.dp),
+            )
+        }
+        if (resolutions.isEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("No resolutions yet.", color = MarketColors.TextFaint, fontSize = 11.sp)
+        } else {
+            resolutions.take(20).forEach { r ->
+                Spacer(Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "${r.marketLabel} -> ${r.outcomeLabel}",
+                            color = MarketColors.TextPrimary,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                        )
+                        val meta = listOfNotNull(
+                            r.resolverId.takeIf { it.isNotBlank() }?.let { "by $it" },
+                            r.source.takeIf { it.isNotBlank() }?.let { "src $it" },
+                        ).joinToString(" · ")
+                        if (meta.isNotBlank()) {
+                            Text(meta, color = MarketColors.TextFaint, fontSize = 10.sp)
+                        }
+                    }
+                    Text(
+                        if (r.isGroup) "GROUP" else (r.outcome?.uppercase() ?: "--"),
+                        color = when {
+                            r.isGroup -> MarketColors.Accent
+                            r.outcomeYes == true -> MarketColors.Up
+                            r.outcomeYes == false -> MarketColors.Down
+                            else -> MarketColors.TextSecondary
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
         }
     }
 }

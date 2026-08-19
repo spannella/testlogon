@@ -132,5 +132,28 @@ interface TradingApi {
     /** ADMIN: bind a symbol to its base/quote asset ids (defines a spot pair). */
     @POST("me/spot_config")
     suspend fun spotConfig(@Body body: SpotConfigDto): EngineConfigAckDto
+
+    // ==== Admin prediction-markets (exchange-admin-config); admin-gated; ack {status,...}. ====
+    // Not deployed to prod -> the repository degrades on 404 (like the engine-config routes).
+
+    /** ADMIN: configure a binary PM on a symbol (face_value>1, optional designated resolver). */
+    @POST("me/pm_config")
+    suspend fun pmConfig(@Body body: PmConfigDto): PmConfigAckDto
+
+    /** ADMIN: configure a categorical (grouped) PM: a group of mutually-exclusive outcome symbols. */
+    @POST("me/pm_group_config")
+    suspend fun pmGroupConfig(@Body body: PmGroupConfigDto): PmConfigAckDto
+
+    /** ADMIN (designated resolver): resolve a binary PM to yes/no. 403 if the caller is not the resolver. */
+    @POST("me/pm_resolve")
+    suspend fun pmResolve(@Body body: PmResolveDto): PmConfigAckDto
+
+    /** ADMIN (designated resolver): resolve a categorical PM to its winning outcome symbol. */
+    @POST("me/pm_group_resolve")
+    suspend fun pmGroupResolve(@Body body: PmGroupResolveDto): PmConfigAckDto
+
+    /** ADMIN: the resolution audit log (symbol/group, outcome, resolver, ts, source). 404 -> empty. */
+    @GET("me/pm_resolutions")
+    suspend fun getPmResolutions(): List<PmResolutionDto>
 }
 

@@ -54,6 +54,8 @@ class TradingViewModel @Inject constructor(
                 tradingParams = it.tradingParams.copy(symbolText = sym),
                 spotIndex = it.spotIndex.copy(symbolText = sym),
                 spotConfig = it.spotConfig.copy(symbolText = sym),
+                pmCreateBinary = it.pmCreateBinary.copy(symbolText = sym),
+                pmResolveBinary = it.pmResolveBinary.copy(symbolText = sym),
             )
         }
         resolveAdmin()
@@ -121,7 +123,7 @@ class TradingViewModel @Inject constructor(
     private fun resolveAdmin() {
         viewModelScope.launch {
             when (val r = currentUserRepository.isAdmin()) {
-                is ApiResult.Success -> _uiState.update { it.copy(isAdmin = r.data) }
+                is ApiResult.Success -> { _uiState.update { it.copy(isAdmin = r.data) }; if (r.data) loadPmResolutions() }
                 else -> Unit
             }
         }
@@ -817,4 +819,84 @@ class TradingViewModel @Inject constructor(
             }
         }
     }
+
+    // ---- Admin prediction-markets forms (exchange-admin-config) ----
+
+    // create binary
+    fun setPmBinSymbol(t: String) = _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(symbolText = digits(t, 9), error = null)) }
+    fun setPmBinFace(t: String) = _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(faceText = digits(t, 12), error = null)) }
+    fun setPmBinResolver(t: String) = _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(resolverText = mpid(t), error = null)) }
+    fun clearPmBinResult() = _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(result = null, error = null)) }
+    fun submitPmCreateBinary() {
+        val f = _uiState.value.pmCreateBinary
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.pmConfig(f.symbolInt!!, f.faceLong!!, f.resolver)
+            _uiState.update { it.copy(pmCreateBinary = it.pmCreateBinary.finish(r)) }
+            if (r is ApiResult.Success && r.data.applied) refreshPm()
+        }
+    }
+
+    // create categorical (grouped)
+    fun setPmCatGroup(t: String) = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(groupText = digits(t, 9), error = null)) }
+    fun setPmCatOutcomes(t: String) = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(outcomesText = t.filter { c -> c.isDigit() || c == ',' || c == ' ' }.take(120), error = null)) }
+    fun setPmCatFace(t: String) = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(faceText = digits(t, 12), error = null)) }
+    fun setPmCatResolver(t: String) = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(resolverText = mpid(t), error = null)) }
+    fun clearPmCatResult() = _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(result = null, error = null)) }
+    fun submitPmCreateCategorical() {
+        val f = _uiState.value.pmCreateCategorical
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.pmGroupConfig(f.groupInt!!, f.outcomes, f.faceLong!!, f.resolver)
+            _uiState.update { it.copy(pmCreateCategorical = it.pmCreateCategorical.finish(r)) }
+        }
+    }
+
+    // resolve binary
+    fun setPmResolveSymbol(t: String) = _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(symbolText = digits(t, 9), error = null)) }
+    fun setPmResolveYes(yes: Boolean) = _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(yes = yes, error = null)) }
+    fun setPmResolveSource(t: String) = _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(sourceText = source(t), error = null)) }
+    fun clearPmResolveResult() = _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(result = null, error = null)) }
+    fun submitPmResolveBinary() {
+        val f = _uiState.value.pmResolveBinary
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.pmResolve(f.symbolInt!!, f.outcome, f.source)
+            _uiState.update { it.copy(pmResolveBinary = it.pmResolveBinary.finish(r)) }
+            if (r is ApiResult.Success && r.data.applied) { refreshPm(); loadPmResolutions() }
+        }
+    }
+
+    // resolve categorical
+    fun setPmGroupResolveGroup(t: String) = _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(groupText = digits(t, 9), error = null)) }
+    fun setPmGroupResolveWinning(t: String) = _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(winningText = digits(t, 9), error = null)) }
+    fun setPmGroupResolveSource(t: String) = _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(sourceText = source(t), error = null)) }
+    fun clearPmGroupResolveResult() = _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(result = null, error = null)) }
+    fun submitPmResolveCategorical() {
+        val f = _uiState.value.pmResolveCategorical
+        if (!f.canSubmit) return
+        _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.copy(submitting = true, error = null, result = null)) }
+        viewModelScope.launch {
+            val r = repository.pmGroupResolve(f.groupInt!!, f.winningInt!!, f.source)
+            _uiState.update { it.copy(pmResolveCategorical = it.pmResolveCategorical.finish(r)) }
+            if (r is ApiResult.Success && r.data.applied) loadPmResolutions()
+        }
+    }
+
+    /** Load the PM resolution audit log (admin). 404 -> empty; failure leaves the list unchanged. */
+    fun loadPmResolutions() {
+        viewModelScope.launch {
+            when (val r = repository.pmResolutions()) {
+                is ApiResult.Success -> _uiState.update { it.copy(pmResolutions = r.data) }
+                else -> Unit
+            }
+        }
+    }
+
+    /** Sanitize an optional free-text resolution source (alnum + a few separators). */
+    private fun source(t: String): String = t.filter { it.isLetterOrDigit() || it == '-' || it == '_' || it == ' ' || it == '.' }.take(40)
+
 }

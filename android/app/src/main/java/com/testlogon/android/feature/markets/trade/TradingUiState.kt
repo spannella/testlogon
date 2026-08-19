@@ -113,6 +113,12 @@ data class TradingUiState(
     val riskConfig: RiskConfigForm = RiskConfigForm(),
     val spotIndex: SpotIndexForm = SpotIndexForm(),
     val spotConfig: SpotConfigForm = SpotConfigForm(),
+    // Admin prediction-markets forms (exchange-admin-config); shown only when isAdmin.
+    val pmCreateBinary: PmCreateBinaryForm = PmCreateBinaryForm(),
+    val pmCreateCategorical: PmCreateCategoricalForm = PmCreateCategoricalForm(),
+    val pmResolveBinary: PmResolveBinaryForm = PmResolveBinaryForm(),
+    val pmResolveCategorical: PmResolveCategoricalForm = PmResolveCategoricalForm(),
+    val pmResolutions: List<com.testlogon.android.data.exchange.PmResolution> = emptyList(),
     val feeSchedule: FeeSchedule? = null,
     val fillsFees: FillsFees? = null,
     val liquidations: Liquidations? = null,
@@ -342,4 +348,106 @@ fun SpotConfigForm.finish(r: ApiResult<EngineConfigAck>): SpotConfigForm = when 
     is ApiResult.Success -> copy(submitting = false, result = r.data)
     is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
     is ApiResult.NetworkError -> copy(submitting = false, error = NET_ERR)
+}
+
+// ==== Admin prediction-markets (exchange-admin-config) — form state ====
+
+/** Import alias: the PM admin ack + resolution domain types live in data.exchange. */
+
+/**
+ * Admin form: configure a BINARY PM on a symbol. [faceText] is the payout on YES (must parse and be
+ * > 1); [resolverText] is an optional designated resolver id (blank -> null on the wire).
+ */
+data class PmCreateBinaryForm(
+    val symbolText: String = "",
+    val faceText: String = "",
+    val resolverText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.PmConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val faceLong: Long? get() = faceText.toLongOrNull()
+    val resolver: String? get() = resolverText.trim().ifEmpty { null }
+    val canSubmit: Boolean get() = !submitting && symbolInt != null && (faceLong ?: 0L) > 1L
+}
+
+/**
+ * Admin form: configure a CATEGORICAL (grouped) PM. [outcomesText] is a comma/space-separated list of
+ * outcome symbol ids (>= 2 distinct); [faceText] the shared payout (> 1).
+ */
+data class PmCreateCategoricalForm(
+    val groupText: String = "",
+    val outcomesText: String = "",
+    val faceText: String = "",
+    val resolverText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.PmConfigAck? = null,
+    val error: String? = null,
+) {
+    val groupInt: Int? get() = groupText.toIntOrNull()
+    val faceLong: Long? get() = faceText.toLongOrNull()
+    val resolver: String? get() = resolverText.trim().ifEmpty { null }
+    /** Parse the outcome ids from a comma/space/newline-separated list, de-duplicated, order-preserving. */
+    val outcomes: List<Int> get() = outcomesText
+        .split(',', ' ', '\n', '\t')
+        .mapNotNull { it.trim().toIntOrNull() }
+        .distinct()
+    val canSubmit: Boolean get() = !submitting && (groupInt ?: 0) > 0 && (faceLong ?: 0L) > 1L && outcomes.size >= 2
+}
+
+/** Admin form: resolve a BINARY PM to yes/no. [yes] holds the selected outcome. */
+data class PmResolveBinaryForm(
+    val symbolText: String = "",
+    val yes: Boolean = true,
+    val sourceText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.PmConfigAck? = null,
+    val error: String? = null,
+) {
+    val symbolInt: Int? get() = symbolText.toIntOrNull()
+    val source: String? get() = sourceText.trim().ifEmpty { null }
+    val outcome: String get() = if (yes) "yes" else "no"
+    val canSubmit: Boolean get() = !submitting && symbolInt != null
+}
+
+/** Admin form: resolve a CATEGORICAL PM by its winning outcome symbol id. */
+data class PmResolveCategoricalForm(
+    val groupText: String = "",
+    val winningText: String = "",
+    val sourceText: String = "",
+    val submitting: Boolean = false,
+    val result: com.testlogon.android.data.exchange.PmConfigAck? = null,
+    val error: String? = null,
+) {
+    val groupInt: Int? get() = groupText.toIntOrNull()
+    val winningInt: Int? get() = winningText.toIntOrNull()
+    val source: String? get() = sourceText.trim().ifEmpty { null }
+    val canSubmit: Boolean get() = !submitting && (groupInt ?: 0) > 0 && winningInt != null
+}
+
+private const val PM_NET_ERR = "Network error. Check your connection and try again."
+
+fun PmCreateBinaryForm.finish(r: ApiResult<com.testlogon.android.data.exchange.PmConfigAck>): PmCreateBinaryForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
+}
+
+fun PmCreateCategoricalForm.finish(r: ApiResult<com.testlogon.android.data.exchange.PmConfigAck>): PmCreateCategoricalForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
+}
+
+fun PmResolveBinaryForm.finish(r: ApiResult<com.testlogon.android.data.exchange.PmConfigAck>): PmResolveBinaryForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
+}
+
+fun PmResolveCategoricalForm.finish(r: ApiResult<com.testlogon.android.data.exchange.PmConfigAck>): PmResolveCategoricalForm = when (r) {
+    is ApiResult.Success -> copy(submitting = false, result = r.data)
+    is ApiResult.Failure -> copy(submitting = false, error = r.error.message)
+    is ApiResult.NetworkError -> copy(submitting = false, error = PM_NET_ERR)
 }

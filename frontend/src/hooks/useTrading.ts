@@ -10,6 +10,7 @@ export const tradingKeys = {
   fillsFees: ["me", "fills_fees"] as const,
   liquidations: ["me", "liquidations"] as const,
   fundingPayments: ["me", "funding_payments"] as const,
+  pmResolutions: ["me", "pm_resolutions"] as const,
 };
 
 /** Exchange account-feed poll (fills-fees / liquidations / funding). */
@@ -214,4 +215,42 @@ export function useSpotIndex() {
 /** Admin-only: mark a symbol spot-enforced (base/quote asset pair). */
 export function useSpotConfig() {
   return useMutation({ mutationFn: trading.setSpotConfig });
+}
+
+
+// ── Prediction-market admin surfaces (`/me/pm_*`) ────────────────────
+// Admin-only PM create/config + resolve mutations and the resolution audit-log
+// query. No account-invalidate (they tune markets, not the caller balance).
+// Routes MAY 404 (not deployed everywhere); resolve MAY 403 (not the resolver)
+// — the calling UI reports either inline, no retry loop.
+
+/** Admin-only: create/config a binary prediction market. */
+export function usePmConfig() {
+  return useMutation({ mutationFn: trading.pmConfig });
+}
+
+/** Admin-only: create/config a categorical (N linked binary outcomes). */
+export function usePmGroupConfig() {
+  return useMutation({ mutationFn: trading.pmGroupConfig });
+}
+
+/** Admin-only: settle a binary PM (403 if not the designated resolver). */
+export function usePmResolve() {
+  return useMutation({ mutationFn: trading.pmResolve });
+}
+
+/** Admin-only: resolve a categorical PM (403 if not the designated resolver). */
+export function usePmGroupResolve() {
+  return useMutation({ mutationFn: trading.pmGroupResolve });
+}
+
+/** PM resolution audit log. `retry: false` — the route 404s until the PM surface deploys. */
+export function usePmResolutions(enabled = true) {
+  return useQuery({
+    queryKey: tradingKeys.pmResolutions,
+    queryFn: trading.getPmResolutions,
+    enabled,
+    retry: false,
+    refetchInterval: ACCOUNT_REFETCH_MS,
+  });
 }

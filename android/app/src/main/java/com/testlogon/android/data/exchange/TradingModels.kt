@@ -467,3 +467,63 @@ fun EngineConfigAckDto.toDomain(): EngineConfigAck = EngineConfigAck(
     result = result,
     message = detail ?: error ?: note,
 )
+
+
+// ==== Admin prediction-markets (exchange-admin-config) — domain + mappers ====
+
+/**
+ * Result of an admin PM config/resolve apply (pm_config / pm_group_config / pm_resolve /
+ * pm_group_resolve). [applied] is true when status == "ack" and, if a [result] is present, it is 0.
+ * [message] surfaces any detail/error/note (e.g. the resolver 403 message on pm_resolve).
+ */
+data class PmConfigAck(
+    val applied: Boolean,
+    val symbolId: Int?,
+    val groupId: Int?,
+    val result: Int?,
+    val message: String?,
+)
+
+fun PmConfigAckDto.toDomain(): PmConfigAck = PmConfigAck(
+    applied = status == "ack" && (result ?: 0) == 0,
+    symbolId = symbolId,
+    groupId = groupId,
+    result = result,
+    message = detail ?: error ?: note,
+)
+
+/**
+ * One PM resolution audit row. [isGroup] is true for a categorical resolution (carries [groupId] +
+ * [winningSymbolId]); otherwise it is a binary resolution (carries [symbolId] + [outcomeYes]).
+ */
+data class PmResolution(
+    val symbolId: Int?,
+    val groupId: Int?,
+    val winningSymbolId: Int?,
+    val outcome: String?,
+    val resolverId: String,
+    val ts: Long,
+    val source: String,
+) {
+    val isGroup: Boolean get() = groupId != null
+    /** For a binary row: true = YES won, false = NO, null when the outcome string is absent/unknown. */
+    val outcomeYes: Boolean? get() = when (outcome?.lowercase()) {
+        "yes" -> true
+        "no" -> false
+        else -> null
+    }
+    /** A compact human label for the resolved market ("#<sym>" or "group <id>"). */
+    val marketLabel: String get() = if (isGroup) "group $groupId" else "#" + (symbolId ?: 0)
+    /** A compact human label for the outcome (YES/NO for binary; the winning symbol for categorical). */
+    val outcomeLabel: String get() = if (isGroup) "#" + (winningSymbolId ?: 0) else (outcome?.uppercase() ?: "--")
+}
+
+fun PmResolutionDto.toDomain(): PmResolution = PmResolution(
+    symbolId = symbolId,
+    groupId = groupId,
+    winningSymbolId = winningSymbolId,
+    outcome = outcome,
+    resolverId = resolverId.orEmpty(),
+    ts = ts ?: 0L,
+    source = source.orEmpty(),
+)

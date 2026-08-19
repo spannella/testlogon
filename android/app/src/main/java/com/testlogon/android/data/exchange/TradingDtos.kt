@@ -487,3 +487,73 @@ data class EngineConfigAckDto(
     val error: String? = null,
     val note: String? = null,
 )
+
+
+// ==== Admin prediction-markets (exchange-admin-config) — POST me/pm_config, pm_group_config,
+// pm_resolve, pm_group_resolve; GET me/pm_resolutions. All admin-only; not deployed to prod yet ->
+// the repository degrades on 404 (see the engine-config routes). ====
+
+/** POST me/pm_config: configure a binary PM on [symbolId]. [faceValue] must be > 1. */
+@JsonClass(generateAdapter = true)
+data class PmConfigDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "face_value") val faceValue: Long,
+    @Json(name = "resolver") val resolver: String? = null,
+)
+
+/** POST me/pm_group_config: configure a categorical PM — a group of mutually-exclusive outcome symbols. */
+@JsonClass(generateAdapter = true)
+data class PmGroupConfigDto(
+    @Json(name = "group_id") val groupId: Int,
+    @Json(name = "outcomes") val outcomes: List<Int>,
+    @Json(name = "face_value") val faceValue: Long,
+    @Json(name = "resolver") val resolver: String? = null,
+)
+
+/** POST me/pm_resolve: resolve a binary PM. [outcome] = "yes" | "no". 403 if not the designated resolver. */
+@JsonClass(generateAdapter = true)
+data class PmResolveDto(
+    @Json(name = "symbolid") val symbolId: Int,
+    @Json(name = "outcome") val outcome: String,
+    @Json(name = "source") val source: String? = null,
+)
+
+/** POST me/pm_group_resolve: resolve a categorical PM by its winning outcome symbol id. */
+@JsonClass(generateAdapter = true)
+data class PmGroupResolveDto(
+    @Json(name = "group_id") val groupId: Int,
+    @Json(name = "winning_symbolid") val winningSymbolId: Int,
+    @Json(name = "source") val source: String? = null,
+)
+
+/**
+ * Shared PM admin ack ({status, ...}). status = "ack" | "rejected"; result == 0 (when present) means
+ * applied. detail/error/note carry the engine message (e.g. the resolver 403 detail). Tolerant.
+ */
+@JsonClass(generateAdapter = true)
+data class PmConfigAckDto(
+    val status: String? = null,
+    val type: String? = null,
+    @Json(name = "symbolid") val symbolId: Int? = null,
+    @Json(name = "group_id") val groupId: Int? = null,
+    val result: Int? = null,
+    val detail: String? = null,
+    val error: String? = null,
+    val note: String? = null,
+)
+
+/**
+ * One row from GET me/pm_resolutions. A binary resolution carries [symbolId] + [outcome] ("yes"/"no");
+ * a categorical one carries [groupId] + the winning [symbolId]. [ts] is a (ns/ms) timestamp; numeric
+ * fields are lenient since the edge may stringify them.
+ */
+@JsonClass(generateAdapter = true)
+data class PmResolutionDto(
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "symbolid") val symbolId: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "group_id") val groupId: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "winning_symbolid") val winningSymbolId: Int? = null,
+    @Json(name = "outcome") val outcome: String? = null,
+    @Json(name = "resolver_id") val resolverId: String? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "ts") val ts: Long? = null,
+    @Json(name = "source") val source: String? = null,
+)
