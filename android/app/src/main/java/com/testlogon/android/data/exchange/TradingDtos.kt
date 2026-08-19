@@ -626,3 +626,50 @@ data class StakeAuctionAckDto(
     @Json(name = "note") val note: String? = null,
     @Json(name = "reason") val reason: String? = null,
 )
+// ==== Discovery browse (STUB) ====
+// GET me/stake_requests / me/auctions return an empty list + stub:true + a human note today; the
+// item shapes below are lenient guesses so that when the backend ships real rows they still parse.
+// All fields optional; numeric ids lenient (the edge may stringify).
+
+/** One open stake request row (browse). Amounts/pcts are strings-or-numbers -> kept as String?. */
+@JsonClass(generateAdapter = true)
+data class StakeRequestBrowseItemDto(
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "request_id") val requestId: Long? = null,
+    @Json(name = "symbolid") val symbolId: Int? = null,
+    @Json(name = "symbol") val symbol: String? = null,
+    @Json(name = "min_collateral") val minCollateral: String? = null,
+    @Json(name = "max_stake_pct") val maxStakePct: String? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "owner") val owner: String? = null,
+)
+
+/** GET me/stake_requests envelope (STUB: stake_requests empty, stub=true, note set). */
+@JsonClass(generateAdapter = true)
+data class StakeRequestsBrowseDto(
+    @Json(name = "stake_requests") val stakeRequests: List<StakeRequestBrowseItemDto>? = null,
+    @Json(name = "count") val count: Int? = null,
+    @Json(name = "stub") val stub: Boolean? = null,
+    @Json(name = "note") val note: String? = null,
+)
+
+/** One open auction row (browse). */
+@JsonClass(generateAdapter = true)
+data class AuctionBrowseItemDto(
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "auction_id") val auctionId: Long? = null,
+    @Json(name = "symbolid") val symbolId: Int? = null,
+    @Json(name = "symbol") val symbol: String? = null,
+    @Json(name = "qty") val qty: String? = null,
+    @Json(name = "reserve_price") val reservePrice: String? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "owner") val owner: String? = null,
+)
+
+/** GET me/auctions envelope (STUB: auctions empty, stub=true, note set). */
+@JsonClass(generateAdapter = true)
+data class AuctionsBrowseDto(
+    @Json(name = "auctions") val auctions: List<AuctionBrowseItemDto>? = null,
+    @Json(name = "count") val count: Int? = null,
+    @Json(name = "stub") val stub: Boolean? = null,
+    @Json(name = "note") val note: String? = null,
+)
+

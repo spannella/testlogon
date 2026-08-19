@@ -66,6 +66,9 @@ import com.testlogon.android.data.custody.CustodyAssets
 import com.testlogon.android.data.custody.CustodyBalance
 import com.testlogon.android.data.custody.CustodyBridgeResult
 import com.testlogon.android.data.custody.CustodySubAccount
+import com.testlogon.android.data.custody.StakingProvider
+import com.testlogon.android.data.custody.StakingPosition
+import com.testlogon.android.data.custody.StakingDashboard
 import com.testlogon.android.data.custody.CustodyDeposit
 import com.testlogon.android.data.custody.CustodyDeposits
 import com.testlogon.android.data.custody.SubAccountTransferResult
@@ -98,6 +101,7 @@ fun CustodyScreen(
     val tabs = remember {
         listOf(
             CustodyTab.BALANCES,
+            CustodyTab.STAKING,
             CustodyTab.SUBACCOUNTS,
             CustodyTab.TRANSFER,
             CustodyTab.DEPOSIT,
@@ -133,6 +137,7 @@ fun CustodyScreen(
             }
             when (state.tab) {
                 CustodyTab.BALANCES -> BalancesTab(state, viewModel)
+                CustodyTab.STAKING -> StakingTab(state, viewModel)
                 CustodyTab.SUBACCOUNTS -> SubAccountsTab(state, viewModel)
                 CustodyTab.TRANSFER -> TransferTab(state, viewModel)
                 CustodyTab.DEPOSIT -> DepositTab(state, viewModel)
@@ -152,6 +157,7 @@ fun CustodyScreen(
 
 private fun CustodyTab.title(): String = when (this) {
     CustodyTab.BALANCES -> "Balances"
+    CustodyTab.STAKING -> "Staking"
     CustodyTab.SUBACCOUNTS -> "Sub-accounts"
     CustodyTab.TRANSFER -> "Transfer"
     CustodyTab.DEPOSIT -> "Deposit"
@@ -254,6 +260,180 @@ private fun BalanceCard(row: CustodyBalance, onDeposit: () -> Unit, onWithdraw: 
                     Text("Withdraw")
                 }
             }
+        }
+    }
+}
+
+// ---------------- Staking ----------------
+
+@Composable
+private fun StakingTab(state: CustodyUiState, viewModel: CustodyViewModel) {
+    val st = state.staking
+    val d = st.dashboard.data
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text("Staking", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            "Stake custody balances with a provider to earn rewards. Positions and rewards are read from the staking gateway.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        when {
+            st.dashboard.loading && d == null -> LoadingBox()
+            st.dashboard.error != null && d == null -> ErrorBox(st.dashboard.error) { viewModel.loadStaking() }
+            d == null || d.unavailable ->
+                UnavailableTab(
+                    "Staking",
+                    "Staking isn't available on this backend yet. When the staking gateway is connected, your providers, positions and rewards will appear here.",
+                )
+            else -> {
+                StakingPositionsSection(d)
+                StakingProvidersSection(d)
+                StakeFormCard(st, viewModel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StakingPositionsSection(d: StakingDashboard) {
+    Text("Your positions", style = MaterialTheme.typography.labelLarge)
+    if (d.vault.isNotBlank()) {
+        Text("Vault ${d.vault.short()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+    }
+    if (!d.hasPositions) {
+        HintText("No staking positions yet. Stake with a provider below to open one.")
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            d.positions.forEach { StakingPositionCard(it) }
+        }
+    }
+}
+
+@Composable
+private fun StakingPositionCard(p: StakingPosition) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    (p.asset.ifBlank { p.provider }).ifBlank { "Position" },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (p.statusLabel.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(50))
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    ) { Text(p.statusLabel, style = MaterialTheme.typography.labelSmall) }
+                }
+            }
+            if (p.provider.isNotBlank()) DetailRow("Provider", p.provider)
+            DetailRow("Principal", p.principal)
+            DetailRow("Rewards", p.rewards)
+            DetailRow("Total", p.total)
+            if (p.positionId.isNotBlank()) DetailRow("Position", p.positionId.short())
+        }
+    }
+}
+
+@Composable
+private fun StakingProvidersSection(d: StakingDashboard) {
+    HorizontalDivider()
+    Text("Providers", style = MaterialTheme.typography.labelLarge)
+    if (!d.hasProviders) {
+        HintText("No staking providers are configured yet.")
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            d.providers.forEach { ProviderRow(it) }
+        }
+    }
+}
+
+@Composable
+private fun ProviderRow(p: StakingProvider) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(p.displayId, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            val sub = listOfNotNull(
+                p.asset.takeIf { it.isNotBlank() },
+                p.kind.takeIf { it.isNotBlank() },
+                p.chain.takeIf { it.isNotBlank() }?.let { "chain $it" },
+            ).joinToString(" - ")
+            if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (p.contract.isNotBlank()) Text(p.contractShort, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun StakeFormCard(st: StakingUiState, viewModel: CustodyViewModel) {
+    val providers = st.dashboard.data?.providers.orEmpty()
+    HorizontalDivider()
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Stake", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            if (providers.isEmpty()) {
+                HintText("No providers available to stake with yet.")
+            } else {
+                Text("Provider", style = MaterialTheme.typography.labelMedium)
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    providers.forEach { prov ->
+                        FilterChip(
+                            selected = prov.id == st.selectedProvider,
+                            onClick = { viewModel.onStakeProviderSelected(prov.id) },
+                            label = { Text(prov.displayId) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = st.amountText,
+                    onValueChange = viewModel::onStakeAmountChanged,
+                    label = { Text("Amount") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("stake_amount"),
+                )
+                st.submitError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                st.result?.let { r -> StakeResultCard(r) { viewModel.clearStakeResult() } }
+                Button(
+                    onClick = { viewModel.submitStake() },
+                    enabled = st.canStake,
+                    modifier = Modifier.fillMaxWidth().testTag("submit_stake"),
+                ) {
+                    Text(if (st.submitting) "Staking..." else "Stake")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StakeResultCard(r: com.testlogon.android.data.custody.StakeResult, onDismiss: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (r.ok) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.errorContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                if (r.ok) "Staked" else "Not staked",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            r.provider?.let { DetailRow("Provider", it) }
+            r.amount?.let { DetailRow("Amount", it) }
+            r.positionId?.let { DetailRow("Position", it.short()) }
+            r.status?.let { DetailRow("Status", it) }
+            r.reason?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            TextButton(onClick = onDismiss) { Text("Dismiss") }
         }
     }
 }

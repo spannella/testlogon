@@ -280,3 +280,31 @@ export function useAuctionRequest() {
 export function useAuctionBid() {
   return useMutation({ mutationFn: trading.auctionBid });
 }
+
+
+// ── Discovery browse reads (open stake requests / open auctions) ─────
+// STUB feeds (empty + stub:true + note) for the peer staking/auction market.
+// `retry: false` — the route 404s until the edge deploys; the calling UI shows
+// an honest empty state using the returned `note`. Light poll while mounted.
+
+/** Browse open stake requests. STUB until the engine adds a listing (retry:false). */
+export function useStakeRequests(enabled = true) {
+  return useQuery({
+    queryKey: ["me", "stake_requests"] as const,
+    queryFn: trading.getStakeRequests,
+    enabled,
+    retry: false,
+    refetchInterval: FEED_REFETCH_MS,
+  });
+}
+
+/** Browse open auctions. STUB until the engine adds a listing (retry:false). */
+export function useOpenAuctions(enabled = true) {
+  return useQuery({
+    queryKey: ["me", "auctions"] as const,
+    queryFn: trading.getOpenAuctions,
+    enabled,
+    retry: false,
+    refetchInterval: FEED_REFETCH_MS,
+  });
+}

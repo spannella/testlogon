@@ -1723,13 +1723,17 @@ private fun StakingAuctionsSection(state: TradingUiState, viewModel: TradingView
         Text("Staking & auctions", color = MarketColors.Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Spacer(Modifier.height(2.dp))
         Text(
-            "Peer mechanisms: stake against another trader's request, or auction a position. Browsing open " +
-                "requests/auctions isn't available yet — act on an id you already have, or create one and share " +
-                "the id it returns.",
+            "Peer mechanisms: stake against another trader's request, or auction a position. Browse open " +
+                "requests/auctions below (read-only preview), or act on an id you already have — create one " +
+                "and share the id it returns.",
             color = MarketColors.TextSecondary,
             fontSize = 11.sp,
         )
         Spacer(Modifier.height(10.dp))
+        BrowseOpenStakeRequests(state.stakeRequestsBrowse)
+        Spacer(Modifier.height(12.dp))
+        BrowseOpenAuctions(state.auctionsBrowse)
+        Spacer(Modifier.height(12.dp))
         StakeRequestPanel(state.stakeRequest, viewModel)
         Spacer(Modifier.height(12.dp))
         StakeOfferPanel(state.stakeOffer, viewModel)
@@ -1737,6 +1741,79 @@ private fun StakingAuctionsSection(state: TradingUiState, viewModel: TradingView
         AuctionRequestPanel(state.auctionRequest, viewModel)
         Spacer(Modifier.height(12.dp))
         AuctionBidPanel(state.auctionBid, viewModel)
+    }
+}
+
+/**
+ * Browse-open (read) subsection for open stake requests. STUB today: the backend returns an empty list
+ * plus a human note, so an honest empty state from [StakeRequestsBrowse.note] is rendered; when real
+ * rows arrive they render as compact cards. Keeps the action forms below unchanged.
+ */
+@Composable
+private fun BrowseOpenStakeRequests(browse: com.testlogon.android.data.exchange.StakeRequestsBrowse?) {
+    EngineCard("Browse open stake requests", "Open requests you can stake against.") {
+        when {
+            browse == null -> Text("Loading...", color = MarketColors.TextSecondary, fontSize = 12.sp)
+            browse.isEmpty -> Text(
+                browse.note ?: if (browse.unavailable) "Browsing open requests isn't available yet." else "No open stake requests right now.",
+                color = MarketColors.TextSecondary,
+                fontSize = 12.sp,
+            )
+            else -> Column(modifier = Modifier.fillMaxWidth()) {
+                browse.items.forEach { item ->
+                    BrowseRow(
+                        title = item.idLabel,
+                        subtitle = listOfNotNull(
+                            item.symbolLabel,
+                            item.minCollateral?.let { "min $it" },
+                            item.maxStakePct?.let { "<= $it%" },
+                            item.status,
+                        ).joinToString("  -  "),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Browse-open (read) subsection for open auctions. STUB today (empty + note); renders rows when present.
+ */
+@Composable
+private fun BrowseOpenAuctions(browse: com.testlogon.android.data.exchange.AuctionsBrowse?) {
+    EngineCard("Browse open auctions", "Open auctions you can bid on.") {
+        when {
+            browse == null -> Text("Loading...", color = MarketColors.TextSecondary, fontSize = 12.sp)
+            browse.isEmpty -> Text(
+                browse.note ?: if (browse.unavailable) "Browsing open auctions isn't available yet." else "No open auctions right now.",
+                color = MarketColors.TextSecondary,
+                fontSize = 12.sp,
+            )
+            else -> Column(modifier = Modifier.fillMaxWidth()) {
+                browse.items.forEach { item ->
+                    BrowseRow(
+                        title = item.idLabel,
+                        subtitle = listOfNotNull(
+                            item.symbolLabel,
+                            item.qty?.let { "qty $it" },
+                            item.reservePrice?.let { "reserve $it" },
+                            item.status,
+                        ).joinToString("  -  "),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One compact browse row: a bold id label + a monospace subtitle line. */
+@Composable
+private fun BrowseRow(title: String, subtitle: String) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(title, color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        if (subtitle.isNotBlank()) {
+            Text(subtitle, color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+        }
     }
 }
 

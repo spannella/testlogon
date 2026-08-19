@@ -25,6 +25,7 @@ import {
   XCircle,
   Info,
   History,
+  Sprout,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
@@ -67,6 +68,7 @@ import {
   type WithdrawResult,
 } from "@/api/endpoints/custody";
 import { SubaccountsTab, TransferTab } from "./CustodyExtras";
+import StakingDashboard from "./StakingDashboard";
 
 // ─── helpers ────────────────────────────────────────────────────
 
@@ -894,6 +896,7 @@ type TabKey =
   | "withdraw"
   | "subaccounts"
   | "transfer"
+  | "staking"
   | "activity"
   | "approvals";
 
@@ -936,6 +939,12 @@ export default function CustodyPage() {
           label: "Transfer",
           short: "Transfer",
           icon: <ArrowLeftRight className="h-4 w-4" />,
+        },
+        {
+          key: "staking" as const,
+          label: "Staking",
+          short: "Staking",
+          icon: <Sprout className="h-4 w-4" />,
         },
         {
           key: "activity" as const,
@@ -1015,6 +1024,9 @@ export default function CustodyPage() {
         </TabsContent>
         <TabsContent value="transfer">
           <TransferTab />
+        </TabsContent>
+        <TabsContent value="staking">
+          <StakingDashboard />
         </TabsContent>
         <TabsContent value="activity">
           <NotAvailable

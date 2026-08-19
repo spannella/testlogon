@@ -78,4 +78,18 @@ interface CustodyApi {
     @Headers("Content-Type: application/json")
     @POST("me/custody/settle-margin")
     suspend fun settleMargin(@Body body: BridgeRequestDto): SettleResultDto
+    // ==== Staking (custody-gated; real gateway-backed). 404/403 -> repository degrades to unavailable. ====
+
+    /** Stakeable providers (chain/protocol staking contracts). */
+    @GET("me/staking/providers")
+    suspend fun stakingProviders(): StakingProvidersDto
+
+    /** The caller's open staking positions (principal/rewards/total per position). */
+    @GET("me/staking/positions")
+    suspend fun stakingPositions(): StakingPositionsDto
+
+    /** Stake an amount with a provider (custody value -> staking contract). */
+    @Headers("Content-Type: application/json")
+    @POST("me/staking/stake")
+    suspend fun stake(@Body body: StakeRequestBodyDto): StakeAckDto
 }

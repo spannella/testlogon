@@ -130,6 +130,9 @@ data class TradingUiState(
     val stakeOffer: StakeOfferForm = StakeOfferForm(),
     val auctionRequest: AuctionRequestForm = AuctionRequestForm(),
     val auctionBid: AuctionBidForm = AuctionBidForm(),
+    // Discovery browse (STUB): open stake requests + auctions (read subsections).
+    val stakeRequestsBrowse: com.testlogon.android.data.exchange.StakeRequestsBrowse? = null,
+    val auctionsBrowse: com.testlogon.android.data.exchange.AuctionsBrowse? = null,
 ) {
     /** Ticker for [symbolId] from the resolved catalogue, else "#<id>". */
     fun symbolLabel(symbolId: Int): String = symbolNames[symbolId] ?: ("#" + symbolId)
