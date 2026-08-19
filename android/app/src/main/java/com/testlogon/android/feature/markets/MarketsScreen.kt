@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +82,15 @@ fun MarketsRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val unreadAlerts by viewModel.unreadAlerts.collectAsStateWithLifecycle()
+    val autoOpenSymbolId by viewModel.autoOpenSymbolId.collectAsStateWithLifecycle()
+    // One-shot: when a saved default market resolves to a loaded symbol, open its detail once per
+    // process via the same nav lambda used for row taps, then clear it so the list stays reachable.
+    LaunchedEffect(autoOpenSymbolId) {
+        autoOpenSymbolId?.let { id ->
+            viewModel.consumeAutoOpen()
+            onOpenSymbol(id)
+        }
+    }
     MarketSurface {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
             MarketsHeader(

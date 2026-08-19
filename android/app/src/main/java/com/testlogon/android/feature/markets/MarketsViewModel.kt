@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.Instrument
+import com.testlogon.android.data.exchange.TradingUiPrefsStore
 import com.testlogon.android.data.exchange.alerts.TradingAlertKind
 import com.testlogon.android.data.exchange.alerts.TradingAlertsPoller
 import com.testlogon.android.feature.markets.trade.TradingNotifier
@@ -31,6 +32,7 @@ import javax.inject.Inject
 @HiltViewModel
 class MarketsViewModel @Inject constructor(
     private val repository: ExchangeRepository,
+    private val prefsStore: TradingUiPrefsStore,
     private val alertsPoller: TradingAlertsPoller,
     private val notifier: TradingNotifier,
     @ApplicationContext appContext: Context,
@@ -44,6 +46,34 @@ class MarketsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(MarketsUiState(favorites = readFavorites()))
     val uiState: StateFlow<MarketsUiState> = _uiState.asStateFlow()
+
+    /**
+     * One-shot auto-open of the saved default market. Emits the target symbolId exactly ONCE per app
+     * process, only after the catalogue has loaded AND the saved default resolves to a symbol present
+     * in the loaded list. The route consumes it and navigates via its existing onOpenSymbol lambda;
+     * after consuming, [consumeAutoOpen] flips [autoOpened] so returning to the list shows the full
+     * list (no loop; the list is always reachable).
+     */
+    private val _autoOpenSymbolId = MutableStateFlow<Int?>(null)
+    val autoOpenSymbolId: StateFlow<Int?> = _autoOpenSymbolId.asStateFlow()
+
+    /** Called by the route once it has consumed the auto-open target so it never re-fires. */
+    fun consumeAutoOpen() {
+        _autoOpenSymbolId.value = null
+    }
+
+    /**
+     * Decide the auto-open target once symbols are loaded: fire only if a default is set, it exists in
+     * the loaded catalogue, and the process-lifetime guard has not already fired.
+     */
+    private fun maybeAutoOpenDefault(instruments: List<Instrument>) {
+        if (autoOpened) return
+        val defaultId = prefsStore.currentDefaultSymbol()
+        if (defaultId == TradingUiPrefsStore.NO_DEFAULT) return
+        if (instruments.none { it.symbolId == defaultId }) return
+        autoOpened = true
+        _autoOpenSymbolId.value = defaultId
+    }
 
     init {
         load()
@@ -96,6 +126,7 @@ class MarketsViewModel @Inject constructor(
                                 rows = instruments.map { i -> MarketRow(instrument = i) },
                             )
                         }
+                        maybeAutoOpenDefault(instruments)
                         pollQuotes(instruments)
                     }
                 }
@@ -162,6 +193,9 @@ class MarketsViewModel @Inject constructor(
     }
 
     private companion object {
+        /** Process-lifetime guard so the default-market auto-open fires at most once per app launch. */
+        @Volatile
+        private var autoOpened = false
         const val POLL_MS = 2_000L
         const val SPARK_EVERY = 5          // refresh sparkline/change every ~10s
         const val SPARK_INTERVAL_SEC = 60
