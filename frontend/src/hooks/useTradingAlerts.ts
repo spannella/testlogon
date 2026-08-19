@@ -31,7 +31,8 @@ export type TradingAlertKind =
   | "liquidation"
   | "funding"
   | "margin"
-  | "pm_resolved";
+  | "pm_resolved"
+  | "price";
 
 export interface TradingAlert {
   /** Stable de-dupe id (kind + event key). */
@@ -42,6 +43,28 @@ export interface TradingAlert {
   /** Epoch ms for ordering + relative-time render. */
   ts: number;
   read: boolean;
+}
+
+/** A trading alert authored OUTSIDE this hook (e.g. the price-alert evaluator). */
+export type ExternalTradingAlert = Omit<TradingAlert, "read">;
+
+/** Custom-event name the hook listens on for externally-authored alerts. */
+export const EXTERNAL_ALERT_EVENT = "tl:tradingAlert";
+
+/**
+ * Push an alert into the trading-alerts bell from anywhere in the app.
+ * The mounted `useTradingAlerts()` hook listens for this event and injects the
+ * alert into its list (toast + OS notification + bell badge), so price alerts
+ * surface through the SAME path as fills/liquidations/etc.
+ */
+export function pushExternalTradingAlert(alert: ExternalTradingAlert): void {
+  try {
+    window.dispatchEvent(
+      new CustomEvent<ExternalTradingAlert>(EXTERNAL_ALERT_EVENT, { detail: alert }),
+    );
+  } catch {
+    /* SSR / no window - no-op */
+  }
 }
 
 /** Cap the retained list so a busy account never grows unbounded. */
@@ -197,6 +220,19 @@ export function useTradingAlerts(enabled = true) {
   );
 
   const persistSeen = React.useCallback(() => saveJson(LS_SEEN, seenRef.current), []);
+
+  // ── Externally-authored alerts (price-alert evaluator, etc.) ─────────
+  // Anything in the app can call pushExternalTradingAlert(); we inject it here
+  // so it toasts + OS-notifies + lands in the bell alongside the /me/* feeds.
+  React.useEffect(() => {
+    const onExternal = (e: Event) => {
+      const detail = (e as CustomEvent<ExternalTradingAlert>).detail;
+      if (!detail || !detail.id) return;
+      pushAlerts([detail], true);
+    };
+    window.addEventListener(EXTERNAL_ALERT_EVENT, onExternal);
+    return () => window.removeEventListener(EXTERNAL_ALERT_EVENT, onExternal);
+  }, [pushAlerts]);
 
   // ── Fills ──────────────────────────────────────────────────────────
   React.useEffect(() => {

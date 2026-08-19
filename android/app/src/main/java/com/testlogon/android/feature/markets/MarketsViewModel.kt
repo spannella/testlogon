@@ -8,6 +8,7 @@ import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.Instrument
 import com.testlogon.android.data.exchange.TradingUiPrefsStore
 import com.testlogon.android.data.exchange.alerts.TradingAlertKind
+import com.testlogon.android.data.exchange.alerts.PriceAlertsEvaluator
 import com.testlogon.android.data.exchange.alerts.TradingAlertsPoller
 import com.testlogon.android.feature.markets.trade.TradingNotifier
 import kotlinx.coroutines.flow.SharingStarted
@@ -34,6 +35,7 @@ class MarketsViewModel @Inject constructor(
     private val repository: ExchangeRepository,
     private val prefsStore: TradingUiPrefsStore,
     private val alertsPoller: TradingAlertsPoller,
+    private val priceAlerts: PriceAlertsEvaluator,
     private val notifier: TradingNotifier,
     @ApplicationContext appContext: Context,
 ) : ViewModel() {
@@ -140,11 +142,14 @@ class MarketsViewModel @Inject constructor(
     private suspend fun pollQuotes(instruments: List<Instrument>) {
         var tick = 0
         while (viewModelScope.isActive) {
+            val lastTicks = HashMap<Int, Long>()
             for (instrument in instruments) {
                 val book = (repository.orderBook(instrument.symbolId) as? ApiResult.Success)?.data
                 val last = (repository.trades(instrument.symbolId) as? ApiResult.Success)
                     ?.data?.firstOrNull()?.price
                 val lastPrice = last?.let { instrument.display(it) } ?: book?.mid
+                val rawLast = last ?: book?.mid?.let { kotlin.math.round(it).toLong() }
+                if (rawLast != null) lastTicks[instrument.symbolId] = rawLast
 
                 // Candle-derived sparkline + % change; refreshed less often than the quote poll.
                 var spark: List<Float>? = null
@@ -176,6 +181,9 @@ class MarketsViewModel @Inject constructor(
                         },
                     )
                 }
+            }
+            priceAlerts.evaluate(lastTicks, instruments).forEach { alert ->
+                notifier.notifyTradingAlert(title = alert.title, body = alert.body, distress = false)
             }
             tick++
             delay(POLL_MS)

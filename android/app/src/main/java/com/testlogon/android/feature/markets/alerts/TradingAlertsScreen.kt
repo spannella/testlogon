@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddAlert
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material3.Icon
@@ -56,6 +57,7 @@ import com.testlogon.android.feature.markets.ui.MarketSurface
 @Composable
 fun TradingAlertsRoute(
     onBack: () -> Unit,
+    onOpenPriceAlerts: () -> Unit = {},
     viewModel: TradingAlertsViewModel = hiltViewModel(),
 ) {
     val alerts by viewModel.alerts.collectAsStateWithLifecycle()
@@ -66,6 +68,7 @@ fun TradingAlertsRoute(
                 unread = unread,
                 hasAlerts = alerts.isNotEmpty(),
                 onBack = onBack,
+                onOpenPriceAlerts = onOpenPriceAlerts,
                 onMarkAllRead = viewModel::markAllRead,
                 onClear = viewModel::clear,
             )
@@ -105,6 +108,7 @@ private fun AlertsHeader(
     unread: Int,
     hasAlerts: Boolean,
     onBack: () -> Unit,
+    onOpenPriceAlerts: () -> Unit,
     onMarkAllRead: () -> Unit,
     onClear: () -> Unit,
 ) {
@@ -124,6 +128,9 @@ private fun AlertsHeader(
                 color = if (unread > 0) MarketColors.Accent else MarketColors.TextSecondary,
                 fontSize = 12.sp,
             )
+        }
+        IconButton(onClick = onOpenPriceAlerts, modifier = Modifier.testTag("open_price_alerts")) {
+            Icon(Icons.Filled.AddAlert, contentDescription = "Price alerts", tint = MarketColors.TextSecondary)
         }
         if (hasAlerts) {
             IconButton(onClick = onMarkAllRead, modifier = Modifier.testTag("alerts_mark_read")) {
@@ -187,6 +194,7 @@ private fun kindColor(kind: TradingAlertKind): Color = when (kind) {
     TradingAlertKind.MARGIN_DISTRESS -> MarketColors.Down
     TradingAlertKind.FUNDING -> MarketColors.Accent
     TradingAlertKind.PM_RESOLVED -> MarketColors.Accent
+    TradingAlertKind.PRICE -> MarketColors.Accent
 }
 
 private fun kindLabel(kind: TradingAlertKind): String = when (kind) {
@@ -195,4 +203,5 @@ private fun kindLabel(kind: TradingAlertKind): String = when (kind) {
     TradingAlertKind.MARGIN_DISTRESS -> "MARGIN"
     TradingAlertKind.FUNDING -> "FUNDING"
     TradingAlertKind.PM_RESOLVED -> "RESOLVED"
+    TradingAlertKind.PRICE -> "PRICE"
 }
