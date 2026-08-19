@@ -42,6 +42,7 @@ const TradingBlotterPage = lazy(() => import("@/pages/blotter/TradingBlotterPage
 const TradingWorkspacePage = lazy(() => import("@/pages/blotter/TradingWorkspacePage"));
 const CustodyPage = lazy(() => import("@/pages/custody/CustodyPage"));
 const PortfolioPage = lazy(() => import("@/pages/portfolio/PortfolioPage"));
+const PnLPage = lazy(() => import("@/pages/pnl/PnLPage"));
 const CatalogPage = lazy(() => import("@/pages/shop/CatalogPage"));
 const ProductDetail = lazy(() => import("@/pages/shop/ProductDetail"));
 const CartPage = lazy(() => import("@/pages/shop/CartPage"));
@@ -722,6 +723,7 @@ export default function App() {
           <Route path="blotter/single" element={<TradingBlotterPage />} />
           <Route path="custody" element={<CustodyPage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="pnl" element={<PnLPage />} />
           <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="agents/memory/:workerId" element={<AgentMemoryPage />} />
           <Route path="agents/feedback" element={<AgentFeedbackPage />} />

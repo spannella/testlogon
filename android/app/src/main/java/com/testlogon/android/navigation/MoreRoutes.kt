@@ -106,6 +106,9 @@ object MoreRoutes {
     // Portfolio: read-only cross-venue account overview (custody / spot / margin / staking snapshot).
     const val PORTFOLIO = PortfolioDest.ROUTE
 
+    // PnL & performance: read-only realized/unrealized analytics + equity curve (Wallet hub, near Portfolio).
+    const val PNL = PnlDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
@@ -563,6 +566,7 @@ object MoreRoutes {
             TRADING_BLOTTER,
             CUSTODY,
             PORTFOLIO,
+            PNL,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,
