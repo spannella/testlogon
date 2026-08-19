@@ -3,6 +3,8 @@ package com.testlogon.android.feature.markets.trade
 import com.testlogon.android.data.exchange.Fill
 import com.testlogon.android.data.exchange.FeeSchedule
 import com.testlogon.android.data.exchange.FillsFees
+import com.testlogon.android.data.exchange.Liquidations
+import com.testlogon.android.data.exchange.FundingPayments
 import com.testlogon.android.data.exchange.feeFor
 import com.testlogon.android.data.exchange.MarginAccount
 import com.testlogon.android.data.exchange.OrderSide
@@ -45,6 +47,8 @@ enum class TicketSection(val label: String) {
     POSITIONS("Positions"),
     ORDERS("Orders"),
     FILLS("Fills"),
+    LIQUIDATIONS("Liq"),
+    FUNDING("Funding"),
 }
 
 /** A working order this session placed (the engine has no server-side list, so we track our own). */
@@ -102,11 +106,13 @@ data class TradingUiState(
     val marginConfig: MarginConfigForm = MarginConfigForm(),
     val feeSchedule: FeeSchedule? = null,
     val fillsFees: FillsFees? = null,
+    val liquidations: Liquidations? = null,
+    val fundingPayments: FundingPayments? = null,
+    /** symbolId -> ticker, for labelling the account-wide liquidation/funding/fills feeds. */
+    val symbolNames: Map<Int, String> = emptyMap(),
 ) {
-    /** The taker bps used to compute a per-fill fee client-side (enriched feed, else schedule, else 20). */
-    val effectiveTakerBps: Int get() = fillsFees?.takerFeeBps ?: feeSchedule?.takerFeeBps ?: 20
-    /** round(price*qty*takerBps/10000) for a session fill, matching the backend fee_formula. */
-    fun feeForFill(price: Long, qty: Long): Long = feeFor(price * qty, effectiveTakerBps)
+    /** Ticker for [symbolId] from the resolved catalogue, else "#<id>". */
+    fun symbolLabel(symbolId: Int): String = symbolNames[symbolId] ?: ("#" + symbolId)
     val isAmending: Boolean get() = amendingClordid != null
     val depositLong: Long? get() = depositText.toLongOrNull()
     val canDeposit: Boolean get() = !depositing && (depositLong ?: 0L) > 0L

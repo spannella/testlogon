@@ -16,7 +16,7 @@ import org.junit.Test
 /**
  * Contract tests for the REAL fee schedule + enriched fills-fees data layer. The fee schedule is now
  * GET me/fees/schedule?symbolid=<n> returning {maker/taker/liq bps, source ("engine"|"venue_default"),
- * configured}; the fills-fees feed stays a client-side estimate (its stub flag is genuine).
+ * configured}; the fills-fees / liquidations / funding feeds are REAL (per-fill fee + maker/taker).
  */
 class TradingFeesContractTest {
 
@@ -99,19 +99,13 @@ class TradingFeesContractTest {
     }
 
     @Test
-    fun fillsFees_emptyFeed_carriesFormulaAndStub() = runTest {
-        backend.enqueue(
-            Fixtures.okBody(
-                """{"fills":[],"taker_fee_bps":20,"fee_formula":"round(price*qty*taker_fee_bps/10000)","source":"stub","stub":true,"note":"engine exposes no per-fill fee"}""",
-            ),
-        )
+    fun fillsFees_emptyFeed_mapsToEmpty() = runTest {
+        backend.enqueue(Fixtures.okBody("""{"status":"ok","type":"fills","count":0,"fills":[]}"""))
         val r = repo().fillsFees()
         assertTrue(r is ApiResult.Success)
         val ff = (r as ApiResult.Success).data
-        assertTrue(ff.fills.isEmpty())
-        assertEquals(20, ff.takerFeeBps)
-        assertTrue(ff.isStub)
-        assertEquals("round(price*qty*taker_fee_bps/10000)", ff.feeFormula)
+        assertTrue(ff.isEmpty)
+        assertEquals(0, ff.count)
 
         val req = backend.takeRequest()
         assertEquals("GET", req.method)
@@ -119,15 +113,102 @@ class TradingFeesContractTest {
     }
 
     @Test
-    fun fillsFees_populatedFeed_mapsFee() = runTest {
-        backend.enqueue(Fixtures.okBody("""{"fills":[{"price":100,"qty":5,"fee":1,"ts_ns":1700000000000000000,"side":"buy"}],"taker_fee_bps":20,"source":"real"}"""))
+    fun fillsFees_populatedFeed_mapsRealFeeAndLiquidity() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"status":"ok","type":"fills","count":1,"fills":[{"symbolid":3,"price":100,"qty":5,"side":"buy","liquidity":"maker","fee":2,"fee_asset":0,"ts":1700000000000000000}]}""",
+            ),
+        )
         val r = repo().fillsFees()
         assertTrue(r is ApiResult.Success)
         val ff = (r as ApiResult.Success).data
         assertEquals(1, ff.fills.size)
-        assertEquals(1L, ff.fills.first().fee)
-        assertEquals(OrderSide.BUY, ff.fills.first().side)
-        assertFalse(ff.isStub)
+        val f = ff.fills.first()
+        assertEquals(3, f.symbolId)
+        assertEquals(2L, f.fee)
+        assertEquals(OrderSide.BUY, f.side)
+        assertEquals(Liquidity.MAKER, f.liquidity)
+        assertEquals(1700000000000000000L, f.tsNs)
+    }
+
+    @Test
+    fun fillsFees_toleratesStringifiedNumbers() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"type":"fills","count":"1","fills":[{"symbolid":"1","price":"100","qty":"5","side":"sell","liquidity":"taker","fee":"3","ts":"1700000000000000000"}]}""",
+            ),
+        )
+        val r = repo().fillsFees()
+        assertTrue(r is ApiResult.Success)
+        val ff = (r as ApiResult.Success).data
+        assertEquals(1, ff.fills.size)
+        assertEquals(3L, ff.fills.first().fee)
+        assertEquals(Liquidity.TAKER, ff.fills.first().liquidity)
+    }
+
+    @Test
+    fun fillsFees_404_mapsToEmptyFeed() = runTest {
+        backend.enqueue(Fixtures.error("\"not found\"", 404))
+        val r = repo().fillsFees()
+        assertTrue(r is ApiResult.Success)
+        assertTrue((r as ApiResult.Success).data.isEmpty)
+    }
+
+    @Test
+    fun liquidations_populatedFeed_mapsSignedPnl() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"status":"ok","type":"liquidations","count":1,"liquidations":[{"symbolid":2,"qty":10,"mark_price":3000,"realized_pnl":-500,"fee":7,"ts":1700000000000000000}]}""",
+            ),
+        )
+        val r = repo().liquidations()
+        assertTrue(r is ApiResult.Success)
+        val liq = (r as ApiResult.Success).data
+        assertEquals(1, liq.events.size)
+        val e = liq.events.first()
+        assertEquals(2, e.symbolId)
+        assertEquals(-500L, e.realizedPnl)
+        assertEquals(7L, e.fee)
+
+        val req = backend.takeRequest()
+        assertEquals("/me/liquidations", req.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun liquidations_404_mapsToEmpty() = runTest {
+        backend.enqueue(Fixtures.error("\"not found\"", 404))
+        val r = repo().liquidations()
+        assertTrue(r is ApiResult.Success)
+        assertTrue((r as ApiResult.Success).data.isEmpty)
+    }
+
+    @Test
+    fun fundingPayments_signedPayment_derivesReceivedFromSign() = runTest {
+        backend.enqueue(
+            Fixtures.okBody(
+                """{"status":"ok","type":"funding","count":2,"funding":[{"symbolid":1,"funding_rate_bps":5,"mark_price":100,"position_qty":10,"payment":-25,"received":false,"ts":1700000000000000000},{"symbolid":1,"funding_rate_bps":-3,"mark_price":100,"position_qty":10,"payment":15,"ts":1700000000000000001}]}""",
+            ),
+        )
+        val r = repo().fundingPayments()
+        assertTrue(r is ApiResult.Success)
+        val fp = (r as ApiResult.Success).data
+        assertEquals(2, fp.payments.size)
+        assertEquals(-25L, fp.payments[0].payment)
+        assertFalse(fp.payments[0].received)
+        // second row omits `received`; derived from the positive sign.
+        assertEquals(15L, fp.payments[1].payment)
+        assertTrue(fp.payments[1].received)
+
+        val req = backend.takeRequest()
+        assertEquals("/me/funding/payments", req.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun fundingPayments_404_mapsToEmpty() = runTest {
+        backend.enqueue(Fixtures.error("\"not found\"", 404))
+        val r = repo().fundingPayments()
+        assertTrue(r is ApiResult.Success)
+        assertTrue((r as ApiResult.Success).data.isEmpty)
     }
 
     @Test

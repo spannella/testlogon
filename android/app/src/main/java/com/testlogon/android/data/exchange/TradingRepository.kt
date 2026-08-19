@@ -61,6 +61,10 @@ interface TradingRepository {
     /** Fees (custody-exchange-gaps): the caller's fee schedule + the enriched fills-fees feed. */
     suspend fun feeSchedule(symbolId: Int): ApiResult<FeeSchedule>
     suspend fun fillsFees(): ApiResult<FillsFees>
+    /** Recent forced-liquidation events (404 -> empty feed). */
+    suspend fun liquidations(): ApiResult<Liquidations>
+    /** Recent perpetual funding payments (404 -> empty feed). */
+    suspend fun fundingPayments(): ApiResult<FundingPayments>
 }
 
 @Singleton
@@ -173,7 +177,27 @@ class TradingRepositoryImpl @Inject constructor(
         withContext(io) { apiCall { api.getFeeSchedule(symbolId).toDomain() } }
 
     override suspend fun fillsFees(): ApiResult<FillsFees> =
-        withContext(io) { apiCall { api.getFillsFees().toDomain() } }
+        withContext(io) { emptyOn404(FillsFees(emptyList(), 0)) { api.getFillsFees().toDomain() } }
+
+    override suspend fun liquidations(): ApiResult<Liquidations> =
+        withContext(io) { emptyOn404(Liquidations(emptyList(), 0)) { api.getLiquidations().toDomain() } }
+
+    override suspend fun fundingPayments(): ApiResult<FundingPayments> =
+        withContext(io) { emptyOn404(FundingPayments(emptyList(), 0)) { api.getFundingPayments().toDomain() } }
+
+    /**
+     * Like [apiCall] but a 404 (endpoint not deployed yet) folds to a Success carrying [emptyValue],
+     * so the new liquidations/funding/fills-fees surfaces render their empty state instead of an error.
+     */
+    private suspend fun <T> emptyOn404(emptyValue: T, block: suspend () -> T): ApiResult<T> = try {
+        ApiResult.Success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: HttpException) {
+        if (e.code() == 404) ApiResult.Success(emptyValue) else ApiResult.Failure(errorParser.from(e))
+    } catch (e: IOException) {
+        ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+    }
 
     private suspend fun <T> apiCall(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())

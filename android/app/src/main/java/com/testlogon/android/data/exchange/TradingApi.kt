@@ -92,8 +92,19 @@ interface TradingApi {
     @GET("me/fees/schedule")
     suspend fun getFeeSchedule(@Query("symbolid") symbolId: Int): FeeScheduleDto
 
-    /** Recent fills enriched with a computed fee (empty feed today + the client-side fee formula). */
+    /**
+     * Recent fills enriched with the REAL per-fill fee + maker/taker liquidity from the engine feed
+     * (custody-exchange-gaps). 404 until deployed -> the repository degrades to an empty feed.
+     */
     @GET("me/fills/fees")
     suspend fun getFillsFees(): FillsFeesDto
+
+    /** This account's recent forced-liquidation events (symbol, qty, mark, realized PnL, fee). 404 when undeployed. */
+    @GET("me/liquidations")
+    suspend fun getLiquidations(): LiquidationsDto
+
+    /** This account's recent perpetual funding payments (signed: negative=paid, positive=received). 404 when undeployed. */
+    @GET("me/funding/payments")
+    suspend fun getFundingPayments(): FundingPaymentsDto
 }
 
