@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.data.exchange.TradingRepository
+import com.testlogon.android.data.exchange.FeeSchedule
+import com.testlogon.android.data.exchange.FillsFees
 import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.navigation.SymbolDetailDest
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -46,7 +48,27 @@ class TradingViewModel @Inject constructor(
         refreshAccount()
         pollAccount()
         refreshPm()
+        loadFees()
         if (TradingFeatures.SPOT_ENABLED) refreshSpot()
+    }
+
+    /**
+     * Load the caller's fee schedule + the enriched fills-fees feed (custody-exchange-gaps). Both 404
+     * until deployed; a failure just leaves the fee card hidden (no error surfaced on the ticket).
+     */
+    fun loadFees() {
+        viewModelScope.launch {
+            when (val r = repository.feeSchedule()) {
+                is ApiResult.Success -> _uiState.update { it.copy(feeSchedule = r.data) }
+                else -> Unit
+            }
+        }
+        viewModelScope.launch {
+            when (val r = repository.fillsFees()) {
+                is ApiResult.Success -> _uiState.update { it.copy(fillsFees = r.data) }
+                else -> Unit
+            }
+        }
     }
 
     /** Detect + track a binary prediction market on this symbol (404 -> not a PM -> stays null). */

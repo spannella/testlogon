@@ -83,4 +83,14 @@ interface TradingApi {
     /** Credit a spot asset balance. */
     @POST("me/spot_deposit")
     suspend fun spotDeposit(@Body body: SpotDepositDto): SpotDepositAckDto
+    // ==== Fees (custody-exchange-gaps) ====
+
+    /** The caller's maker/taker/liquidation fee schedule (venue defaults today; source=stub). */
+    @GET("me/fees/schedule")
+    suspend fun getFeeSchedule(): FeeScheduleDto
+
+    /** Recent fills enriched with a computed fee (empty feed today + the client-side fee formula). */
+    @GET("me/fills/fees")
+    suspend fun getFillsFees(): FillsFeesDto
 }
+

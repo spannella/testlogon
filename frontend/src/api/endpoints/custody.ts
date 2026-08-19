@@ -234,3 +234,143 @@ export function mergeBalances(
   }
   return rows;
 }
+
+
+// ─── Sub-accounts, custody<->trading bridge, and fee endpoints ───────────
+// NEW gap-closing endpoints (from the exchange-edge custody phase). Every one
+// of these MAY 404 on backends where the edge isn't deployed yet — all callers
+// must degrade gracefully (retry:false + an "unavailable" empty state) and the
+// stub/simulated responses below carry a `stub:true` flag the UI surfaces
+// honestly so a user never mistakes a simulated move for a settled one.
+
+export interface SubaccountBalancesMap {
+  [asset: string]: number | string;
+}
+
+export interface Subaccount {
+  id: string;
+  label: string;
+  tier?: string;
+  balances?: SubaccountBalancesMap;
+  /** Full vault name (present on create). */
+  vault?: string;
+}
+
+export interface SubaccountsResult {
+  /** The caller's base (default) vault name. */
+  default_vault: string;
+  subaccounts: Subaccount[];
+}
+
+/**
+ * List the caller's sub-account vaults (default base vault + named ones).
+ * 404s until the edge deploys — callers should render a graceful
+ * "not available on this backend yet" state (retry:false).
+ */
+export const getSubaccounts = () =>
+  api.get<SubaccountsResult>("/me/custody/subaccounts");
+
+/** Create a named sub-account vault under the caller's base vault. */
+export const createSubaccount = (label: string) =>
+  api.post<Subaccount>("/me/custody/subaccounts", { label });
+
+/** Response to a simulated transfer — carries stub:true when not settled. */
+export interface TransferResult {
+  status: string;
+  stub?: boolean;
+  note?: string;
+  from?: string;
+  to?: string;
+  asset?: string | number;
+  amount?: string | number;
+  direction?: "to_trading" | "to_custody" | string;
+  trading_credited?: boolean;
+  [k: string]: unknown;
+}
+
+export interface SubaccountTransferRequest {
+  from_label?: string;
+  to_label?: string;
+  asset: string | number;
+  amount: number | string;
+}
+
+/**
+ * Move an asset between two of the caller's OWN sub-account vaults (or the
+ * base vault). Deliberately a documented no-op on the backend (stub:true).
+ */
+export const transferBetweenSubaccounts = (req: SubaccountTransferRequest) =>
+  api.post<TransferResult>("/me/custody/subaccounts/transfer", req);
+
+export interface CustodyTradingTransferRequest {
+  direction: "to_trading" | "to_custody";
+  /** Engine asset id for the credit path. */
+  asset: number;
+  /** Positive integer amount. */
+  amount: number;
+}
+
+/**
+ * Custody<->trading bridge: move value between the custody vault and the
+ * exchange spot ledger. Best-effort / simulated (stub:true) — see the
+ * returned `note`.
+ */
+export const custodyTradingTransfer = (req: CustodyTradingTransferRequest) =>
+  api.post<TransferResult>("/me/custody/transfer", req);
+
+// ─── Fees ────────────────────────────────────────────────────────────────
+
+export interface FeeScheduleRow {
+  symbolid?: number;
+  maker_fee_bps: number;
+  taker_fee_bps: number;
+  liquidation_fee_bps: number;
+}
+
+export interface FeeScheduleResult {
+  schedule: FeeScheduleRow[];
+  maker_fee_bps: number;
+  taker_fee_bps: number;
+  liquidation_fee_bps: number;
+  source?: string;
+  stub?: boolean;
+}
+
+/** The caller's maker/taker/liquidation fee schedule (venue defaults when stub). */
+export const getFeeSchedule = () =>
+  api.get<FeeScheduleResult>("/me/fees/schedule");
+
+export interface EnrichedFill {
+  price?: number;
+  qty?: number;
+  fee?: number;
+  [k: string]: unknown;
+}
+
+export interface FillsFeesResult {
+  fills: EnrichedFill[];
+  taker_fee_bps: number;
+  fee_formula?: string;
+  source?: string;
+  stub?: boolean;
+  note?: string;
+}
+
+/**
+ * Recent fills enriched with a computed fee (thin wrapper). Returns an empty
+ * feed + the fee formula / taker rate that WOULD apply until the engine
+ * exposes a per-caller fills feed. 404s until the edge deploys.
+ */
+export const getFillsFees = () => api.get<FillsFeesResult>("/me/fills/fees");
+
+/** round(price*qty*taker_fee_bps/10000) — the documented fee formula. */
+export function computeFee(
+  price: number | undefined | null,
+  qty: number | undefined | null,
+  takerFeeBps: number,
+): number {
+  const p = typeof price === "number" ? price : 0;
+  const q = typeof qty === "number" ? qty : 0;
+  if (!(p > 0) || !(q > 0) || !(takerFeeBps > 0)) return 0;
+  return Math.round((p * q * takerFeeBps) / 10000);
+}

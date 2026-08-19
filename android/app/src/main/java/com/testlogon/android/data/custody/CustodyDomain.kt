@@ -204,3 +204,82 @@ data class CustodyWithdrawResult(
     val reason: String?,
     val category: String?,
 )
+
+// ---------------- Sub-accounts ----------------
+
+/**
+ * A custody sub-account vault: the base ("default") vault or a named sub-account. [balances] are the
+ * merged, display-ready rows (same registry treatment as the main balance view).
+ */
+data class CustodySubAccount(
+    val id: String,
+    val label: String,
+    val tier: String,
+    val isDefault: Boolean,
+    val rows: List<CustodyBalance>,
+) {
+    val displayLabel: String get() = if (isDefault) "Base vault" else label.ifBlank { "Sub-account" }
+    val idShort: String get() = if (id.length <= 14) id else "${id.take(8)}…${id.takeLast(4)}"
+    fun funded(): List<CustodyBalance> = rows.filter { it.amount > 0.0 }
+}
+
+/**
+ * The sub-accounts response: the default (base) vault + the named sub-accounts, plus an "unavailable"
+ * flag for when the backend does not expose the route (404 -> soft empty state).
+ */
+data class CustodySubAccounts(
+    val defaultVault: String,
+    val subAccounts: List<CustodySubAccount>,
+    val unavailable: Boolean = false,
+) {
+    /** Base vault + named sub-accounts, so a picker can offer every OWN vault as a transfer endpoint. */
+    val all: List<CustodySubAccount>
+        get() = listOf(
+            CustodySubAccount(id = defaultVault, label = "", tier = "—", isDefault = true, rows = emptyList()),
+        ) + subAccounts
+
+    val isEmpty: Boolean get() = subAccounts.isEmpty()
+
+    companion object {
+        fun unavailable(): CustodySubAccounts =
+            CustodySubAccounts(defaultVault = "", subAccounts = emptyList(), unavailable = true)
+    }
+}
+
+// ---------------- Transfers ----------------
+
+/** Which side of the custody<->trading bridge a transfer moves value toward. */
+enum class BridgeDirection(val wire: String, val label: String) {
+    TO_TRADING("to_trading", "Custody → Trading"),
+    TO_CUSTODY("to_custody", "Trading → Custody");
+
+    fun toggle(): BridgeDirection = if (this == TO_TRADING) TO_CUSTODY else TO_TRADING
+}
+
+/**
+ * Result of the custody<->trading bridge. [simulated] (stub) is expected true today; [tradingCredited]
+ * is only meaningful on the to_trading path. [note] is the honest "not settled" explanation.
+ */
+data class CustodyBridgeResult(
+    val ok: Boolean,
+    val simulated: Boolean,
+    val direction: BridgeDirection?,
+    val asset: Int?,
+    val amount: Long?,
+    val tradingCredited: Boolean,
+    val note: String?,
+)
+
+/**
+ * Result of a between-sub-accounts transfer. This route is a documented no-op, so [simulated] is
+ * expected true and no balance moves; [note] carries the honest explanation.
+ */
+data class SubAccountTransferResult(
+    val ok: Boolean,
+    val simulated: Boolean,
+    val from: String?,
+    val to: String?,
+    val asset: String?,
+    val amount: String?,
+    val note: String?,
+)

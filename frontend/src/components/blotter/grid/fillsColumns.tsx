@@ -26,6 +26,7 @@ export const fillsColumns: ColumnDef<Order>[] = [
   { ...pick('side') },
   { ...pick('cumQty'),   header: 'FillQty'  },
   { ...pick('avgPx'),    header: 'FillPx'   },
+  { ...pick('fee') },
   { ...pick('edgeToExec') },       // small: one signed number, quick scan
   { ...pick('px'),       header: 'OrderPx'  },
   { ...pick('leaves'),   header: 'Remaining' },

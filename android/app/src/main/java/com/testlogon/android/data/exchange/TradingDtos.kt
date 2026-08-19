@@ -318,3 +318,53 @@ data class PmStateDto(
     val error: String? = null,
     val detail: String? = null,
 )
+
+// ==== Fees (custody-exchange-gaps) ====
+
+/** One row of the fee schedule. bps fields may be stringified by the edge, so all use @LenientInt. */
+@JsonClass(generateAdapter = true)
+data class FeeScheduleRowDto(
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "symbolid") val symbolId: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "maker_fee_bps") val makerFeeBps: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "taker_fee_bps") val takerFeeBps: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "liquidation_fee_bps") val liquidationFeeBps: Int? = null,
+)
+
+/**
+ * GET me/fees/schedule. The stub returns a single venue-default row plus the top-level bps mirrors and
+ * source/stub markers. Both the [schedule] rows and the flat mirrors are tolerated (either may be
+ * present); the repo prefers the first schedule row and falls back to the mirrors.
+ */
+@JsonClass(generateAdapter = true)
+data class FeeScheduleDto(
+    @Json(name = "schedule") val schedule: List<FeeScheduleRowDto>? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "maker_fee_bps") val makerFeeBps: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "taker_fee_bps") val takerFeeBps: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "liquidation_fee_bps") val liquidationFeeBps: Int? = null,
+    @Json(name = "source") val source: String? = null,
+    @Json(name = "stub") val stub: Boolean? = null,
+)
+
+/** One enriched fill from GET me/fills/fees, with a server-computed [fee]. */
+@JsonClass(generateAdapter = true)
+data class FillFeeDto(
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "price") val price: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "qty") val qty: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "fee") val fee: Long? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "ts_ns") val tsNs: Long? = null,
+    @Json(name = "side") val side: String? = null,
+)
+
+/**
+ * GET me/fills/fees. Today the enriched [fills] feed is empty (the engine exposes no per-fill fee), so
+ * the UI computes fees client-side using [takerFeeBps] + [feeFormula]. source/stub mark it honest.
+ */
+@JsonClass(generateAdapter = true)
+data class FillsFeesDto(
+    @Json(name = "fills") val fills: List<FillFeeDto>? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "taker_fee_bps") val takerFeeBps: Int? = null,
+    @Json(name = "fee_formula") val feeFormula: String? = null,
+    @Json(name = "source") val source: String? = null,
+    @Json(name = "stub") val stub: Boolean? = null,
+    @Json(name = "note") val note: String? = null,
+)

@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { getFeeSchedule } from "@/api/endpoints/custody";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import {
   useMarginAccount,
   usePmState,
@@ -135,7 +138,90 @@ const MARGIN_CONFIG_FIELDS: {
   { key: "max_position_qty", label: "Max position qty", def: "1000000" },
 ];
 
+// Compact maker/taker/liquidation fee schedule card. Sourced from the
+// /me/fees/schedule route; 404s until the exchange edge deploys, in which
+// case the card hides itself entirely (retry:false, graceful). When the
+// backend flags the row as a stub it is labelled clearly as venue defaults.
+function useIsMobile(bp = 767): boolean {
+  const [m, setM] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia(`(max-width: ${bp}px)`).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const h = () => setM(mq.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, [bp]);
+  return m;
+}
+
+function FeeSchedulePanel() {
+  const isMobile = useIsMobile();
+  const q = useQuery({
+    queryKey: ["fees", "schedule"],
+    queryFn: getFeeSchedule,
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  // Hide entirely when the route isn't available on this backend yet.
+  if (q.isError || (!q.isLoading && !q.data)) return null;
+
+  const row = q.data?.schedule?.[0];
+  const maker = row?.maker_fee_bps ?? q.data?.maker_fee_bps;
+  const taker = row?.taker_fee_bps ?? q.data?.taker_fee_bps;
+  const liq = row?.liquidation_fee_bps ?? q.data?.liquidation_fee_bps;
+  const isStub = q.data?.stub === true || q.data?.source === "stub";
+
+  return (
+    <Card className="mt-3">
+      <CardContent className="space-y-2 p-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Fee schedule
+          </span>
+          {isStub && (
+            <Badge
+              variant="outline"
+              className="gap-1 border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-600 dark:text-amber-400"
+            >
+              venue defaults
+            </Badge>
+          )}
+        </div>
+        {q.isLoading ? (
+          <p className="py-2 text-center text-xs text-muted-foreground">Loading…</p>
+        ) : (
+          <div className={cn("grid gap-2 text-center", isMobile ? "grid-cols-1" : "grid-cols-3")}>
+            <div className="rounded-md border bg-muted/30 p-2">
+              <div className="text-[10px] uppercase text-muted-foreground">Maker</div>
+              <div className="text-sm font-semibold tabular-nums">{maker ?? "—"} bps</div>
+            </div>
+            <div className="rounded-md border bg-muted/30 p-2">
+              <div className="text-[10px] uppercase text-muted-foreground">Taker</div>
+              <div className="text-sm font-semibold tabular-nums">{taker ?? "—"} bps</div>
+            </div>
+            <div className="rounded-md border bg-muted/30 p-2">
+              <div className="text-[10px] uppercase text-muted-foreground">Liq.</div>
+              <div className="text-sm font-semibold tabular-nums">{liq ?? "—"} bps</div>
+            </div>
+          </div>
+        )}
+        {isStub && (
+          <p className="text-[10px] text-muted-foreground">
+            Shown fees are venue defaults; per-symbol rates apply when the engine
+            exposes a per-caller fee query.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function MarginConfigPanel({ symbolId }: { symbolId: number }) {
+  const isMobile = useIsMobile();
   const isAdmin = useAuthStore((st) => st.isAdmin);
   const configM = useMarginConfig();
   const [open, setOpen] = useState(false);
@@ -205,7 +291,7 @@ function MarginConfigPanel({ symbolId }: { symbolId: number }) {
         {open && (
           <div className="mt-3 space-y-2">
             <Field label="Symbol id" value={symId} onChange={setSymId} />
-            <div className="grid grid-cols-2 gap-2">
+            <div className={cn("grid gap-2", isMobile ? "grid-cols-1" : "grid-cols-2")}>
               {MARGIN_CONFIG_FIELDS.map((f) => (
                 <Field
                   key={f.key}
@@ -1168,6 +1254,7 @@ export function TradeTicket({
         {msg && <p className={cn("text-xs font-mono", msg.error ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400")}>{msg.text}</p>}
       </CardContent>
     </Card>
+    <FeeSchedulePanel />
     <MarginConfigPanel symbolId={symbolId} />
     </div>
   );
