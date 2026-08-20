@@ -5,12 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useSymbols, useOrderBook, useCandles, useTrades } from "@/hooks/useMarketData";
 import { useMdStream } from "@/hooks/useMdStream";
 import type { BookLevel, Candle } from "@/api/endpoints/marketData";
 import type { OrderSide } from "@/api/endpoints/trading";
 import CandleChart from "./CandleChart";
+import DepthChart from "./DepthChart";
+import TimeSales from "./TimeSales";
 import { TradeTicket } from "./TradeTicket";
 import { formatPrice, formatQty, formatTimeNs } from "./format";
 
@@ -455,6 +458,44 @@ export default function SymbolDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Market Depth &amp; Time &amp; Sales</CardTitle>
+          <CardDescription>
+            Cumulative depth curve and the live prints tape.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue="depth">
+            <TabsList>
+              <TabsTrigger value="depth">Depth Chart</TabsTrigger>
+              <TabsTrigger value="tape">Time &amp; Sales</TabsTrigger>
+            </TabsList>
+            <TabsContent value="depth" className="mt-3">
+              {book.isLoading && !liveBook ? (
+                <Skeleton className="h-64 w-full" />
+              ) : (
+                <div className="text-muted-foreground">
+                  <DepthChart
+                    bids={liveBook?.bids ?? []}
+                    asks={liveBook?.asks ?? []}
+                    scaler={scaler}
+                  />
+                </div>
+              )}
+            </TabsContent>
+            <TabsContent value="tape" className="mt-3">
+              <TimeSales
+                trades={recentTrades}
+                scaler={scaler}
+                isLoading={trades.isLoading}
+                unavailable={trades.isError}
+              />
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
     </div>
   );
 }
