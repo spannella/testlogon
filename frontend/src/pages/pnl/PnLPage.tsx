@@ -49,6 +49,9 @@ import {
   downloadCsv,
   type ReportFill,
 } from "@/lib/exportReport";
+import { usePaperMode } from "@/lib/paperMode";
+import { buildPnlSummaryFromPaper } from "@/lib/paperBlotter";
+import { usePaperAccount, usePaperMarks } from "@/hooks/usePaperMarks";
 
 // --- helpers ----------------------------------------------------
 
@@ -182,6 +185,13 @@ function StatCard({
 // --- page -------------------------------------------------------
 
 export default function PnLPage() {
+  const { enabled: paper } = usePaperMode();
+  const paperAcct = usePaperAccount(paper);
+  const { marks: paperMarks, symName: paperSymName } = usePaperMarks(paperAcct, paper);
+  const paperSummary = useMemo(
+    () => buildPnlSummaryFromPaper(paperAcct, paperMarks, paperSymName),
+    [paperAcct, paperMarks, paperSymName],
+  );
   const fillsQ = useFillsFees();
   const fundingQ = useFundingPayments();
   const liqQ = useLiquidations();
@@ -287,9 +297,14 @@ export default function PnLPage() {
         <div className="flex items-center gap-2">
           <LineChart className="h-6 w-6 text-primary" />
           <div>
-            <h1 className="text-xl font-semibold leading-tight">PnL &amp; performance</h1>
+            <h1 className="flex items-center gap-2 text-xl font-semibold leading-tight">
+              PnL &amp; performance
+              {paper && <Badge variant="secondary">PAPER</Badge>}
+            </h1>
             <p className="text-xs text-muted-foreground">
-              Realized PnL, fees, funding &amp; win rate — computed from your fills.
+              {paper
+                ? "Realized, unrealized & equity — computed from your PAPER account."
+                : "Realized PnL, fees, funding & win rate — computed from your fills."}
             </p>
           </div>
         </div>
@@ -319,7 +334,93 @@ export default function PnLPage() {
         </div>
       </div>
 
-      {loading ? (
+      {paper ? (
+        <>
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+            <StatCard
+              label="Equity"
+              value={formatPrice(paperSummary.equity, quoteScaler)}
+              icon={<BarChart2 className="h-3.5 w-3.5" />}
+              sub={`Return ${paperSummary.returnPct >= 0 ? "+" : ""}${paperSummary.returnPct.toFixed(2)}%`}
+            />
+            <StatCard
+              label="Realized PnL"
+              value={formatPrice(paperSummary.realized, quoteScaler)}
+              valueColor={signColor(paperSummary.realized)}
+              icon={paperSummary.realized >= 0 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
+              sub="Closed round-trips (simulated)"
+            />
+            <StatCard
+              label="Unrealized PnL"
+              value={formatPrice(paperSummary.unrealized, quoteScaler)}
+              valueColor={signColor(paperSummary.unrealized)}
+              icon={<BarChart2 className="h-3.5 w-3.5" />}
+              sub="Open positions at live marks"
+            />
+            <StatCard
+              label="Cash"
+              value={formatPrice(paperSummary.cash, quoteScaler)}
+              icon={<Receipt className="h-3.5 w-3.5" />}
+              sub="Free simulated cash"
+            />
+            <StatCard
+              label="Starting balance"
+              value={formatPrice(paperSummary.startingCash, quoteScaler)}
+              icon={<Hash className="h-3.5 w-3.5" />}
+              sub="Seed cash"
+            />
+            <StatCard
+              label="Open positions"
+              value={String(paperSummary.perSymbol.length)}
+              icon={<Target className="h-3.5 w-3.5" />}
+              sub="Distinct symbols held"
+            />
+          </div>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                Paper positions
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {paperSummary.perSymbol.length === 0 ? (
+                <p className="py-4 text-sm text-muted-foreground">No open paper positions.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-xs text-muted-foreground">
+                        <th className="py-2 pr-3 font-medium">Symbol</th>
+                        <th className="py-2 pr-3 text-right font-medium">Qty</th>
+                        <th className="py-2 pr-3 text-right font-medium">Avg entry</th>
+                        <th className="py-2 pr-3 text-right font-medium">Mark</th>
+                        <th className="py-2 text-right font-medium">Unrealized PnL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paperSummary.perSymbol.map((p) => (
+                        <tr key={p.symbolId} className="border-b last:border-0">
+                          <td className="py-2 pr-3 font-medium">{p.sym}</td>
+                          <td className="num py-2 pr-3 text-right tabular-nums">{formatQty(p.netQty, quoteScaler)}</td>
+                          <td className="num py-2 pr-3 text-right tabular-nums">{formatPrice(p.avgCost, quoteScaler)}</td>
+                          <td className="num py-2 pr-3 text-right tabular-nums">{p.markPx != null ? formatPrice(p.markPx, quoteScaler) : "\u2014"}</td>
+                          <td className="num py-2 text-right font-medium tabular-nums" style={{ color: signColor(p.unrealized) }}>{formatPrice(p.unrealized, quoteScaler)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <Separator className="my-3" />
+                  <p className="text-[11px] text-muted-foreground">
+                    Simulated PnL from your isolated paper account — no real funds. Unrealized is
+                    marked to the live market price for each held symbol.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      ) : loading ? (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-24 w-full" />

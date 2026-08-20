@@ -41,6 +41,9 @@ import {
 } from "@/api/endpoints/trading";
 import { getSymbols, type MarketSymbol } from "@/api/endpoints/marketData";
 import { formatPrice, formatQty } from "@/pages/markets/format";
+import { usePaperMode } from "@/lib/paperMode";
+import { buildPnlSummaryFromPaper } from "@/lib/paperBlotter";
+import { usePaperAccount, usePaperMarks } from "@/hooks/usePaperMarks";
 
 // --- helpers ----------------------------------------------------
 
@@ -183,6 +186,13 @@ function KV({ label, value, valueColor }: { label: string; value: string; valueC
 export default function PortfolioPage() {
   useIsMobile(767); // responsive grid is CSS-driven; hook kept for parity/future use
 
+  const { enabled: paper } = usePaperMode();
+  const paperAcct = usePaperAccount(paper);
+  const { marks: paperMarks, symName: paperSymName } = usePaperMarks(paperAcct, paper);
+  const paperSummary = useMemo(
+    () => buildPnlSummaryFromPaper(paperAcct, paperMarks, paperSymName),
+    [paperAcct, paperMarks, paperSymName],
+  );
   const custodyQ = useQuery({
     queryKey: ["portfolio", "custody", "balance"],
     queryFn: getBalance,
@@ -383,9 +393,14 @@ export default function PortfolioPage() {
         <div className="flex items-center gap-2">
           <PieChart className="h-6 w-6 text-primary" />
           <div>
-            <h1 className="text-xl font-semibold leading-tight">Portfolio</h1>
+            <h1 className="flex items-center gap-2 text-xl font-semibold leading-tight">
+            Portfolio
+            {paper && <Badge variant="secondary">PAPER</Badge>}
+          </h1>
             <p className="text-xs text-muted-foreground">
-              Read-only overview across custody, trading, margin &amp; staking.
+              {paper
+                ? "Simulated paper account — positions, cash & equity at live marks."
+                : "Read-only overview across custody, trading, margin & staking."}
             </p>
           </div>
         </div>
@@ -395,6 +410,86 @@ export default function PortfolioPage() {
         </Button>
       </div>
 
+      {paper ? (
+        <>
+          <Card>
+            <CardContent className="flex flex-col gap-1 py-6">
+              <span className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+                Paper equity — simulated
+              </span>
+              <div className="flex items-baseline gap-2">
+                <span className="num text-3xl font-bold tabular-nums">{formatPrice(paperSummary.equity, 1)}</span>
+              </div>
+              <span className="text-[11px] text-muted-foreground">
+                Cash {formatPrice(paperSummary.cash, 1)} + open positions at live marks. Return{" "}
+                <span style={{ color: signColor(paperSummary.returnPct) }}>
+                  {paperSummary.returnPct >= 0 ? "+" : ""}{paperSummary.returnPct.toFixed(2)}%
+                </span>{" "}vs {formatPrice(paperSummary.startingCash, 1)} seed. No real funds.
+              </span>
+            </CardContent>
+          </Card>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Card><CardContent className="flex flex-col gap-1 py-4">
+              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Cash</span>
+              <span className="num text-xl font-semibold tabular-nums">{formatPrice(paperSummary.cash, 1)}</span>
+            </CardContent></Card>
+            <Card><CardContent className="flex flex-col gap-1 py-4">
+              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Realized PnL</span>
+              <span className="num text-xl font-semibold tabular-nums" style={{ color: signColor(paperSummary.realized) }}>{formatPrice(paperSummary.realized, 1)}</span>
+            </CardContent></Card>
+            <Card><CardContent className="flex flex-col gap-1 py-4">
+              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Unrealized PnL</span>
+              <span className="num text-xl font-semibold tabular-nums" style={{ color: signColor(paperSummary.unrealized) }}>{formatPrice(paperSummary.unrealized, 1)}</span>
+            </CardContent></Card>
+          </div>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                Paper positions
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {paperSummary.perSymbol.length === 0 ? (
+                <p className="py-4 text-sm text-muted-foreground">No open paper positions.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-xs text-muted-foreground">
+                        <th className="py-2 pr-3 font-medium">Symbol</th>
+                        <th className="py-2 pr-3 text-right font-medium">Side</th>
+                        <th className="py-2 pr-3 text-right font-medium">Qty</th>
+                        <th className="py-2 pr-3 text-right font-medium">Avg entry</th>
+                        <th className="py-2 pr-3 text-right font-medium">Mark</th>
+                        <th className="py-2 text-right font-medium">Unrealized PnL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paperSummary.perSymbol.map((p) => (
+                        <tr key={p.symbolId} className="border-b last:border-0">
+                          <td className="py-2 pr-3 font-medium">{p.sym}</td>
+                          <td className="py-2 pr-3 text-right">{p.side}</td>
+                          <td className="num py-2 pr-3 text-right tabular-nums">{formatQty(Math.abs(p.netQty), 1)}</td>
+                          <td className="num py-2 pr-3 text-right tabular-nums">{formatPrice(p.avgCost, 1)}</td>
+                          <td className="num py-2 pr-3 text-right tabular-nums">{p.markPx != null ? formatPrice(p.markPx, 1) : "\u2014"}</td>
+                          <td className="num py-2 text-right font-medium tabular-nums" style={{ color: signColor(p.unrealized) }}>{formatPrice(p.unrealized, 1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <Separator className="my-3" />
+                  <p className="text-[11px] text-muted-foreground">
+                    Simulated positions from your isolated paper account. Unrealized is marked to
+                    the live market price for each held symbol — no real funds.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      ) : (
+      <>
       {/* Total equity */}
       <Card>
         <CardContent className="flex flex-col gap-1 py-6">
@@ -667,6 +762,8 @@ export default function PortfolioPage() {
           )}
         </CardContent>
       </Card>
+      </>
+      )}
     </div>
   );
 }

@@ -9,12 +9,19 @@ import com.testlogon.android.data.exchange.FundingPayments
 import com.testlogon.android.data.exchange.Instrument
 import com.testlogon.android.data.exchange.Liquidations
 import com.testlogon.android.data.exchange.TradingRepository
+import com.testlogon.android.feature.paper.PaperAccountStore
+import com.testlogon.android.feature.paper.PaperEngine
+import com.testlogon.android.feature.paper.PaperModeStore
+import com.testlogon.android.feature.paper.PaperViews
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -33,13 +40,72 @@ import javax.inject.Inject
 class PnlViewModel @Inject constructor(
     private val trading: TradingRepository,
     private val exchange: ExchangeRepository,
+    private val paperStore: PaperAccountStore,
+    private val paperModeStore: PaperModeStore,
 ) : ViewModel() {
 
+    // Live (real-venue) PnL state produced by [refresh]. Exposed verbatim when paper mode is OFF.
     private val _uiState = MutableStateFlow(PnlUiState())
-    val uiState: StateFlow<PnlUiState> = _uiState.asStateFlow()
+
+    // Latest PAPER PnL projection (stats + per-symbol) from the shared account; null until first poll.
+    private val paperFlow = MutableStateFlow<PnlUiState?>(null)
+
+    /** Latest known live mark per paper symbolId, so paper unrealized marks-to-market. */
+    private val paperMarks = HashMap<Int, Long>()
+
+    /**
+     * The exposed state switches source on the paper-mode flag: the shared PAPER account projection when
+     * ON (loading until its first poll lands), else the live venue report. Read-only either way.
+     */
+    val uiState: StateFlow<PnlUiState> =
+        combine(_uiState, paperModeStore.paperMode, paperFlow) { live, paper, paperState ->
+            if (paper) (paperState ?: PnlUiState(loading = true, paper = true)) else live
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, PnlUiState())
 
     init {
         refresh()
+        pollPaper()
+    }
+
+    /**
+     * Continuously project the shared PAPER account into a [PnlUiState] while the VM is alive: reload the
+     * account, refresh live marks, and fold through [PaperViews]. The output is only surfaced while paper
+     * mode is ON, but polling keeps it warm for an instant switch.
+     */
+    private fun pollPaper() {
+        viewModelScope.launch {
+            val instruments = (exchange.symbols() as? ApiResult.Success)?.data ?: emptyList()
+            val names = instruments.associate { it.symbolId to it.symbol }
+            while (true) {
+                val acct = paperStore.load()
+                if (acct == null) {
+                    paperFlow.value = PnlUiState(loading = false, paper = true)
+                } else {
+                    val symbols = (acct.positions.keys + acct.orders.map { it.symbolId }).toSet()
+                    for (sid in symbols) {
+                        val mark = fetchMark(sid)
+                        if (mark != null) paperMarks[sid] = mark
+                    }
+                    val stats = PaperViews.pnlStats(acct, paperMarks)
+                    paperFlow.value = PnlUiState(
+                        loading = false,
+                        stats = stats,
+                        bySymbol = PaperViews.pnlBySymbol(acct, names),
+                        equityCurve = emptyList(),
+                        paper = true,
+                    )
+                }
+                kotlinx.coroutines.delay(2_000L)
+            }
+        }
+    }
+
+    /** Best available live price for [symbolId]: last trade, else order-book mid. Null when unavailable. */
+    private suspend fun fetchMark(symbolId: Int): Long? {
+        val last = (exchange.trades(symbolId) as? ApiResult.Success)?.data?.firstOrNull()?.price
+        if (last != null) return last
+        val book = (exchange.orderBook(symbolId) as? ApiResult.Success)?.data
+        return book?.mid?.let { Math.round(it) }
     }
 
     fun refresh() {

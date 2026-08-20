@@ -16,6 +16,8 @@ data class PnlUiState(
     val stats: PnlStats? = null,
     val bySymbol: List<SymbolRow> = emptyList(),
     val equityCurve: List<EquityCurvePoint> = emptyList(),
+    /** True when the report is derived from the shared PAPER account (drives the PAPER badge). */
+    val paper: Boolean = false,
 ) {
     /** True once loaded, readable, and there was genuinely no trading activity to analyze. */
     val isEmpty: Boolean

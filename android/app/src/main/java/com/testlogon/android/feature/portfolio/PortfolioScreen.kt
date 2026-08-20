@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -70,7 +71,15 @@ fun PortfolioScreen(
         modifier = modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                title = { Text("Portfolio") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Portfolio")
+                        if (state.paper) {
+                            Spacer(Modifier.width(8.dp))
+                            PortfolioPaperBadge()
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -324,3 +333,21 @@ private fun fmt(v: Double): String =
 
 /** USD money format: '$' prefix, 2 decimals, grouped thousands (indicative reference value). */
 private fun usd(v: Double): String = "$" + String.format(java.util.Locale.US, "%,.2f", v)
+
+
+/** A small PAPER pill shown in the app bar when the portfolio reflects the shared paper account. */
+@Composable
+private fun PortfolioPaperBadge() {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Text(
+            "PAPER",
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
