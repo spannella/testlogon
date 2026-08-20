@@ -10,6 +10,12 @@ import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.FeeSchedule
 import com.testlogon.android.data.exchange.FillsFees
 import com.testlogon.android.data.feed.CurrentUserRepository
+import com.testlogon.android.feature.paper.PaperAccountStore
+import com.testlogon.android.feature.paper.PaperEngine
+import com.testlogon.android.feature.paper.PaperEngine.PaperAccount
+import com.testlogon.android.feature.paper.PaperEngine.PaperOrder
+import com.testlogon.android.feature.paper.PaperModeStore
+import com.testlogon.android.feature.paper.PaperTicketSupport
 import com.testlogon.android.navigation.SymbolDetailDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -32,6 +38,8 @@ class TradingViewModel @Inject constructor(
     private val exchangeRepository: ExchangeRepository,
     private val notifier: TradingNotifier,
     private val currentUserRepository: CurrentUserRepository,
+    private val paperModeStore: PaperModeStore,
+    private val paperAccountStore: PaperAccountStore,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -43,6 +51,9 @@ class TradingViewModel @Inject constructor(
     val uiState: StateFlow<TradingUiState> = _uiState.asStateFlow()
 
     private var seq = 0
+
+    /** Cached paper account (client-side simulation) shared with the Paper screen via the store. */
+    private var paperAccount: PaperAccount = PaperEngine.newAccount(PAPER_STARTING_CASH)
 
     init {
         val sym = symbolId.toString()
@@ -69,6 +80,38 @@ class TradingViewModel @Inject constructor(
         resolveSymbols()
         loadStakeAuctionBrowse()
         if (TradingFeatures.SPOT_ENABLED) refreshSpot()
+        observePaperMode()
+        loadPaperAccount()
+    }
+
+    /** Load the shared paper account (or seed a fresh one) and project its cash into the ticket. */
+    private fun loadPaperAccount() {
+        viewModelScope.launch {
+            paperAccount = paperAccountStore.load()
+                ?: PaperEngine.newAccount(PAPER_STARTING_CASH).also { paperAccountStore.save(it) }
+            _uiState.update { it.copy(paperCash = paperAccount.cash) }
+        }
+    }
+
+    /** Mirror the durable paper-mode flag into the ticket; snap a non-paper type back to Limit on ON. */
+    private fun observePaperMode() {
+        viewModelScope.launch {
+            paperModeStore.paperMode.collect { on ->
+                _uiState.update {
+                    it.copy(
+                        paperMode = on,
+                        orderType = if (on) PaperTicketSupport.snapToPaper(it.orderType) else it.orderType,
+                        armed = null,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Toggle paper mode (persisted; the observer re-projects state). */
+    fun setPaperMode(enabled: Boolean) {
+        notifier.tick()
+        viewModelScope.launch { paperModeStore.setPaperMode(enabled) }
     }
 
     /**
@@ -323,7 +366,7 @@ class TradingViewModel @Inject constructor(
 
     /** Quick-size: set qty to a % of (no-leverage) buying power = availableBalance / refPrice. */
     fun setQtyPercent(pct: Int, refPrice: Long?) {
-        val avail = _uiState.value.account?.availableBalance ?: return
+        val avail = _uiState.value.effectiveBuyingPower ?: return
         val px = refPrice ?: return
         if (px <= 0 || avail <= 0) return
         val maxQty = avail / px
@@ -334,7 +377,7 @@ class TradingViewModel @Inject constructor(
 
     /** Set qty to the maximum affordable at [refPrice] from available balance (no leverage). */
     fun setMaxQty(refPrice: Long?) {
-        val avail = _uiState.value.account?.availableBalance
+        val avail = _uiState.value.effectiveBuyingPower
         val max = OrderMath.maxQtyForBalance(avail, refPrice ?: _uiState.value.entryRefPrice)
         if (max <= 0L) return
         notifier.tick()
@@ -489,15 +532,21 @@ class TradingViewModel @Inject constructor(
         }
     }
 
-    /** Route the ticket's primary action to the right engine endpoint for the selected order type. */
-    fun submit() {
+    /**
+     * Route the ticket's primary action to the right engine endpoint for the selected order type.
+     * In PAPER mode (Market/Limit only) the order is simulated via [PaperEngine] instead of hitting
+     * `/me/orders`; [bestBid]/[bestAsk]/[last] pick the simulated fill price.
+     */
+    fun submit(bestBid: Long? = null, bestAsk: Long? = null, last: Long? = null) {
         val s = _uiState.value
-        if (s.orderType == OrderType.MARKET && !s.oneTap && s.armed != "market") {
+        val isMarketLike = s.paperMode || s.orderType == OrderType.MARKET
+        if (isMarketLike && s.orderType == OrderType.MARKET && !s.oneTap && s.armed != "market") {
             notifier.warn()
-            _uiState.update { it.copy(armed = "market", message = "Tap Confirm to send the market order", messageIsError = false) }
+            _uiState.update { it.copy(armed = "market", message = "Tap Confirm paper order".takeIf { s.paperMode } ?: "Tap Confirm to send the market order", messageIsError = false) }
             return
         }
         _uiState.update { it.copy(armed = null) }
+        if (s.paperMode) { submitPaper(bestBid, bestAsk, last); return }
         when (s.orderType) {
             OrderType.LIMIT -> place()
             OrderType.MARKET -> place()
@@ -509,6 +558,49 @@ class TradingViewModel @Inject constructor(
             OrderType.OCO -> submitOco()
             OrderType.FUNDING -> submitFunding()
         }
+    }
+
+    /**
+     * Simulate the ticket order via [PaperEngine] (paper mode). Only Market/Limit reach here (the UI
+     * restricts the selector in paper mode). MARKET fills at the crossed price; LIMIT rests (or fills
+     * if marketable). Persists the shared paper account and re-projects cash — NEVER hits /me/orders.
+     */
+    private fun submitPaper(bestBid: Long?, bestAsk: Long?, last: Long?) {
+        val s = _uiState.value
+        val isMarket = s.orderType == OrderType.MARKET
+        val qty = s.qtyLong ?: return
+        if (qty <= 0L) return
+        val limit = if (isMarket) null else (s.priceLong ?: return)
+        if (!isMarket && (limit == null || limit <= 0L)) return
+        val marketPrice = PaperTicketSupport.marketPriceFor(s.side, bestBid, bestAsk, last)
+        if (marketPrice == null) {
+            _uiState.update { it.copy(message = "No live price yet — try again", messageIsError = true) }
+            notifier.error(); return
+        }
+        val order = PaperOrder(
+            id = "pt-" + System.currentTimeMillis() + "-" + (paperAccount.orders.size + 1),
+            symbolId = symbolId,
+            side = s.side,
+            type = PaperTicketSupport.toPaperType(s.orderType),
+            qty = qty,
+            limitPrice = limit,
+            createdTsMs = System.currentTimeMillis(),
+        )
+        val before = paperAccount
+        paperAccount = PaperEngine.placeOrder(paperAccount, order, marketPrice)
+        val filled = paperAccount.fills.lastOrNull()?.orderId == order.id
+        val snapshot = paperAccount
+        viewModelScope.launch { paperAccountStore.save(snapshot) }
+        _uiState.update {
+            it.copy(
+                paperCash = paperAccount.cash,
+                qtyText = if (paperAccount !== before) "" else it.qtyText,
+                message = if (paperAccount === before) "Paper order rejected"
+                    else if (filled) "Paper order filled @ $marketPrice" else "Paper limit order working",
+                messageIsError = paperAccount === before,
+            )
+        }
+        if (paperAccount !== before) notifier.success() else notifier.error()
     }
 
     private fun digits(t: String, max: Int) = t.filter { it.isDigit() }.take(max)
@@ -1055,4 +1147,8 @@ class TradingViewModel @Inject constructor(
         }
     }
 
+    private companion object {
+        /** Seed for a fresh shared paper account (matches the Paper screen's baseline). */
+        const val PAPER_STARTING_CASH = 100_000L
+    }
 }
