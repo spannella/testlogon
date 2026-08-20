@@ -4284,6 +4284,7 @@
     <string name="more_entry_admin_dashboard">Admin alerts</string>
     <string name="more_entry_global_search">Search</string>
     <string name="more_entry_markets">Markets</string>
+    <string name="more_entry_analysis">Analysis</string>
     <string name="more_entry_trading_alerts">Trading alerts</string>
     <string name="admin_dashboard_title">Admin alerts</string>
     <string name="admin_dashboard_back">Back</string>

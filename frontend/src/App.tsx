@@ -58,6 +58,7 @@ const DelegateFeedPage = lazy(() => import("@/pages/feed/DelegateFeedPage"));
 const HomePage = lazy(() => import("@/pages/home/HomePage"));
 const MarketsPage = lazy(() => import("@/pages/markets/MarketsPage"));
 const SymbolDetailPage = lazy(() => import("@/pages/markets/SymbolDetailPage"));
+const MarketAnalysisPage = lazy(() => import("@/pages/analysis/MarketAnalysisPage"));
 const PaperTradingPage = lazy(() => import("@/pages/paper/PaperTradingPage"));
 const PriceAlertsPage = lazy(() => import("@/pages/alerts/PriceAlertsPage"));
 const SyndicatesPage = lazy(() => import("@/pages/syndicates/SyndicatesPage"));
@@ -744,6 +745,7 @@ export default function App() {
           <Route path="home" element={<HomePage />} />
           <Route path="markets" element={<MarketsPage />} />
           <Route path="markets/:symbolId" element={<SymbolDetailPage />} />
+          <Route path="analysis" element={<MarketAnalysisPage />} />
           <Route path="markets/price-alerts" element={<PriceAlertsPage />} />
           <Route path="paper" element={<PaperTradingPage />} />
           <Route path="discover" element={<DiscoverPage />} />

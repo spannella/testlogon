@@ -33,4 +33,19 @@ interface ExchangeApi {
     suspend fun getTrades(
         @Path("symbolId") symbolId: Int,
     ): TradesResponseDto
+
+    /**
+     * Long-range HISTORICAL bars for the Analysis workbench. NEW endpoint — the backend may 404 it,
+     * in which case the repository degrades to [getCandles] (recent window). [interval] is the
+     * candle interval label (e.g. "1m","1h","1d"); [from]/[to] are epoch-second bounds (optional);
+     * [cursor] paginates a large range.
+     */
+    @GET("md/history/{symbolId}")
+    suspend fun getHistory(
+        @Path("symbolId") symbolId: Int,
+        @Query("interval") interval: String,
+        @Query("from") from: Long? = null,
+        @Query("to") to: Long? = null,
+        @Query("cursor") cursor: String? = null,
+    ): HistoryResponseDto
 }

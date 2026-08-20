@@ -75,3 +75,31 @@ data class Trade(
     val aggressor: Aggressor,
     val tsNs: Long,
 )
+
+/**
+ * One historical OHLCV bar for the Analysis workbench. [ts] is the bar-start in epoch SECONDS (the
+ * long-range history endpoint keys by seconds, unlike [Candle.tsStartNs]). Prices/volume are raw
+ * integers; scale for display via the owning [Instrument].
+ */
+data class HistoryBar(
+    val ts: Long,
+    val open: Long,
+    val high: Long,
+    val low: Long,
+    val close: Long,
+    val volume: Long,
+)
+
+/**
+ * A page of [HistoryBar]s for one symbol+interval. [nextCursor] paginates a large range (null when
+ * the page is terminal). [stub] is true when this was DEGRADED from the recent-window candles read
+ * because the long-range `md/history` endpoint was absent (404) — the UI shows a "recent window
+ * only" banner in that case.
+ */
+data class HistoryBars(
+    val symbolId: Int,
+    val interval: String,
+    val bars: List<HistoryBar>,
+    val nextCursor: String? = null,
+    val stub: Boolean = false,
+)
