@@ -43,6 +43,11 @@ import { useAuthStore } from "@/stores/authStore";
 import { EngineConfigPanel } from "./EngineConfigPanel";
 import { PmAdminPanel } from "./PmAdminPanel";
 import { StakingAuctionsPanel } from "./StakingAuctionsPanel";
+import { Switch } from "@/components/ui/switch";
+import { toast } from "sonner";
+import { usePaperMode, selectMarketPrice, isPaperOrderType } from "@/lib/paperMode";
+import { placeOrder as placePaperOrder, type PaperAccount } from "@/lib/paperEngine";
+import { loadAccount as loadPaperAccount, saveAccount as savePaperAccount, PAPER_ACCOUNT_KEY } from "@/lib/paperStore";
 
 type OrderType = "limit" | "market" | "stop" | "stop_limit" | "take_profit" | "quote" | "oto" | "oco" | "funding";
 type Section = "trade" | "positions" | "orders" | "fills";
@@ -382,6 +387,22 @@ export function TradeTicket({
   const spot = useSpotBalance(tradingFeatures.SPOT_ENABLED);
   const spotDepositM = useSpotDeposit();
 
+  // ── PAPER MODE ──────────────────────────────────────────────────────
+  // Shared flag + shared `paper.account.v1` account (same one the Paper
+  // Trading page uses). When ON, market/limit submits route to the local
+  // paper engine instead of the live /me/orders mutations.
+  const { enabled: paperMode, setEnabled: setPaperMode } = usePaperMode();
+  const [paperAcct, setPaperAcct] = useState<PaperAccount>(() => loadPaperAccount());
+  // Re-read the paper account if another surface (Paper page / other tab) mutates it.
+  useEffect(() => {
+    const reload = (e?: StorageEvent) => {
+      if (e && e.key && e.key !== PAPER_ACCOUNT_KEY) return;
+      setPaperAcct(loadPaperAccount());
+    };
+    window.addEventListener("storage", reload);
+    return () => window.removeEventListener("storage", reload);
+  }, []);
+
   const acct = account.data;
   const pmState = pm.data?.is_binary ? pm.data : undefined;
 
@@ -463,6 +484,16 @@ export function TradeTicket({
   ], []);
   useRegisterShortcuts(tradeShortcuts);
 
+  // In paper mode only market & limit are simulated — snap the selector back
+  // to Limit if a non-paper type was active when paper mode was enabled.
+  useEffect(() => {
+    if (paperMode && !isPaperOrderType(orderType)) {
+      setOrderType("limit");
+      resetArmed();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paperMode]);
+
   // Prefill the price from the last trade while untouched.
   useEffect(() => {
     if (!price && lastPrice && lastPrice > 0) setPrice(String(lastPrice));
@@ -498,6 +529,9 @@ export function TradeTicket({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exec.data]);
 
+  const effectiveOrderTypes = paperMode
+    ? ORDER_TYPES.filter((t) => isPaperOrderType(t.id))
+    : ORDER_TYPES;
   const priceN = parseInt(price) || 0;
   const qtyN = parseInt(qty) || 0;
   const stopN = parseInt(stop) || 0;
@@ -509,7 +543,9 @@ export function TradeTicket({
   const fundingQtyN = parseInt(fundingQty) || 0;
   const durationSecN = parseInt(durationSec) || 0;
   const refPrice = priceN || stopN || lastPrice || 0;
-  const avail = acct?.available_balance ?? 0;
+  // Buying power reflects the PAPER account cash when paper mode is on so
+  // sizing / Max / order-value all key off the simulated balance.
+  const avail = paperMode ? paperAcct.cash : (acct?.available_balance ?? 0);
   const orderValue = priceN > 0 && qtyN > 0 ? priceN * qtyN : undefined;
   // ── Order preview math (all client-side, EXACT except the clearly-labeled est.) ──
   // Notional uses the effective ticket price: limit/stop-limit use the entered
@@ -695,11 +731,53 @@ export function TradeTicket({
     if (orderType === "market" && !oneTap && armed !== "market") {
       vibrate("warn");
       setArmed("market");
-      setMsg({ text: "Tap Confirm to send the market order", error: false });
+      setMsg({
+        text: paperMode ? "Tap Confirm paper order to simulate the fill" : "Tap Confirm to send the market order",
+        error: false,
+      });
       return;
     }
     setArmed(null);
     const cl = nextClordid();
+    // PAPER MODE: simulate market & limit locally against the shared paper
+    // account. Never hits /me/orders. Other order types are unreachable here
+    // because the selector is restricted to market & limit while paper is on.
+    if (paperMode && (orderType === "market" || orderType === "limit")) {
+      const isMkt = orderType === "market";
+      const marketPrice = selectMarketPrice(side, {
+        bestBid,
+        bestAsk,
+        lastPrice,
+        refPrice: previewPrice || refPrice,
+      });
+      const { account: nextAcct, order, fill } = placePaperOrder(
+        paperAcct,
+        { symbolId, side, type: orderType, price: isMkt ? undefined : priceN, qty: qtyN },
+        marketPrice,
+      );
+      setPaperAcct(nextAcct);
+      savePaperAccount(nextAcct);
+      if (order.status === "cancelled") {
+        vibrate("error");
+        setMsg({ text: "Paper order rejected (no market price / zero qty)", error: true });
+        toast.error("Paper order rejected");
+        return;
+      }
+      if (fill) {
+        vibrate("success");
+        setMsg({ text: `Paper ${side} ${qtyN} filled @ ${formatPrice(fill.price, scaler)}`, error: false });
+        toast.success("Paper order placed");
+      } else {
+        vibrate("tick");
+        setWorkingOrders((w) => [
+          ...w,
+          { clordid: order.id, side, price: priceN, qty: qtyN },
+        ]);
+        setMsg({ text: `Paper limit resting: ${side} ${qtyN} @ ${formatPrice(priceN, scaler)}`, error: false });
+        toast.success("Paper order placed");
+      }
+      return;
+    }
     if (orderType === "limit" || orderType === "market") {
       const isMarket = orderType === "market";
       const body: PlaceOrderRequest = {
@@ -809,8 +887,14 @@ export function TradeTicket({
     );
   }
 
-  const cancelOne = (clo: string) =>
-    cancelM.mutate(
+  const cancelOne = (clo: string) => {
+    // Paper resting orders are local-only — never hit the real cancel endpoint.
+    if (paperMode) {
+      setWorkingOrders((w) => w.filter((x) => x.clordid !== clo));
+      setMsg({ text: "Paper order cancelled", error: false });
+      return;
+    }
+    return cancelM.mutate(
       { clordid: clo, symbolId },
       {
         onSuccess: (a) => {
@@ -822,6 +906,7 @@ export function TradeTicket({
         },
       }
     );
+  };
   const cancelAll = () =>
     bulkM.mutate(undefined, {
       onSuccess: (a) => {
@@ -854,7 +939,10 @@ export function TradeTicket({
   const buyLabel = isPm ? "YES" : "Buy";
   const sellLabel = isPm ? "NO" : "Sell";
   const submitLabel = useMemo(() => {
-    if (armed === "market") return `Confirm ${side === "buy" ? "Buy" : "Sell"} ${qty} @ market`;
+    if (armed === "market")
+      return paperMode
+        ? `Confirm paper order — ${side === "buy" ? "Buy" : "Sell"} ${qty} @ market`
+        : `Confirm ${side === "buy" ? "Buy" : "Sell"} ${qty} @ market`;
     const s = side === "buy" ? "Buy" : "Sell";
     switch (orderType) {
       case "limit":
@@ -878,7 +966,7 @@ export function TradeTicket({
       default:
         return "Submit";
     }
-  }, [armed, side, qty, orderType, isBorrow]);
+  }, [armed, side, qty, orderType, isBorrow, paperMode]);
 
   const sections: { id: Section; label: string; count?: number }[] = [
     { id: "trade", label: "Trade" },
@@ -889,8 +977,41 @@ export function TradeTicket({
 
   return (
     <div className="space-y-3" ref={ticketRef}>
-    <Card>
+    <Card className={cn(paperMode && "border-2 border-amber-500/70 bg-amber-500/[0.03]")}>
       <CardContent className="space-y-3 pt-6">
+        {/* Paper-mode toggle + banner */}
+        <div className="flex items-center justify-between rounded-lg border px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold">Paper</span>
+            {paperMode && (
+              <Badge
+                data-testid="paper_badge"
+                className="bg-amber-500 text-amber-950 hover:bg-amber-500"
+              >
+                PAPER
+              </Badge>
+            )}
+          </div>
+          <Switch
+            checked={paperMode}
+            onCheckedChange={(v) => {
+              setPaperMode(v);
+              resetArmed();
+              vibrate("tick");
+            }}
+            aria-label="Paper trading mode"
+            data-testid="paper_toggle"
+            className="data-[state=checked]:bg-amber-500"
+          />
+        </div>
+        {paperMode && (
+          <div
+            data-testid="paper_banner"
+            className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300"
+          >
+            PAPER MODE — orders are simulated locally against your paper account. Nothing is sent to the exchange.
+          </div>
+        )}
         {/* Prediction-market banner */}
         {isPm && pmState && (
           <div
@@ -936,7 +1057,35 @@ export function TradeTicket({
         )}
 
         {/* Account strip */}
-        {acct && (
+        {paperMode && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/[0.04] p-3 text-sm" data-testid="paper_account_strip">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Paper cash</span>
+              <span className="tabular-nums font-semibold">{formatPrice(paperAcct.cash, scaler)}</span>
+            </div>
+            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+              <span>Buying power</span>
+              <span className="tabular-nums">{formatPrice(paperAcct.cash, scaler)}</span>
+            </div>
+            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+              <span>Realized PnL</span>
+              <span
+                className={cn(
+                  "tabular-nums",
+                  paperAcct.realizedPnl >= 0
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-rose-600 dark:text-rose-400",
+                )}
+              >
+                {paperAcct.realizedPnl >= 0 ? "+" : ""}
+                {formatPrice(paperAcct.realizedPnl, scaler)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Real account strip (hidden in paper mode) */}
+        {!paperMode && acct && (
           <div className="rounded-lg border p-3 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Available</span>
@@ -1029,7 +1178,7 @@ export function TradeTicket({
           <div className="space-y-3">
             {/* Order type */}
             <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {ORDER_TYPES.map((t) => (
+              {effectiveOrderTypes.map((t) => (
                 <Pill
                   key={t.id}
                   active={orderType === t.id}
@@ -1044,6 +1193,11 @@ export function TradeTicket({
                 </Pill>
               ))}
             </div>
+            {paperMode && (
+              <p className="-mt-1 text-[11px] text-amber-600 dark:text-amber-400" data-testid="paper_order_type_note">
+                Simulated in paper mode: market &amp; limit only.
+              </p>
+            )}
 
             {/* One-click bid/ask + market quick-actions (prefill only — the
                 user still confirms/submits via the existing path). */}

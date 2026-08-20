@@ -20,6 +20,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,6 +50,10 @@ import com.testlogon.android.data.exchange.EngineConfigAck
 import com.testlogon.android.feature.markets.ui.MarketColors
 import java.util.Locale
 
+/** Paper-mode accent (amber) — makes a simulated ticket unmistakable. */
+private val PaperAmber = Color(0xFFF0B90B)
+private val PaperAmberFill = Color(0x1FF0B90B)
+
 /**
  * Order ticket. Account context sits on top; the rest is split into Trade / Positions / Orders / Fills
  * sections so order entry isn't buried under a long scroll.
@@ -69,12 +75,24 @@ fun TradeTicket(
         }
     }
 
-    Column(modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("trade_ticket")) {
+    val ticketBorder = if (state.paperMode) Modifier.border(1.5.dp, PaperAmber, RoundedCornerShape(12.dp)) else Modifier
+    Column(
+        modifier = modifier.fillMaxWidth()
+            .then(ticketBorder)
+            .then(if (state.paperMode) Modifier.background(PaperAmberFill, RoundedCornerShape(12.dp)) else Modifier)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("trade_ticket")
+    ) {
+        PaperModeHeader(state.paperMode, onToggle = viewModel::setPaperMode)
+        Spacer(Modifier.height(if (state.paperMode) 8.dp else 6.dp))
         state.pm?.let {
             PmBanner(it, lastPrice)
             Spacer(Modifier.height(10.dp))
         }
-        state.account?.let {
+        if (state.paperMode) {
+            PaperAccountStrip(state.paperCash)
+            Spacer(Modifier.height(10.dp))
+        } else state.account?.let {
             AccountStrip(it)
             Spacer(Modifier.height(10.dp))
         }
@@ -136,7 +154,16 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?
     val sideColor = if (state.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down
     var showDepositConfirm by remember { mutableStateOf(false) }
 
-    OrderTypeRow(selected = state.orderType, onSelect = viewModel::setOrderType)
+    OrderTypeRow(selected = state.orderType, paperMode = state.paperMode, onSelect = viewModel::setOrderType)
+    if (state.paperMode) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Simulated in paper mode: market & limit only.",
+            color = PaperAmber,
+            fontSize = 11.sp,
+            modifier = Modifier.testTag("paper_type_note"),
+        )
+    }
     Spacer(Modifier.height(10.dp))
 
     if (state.orderType != OrderType.QUOTE && state.orderType != OrderType.FUNDING) {
@@ -281,13 +308,13 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(if (state.canSubmit) submitColor else MarketColors.SurfaceAlt)
-            .clickable(enabled = state.canSubmit) { viewModel.submit() }
+            .clickable(enabled = state.canSubmit) { viewModel.submit(bestBid, bestAsk, lastPrice) }
             .testTag("trade_place")
             .padding(vertical = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = if (armedMarket) "Confirm ${if (state.side == OrderSide.BUY) "Buy" else "Sell"} ${state.qtyText} @ market".trim() else submitLabel(state),
+            text = if (armedMarket) (if (state.paperMode) "Confirm paper order" else "Confirm ${if (state.side == OrderSide.BUY) "Buy" else "Sell"} ${state.qtyText} @ market".trim()) else submitLabel(state),
             color = if (state.canSubmit) Color.Black else MarketColors.TextFaint,
             fontWeight = FontWeight.Bold,
             fontSize = 15.sp,
@@ -816,6 +843,74 @@ private fun SideButton(text: String, selected: Boolean, color: Color, modifier: 
 }
 
 @Composable
+private fun PaperModeHeader(paperMode: Boolean, onToggle: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().testTag("paper_mode_header"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        if (paperMode) {
+            Text(
+                text = "PAPER",
+                color = Color.Black,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(PaperAmber)
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                    .testTag("paper_badge"),
+            )
+        } else {
+            Text("Paper trading", color = MarketColors.TextSecondary, fontSize = 12.sp)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Paper",
+                color = if (paperMode) PaperAmber else MarketColors.TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = if (paperMode) FontWeight.Bold else FontWeight.Normal,
+            )
+            Spacer(Modifier.width(6.dp))
+            Switch(
+                checked = paperMode,
+                onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.Black,
+                    checkedTrackColor = PaperAmber,
+                    uncheckedThumbColor = MarketColors.TextSecondary,
+                    uncheckedTrackColor = MarketColors.SurfaceAlt,
+                ),
+                modifier = Modifier.testTag("paper_mode_switch"),
+            )
+        }
+    }
+    if (paperMode) {
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "Simulated orders — nothing is sent to the exchange.",
+            color = PaperAmber,
+            fontSize = 11.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .background(PaperAmberFill)
+                .padding(horizontal = 8.dp, vertical = 5.dp)
+                .testTag("paper_banner"),
+        )
+    }
+}
+
+@Composable
+private fun PaperAccountStrip(paperCash: Long?) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("paper_account_strip")) {
+        WalletRow("Paper cash", paperCash ?: 0L)
+        Spacer(Modifier.height(3.dp))
+        WalletRow("Buying power", paperCash ?: 0L)
+    }
+}
+
+@Composable
 private fun AccountStrip(account: com.testlogon.android.data.exchange.MarginAccount) {
     Column(modifier = Modifier.fillMaxWidth()) {
         WalletRow("Balance", account.balance)
@@ -921,12 +1016,14 @@ private fun AdvancedSection(state: TradingUiState, viewModel: TradingViewModel) 
 }
 
 @Composable
-private fun OrderTypeRow(selected: OrderType, onSelect: (OrderType) -> Unit) {
+private fun OrderTypeRow(selected: OrderType, paperMode: Boolean, onSelect: (OrderType) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        OrderType.values().filter { it.isAvailable() }.forEach { t ->
+        OrderType.values()
+            .filter { it.isAvailable() && (!paperMode || com.testlogon.android.feature.paper.PaperTicketSupport.isPaperSimulatable(it)) }
+            .forEach { t ->
             val on = t == selected
             Text(
                 text = t.label,

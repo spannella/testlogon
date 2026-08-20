@@ -105,6 +105,9 @@ data class TradingUiState(
     val section: TicketSection = TicketSection.TRADE,
     val armed: String? = null,        // "market" | "close" -> a confirm is pending (skipped when oneTap)
     val oneTap: Boolean = false,      // when true, market/close fire without a confirm step
+    // ---- PAPER MODE (client-side simulation; shares the Paper screen's account/store) ----
+    val paperMode: Boolean = false,   // when true, submits route to PaperEngine, NOT /me/orders
+    val paperCash: Long? = null,      // simulated free cash (null until the paper account loads)
     // Position-size / risk calculator (collapsible). riskAmount + stop -> qty via OrderMath.
     val riskCalcOpen: Boolean = false,
     val riskAmountText: String = "",
@@ -213,6 +216,9 @@ data class TradingUiState(
     /** Available margin balance, or null when the account hasn't loaded. */
     val availableBalance: Long? get() = account?.availableBalance
 
+    /** Buying power the ticket sizes against: paper cash in paper mode, else real available. */
+    val effectiveBuyingPower: Long? get() = if (paperMode) paperCash else availableBalance
+
     /** The price used for preview/sizing: the entered limit price, else the stop/trigger. */
     val entryRefPrice: Long? get() = priceLong ?: stopLong
 
@@ -221,7 +227,7 @@ data class TradingUiState(
 
     /** Max whole qty affordable at the reference price from available balance (no leverage). */
     fun maxAffordableQty(refPrice: Long?): Long =
-        OrderMath.maxQtyForBalance(availableBalance, refPrice ?: entryRefPrice)
+        OrderMath.maxQtyForBalance(effectiveBuyingPower, refPrice ?: entryRefPrice)
 
     /** Risk-calculator inputs. */
     val riskAmountLong: Long? get() = riskAmountText.toLongOrNull()
