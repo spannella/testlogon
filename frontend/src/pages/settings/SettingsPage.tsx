@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { Phone } from "lucide-react";
+import { Phone, Keyboard } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Appearance } from "./Appearance";
 import { AppearanceSection } from "./AppearanceSection";
 import { JiraIntegrationSettings } from "./JiraIntegrationSettings";
 import { TradingSettings } from "./TradingSettings";
+import { openShortcutsHelp } from "@/components/layout/KeyboardShortcutsHost";
 
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -88,6 +89,26 @@ export default function SettingsPage() {
             <Link to="/settings/call-rate" data-testid="call-rate-settings-link">
               Manage Call Rate
             </Link>
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Keyboard className="h-4 w-4" />
+            Keyboard shortcuts
+          </CardTitle>
+        </CardHeader>
+        <Separator />
+        <CardContent className="pt-4">
+          <p className="mb-3 text-sm text-muted-foreground">
+            Power-user navigation and trading hotkeys. Press{" "}
+            <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">?</kbd>{" "}
+            anywhere to view them, or toggle them on and off.
+          </p>
+          <Button variant="outline" onClick={() => openShortcutsHelp()}>
+            View keyboard shortcuts
           </Button>
         </CardContent>
       </Card>

@@ -25,6 +25,7 @@ import {
   Users,
   Play,
   Calendar as CalendarIcon,
+  Keyboard,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -38,6 +39,7 @@ import {
 import { useSymbols } from "@/hooks/useMarketData";
 import { useUiStore } from "@/stores/uiStore";
 import { globalSearch, type SearchResultItem } from "@/api/endpoints/search";
+import { openShortcutsHelp } from "@/components/layout/KeyboardShortcutsHost";
 
 /**
  * Unified global command palette (Cmd/Ctrl+K quick-switcher).
@@ -111,6 +113,13 @@ const ACTIONS: ActionDest[] = [
     keywords: "buy sell order ticket",
     run: ({ navigate, defaultSymbolId }) =>
       navigate(defaultSymbolId != null ? `/markets/${defaultSymbolId}` : "/markets"),
+  },
+  {
+    id: "action:shortcuts",
+    label: "Keyboard shortcuts",
+    icon: Keyboard,
+    keywords: "hotkeys keys help shortcuts kbd",
+    run: () => openShortcutsHelp(),
   },
 ];
 
