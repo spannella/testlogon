@@ -112,6 +112,10 @@ object MoreRoutes {
     // PnL & performance: read-only realized/unrealized analytics + equity curve (Wallet hub, near Portfolio).
     const val PNL = PnlDest.ROUTE
 
+    // Paper Trading: a SELF-CONTAINED client-side trading simulation (isolated paper account; NO real
+    // order calls). Reached from the More -> Wallet hub.
+    const val PAPER = PaperDest.ROUTE
+
     // Export & reporting: read-only period-scoped CSV export (Wallet hub, near PnL).
     const val REPORTS = ReportsDest.ROUTE
 
@@ -577,6 +581,7 @@ object MoreRoutes {
             CUSTODY,
             PORTFOLIO,
             PNL,
+            PAPER,
             REPORTS,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
