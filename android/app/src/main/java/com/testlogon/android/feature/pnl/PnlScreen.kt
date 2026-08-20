@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,12 +38,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.testlogon.android.feature.reports.ReportCsv
+import com.testlogon.android.feature.reports.shareReportCsv
 import java.util.Locale
 
 /** Green/red for PnL, independent of the app theme (matches the markets/portfolio convention). */
@@ -56,10 +60,17 @@ fun PnlRoute(
     viewModel: PnlViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     PnlScreen(
         state = state,
         onBack = onBack,
         onRefresh = viewModel::refresh,
+        onExport = {
+            val stats = state.stats
+            if (stats != null) {
+                shareReportCsv(context, ReportCsv.pnlScreenSummary(state.bySymbol, stats), "pnl-summary")
+            }
+        },
         modifier = modifier,
     )
 }
@@ -69,6 +80,7 @@ fun PnlScreen(
     state: PnlUiState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
+    onExport: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -82,6 +94,11 @@ fun PnlScreen(
                     }
                 },
                 actions = {
+                    if (state.stats != null) {
+                        IconButton(onClick = onExport) {
+                            Icon(Icons.Filled.Share, contentDescription = "Export CSV")
+                        }
+                    }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     }

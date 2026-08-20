@@ -1450,6 +1450,7 @@
     <string name="more_entry_custody">Custody</string>
     <string name="more_entry_portfolio">Portfolio</string>
     <string name="more_entry_pnl">PnL &amp; performance</string>
+    <string name="more_entry_reports">Export &amp; reporting</string>
     <string name="story_ring_unseen">Story from %1$s, unseen</string>
     <string name="story_ring_seen">Story from %1$s, seen</string>
     <string name="story_close">Close stories</string>

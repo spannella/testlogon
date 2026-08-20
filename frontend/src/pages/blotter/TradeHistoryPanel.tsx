@@ -10,6 +10,7 @@ import type { MarketSymbol } from "@/api/endpoints/marketData";
 import { useFillsFees } from "@/hooks/useTrading";
 import type { FillFee } from "@/api/endpoints/trading";
 import { formatPrice, formatQty } from "@/pages/markets/format";
+import { buildTradeHistoryCsv, downloadCsv, type ReportFill } from "@/lib/exportReport";
 
 type SymLookup = (symbolid: number | undefined) => { name: string; scaler: number };
 function makeSymLookup(symbols: MarketSymbol[] | undefined): SymLookup {
@@ -41,12 +42,43 @@ export default function TradeHistoryPanel() {
   const q = useFillsFees();
   const fills: FillFee[] = Array.isArray(q.data?.fills) ? q.data!.fills! : [];
 
+  const exportCsv = () => {
+    const rows: ReportFill[] = fills.map((f) => ({
+      symbolid: f.symbolid,
+      price: f.price,
+      qty: f.qty,
+      side: String(f.side ?? ""),
+      liquidity: f.liquidity,
+      fee: f.fee,
+      ts: f.ts,
+    }));
+    downloadCsv(
+      "testlogon-trades.csv",
+      buildTradeHistoryCsv(rows, (id) => sym(id)),
+    );
+  };
+
   return (
     <div className="tl-panel-body tl-wo">
       <div className="tl-wo-bar">
         <span className="dim">{fills.length} executed fill{fills.length === 1 ? "" : "s"}</span>
         <span style={{ flex: 1 }} />
         {q.isFetching && <span className="dim" style={{ fontSize: "0.7rem" }}>refreshing…</span>}
+        <button
+          type="button"
+          className="tl-wo-btn"
+          onClick={exportCsv}
+          disabled={fills.length === 0}
+          title="Export trade history to CSV"
+          style={{
+            marginLeft: "0.5rem",
+            fontSize: "0.7rem",
+            cursor: fills.length === 0 ? "default" : "pointer",
+            opacity: fills.length === 0 ? 0.5 : 1,
+          }}
+        >
+          Export CSV
+        </button>
       </div>
       <div className="tl-wo-scroll">
         <table className="tl-wo-table">

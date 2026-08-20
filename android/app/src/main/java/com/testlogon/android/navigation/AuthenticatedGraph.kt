@@ -221,6 +221,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         portfolioDestination(navController)
         // PnL & performance: read-only realized/unrealized analytics, equity curve, per-symbol breakdown.
         pnlDestination(navController)
+        // Export & reporting: read-only period-scoped CSV export (trade history / PnL / statement).
+        reportsDestination(navController)
         // AND-336: backend-mediated Google Drive import picker (authenticated-only).
         driveImportDestination(navController)
         // AND-335: owner share sheet (create/list/revoke share links) + the public share screen

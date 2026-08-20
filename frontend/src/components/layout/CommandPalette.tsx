@@ -69,6 +69,7 @@ const PAGES: PageDest[] = [
   { id: "page:price-alerts", label: "Price Alerts", path: "/markets/price-alerts", icon: Bell, keywords: "alerts notify" },
   { id: "page:portfolio", label: "Portfolio", path: "/portfolio", icon: PieChart, keywords: "positions holdings balances" },
   { id: "page:pnl", label: "PnL", path: "/pnl", icon: LineChart, keywords: "profit loss realized unrealized" },
+  { id: "page:reports", label: "Reports", path: "/reports", icon: FileText, keywords: "export csv pdf statement trades print" },
   { id: "page:blotter", label: "Blotter / Workspace", path: "/blotter", icon: LayoutGrid, keywords: "orders fills positions workspace" },
   { id: "page:blotter-single", label: "Blotter (single panel)", path: "/blotter/single", icon: LayoutGrid, keywords: "orders fills" },
   { id: "page:custody", label: "Custody", path: "/custody", icon: Coins, keywords: "wallet deposit withdraw" },

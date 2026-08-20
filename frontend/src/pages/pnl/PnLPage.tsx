@@ -16,6 +16,7 @@ import {
   Hash,
   BarChart2,
   Info,
+  Download,
 } from "lucide-react";
 import { ApiError } from "@/api/client";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,12 @@ import {
   type PnlLiquidation,
   type EquityPoint,
 } from "@/lib/pnl";
+import {
+  buildTradeHistoryCsv,
+  buildPnlSummaryCsv,
+  downloadCsv,
+  type ReportFill,
+} from "@/lib/exportReport";
 
 // --- helpers ----------------------------------------------------
 
@@ -236,6 +243,29 @@ export default function PnLPage() {
     return computePnl(fills, funding, liquidations);
   }, [fillsQ.data, fundingQ.data, liqQ.data]);
 
+  // Raw fills for CSV export (keeps liquidity + raw ts). A SymbolResolver over
+  // the same symbol catalog the table uses.
+  const reportFills: ReportFill[] = useMemo(
+    () =>
+      (fillsQ.data?.fills ?? []).map((f) => ({
+        symbolid: f.symbolid,
+        price: f.price,
+        qty: f.qty,
+        side: f.side,
+        liquidity: f.liquidity,
+        fee: f.fee,
+        ts: f.ts,
+      })),
+    [fillsQ.data],
+  );
+  const exportTrades = () =>
+    downloadCsv("testlogon-trades.csv", buildTradeHistoryCsv(reportFills, symLookup));
+  const exportPnl = () =>
+    downloadCsv(
+      "testlogon-pnl.csv",
+      buildPnlSummaryCsv(summary.perSymbol, summary, symLookup, quoteScaler),
+    );
+
   const unrealized = num(marginQ.data?.pos_unrealized_pnl);
   const unrealizedScaler = marginQ.data?.pos_symbol_idx != null
     ? symLookup(marginQ.data.pos_symbol_idx).scaler
@@ -263,10 +293,30 @@ export default function PnLPage() {
             </p>
           </div>
         </div>
-        <Button variant="outline" size="sm" className="gap-2 self-start sm:self-auto" onClick={refetchAll}>
-          <RefreshCw className={cn("h-4 w-4", anyFetching && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={exportTrades}
+            disabled={summary.tradeCount === 0}
+          >
+            <Download className="h-4 w-4" /> Trades CSV
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={exportPnl}
+            disabled={summary.tradeCount === 0}
+          >
+            <Download className="h-4 w-4" /> PnL CSV
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={refetchAll}>
+            <RefreshCw className={cn("h-4 w-4", anyFetching && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {loading ? (
