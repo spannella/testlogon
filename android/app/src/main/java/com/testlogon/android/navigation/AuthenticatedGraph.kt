@@ -300,6 +300,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         adminDashboardDestination(navController)
         // Markets (exchange market-data, VIEW-ONLY): instrument list + per-symbol chart/book/tape.
         marketsDestinations(navController)
+        // Global search (symbols + trading destinations quick-jump); reached from the Markets header + More hub.
+        globalSearchDestination(navController)
         // B5 admin queues (moderation board + video review + DMCA claims).
         moderationBoardDestinations(navController)
         videoReviewDestination(navController)
