@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -199,15 +200,23 @@ private fun MarketsList(
 ) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(MarketsFilter.All) }
-    // Apply the watchlist tab, then the search text, then float starred instruments to the top
-    // (stable within each group so the starred order is deterministic across quote ticks).
-    val displayed = remember(rows, favorites, query, filter) {
-        rows.filter { filter == MarketsFilter.All || favorites.contains(it.instrument.symbolId) }
+    // The unified class filter (All / Spot / Perp / Prediction / Funding), applied via the pure classifier.
+    var classTab by remember { mutableStateOf<MarketClassTab>(MarketClassTab.All) }
+    // Apply the class filter, then the watchlist tab, then the search text, then float starred
+    // instruments to the top (stable within each group so starred order is deterministic across ticks).
+    val displayed = remember(rows, favorites, query, filter, classTab) {
+        rows.filter { matchesTab(it.instrument, it.isPrediction == true, classTab) }
+            .filter { filter == MarketsFilter.All || favorites.contains(it.instrument.symbolId) }
             .filter { query.isBlank() || it.instrument.symbol.contains(query.trim(), ignoreCase = true) }
             .sortedByDescending { favorites.contains(it.instrument.symbolId) }
     }
     Column(modifier = Modifier.fillMaxSize()) {
         MarketSearchField(query = query, onQuery = { query = it })
+        MarketsClassTabs(
+            rows = rows,
+            selected = classTab,
+            onSelect = { classTab = it },
+        )
         MarketsFilterTabs(
             filter = filter,
             allCount = rows.size,
@@ -215,7 +224,7 @@ private fun MarketsList(
             onSelect = { filter = it },
         )
         if (displayed.isEmpty()) {
-            MarketsEmpty(filter = filter, query = query)
+            MarketsEmpty(filter = filter, query = query, classTab = classTab)
             return@Column
         }
         val compact = LocalAppUiDensity.current.isCompact
@@ -231,10 +240,42 @@ private fun MarketsList(
                 MarketRowCard(
                     row = row,
                     favorite = favorites.contains(row.instrument.symbolId),
+                    classTab = classTab,
                     onClick = { onOpenSymbol(row.instrument.symbolId) },
                     onToggleFavorite = { onToggleFavorite(row.instrument.symbolId) },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun MarketsClassTabs(
+    rows: List<MarketRow>,
+    selected: MarketClassTab,
+    onSelect: (MarketClassTab) -> Unit,
+) {
+    // Live per-tab counts via the pure classifier so each chip shows how many instruments it holds.
+    val counts = remember(rows) {
+        MARKET_CLASS_TABS.associateWith { tab ->
+            rows.count { matchesTab(it.instrument, it.isPrediction == true, tab) }
+        }
+    }
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag("markets_class_tabs"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(MARKET_CLASS_TABS) { tab ->
+            MarketFilterChip(
+                label = tab.label,
+                count = counts[tab] ?: 0,
+                selected = tab == selected,
+                onClick = { onSelect(tab) },
+                tag = "class_" + tab.label.lowercase(),
+            )
         }
     }
 }
@@ -307,12 +348,18 @@ private fun MarketFilterChip(
 }
 
 @Composable
-private fun MarketsEmpty(filter: MarketsFilter, query: String) {
+private fun MarketsEmpty(filter: MarketsFilter, query: String, classTab: MarketClassTab) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val text = when {
             query.isNotBlank() -> "No markets match \"$query\"."
             filter == MarketsFilter.Watchlist ->
                 "Your watchlist is empty. Tap the star on any market to add it."
+            classTab is MarketClassTab.Of -> when (classTab.clazz) {
+                InstrumentClass.SPOT -> "No spot markets available."
+                InstrumentClass.PERP -> "No perpetual markets available."
+                InstrumentClass.PREDICTION -> "No prediction markets right now."
+                InstrumentClass.FUNDING -> "No funding-book instruments right now."
+            }
             else -> "No markets available."
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
@@ -379,6 +426,7 @@ private fun MarketSearchField(query: String, onQuery: (String) -> Unit) {
 private fun MarketRowCard(
     row: MarketRow,
     favorite: Boolean,
+    classTab: MarketClassTab,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
 ) {
@@ -399,7 +447,7 @@ private fun MarketRowCard(
         val base = baseMonogram(row.instrument.symbol)
         TokenBadge(monogram = base, symbol = row.instrument.symbol)
         Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.width(88.dp)) {
+        Column(modifier = Modifier.width(104.dp)) {
             Text(
                 text = row.instrument.symbol,
                 color = MarketColors.TextPrimary,
@@ -408,9 +456,16 @@ private fun MarketRowCard(
                 maxLines = 1,
             )
             Text(
-                text = if (row.instrument.isPerpetual) "Perp" else "Spot",
-                color = MarketColors.TextSecondary,
+                text = rowSubtitle(row, classTab),
+                color = when (classTab) {
+                    is MarketClassTab.Of -> if (classTab.clazz == InstrumentClass.PREDICTION ||
+                        classTab.clazz == InstrumentClass.FUNDING
+                    ) MarketColors.Accent else MarketColors.TextSecondary
+                    else -> MarketColors.TextSecondary
+                },
                 fontSize = 11.sp,
+                maxLines = 1,
+                modifier = Modifier.testTag("market_sub_" + row.instrument.symbolId),
             )
         }
         Spacer(Modifier.width(8.dp))
@@ -556,6 +611,41 @@ private fun badgeColors(symbol: String): Pair<Color, Color> {
     val h = abs(symbol.hashCode())
     return palettes[h % palettes.size]
 }
+
+/**
+ * The per-row secondary label, chosen by the active class tab so each lens surfaces its own datum:
+ *  - Funding tab: funding interval + latest applied rate (bps), "—" when the rate is unknown.
+ *  - Prediction tab: implied-YES %, "—" when not yet known.
+ *  - otherwise: the base Perp/Spot badge (identical to the pre-filter behaviour).
+ */
+internal fun rowSubtitle(row: MarketRow, classTab: MarketClassTab): String {
+    val base = if (row.instrument.isPerpetual) "Perp" else "Spot"
+    return when {
+        classTab is MarketClassTab.Of && classTab.clazz == InstrumentClass.FUNDING -> {
+            val interval = formatFundingInterval(row.instrument.fundingIntervalS)
+            val rate = row.latestFundingRateBps?.let { formatBps(it) } ?: "—"
+            "$interval · $rate"
+        }
+        classTab is MarketClassTab.Of && classTab.clazz == InstrumentClass.PREDICTION -> {
+            val yes = row.impliedYes?.let { String.format("%.0f%%", it * 100f) } ?: "—"
+            "YES $yes"
+        }
+        else -> base
+    }
+}
+
+/** Funding interval seconds -> compact human label (e.g. 3600 -> "1h", 28800 -> "8h"). */
+internal fun formatFundingInterval(seconds: Long): String {
+    if (seconds <= 0) return "—"
+    return when {
+        seconds % 3600L == 0L -> "${seconds / 3600L}h"
+        seconds % 60L == 0L -> "${seconds / 60L}m"
+        else -> "${seconds}s"
+    }
+}
+
+/** Signed basis-points label for a funding rate (e.g. 12 -> "+12 bps", -5 -> "-5 bps"). */
+internal fun formatBps(bps: Int): String = (if (bps >= 0) "+" else "") + "$bps bps"
 
 /** Locale-agnostic grouped price format (no currency symbol; instruments are already quote-named). */
 internal fun formatPrice(value: Double): String {

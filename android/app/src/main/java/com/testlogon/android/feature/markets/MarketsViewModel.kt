@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.Instrument
+import com.testlogon.android.data.exchange.TradingRepository
+import com.testlogon.android.data.exchange.PmState
 import com.testlogon.android.data.exchange.TradingUiPrefsStore
 import com.testlogon.android.data.exchange.alerts.TradingAlertKind
 import com.testlogon.android.data.exchange.alerts.PriceAlertsEvaluator
@@ -33,6 +35,7 @@ import javax.inject.Inject
 @HiltViewModel
 class MarketsViewModel @Inject constructor(
     private val repository: ExchangeRepository,
+    private val trading: TradingRepository,
     private val prefsStore: TradingUiPrefsStore,
     private val alertsPoller: TradingAlertsPoller,
     private val priceAlerts: PriceAlertsEvaluator,
@@ -48,6 +51,13 @@ class MarketsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(MarketsUiState(favorites = readFavorites()))
     val uiState: StateFlow<MarketsUiState> = _uiState.asStateFlow()
+
+    /**
+     * Per-symbol PM-probe cache for this VM instance: a real [PmState] when the symbol is a binary
+     * prediction market, or the [PM_NOT_A_MARKET] sentinel once probed-and-not (so we never re-probe
+     * a plain spot/perp). Absent = not yet probed.
+     */
+    private val pmProbeCache = HashMap<Int, PmState>()
 
     /**
      * One-shot auto-open of the saved default market. Emits the target symbolId exactly ONCE per app
@@ -129,6 +139,8 @@ class MarketsViewModel @Inject constructor(
                             )
                         }
                         maybeAutoOpenDefault(instruments)
+                        refreshFundingRates(instruments)
+                        probePredictionMarkets(instruments)
                         pollQuotes(instruments)
                     }
                 }
@@ -190,6 +202,85 @@ class MarketsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Read the account's recent perpetual funding payments once and fold the MOST-RECENT applied
+     * rate (bps) per symbol onto its row. Degrades silently (empty feed / 404) leaving rates unknown.
+     * Only perps carry a funding rate; spot rows are left untouched.
+     */
+    private fun refreshFundingRates(instruments: List<Instrument>) {
+        viewModelScope.launch {
+            val payments = (trading.fundingPayments() as? ApiResult.Success)?.data?.payments.orEmpty()
+            if (payments.isEmpty()) return@launch
+            // Most-recent payment per symbol wins (feed is not guaranteed ordered).
+            val latestBySymbol = HashMap<Int, Int>()
+            val latestTs = HashMap<Int, Long>()
+            for (fp in payments) {
+                val prev = latestTs[fp.symbolId]
+                if (prev == null || fp.tsNs >= prev) {
+                    latestTs[fp.symbolId] = fp.tsNs
+                    latestBySymbol[fp.symbolId] = fp.fundingRateBps
+                }
+            }
+            if (latestBySymbol.isEmpty()) return@launch
+            _uiState.update { state ->
+                state.copy(
+                    rows = state.rows.map { row ->
+                        val bps = latestBySymbol[row.instrument.symbolId]
+                        if (bps != null) row.copy(latestFundingRateBps = bps) else row
+                    },
+                )
+            }
+        }
+    }
+
+    /**
+     * LAZILY probe each listed symbol's binary prediction-market state (there is NO list endpoint) to
+     * detect the PREDICTION class + surface implied-YES. Runs one sequential pass over the loaded
+     * symbols (no storm), caches the yes/no result per symbolId for the process, and treats any
+     * 404/failure as "not a PM" so a non-PM symbol never errors the list. Implied-YES is derived
+     * whenever the row already has a last price.
+     */
+    private fun probePredictionMarkets(instruments: List<Instrument>) {
+        viewModelScope.launch {
+            for (instrument in instruments) {
+                val id = instrument.symbolId
+                val cached = pmProbeCache[id]
+                val pm = if (cached == null) {
+                    when (val r = trading.pmState(id)) {
+                        is ApiResult.Success -> {
+                            val isPm = r.data.isBinary
+                            pmProbeCache[id] = if (isPm) r.data else PM_NOT_A_MARKET
+                            if (isPm) r.data else null
+                        }
+                        // 404/error/offline -> definitively treat as not-a-PM and cache so we don't re-probe.
+                        else -> { pmProbeCache[id] = PM_NOT_A_MARKET; null }
+                    }
+                } else if (cached === PM_NOT_A_MARKET) {
+                    null
+                } else {
+                    cached
+                }
+                _uiState.update { state ->
+                    state.copy(
+                        rows = state.rows.map { row ->
+                            if (row.instrument.symbolId == id) {
+                                val impliedRaw = pm?.impliedYes(
+                                    row.lastPrice?.let { kotlin.math.round(it).toLong() },
+                                )
+                                row.copy(
+                                    isPrediction = pm != null,
+                                    impliedYes = impliedRaw ?: row.impliedYes,
+                                )
+                            } else {
+                                row
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+
     private fun reduceError(message: String) {
         _uiState.update {
             if (it.rows.isNotEmpty()) {
@@ -201,6 +292,15 @@ class MarketsViewModel @Inject constructor(
     }
 
     private companion object {
+        /** Sentinel meaning "probed, and this symbol is NOT a prediction market" (cache negatives). */
+        private val PM_NOT_A_MARKET = PmState(
+            symbolId = -1,
+            isBinary = false,
+            resolved = false,
+            outcomeYes = null,
+            faceValue = 0L,
+            resolverId = "",
+        )
         /** Process-lifetime guard so the default-market auto-open fires at most once per app launch. */
         @Volatile
         private var autoOpened = false
