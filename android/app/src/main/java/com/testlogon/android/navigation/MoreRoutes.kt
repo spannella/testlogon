@@ -377,6 +377,9 @@ object MoreRoutes {
     // Markets (exchange market-data, VIEW-ONLY): instrument list -> per-symbol chart/book/tape.
     const val MARKETS = MarketsDest.ROUTE
 
+    // Analysis workbench: historical market-data research (stats / correlation / MA-cross backtest).
+    const val ANALYSIS = AnalysisDest.ROUTE
+
     // Global search: quick-jump over exchange symbols + trading destinations + curated actions.
     const val GLOBAL_SEARCH = GlobalSearchDest.ROUTE
 
@@ -666,6 +669,7 @@ object MoreRoutes {
             WEBHOOKS,
             ADMIN_DASHBOARD,
             MARKETS,
+            ANALYSIS,
             GLOBAL_SEARCH,
             TRADING_ALERTS,
             ADMIN_EMAIL_DASHBOARD,

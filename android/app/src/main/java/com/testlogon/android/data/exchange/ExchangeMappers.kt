@@ -44,3 +44,41 @@ fun TradeDto.toDomain(): Trade = Trade(
     },
     tsNs = tsNs,
 )
+
+fun HistoryBarDto.toDomain(): HistoryBar = HistoryBar(
+    ts = ts,
+    open = open,
+    high = high,
+    low = low,
+    close = close,
+    volume = volume,
+)
+
+fun HistoryResponseDto.toDomain(symbolId: Int): HistoryBars = HistoryBars(
+    symbolId = if (symbol != 0) symbol else symbolId,
+    interval = interval,
+    bars = bars.map { it.toDomain() },
+    nextCursor = nextCursor?.takeIf { it.isNotBlank() },
+    stub = false,
+)
+
+/**
+ * Adapt a recent-window [Candle] list (nanosecond timestamps) into [HistoryBar]s (second timestamps)
+ * so the workbench degrades onto the existing candles read when `md/history` is absent.
+ */
+fun List<Candle>.toHistoryBars(symbolId: Int, interval: String): HistoryBars = HistoryBars(
+    symbolId = symbolId,
+    interval = interval,
+    bars = map {
+        HistoryBar(
+            ts = it.tsStartNs / 1_000_000_000L,
+            open = it.open,
+            high = it.high,
+            low = it.low,
+            close = it.close,
+            volume = it.volume,
+        )
+    },
+    nextCursor = null,
+    stub = true,
+)

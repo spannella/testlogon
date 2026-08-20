@@ -77,3 +77,29 @@ data class TradeDto(
     val qty: Long = 0,
     @Json(name = "ts_ns") val tsNs: Long = 0,
 )
+
+/**
+ * Transport for the NEW long-range history endpoint (`GET md/history/{symbolId}`). Every field has a
+ * default so a partial/absent payload never fails to decode. [nextCursor] paginates; [bars] carry the
+ * OHLCV timeline. Prices/quantities are integers on the wire (divide by the symbol's price scaler).
+ */
+@JsonClass(generateAdapter = true)
+data class HistoryResponseDto(
+    val symbol: Int = 0,
+    val interval: String = "",
+    val from: Long = 0,
+    val to: Long = 0,
+    val count: Int = 0,
+    @Json(name = "next_cursor") val nextCursor: String? = null,
+    val bars: List<HistoryBarDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class HistoryBarDto(
+    @Json(name = "ts") val ts: Long = 0,
+    @Json(name = "o") val open: Long = 0,
+    @Json(name = "h") val high: Long = 0,
+    @Json(name = "l") val low: Long = 0,
+    @Json(name = "c") val close: Long = 0,
+    @Json(name = "v") val volume: Long = 0,
+)

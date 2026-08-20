@@ -1593,6 +1593,16 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // Analysis workbench (VIEW-ONLY): historical market-data research — returns / volatility /
+        // drawdown / correlation + a fast/slow MA-cross backtest over the md/ history (or recent window).
+        MoreEntry(
+            id = "analysis",
+            labelRes = R.string.more_entry_analysis,
+            icon = Icons.Outlined.Insights,
+            route = MoreRoutes.ANALYSIS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // Trading Alerts: derived notifications (fills / liquidations / funding / margin-distress / PM-resolved)
         // detected from the trader feed reads. Reachable here and from the Markets header bell.
         MoreEntry(

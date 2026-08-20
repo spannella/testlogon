@@ -9,6 +9,7 @@ import com.testlogon.android.feature.markets.MarketsRoute
 import com.testlogon.android.feature.markets.SymbolDetailRoute
 import com.testlogon.android.feature.markets.alerts.TradingAlertsRoute
 import com.testlogon.android.feature.markets.alerts.pricealerts.PriceAlertsRoute
+import com.testlogon.android.feature.analysis.MarketAnalysisRoute
 
 /**
  * Markets (exchange market-data, VIEW-ONLY) destinations, registered in the AUTHENTICATED nav graph.
@@ -37,6 +38,11 @@ data object PriceAlertsDest {
     const val ROUTE = "markets/alerts/price"
 }
 
+/** Analysis workbench (historical market-data research/backtest) — a new navigable destination. */
+data object AnalysisDest {
+    const val ROUTE = "markets/analysis"
+}
+
 /** Registers the Markets list + per-symbol detail destinations (Back pops the back stack). */
 fun NavGraphBuilder.marketsDestinations(navController: NavHostController) {
     composable(MarketsDest.ROUTE) {
@@ -63,6 +69,9 @@ fun NavGraphBuilder.marketsDestinations(navController: NavHostController) {
     }
     composable(PriceAlertsDest.ROUTE) {
         PriceAlertsRoute(onBack = { navController.popBackStack() })
+    }
+    composable(AnalysisDest.ROUTE) {
+        MarketAnalysisRoute(onBack = { navController.popBackStack() })
     }
     composable(
         route = SymbolDetailDest.ROUTE,
