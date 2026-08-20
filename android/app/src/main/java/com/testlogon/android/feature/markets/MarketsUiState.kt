@@ -13,6 +13,15 @@ data class MarketRow(
     val bestAsk: Long? = null,
     val spark: List<Float> = emptyList(),
     val changePct: Double? = null,
+    /**
+     * Whether this symbol has a live binary prediction market (probed lazily; null = not yet probed,
+     * false = probed and not a PM). Drives the PREDICTION class + the implied-YES surface.
+     */
+    val isPrediction: Boolean? = null,
+    /** Implied YES probability (0..1) from the latest PM state x last price, when known. */
+    val impliedYes: Float? = null,
+    /** Latest applied funding rate (bps) for this perp from the funding-payments feed; null = unknown. */
+    val latestFundingRateBps: Int? = null,
 )
 
 /**

@@ -9,6 +9,7 @@ fun SymbolDto.toDomain(): Instrument = Instrument(
     lotSize = lotSize,
     referencePrice = referencePrice,
     isPerpetual = isPerpetual,
+    fundingIntervalS = fundingIntervalS,
 )
 
 fun OrderBookDto.toDomain(): OrderBook {

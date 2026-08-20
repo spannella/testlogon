@@ -13,6 +13,8 @@ data class Instrument(
     val lotSize: Long,
     val referencePrice: Long,
     val isPerpetual: Boolean,
+    /** Funding interval in seconds for perpetuals (0 for spot / when unknown). */
+    val fundingIntervalS: Long = 0,
 ) {
     /** Scale a raw integer price/qty into a display double (divides by a >=1 scaler). */
     fun display(raw: Long): Double = raw.toDouble() / priceScaler.coerceAtLeast(1)

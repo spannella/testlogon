@@ -37,6 +37,13 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { useSymbols } from "@/hooks/useMarketData";
+import { usePredictionProbe } from "@/hooks/useInstrumentClasses";
+import {
+  CLASS_ORDER,
+  CLASS_LABELS,
+  classesForSymbol,
+  type InstrumentClass,
+} from "@/lib/instrumentClass";
 import { useUiStore } from "@/stores/uiStore";
 import { globalSearch, type SearchResultItem } from "@/api/endpoints/search";
 import { openShortcutsHelp } from "@/components/layout/KeyboardShortcutsHost";
@@ -296,6 +303,30 @@ export default function CommandPalette() {
   const hasQuery = debouncedQuery.length >= 2;
   const q = query.toLowerCase();
 
+  // Substring-filtered symbols shown in the palette. We probe PM state only for
+  // this (already small, cmdk-visible) slice so the palette + Markets list use
+  // the SAME classifier without a catalog-wide probe storm.
+  const filteredSymbols = React.useMemo(
+    () => symbols.filter((sc) => !query || sc.symbol.toLowerCase().includes(q)),
+    [symbols, query, q],
+  );
+  const probeIds = React.useMemo(() => filteredSymbols.map((sc) => sc.symbol_id), [filteredSymbols]);
+  // Only probe while the palette is open; capped inside the hook.
+  const probe = usePredictionProbe(probeIds, open);
+
+  // Group the visible symbols by instrument class (a symbol may appear under
+  // several headings — a perp is also in the funding book).
+  const symbolsByClass = React.useMemo(() => {
+    const groups = new Map<InstrumentClass, typeof filteredSymbols>();
+    for (const cls of CLASS_ORDER) groups.set(cls, []);
+    for (const sc of filteredSymbols) {
+      const classes = classesForSymbol(sc, { isPrediction: probe.isPrediction(sc.symbol_id) });
+      for (const cls of classes) groups.get(cls)!.push(sc);
+    }
+    return groups;
+  }, [filteredSymbols, probe]);
+
+
   return (
     <CommandDialog open={open} onOpenChange={setOpen} shouldFilter={false}>
       <CommandInput
@@ -319,20 +350,24 @@ export default function CommandPalette() {
           </CommandGroup>
         )}
 
-        <CommandGroup heading="Symbols">
-          {symbols
-            .filter((s) => !query || s.symbol.toLowerCase().includes(q))
-            .map((s) => (
-              <CommandItem
-                key={`symbol-${s.symbol_id}`}
-                value={`symbol ${s.symbol}`}
-                onSelect={() => go(`symbol:${s.symbol_id}`, `/markets/${s.symbol_id}`)}
-              >
-                <TrendingUp className="mr-2 h-4 w-4 text-muted-foreground" />
-                {s.symbol}
-              </CommandItem>
-            ))}
-        </CommandGroup>
+        {CLASS_ORDER.map((cls) => {
+          const group = symbolsByClass.get(cls) ?? [];
+          if (group.length === 0) return null;
+          return (
+            <CommandGroup key={`symbols-${cls}`} heading={CLASS_LABELS[cls]}>
+              {group.map((sc) => (
+                <CommandItem
+                  key={`symbol-${cls}-${sc.symbol_id}`}
+                  value={`symbol ${cls} ${sc.symbol}`}
+                  onSelect={() => go(`symbol:${sc.symbol_id}`, `/markets/${sc.symbol_id}`)}
+                >
+                  <TrendingUp className="mr-2 h-4 w-4 text-muted-foreground" />
+                  {sc.symbol}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          );
+        })}
 
         <CommandGroup heading="Pages">
           {PAGES.filter(
