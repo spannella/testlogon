@@ -1593,6 +1593,17 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // Creator revenue-share TOKENS: mint a token (100% supply, $100 fee), browse the listed
+        // market, and manage cap table / revenue / upkeep / IPO auction per token. All reads
+        // degrade-on-404 (the me/tokens/* backend is pending).
+        MoreEntry(
+            id = "tokens",
+            labelRes = R.string.more_entry_tokens,
+            icon = Icons.Outlined.Paid,
+            route = MoreRoutes.TOKENS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // Analysis workbench (VIEW-ONLY): historical market-data research — returns / volatility /
         // drawdown / correlation + a fast/slow MA-cross backtest over the md/ history (or recent window).
         MoreEntry(

@@ -377,6 +377,10 @@ object MoreRoutes {
     // Markets (exchange market-data, VIEW-ONLY): instrument list -> per-symbol chart/book/tape.
     const val MARKETS = MarketsDest.ROUTE
 
+    // Creator revenue-share TOKENS: mint a token, browse the listed market, per-token detail
+    // (cap table / revenue / upkeep / IPO auction). Endpoints degrade-on-404 (backend pending).
+    const val TOKENS = TokensMarketDest.ROUTE
+
     // Analysis workbench: historical market-data research (stats / correlation / MA-cross backtest).
     const val ANALYSIS = AnalysisDest.ROUTE
 
@@ -669,6 +673,7 @@ object MoreRoutes {
             WEBHOOKS,
             ADMIN_DASHBOARD,
             MARKETS,
+            TOKENS,
             ANALYSIS,
             GLOBAL_SEARCH,
             TRADING_ALERTS,

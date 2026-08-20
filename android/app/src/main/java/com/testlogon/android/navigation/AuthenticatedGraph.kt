@@ -304,6 +304,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         adminDashboardDestination(navController)
         // Markets (exchange market-data, VIEW-ONLY): instrument list + per-symbol chart/book/tape.
         marketsDestinations(navController)
+        // Creator revenue-share TOKENS: mint + browse market + per-token detail (cap table /
+        // revenue / upkeep / IPO auction). Endpoints degrade-on-404 (backend pending).
+        tokensDestinations(navController)
         // Global search (symbols + trading destinations quick-jump); reached from the Markets header + More hub.
         globalSearchDestination(navController)
         // B5 admin queues (moderation board + video review + DMCA claims).
