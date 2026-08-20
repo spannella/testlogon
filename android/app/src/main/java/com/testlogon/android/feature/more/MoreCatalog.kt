@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.CandlestickChart
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Copyright
 import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.ManageSearch
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Balance
@@ -1555,6 +1556,15 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.ACCOUNT,
             section = MoreSection.SECURITY,
             operatorOnly = true,
+        ),
+        // Global search: quick-jump over exchange symbols + the app trading destinations + curated actions.
+        MoreEntry(
+            id = "global_search",
+            labelRes = R.string.more_entry_global_search,
+            icon = Icons.Outlined.ManageSearch,
+            route = MoreRoutes.GLOBAL_SEARCH,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
         ),
         // Markets (exchange market-data, VIEW-ONLY): tradable instruments -> per-symbol chart / order-book
         // ladder / recent-trades tape. Read-only; no order entry. Polls the md/ (market-data) endpoints on-screen.

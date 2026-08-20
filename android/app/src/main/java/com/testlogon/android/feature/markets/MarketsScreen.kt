@@ -78,6 +78,7 @@ fun MarketsRoute(
     onBack: () -> Unit,
     onOpenSymbol: (symbolId: Int) -> Unit,
     onOpenAlerts: () -> Unit = {},
+    onOpenSearch: () -> Unit = {},
     viewModel: MarketsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -98,6 +99,7 @@ fun MarketsRoute(
                 count = state.rows.size,
                 unreadAlerts = unreadAlerts,
                 onOpenAlerts = onOpenAlerts,
+                onOpenSearch = onOpenSearch,
             )
             Box(modifier = Modifier.fillMaxSize()) {
                 when (state.phase) {
@@ -128,6 +130,7 @@ private fun MarketsHeader(
     count: Int,
     unreadAlerts: Int = 0,
     onOpenAlerts: () -> Unit = {},
+    onOpenSearch: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -153,6 +156,13 @@ private fun MarketsHeader(
                 text = if (count > 0) "$count instruments  LIVE" else "live",
                 color = MarketColors.TextSecondary,
                 fontSize = 12.sp,
+            )
+        }
+        IconButton(onClick = onOpenSearch, modifier = Modifier.testTag("markets_search")) {
+            Icon(
+                Icons.Filled.Search,
+                contentDescription = "Search",
+                tint = MarketColors.TextPrimary,
             )
         }
         IconButton(onClick = onOpenAlerts, modifier = Modifier.testTag("markets_alerts_bell")) {

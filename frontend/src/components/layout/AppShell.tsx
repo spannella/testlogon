@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import MobileNav from "./MobileNav";
+import CommandPalette from "./CommandPalette";
 import ImpersonationBanner from "@/components/shared/ImpersonationBanner";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
@@ -120,6 +121,7 @@ export default function AppShell() {
           <ServiceWorkerSyncListener />
           <MessagingStreamListener />
           <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
+          <CommandPalette />
           <ImpersonationBanner />
           <SessionExpiryWarning />
 

@@ -13,18 +13,6 @@ import {
   Menu,
   CheckCheck,
   Check,
-  MessageSquare,
-  PenLine,
-  Keyboard,
-  Clock,
-  X,
-  FileText,
-  ShoppingBag,
-  FolderOpen,
-  Ticket,
-  Users,
-  Play,
-  Calendar as CalendarIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -37,15 +25,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  CommandDialog,
-  CommandInput,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-  CommandShortcut,
-} from "@/components/ui/command";
 import ShortcutHelpDialog from "@/components/shared/ShortcutHelpDialog";
 import TradingAlertsBell from "@/components/layout/TradingAlertsBell";
 import PriceAlertEvaluator from "@/components/layout/PriceAlertEvaluator";
@@ -63,7 +42,6 @@ import { logout as apiLogout } from "@/api/endpoints/auth";
 import { getAlerts, markAllAlertRead, getActivityFeed } from "@/api/endpoints/alerts";
 import { getProfile } from "@/api/endpoints/profile";
 import { useAlertStream } from "@/hooks/useAlertStream";
-import { globalSearch } from "@/api/endpoints/search";
 import type { Profile } from "@/api/types";
 
 function getInitials(profile: Profile | undefined, userId: string | null): string {
@@ -85,42 +63,6 @@ interface HeaderProps {
   onMobileMenuToggle?: () => void;
 }
 
-// ─── Navigation items for search ────────────────────────────────
-
-const SEARCH_PAGES = [
-  { label: "Dashboard", path: "/", group: "Pages" },
-  { label: "Messages", path: "/messages", group: "Pages" },
-  { label: "Feed", path: "/feed", group: "Pages" },
-  { label: "Shop", path: "/shop", group: "Pages" },
-  { label: "Cart", path: "/cart", group: "Pages" },
-  { label: "Billing", path: "/billing", group: "Pages" },
-  { label: "Orders", path: "/purchases", group: "Pages" },
-  { label: "Subscriptions", path: "/subscriptions", group: "Pages" },
-  { label: "Files", path: "/files", group: "Pages" },
-  { label: "Calendar", path: "/calendar", group: "Pages" },
-  { label: "Search", path: "/search", group: "Pages" },
-  { label: "Profile", path: "/profile", group: "Account" },
-  { label: "Security", path: "/security", group: "Account" },
-  { label: "Alerts", path: "/alerts", group: "Account" },
-  { label: "Settings", path: "/settings", group: "Account" },
-];
-
-// ─── Action commands for the palette ───────────────────────────
-
-interface ActionCommand {
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  shortcut?: string;
-}
-
-const SEARCH_ACTIONS: ActionCommand[] = [
-  { label: "Toggle Dark Mode", icon: Moon, shortcut: "Ctrl+Shift+D" },
-  { label: "New Message", icon: MessageSquare, shortcut: "Ctrl+Shift+N" },
-  { label: "New Post", icon: PenLine, shortcut: "Ctrl+Shift+P" },
-  { label: "Keyboard Shortcuts", icon: Keyboard, shortcut: "?" },
-  { label: "Log Out", icon: LogOut },
-];
-
 // ─── Header Component ───────────────────────────────────────────
 
 export default function Header({ onMobileMenuToggle }: HeaderProps) {
@@ -137,41 +79,8 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
     staleTime: 5 * 60 * 1000,
   });
 
-  const recentCommands = useUiStore((s) => s.recentCommands);
-  const trackRecentCommand = useUiStore((s) => s.trackRecentCommand);
-  const recentSearches = useUiStore((s) => s.recentSearches);
-  const trackRecentSearch = useUiStore((s) => s.trackRecentSearch);
-  const removeRecentSearch = useUiStore((s) => s.removeRecentSearch);
-
-  const [searchOpen, setSearchOpen] = React.useState(false);
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState("");
   const [alertsOpen, setAlertsOpen] = React.useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = React.useState(false);
-
-  // Debounce the search query for content search
-  React.useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  // Reset search query when dialog closes
-  React.useEffect(() => {
-    if (!searchOpen) {
-      setSearchQuery("");
-      setDebouncedSearchQuery("");
-    }
-  }, [searchOpen]);
-
-  // Content search query
-  const contentSearchQuery = useQuery({
-    queryKey: ["header-search", debouncedSearchQuery],
-    queryFn: () => globalSearch(debouncedSearchQuery, undefined, 3),
-    enabled: debouncedSearchQuery.length >= 2,
-    staleTime: 60_000,
-  });
-
-  const searchResults = contentSearchQuery.data;
 
   // Real-time alert stream
   const { unreadCount, resetUnread } = useAlertStream(true);
@@ -205,13 +114,6 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
 
   // ─── Global keyboard shortcuts ────────────────────────────────
   const shortcuts = React.useMemo<Shortcut[]>(() => [
-    {
-      key: "ctrl+k",
-      label: "Open command palette",
-      group: "General",
-      action: () => setSearchOpen(true),
-      activeInInput: true,
-    },
     {
       key: "shift+?",
       label: "Show keyboard shortcuts",
@@ -323,7 +225,16 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
             "relative h-9 justify-start gap-2 text-sm text-muted-foreground",
             "w-40 sm:w-64 lg:w-80",
           )}
-          onClick={() => setSearchOpen(true)}
+          onClick={() =>
+            window.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                key: "k",
+                ctrlKey: !navigator.userAgent.includes("Mac"),
+                metaKey: navigator.userAgent.includes("Mac"),
+                bubbles: true,
+              }),
+            )
+          }
         >
           <Search className="h-4 w-4" />
           <span className="hidden sm:inline">Search...</span>
@@ -552,307 +463,6 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
         </DropdownMenu>
       </header>
 
-      {/* Command palette / search dialog */}
-      <CommandDialog open={searchOpen} onOpenChange={setSearchOpen}>
-        <CommandInput
-          placeholder="Search content and pages..."
-          value={searchQuery}
-          onValueChange={setSearchQuery}
-        />
-        <CommandList>
-          <CommandEmpty>No results found.</CommandEmpty>
-
-          {/* Recently Used */}
-          {recentCommands.length > 0 && (
-            <CommandGroup heading="Recently Used">
-              {recentCommands.map((label) => {
-                const page = SEARCH_PAGES.find((p) => p.label === label);
-                const action = SEARCH_ACTIONS.find((a) => a.label === label);
-                return (
-                  <CommandItem
-                    key={`recent-${label}`}
-                    value={`recent-${label}`}
-                    onSelect={() => {
-                      if (page) {
-                        navigate(page.path);
-                      } else if (action) {
-                        executeAction(action.label);
-                      }
-                      trackRecentCommand(label);
-                      setSearchOpen(false);
-                    }}
-                  >
-                    {action?.icon && <action.icon className="mr-2 h-4 w-4" />}
-                    {label}
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          )}
-
-          {["Pages", "Account"].map((group) => (
-            <CommandGroup key={group} heading={group}>
-              {SEARCH_PAGES.filter((p) => p.group === group).map((page) => (
-                <CommandItem
-                  key={page.path}
-                  value={page.label}
-                  onSelect={() => {
-                    navigate(page.path);
-                    trackRecentCommand(page.label);
-                    setSearchOpen(false);
-                  }}
-                >
-                  {page.label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          ))}
-
-          {/* Actions */}
-          <CommandGroup heading="Actions">
-            {SEARCH_ACTIONS.map((action) => (
-              <CommandItem
-                key={action.label}
-                value={action.label}
-                onSelect={() => {
-                  executeAction(action.label);
-                  trackRecentCommand(action.label);
-                  setSearchOpen(false);
-                }}
-              >
-                <action.icon className="mr-2 h-4 w-4" />
-                {action.label}
-                {action.shortcut && (
-                  <CommandShortcut>{action.shortcut}</CommandShortcut>
-                )}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-
-          {/* Recent searches (shown when query is empty) */}
-          {!searchQuery && recentSearches.length > 0 && (
-            <CommandGroup heading="Recent Searches">
-              {recentSearches.map((query) => (
-                <CommandItem
-                  key={`recent-search-${query}`}
-                  value={`recent-search-${query}`}
-                  onSelect={() => {
-                    setSearchQuery(query);
-                    trackRecentSearch(query);
-                  }}
-                >
-                  <Clock className="mr-2 h-4 w-4 text-muted-foreground" />
-                  <span className="flex-1">{query}</span>
-                  <button
-                    className="ml-auto text-muted-foreground hover:text-foreground"
-                    onClick={(e) => { e.stopPropagation(); removeRecentSearch(query); }}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {/* Content search results */}
-          {(searchResults?.results?.users?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Users">
-              {searchResults!.results.users.items.map((item) => (
-                <CommandItem
-                  key={`user-${item.id}`}
-                  value={`user-${item.id}-${item.title}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <User className="mr-2 h-4 w-4 text-muted-foreground" />
-                  {item.title}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {(searchResults?.results?.posts?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Posts">
-              {searchResults!.results.posts.items.map((item) => (
-                <CommandItem
-                  key={`post-${item.id}`}
-                  value={`post-${item.id}-${item.snippet}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <FileText className="mr-2 h-4 w-4 text-muted-foreground" />
-                  {item.snippet}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {(searchResults?.results?.catalog?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Catalog">
-              {searchResults!.results.catalog.items.map((item) => (
-                <CommandItem
-                  key={`catalog-${item.id}`}
-                  value={`catalog-${item.id}-${item.title}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <ShoppingBag className="mr-2 h-4 w-4 text-muted-foreground" />
-                  {item.title}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {(searchResults?.results?.files?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Files">
-              {searchResults!.results.files.items.map((item) => (
-                <CommandItem
-                  key={`file-${item.id}`}
-                  value={`file-${item.id}-${item.title}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <FolderOpen className="mr-2 h-4 w-4 text-muted-foreground" />
-                  {item.title}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {(searchResults?.results?.messages?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Messages">
-              {searchResults!.results.messages!.items.map((item) => (
-                <CommandItem
-                  key={`message-${item.id}`}
-                  value={`message-${item.id}-${item.snippet}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <MessageSquare className="mr-2 h-4 w-4 text-muted-foreground" />
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-sm truncate">{item.title}</span>
-                    <span className="text-xs text-muted-foreground truncate">{item.snippet}</span>
-                  </div>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {(searchResults?.results?.tickets?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Tickets">
-              {searchResults!.results.tickets!.items.map((item) => (
-                <CommandItem
-                  key={`ticket-${item.id}`}
-                  value={`ticket-${item.id}-${item.title}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <Ticket className="mr-2 h-4 w-4 text-muted-foreground" />
-                  <div className="flex flex-col min-w-0 flex-1">
-                    <span className="text-sm truncate">{item.title}</span>
-                    <span className="text-xs text-muted-foreground truncate">{item.snippet}</span>
-                  </div>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {(searchResults?.results?.contacts?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Contacts">
-              {searchResults!.results.contacts!.items.map((item) => (
-                <CommandItem
-                  key={`contact-${item.id}`}
-                  value={`contact-${item.id}-${item.title}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <Users className="mr-2 h-4 w-4 text-muted-foreground" />
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-sm truncate">{item.title}</span>
-                    <span className="text-xs text-muted-foreground truncate">{item.snippet}</span>
-                  </div>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {(searchResults?.results?.videos?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Videos">
-              {searchResults!.results.videos!.items.map((item) => (
-                <CommandItem
-                  key={`video-${item.id}`}
-                  value={`video-${item.id}-${item.title}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <Play className="mr-2 h-4 w-4 text-muted-foreground" />
-                  {item.title}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {(searchResults?.results?.calendar?.items?.length ?? 0) > 0 && (
-            <CommandGroup heading="Calendar">
-              {searchResults!.results.calendar!.items.map((item) => (
-                <CommandItem
-                  key={`calendar-${item.id}`}
-                  value={`calendar-${item.id}-${item.title}`}
-                  onSelect={() => {
-                    navigate(item.url);
-                    trackRecentSearch(searchQuery);
-                    setSearchOpen(false);
-                  }}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
-                  {item.title}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-
-          {/* View all results link */}
-          {searchQuery.length >= 2 && (
-            <CommandGroup>
-              <CommandItem
-                value={`view-all-results-${searchQuery}`}
-                onSelect={() => {
-                  navigate(`/search?q=${encodeURIComponent(searchQuery)}`);
-                  setSearchOpen(false);
-                }}
-              >
-                <Search className="mr-2 h-4 w-4" />
-                View all results for &quot;{searchQuery}&quot;
-              </CommandItem>
-            </CommandGroup>
-          )}
-        </CommandList>
-      </CommandDialog>
-
       {/* Keyboard shortcuts help overlay */}
       <ShortcutHelpDialog
         open={shortcutHelpOpen}
@@ -883,26 +493,6 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
     </>
   );
 
-  /** Execute an action command by label */
-  function executeAction(label: string) {
-    switch (label) {
-      case "Toggle Dark Mode":
-        setTheme(theme === "dark" ? "light" : "dark");
-        break;
-      case "New Message":
-        navigate("/messages?new=1");
-        break;
-      case "New Post":
-        navigate("/feed?compose=1");
-        break;
-      case "Keyboard Shortcuts":
-        setShortcutHelpOpen(true);
-        break;
-      case "Log Out":
-        void handleLogout();
-        break;
-    }
-  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────

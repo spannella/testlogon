@@ -370,6 +370,9 @@ object MoreRoutes {
     // Markets (exchange market-data, VIEW-ONLY): instrument list -> per-symbol chart/book/tape.
     const val MARKETS = MarketsDest.ROUTE
 
+    // Global search: quick-jump over exchange symbols + trading destinations + curated actions.
+    const val GLOBAL_SEARCH = GlobalSearchDest.ROUTE
+
     // Trading Alerts (derived notifications: fills / liquidations / funding / margin-distress / PM-resolved).
     const val TRADING_ALERTS = TradingAlertsDest.ROUTE
 
@@ -654,6 +657,7 @@ object MoreRoutes {
             WEBHOOKS,
             ADMIN_DASHBOARD,
             MARKETS,
+            GLOBAL_SEARCH,
             TRADING_ALERTS,
             ADMIN_EMAIL_DASHBOARD,
             ADMIN_SMS_DASHBOARD,

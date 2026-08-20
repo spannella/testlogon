@@ -48,6 +48,9 @@ fun NavGraphBuilder.marketsDestinations(navController: NavHostController) {
             onOpenAlerts = {
                 navController.navigate(TradingAlertsDest.ROUTE) { launchSingleTop = true }
             },
+            onOpenSearch = {
+                navController.navigate(GlobalSearchDest.ROUTE) { launchSingleTop = true }
+            },
         )
     }
     composable(TradingAlertsDest.ROUTE) {
