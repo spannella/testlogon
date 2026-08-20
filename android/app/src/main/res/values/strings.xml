@@ -183,6 +183,16 @@
     <string name="settings_section_trading_subtitle">Theme, default market &amp; trade alerts</string>
     <string name="trading_prefs_title">Trading preferences</string>
     <string name="trading_prefs_theme_section">Theme</string>
+    <string name="trading_prefs_accent_section">Accent color</string>
+    <string name="trading_prefs_accent_default">Default (Blue)</string>
+    <string name="trading_prefs_accent_violet">Violet</string>
+    <string name="trading_prefs_accent_teal">Teal</string>
+    <string name="trading_prefs_accent_amber">Amber</string>
+    <string name="trading_prefs_accent_rose">Rose</string>
+    <string name="trading_prefs_accent_green">Green</string>
+    <string name="trading_prefs_density_section">Density</string>
+    <string name="trading_prefs_density_comfortable">Comfortable</string>
+    <string name="trading_prefs_density_compact">Compact</string>
     <string name="trading_prefs_default_market_section">Default market</string>
     <string name="trading_prefs_default_market_label">Market</string>
     <string name="trading_prefs_default_market_none">No default (use first available)</string>

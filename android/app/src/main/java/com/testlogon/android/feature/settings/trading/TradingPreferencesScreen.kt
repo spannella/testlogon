@@ -4,11 +4,14 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
@@ -41,12 +44,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.core.network.AppAccent
+import com.testlogon.android.core.network.AppDensity
 import com.testlogon.android.core.network.AppThemeMode
 import com.testlogon.android.data.exchange.TradingUiPrefsStore
 import com.testlogon.android.data.exchange.alerts.TradingAlertKind
@@ -63,6 +75,8 @@ fun TradingPreferencesRoute(
         state = state,
         onBack = onBack,
         onModeSelected = viewModel::onModeSelected,
+        onAccentSelected = viewModel::onAccentSelected,
+        onDensitySelected = viewModel::onDensitySelected,
         onDefaultMarketSelected = viewModel::onDefaultMarketSelected,
         onAlertKindToggled = viewModel::onAlertKindToggled,
         onRefreshNotifications = viewModel::refreshNotificationState,
@@ -78,6 +92,8 @@ fun TradingPreferencesScreen(
     state: TradingPreferencesUiState,
     onBack: () -> Unit,
     onModeSelected: (AppThemeMode) -> Unit,
+    onAccentSelected: (AppAccent) -> Unit,
+    onDensitySelected: (AppDensity) -> Unit,
     onDefaultMarketSelected: (Int) -> Unit,
     onAlertKindToggled: (TradingAlertKind, Boolean) -> Unit,
     onRefreshNotifications: () -> Unit,
@@ -137,6 +153,24 @@ fun TradingPreferencesScreen(
                     },
                 )
             }
+
+            HorizontalDivider()
+
+            // ---- Accent color ----
+            SectionHeader(stringResource(R.string.trading_prefs_accent_section))
+            AccentPicker(
+                selected = state.appearance.accent,
+                onSelected = onAccentSelected,
+            )
+
+            HorizontalDivider()
+
+            // ---- Density ----
+            SectionHeader(stringResource(R.string.trading_prefs_density_section))
+            DensityToggle(
+                selected = state.appearance.density,
+                onSelected = onDensitySelected,
+            )
 
             HorizontalDivider()
 
@@ -240,6 +274,91 @@ fun TradingPreferencesScreen(
             }
         }
     }
+}
+
+@Composable
+private fun AccentPicker(
+    selected: AppAccent,
+    onSelected: (AppAccent) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("trading_prefs_accent_row")
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AppAccent.entries.forEach { accent ->
+            val isSel = accent == selected
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(Color(accent.seedArgb))
+                    .border(
+                        width = if (isSel) 3.dp else 1.dp,
+                        color = if (isSel) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.outline,
+                        shape = CircleShape,
+                    )
+                    .selectable(
+                        selected = isSel,
+                        role = Role.RadioButton,
+                        onClick = { onSelected(accent) },
+                    )
+                    .testTag("trading_prefs_accent_${accent.name.lowercase()}"),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (isSel) {
+                    Icon(
+                        imageVector = Icons.Filled.Check,
+                        contentDescription = stringResource(accentLabel(accent)),
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DensityToggle(
+    selected: AppDensity,
+    onSelected: (AppDensity) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("trading_prefs_density_row")
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        AppDensity.entries.forEach { density ->
+            FilterChip(
+                selected = selected == density,
+                onClick = { onSelected(density) },
+                label = { Text(stringResource(densityLabel(density))) },
+                modifier = Modifier.testTag("trading_prefs_density_${density.name.lowercase()}"),
+            )
+        }
+    }
+}
+
+private fun accentLabel(accent: AppAccent): Int = when (accent) {
+    AppAccent.DEFAULT -> R.string.trading_prefs_accent_default
+    AppAccent.VIOLET -> R.string.trading_prefs_accent_violet
+    AppAccent.TEAL -> R.string.trading_prefs_accent_teal
+    AppAccent.AMBER -> R.string.trading_prefs_accent_amber
+    AppAccent.ROSE -> R.string.trading_prefs_accent_rose
+    AppAccent.GREEN -> R.string.trading_prefs_accent_green
+}
+
+private fun densityLabel(density: AppDensity): Int = when (density) {
+    AppDensity.COMFORTABLE -> R.string.trading_prefs_density_comfortable
+    AppDensity.COMPACT -> R.string.trading_prefs_density_compact
 }
 
 @Composable

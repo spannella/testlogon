@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useUiStore, type Theme } from "@/stores/uiStore";
+import { useUiStore, type Theme, type AccentColor, type Density } from "@/stores/uiStore";
 import { useSymbols } from "@/hooks/useMarketData";
 import type { TradingAlertKind } from "@/hooks/useTradingAlerts";
 import {
@@ -31,6 +31,22 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
   { value: "system", label: "System" },
+];
+
+// Accent presets (subset of the full appearance palette) - swatches shown inline.
+const ACCENT_OPTIONS: { value: AccentColor; label: string; color: string }[] = [
+  { value: "blue",   label: "Blue",   color: "hsl(221.2 83.2% 53.3%)" },
+  { value: "purple", label: "Purple", color: "hsl(262 83% 58%)" },
+  { value: "green",  label: "Green",  color: "hsl(142 71% 45%)" },
+  { value: "orange", label: "Orange", color: "hsl(25 95% 53%)" },
+  { value: "pink",   label: "Pink",   color: "hsl(330 81% 60%)" },
+  { value: "teal",   label: "Teal",   color: "hsl(173 80% 40%)" },
+];
+
+// Density options (default = comfortable, matching the current look).
+const DENSITY_OPTIONS: { value: Density; label: string }[] = [
+  { value: "compact",     label: "Compact" },
+  { value: "comfortable", label: "Comfortable" },
 ];
 
 const ALERT_KINDS: { kind: TradingAlertKind; label: string; hint: string }[] = [
@@ -52,6 +68,10 @@ function currentNotifyStatus(): NotifyStatus {
 export function TradingSettings() {
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
+  const density = useUiStore((s) => s.density);
+  const setDensity = useUiStore((s) => s.setDensity);
+  const accentColor = useUiStore((s) => s.accentColor);
+  const setAccentColor = useUiStore((s) => s.setAccentColor);
 
   const symbolsQuery = useSymbols();
   const symbols = symbolsQuery.data?.symbols ?? [];
@@ -135,6 +155,64 @@ export function TradingSettings() {
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <Separator />
+
+        {/* Density */}
+        <div className="space-y-2">
+          <Label className="text-sm font-medium">Density</Label>
+          <p className="text-xs text-muted-foreground">
+            Comfortable spacing, or compact to fit more on screen.
+          </p>
+          <div className="inline-flex rounded-md border p-0.5" role="group" data-testid="trading-density-toggle">
+            {DENSITY_OPTIONS.map((d) => (
+              <Button
+                key={d.value}
+                type="button"
+                size="sm"
+                variant={density === d.value ? "default" : "ghost"}
+                className="h-8 px-3"
+                aria-pressed={density === d.value}
+                onClick={() => setDensity(d.value)}
+              >
+                {d.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Accent color */}
+        <div className="space-y-2">
+          <Label className="text-sm font-medium">Accent color</Label>
+          <p className="text-xs text-muted-foreground">
+            Tints buttons, links, and highlights across the app.
+          </p>
+          <div className="flex flex-wrap gap-2" role="group" data-testid="trading-accent-picker">
+            {ACCENT_OPTIONS.map((a) => (
+              <button
+                key={a.value}
+                type="button"
+                title={a.label}
+                aria-label={a.label}
+                aria-pressed={accentColor === a.value}
+                onClick={() => setAccentColor(a.value)}
+                className={
+                  "flex h-8 w-8 items-center justify-center rounded-full border-2 transition-transform hover:scale-110 " +
+                  (accentColor === a.value
+                    ? "border-foreground ring-2 ring-offset-2 ring-offset-background ring-foreground/30"
+                    : "border-transparent")
+                }
+                style={{ backgroundColor: a.color }}
+              >
+                {accentColor === a.value ? (
+                  <Check className="h-4 w-4 text-white drop-shadow" />
+                ) : null}
+              </button>
+            ))}
+          </div>
         </div>
 
         <Separator />

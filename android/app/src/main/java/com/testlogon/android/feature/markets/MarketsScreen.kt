@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.testlogon.android.core.ui.theme.LocalAppUiDensity
+import com.testlogon.android.core.ui.theme.isCompact
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
@@ -216,10 +218,14 @@ private fun MarketsList(
             MarketsEmpty(filter = filter, query = query)
             return@Column
         }
+        val compact = LocalAppUiDensity.current.isCompact
         LazyColumn(
             modifier = Modifier.fillMaxSize().testTag("markets_list"),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(
+                horizontal = 12.dp,
+                vertical = if (compact) 6.dp else 10.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp),
         ) {
             items(displayed, key = { it.instrument.symbolId }) { row ->
                 MarketRowCard(
@@ -384,7 +390,10 @@ private fun MarketRowCard(
             .background(MarketColors.Surface)
             .border(1.dp, MarketColors.Border, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(
+                horizontal = 12.dp,
+                vertical = if (LocalAppUiDensity.current.isCompact) 7.dp else 12.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val base = baseMonogram(row.instrument.symbol)
