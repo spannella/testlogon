@@ -2,11 +2,21 @@ package com.testlogon.android.feature.blotter
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.exchange.ExchangeRepository
+import com.testlogon.android.data.exchange.Instrument
+import com.testlogon.android.feature.paper.PaperAccountStore
+import com.testlogon.android.feature.paper.PaperEngine
+import com.testlogon.android.feature.paper.PaperModeStore
+import com.testlogon.android.feature.paper.PaperViews
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -43,6 +53,8 @@ data class BlotterUiState(
     val groupBy: BlotterGroupKey? = null,
     val collapsedGroups: Set<String> = emptySet(),
     val expandedRows: Set<String> = emptySet(),
+    /** True when [orders] is sourced from the shared PAPER account (drives the PAPER badge). */
+    val paper: Boolean = false,
 ) {
     /**
      * The Row weight to lay a column out with: the user's persisted per-column width override when
@@ -152,16 +164,85 @@ data class BlotterUiState(
 @HiltViewModel
 class TradingBlotterViewModel @Inject constructor(
     private val layoutStore: BlotterLayoutStore,
+    private val paperStore: PaperAccountStore,
+    private val paperModeStore: PaperModeStore,
+    private val exchange: ExchangeRepository,
 ) : ViewModel() {
 
     private val rng = Random(0xB107)
 
+    // Base (live/mock) blotter state + all layout facets — the single source of truth the mutators and
+    // ticker write to. When paper mode is OFF the exposed [uiState] is this verbatim.
     private val _uiState = MutableStateFlow(BlotterUiState(orders = seedOrders()))
-    val uiState: StateFlow<BlotterUiState> = _uiState.asStateFlow()
+
+    // Latest PAPER projection (blotter order rows derived from the shared paper account + live marks),
+    // refreshed by [pollPaper]. Null until the first paper poll completes.
+    private val paperOrdersFlow = MutableStateFlow<List<BlotterOrder>>(emptyList())
+
+    /** Latest known live mark per paper symbolId, so paper positions mark-to-market. */
+    private val paperMarks = HashMap<Int, Long>()
+    private var paperInstruments: List<Instrument> = emptyList()
+
+    /**
+     * The exposed state combines the base state, the paper-mode flag, and the current paper order rows.
+     * In paper mode the base state's [BlotterUiState.orders] are REPLACED by the paper rows (re-sorted
+     * with the active sort) and [BlotterUiState.paper] is set — every derived view (fills, positions,
+     * filters, grouping, export) then flows from the paper rows automatically. OFF = base verbatim.
+     */
+    val uiState: StateFlow<BlotterUiState> =
+        combine(_uiState, paperModeStore.paperMode, paperOrdersFlow) { base, paper, paperRows ->
+            if (!paper) {
+                base.copy(paper = false)
+            } else {
+                base.copy(
+                    orders = sortOrders(paperRows, base.sortColumn, base.sortDir),
+                    paper = true,
+                )
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, BlotterUiState(orders = emptyList()))
 
     init {
         restoreLayout()
         startTicker()
+        pollPaper()
+    }
+
+    /**
+     * Continuously refresh the PAPER projection while the VM is alive: reload the shared account, feed
+     * live marks into the engine (so resting limits fill as the sim market moves), and re-derive the
+     * blotter order rows. Cheap and idempotent; only meaningful output is consumed when paper mode is
+     * ON, but polling unconditionally keeps the projection warm for an instant switch.
+     */
+    private fun pollPaper() {
+        viewModelScope.launch {
+            paperInstruments = (exchange.symbols() as? ApiResult.Success)?.data ?: emptyList()
+            val names = paperInstruments.associate { it.symbolId to it.symbol }
+            while (true) {
+                val loaded = paperStore.load()
+                if (loaded != null) {
+                    // Refresh a mark for every symbol the account touches, then tick the engine.
+                    var acct: PaperEngine.PaperAccount = loaded
+                    val symbols = (acct.positions.keys + acct.orders.map { it.symbolId }).toSet()
+                    for (sid in symbols) {
+                        val mark = fetchMark(sid)
+                        if (mark != null) {
+                            paperMarks[sid] = mark
+                            acct = PaperEngine.onTick(acct, sid, mark)
+                        }
+                    }
+                    paperOrdersFlow.value = PaperViews.blotterOrders(acct, paperMarks, names)
+                }
+                delay(2_000L)
+            }
+        }
+    }
+
+    /** Best available live price for [symbolId]: last trade, else order-book mid. Null when unavailable. */
+    private suspend fun fetchMark(symbolId: Int): Long? {
+        val last = (exchange.trades(symbolId) as? ApiResult.Success)?.data?.firstOrNull()?.price
+        if (last != null) return last
+        val book = (exchange.orderBook(symbolId) as? ApiResult.Success)?.data
+        return book?.mid?.let { Math.round(it) }
     }
 
     /** Merge the persisted layout over defaults and re-sort the seed to match. Never throws. */

@@ -207,7 +207,15 @@ fun TradingBlotterScreen(
         modifier = modifier.testTag(TradingBlotterTestTags.SCREEN),
         topBar = {
             TopAppBar(
-                title = { Text("Trading Blotter") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Trading Blotter")
+                        if (state.paper) {
+                            Spacer(Modifier.width(8.dp))
+                            PaperBadge()
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -617,6 +625,23 @@ private fun StaticHeader(
 }
 
 private fun sideColor(side: BlotterSide): Color = if (side == BlotterSide.BUY) BuyColor else SellColor
+
+/** A small PAPER pill shown in the app bar when the blotter is sourcing the shared paper account. */
+@Composable
+private fun PaperBadge() {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Text(
+            "PAPER",
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
 
 @Composable
 private fun StatusBadge(status: BlotterStatus, modifier: Modifier = Modifier) {

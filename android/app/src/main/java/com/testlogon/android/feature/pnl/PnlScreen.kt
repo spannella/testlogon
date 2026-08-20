@@ -28,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -87,7 +88,15 @@ fun PnlScreen(
         modifier = modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                title = { Text("PnL & performance") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("PnL & performance")
+                        if (state.paper) {
+                            Spacer(Modifier.width(8.dp))
+                            PnlPaperBadge()
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -415,4 +424,22 @@ private fun MessageBlock(title: String, body: String, modifier: Modifier) {
 private fun signed(v: Long): String {
     val grouped = String.format(Locale.US, "%,d", Math.abs(v))
     return if (v >= 0) "+$grouped" else "-$grouped"
+}
+
+
+/** A small PAPER pill shown in the app bar when the PnL screen reflects the shared paper account. */
+@Composable
+private fun PnlPaperBadge() {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Text(
+            "PAPER",
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+    }
 }

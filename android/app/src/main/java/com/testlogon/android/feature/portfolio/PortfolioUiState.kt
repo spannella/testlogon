@@ -26,7 +26,13 @@ enum class PortfolioVenue(val label: String) {
     SPOT("Spot"),
     MARGIN("Margin"),
     STAKING("Staking"),
+    /** The shared client-side PAPER account (only shown while paper mode is ON). */
+    PAPER("Paper"),
 }
+
+/** The four real venues shown in live mode (PAPER is surfaced only while paper mode is ON). */
+val LIVE_VENUES: List<PortfolioVenue> =
+    listOf(PortfolioVenue.CUSTODY, PortfolioVenue.SPOT, PortfolioVenue.MARGIN, PortfolioVenue.STAKING)
 
 /**
  * One venue card. When [loading] is false, a readable venue carries an [equity] contribution (a coarse
@@ -87,12 +93,14 @@ data class PortfolioPosition(
  */
 data class PortfolioUiState(
     val loading: Boolean = true,
-    val cards: List<VenueCard> = PortfolioVenue.entries.map { VenueCard(venue = it) },
+    val cards: List<VenueCard> = LIVE_VENUES.map { VenueCard(venue = it) },
     val positions: List<PortfolioPosition> = emptyList(),
     /** True when a usable USD price map valued at least one balance -> show USD equity. */
     val priced: Boolean = false,
     /** True when the priced marks are the edge STUB placeholders (indicative-only caveat). */
     val pricesStub: Boolean = false,
+    /** True when the whole screen reflects the shared PAPER account (drives the PAPER badge). */
+    val paper: Boolean = false,
 ) {
     /** Sum of the readable venues' equity contributions - a coarse cross-venue snapshot, not a settled total. */
     val totalEquity: Double get() = cards.filter { it.countsTowardTotal }.sumOf { it.equity }

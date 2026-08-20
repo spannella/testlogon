@@ -23,6 +23,19 @@ import WorkingOrdersPanel from "@/pages/blotter/WorkingOrdersPanel";
 import TradeHistoryPanel from "@/pages/blotter/TradeHistoryPanel";
 import { formatPrice, formatQty } from "@/pages/markets/format";
 import "@/components/blotter/dock.css";
+import { orderColumns } from "@/components/blotter/grid/columns";
+import { fillsColumns } from "@/components/blotter/grid/fillsColumns";
+import { usePaperMode } from "@/lib/paperMode";
+import {
+  paperOrdersToBlotter,
+  paperFillsToBlotter,
+  paperPositionsToBlotter,
+  type PaperMarks,
+  type SymName,
+} from "@/lib/paperBlotter";
+import { usePaperAccount, usePaperMarks } from "@/hooks/usePaperMarks";
+import type { PaperAccount } from "@/lib/paperEngine";
+import { Badge } from "@/components/ui/badge";
 
 const SYMS = ["BTC-USD", "ETH-USD", "SOL-USD", "PMKT-2028"];
 const REF: Record<string, number> = { "BTC-USD": 64000, "ETH-USD": 3400, "SOL-USD": 145, "PMKT-2028": 0.62 };
@@ -142,7 +155,10 @@ function useIsMobile(bp = 767): boolean {
 }
 
 const LAYOUT_KEY = "testlogon.trading.dock.v3";
-interface Ctx { orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; isMobile: boolean; sym: SymLookup; }
+interface Ctx {
+  orders: Order[]; touched: Set<string>; onCancel: (c: string) => void; isMobile: boolean; sym: SymLookup;
+  paper: boolean; paperAcct: PaperAccount; paperMarks: PaperMarks; paperSymName: SymName;
+}
 const WsCtx = createContext<Ctx | null>(null);
 const useWs = (): Ctx => { const c = useContext(WsCtx); if (!c) throw new Error("WsCtx missing"); return c; };
 
@@ -154,7 +170,18 @@ function FeedNote({ children }: { children: React.ReactNode }) {
 // Orders — the REAL working-orders MANAGEMENT surface (GET /me/orders/live
 // with per-row Amend / Cancel + confirmed Cancel-all). Replaces the former
 // mock-generator grid; the mock still feeds the Positions panel below.
-function OrdersPanel() { return <WorkingOrdersPanel />; }
+function OrdersPanel() {
+  const c = useWs();
+  if (!c.paper) return <WorkingOrdersPanel />;
+  const rows = paperOrdersToBlotter(c.paperAcct, c.paperSymName);
+  const cols = c.isMobile ? mobileFilter(orderColumns as ColumnDef<any>[], new Set(["sym", "side", "px", "qty", "status"])) : orderColumns;
+  return (
+    <div className="tl-panel-body">
+      <Blotter data={rows} columns={cols} storageKeyPrefix="tl-ws-paper-orders" />
+      {rows.length === 0 ? <FeedNote>No working paper orders. Place a limit order in Paper mode.</FeedNote> : null}
+    </div>
+  );
+}
 
 // Trade history — the REAL executed-fills feed (GET /me/fills/fees).
 function HistoryPanel() { return <TradeHistoryPanel />; }
@@ -165,10 +192,20 @@ function HistoryPanel() { return <TradeHistoryPanel />; }
 function FillsPanel() {
   const c = useWs();
   const q = useFillsFees();
+  const paperRows = c.paper ? paperFillsToBlotter(c.paperAcct, c.paperSymName) : null;
   const cols = useMemo(() => {
     const full = fillFeeColumns(c.sym);
     return c.isMobile ? mobileFilter(full as ColumnDef<any>[], new Set(["sym", "side", "price", "qty", "fee"])) : full;
   }, [c.sym, c.isMobile]);
+  if (c.paper && paperRows) {
+    const pcols = c.isMobile ? mobileFilter(fillsColumns as ColumnDef<any>[], new Set(["sym", "side", "cumQty", "avgPx"])) : fillsColumns;
+    return (
+      <div className="tl-panel-body">
+        <Blotter data={paperRows} columns={pcols} storageKeyPrefix="tl-ws-paper-fills" />
+        {paperRows.length === 0 ? <FeedNote>No paper fills yet.</FeedNote> : null}
+      </div>
+    );
+  }
   const rows = q.data?.fills ?? [];
   return (
     <div className="tl-panel-body">
@@ -218,6 +255,7 @@ function FundingPanel() {
 
 function PositionsPanel() {
   const c = useWs();
+  const paperPos = c.paper ? paperPositionsToBlotter(c.paperAcct, c.paperMarks, c.paperSymName) : null;
   const pos = useMemo(() => {
     const m = new Map<string, PosRow>();
     for (const o of c.orders) {
@@ -230,6 +268,14 @@ function PositionsPanel() {
     rows.forEach((p) => { p.unrealized = +((p.markPx - p.avgCost) * p.netQty).toFixed(2); });
     return rows;
   }, [c.orders]);
+  if (c.paper && paperPos) {
+    return (
+      <div className="tl-panel-body">
+        <Blotter data={paperPos} columns={posColumns} storageKeyPrefix="tl-ws-paper-pos" getRowId={(r: any) => r.sym} />
+        {paperPos.length === 0 ? <FeedNote>No open paper positions.</FeedNote> : null}
+      </div>
+    );
+  }
   return <div className="tl-panel-body"><Blotter data={pos} columns={posColumns} storageKeyPrefix="tl-ws-pos" getRowId={(r: any) => r.sym} /></div>;
 }
 
@@ -254,6 +300,9 @@ export default function TradingWorkspacePage() {
   // Symbol catalog for mapping symbolid -> name + price scaler on the real feeds.
   const symbolsQuery = useSymbols();
   const sym = useMemo(() => makeSymLookup(symbolsQuery.data?.symbols), [symbolsQuery.data]);
+  const { enabled: paper } = usePaperMode();
+  const paperAcct = usePaperAccount(paper);
+  const { marks: paperMarks, symName: paperSymName } = usePaperMarks(paperAcct, paper);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -283,8 +332,8 @@ export default function TradingWorkspacePage() {
     return () => { clearInterval(id); if (clearTimer.current) clearTimeout(clearTimer.current); };
   }, []);
 
-  const ctxRef = useRef<Ctx>({ orders, touched, onCancel: cancel, isMobile, sym });
-  ctxRef.current = { orders, touched, onCancel: cancel, isMobile, sym };
+  const ctxRef = useRef<Ctx>({ orders, touched, onCancel: cancel, isMobile, sym, paper, paperAcct, paperMarks, paperSymName });
+  ctxRef.current = { orders, touched, onCancel: cancel, isMobile, sym, paper, paperAcct, paperMarks, paperSymName };
   const stableCtx = useMemo(() => new Proxy({} as Ctx, { get(_, k: string) { return (ctxRef.current as any)[k]; } }), []);
 
   const [dockApi, setDockApi] = useState<DockviewApi | null>(null);
@@ -331,7 +380,10 @@ export default function TradingWorkspacePage() {
     return (
       <WsCtx.Provider value={ctxRef.current}>
         <div style={{ height: "calc(100vh - 3.5rem)", display: "flex", flexDirection: "column" }}>
-          <h1 style={{ fontSize: "1rem", fontWeight: 600, padding: "0.5rem 0.7rem 0.35rem" }}>Trading Workspace</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.7rem 0.35rem" }}>
+            <h1 style={{ fontSize: "1rem", fontWeight: 600 }}>Trading Workspace</h1>
+            {paper && <Badge variant="secondary">PAPER</Badge>}
+          </div>
           <div className="tl-mobile-tabs" style={{ overflowX: "auto" }}>
             {PANEL_META.map((m) => (
               <button key={m.id} type="button" className={activeTab === m.id ? "active" : ""} onClick={() => setActiveTab(m.id)}>{m.title}</button>
@@ -348,6 +400,7 @@ export default function TradingWorkspacePage() {
       <div style={{ height: "calc(100vh - 3.5rem)", display: "flex", flexDirection: "column", padding: "0.6rem 0.75rem", gap: "0.4rem" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: "0.75rem" }}>
           <h1 style={{ fontSize: "1.1rem", fontWeight: 600 }}>Trading Workspace</h1>
+          {paper && <Badge variant="secondary">PAPER</Badge>}
           <span style={{ fontSize: "0.78rem", opacity: 0.55 }}>drag tabs to split / float · layout persists · right-click a grid header for group / filter / columns</span>
         </div>
         <div style={{ flex: 1, minHeight: 0, position: "relative" }}>

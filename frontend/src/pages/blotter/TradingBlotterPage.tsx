@@ -7,6 +7,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Blotter } from "@/components/blotter/grid";
 import { orderColumns } from "@/components/blotter/grid/columns";
 import type { Order, Side, OrderStatus, Venue, Lot } from "@/components/blotter/types";
+import { usePaperMode } from "@/lib/paperMode";
+import { paperOrdersToBlotter } from "@/lib/paperBlotter";
+import { usePaperAccount, usePaperMarks } from "@/hooks/usePaperMarks";
+import { Badge } from "@/components/ui/badge";
 
 const SYMS = ["BTC-USD", "ETH-USD", "SOL-USD", "PMKT-2028"];
 const REF: Record<string, number> = { "BTC-USD": 64000, "ETH-USD": 3400, "SOL-USD": 145, "PMKT-2028": 0.62 };
@@ -62,6 +66,10 @@ function useIsMobile(bp = 767): boolean {
 
 export default function TradingBlotterPage() {
   const isMobile = useIsMobile();
+  const { enabled: paper } = usePaperMode();
+  const paperAcct = usePaperAccount(paper);
+  const { symName } = usePaperMarks(paperAcct, paper);
+  const paperRows = paper ? paperOrdersToBlotter(paperAcct, symName) : [];
   const [orders, setOrders] = useState<Order[]>(() => Array.from({ length: 600 }, makeOrder));
   const [touched, setTouched] = useState<Set<string>>(new Set());
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -105,13 +113,26 @@ export default function TradingBlotterPage() {
     <div style={{ height: "calc(100vh - 3.5rem)", display: "flex", flexDirection: "column", padding: "0.75rem", gap: "0.5rem" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: "0.75rem" }}>
         <h1 style={{ fontSize: "1.1rem", fontWeight: 600 }}>Trading Blotter</h1>
-        <span style={{ fontSize: "0.8rem", opacity: 0.6 }}>{orders.length} orders · {live} working · live</span>
+        {paper ? (
+          <>
+            <Badge variant="secondary">PAPER</Badge>
+            <span style={{ fontSize: "0.8rem", opacity: 0.6 }}>{paperRows.length} working (simulated)</span>
+          </>
+        ) : (
+          <span style={{ fontSize: "0.8rem", opacity: 0.6 }}>{orders.length} orders · {live} working · live</span>
+        )}
         <span style={{ fontSize: "0.75rem", opacity: 0.5, marginLeft: "auto" }}>
           right-click a header to group / filter / choose columns · drag to reorder · layout persists
         </span>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <Blotter data={orders} columns={isMobile ? mobileOrderColumns : orderColumns} touched={touched} storageKeyPrefix="tl-blotter" onCancel={cancel} />
+        <Blotter
+          data={paper ? paperRows : orders}
+          columns={isMobile ? mobileOrderColumns : orderColumns}
+          touched={paper ? undefined : touched}
+          storageKeyPrefix="tl-blotter"
+          onCancel={paper ? undefined : cancel}
+        />
       </div>
     </div>
   );
