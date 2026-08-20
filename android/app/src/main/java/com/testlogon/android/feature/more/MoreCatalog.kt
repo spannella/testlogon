@@ -5,6 +5,7 @@ import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.ShowChart
+import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Devices
@@ -986,6 +987,14 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_pnl,
             icon = Icons.Outlined.ShowChart,
             route = MoreRoutes.PNL,
+            hub = MoreHub.WALLET,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "paper_trading",
+            labelRes = R.string.more_entry_paper_trading,
+            icon = Icons.Outlined.Science,
+            route = MoreRoutes.PAPER,
             hub = MoreHub.WALLET,
             section = MoreSection.APP,
         ),

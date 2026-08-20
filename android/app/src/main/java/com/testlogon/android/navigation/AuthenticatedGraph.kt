@@ -221,6 +221,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         portfolioDestination(navController)
         // PnL & performance: read-only realized/unrealized analytics, equity curve, per-symbol breakdown.
         pnlDestination(navController)
+        // Paper Trading: self-contained client-side trading simulation (isolated paper account; no real orders).
+        paperDestination(navController)
         // Export & reporting: read-only period-scoped CSV export (trade history / PnL / statement).
         reportsDestination(navController)
         // AND-336: backend-mediated Google Drive import picker (authenticated-only).
