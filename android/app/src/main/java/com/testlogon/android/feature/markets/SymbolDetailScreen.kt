@@ -50,6 +50,7 @@ import com.testlogon.android.data.exchange.Trade
 import com.testlogon.android.feature.markets.book.BookStyle
 import com.testlogon.android.feature.markets.book.OrderBookL2
 import com.testlogon.android.feature.markets.chart.CandlestickChart
+import com.testlogon.android.feature.markets.chart.DepthChart
 import com.testlogon.android.feature.markets.chart.ChartDrawing
 import com.testlogon.android.feature.markets.chart.ChartType
 import com.testlogon.android.feature.markets.chart.DrawingTool
@@ -201,6 +202,30 @@ private fun SymbolDetailContent(
                     },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
+            }
+
+            DetailTab.DEPTH -> {
+                item {
+                    DepthSectionHeader()
+                    DepthChart(
+                        book = state.orderBook,
+                        priceScaler = PRICE_SCALER,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TimeAndSalesHeader()
+                }
+                items(state.trades.take(TAPE_ROWS)) { trade -> TimeAndSalesRow(trade) }
+                if (state.trades.isEmpty()) {
+                    item {
+                        Text(
+                            "No trades yet.",
+                            color = MarketColors.TextFaint,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
             }
 
             DetailTab.TRADES -> {
@@ -436,7 +461,7 @@ private fun DrawingToolbar(
 }
 
 /** Top-level panel selector for the symbol detail: Chart / Book / Trades. */
-private enum class DetailTab(val label: String) { CHART("Chart"), BOOK("Book"), TRADES("Trades"), TRADE("Order") }
+private enum class DetailTab(val label: String) { CHART("Chart"), BOOK("Book"), DEPTH("Depth"), TRADES("Trades"), TRADE("Order") }
 
 @Composable
 private fun DetailTabBar(selected: DetailTab, onSelect: (DetailTab) -> Unit) {
@@ -579,6 +604,80 @@ private fun TradeRow(trade: Trade) {
         Text(
             text = tapeTimeFormat.format(Date(trade.tsNs / 1_000_000L)),
             color = MarketColors.TextFaint,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+
+/** Cap for the compact live Time & Sales tape on the Depth tab (newest-first, ~50 recent prints). */
+private const val TAPE_ROWS = 50
+
+@Composable
+private fun DepthSectionHeader() {
+    Text(
+        text = "Market Depth",
+        color = MarketColors.TextPrimary,
+        fontWeight = FontWeight.Bold,
+        fontSize = 14.sp,
+        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 4.dp),
+    )
+}
+
+/** Header row for the compact Time & Sales tape (Time / Price / Size). */
+@Composable
+private fun TimeAndSalesHeader() {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Time & Sales", color = MarketColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f))
+    }
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+        Text("Time", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text("Price", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(1.2f))
+        Text("Size", color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(1f))
+    }
+}
+
+/** One side-colored print in the compact Time & Sales tape (buy green / sell red), time-first. */
+@Composable
+private fun TimeAndSalesRow(trade: Trade) {
+    val color = when (trade.aggressor) {
+        Aggressor.BUY -> MarketColors.Up
+        Aggressor.SELL -> MarketColors.Down
+        Aggressor.UNKNOWN -> MarketColors.TextSecondary
+    }
+    val bg = when (trade.aggressor) {
+        Aggressor.BUY -> MarketColors.UpFill
+        Aggressor.SELL -> MarketColors.DownFill
+        Aggressor.UNKNOWN -> Color.Transparent
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().background(bg).padding(horizontal = 12.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = tapeTimeFormat.format(Date(trade.tsNs / 1_000_000L)),
+            color = MarketColors.TextFaint,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = formatPrice(trade.price.toDouble()),
+            color = color,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1.2f),
+        )
+        Text(
+            text = trade.qty.toString(),
+            color = MarketColors.TextPrimary,
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp,
             textAlign = androidx.compose.ui.text.style.TextAlign.End,

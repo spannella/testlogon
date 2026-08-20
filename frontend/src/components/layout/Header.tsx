@@ -25,10 +25,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import ShortcutHelpDialog from "@/components/shared/ShortcutHelpDialog";
 import TradingAlertsBell from "@/components/layout/TradingAlertsBell";
 import PriceAlertEvaluator from "@/components/layout/PriceAlertEvaluator";
-import { useGlobalShortcuts, useChordShortcuts, useChordIndicator, type Shortcut, type ChordMapping } from "@/hooks/useGlobalShortcuts";
+import { useGlobalShortcuts, type Shortcut } from "@/hooks/useGlobalShortcuts";
 import {
   Popover,
   PopoverContent,
@@ -80,7 +79,6 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
   });
 
   const [alertsOpen, setAlertsOpen] = React.useState(false);
-  const [shortcutHelpOpen, setShortcutHelpOpen] = React.useState(false);
 
   // Real-time alert stream
   const { unreadCount, resetUnread } = useAlertStream(true);
@@ -115,12 +113,6 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
   // ─── Global keyboard shortcuts ────────────────────────────────
   const shortcuts = React.useMemo<Shortcut[]>(() => [
     {
-      key: "shift+?",
-      label: "Show keyboard shortcuts",
-      group: "General",
-      action: () => setShortcutHelpOpen(true),
-    },
-    {
       key: "ctrl+shift+d",
       label: "Toggle dark mode",
       group: "Actions",
@@ -149,23 +141,6 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
 
   useGlobalShortcuts(shortcuts);
 
-  // ─── Navigation chord shortcuts (g + key) ────────────────────
-  const navigationChords = React.useMemo<ChordMapping[]>(
-    () => [
-      { first: "g", second: "m", label: "Go to Messages", group: "Navigation", action: () => navigate("/messages") },
-      { first: "g", second: "f", label: "Go to Feed", group: "Navigation", action: () => navigate("/feed") },
-      { first: "g", second: "c", label: "Go to Calendar", group: "Navigation", action: () => navigate("/calendar") },
-      { first: "g", second: "s", label: "Go to Settings", group: "Navigation", action: () => navigate("/settings") },
-      { first: "g", second: "t", label: "Go to Tickets", group: "Navigation", action: () => navigate("/tickets") },
-      { first: "g", second: "i", label: "Go to Files", group: "Navigation", action: () => navigate("/files") },
-      { first: "n", second: "m", label: "New message", group: "Actions", action: () => navigate("/messages?new=1") },
-      { first: "n", second: "p", label: "New post", group: "Actions", action: () => navigate("/feed?compose=1") },
-    ],
-    [navigate],
-  );
-
-  const { pendingKey, onChordStart, onChordEnd } = useChordIndicator();
-  useChordShortcuts(navigationChords, onChordStart, onChordEnd);
 
   const handleLogout = async () => {
     try {
@@ -462,34 +437,6 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
-
-      {/* Keyboard shortcuts help overlay */}
-      <ShortcutHelpDialog
-        open={shortcutHelpOpen}
-        onOpenChange={setShortcutHelpOpen}
-        shortcuts={shortcuts}
-        chords={navigationChords}
-      />
-
-      {/* Chord indicator — shows pending first key */}
-      {pendingKey && (
-        <div
-          data-testid="chord-indicator"
-          className="fixed bottom-4 right-4 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150"
-        >
-          <div className="rounded-lg border border-border bg-card p-3 shadow-lg">
-            <div className="flex items-center gap-2">
-              <kbd className="rounded bg-primary/10 px-2 py-0.5 font-mono text-sm font-bold text-primary">
-                {pendingKey.toUpperCase()}
-              </kbd>
-              <span className="text-sm text-muted-foreground">+ ...</span>
-            </div>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              Press a key within 1s
-            </p>
-          </div>
-        </div>
-      )}
     </>
   );
 

@@ -4,6 +4,7 @@ import Sidebar from "./Sidebar";
 import Header from "./Header";
 import MobileNav from "./MobileNav";
 import CommandPalette from "./CommandPalette";
+import KeyboardShortcutsHost from "./KeyboardShortcutsHost";
 import ImpersonationBanner from "@/components/shared/ImpersonationBanner";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
@@ -125,11 +126,13 @@ export default function AppShell() {
           <ImpersonationBanner />
           <SessionExpiryWarning />
 
+          <KeyboardShortcutsHost>
           <main id="main-content" tabIndex={-1} className="flex flex-col flex-1 overflow-y-auto pb-16 md:pb-0 outline-none">
             <PageTransition>
               <Outlet />
             </PageTransition>
           </main>
+          </KeyboardShortcutsHost>
         </div>
 
         {/* Mobile bottom tab bar */}

@@ -3,6 +3,8 @@ package com.testlogon.android.feature.settings.trading
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.core.network.AppAccent
+import com.testlogon.android.core.network.AppDensity
 import com.testlogon.android.core.network.AppThemeMode
 import com.testlogon.android.core.network.AppearancePreferences
 import com.testlogon.android.core.network.ThemePreferencesStore
@@ -95,6 +97,12 @@ class TradingPreferencesViewModel @Inject constructor(
     }
 
     fun onModeSelected(mode: AppThemeMode) = themeStore.setMode(mode)
+
+    /** Density + accent theming: persist the chosen accent; the whole app re-accents live. */
+    fun onAccentSelected(accent: AppAccent) = themeStore.setAccent(accent)
+
+    /** Density + accent theming: persist the chosen UI density; high-traffic surfaces retighten live. */
+    fun onDensitySelected(density: AppDensity) = themeStore.setDensity(density)
 
     fun onDefaultMarketSelected(symbolId: Int) {
         if (symbolId == TradingUiPrefsStore.NO_DEFAULT) tradingUiPrefs.clearDefaultSymbol()

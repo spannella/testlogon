@@ -25,6 +25,7 @@ import {
   Users,
   Play,
   Calendar as CalendarIcon,
+  Keyboard,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -38,6 +39,7 @@ import {
 import { useSymbols } from "@/hooks/useMarketData";
 import { useUiStore } from "@/stores/uiStore";
 import { globalSearch, type SearchResultItem } from "@/api/endpoints/search";
+import { openShortcutsHelp } from "@/components/layout/KeyboardShortcutsHost";
 
 /**
  * Unified global command palette (Cmd/Ctrl+K quick-switcher).
@@ -69,6 +71,7 @@ const PAGES: PageDest[] = [
   { id: "page:price-alerts", label: "Price Alerts", path: "/markets/price-alerts", icon: Bell, keywords: "alerts notify" },
   { id: "page:portfolio", label: "Portfolio", path: "/portfolio", icon: PieChart, keywords: "positions holdings balances" },
   { id: "page:pnl", label: "PnL", path: "/pnl", icon: LineChart, keywords: "profit loss realized unrealized" },
+  { id: "page:reports", label: "Reports", path: "/reports", icon: FileText, keywords: "export csv pdf statement trades print" },
   { id: "page:blotter", label: "Blotter / Workspace", path: "/blotter", icon: LayoutGrid, keywords: "orders fills positions workspace" },
   { id: "page:blotter-single", label: "Blotter (single panel)", path: "/blotter/single", icon: LayoutGrid, keywords: "orders fills" },
   { id: "page:custody", label: "Custody", path: "/custody", icon: Coins, keywords: "wallet deposit withdraw" },
@@ -110,6 +113,13 @@ const ACTIONS: ActionDest[] = [
     keywords: "buy sell order ticket",
     run: ({ navigate, defaultSymbolId }) =>
       navigate(defaultSymbolId != null ? `/markets/${defaultSymbolId}` : "/markets"),
+  },
+  {
+    id: "action:shortcuts",
+    label: "Keyboard shortcuts",
+    icon: Keyboard,
+    keywords: "hotkeys keys help shortcuts kbd",
+    run: () => openShortcutsHelp(),
   },
 ];
 

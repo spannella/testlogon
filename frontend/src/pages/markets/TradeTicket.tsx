@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRegisterShortcuts, type ShortcutEntry } from "@/hooks/useKeyboardShortcuts";
 import { useQuery } from "@tanstack/react-query";
 import { getFeeSchedule } from "@/api/endpoints/custody";
 import { cn } from "@/lib/utils";
@@ -102,11 +103,13 @@ function Field({
   value,
   onChange,
   onStep,
+  dataField,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   onStep?: (delta: number) => void;
+  dataField?: string;
 }) {
   return (
     <div className="w-full">
@@ -121,6 +124,7 @@ function Field({
           value={value}
           inputMode="numeric"
           placeholder="0"
+          data-trade-field={dataField}
           onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, ""))}
           className="tabular-nums"
         />
@@ -419,6 +423,45 @@ export function TradeTicket({
 
   const seq = useRef(0);
   const nextClordid = () => `t${Date.now()}${seq.current++ % 100}`;
+
+  // ── Trade-view keyboard shortcuts (scoped to the ticket) ─────────────
+  const ticketRef = useRef<HTMLDivElement>(null);
+  const focusTradeField = (field: "price" | "qty") => {
+    const root = ticketRef.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLInputElement>(`input[data-trade-field="${field}"]`);
+    if (el) {
+      el.focus();
+      el.select();
+    }
+  };
+  const tradeShortcuts = useMemo<ShortcutEntry[]>(() => [
+    {
+      def: { kind: "single", key: "b", label: "Buy side", group: "Trading" },
+      action: () => { setSide("buy"); setArmed((a) => (a ? null : a)); },
+    },
+    {
+      def: { kind: "single", key: "s", label: "Sell side", group: "Trading" },
+      action: () => { setSide("sell"); setArmed((a) => (a ? null : a)); },
+    },
+    {
+      def: { kind: "single", key: "p", label: "Focus price", group: "Trading" },
+      action: () => focusTradeField("price"),
+    },
+    {
+      def: { kind: "single", key: "q", label: "Focus quantity", group: "Trading" },
+      action: () => focusTradeField("qty"),
+    },
+    {
+      def: { kind: "single", key: "escape", label: "Clear / blur inputs", group: "Trading" },
+      action: () => {
+        const active = document.activeElement as HTMLElement | null;
+        if (active && ticketRef.current?.contains(active)) active.blur();
+        setArmed((a) => (a ? null : a));
+      },
+    },
+  ], []);
+  useRegisterShortcuts(tradeShortcuts);
 
   // Prefill the price from the last trade while untouched.
   useEffect(() => {
@@ -845,7 +888,7 @@ export function TradeTicket({
   ];
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" ref={ticketRef}>
     <Card>
       <CardContent className="space-y-3 pt-6">
         {/* Prediction-market banner */}
@@ -1076,8 +1119,8 @@ export function TradeTicket({
             {/* Type-specific fields */}
             {orderType === "limit" && (
               <>
-                <Field label="Price" value={price} onChange={setPrice} onStep={(d) => stepField(setPrice, price, d)} />
-                <Field label="Quantity" value={qty} onChange={setQty} onStep={(d) => stepField(setQty, qty, d)} />
+                <Field label="Price" value={price} onChange={setPrice} onStep={(d) => stepField(setPrice, price, d)} dataField="price" />
+                <Field label="Quantity" value={qty} onChange={setQty} onStep={(d) => stepField(setQty, qty, d)} dataField="qty" />
               </>
             )}
             {orderType === "market" && <Field label="Quantity" value={qty} onChange={setQty} onStep={(d) => stepField(setQty, qty, d)} />}

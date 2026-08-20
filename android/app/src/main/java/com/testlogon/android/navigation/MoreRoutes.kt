@@ -112,6 +112,9 @@ object MoreRoutes {
     // PnL & performance: read-only realized/unrealized analytics + equity curve (Wallet hub, near Portfolio).
     const val PNL = PnlDest.ROUTE
 
+    // Export & reporting: read-only period-scoped CSV export (Wallet hub, near PnL).
+    const val REPORTS = ReportsDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
@@ -574,6 +577,7 @@ object MoreRoutes {
             CUSTODY,
             PORTFOLIO,
             PNL,
+            REPORTS,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,

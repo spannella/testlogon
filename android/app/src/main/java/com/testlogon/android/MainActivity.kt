@@ -20,8 +20,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.testlogon.android.core.network.AppAccent
+import com.testlogon.android.core.network.AppDensity
 import com.testlogon.android.core.network.AppThemeMode
 import com.testlogon.android.core.network.ThemePreferencesStore
+import com.testlogon.android.core.ui.theme.AppUiDensity
 import com.testlogon.android.core.ui.theme.TestLogonTheme
 import com.testlogon.android.data.gcal.GoogleCalendarReturnHandler
 import com.testlogon.android.data.payments.PaymentReturnDispatcher
@@ -143,8 +146,22 @@ class MainActivity : FragmentActivity() {
             }
             val dynamicColor = appearance.dynamicColor &&
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            // Density + accent theming: map the persisted accent preset to a Compose seed color
+            // (null for the DEFAULT preset so the current brand look is untouched) and the density
+            // preset to the core-ui CompositionLocal value the app root provides.
+            val accentSeed = if (appearance.accent == AppAccent.DEFAULT) null
+                else Color(appearance.accent.seedArgb)
+            val uiDensity = when (appearance.density) {
+                AppDensity.COMPACT -> AppUiDensity.COMPACT
+                AppDensity.COMFORTABLE -> AppUiDensity.COMFORTABLE
+            }
 
-            TestLogonTheme(darkTheme = darkTheme, dynamicColor = dynamicColor) {
+            TestLogonTheme(
+                darkTheme = darkTheme,
+                dynamicColor = dynamicColor,
+                accentSeed = accentSeed,
+                density = uiDensity,
+            ) {
                 // Expose Compose testTags to UIAutomator as view resource-ids so on-device UI
                 // automation (Maestro feature-demo capture, instrumented device tests) can target
                 // every tagged node by id. Recommended by Google for production UI automation; no
