@@ -42,6 +42,7 @@ const TradingBlotterPage = lazy(() => import("@/pages/blotter/TradingBlotterPage
 const TradingWorkspacePage = lazy(() => import("@/pages/blotter/TradingWorkspacePage"));
 const CustodyPage = lazy(() => import("@/pages/custody/CustodyPage"));
 const PortfolioPage = lazy(() => import("@/pages/portfolio/PortfolioPage"));
+const BailoutsBoardPage = lazy(() => import("@/pages/bailouts/BailoutsBoardPage"));
 const PnLPage = lazy(() => import("@/pages/pnl/PnLPage"));
 const ReportsPage = lazy(() => import("@/pages/reports/ReportsPage"));
 const CatalogPage = lazy(() => import("@/pages/shop/CatalogPage"));
@@ -751,6 +752,7 @@ export default function App() {
           <Route path="tokens" element={<TokenMarketPage />} />
           <Route path="tokens/new" element={<MintTokenPage />} />
           <Route path="tokens/:id" element={<TokenDetailPage />} />
+          <Route path="bailouts" element={<BailoutsBoardPage />} />
           <Route path="analysis" element={<MarketAnalysisPage />} />
           <Route path="markets/price-alerts" element={<PriceAlertsPage />} />
           <Route path="paper" element={<PaperTradingPage />} />

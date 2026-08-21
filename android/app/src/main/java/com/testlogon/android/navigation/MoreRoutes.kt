@@ -381,6 +381,13 @@ object MoreRoutes {
     // (cap table / revenue / upkeep / IPO auction). Endpoints degrade-on-404 (backend pending).
     const val TOKENS = TokensMarketDest.ROUTE
 
+    // MARGIN DISTRESS / PRE-EMPTIVE BAILOUT AUCTION: the rescuer opportunity board (the navigable hub
+    // BROWSE entry) + the distress overview + auto-bailout account setting. Per-position auction is a
+    // detail route reached from those. All reads degrade-on-404 (the margin-distress backend is pending).
+    const val BAILOUTS = BailoutBoardDest.ROUTE
+    const val MARGIN_DISTRESS = BailoutDistressDest.ROUTE
+    const val BAILOUT_SETTINGS = BailoutSettingsDest.ROUTE
+
     // Analysis workbench: historical market-data research (stats / correlation / MA-cross backtest).
     const val ANALYSIS = AnalysisDest.ROUTE
 
@@ -674,6 +681,9 @@ object MoreRoutes {
             ADMIN_DASHBOARD,
             MARKETS,
             TOKENS,
+            BAILOUTS,
+            MARGIN_DISTRESS,
+            BAILOUT_SETTINGS,
             ANALYSIS,
             GLOBAL_SEARCH,
             TRADING_ALERTS,
