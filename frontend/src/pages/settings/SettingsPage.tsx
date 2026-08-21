@@ -11,6 +11,7 @@ import { Appearance } from "./Appearance";
 import { AppearanceSection } from "./AppearanceSection";
 import { JiraIntegrationSettings } from "./JiraIntegrationSettings";
 import { TradingSettings } from "./TradingSettings";
+import { BailoutSettings } from "./BailoutSettings";
 import { openShortcutsHelp } from "@/components/layout/KeyboardShortcutsHost";
 
 export default function SettingsPage() {
@@ -114,6 +115,8 @@ export default function SettingsPage() {
       </Card>
 
       <TradingSettings />
+
+      <BailoutSettings />
 
       <Account />
 

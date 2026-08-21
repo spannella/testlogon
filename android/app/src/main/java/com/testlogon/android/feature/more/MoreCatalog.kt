@@ -1604,6 +1604,18 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // MARGIN DISTRESS / PRE-EMPTIVE BAILOUT AUCTION: the rescuer opportunity board (BROWSE open
+        // bailouts to inject rescue capital for a position-share). The distress overview + per-position
+        // auction + auto-bailout setting are reached from here / the margin position surface. All reads
+        // degrade-on-404 (the me/margin/distress + me/bailouts backend is pending).
+        MoreEntry(
+            id = "bailouts",
+            labelRes = R.string.more_entry_bailouts,
+            icon = Icons.Outlined.Shield,
+            route = MoreRoutes.BAILOUTS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // Analysis workbench (VIEW-ONLY): historical market-data research — returns / volatility /
         // drawdown / correlation + a fast/slow MA-cross backtest over the md/ history (or recent window).
         MoreEntry(

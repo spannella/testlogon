@@ -44,6 +44,7 @@ import { formatPrice, formatQty } from "@/pages/markets/format";
 import { usePaperMode } from "@/lib/paperMode";
 import { buildPnlSummaryFromPaper } from "@/lib/paperBlotter";
 import { usePaperAccount, usePaperMarks } from "@/hooks/usePaperMarks";
+import { MarginDistressSection } from "@/pages/bailouts/MarginDistressSection";
 
 // --- helpers ----------------------------------------------------
 
@@ -699,6 +700,9 @@ export default function PortfolioPage() {
           )}
         </VenueCard>
       </div>
+
+      {/* Margin distress / pre-emptive bailout */}
+      <MarginDistressSection />
 
       {/* Open positions (margin) */}
       <Card>
