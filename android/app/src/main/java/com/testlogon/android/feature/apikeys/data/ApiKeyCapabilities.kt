@@ -70,6 +70,19 @@ object ApiKeyCapabilities {
         ApiCapability("video:publish", "Video", "Publish"),
         ApiCapability("video:moderate", "Video", "Moderate"),
         ApiCapability("video:monetize", "Video", "Monetize (money)"),
+        // MULTI-PROTOCOL trading/custody credentials - the unified exchange gateway scope groups (mirror the web
+        // create dialog). These gate REST/WS/FIX/Binary access; FIX/binary require >=1 Trading/Custody scope.
+        ApiCapability("trading:read", "Trading", "Read"),
+        ApiCapability("trading:orders", "Trading", "Orders"),
+        ApiCapability("trading:cancel", "Trading", "Cancel"),
+        ApiCapability("trading:positions", "Trading", "Positions"),
+        ApiCapability("trading:funding", "Trading", "Funding"),
+        ApiCapability("custody:read", "Custody", "Read"),
+        ApiCapability("custody:deposit", "Custody", "Deposit"),
+        ApiCapability("custody:withdraw", "Custody", "Withdraw"),
+        ApiCapability("custody:transfer", "Custody", "Transfer"),
+        ApiCapability("marketdata:read", "Market Data", "Read"),
+        ApiCapability("marketdata:stream", "Market Data", "Stream"),
     )
 
     private val BY_ID: Map<String, ApiCapability> = ALL.associateBy { it.id }

@@ -1,6 +1,10 @@
 package com.testlogon.android.feature.apikeys.ui
 
 import com.testlogon.android.feature.apikeys.data.ApiKey
+import com.testlogon.android.feature.apikeys.data.GatewayEndpoints
+import com.testlogon.android.feature.apikeys.data.KeyProtocols
+import com.testlogon.android.feature.apikeys.data.Protocol
+import com.testlogon.android.feature.apikeys.data.ProtocolCredentials
 
 /**
  * B-APIKEY (batch 7) - exhaustive UI state for the API-keys LIST screen.
@@ -44,6 +48,16 @@ data class CreateApiKeyForm(
     val labelError: String? = null,
     val submitError: String? = null,
     val canSubmit: Boolean = false,
+    // MULTI-PROTOCOL: the selected transport protocols to provision (empty -> a content-only key).
+    val selectedProtocols: Set<Protocol> = emptySet(),
+    // The unified exchange gateway availability (null until loaded / when the endpoint 404s -> hints degrade).
+    val gateway: GatewayEndpoints? = null,
+    // Per-protocol scope-requirement errors (FIX/binary need >=1 trading/custody scope; WS >=1 trading/custody/md).
+    val protocolErrors: Map<Protocol, String> = emptyMap(),
+    // One-time protocol credentials returned on a successful create (show-once), or null for a content-only key.
+    val createdProtocolCredentials: ProtocolCredentials? = null,
+    // The one-time API secret shown alongside [createdProtocolCredentials] in the multi-protocol show-once dialog.
+    val createdApiSecret: String? = null,
 )
 
 /**
@@ -68,6 +82,16 @@ data class ApiKeyDetailUiState(
     val denyCidrs: List<String> = emptyList(),
     val savingIpRules: Boolean = false,
     val ipRuleError: String? = null,
+    // MULTI-PROTOCOL: the key's per-protocol connection credentials (null until loaded; absent on a 404 ->
+    // the section shows the honest "not available yet" state). [protocolsError] is a non-404 load failure.
+    val protocols: KeyProtocols? = null,
+    val protocolsLoading: Boolean = false,
+    val protocolsError: String? = null,
+    // The protocol currently being rotated (its Rotate button shows a spinner); [rotatedSecret] is the ONE-TIME
+    // new secret to display show-once after a rotate.
+    val rotatingProtocol: Protocol? = null,
+    val rotateError: String? = null,
+    val rotatedSecret: RotatedSecret? = null,
 ) {
     /** True when the edited capability selection differs from the saved set. */
     val capabilitiesDirty: Boolean get() = editedCapabilities != capabilities.toSet()
@@ -80,7 +104,17 @@ data class ApiKeyDetailUiState(
  * successful create so the create screen pops back to the (refreshing) list, carrying the one-time secret for
  * one-time in-session display. Delivered via a Channel (one-shot, never re-delivered on rotation).
  */
+/** MULTI-PROTOCOL: a one-time rotated protocol secret, surfaced show-once on the detail screen. */
+data class RotatedSecret(val protocol: Protocol, val secret: String)
+
 sealed interface ApiKeysEffect {
     data object NavigateToLogin : ApiKeysEffect
     data class CreateSucceeded(val secret: String) : ApiKeysEffect
+
+    /**
+     * MULTI-PROTOCOL: create succeeded but the one-time secret (+ protocol credentials) was ALREADY shown
+     * show-once on the create screen (a multi-protocol key), so pop back and just refresh the list WITHOUT
+     * re-displaying the secret there.
+     */
+    data object CreateSucceededShown : ApiKeysEffect
 }

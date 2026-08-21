@@ -53,4 +53,32 @@ interface ApiKeysApi {
      */
     @POST("ui/api_keys/ip_rules")
     suspend fun setIpRules(@Body body: SetIpRulesRequest): SetIpRulesResultDto
+
+    // ── MULTI-PROTOCOL trading/custody credentials (NEW; callers DEGRADE ON 404) ──────────────────────
+
+    /**
+     * GET the unified exchange gateway per-protocol availability (WS url/enabled, FIX host/port/running,
+     * binary endpoint/enabled). NEW endpoint -> a 404 means "not available yet" (repo maps 404 -> null).
+     * Idempotent GET.
+     */
+    @GET("me/gateway/endpoints")
+    suspend fun gatewayEndpoints(): GatewayEndpointsDto
+
+    /**
+     * GET a key's per-protocol connection credentials (REST base_url/scopes, WS url/subs/token_set,
+     * FIX sender/target/host/port/username/msg_types/status, binary endpoint/hmac/ops/key_set). NEW endpoint;
+     * a 404 -> "not available yet". Secrets are NEVER returned here (only token_set/key_set flags). Idempotent.
+     */
+    @GET("ui/api_keys/{key_id}/protocols")
+    suspend fun keyProtocols(@Path("key_id") keyId: String): KeyProtocolsDto
+
+    /**
+     * POST a rotate of a single protocol's secret. Returns the ONE-TIME new { protocol, secret } (show-once).
+     * NON-idempotent -> NO auto-retry; may require fresh MFA (401).
+     */
+    @POST("ui/api_keys/{key_id}/protocols/{protocol}/rotate")
+    suspend fun rotateProtocolSecret(
+        @Path("key_id") keyId: String,
+        @Path("protocol") protocol: String,
+    ): RotateProtocolSecretDto
 }
