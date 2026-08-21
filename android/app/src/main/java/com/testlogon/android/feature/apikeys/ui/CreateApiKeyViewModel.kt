@@ -6,6 +6,8 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.feature.apikeys.data.ApiKeyCapabilities
 import com.testlogon.android.feature.apikeys.data.ApiKeysRepository
+import com.testlogon.android.feature.apikeys.data.Protocol
+import com.testlogon.android.feature.apikeys.data.TradingCredentialsFormat
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -41,8 +43,34 @@ class CreateApiKeyViewModel @Inject constructor(
     private val _form = MutableStateFlow(CreateApiKeyForm())
     val form: StateFlow<CreateApiKeyForm> = _form.asStateFlow()
 
+
     private val _effects = Channel<ApiKeysEffect>(Channel.BUFFERED)
     val effects: Flow<ApiKeysEffect> = _effects.receiveAsFlow()
+
+    init {
+        loadGateway()
+    }
+
+    /** Best-effort load of the gateway availability (for the per-protocol hints). Silent on any failure/404. */
+    private fun loadGateway() {
+        viewModelScope.launch {
+            when (val r = repo.gatewayEndpoints()) {
+                is ApiResult.Success -> _form.value = _form.value.copy(gateway = r.data)
+                else -> Unit // hints simply degrade to "availability unknown"
+            }
+        }
+    }
+
+    /** MULTI-PROTOCOL: toggle a transport protocol; re-derives per-protocol scope-requirement errors + canSubmit. */
+    fun onToggleProtocol(protocol: Protocol) {
+        val current = _form.value
+        val next = if (protocol in current.selectedProtocols) {
+            current.selectedProtocols - protocol
+        } else {
+            current.selectedProtocols + protocol
+        }
+        _form.value = recompute(current.copy(selectedProtocols = next, submitError = null))
+    }
 
     fun onLabelChange(value: String) {
         _form.value = recompute(_form.value.copy(label = value, labelError = null, submitError = null))
@@ -55,12 +83,22 @@ class CreateApiKeyViewModel @Inject constructor(
         } else {
             current.selectedCapabilities + id
         }
-        _form.value = current.copy(selectedCapabilities = next, submitError = null)
+        // Recompute so a protocol scope-requirement error clears/appears as scopes change.
+        _form.value = recompute(current.copy(selectedCapabilities = next, submitError = null))
     }
 
     fun onExpiresChange(value: String) {
         // Keep digits only so the optional expiry parses cleanly (blank -> no expiry).
         _form.value = _form.value.copy(expiresInDays = value.filter { it.isDigit() }, submitError = null)
+    }
+
+    /**
+     * MULTI-PROTOCOL: dismiss the show-once created-credentials dialog. The one-time API secret + protocol
+     * credentials have now been shown, so pop back to the (refreshing) list WITHOUT re-displaying the secret.
+     */
+    fun dismissCreatedCredentials() {
+        _form.value = _form.value.copy(createdProtocolCredentials = null, createdApiSecret = null)
+        viewModelScope.launch { _effects.send(ApiKeysEffect.CreateSucceededShown) }
     }
 
     fun submit() {
@@ -71,10 +109,28 @@ class CreateApiKeyViewModel @Inject constructor(
             // Canonical order (matches the catalog) for a stable request payload.
             val capabilities = ApiKeyCapabilities.ALL.map { it.id }.filter { it in current.selectedCapabilities }
             val expires = current.expiresInDays.toIntOrNull()?.takeIf { it > 0 }
-            when (val result = repo.create(current.label.trim(), capabilities, expires)) {
+            // Canonical protocol order (rest, ws, fix, binary).
+            val protocols = TradingCredentialsFormat.ALL_PROTOCOLS
+                .filter { it in current.selectedProtocols }
+                .map { it.wire }
+            when (val result = repo.create(current.label.trim(), capabilities, expires, protocols)) {
                 is ApiResult.Success -> {
-                    _form.value = _form.value.copy(submitting = false)
-                    _effects.send(ApiKeysEffect.CreateSucceeded(result.data.secret))
+                    val creds = result.data.protocolCredentials?.takeIf { !it.isEmpty }
+                    if (creds != null) {
+                        // A multi-protocol key: show the API secret + one-time protocol credentials show-once
+                        // HERE (do NOT pop yet). On dismiss the screen pops back and refreshes the list WITHOUT
+                        // re-displaying the secret.
+                        _form.value = _form.value.copy(
+                            submitting = false,
+                            createdProtocolCredentials = creds,
+                            createdApiSecret = result.data.secret,
+                        )
+                    } else {
+                        // Content-only (or no protocol material): keep the existing flow — pop back and let the
+                        // list show the one-time secret once.
+                        _form.value = _form.value.copy(submitting = false)
+                        _effects.send(ApiKeysEffect.CreateSucceeded(result.data.secret))
+                    }
                 }
                 is ApiResult.Failure -> {
                     // A 403 fresh-MFA / session-expired 401 from this NON-idempotent create surfaces inline so the
@@ -101,8 +157,16 @@ class CreateApiKeyViewModel @Inject constructor(
         }
     }
 
-    private fun recompute(form: CreateApiKeyForm): CreateApiKeyForm =
-        form.copy(canSubmit = form.label.isNotBlank())
+    private fun recompute(form: CreateApiKeyForm): CreateApiKeyForm {
+        val errors = TradingCredentialsFormat.validateProtocolScopes(
+            protocols = form.selectedProtocols,
+            scopes = form.selectedCapabilities,
+        ).associate { it.protocol to it.message }
+        return form.copy(
+            protocolErrors = errors,
+            canSubmit = form.label.isNotBlank() && errors.isEmpty(),
+        )
+    }
 
     companion object {
         private const val HTTP_UNAUTHORIZED = 401

@@ -7,6 +7,7 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.feature.apikeys.data.ApiKey
 import com.testlogon.android.feature.apikeys.data.ApiKeyCapabilities
 import com.testlogon.android.feature.apikeys.data.ApiKeysRepository
+import com.testlogon.android.feature.apikeys.data.Protocol
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +42,54 @@ class ApiKeyDetailViewModel @Inject constructor(
 
     init {
         load()
+        loadProtocols()
+    }
+
+    /**
+     * MULTI-PROTOCOL: load the key's per-protocol connection credentials. DEGRADES ON 404 -> a null [protocols]
+     * with no error (the section shows the honest "not available yet" state). A non-404 failure sets an error.
+     */
+    private fun loadProtocols() {
+        _state.value = _state.value.copy(protocolsLoading = true, protocolsError = null)
+        viewModelScope.launch {
+            when (val r = repo.keyProtocols(keyId)) {
+                is ApiResult.Success ->
+                    _state.value = _state.value.copy(protocolsLoading = false, protocols = r.data)
+                is ApiResult.Failure ->
+                    _state.value = _state.value.copy(protocolsLoading = false, protocolsError = r.error.message)
+                is ApiResult.NetworkError ->
+                    _state.value = _state.value.copy(protocolsLoading = false, protocolsError = OFFLINE)
+            }
+        }
+    }
+
+    /** MULTI-PROTOCOL: rotate one protocol's secret; surfaces the ONE-TIME new secret show-once. */
+    fun rotateProtocol(protocol: Protocol) {
+        val s = _state.value
+        if (s.rotatingProtocol != null) return
+        _state.value = s.copy(rotatingProtocol = protocol, rotateError = null)
+        viewModelScope.launch {
+            when (val r = repo.rotateProtocolSecret(keyId, protocol.wire)) {
+                is ApiResult.Success -> {
+                    _state.value = _state.value.copy(
+                        rotatingProtocol = null,
+                        rotatedSecret = RotatedSecret(protocol, r.data),
+                    )
+                    // The token/key is now (re)provisioned; refresh the *set flags.
+                    loadProtocols()
+                }
+                is ApiResult.Failure -> handleMutationError(r.error.status, r.error.message) {
+                    _state.value = _state.value.copy(rotatingProtocol = null, rotateError = it)
+                }
+                is ApiResult.NetworkError ->
+                    _state.value = _state.value.copy(rotatingProtocol = null, rotateError = OFFLINE)
+            }
+        }
+    }
+
+    /** Dismiss the show-once rotated-secret dialog. */
+    fun dismissRotatedSecret() {
+        _state.value = _state.value.copy(rotatedSecret = null)
     }
 
     private fun load() {

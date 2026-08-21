@@ -346,14 +346,70 @@ export interface ApiKey {
   capabilities?: string[];
 }
 
+export interface ApiKeyProtocolCredentials {
+  ws?: { ws_token: string };
+  fix?: { username: string; password: string };
+  binary?: { api_key: string; secret: string };
+}
+
 export interface ApiKeyCreated extends ApiKey {
   key_secret: string;
+  protocol_credentials?: ApiKeyProtocolCredentials;
 }
 
 export interface CreateApiKeyReq {
   label?: string;
   expires_in_days?: number;
   capabilities?: string[];
+  protocols?: ("rest" | "ws" | "fix" | "binary")[];
+}
+
+// ─── Multi-protocol gateway / connection credentials ─────────────
+
+export interface GatewayEndpoints {
+  ws: { url: string; enabled: boolean };
+  fix: { host: string; port: number; running: boolean };
+  binary: { endpoint: string; enabled: boolean };
+}
+
+export interface KeyProtocolsRest {
+  base_url: string;
+  scopes: string[];
+}
+
+export interface KeyProtocolsWs {
+  url: string;
+  subs: string[];
+  token_set: boolean;
+}
+
+export interface KeyProtocolsFix {
+  sender_comp_id: string;
+  target_comp_id: string;
+  host: string;
+  port: number;
+  username: string;
+  msg_types: string[];
+  status: string;
+}
+
+export interface KeyProtocolsBinary {
+  endpoint: string;
+  hmac_scheme: string;
+  ops: string[];
+  key_set: boolean;
+}
+
+export interface KeyProtocols {
+  rest?: KeyProtocolsRest;
+  ws?: KeyProtocolsWs;
+  fix?: KeyProtocolsFix;
+  binary?: KeyProtocolsBinary;
+}
+
+export interface RotateProtocolSecretResp {
+  protocol: string;
+  secret: string;
 }
 
 export interface RevokeApiKeyReq {

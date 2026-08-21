@@ -72,6 +72,9 @@ fun NavGraphBuilder.apiKeysDestinations(navController: NavHostController) {
                     ?.savedStateHandle?.set(ApiKeysListDest.RESULT_NEW_SECRET, secret)
                 navController.popBackStack()
             },
+            // MULTI-PROTOCOL: the secret + protocol credentials were already shown show-once on the create
+            // screen, so pop back WITHOUT handing a secret to the list (it just refreshes to show the new row).
+            onCreatedShown = { navController.popBackStack() },
             onNavigateToLogin = { navController.navigateToApiKeysReauth() },
         )
     }

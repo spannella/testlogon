@@ -100,6 +100,7 @@ fun ApiKeysListRoute(
             when (effect) {
                 is ApiKeysEffect.NavigateToLogin -> onNavigateToLogin()
                 is ApiKeysEffect.CreateSucceeded -> Unit // not emitted by the list VM
+                is ApiKeysEffect.CreateSucceededShown -> Unit
             }
         }
     }

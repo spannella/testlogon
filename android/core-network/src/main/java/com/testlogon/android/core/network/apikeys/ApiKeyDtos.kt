@@ -57,6 +57,9 @@ data class CreateApiKeyResultDto(
     @Json(name = "capabilities") val capabilities: List<String> = emptyList(),
     @Json(name = "created_at") val createdAt: Long? = null,
     @Json(name = "expires_at") val expiresAt: Long? = null,
+    // MULTI-PROTOCOL: one-time WS/FIX/binary credential material when `protocols` were requested (show-once,
+    // absent for content-only keys). NEVER persisted/logged.
+    @Json(name = "protocol_credentials") val protocolCredentials: ProtocolCredentialsDto? = null,
 )
 
 /**
@@ -68,6 +71,8 @@ data class CreateApiKeyRequest(
     @Json(name = "label") val label: String,
     @Json(name = "capabilities") val capabilities: List<String> = emptyList(),
     @Json(name = "expires_in_days") val expiresInDays: Int? = null,
+    // MULTI-PROTOCOL: subset of [rest|ws|fix|binary] to provision for this key (absent -> content-only key).
+    @Json(name = "protocols") val protocols: List<String>? = null,
 )
 
 /** Request body for POST ui/api_keys/revoke. */

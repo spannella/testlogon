@@ -4468,6 +4468,54 @@
     <string name="api_keys_secret_copied">Copied to clipboard</string>
     <string name="api_keys_secret_done">Done</string>
 
+    <!-- MULTI-PROTOCOL trading/custody credentials (REST/WS/FIX/Binary) -->
+    <string name="api_keys_protocols_label">Protocols (optional)</string>
+    <string name="api_keys_protocols_hint">Provision transports for the unified trading/custody gateway. FIX and Binary require at least one Trading or Custody scope; WebSocket requires a Trading, Custody, or Market Data scope.</string>
+    <string name="api_keys_protocol_hint_available">Available</string>
+    <string name="api_keys_protocol_hint_unavailable">Not available yet</string>
+    <string name="api_keys_protocol_hint_unknown">Availability unknown</string>
+    <string name="api_keys_created_creds_title">Copy your credentials now</string>
+    <string name="api_keys_created_creds_warning">These secrets are shown only once. Store them securely — you will not be able to see them again.</string>
+    <string name="api_keys_creds_api_secret">API secret</string>
+    <string name="api_keys_creds_ws_token">WebSocket token</string>
+    <string name="api_keys_creds_fix_username">FIX username</string>
+    <string name="api_keys_creds_fix_password">FIX password</string>
+    <string name="api_keys_creds_binary_api_key">Binary API key</string>
+    <string name="api_keys_creds_binary_secret">Binary secret</string>
+    <string name="api_keys_conn_title">Connection credentials</string>
+    <string name="api_keys_conn_loading">Loading connection details…</string>
+    <string name="api_keys_conn_unavailable">Connection credentials are not available for this key yet.</string>
+    <string name="api_keys_conn_rest_title">REST</string>
+    <string name="api_keys_conn_base_url">Base URL</string>
+    <string name="api_keys_conn_scopes">Scopes</string>
+    <string name="api_keys_conn_ws_title">WebSocket</string>
+    <string name="api_keys_conn_url">URL</string>
+    <string name="api_keys_conn_ws_subs">Subscribe payloads</string>
+    <string name="api_keys_conn_ws_token_set">Token provisioned</string>
+    <string name="api_keys_conn_ws_token_unset">No token yet</string>
+    <string name="api_keys_conn_rotate_ws">Rotate WS token</string>
+    <string name="api_keys_conn_fix_title">FIX</string>
+    <string name="api_keys_conn_fix_sender">SenderCompID</string>
+    <string name="api_keys_conn_fix_target">TargetCompID</string>
+    <string name="api_keys_conn_fix_host">Host</string>
+    <string name="api_keys_conn_fix_port">Port</string>
+    <string name="api_keys_conn_fix_username">Username</string>
+    <string name="api_keys_conn_fix_msgtypes">MsgTypes</string>
+    <string name="api_keys_conn_fix_status">Status</string>
+    <string name="api_keys_conn_fix_share">Share session config</string>
+    <string name="api_keys_conn_fix_copy_cfg">Copy session config</string>
+    <string name="api_keys_conn_rotate_fix">Rotate FIX password</string>
+    <string name="api_keys_conn_binary_title">Binary</string>
+    <string name="api_keys_conn_binary_endpoint">Endpoint</string>
+    <string name="api_keys_conn_binary_hmac">HMAC scheme</string>
+    <string name="api_keys_conn_binary_ops">Ops</string>
+    <string name="api_keys_conn_binary_key_set">Key provisioned</string>
+    <string name="api_keys_conn_binary_key_unset">No key yet</string>
+    <string name="api_keys_conn_rotate_binary">Rotate binary secret</string>
+    <string name="api_keys_conn_rotated_title">Copy your new secret now</string>
+    <string name="api_keys_conn_copy">Copy</string>
+    <string name="api_keys_conn_share_subject">FIX session config</string>
+
     <!-- AND-399 Analytics dashboards (read): account-wide KPI tiles + charts + breakdowns. -->
     <string name="more_entry_analytics_dashboard">Analytics</string>
     <string name="analytics_dashboard_title">Analytics</string>

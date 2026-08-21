@@ -51,7 +51,21 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import android.content.Intent
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import com.testlogon.android.feature.apikeys.data.ApiKeyCapabilities
+import com.testlogon.android.feature.apikeys.data.BinaryProtocolInfo
+import com.testlogon.android.feature.apikeys.data.FixProtocolInfo
+import com.testlogon.android.feature.apikeys.data.KeyProtocols
+import com.testlogon.android.feature.apikeys.data.Protocol
+import com.testlogon.android.feature.apikeys.data.RestProtocolInfo
+import com.testlogon.android.feature.apikeys.data.TradingCredentialsFormat
+import com.testlogon.android.feature.apikeys.data.WsProtocolInfo
 
 /** Batch 8 (#17, #18) - stable testTags for the API-key detail screen. */
 object ApiKeyDetailTestTags {
@@ -64,6 +78,12 @@ object ApiKeyDetailTestTags {
     const val CIDR_CONFIRM = "api_key_detail_cidr_confirm"
 
     fun cap(id: String) = "api_key_detail_cap_${id.replace(':', '_')}"
+
+    // MULTI-PROTOCOL connection-credentials section.
+    const val CONN_SECTION = "api_key_detail_conn"
+    fun rotate(p: Protocol) = "api_key_detail_rotate_${p.wire}"
+    const val FIX_SHARE = "api_key_detail_fix_share"
+    const val FIX_COPY_CFG = "api_key_detail_fix_copy_cfg"
 }
 
 @Composable
@@ -79,6 +99,7 @@ fun ApiKeyDetailRoute(
             when (effect) {
                 is ApiKeysEffect.NavigateToLogin -> onNavigateToLogin()
                 is ApiKeysEffect.CreateSucceeded -> Unit
+                is ApiKeysEffect.CreateSucceededShown -> Unit
             }
         }
     }
@@ -94,6 +115,8 @@ fun ApiKeyDetailRoute(
         onAddDeny = viewModel::addDeny,
         onEditDeny = viewModel::editDeny,
         onRemoveDeny = viewModel::removeDeny,
+        onRotateProtocol = viewModel::rotateProtocol,
+        onDismissRotatedSecret = viewModel::dismissRotatedSecret,
     )
 }
 
@@ -109,6 +132,8 @@ fun ApiKeyDetailScreen(
     onAddDeny: (String) -> Unit,
     onEditDeny: (String, String) -> Unit,
     onRemoveDeny: (String) -> Unit,
+    onRotateProtocol: (Protocol) -> Unit = {},
+    onDismissRotatedSecret: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // null = closed; non-null = the dialog config (which list + optional value being edited).
@@ -194,9 +219,19 @@ fun ApiKeyDetailScreen(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
+
+                    ConnectionCredentialsSection(
+                        state = state,
+                        onRotate = onRotateProtocol,
+                    )
                 }
             }
         }
+    }
+
+    // MULTI-PROTOCOL: show-once dialog for a rotated protocol secret.
+    state.rotatedSecret?.let { rotated ->
+        RotatedSecretDialog(rotated = rotated, onDismiss = onDismissRotatedSecret)
     }
 
     dialog?.let { cfg ->
@@ -379,6 +414,259 @@ private fun CidrInputDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+
+/**
+ * MULTI-PROTOCOL - the "Connection credentials" section: one card per ENABLED protocol from
+ * GET ui/api_keys/{id}/protocols. Degrades to an honest "not available yet" line when the endpoint 404s (null
+ * [ApiKeyDetailUiState.protocols]). Secrets are shown only at create/rotate - this section shows connection
+ * metadata + provisioned flags + Rotate actions.
+ */
+@Composable
+private fun ConnectionCredentialsSection(
+    state: ApiKeyDetailUiState,
+    onRotate: (Protocol) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth().testTag(ApiKeyDetailTestTags.CONN_SECTION)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(R.string.api_keys_conn_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            val protocols = state.protocols
+            when {
+                state.protocolsLoading && protocols == null ->
+                    Text(
+                        text = stringResource(R.string.api_keys_conn_loading),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                state.protocolsError != null && protocols == null ->
+                    Text(
+                        text = state.protocolsError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                protocols == null || !protocols.hasAny ->
+                    Text(
+                        text = stringResource(R.string.api_keys_conn_unavailable),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                else -> {
+                    protocols.rest?.let { RestCredentialsBlock(it) }
+                    protocols.ws?.let { WsCredentialsBlock(it, state.rotatingProtocol == Protocol.WS, onRotate) }
+                    protocols.fix?.let { FixCredentialsBlock(it, state.rotatingProtocol == Protocol.FIX, onRotate) }
+                    protocols.binary?.let {
+                        BinaryCredentialsBlock(it, state.rotatingProtocol == Protocol.BINARY, onRotate)
+                    }
+                    if (state.rotateError != null) {
+                        Text(
+                            text = state.rotateError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RestCredentialsBlock(info: RestProtocolInfo) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(R.string.api_keys_conn_rest_title), style = MaterialTheme.typography.titleSmall)
+        LabeledValue(stringResource(R.string.api_keys_conn_base_url), info.baseUrl)
+        if (info.scopes.isNotEmpty()) {
+            LabeledValue(stringResource(R.string.api_keys_conn_scopes), info.scopes.joinToString(", "))
+        }
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun WsCredentialsBlock(info: WsProtocolInfo, rotating: Boolean, onRotate: (Protocol) -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(R.string.api_keys_conn_ws_title), style = MaterialTheme.typography.titleSmall)
+        LabeledValue(stringResource(R.string.api_keys_conn_url), info.url)
+        Text(stringResource(R.string.api_keys_conn_ws_subs), style = MaterialTheme.typography.labelMedium)
+        TradingCredentialsFormat.wsSubscribeChannels(info.subs).forEach { sub ->
+            val payload = TradingCredentialsFormat.wsSubscribePayload(sub)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = payload,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.weight(1f),
+                )
+                AssistChip(
+                    onClick = { clipboard.setText(AnnotatedString(payload)) },
+                    label = { Text(stringResource(R.string.api_keys_conn_copy)) },
+                )
+            }
+        }
+        Text(
+            text = if (info.tokenSet) stringResource(R.string.api_keys_conn_ws_token_set)
+            else stringResource(R.string.api_keys_conn_ws_token_unset),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        RotateButton(
+            label = stringResource(R.string.api_keys_conn_rotate_ws),
+            rotating = rotating,
+            testTag = ApiKeyDetailTestTags.rotate(Protocol.WS),
+            onClick = { onRotate(Protocol.WS) },
+        )
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun FixCredentialsBlock(info: FixProtocolInfo, rotating: Boolean, onRotate: (Protocol) -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val cfg = TradingCredentialsFormat.buildFixSessionConfig(
+        TradingCredentialsFormat.FixSessionParams(
+            senderCompId = info.senderCompId,
+            targetCompId = info.targetCompId,
+            host = info.host,
+            port = info.port?.toString().orEmpty(),
+            username = info.username.ifBlank { null },
+            msgTypes = info.msgTypes,
+        ),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.api_keys_conn_fix_title), style = MaterialTheme.typography.titleSmall)
+            if (info.status.isNotBlank()) {
+                AssistChip(onClick = {}, label = { Text(info.status) })
+            }
+        }
+        LabeledValue(stringResource(R.string.api_keys_conn_fix_sender), info.senderCompId)
+        LabeledValue(stringResource(R.string.api_keys_conn_fix_target), info.targetCompId)
+        LabeledValue(stringResource(R.string.api_keys_conn_fix_host), info.host)
+        LabeledValue(stringResource(R.string.api_keys_conn_fix_port), info.port?.toString().orEmpty())
+        if (info.username.isNotBlank()) {
+            LabeledValue(stringResource(R.string.api_keys_conn_fix_username), info.username)
+        }
+        if (info.msgTypes.isNotEmpty()) {
+            LabeledValue(stringResource(R.string.api_keys_conn_fix_msgtypes), info.msgTypes.joinToString(", "))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistChip(
+                onClick = {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, TradingCredentialsFormat.fixConfigFilename(info.senderCompId))
+                        putExtra(Intent.EXTRA_TITLE, TradingCredentialsFormat.fixConfigFilename(info.senderCompId))
+                        putExtra(Intent.EXTRA_TEXT, cfg)
+                    }
+                    context.startActivity(
+                        Intent.createChooser(send, context.getString(R.string.api_keys_conn_share_subject)),
+                    )
+                },
+                label = { Text(stringResource(R.string.api_keys_conn_fix_share)) },
+                modifier = Modifier.testTag(ApiKeyDetailTestTags.FIX_SHARE),
+            )
+            AssistChip(
+                onClick = { clipboard.setText(AnnotatedString(cfg)) },
+                label = { Text(stringResource(R.string.api_keys_conn_fix_copy_cfg)) },
+                modifier = Modifier.testTag(ApiKeyDetailTestTags.FIX_COPY_CFG),
+            )
+        }
+        RotateButton(
+            label = stringResource(R.string.api_keys_conn_rotate_fix),
+            rotating = rotating,
+            testTag = ApiKeyDetailTestTags.rotate(Protocol.FIX),
+            onClick = { onRotate(Protocol.FIX) },
+        )
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun BinaryCredentialsBlock(info: BinaryProtocolInfo, rotating: Boolean, onRotate: (Protocol) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(R.string.api_keys_conn_binary_title), style = MaterialTheme.typography.titleSmall)
+        LabeledValue(stringResource(R.string.api_keys_conn_binary_endpoint), info.endpoint)
+        LabeledValue(stringResource(R.string.api_keys_conn_binary_hmac), info.hmacScheme)
+        if (info.ops.isNotEmpty()) {
+            LabeledValue(stringResource(R.string.api_keys_conn_binary_ops), info.ops.joinToString(", "))
+        }
+        Text(
+            text = if (info.keySet) stringResource(R.string.api_keys_conn_binary_key_set)
+            else stringResource(R.string.api_keys_conn_binary_key_unset),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        RotateButton(
+            label = stringResource(R.string.api_keys_conn_rotate_binary),
+            rotating = rotating,
+            testTag = ApiKeyDetailTestTags.rotate(Protocol.BINARY),
+            onClick = { onRotate(Protocol.BINARY) },
+        )
+    }
+}
+
+@Composable
+private fun LabeledValue(label: String, value: String) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value.ifBlank { "-" },
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+        )
+    }
+}
+
+@Composable
+private fun RotateButton(label: String, rotating: Boolean, testTag: String, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, enabled = !rotating, modifier = Modifier.testTag(testTag)) {
+        if (rotating) {
+            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+        } else {
+            Text(label)
+        }
+    }
+}
+
+/** MULTI-PROTOCOL - show-once dialog for a rotated protocol secret. */
+@Composable
+private fun RotatedSecretDialog(rotated: RotatedSecret, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.api_keys_conn_rotated_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = stringResource(R.string.api_keys_created_creds_warning),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = TradingCredentialsFormat.protocolLabel(rotated.protocol),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(
+                    text = rotated.secret,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                )
+                AssistChip(
+                    onClick = { clipboard.setText(AnnotatedString(rotated.secret)) },
+                    label = { Text(stringResource(R.string.api_keys_conn_copy)) },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.api_keys_secret_done)) }
         },
     )
 }

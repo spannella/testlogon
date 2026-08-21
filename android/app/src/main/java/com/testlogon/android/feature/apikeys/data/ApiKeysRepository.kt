@@ -37,7 +37,12 @@ interface ApiKeysRepository {
     suspend fun list(): ApiResult<List<ApiKey>>
 
     /** POST a new API key (label + capabilities + optional expiry). On success returns the one-time secret. */
-    suspend fun create(label: String, capabilities: List<String>, expiresInDays: Int?): ApiResult<CreatedApiKey>
+    suspend fun create(
+        label: String,
+        capabilities: List<String>,
+        expiresInDays: Int?,
+        protocols: List<String> = emptyList(),
+    ): ApiResult<CreatedApiKey>
 
     /** POST a revoke for the given key id. On success the key is dropped from the in-memory snapshot. */
     suspend fun revoke(keyId: String): ApiResult<Unit>
@@ -60,6 +65,24 @@ interface ApiKeysRepository {
         allowCidrs: List<String>,
         denyCidrs: List<String>,
     ): ApiResult<Pair<List<String>, List<String>>>
+
+    /**
+     * MULTI-PROTOCOL: GET the unified exchange gateway per-protocol availability. NEW endpoint -> DEGRADES ON
+     * 404 to `ApiResult.Success(null)` (an honest "not available yet" state; existing keys are unaffected).
+     */
+    suspend fun gatewayEndpoints(): ApiResult<GatewayEndpoints?>
+
+    /**
+     * MULTI-PROTOCOL: GET a key's per-protocol connection credentials. NEW endpoint -> DEGRADES ON 404 to
+     * `ApiResult.Success(null)`. Secrets are never returned here (only token_set/key_set flags).
+     */
+    suspend fun keyProtocols(keyId: String): ApiResult<KeyProtocols?>
+
+    /**
+     * MULTI-PROTOCOL: POST a rotate of one protocol's secret. Returns the ONE-TIME new secret (show-once).
+     * A mutation -> errors clearly (does NOT degrade on 404).
+     */
+    suspend fun rotateProtocolSecret(keyId: String, protocol: String): ApiResult<String>
 }
 
 @Singleton
@@ -98,6 +121,7 @@ class DefaultApiKeysRepository @Inject constructor(
         label: String,
         capabilities: List<String>,
         expiresInDays: Int?,
+        protocols: List<String>,
     ): ApiResult<CreatedApiKey> =
         withContext(Dispatchers.IO) {
             val result = call {
@@ -106,6 +130,8 @@ class DefaultApiKeysRepository @Inject constructor(
                         label = label,
                         capabilities = capabilities,
                         expiresInDays = expiresInDays,
+                        // Absent (null) for a content-only key so the wire body stays unchanged from before.
+                        protocols = protocols.takeIf { it.isNotEmpty() },
                     ),
                 ).toDomain()
             }
@@ -172,6 +198,32 @@ class DefaultApiKeysRepository @Inject constructor(
             result
         }
 
+    override suspend fun gatewayEndpoints(): ApiResult<GatewayEndpoints?> =
+        withContext(Dispatchers.IO) {
+            degradeOn404 { api.gatewayEndpoints().toDomain() }
+        }
+
+    override suspend fun keyProtocols(keyId: String): ApiResult<KeyProtocols?> =
+        withContext(Dispatchers.IO) {
+            degradeOn404 { api.keyProtocols(keyId).toDomain() }
+        }
+
+    override suspend fun rotateProtocolSecret(keyId: String, protocol: String): ApiResult<String> =
+        withContext(Dispatchers.IO) {
+            call { api.rotateProtocolSecret(keyId, protocol).secret }
+        }
+
+    /**
+     * Folds a NEW-endpoint READ into ApiResult, mapping a 404 to `Success(null)` (the endpoint is "not available
+     * yet"). Any other HTTP/transport failure surfaces normally so a real error is not masked as absence.
+     */
+    private suspend fun <T> degradeOn404(block: suspend () -> T): ApiResult<T?> =
+        when (val r = call { block() }) {
+            is ApiResult.Success -> r
+            is ApiResult.Failure -> if (r.error.status == HTTP_NOT_FOUND) ApiResult.Success(null) else r
+            is ApiResult.NetworkError -> r
+        }
+
     /** Patches the cached row for [keyId] (if present) so detail/list reflect a mutation without a re-fetch. */
     private fun updateCached(keyId: String, transform: (ApiKey) -> ApiKey) {
         cache = cache?.map { if (it.id == keyId) transform(it) else it }
@@ -198,5 +250,6 @@ class DefaultApiKeysRepository @Inject constructor(
 
     private companion object {
         const val HTTP_UNAUTHORIZED = 401
+        const val HTTP_NOT_FOUND = 404
     }
 }

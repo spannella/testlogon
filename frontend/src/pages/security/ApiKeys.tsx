@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Key, Plus, Trash2, Copy, Check, AlertTriangle, Globe, Download, Info, X, BarChart2, Shield } from "lucide-react";
+import { Key, Plus, Trash2, Copy, Check, AlertTriangle, Globe, Download, Info, X, BarChart2, Shield, Radio } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +26,10 @@ import {
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { getApiKeys, createApiKey, revokeApiKey, setApiKeyIpRules, getApiKeyUsage } from "@/api/endpoints/account";
-import type { ApiKey } from "@/api/types";
+import { getGatewayEndpoints } from "@/api/endpoints/tradingCredentials";
+import type { ApiKey, ApiKeyProtocolCredentials } from "@/api/types";
+import { ALL_PROTOCOLS, protocolLabel, validateProtocolScopes, type Protocol } from "@/lib/tradingCredentials";
+import { ConnectionCredentialsDialog } from "./ConnectionCredentials";
 
 // ─── Capability scopes (mirrors app/services/api_key_capabilities.py) ──
 
@@ -38,6 +41,10 @@ const SCOPE_GROUPS: { label: string; scopes: string[] }[] = [
   { label: "Newsfeed", scopes: ["newsfeed:moderate", "newsfeed:read", "newsfeed:write"] },
   { label: "Shopping", scopes: ["shopping:cart:write", "shopping:catalog:read", "shopping:checkout:write", "shopping:orders:read"] },
   { label: "Tickets", scopes: ["tickets:admin", "tickets:read", "tickets:write"] },
+  // ─── Exchange gateway scopes (trading / custody / market data) ───
+  { label: "Trading", scopes: ["trading:read", "trading:orders", "trading:cancel", "trading:positions", "trading:funding"] },
+  { label: "Custody", scopes: ["custody:read", "custody:deposit", "custody:withdraw", "custody:transfer"] },
+  { label: "Market Data", scopes: ["marketdata:read", "marketdata:stream"] },
 ];
 
 // ─── CIDR list editor ────────────────────────────────────────────
@@ -254,6 +261,32 @@ function KeyDetailsDialog({
   );
 }
 
+// ─── Show-once protocol credentials panel (create result) ────────
+
+function ProtocolCredentialsPanel({ creds }: { creds: ApiKeyProtocolCredentials }) {
+  const rows: { label: string; value: string }[] = [];
+  if (creds.ws?.ws_token) rows.push({ label: "WS Token", value: creds.ws.ws_token });
+  if (creds.fix?.username) rows.push({ label: "FIX Username", value: creds.fix.username });
+  if (creds.fix?.password) rows.push({ label: "FIX Password", value: creds.fix.password });
+  if (creds.binary?.api_key) rows.push({ label: "Binary API Key", value: creds.binary.api_key });
+  if (creds.binary?.secret) rows.push({ label: "Binary Secret", value: creds.binary.secret });
+  if (rows.length === 0) return null;
+  return (
+    <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50/50 p-3 dark:border-blue-800 dark:bg-blue-950/40">
+      <p className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300">
+        <Radio className="h-3.5 w-3.5" />
+        Protocol credentials (shown once)
+      </p>
+      {rows.map((r) => (
+        <div key={r.label}>
+          <p className="mb-0.5 text-[11px] font-medium text-muted-foreground">{r.label}</p>
+          <code className="block break-all rounded border bg-background/60 px-2 py-1 text-xs font-mono">{r.value}</code>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Main component ──────────────────────────────────────────────
 
 export function ApiKeys() {
@@ -262,11 +295,13 @@ export function ApiKeys() {
   const [label, setLabel] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<string>("none");
   const [capabilities, setCapabilities] = useState<string[]>([]);
-  const [createdKey, setCreatedKey] = useState<{ key_id: string; key_secret: string; label: string; expiresInDays: string } | null>(null);
+  const [protocols, setProtocols] = useState<Protocol[]>([]);
+  const [createdKey, setCreatedKey] = useState<{ key_id: string; key_secret: string; label: string; expiresInDays: string; protocolCredentials?: ApiKeyProtocolCredentials } | null>(null);
   const [copiedField, setCopiedField] = useState<"key_id" | "key_secret" | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [ipRulesTarget, setIpRulesTarget] = useState<string | null>(null);
   const [detailsTarget, setDetailsTarget] = useState<ApiKey | null>(null);
+  const [connTarget, setConnTarget] = useState<ApiKey | null>(null);
   // CIDR list state
   const [allowCidrList, setAllowCidrList] = useState<string[]>([]);
   const [denyCidrList, setDenyCidrList] = useState<string[]>([]);
@@ -278,18 +313,43 @@ export function ApiKeys() {
     queryFn: getApiKeys,
   });
 
+  // Gateway availability (degrade-on-404 — hints only).
+  const gatewayQuery = useQuery({
+    queryKey: ["gatewayEndpoints"],
+    queryFn: getGatewayEndpoints,
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  const protocolAvailability: Record<Protocol, { available: boolean; hint?: string }> = {
+    rest: { available: true },
+    ws: gatewayQuery.data
+      ? { available: gatewayQuery.data.ws.enabled, hint: gatewayQuery.data.ws.enabled ? undefined : "WS gateway disabled" }
+      : { available: true },
+    fix: gatewayQuery.data
+      ? { available: gatewayQuery.data.fix.running, hint: gatewayQuery.data.fix.running ? undefined : "FIX gateway not running" }
+      : { available: true },
+    binary: gatewayQuery.data
+      ? { available: gatewayQuery.data.binary.enabled, hint: gatewayQuery.data.binary.enabled ? undefined : "Binary listener disabled" }
+      : { available: true },
+  };
+
+  const protocolScopeErrors = validateProtocolScopes(protocols, capabilities);
+
   const createMutation = useMutation({
     mutationFn: () => createApiKey({
       label: label || undefined,
       expires_in_days: expiresInDays === "none" ? undefined : Number(expiresInDays),
       capabilities: capabilities.length > 0 ? capabilities : undefined,
+      protocols: protocols.length > 0 ? protocols : undefined,
     }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
-      setCreatedKey({ key_id: data.key_id, key_secret: data.key_secret, label, expiresInDays });
+      setCreatedKey({ key_id: data.key_id, key_secret: data.key_secret, label, expiresInDays, protocolCredentials: data.protocol_credentials });
       setLabel("");
       setExpiresInDays("none");
       setCapabilities([]);
+      setProtocols([]);
     },
     onError: () => toast.error("Failed to create API key"),
   });
@@ -347,6 +407,15 @@ export function ApiKeys() {
       "IMPORTANT: Store this file securely and delete it after saving your credentials.",
       "The Secret Key will not be shown again.",
     ];
+    const pc = createdKey.protocolCredentials;
+    if (pc) {
+      lines.push("", "Protocol Credentials (shown once)", "---------------------------------");
+      if (pc.ws?.ws_token) lines.push(`WS Token:        ${pc.ws.ws_token}`);
+      if (pc.fix?.username) lines.push(`FIX Username:    ${pc.fix.username}`);
+      if (pc.fix?.password) lines.push(`FIX Password:    ${pc.fix.password}`);
+      if (pc.binary?.api_key) lines.push(`Binary API Key:  ${pc.binary.api_key}`);
+      if (pc.binary?.secret) lines.push(`Binary Secret:   ${pc.binary.secret}`);
+    }
     const blob = new Blob([lines.join("\n")], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -404,7 +473,7 @@ export function ApiKeys() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => { setCreateOpen(true); setCreatedKey(null); setCopiedField(null); setLabel(""); setExpiresInDays("none"); setCapabilities([]); }}
+            onClick={() => { setCreateOpen(true); setCreatedKey(null); setCopiedField(null); setLabel(""); setExpiresInDays("none"); setCapabilities([]); setProtocols([]); }}
           >
             <Plus className="mr-1 h-3.5 w-3.5" />
             Create Key
@@ -457,6 +526,14 @@ export function ApiKeys() {
                   <Button
                     size="icon"
                     variant="ghost"
+                    onClick={() => setConnTarget(k)}
+                    aria-label="Connection credentials"
+                  >
+                    <Radio className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
                     onClick={() => setDetailsTarget(k)}
                     aria-label="View key details"
                   >
@@ -491,6 +568,14 @@ export function ApiKeys() {
           keyData={detailsTarget}
           onClose={() => setDetailsTarget(null)}
           onOpenIpRules={() => openIpRules(detailsTarget)}
+        />
+      )}
+
+      {/* Connection credentials dialog */}
+      {connTarget && (
+        <ConnectionCredentialsDialog
+          keyData={connTarget}
+          onClose={() => setConnTarget(null)}
         />
       )}
 
@@ -529,6 +614,9 @@ export function ApiKeys() {
                   </div>
                 </div>
               ))}
+              {createdKey.protocolCredentials && (
+                <ProtocolCredentialsPanel creds={createdKey.protocolCredentials} />
+              )}
               <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 <span>The Secret Key is shown only once. Store it securely.</span>
@@ -602,8 +690,53 @@ export function ApiKeys() {
                   </p>
                 )}
               </div>
+
+              {/* Protocols — multi-protocol gateway channels */}
+              <div>
+                <Label className="flex items-center gap-1.5">
+                  <Radio className="h-3.5 w-3.5 text-muted-foreground" />
+                  Protocols <span className="text-xs font-normal text-muted-foreground">(exchange gateway channels)</span>
+                </Label>
+                <div className="mt-1 grid grid-cols-2 gap-2 rounded-md border p-3">
+                  {ALL_PROTOCOLS.map((proto) => {
+                    const avail = protocolAvailability[proto];
+                    return (
+                      <label key={proto} className="flex cursor-pointer items-start gap-1.5 text-xs">
+                        <input
+                          type="checkbox"
+                          aria-label={proto}
+                          className="mt-0.5"
+                          checked={protocols.includes(proto)}
+                          onChange={(e) => {
+                            setProtocols((prev) =>
+                              e.target.checked ? [...prev, proto] : prev.filter((p) => p !== proto)
+                            );
+                          }}
+                        />
+                        <span className="flex flex-col">
+                          <span className="font-medium">{protocolLabel(proto)}</span>
+                          {avail.hint && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400">{avail.hint}</span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {protocolScopeErrors.length > 0 && (
+                  <div className="mt-1 space-y-0.5">
+                    {protocolScopeErrors.map((err) => (
+                      <p key={err.protocol} className="flex items-center gap-1 text-[11px] text-destructive">
+                        <AlertTriangle className="h-3 w-3 shrink-0" />
+                        {err.message}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <DialogFooter>
-                <Button type="submit" disabled={createMutation.isPending}>
+                <Button type="submit" disabled={createMutation.isPending || protocolScopeErrors.length > 0}>
                   {createMutation.isPending ? "Creating..." : "Create Key"}
                 </Button>
               </DialogFooter>
