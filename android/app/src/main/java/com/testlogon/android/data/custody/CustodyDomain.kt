@@ -338,3 +338,116 @@ data class StakeResult(
     val status: String?,
     val reason: String?,
 )
+
+// ---------------- External custody providers ----------------
+
+/**
+ * One custody provider, display-ready. [kind] resolves to internal|fireblocks|bitgo; [status] is the
+ * raw wire status (the pure [com.testlogon.android.feature.custody.CustodyProviderFormat] turns it into
+ * a badge). Provider secrets are SERVER-SIDE only -- nothing here carries a credential.
+ */
+data class CustodyProvider(
+    val id: String,
+    val name: String,
+    val kind: String,
+    val connected: Boolean,
+    val status: String,
+    val features: List<String>,
+) {
+    val displayName: String get() = name.ifBlank { id.ifBlank { "Provider" } }
+}
+
+/**
+ * The providers list, plus an [unavailable] flag for when the backend does not expose the provider
+ * routes (404) -- a soft, honest "provider integration pending" empty state.
+ */
+data class CustodyProviders(
+    val providers: List<CustodyProvider>,
+    val unavailable: Boolean = false,
+) {
+    val isEmpty: Boolean get() = providers.isEmpty()
+
+    companion object {
+        fun unavailable(): CustodyProviders = CustodyProviders(providers = emptyList(), unavailable = true)
+    }
+}
+
+/**
+ * A provider's live status probe (GET providers/{id}/status): connection health, whether balances are
+ * attested, the last reconciliation marker, and any pending approvals count.
+ */
+data class ProviderStatusDetail(
+    val status: String,
+    val balancesAttested: Boolean?,
+    val lastReconciledTs: String?,
+    val pendingApprovals: Int?,
+)
+
+/** The immediate result of a connect/disconnect action. [reason] carries any gateway message. */
+data class ProviderActionResult(
+    val ok: Boolean,
+    val status: String?,
+    val reason: String?,
+)
+
+// ---------------- Vaults (provider-backed) ----------------
+
+/**
+ * One vault, display-ready. [provider] defaults to "internal" when the backend omits it (older vaults
+ * predate external custody). This reuses/extends the sub-accounts read with a backing provider.
+ */
+data class CustodyVault(
+    val vault: String,
+    val label: String,
+    val provider: String,
+) {
+    val displayLabel: String get() = label.ifBlank { "Vault" }
+    val vaultShort: String get() = if (vault.length <= 14) vault else "${vault.take(8)}…${vault.takeLast(4)}"
+}
+
+/** The vaults list, plus an [unavailable] flag for a 404 soft empty state. */
+data class CustodyVaults(
+    val vaults: List<CustodyVault>,
+    val unavailable: Boolean = false,
+) {
+    val isEmpty: Boolean get() = vaults.isEmpty()
+
+    companion object {
+        fun unavailable(): CustodyVaults = CustodyVaults(vaults = emptyList(), unavailable = true)
+    }
+}
+
+/** Result of setting a vault's backing provider (PUT vaults/{vault}/provider). */
+data class SetVaultProviderResult(
+    val ok: Boolean,
+    val vault: String?,
+    val provider: String?,
+    val reason: String?,
+)
+
+// ---------------- Withdrawal approval (provider-backed, multi-sig) ----------------
+
+/** One approver who signed off on a withdrawal. */
+data class WithdrawalApprover(
+    val approver: String,
+    val at: String,
+)
+
+/**
+ * A provider-backed withdrawal's approval state (GET withdrawals/{id}/approval): the current status,
+ * the required quorum, and the approvers collected so far. [unavailable] is true when the backend does
+ * not expose the approval route (404) -- a soft empty state.
+ */
+data class WithdrawalApproval(
+    val status: String,
+    val quorum: Int,
+    val approvals: List<WithdrawalApprover>,
+    val unavailable: Boolean = false,
+) {
+    val collected: Int get() = approvals.size
+
+    companion object {
+        fun unavailable(): WithdrawalApproval =
+            WithdrawalApproval(status = "", quorum = 0, approvals = emptyList(), unavailable = true)
+    }
+}

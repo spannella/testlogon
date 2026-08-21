@@ -2,6 +2,7 @@ package com.testlogon.android.data.custody
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import com.testlogon.android.core.network.json.LenientInt
 
 /*
  * Wire DTOs for the PRODUCTION custody surface (the /me/custody endpoints), repointed to the REAL
@@ -263,4 +264,111 @@ data class StakeAckDto(
     @Json(name = "detail") val detail: String? = null,
     @Json(name = "error") val error: String? = null,
     @Json(name = "reason") val reason: String? = null,
+)
+
+// ==== External custody providers (Fireblocks / BitGo / internal gateway) ====
+// Provider creds are SERVER-SIDE only: these routes only initiate a connection + report status; no
+// provider secret is ever sent from or returned to the client. NONE are deployed on every backend --
+// a 404 folds to a soft "provider integration pending" state in the repository (reads only). All
+// fields nullable/defaulted so a partial shape parses. Integer/count fields use @LenientInt so a JSON
+// number OR numeric string both decode.
+
+/** One custody provider (GET me/custody/providers). kind in internal|fireblocks|bitgo. */
+@JsonClass(generateAdapter = true)
+data class CustodyProviderDto(
+    @Json(name = "id") val id: String? = null,
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "kind") val kind: String? = null,
+    @Json(name = "connected") val connected: Boolean? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "features") val features: List<String>? = null,
+)
+
+/** GET me/custody/providers envelope. */
+@JsonClass(generateAdapter = true)
+data class CustodyProvidersDto(
+    @Json(name = "providers") val providers: List<CustodyProviderDto>? = null,
+)
+
+/**
+ * POST me/custody/providers/{id}/connect (body {label?}) and .../disconnect response. connect returns
+ * {ok,status}; disconnect returns an ack ({ok} and/or {disconnected}). All fields nullable so both
+ * shapes parse. detail/error carry a rejection message.
+ */
+@JsonClass(generateAdapter = true)
+data class ProviderConnectResultDto(
+    @Json(name = "ok") val ok: Boolean? = null,
+    @Json(name = "disconnected") val disconnected: Boolean? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "detail") val detail: String? = null,
+    @Json(name = "error") val error: String? = null,
+)
+
+/** Body for POST me/custody/providers/{id}/connect -- an optional human label for the connection. */
+@JsonClass(generateAdapter = true)
+data class ProviderConnectRequestDto(
+    @Json(name = "label") val label: String? = null,
+)
+
+/**
+ * GET me/custody/providers/{id}/status. balances_attested is a tri-state (true/false/absent);
+ * pending_approvals is an integer count (lenient). last_reconciled_ts is left as a raw string
+ * (epoch or ISO -- displayed verbatim).
+ */
+@JsonClass(generateAdapter = true)
+data class ProviderStatusDto(
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "balances_attested") val balancesAttested: Boolean? = null,
+    @Json(name = "last_reconciled_ts") val lastReconciledTs: String? = null,
+    @LenientInt @Json(name = "pending_approvals") val pendingApprovals: Int? = null,
+)
+
+/** One vault row (GET me/custody/vaults). provider optional -> defaults to "internal" at the edge. */
+@JsonClass(generateAdapter = true)
+data class VaultDto(
+    @Json(name = "vault") val vault: String? = null,
+    @Json(name = "label") val label: String? = null,
+    @Json(name = "provider") val provider: String? = null,
+    @Json(name = "balances") val balances: Map<String, Any?>? = null,
+)
+
+/** GET me/custody/vaults envelope. */
+@JsonClass(generateAdapter = true)
+data class VaultsDto(
+    @Json(name = "vaults") val vaults: List<VaultDto>? = null,
+)
+
+/** Body for PUT me/custody/vaults/{vault}/provider -- the provider to back the vault with. */
+@JsonClass(generateAdapter = true)
+data class SetVaultProviderRequestDto(
+    @Json(name = "provider") val provider: String,
+)
+
+/** PUT me/custody/vaults/{vault}/provider ack ({ok, provider}). */
+@JsonClass(generateAdapter = true)
+data class SetVaultProviderResultDto(
+    @Json(name = "ok") val ok: Boolean? = null,
+    @Json(name = "vault") val vault: String? = null,
+    @Json(name = "provider") val provider: String? = null,
+    @Json(name = "detail") val detail: String? = null,
+    @Json(name = "error") val error: String? = null,
+)
+
+/** One approver who has signed off on a withdrawal (GET me/custody/withdrawals/{id}/approval). */
+@JsonClass(generateAdapter = true)
+data class WithdrawalApproverDto(
+    @Json(name = "approver") val approver: String? = null,
+    @Json(name = "at") val at: String? = null,
+)
+
+/**
+ * GET me/custody/withdrawals/{id}/approval. status in
+ * pending_approval|approved|signed|broadcast|rejected. quorum is the required approvals (lenient int);
+ * approvals lists who has signed so far.
+ */
+@JsonClass(generateAdapter = true)
+data class WithdrawalApprovalDto(
+    @Json(name = "status") val status: String? = null,
+    @LenientInt @Json(name = "quorum") val quorum: Int? = null,
+    @Json(name = "approvals") val approvals: List<WithdrawalApproverDto>? = null,
 )

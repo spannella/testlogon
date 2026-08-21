@@ -41,6 +41,7 @@ const CalendarPage = lazy(() => import("@/pages/calendar/CalendarPage"));
 const TradingBlotterPage = lazy(() => import("@/pages/blotter/TradingBlotterPage"));
 const TradingWorkspacePage = lazy(() => import("@/pages/blotter/TradingWorkspacePage"));
 const CustodyPage = lazy(() => import("@/pages/custody/CustodyPage"));
+const CustodyProvidersPage = lazy(() => import("@/pages/custody/CustodyProvidersPage"));
 const PortfolioPage = lazy(() => import("@/pages/portfolio/PortfolioPage"));
 const BailoutsBoardPage = lazy(() => import("@/pages/bailouts/BailoutsBoardPage"));
 const PnLPage = lazy(() => import("@/pages/pnl/PnLPage"));
@@ -731,6 +732,7 @@ export default function App() {
           <Route path="blotter" element={<TradingWorkspacePage />} />
           <Route path="blotter/single" element={<TradingBlotterPage />} />
           <Route path="custody" element={<CustodyPage />} />
+          <Route path="custody/providers" element={<CustodyProvidersPage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
           <Route path="pnl" element={<PnLPage />} />
           <Route path="reports" element={<ReportsPage />} />

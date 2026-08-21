@@ -4,6 +4,8 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
+import retrofit2.http.PUT
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
@@ -92,4 +94,49 @@ interface CustodyApi {
     @Headers("Content-Type: application/json")
     @POST("me/staking/stake")
     suspend fun stake(@Body body: StakeRequestBodyDto): StakeAckDto
+
+
+    // ==== External custody providers (Fireblocks / BitGo / internal gateway) ====
+    // Provider creds are SERVER-SIDE only; these routes initiate a connection + report status. NOT
+    // deployed on every backend -> reads 404 -> repository degrades to a "pending backend" state.
+
+    /** List the custody providers this account can back vaults with (internal|fireblocks|bitgo). */
+    @GET("me/custody/providers")
+    suspend fun getProviders(): CustodyProvidersDto
+
+    /** Initiate a connection to a provider (creds resolved server-side). Optional human label. */
+    @Headers("Content-Type: application/json")
+    @POST("me/custody/providers/{id}/connect")
+    suspend fun connectProvider(
+        @Path("id") id: String,
+        @Body body: ProviderConnectRequestDto,
+    ): ProviderConnectResultDto
+
+    /** Disconnect a provider (server-side teardown; no secret client-side). */
+    @POST("me/custody/providers/{id}/disconnect")
+    suspend fun disconnectProvider(@Path("id") id: String): ProviderConnectResultDto
+
+    /** Live status probe for a provider (health, attestation, reconciliation, pending approvals). */
+    @GET("me/custody/providers/{id}/status")
+    suspend fun getProviderStatus(@Path("id") id: String): ProviderStatusDto
+
+    // ==== Provider-backed vaults ====
+
+    /** List the caller's vaults with their backing provider (extends the sub-accounts read). */
+    @GET("me/custody/vaults")
+    suspend fun getVaults(): VaultsDto
+
+    /** Set the backing provider for one vault. */
+    @Headers("Content-Type: application/json")
+    @PUT("me/custody/vaults/{vault}/provider")
+    suspend fun setVaultProvider(
+        @Path("vault") vault: String,
+        @Body body: SetVaultProviderRequestDto,
+    ): SetVaultProviderResultDto
+
+    // ==== Provider-backed withdrawal approval (multi-sig quorum) ====
+
+    /** Poll the approval state of a provider-backed withdrawal (status + quorum + approvers). */
+    @GET("me/custody/withdrawals/{id}/approval")
+    suspend fun getWithdrawalApproval(@Path("id") id: String): WithdrawalApprovalDto
 }
