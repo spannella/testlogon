@@ -384,6 +384,11 @@ object MoreRoutes {
     // (cap table / revenue / upkeep / IPO auction). Endpoints degrade-on-404 (backend pending).
     const val TOKENS = TokensMarketDest.ROUTE
 
+    // USER-CREATED STRATEGIES / BASKETS (investable funds): the marketplace + "my strategies" list
+    // (the navigable hub BROWSE entry). Builder / detail+invest/redeem / paper-run+backtest are
+    // detail routes reached from there. All reads degrade-on-404 (the me/strategies backend is pending).
+    const val STRATEGIES = StrategyMarketDest.ROUTE
+
     // MARGIN DISTRESS / PRE-EMPTIVE BAILOUT AUCTION: the rescuer opportunity board (the navigable hub
     // BROWSE entry) + the distress overview + auto-bailout account setting. Per-position auction is a
     // detail route reached from those. All reads degrade-on-404 (the margin-distress backend is pending).
@@ -685,6 +690,7 @@ object MoreRoutes {
             ADMIN_DASHBOARD,
             MARKETS,
             TOKENS,
+            STRATEGIES,
             BAILOUTS,
             MARGIN_DISTRESS,
             BAILOUT_SETTINGS,

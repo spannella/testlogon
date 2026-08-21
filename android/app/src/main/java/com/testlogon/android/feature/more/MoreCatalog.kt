@@ -1612,6 +1612,17 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // USER-CREATED STRATEGIES / BASKETS (investable funds): define a basket following a simple rule
+        // set, paper-trade + backtest it, then invest real capital at NAV (pooled fund with NAV units).
+        // Dual fee (mgmt on AUM + perf above a high-water mark). All reads degrade-on-404 (backend pending).
+        MoreEntry(
+            id = "strategies",
+            labelRes = R.string.more_entry_strategies,
+            icon = Icons.Outlined.PieChart,
+            route = MoreRoutes.STRATEGIES,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // MARGIN DISTRESS / PRE-EMPTIVE BAILOUT AUCTION: the rescuer opportunity board (BROWSE open
         // bailouts to inject rescue capital for a position-share). The distress overview + per-position
         // auction + auto-bailout setting are reached from here / the margin position surface. All reads

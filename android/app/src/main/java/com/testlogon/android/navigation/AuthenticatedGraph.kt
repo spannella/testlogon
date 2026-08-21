@@ -309,6 +309,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // Creator revenue-share TOKENS: mint + browse market + per-token detail (cap table /
         // revenue / upkeep / IPO auction). Endpoints degrade-on-404 (backend pending).
         tokensDestinations(navController)
+        // USER-CREATED STRATEGIES / BASKETS (investable funds): marketplace + builder + detail
+        // (invest/redeem at NAV) + paper-run/backtest. Endpoints degrade-on-404 (backend pending).
+        strategiesDestinations(navController)
         // MARGIN DISTRESS / PRE-EMPTIVE BAILOUT AUCTION: distress overview + rescuer board + per-position
         // auction + auto-bailout setting. Endpoints degrade-on-404 (backend pending); distress never fabricated.
         bailoutDestinations(navController)

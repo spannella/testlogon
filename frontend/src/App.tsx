@@ -63,6 +63,10 @@ const SymbolDetailPage = lazy(() => import("@/pages/markets/SymbolDetailPage"));
 const TokenMarketPage = lazy(() => import("@/pages/tokens/TokenMarketPage"));
 const MintTokenPage = lazy(() => import("@/pages/tokens/MintTokenPage"));
 const TokenDetailPage = lazy(() => import("@/pages/tokens/TokenDetailPage"));
+const StrategyMarketPage = lazy(() => import("@/pages/strategies/StrategyMarketPage"));
+const StrategyBuilderPage = lazy(() => import("@/pages/strategies/StrategyBuilderPage"));
+const StrategyDetailPage = lazy(() => import("@/pages/strategies/StrategyDetailPage"));
+const StrategyBacktestPage = lazy(() => import("@/pages/strategies/StrategyBacktestPage"));
 const MarketAnalysisPage = lazy(() => import("@/pages/analysis/MarketAnalysisPage"));
 const PaperTradingPage = lazy(() => import("@/pages/paper/PaperTradingPage"));
 const PriceAlertsPage = lazy(() => import("@/pages/alerts/PriceAlertsPage"));
@@ -754,6 +758,11 @@ export default function App() {
           <Route path="tokens" element={<TokenMarketPage />} />
           <Route path="tokens/new" element={<MintTokenPage />} />
           <Route path="tokens/:id" element={<TokenDetailPage />} />
+          <Route path="strategies" element={<StrategyMarketPage />} />
+          <Route path="strategies/new" element={<StrategyBuilderPage />} />
+          <Route path="strategies/:id" element={<StrategyDetailPage />} />
+          <Route path="strategies/:id/edit" element={<StrategyBuilderPage />} />
+          <Route path="strategies/:id/backtest" element={<StrategyBacktestPage />} />
           <Route path="bailouts" element={<BailoutsBoardPage />} />
           <Route path="analysis" element={<MarketAnalysisPage />} />
           <Route path="markets/price-alerts" element={<PriceAlertsPage />} />
