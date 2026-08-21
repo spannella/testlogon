@@ -4287,6 +4287,7 @@
     <string name="more_entry_markets">Markets</string>
     <string name="more_entry_analysis">Analysis</string>
     <string name="more_entry_tokens">Creator Tokens</string>
+    <string name="more_entry_strategies">Strategies &amp; Baskets</string>
     <string name="more_entry_bailouts">Bailout Auctions</string>
     <string name="more_entry_trading_alerts">Trading alerts</string>
     <string name="admin_dashboard_title">Admin alerts</string>
