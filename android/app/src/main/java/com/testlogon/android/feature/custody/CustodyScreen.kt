@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -79,6 +80,7 @@ import com.testlogon.android.data.custody.WithdrawStatus
 @Composable
 fun CustodyRoute(
     onBack: () -> Unit,
+    onOpenProviders: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: CustodyViewModel = hiltViewModel(),
 ) {
@@ -86,6 +88,7 @@ fun CustodyRoute(
     CustodyScreen(
         state = state,
         onBack = onBack,
+        onOpenProviders = onOpenProviders,
         viewModel = viewModel,
         modifier = modifier,
     )
@@ -95,6 +98,7 @@ fun CustodyRoute(
 fun CustodyScreen(
     state: CustodyUiState,
     onBack: () -> Unit,
+    onOpenProviders: () -> Unit,
     viewModel: CustodyViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -120,6 +124,11 @@ fun CustodyScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenProviders) {
+                        Icon(Icons.Filled.Shield, contentDescription = "Custody providers")
                     }
                 },
             )

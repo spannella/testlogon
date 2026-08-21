@@ -165,6 +165,100 @@ class CustodyRepository @Inject constructor(
         ).toDomain()
     }
 
+
+    // ==== External custody providers (Fireblocks / BitGo / internal gateway) ====
+
+    /**
+     * List custody providers. Provider routes are NOT deployed on every backend: a 404 (or any HTTP
+     * error) folds into a soft "unavailable" success so the Providers screen can degrade to an honest
+     * "provider integration pending backend" empty state instead of erroring. Network errors still
+     * surface. No provider secret is ever transported -- these are status-only reads.
+     */
+    suspend fun getProviders(): ApiResult<CustodyProviders> = withContext(io) {
+        try {
+            ApiResult.Success(api.getProviders().toDomain())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Success(CustodyProviders.unavailable())
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
+    /**
+     * Fetch a provider's live status probe. Also soft-degrades on HTTP error (returns null) so a single
+     * provider whose status route is missing doesn't error the whole screen; network errors surface.
+     */
+    suspend fun getProviderStatus(id: String): ApiResult<ProviderStatusDetail?> = withContext(io) {
+        try {
+            ApiResult.Success(api.getProviderStatus(id.trim()).toDomain())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Success(null)
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
+    /** Initiate a provider connection (creds server-side). A gateway rejection surfaces as a Failure. */
+    suspend fun connectProvider(id: String, label: String?): ApiResult<ProviderActionResult> = call {
+        api.connectProvider(
+            id.trim(),
+            ProviderConnectRequestDto(label = label?.trim()?.takeIf { it.isNotBlank() }),
+        ).toDomain()
+    }
+
+    /** Disconnect a provider. A gateway rejection surfaces as a Failure. */
+    suspend fun disconnectProvider(id: String): ApiResult<ProviderActionResult> = call {
+        api.disconnectProvider(id.trim()).toDomain()
+    }
+
+    // ==== Provider-backed vaults ====
+
+    /**
+     * List the caller's vaults with their backing provider. Soft-degrades on HTTP error to an
+     * "unavailable" empty state (route not deployed); network errors surface.
+     */
+    suspend fun getVaults(): ApiResult<CustodyVaults> = withContext(io) {
+        try {
+            ApiResult.Success(api.getVaults().toDomain())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Success(CustodyVaults.unavailable())
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
+    /** Set a vault's backing provider. A gateway rejection surfaces as a Failure. */
+    suspend fun setVaultProvider(vault: String, provider: String): ApiResult<SetVaultProviderResult> = call {
+        api.setVaultProvider(
+            vault.trim(),
+            SetVaultProviderRequestDto(provider = provider.trim().lowercase()),
+        ).toDomain()
+    }
+
+    // ==== Provider-backed withdrawal approval ====
+
+    /**
+     * Poll a provider-backed withdrawal's approval state. Soft-degrades on HTTP error to an
+     * "unavailable" state (route not deployed / not a governed withdrawal); network errors surface.
+     */
+    suspend fun getWithdrawalApproval(id: String): ApiResult<WithdrawalApproval> = withContext(io) {
+        try {
+            ApiResult.Success(api.getWithdrawalApproval(id.trim()).toDomain())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            ApiResult.Success(WithdrawalApproval.unavailable())
+        } catch (e: IOException) {
+            ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+        }
+    }
+
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = withContext(io) {
         try {
             ApiResult.Success(block())
@@ -319,6 +413,65 @@ private fun StakeAckDto.toDomain(): StakeResult = StakeResult(
     amount = amount?.trim()?.takeIf { it.isNotBlank() },
     status = status?.trim()?.takeIf { it.isNotBlank() },
     reason = listOfNotNull(detail, error, reason).firstOrNull { it.isNotBlank() },
+)
+
+// ---- provider / vault / approval DTO -> domain mappers ----
+
+private fun CustodyProvidersDto.toDomain(): CustodyProviders = CustodyProviders(
+    providers = providers.orEmpty().map { it.toDomain() },
+    unavailable = false,
+)
+
+private fun CustodyProviderDto.toDomain(): CustodyProvider = CustodyProvider(
+    id = id?.trim().orEmpty(),
+    name = name?.trim().orEmpty(),
+    kind = kind?.trim().orEmpty().ifBlank { "internal" },
+    connected = connected == true,
+    status = status?.trim().orEmpty(),
+    features = features.orEmpty().mapNotNull { it?.trim()?.takeIf(String::isNotBlank) },
+)
+
+private fun ProviderStatusDto.toDomain(): ProviderStatusDetail = ProviderStatusDetail(
+    status = status?.trim().orEmpty(),
+    balancesAttested = balancesAttested,
+    lastReconciledTs = lastReconciledTs?.trim()?.takeIf { it.isNotBlank() },
+    pendingApprovals = pendingApprovals,
+)
+
+private fun ProviderConnectResultDto.toDomain(): ProviderActionResult = ProviderActionResult(
+    ok = (ok == true) || (disconnected == true),
+    status = status?.trim()?.takeIf { it.isNotBlank() },
+    reason = listOfNotNull(detail, error).firstOrNull { it.isNotBlank() },
+)
+
+private fun VaultsDto.toDomain(): CustodyVaults = CustodyVaults(
+    vaults = vaults.orEmpty().map { it.toDomain() },
+    unavailable = false,
+)
+
+private fun VaultDto.toDomain(): CustodyVault = CustodyVault(
+    vault = vault?.trim().orEmpty(),
+    label = label?.trim().orEmpty(),
+    provider = provider?.trim().orEmpty().ifBlank { "internal" },
+)
+
+private fun SetVaultProviderResultDto.toDomain(): SetVaultProviderResult = SetVaultProviderResult(
+    ok = ok == true,
+    vault = vault?.trim()?.takeIf { it.isNotBlank() },
+    provider = provider?.trim()?.takeIf { it.isNotBlank() },
+    reason = listOfNotNull(detail, error).firstOrNull { it.isNotBlank() },
+)
+
+private fun WithdrawalApprovalDto.toDomain(): WithdrawalApproval = WithdrawalApproval(
+    status = status?.trim().orEmpty(),
+    quorum = quorum ?: 0,
+    approvals = approvals.orEmpty().map { it.toDomain() },
+    unavailable = false,
+)
+
+private fun WithdrawalApproverDto.toDomain(): WithdrawalApprover = WithdrawalApprover(
+    approver = approver?.trim().orEmpty().ifBlank { "Approver" },
+    at = at?.trim().orEmpty(),
 )
 
 /** Provides the custody Retrofit API (mirrors the auth data module's provider style). */

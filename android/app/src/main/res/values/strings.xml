@@ -1458,6 +1458,7 @@
     <string name="more_entry_trading_blotter">Trading Blotter</string>
     <string name="more_entry_home">Home</string>
     <string name="more_entry_custody">Custody</string>
+    <string name="more_entry_custody_providers">Custody providers</string>
     <string name="more_entry_portfolio">Portfolio</string>
     <string name="more_entry_pnl">PnL &amp; performance</string>
     <string name="more_entry_paper_trading">Paper Trading</string>

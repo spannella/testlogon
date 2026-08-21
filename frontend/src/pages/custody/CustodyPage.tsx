@@ -26,7 +26,9 @@ import {
   Info,
   History,
   Sprout,
+  Building2,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { cn } from "@/lib/utils";
@@ -973,6 +975,14 @@ export default function CustodyPage() {
           <p className="text-sm text-muted-foreground">
             Hold, receive and send crypto from your custodial vault.
           </p>
+        </div>
+        <div className="ml-auto">
+          <Button asChild variant="outline" size="sm" className="gap-1.5">
+            <Link to="/custody/providers">
+              <Building2 className="h-4 w-4" />
+              Custody providers
+            </Link>
+          </Button>
         </div>
       </div>
 

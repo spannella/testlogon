@@ -106,6 +106,9 @@ object MoreRoutes {
     // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /me/custody/*.
     const val CUSTODY = CustodyDest.ROUTE
 
+    // External custody providers (Fireblocks / BitGo / internal gateway): connect + per-vault provider + withdrawal approval.
+    const val CUSTODY_PROVIDERS = CustodyProvidersDest.ROUTE
+
     // Portfolio: read-only cross-venue account overview (custody / spot / margin / staking snapshot).
     const val PORTFOLIO = PortfolioDest.ROUTE
 
@@ -593,6 +596,7 @@ object MoreRoutes {
             TRADING_BLOTTER,
             HOME,
             CUSTODY,
+            CUSTODY_PROVIDERS,
             PORTFOLIO,
             PNL,
             PAPER,
