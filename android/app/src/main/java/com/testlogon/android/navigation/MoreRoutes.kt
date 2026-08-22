@@ -126,6 +126,9 @@ object MoreRoutes {
     // Export & reporting: read-only period-scoped CSV export (Wallet hub, near PnL).
     const val REPORTS = ReportsDest.ROUTE
 
+    // Tax lots & realized-gains: read-only client-side cost-basis report (Wallet hub, near Reports).
+    const val TAX_REPORT = TaxReportDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
@@ -615,6 +618,7 @@ object MoreRoutes {
             PNL,
             PAPER,
             REPORTS,
+            TAX_REPORT,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,

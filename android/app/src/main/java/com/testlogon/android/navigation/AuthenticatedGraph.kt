@@ -230,6 +230,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         paperDestination(navController)
         // Export & reporting: read-only period-scoped CSV export (trade history / PnL / statement).
         reportsDestination(navController)
+        // Tax lots & realized-gains: read-only client-side FIFO/LIFO/Average cost-basis report + CSV.
+        taxReportDestination(navController)
         // AND-336: backend-mediated Google Drive import picker (authenticated-only).
         driveImportDestination(navController)
         // AND-335: owner share sheet (create/list/revoke share links) + the public share screen

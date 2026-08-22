@@ -1024,6 +1024,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.APP,
         ),
         MoreEntry(
+            id = "tax_report",
+            labelRes = R.string.more_entry_tax_report,
+            icon = Icons.Outlined.ReceiptLong,
+            route = MoreRoutes.TAX_REPORT,
+            hub = MoreHub.WALLET,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
             id = "catalog",
             labelRes = R.string.more_entry_catalog,
             icon = Icons.Outlined.Storefront,
