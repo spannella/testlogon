@@ -29,6 +29,13 @@ interface TokensApi {
     @GET("me/tokens/market")
     suspend fun getMarket(): TokenListDto
 
+    /**
+     * OPEN IPO token auctions (the discovery feed of tokens currently raising via a sealed-bid IPO).
+     * OPTIONAL / not deployed on every backend: the [TokensRepository] degrades a 404 to an empty list.
+     */
+    @GET("me/tokens/auctions")
+    suspend fun getOpenAuctions(): TokenAuctionListDto
+
     @GET("me/tokens/{id}")
     suspend fun getToken(@Path("id") id: String): TokenDto
 

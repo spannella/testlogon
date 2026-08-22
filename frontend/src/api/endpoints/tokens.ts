@@ -169,6 +169,19 @@ export const getMyTokens = () => api.get<TokensResult>("/me/tokens");
 /** All listed creator tokens to browse. */
 export const getTokenMarket = () => api.get<TokensResult>("/me/tokens/market");
 
+/** Result of the open-IPO-auctions browse feed. */
+export interface TokenAuctionsResult {
+  auctions: TokenAuction[];
+}
+
+/**
+ * Browse OPEN creator-token IPO auctions to bid on. OPTIONAL/NEW route — 404s
+ * until the backend ships this listing; the Discover hub degrades to an honest
+ * empty state on 404 (retry:false).
+ */
+export const getOpenTokenAuctions = () =>
+  api.get<TokenAuctionsResult>("/me/tokens/auctions");
+
 export const getToken = (id: string) => api.get<Token>(`/me/tokens/${encodeURIComponent(id)}`);
 
 export const getCapTable = (id: string) =>

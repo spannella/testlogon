@@ -130,6 +130,7 @@ const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/Qu
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
 const VideosPage = lazy(() => import("@/pages/videos/VideosPage"));
 const DiscoverPage = lazy(() => import("@/pages/discover/DiscoverPage"));
+const InvestHubPage = lazy(() => import("@/pages/invest/InvestHubPage"));
 const TagPage = lazy(() => import("@/pages/discover/TagPage"));
 const SearchPage = lazy(() => import("@/pages/search/SearchPage"));
 const VideoPlayerPage = lazy(() => import("@/pages/videos/VideoPlayerPage"));
@@ -764,6 +765,7 @@ export default function App() {
           <Route path="strategies/:id/edit" element={<StrategyBuilderPage />} />
           <Route path="strategies/:id/backtest" element={<StrategyBacktestPage />} />
           <Route path="bailouts" element={<BailoutsBoardPage />} />
+          <Route path="invest" element={<InvestHubPage />} />
           <Route path="analysis" element={<MarketAnalysisPage />} />
           <Route path="markets/price-alerts" element={<PriceAlertsPage />} />
           <Route path="paper" element={<PaperTradingPage />} />

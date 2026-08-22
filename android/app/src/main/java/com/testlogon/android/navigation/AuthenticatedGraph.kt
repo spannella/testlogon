@@ -306,6 +306,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         adminDashboardDestination(navController)
         // Markets (exchange market-data, VIEW-ONLY): instrument list + per-symbol chart/book/tape.
         marketsDestinations(navController)
+        // Unified INVEST hub: aggregates markets + creator tokens + strategy funds + staking +
+        // open opportunities client-side into one front door. Owns no detail routes — each card /
+        // see-all navigates to the existing per-product destination in this same graph.
+        investDestinations(navController)
         // Creator revenue-share TOKENS: mint + browse market + per-token detail (cap table /
         // revenue / upkeep / IPO auction). Endpoints degrade-on-404 (backend pending).
         tokensDestinations(navController)

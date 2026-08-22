@@ -380,6 +380,10 @@ object MoreRoutes {
     // Markets (exchange market-data, VIEW-ONLY): instrument list -> per-symbol chart/book/tape.
     const val MARKETS = MarketsDest.ROUTE
 
+    // Unified INVEST hub: one front door aggregating markets + creator tokens + strategy funds +
+    // staking + open opportunities. Degrades per-section on 404; owns no detail routes.
+    const val INVEST = InvestDest.ROUTE
+
     // Creator revenue-share TOKENS: mint a token, browse the listed market, per-token detail
     // (cap table / revenue / upkeep / IPO auction). Endpoints degrade-on-404 (backend pending).
     const val TOKENS = TokensMarketDest.ROUTE
@@ -689,6 +693,7 @@ object MoreRoutes {
             WEBHOOKS,
             ADMIN_DASHBOARD,
             MARKETS,
+            INVEST,
             TOKENS,
             STRATEGIES,
             BAILOUTS,
