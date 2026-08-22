@@ -10,6 +10,7 @@ import com.testlogon.android.feature.markets.SymbolDetailRoute
 import com.testlogon.android.feature.markets.alerts.TradingAlertsRoute
 import com.testlogon.android.feature.markets.alerts.pricealerts.PriceAlertsRoute
 import com.testlogon.android.feature.analysis.MarketAnalysisRoute
+import com.testlogon.android.feature.activity.ActivityCenterRoute
 
 /**
  * Markets (exchange market-data, VIEW-ONLY) destinations, registered in the AUTHENTICATED nav graph.
@@ -43,6 +44,11 @@ data object AnalysisDest {
     const val ROUTE = "markets/analysis"
 }
 
+/** Consolidated Activity Center (durable, day-grouped account-event timeline). New navigable destination. */
+data object ActivityCenterDest {
+    const val ROUTE = "activity/center"
+}
+
 /** Registers the Markets list + per-symbol detail destinations (Back pops the back stack). */
 fun NavGraphBuilder.marketsDestinations(navController: NavHostController) {
     composable(MarketsDest.ROUTE) {
@@ -72,6 +78,12 @@ fun NavGraphBuilder.marketsDestinations(navController: NavHostController) {
     }
     composable(AnalysisDest.ROUTE) {
         MarketAnalysisRoute(onBack = { navController.popBackStack() })
+    }
+    composable(ActivityCenterDest.ROUTE) {
+        ActivityCenterRoute(
+            onBack = { navController.popBackStack() },
+            onOpenRoute = { route -> navController.navigate(route) { launchSingleTop = true } },
+        )
     }
     composable(
         route = SymbolDetailDest.ROUTE,

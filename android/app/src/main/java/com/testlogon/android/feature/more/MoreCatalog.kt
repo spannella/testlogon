@@ -1683,6 +1683,17 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // Activity Center: the consolidated, filterable, day-grouped account-event timeline (trades /
+        // funding / liquidations / risk / system), aggregated client-side from the shipped exchange feeds.
+        // Durable history, distinct from the transient Trading Alerts bell. Degrades per-source on 404.
+        MoreEntry(
+            id = "activity_center",
+            labelRes = R.string.more_entry_activity_center,
+            icon = Icons.Outlined.History,
+            route = MoreRoutes.ACTIVITY_CENTER,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // AND-404: READ-ONLY admin EMAIL delivery dashboard (per-channel stats + recent activity). Self-gates
         // via the backend 403 -> the screen's Forbidden state; a non-admin sees no admin data.
         MoreEntry(
