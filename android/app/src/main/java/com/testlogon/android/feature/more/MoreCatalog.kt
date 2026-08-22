@@ -1000,6 +1000,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.APP,
         ),
         MoreEntry(
+            id = "portfolio_analytics",
+            labelRes = R.string.more_entry_portfolio_analytics,
+            icon = Icons.Outlined.Assessment,
+            route = MoreRoutes.PORTFOLIO_ANALYTICS,
+            hub = MoreHub.WALLET,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
             id = "paper_trading",
             labelRes = R.string.more_entry_paper_trading,
             icon = Icons.Outlined.Science,

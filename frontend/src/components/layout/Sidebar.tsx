@@ -153,6 +153,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Price Alerts", i18nKey: "nav.priceAlerts", path: "/markets/price-alerts", icon: <Bell className="h-5 w-5" /> },
       { label: "Paper Trading", i18nKey: "nav.paperTrading", path: "/paper", icon: <TrendingUp className="h-5 w-5" /> },
       { label: "Portfolio", i18nKey: "nav.portfolio", path: "/portfolio", icon: <PieChart className="h-5 w-5" /> },
+      { label: "Portfolio Risk", i18nKey: "nav.portfolioRisk", path: "/portfolio/analytics", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Bailouts", i18nKey: "nav.bailouts", path: "/bailouts", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "PnL", i18nKey: "nav.pnl", path: "/pnl", icon: <LineChart className="h-5 w-5" /> },
       { label: "Reports", i18nKey: "nav.reports", path: "/reports", icon: <FileText className="h-5 w-5" /> },

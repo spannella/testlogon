@@ -112,6 +112,10 @@ object MoreRoutes {
     // Portfolio: read-only cross-venue account overview (custody / spot / margin / staking snapshot).
     const val PORTFOLIO = PortfolioDest.ROUTE
 
+    // Portfolio Allocation & Risk Analytics: read-only cross-venue allocation / concentration /
+    // exposure / risk (vol + VaR + diversification), client-computed from existing holding reads.
+    const val PORTFOLIO_ANALYTICS = PortfolioAnalyticsDest.ROUTE
+
     // PnL & performance: read-only realized/unrealized analytics + equity curve (Wallet hub, near Portfolio).
     const val PNL = PnlDest.ROUTE
 
@@ -607,6 +611,7 @@ object MoreRoutes {
             CUSTODY,
             CUSTODY_PROVIDERS,
             PORTFOLIO,
+            PORTFOLIO_ANALYTICS,
             PNL,
             PAPER,
             REPORTS,

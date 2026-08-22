@@ -223,6 +223,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         portfolioDestination(navController)
         // PnL & performance: read-only realized/unrealized analytics, equity curve, per-symbol breakdown.
         pnlDestination(navController)
+        // Portfolio Allocation & Risk Analytics: read-only cross-venue allocation / concentration /
+        // exposure / risk (vol + VaR + diversification), client-computed from existing holding reads.
+        portfolioAnalyticsDestination(navController)
         // Paper Trading: self-contained client-side trading simulation (isolated paper account; no real orders).
         paperDestination(navController)
         // Export & reporting: read-only period-scoped CSV export (trade history / PnL / statement).
