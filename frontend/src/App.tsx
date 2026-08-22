@@ -84,6 +84,7 @@ const DelegationApiKeysPage = lazy(
 );
 const AlertsPage = lazy(() => import("@/pages/alerts/AlertsPage"));
 const ActivityFeedPage = lazy(() => import("@/pages/activity/ActivityFeedPage"));
+const ActivityCenterPage = lazy(() => import("@/pages/activity-center/ActivityCenterPage"));
 const NotificationsPage = lazy(() => import("@/pages/notifications/NotificationsPage"));
 const SecurityPage = lazy(() => import("@/pages/security/SecurityPage"));
 const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
@@ -788,6 +789,7 @@ export default function App() {
           <Route path="delegation-api" element={<DelegationApiKeysPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="activity" element={<ActivityFeedPage />} />
+          <Route path="activity-center" element={<ActivityCenterPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
           <Route path="appeals" element={<AppealsPage />} />
           <Route path="tickets" element={<TicketsPage />} />

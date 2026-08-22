@@ -416,6 +416,10 @@ object MoreRoutes {
     // Trading Alerts (derived notifications: fills / liquidations / funding / margin-distress / PM-resolved).
     const val TRADING_ALERTS = TradingAlertsDest.ROUTE
 
+    // Activity Center: consolidated, filterable, day-grouped account-event timeline (client-aggregated
+    // from the shipped exchange feeds; degrades per-source on 404). Distinct from transient notifications.
+    const val ACTIVITY_CENTER = ActivityCenterDest.ROUTE
+
     // AND-404: READ-ONLY admin email/SMS delivery dashboards (per-channel stats + recent activity). Self-gate
     // via the backend 403 -> the screen's Forbidden state (cf. the AND-403 admin-dashboard pattern); a non-admin
     // sees no admin data. Two concrete entry routes off the shared `{channel}` destination template.
@@ -711,6 +715,7 @@ object MoreRoutes {
             ANALYSIS,
             GLOBAL_SEARCH,
             TRADING_ALERTS,
+            ACTIVITY_CENTER,
             ADMIN_EMAIL_DASHBOARD,
             ADMIN_SMS_DASHBOARD,
             ADMIN_MODERATION,

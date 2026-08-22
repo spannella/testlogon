@@ -1,4 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
+import { useActivityUnread } from "@/hooks/useActivity";
 import {
   Sparkles,
   LayoutDashboard,
@@ -159,6 +160,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Reports", i18nKey: "nav.reports", path: "/reports", icon: <FileText className="h-5 w-5" /> },
       { label: "Tax & Gains", i18nKey: "nav.taxGains", path: "/reports/tax", icon: <Receipt className="h-5 w-5" /> },
       { label: "Activity", i18nKey: "nav.activity", path: "/activity", icon: <Activity className="h-5 w-5" /> },
+      { label: "Activity Center", i18nKey: "nav.activityCenter", path: "/activity-center", icon: <Bell className="h-5 w-5" /> },
       { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: <Compass className="h-5 w-5" /> },
       { label: "Saved", i18nKey: "nav.saved", path: "/saved", icon: <Bookmark className="h-5 w-5" /> },
       { label: "Achievements", i18nKey: "nav.achievements", path: "/achievements", icon: <Trophy className="h-5 w-5" /> },
@@ -450,6 +452,7 @@ export default function Sidebar() {
     (sum, c) => sum + (c.unread_count ?? 0),
     0,
   );
+  const activityUnread = useActivityUnread(!!accessToken);
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
@@ -517,7 +520,7 @@ export default function Sidebar() {
             <ul className="space-y-0.5">
               {items.map((item) => {
                 const active = isActive(item.path);
-                const badge = item.path === "/messages" ? totalUnread : (item.badge ?? 0);
+                const badge = item.path === "/messages" ? totalUnread : item.path === "/activity-center" ? activityUnread : (item.badge ?? 0);
                 const link = (
                   <NavLink
                     key={item.path}
