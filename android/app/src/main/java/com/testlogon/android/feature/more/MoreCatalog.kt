@@ -960,6 +960,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.APP,
         ),
         MoreEntry(
+            id = "active_algos",
+            labelRes = R.string.more_entry_active_algos,
+            icon = Icons.Outlined.Schedule,
+            route = MoreRoutes.ACTIVE_ALGOS,
+            hub = MoreHub.STUDIO,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
             id = "home",
             labelRes = R.string.more_entry_home,
             icon = Icons.Outlined.Dashboard,

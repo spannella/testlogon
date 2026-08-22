@@ -48,6 +48,21 @@ import { toast } from "sonner";
 import { usePaperMode, selectMarketPrice, isPaperOrderType } from "@/lib/paperMode";
 import { placeOrder as placePaperOrder, type PaperAccount } from "@/lib/paperEngine";
 import { loadAccount as loadPaperAccount, saveAccount as savePaperAccount, PAPER_ACCOUNT_KEY } from "@/lib/paperStore";
+import {
+  positionSizeQty,
+  riskReward,
+  liquidationPreview,
+  breakevenPrice,
+  twapSchedule,
+  icebergClips,
+} from "@/lib/orderCalc";
+import {
+  useAlgoOrders,
+  nextAlgoId,
+  type AlgoOrder,
+  type AlgoChild,
+} from "@/lib/algoStore";
+import { useAlgoRunner } from "@/lib/algoRunner";
 
 type OrderType = "limit" | "market" | "stop" | "stop_limit" | "take_profit" | "quote" | "oto" | "oco" | "funding";
 type Section = "trade" | "positions" | "orders" | "fills";
@@ -393,6 +408,8 @@ export function TradeTicket({
   // paper engine instead of the live /me/orders mutations.
   const { enabled: paperMode, setEnabled: setPaperMode } = usePaperMode();
   const [paperAcct, setPaperAcct] = useState<PaperAccount>(() => loadPaperAccount());
+  const algoStore = useAlgoOrders();
+  const [, forceAlgoTick] = useState(0);
   // Re-read the paper account if another surface (Paper page / other tab) mutates it.
   useEffect(() => {
     const reload = (e?: StorageEvent) => {
@@ -441,6 +458,23 @@ export function TradeTicket({
   const [riskOpen, setRiskOpen] = useState(false);
   const [riskAmt, setRiskAmt] = useState("");
   const [riskStop, setRiskStop] = useState("");
+  // Calculators — extra depth inputs (R:R target, leverage, fee bps).
+  const [calcTarget, setCalcTarget] = useState("");
+  const [calcLeverage, setCalcLeverage] = useState("10");
+  const [calcFeeBps, setCalcFeeBps] = useState("10");
+  const [riskPct, setRiskPct] = useState("1");
+  // Bracket helper — optional attached take-profit + stop-loss on an entry.
+  const [bracketOn, setBracketOn] = useState(false);
+  const [bracketTp, setBracketTp] = useState("");
+  const [bracketSl, setBracketSl] = useState("");
+  // Algo mode — client-side TWAP / Iceberg.
+  const [algoMode, setAlgoMode] = useState(false);
+  const [algoKind, setAlgoKind] = useState<"twap" | "iceberg">("twap");
+  const [algoQty, setAlgoQty] = useState("");
+  const [algoSlices, setAlgoSlices] = useState("5");
+  const [algoDurationSec, setAlgoDurationSec] = useState("60");
+  const [algoVisible, setAlgoVisible] = useState("");
+  const [algoChildType, setAlgoChildType] = useState<"market" | "limit">("market");
 
   const seq = useRef(0);
   const nextClordid = () => `t${Date.now()}${seq.current++ % 100}`;
@@ -588,6 +622,67 @@ export function TradeTicket({
     vibrate("tick");
     resetArmed();
   };
+
+  // ── Order-entry DEPTH calculators (all pure, via orderCalc). ──────────
+  const riskPctN = parseInt(riskPct) || 0;
+  const calcTargetN = parseInt(calcTarget) || 0;
+  const calcLeverageN = parseInt(calcLeverage) || 0;
+  const calcFeeBpsN = parseInt(calcFeeBps) || 0;
+  // Risk% sizing keys off the account equity (paper cash in paper mode).
+  const equityForSizing = avail;
+  const riskPctSuggestedQty = positionSizeQty({
+    equityCents: equityForSizing,
+    riskPct: riskPctN,
+    entryPrice: riskEntry,
+    stopPrice: riskStopN,
+  });
+  const rr = riskReward({
+    side,
+    entry: riskEntry,
+    stop: riskStopN,
+    target: calcTargetN,
+    qty: qtyN || suggestedQty || riskPctSuggestedQty,
+  });
+  const liqPrev = liquidationPreview({
+    side,
+    entry: previewPrice,
+    qty: qtyN,
+    leverage: calcLeverageN,
+    maintenanceMarginBps: ASSUMED_MAINT_MARGIN_BPS,
+  });
+  const breakeven = breakevenPrice({ side, entry: previewPrice, feeBps: calcFeeBpsN });
+  const applyRiskPctQty = () => {
+    if (riskPctSuggestedQty <= 0) return;
+    setQty(String(riskPctSuggestedQty));
+    vibrate("tick");
+    resetArmed();
+  };
+
+  // ── Bracket helper: attached TP + SL exits on the entry. ──────────────
+  const bracketTpN = parseInt(bracketTp) || 0;
+  const bracketSlN = parseInt(bracketSl) || 0;
+  // Bracket only makes sense on a plain entry (limit / market) with a qty.
+  const bracketEligible = orderType === "limit" || orderType === "market";
+  const bracketReady = bracketOn && bracketEligible && qtyN > 0 && (bracketTpN > 0 || bracketSlN > 0);
+
+  // ── Algo mode derived preview. ───────────────────────────────────────
+  const algoQtyN = parseInt(algoQty) || 0;
+  const algoSlicesN = parseInt(algoSlices) || 0;
+  const algoDurationSecN = parseInt(algoDurationSec) || 0;
+  const algoVisibleN = parseInt(algoVisible) || 0;
+  const twapPreview = twapSchedule({
+    totalQty: algoQtyN,
+    slices: algoSlicesN,
+    durationMs: algoDurationSecN * 1000,
+    startMs: 0,
+  });
+  const icebergPreview = icebergClips({ totalQty: algoQtyN, visibleQty: algoVisibleN });
+  const algoStartReady =
+    algoQtyN > 0 &&
+    (algoChildType === "market" || priceN > 0) &&
+    (algoKind === "twap"
+      ? twapPreview.length > 0 && algoDurationSecN > 0
+      : icebergPreview.clips > 0);
 
   // One-click bid/ask/market prefill — sets side + price only; the user still
   // confirms and submits through the existing money-safety path.
@@ -798,11 +893,16 @@ export function TradeTicket({
             ? (Date.now() + parseInt(expiryMin) * 60000) * 1_000_000
             : undefined,
       };
+      const entryQty = qtyN;
+      const entrySide = side;
+      const attachBracket = bracketReady;
       void handleAck(placeM.mutateAsync(body), {
         workingSide: side,
         workingPrice: priceN,
         workingQty: isMarket ? 0 : qtyN,
         okMsg: (a) => `Placed #${a.orderid ?? "?"}`,
+      }).then(() => {
+        if (attachBracket) placeBracketExits(entrySide, entryQty);
       });
     } else if (orderType === "stop" || orderType === "stop_limit" || orderType === "take_profit") {
       const algoType = orderType === "stop" ? "stop_market" : orderType === "stop_limit" ? "stop_limit" : "take_profit";
@@ -887,6 +987,54 @@ export function TradeTicket({
     );
   }
 
+  // Bracket: place the linked TP + SL exit legs after the entry submits. TP is a
+  // take-profit exit and SL a stop-market exit, both on the OPPOSITE side of the
+  // entry (a long brackets with sell exits). Reuses the existing algo order types;
+  // if a leg is rejected the user gets a clear, non-fatal message.
+  function placeBracketExits(entrySide: OrderSide, entryQty: number) {
+    if (entryQty <= 0) return;
+    const exitSide: OrderSide = entrySide === "buy" ? "sell" : "buy";
+    const legs: Promise<AnyAck>[] = [];
+    if (bracketTpN > 0) {
+      legs.push(
+        algoM.mutateAsync({
+          algo_type: "take_profit",
+          symbolid: symbolId,
+          side: exitSide,
+          qty: entryQty,
+          stop_price: bracketTpN,
+        }) as Promise<AnyAck>,
+      );
+    }
+    if (bracketSlN > 0) {
+      legs.push(
+        algoM.mutateAsync({
+          algo_type: "stop_market",
+          symbolid: symbolId,
+          side: exitSide,
+          qty: entryQty,
+          stop_price: bracketSlN,
+        }) as Promise<AnyAck>,
+      );
+    }
+    if (legs.length === 0) return;
+    Promise.allSettled(legs).then((results) => {
+      const ok = results.filter((r) => r.status === "fulfilled" && isAck(r.value as AnyAck)).length;
+      const rejected = results.length - ok;
+      if (rejected > 0) {
+        setMsg({
+          text: `Entry placed; ${ok}/${results.length} bracket exit(s) attached — ${rejected} rejected by the venue`,
+          error: true,
+        });
+        toast.error("Some bracket legs were rejected");
+      } else {
+        setMsg({ text: `Bracket attached: ${ok} exit leg(s) armed`, error: false });
+        toast.success("Bracket exits attached");
+      }
+      account.refetch();
+    });
+  }
+
   const cancelOne = (clo: string) => {
     // Paper resting orders are local-only — never hit the real cancel endpoint.
     if (paperMode) {
@@ -967,6 +1115,103 @@ export function TradeTicket({
         return "Submit";
     }
   }, [armed, side, qty, orderType, isBorrow, paperMode]);
+
+  // ── ALGO ORDERS: client-side runner wiring. ──────────────────────────
+  // The runner places child orders for RUNNING algos on THIS symbol via the
+  // same primitives the ticket uses. Live children go through placeM; paper
+  // children route to the shared paper engine. Runs only while mounted.
+  const placeLiveChild = async (args: {
+    side: OrderSide;
+    type: "market" | "limit";
+    price?: number;
+    qty: number;
+  }): Promise<{ filled: boolean; fillPrice?: number }> => {
+    const isMarket = args.type === "market";
+    const a = await placeM.mutateAsync({
+      symbolid: symbolId,
+      side: args.side,
+      price: isMarket ? 0 : args.price ?? 0,
+      qty: args.qty,
+      clordid: nextClordid(),
+      market: isMarket || undefined,
+    });
+    if (isAck(a)) {
+      const fl = a.fills ?? [];
+      if (fl.length) {
+        const filledQ = fl.reduce((sum, x) => sum + (x.qty ?? 0), 0);
+        const fillPrice = fl[0]?.price;
+        if (filledQ >= args.qty) return { filled: true, fillPrice };
+      }
+      // Placed but not (fully) filled — for a market child treat as filled, for a
+      // limit child leave resting (advance on the next ack cycle).
+      return { filled: isMarket, fillPrice: undefined };
+    }
+    throw new Error(ackMessage(a) ?? "child rejected");
+  };
+
+  useAlgoRunner({
+    symbolId,
+    quotes: { bestBid, bestAsk, lastPrice },
+    placeLiveChild,
+    paperAccount: paperAcct,
+    commitPaper: (acctNext) => {
+      setPaperAcct(acctNext);
+      savePaperAccount(acctNext);
+    },
+    onProgress: () => forceAlgoTick((n) => n + 1),
+  });
+
+  // Build + persist a new algo, then it starts running immediately (status
+  // "running" is picked up by the runner on its next tick).
+  function startAlgo() {
+    if (!algoStartReady) return;
+    const now = Date.now();
+    const isTwap = algoKind === "twap";
+    let children: AlgoChild[];
+    if (isTwap) {
+      children = twapPreview.map((sl) => ({
+        seq: sl.seq,
+        qty: sl.qty,
+        atMs: now + sl.atMs,
+        status: "pending" as const,
+      }));
+    } else {
+      const ic = icebergClips({ totalQty: algoQtyN, visibleQty: algoVisibleN });
+      children = [];
+      for (let i = 0; i < ic.clips; i++) {
+        children.push({
+          seq: i,
+          qty: i === ic.clips - 1 ? ic.lastClipQty : ic.clipQty,
+          status: "pending" as const,
+        });
+      }
+    }
+    const order: AlgoOrder = {
+      id: nextAlgoId(),
+      kind: algoKind,
+      symbolId,
+      symbolLabel: `#${symbolId}`,
+      side,
+      childType: algoChildType,
+      limitPrice: algoChildType === "limit" ? priceN : undefined,
+      totalQty: algoQtyN,
+      slices: isTwap ? twapPreview.length : undefined,
+      durationMs: isTwap ? algoDurationSecN * 1000 : undefined,
+      visibleQty: isTwap ? undefined : algoVisibleN,
+      paper: paperMode,
+      status: "running",
+      children,
+      createdAt: now,
+      updatedAt: now,
+    };
+    algoStore.add(order);
+    vibrate("success");
+    toast.success(`${isTwap ? "TWAP" : "Iceberg"} started — ${children.length} ${isTwap ? "slices" : "clips"}`);
+    setMsg({
+      text: `${isTwap ? "TWAP" : "Iceberg"} ${side} ${algoQtyN} started (${children.length} children)`,
+      error: false,
+    });
+  }
 
   const sections: { id: Section; label: string; count?: number }[] = [
     { id: "trade", label: "Trade" },
@@ -1199,6 +1444,79 @@ export function TradeTicket({
               </p>
             )}
 
+            {/* ── ALGO MODE (client-side TWAP / Iceberg) ─────────────── */}
+            {!isPm && (
+              <div className="rounded-lg border p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold">Algo order</p>
+                    <p className="text-[11px] text-muted-foreground">Client-side TWAP / Iceberg</p>
+                  </div>
+                  <Switch checked={algoMode} onCheckedChange={setAlgoMode} data-testid="algo_mode_toggle" />
+                </div>
+                {algoMode && (
+                  <div className="mt-3 space-y-3">
+                    <div className="flex gap-1.5">
+                      <Pill active={algoKind === "twap"} onClick={() => setAlgoKind("twap")} tag="algo_kind_twap">
+                        TWAP
+                      </Pill>
+                      <Pill active={algoKind === "iceberg"} onClick={() => setAlgoKind("iceberg")} tag="algo_kind_iceberg">
+                        Iceberg
+                      </Pill>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <Pill active={algoChildType === "market"} onClick={() => setAlgoChildType("market")} tag="algo_child_market">
+                        Market children
+                      </Pill>
+                      <Pill active={algoChildType === "limit"} onClick={() => setAlgoChildType("limit")} tag="algo_child_limit">
+                        Limit children
+                      </Pill>
+                    </div>
+                    {algoChildType === "limit" && (
+                      <Field label="Child limit price" value={price} onChange={setPrice} dataField="price" />
+                    )}
+                    <Field label="Total quantity" value={algoQty} onChange={setAlgoQty} />
+                    {algoKind === "twap" ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="# slices" value={algoSlices} onChange={setAlgoSlices} />
+                        <Field label="Duration (sec)" value={algoDurationSec} onChange={setAlgoDurationSec} />
+                      </div>
+                    ) : (
+                      <Field label="Visible clip size" value={algoVisible} onChange={setAlgoVisible} />
+                    )}
+                    <div className="rounded-md border bg-muted/20 p-2 text-xs" data-testid="algo_preview">
+                      {algoKind === "twap" ? (
+                        <span>
+                          {twapPreview.length > 0
+                            ? `${twapPreview.length} slice(s) · ~${formatQty(twapPreview[0]!.qty, scaler)}/slice over ${algoDurationSecN}s`
+                            : "Enter qty, slices & duration"}
+                        </span>
+                      ) : (
+                        <span>
+                          {icebergPreview.clips > 0
+                            ? `${icebergPreview.clips} clip(s) · ${formatQty(icebergPreview.clipQty, scaler)} visible, last ${formatQty(icebergPreview.lastClipQty, scaler)}`
+                            : "Enter total & visible size"}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                      Client-side algos run only while this tab is open.
+                      {paperMode ? " Children route to your paper account." : ""}
+                    </p>
+                    <Button
+                      type="button"
+                      className={cn("w-full", side === "buy" ? "bg-emerald-600 hover:bg-emerald-600/90" : "bg-rose-600 hover:bg-rose-600/90")}
+                      disabled={!algoStartReady}
+                      onClick={startAlgo}
+                      data-testid="algo_start"
+                    >
+                      Start {algoKind === "twap" ? "TWAP" : "Iceberg"} ({side === "buy" ? "Buy" : "Sell"})
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* One-click bid/ask + market quick-actions (prefill only — the
                 user still confirms/submits via the existing path). */}
             {!isPm && orderType !== "quote" && orderType !== "funding" && (bestBid || bestAsk) && (
@@ -1385,6 +1703,31 @@ export function TradeTicket({
               </div>
             )}
 
+            {/* ── BRACKET HELPER: attached TP + SL on the entry ──────── */}
+            {!isPm && bracketEligible && !algoMode && (
+              <div className="rounded-lg border p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold">Bracket exits</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Attach take-profit + stop-loss on this {side === "buy" ? "long" : "short"} entry
+                    </p>
+                  </div>
+                  <Switch checked={bracketOn} onCheckedChange={setBracketOn} data-testid="bracket_toggle" />
+                </div>
+                {bracketOn && (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <Field label="Take-profit price" value={bracketTp} onChange={setBracketTp} />
+                    <Field label="Stop-loss price" value={bracketSl} onChange={setBracketSl} />
+                    <p className="col-span-2 text-[11px] text-muted-foreground" data-testid="bracket_note">
+                      Exits are placed as {side === "buy" ? "Sell" : "Buy"} take-profit / stop after the entry submits.
+                      {bracketReady ? "" : " Enter a qty and at least one exit price."}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* TIF (limit only) */}
             {orderType === "limit" && (
               <div>
@@ -1517,7 +1860,7 @@ export function TradeTicket({
                   className="flex w-full items-center justify-between text-xs font-semibold text-primary"
                   onClick={() => setRiskOpen((v) => !v)}
                 >
-                  <span>Position-size calculator</span>
+                  <span>Calculators</span>
                   <span aria-hidden>{riskOpen ? "▲" : "▼"}</span>
                 </button>
                 {riskOpen && (
@@ -1545,6 +1888,79 @@ export function TradeTicket({
                     >
                       Apply qty
                     </Button>
+                    {/* Risk% sizing — size off a % of account equity. */}
+                    <div className="rounded-md border bg-muted/20 p-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="Risk % of equity" value={riskPct} onChange={setRiskPct} />
+                        <div className="flex flex-col justify-end pb-1 text-xs">
+                          <span className="text-muted-foreground">Suggested qty</span>
+                          <span className="font-semibold tabular-nums" data-testid="riskpct_suggested_qty">
+                            {riskPctSuggestedQty > 0 ? formatQty(riskPctSuggestedQty, scaler) : "—"}
+                          </span>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="mt-2 w-full"
+                        data-testid="riskpct_apply"
+                        disabled={riskPctSuggestedQty <= 0}
+                        onClick={applyRiskPctQty}
+                      >
+                        Apply risk% qty
+                      </Button>
+                    </div>
+                    {/* Risk : Reward readout. */}
+                    <div className="rounded-md border bg-muted/20 p-2 text-xs">
+                      <Field label="Target price" value={calcTarget} onChange={setCalcTarget} />
+                      <div className="mt-2 grid grid-cols-3 gap-1 tabular-nums">
+                        <div>
+                          <div className="text-muted-foreground">Risk</div>
+                          <div data-testid="rr_risk">{rr.riskCents > 0 ? formatPrice(rr.riskCents, scaler) : "—"}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">Reward</div>
+                          <div data-testid="rr_reward">{rr.rewardCents > 0 ? formatPrice(rr.rewardCents, scaler) : "—"}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">R:R</div>
+                          <div data-testid="rr_ratio" className={rr.rr >= 1 ? "text-emerald-600 dark:text-emerald-400" : ""}>
+                            {rr.rr > 0 ? `${rr.rr.toFixed(2)}:1` : "—"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    {/* Est. liq (leverage) + breakeven. */}
+                    <div className="rounded-md border bg-muted/20 p-2 text-xs">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="Leverage (x)" value={calcLeverage} onChange={setCalcLeverage} />
+                        <Field label="Fee (bps/side)" value={calcFeeBps} onChange={setCalcFeeBps} />
+                      </div>
+                      <div className="mt-2 space-y-0.5">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Margin required</span>
+                          <span className="tabular-nums" data-testid="calc_margin_req">
+                            {liqPrev.marginRequiredCents > 0 ? `~${formatPrice(liqPrev.marginRequiredCents, scaler)}` : "—"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Est. liq. price</span>
+                          <span className="tabular-nums" data-testid="calc_liq_price">
+                            {liqPrev.liqPrice != null ? `~${formatPrice(Math.round(liqPrev.liqPrice), scaler)} (est.)` : "—"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Breakeven (fees)</span>
+                          <span className="tabular-nums" data-testid="calc_breakeven">
+                            {breakeven > 0 ? formatPrice(breakeven, scaler) : "—"}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Liquidation is a rough estimate under an assumed maintenance margin — not the venue's authoritative figure.
+                      </p>
+                    </div>
                     <div>
                       <label className="text-xs text-muted-foreground">% of buying power</label>
                       <div className="mt-1 flex gap-1.5">

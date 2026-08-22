@@ -107,6 +107,7 @@ import {
   CandlestickChart,
   PieChart,
   TrendingUp,
+  Timer,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -153,6 +154,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Analysis", i18nKey: "nav.analysis", path: "/analysis", icon: <LineChart className="h-5 w-5" /> },
       { label: "Price Alerts", i18nKey: "nav.priceAlerts", path: "/markets/price-alerts", icon: <Bell className="h-5 w-5" /> },
       { label: "Paper Trading", i18nKey: "nav.paperTrading", path: "/paper", icon: <TrendingUp className="h-5 w-5" /> },
+      { label: "Active Algos", i18nKey: "nav.activeAlgos", path: "/algos", icon: <Timer className="h-5 w-5" /> },
       { label: "Portfolio", i18nKey: "nav.portfolio", path: "/portfolio", icon: <PieChart className="h-5 w-5" /> },
       { label: "Portfolio Risk", i18nKey: "nav.portfolioRisk", path: "/portfolio/analytics", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Bailouts", i18nKey: "nav.bailouts", path: "/bailouts", icon: <LifeBuoy className="h-5 w-5" /> },
