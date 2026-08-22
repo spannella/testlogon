@@ -47,6 +47,7 @@ const PortfolioAnalyticsPage = lazy(() => import("@/pages/portfolio/PortfolioAna
 const BailoutsBoardPage = lazy(() => import("@/pages/bailouts/BailoutsBoardPage"));
 const PnLPage = lazy(() => import("@/pages/pnl/PnLPage"));
 const ReportsPage = lazy(() => import("@/pages/reports/ReportsPage"));
+const TaxReportPage = lazy(() => import("@/pages/reports/TaxReportPage"));
 const CatalogPage = lazy(() => import("@/pages/shop/CatalogPage"));
 const ProductDetail = lazy(() => import("@/pages/shop/ProductDetail"));
 const CartPage = lazy(() => import("@/pages/shop/CartPage"));
@@ -743,6 +744,7 @@ export default function App() {
           <Route path="portfolio/analytics" element={<PortfolioAnalyticsPage />} />
           <Route path="pnl" element={<PnLPage />} />
           <Route path="reports" element={<ReportsPage />} />
+          <Route path="reports/tax" element={<TaxReportPage />} />
           <Route path="content-calendar" element={<ContentCalendarPage />} />
           <Route path="agents/memory/:workerId" element={<AgentMemoryPage />} />
           <Route path="agents/feedback" element={<AgentFeedbackPage />} />
