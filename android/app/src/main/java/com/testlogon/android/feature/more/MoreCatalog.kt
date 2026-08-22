@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.EditCalendar
 import androidx.compose.material.icons.outlined.EventNote
+import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.AddBusiness
@@ -1588,6 +1589,17 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_global_search,
             icon = Icons.Outlined.ManageSearch,
             route = MoreRoutes.GLOBAL_SEARCH,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // Unified INVEST hub: one front door aggregating every investable/tradeable product (markets +
+        // creator tokens + strategy funds + staking + open opportunities) client-side. A live search
+        // filters all sections; each "see all" opens the existing screen. Degrades per-section on 404.
+        MoreEntry(
+            id = "invest",
+            labelRes = R.string.more_entry_invest,
+            icon = Icons.Outlined.Explore,
+            route = MoreRoutes.INVEST,
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),

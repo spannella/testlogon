@@ -78,6 +78,10 @@ fun TokenAuctionDto.toDomain(fallbackId: String): TokenAuction = TokenAuction(
     bids = bids.orEmpty().map { it.toDomain() },
 )
 
+/** Map the open-auctions feed; each row falls back to its own token_id when present, else blank. */
+fun TokenAuctionListDto.toDomain(): List<TokenAuction> =
+    auctions.orEmpty().map { it.toDomain(it.tokenId.orEmpty()) }
+
 fun TokenDistributionDto.toDomain(): TokenDistribution = TokenDistribution(
     ts = ts ?: 0L,
     totalAmount = totalAmount ?: 0L,

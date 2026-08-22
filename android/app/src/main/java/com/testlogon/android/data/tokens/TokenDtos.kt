@@ -89,6 +89,12 @@ data class TokenAuctionDto(
     @Json(name = "bids") val bids: List<TokenBidDto>? = null,
 )
 
+/** `GET me/tokens/auctions` -> the open IPO auctions feed. Optional endpoint (degrade-on-404). */
+@JsonClass(generateAdapter = true)
+data class TokenAuctionListDto(
+    @Json(name = "auctions") val auctions: List<TokenAuctionDto>? = null,
+)
+
 /** `POST me/tokens/{id}/auction/bid` body. */
 @JsonClass(generateAdapter = true)
 data class PlaceBidRequestDto(

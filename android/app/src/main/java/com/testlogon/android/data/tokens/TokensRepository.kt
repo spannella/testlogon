@@ -28,6 +28,9 @@ interface TokensRepository {
     /** Listed tokens to browse — the market (degrades to empty). */
     suspend fun market(): ApiResult<List<Token>>
 
+    /** Open IPO token auctions (the discovery feed; OPTIONAL endpoint, degrades to empty on 404). */
+    suspend fun openAuctions(): ApiResult<List<TokenAuction>>
+
     /** A single token by id (degrades to null when absent/undeployed). */
     suspend fun token(id: String): ApiResult<Token?>
 
@@ -66,6 +69,10 @@ class TokensRepositoryImpl @Inject constructor(
 
     override suspend fun market(): ApiResult<List<Token>> = withContext(io) {
         degradeToEmpty(emptyList()) { api.getMarket().toDomain() }
+    }
+
+    override suspend fun openAuctions(): ApiResult<List<TokenAuction>> = withContext(io) {
+        degradeToEmpty(emptyList()) { api.getOpenAuctions().toDomain() }
     }
 
     override suspend fun token(id: String): ApiResult<Token?> = withContext(io) {
