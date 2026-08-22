@@ -214,6 +214,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         filesDestination(navController)
         // Trading Blotter: native orders/fills/positions blotter (web parity; sample data + ticker).
         blotterDestination(navController)
+        // Active Algos monitor: client-side TWAP / Iceberg algo progress + pause/cancel.
+        activeAlgosDestination(navController)
         // Custody: native crypto custody surface wired to /me/custody/* (officer approvals self-gate on the admin signal).
         custodyDestination(navController)
         // External custody providers (Fireblocks / BitGo / internal gateway): connect + per-vault provider + withdrawal approval.

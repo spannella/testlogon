@@ -40,6 +40,7 @@ class TradingViewModel @Inject constructor(
     private val currentUserRepository: CurrentUserRepository,
     private val paperModeStore: PaperModeStore,
     private val paperAccountStore: PaperAccountStore,
+    private val algoManager: AlgoManager,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -399,6 +400,108 @@ class TradingViewModel @Inject constructor(
         _uiState.update { it.copy(qtyText = q.toString(), armed = null) }
     }
 
+    // ---- Risk-% sizer ----
+    fun setRiskPct(text: String) = _uiState.update { it.copy(riskPctText = digits(text, 3)) }
+
+    /** Apply the risk-% sized qty (equity * pct / stop distance) to the ticket. No-op when it's 0. */
+    fun applyRiskPctSize(refPrice: Long?) {
+        val q = _uiState.value.riskPctSizedQty(refPrice)
+        if (q <= 0L) return
+        notifier.tick()
+        _uiState.update { it.copy(qtyText = q.toString(), armed = null) }
+    }
+
+    // ---- Bracket helper (attached TP + SL) ----
+    fun toggleBracket() = _uiState.update { it.copy(bracketEnabled = !it.bracketEnabled) }
+    fun setBracketTp(text: String) = _uiState.update { it.copy(bracketTpText = digits(text, 12)) }
+    fun setBracketSl(text: String) = _uiState.update { it.copy(bracketSlText = digits(text, 12)) }
+
+    // ---- Algo mode (client-side TWAP / Iceberg) ----
+    fun toggleAlgoMode() { notifier.tick(); _uiState.update { it.copy(algoMode = !it.algoMode, armed = null, message = null) } }
+    fun setAlgoKind(k: AlgoKind) { notifier.tick(); _uiState.update { it.copy(algoKind = k) } }
+    fun setAlgoTotalQty(text: String) = _uiState.update { it.copy(algoTotalQtyText = digits(text, 9)) }
+    fun setAlgoSlices(text: String) = _uiState.update { it.copy(algoSlicesText = digits(text, 4)) }
+    fun setAlgoDurationSec(text: String) = _uiState.update { it.copy(algoDurationSecText = digits(text, 6)) }
+    fun setAlgoVisible(text: String) = _uiState.update { it.copy(algoVisibleText = digits(text, 9)) }
+    fun setAlgoIntervalSec(text: String) = _uiState.update { it.copy(algoIntervalSecText = digits(text, 6)) }
+    fun setAlgoUseLimit(use: Boolean) = _uiState.update { it.copy(algoUseLimit = use) }
+    fun setAlgoLimit(text: String) = _uiState.update { it.copy(algoLimitText = digits(text, 12)) }
+
+    /**
+     * Start a client-side algo (TWAP / Iceberg) via [AlgoManager]. Children are placed through the same
+     * submit path as the ticket (paper-aware). [bestBid]/[bestAsk]/[last] give a reference fill price for
+     * paper-mode children when the algo is a market algo. No-op unless [TradingUiState.canStartAlgo].
+     */
+    fun startAlgo(bestBid: Long? = null, bestAsk: Long? = null, last: Long? = null) {
+        val s = _uiState.value
+        if (!s.canStartAlgo) return
+        val label = s.symbolLabel(symbolId)
+        val limit = if (s.algoUseLimit) s.algoLimitLong else null
+        val refPrice = com.testlogon.android.feature.paper.PaperTicketSupport.marketPriceFor(s.side, bestBid, bestAsk, last)
+        val id = when (s.algoKind) {
+            AlgoKind.TWAP -> algoManager.startTwap(
+                symbolId = symbolId, symbolLabel = label, side = s.side,
+                totalQty = s.algoTotalQtyLong ?: return, slices = s.algoSlicesInt ?: return,
+                durationMs = (s.algoDurationSecLong ?: return) * 1_000L,
+                limitPrice = limit, paperMode = s.paperMode, refPrice = refPrice,
+            )
+            AlgoKind.ICEBERG -> algoManager.startIceberg(
+                symbolId = symbolId, symbolLabel = label, side = s.side,
+                totalQty = s.algoTotalQtyLong ?: return, visibleQty = s.algoVisibleLong ?: return,
+                clipIntervalMs = (s.algoIntervalSecLong ?: return) * 1_000L,
+                limitPrice = limit, paperMode = s.paperMode, refPrice = refPrice,
+            )
+        }
+        if (id != null) {
+            notifier.success()
+            _uiState.update { it.copy(message = "${s.algoKind.name} algo started - track it in Active Algos", messageIsError = false) }
+        } else {
+            notifier.error()
+            _uiState.update { it.copy(message = "Algo inputs invalid", messageIsError = true) }
+        }
+    }
+
+    /**
+     * Place the attached bracket legs (take-profit + stop-loss) on the OPPOSITE side of the entry, after
+     * a successful entry placement. Uses the existing take_profit / stop_market algo endpoints (paper mode
+     * has no server algos, so this is skipped there). Failures are surfaced but never unwind the entry.
+     */
+    private fun placeBracketLegs(entrySide: OrderSide, qty: Long) {
+        val s = _uiState.value
+        if (!s.bracketEnabled || s.paperMode) return
+        val exitSide = if (entrySide == OrderSide.BUY) OrderSide.SELL else OrderSide.BUY
+        val tp = s.bracketTpLong
+        val sl = s.bracketSlLong
+        if (tp == null && sl == null) return
+        viewModelScope.launch {
+            var placed = 0
+            var failed = 0
+            if (tp != null && tp > 0L) {
+                when (val r = repository.placeAlgo("take_profit", symbolId, exitSide, qty, tp, null)) {
+                    is ApiResult.Success -> if (r.data.accepted) placed++ else failed++
+                    else -> failed++
+                }
+            }
+            if (sl != null && sl > 0L) {
+                when (val r = repository.placeAlgo("stop_market", symbolId, exitSide, qty, sl, null)) {
+                    is ApiResult.Success -> if (r.data.accepted) placed++ else failed++
+                    else -> failed++
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    message = when {
+                        failed == 0 && placed > 0 -> "Entry placed + bracket ($placed leg(s)) armed"
+                        placed > 0 -> "Entry placed; bracket partially armed ($placed ok, $failed rejected)"
+                        else -> "Entry placed; bracket legs rejected (place TP/SL manually)"
+                    },
+                    messageIsError = failed > 0 && placed == 0,
+                )
+            }
+            if (placed > 0) refreshOrdersLive()
+        }
+    }
+
     // ---- One-click bid/ask / market prefills (the user still submits via the normal flow) ----
 
     /** Prefill a Buy limit at the best bid. */
@@ -725,6 +828,7 @@ class TradingViewModel @Inject constructor(
                         }
                         refreshAccount()
                         refreshOrdersLive()
+                        if (s.bracketEnabled) placeBracketLegs(s.side, qty)
                         if (filled > 0) notifier.notifyFill("Order filled", "Filled $filled @ ${ack.fills.firstOrNull()?.price ?: price}") else notifier.success()
                     } else {
                         _uiState.update { it.copy(placing = false, message = ack.message ?: "Order rejected", messageIsError = true) }

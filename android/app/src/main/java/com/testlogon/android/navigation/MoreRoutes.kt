@@ -100,6 +100,9 @@ object MoreRoutes {
     // Trading Blotter: native orders/fills/positions blotter (web parity). Sample data only.
     const val TRADING_BLOTTER = BlotterDest.ROUTE
 
+    // Active Algos: client-side TWAP / Iceberg algo-order monitor (progress + pause/cancel).
+    const val ACTIVE_ALGOS = ActiveAlgosDest.ROUTE
+
     // Home / Dashboard: read-only trading launch surface (portfolio + watchlist + activity + onboarding).
     const val HOME = HomeDest.ROUTE
 
@@ -614,6 +617,7 @@ object MoreRoutes {
             SELLER_SALES,
             FILES,
             TRADING_BLOTTER,
+            ACTIVE_ALGOS,
             HOME,
             CUSTODY,
             CUSTODY_PROVIDERS,

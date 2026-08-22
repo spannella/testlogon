@@ -166,6 +166,16 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?
     }
     Spacer(Modifier.height(10.dp))
 
+    // Algo mode: swap the entry panel for a client-side TWAP / Iceberg builder.
+    if (state.pm == null) {
+        AlgoModeToggle(state.algoMode, viewModel::toggleAlgoMode)
+        Spacer(Modifier.height(10.dp))
+    }
+    if (state.algoMode && state.pm == null) {
+        AlgoBuilder(state, lastPrice, bestBid, bestAsk, viewModel)
+        return
+    }
+
     if (state.orderType != OrderType.QUOTE && state.orderType != OrderType.FUNDING) {
         val buyLabel = if (state.pm != null) "YES" else "Buy"
         val sellLabel = if (state.pm != null) "NO" else "Sell"
@@ -206,6 +216,7 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?
             Spacer(Modifier.height(8.dp))
             OrderPreview(state, refPrice, viewModel)
             RiskCalculator(state, refPrice, viewModel)
+            BracketHelper(state, refPrice, viewModel)
             AdvancedSection(state, viewModel)
         }
         OrderType.MARKET -> {
@@ -216,6 +227,7 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?
             Spacer(Modifier.height(8.dp))
             OrderPreview(state, refPrice, viewModel)
             RiskCalculator(state, refPrice, viewModel)
+            BracketHelper(state, refPrice, viewModel)
             AdvancedSection(state, viewModel)
         }
         OrderType.STOP -> {
@@ -1232,6 +1244,30 @@ private fun RiskCalculator(state: TradingUiState, refPrice: Long?, viewModel: Tr
         ) {
             Text("Apply to ticket", color = if (sizedQty > 0L) Color.Black else MarketColors.TextFaint, fontWeight = FontWeight.Bold, fontSize = 11.sp)
         }
+    }
+    Spacer(Modifier.height(10.dp))
+    Text("Or size by risk % of buying power", color = MarketColors.TextSecondary, fontSize = 11.sp)
+    Spacer(Modifier.height(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) { NumberField("Risk %", state.riskPctText, viewModel::setRiskPct) }
+        val pctQty = state.riskPctSizedQty(refPrice)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (pctQty > 0L) MarketColors.Accent else MarketColors.SurfaceAlt)
+                .clickable(enabled = pctQty > 0L) { viewModel.applyRiskPctSize(refPrice) }
+                .testTag("risk_pct_apply")
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(if (pctQty > 0L) "Apply $pctQty" else "Apply %", color = if (pctQty > 0L) Color.Black else MarketColors.TextFaint, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        }
+    }
+    val be = state.breakevenPrice(refPrice)
+    if (be != null) {
+        Spacer(Modifier.height(6.dp))
+        PreviewLine("Break-even (est., after fees)", fmt(be.toDouble()), MarketColors.TextPrimary)
     }
     Spacer(Modifier.height(6.dp))
     Text("Or size by buying power", color = MarketColors.TextSecondary, fontSize = 11.sp)
@@ -2343,5 +2379,154 @@ private fun AuctionBidPanel(form: AuctionBidForm, viewModel: TradingViewModel) {
             onSubmit = viewModel::submitAuctionBid,
             onDismiss = viewModel::clearAuctionBidResult,
         )
+    }
+}
+
+
+// ======================= Order-entry depth: bracket + algo =======================
+
+@Composable
+private fun BracketHelper(state: TradingUiState, refPrice: Long?, viewModel: TradingViewModel) {
+    Spacer(Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = if (state.bracketEnabled) "Bracket (TP + SL) ▲" else "Bracket (TP + SL) ▼",
+            color = MarketColors.Accent,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.clickable { viewModel.toggleBracket() }.testTag("bracket_toggle").padding(vertical = 4.dp),
+        )
+    }
+    if (!state.bracketEnabled) return
+    if (state.paperMode) {
+        Spacer(Modifier.height(4.dp))
+        Text("Brackets place server-side TP/SL orders — not simulated in paper mode.", color = PaperAmber, fontSize = 11.sp)
+        return
+    }
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.weight(1f)) { NumberField("Take-profit", state.bracketTpText, viewModel::setBracketTp) }
+        Box(Modifier.weight(1f)) { NumberField("Stop-loss", state.bracketSlText, viewModel::setBracketSl) }
+    }
+    val rr = state.bracketRiskReward(refPrice)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = when {
+            refPrice == null -> "Enter an entry price first."
+            state.bracketTpLong == null && state.bracketSlLong == null -> "Enter a take-profit and/or stop-loss."
+            rr == null -> "Set a stop-loss that differs from the entry for R:R."
+            else -> "R:R ${String.format(Locale.US, "%.2f", rr.ratio)} : 1  (risk ${fmt(rr.risk.toDouble())}, reward ${fmt(rr.reward.toDouble())})"
+        },
+        color = if (rr != null) MarketColors.TextPrimary else MarketColors.TextFaint,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+    )
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "On submit: entry places first, then the opposite-side TP/SL are attached. If a leg is rejected it's reported (entry is unaffected).",
+        color = MarketColors.TextFaint,
+        fontSize = 10.sp,
+    )
+}
+
+@Composable
+private fun AlgoModeToggle(algoMode: Boolean, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (algoMode) MarketColors.UpFill else MarketColors.Surface)
+            .border(1.dp, if (algoMode) MarketColors.Accent else MarketColors.Border, RoundedCornerShape(8.dp))
+            .clickable(onClick = onToggle)
+            .testTag("algo_mode_toggle")
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text("Algo order (TWAP / Iceberg)", color = if (algoMode) MarketColors.Accent else MarketColors.TextSecondary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Text(if (algoMode) "ON" else "OFF", color = if (algoMode) MarketColors.Accent else MarketColors.TextFaint, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun AlgoBuilder(state: TradingUiState, lastPrice: Long?, bestBid: Long?, bestAsk: Long?, viewModel: TradingViewModel) {
+    val sideColor = if (state.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down
+    // Side selector (reused).
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SideButton("Buy", state.side == OrderSide.BUY, MarketColors.Up, Modifier.weight(1f)) { viewModel.setSide(OrderSide.BUY) }
+        SideButton("Sell", state.side == OrderSide.SELL, MarketColors.Down, Modifier.weight(1f)) { viewModel.setSide(OrderSide.SELL) }
+    }
+    Spacer(Modifier.height(10.dp))
+    // Kind selector.
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SideButton("TWAP", state.algoKind == AlgoKind.TWAP, MarketColors.Accent, Modifier.weight(1f)) { viewModel.setAlgoKind(AlgoKind.TWAP) }
+        SideButton("Iceberg", state.algoKind == AlgoKind.ICEBERG, MarketColors.Accent, Modifier.weight(1f)) { viewModel.setAlgoKind(AlgoKind.ICEBERG) }
+    }
+    Spacer(Modifier.height(10.dp))
+    NumberField("Total quantity", state.algoTotalQtyText, viewModel::setAlgoTotalQty)
+    Spacer(Modifier.height(8.dp))
+    when (state.algoKind) {
+        AlgoKind.TWAP -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.weight(1f)) { NumberField("Slices", state.algoSlicesText, viewModel::setAlgoSlices) }
+                Box(Modifier.weight(1f)) { NumberField("Duration (sec)", state.algoDurationSecText, viewModel::setAlgoDurationSec) }
+            }
+        }
+        AlgoKind.ICEBERG -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.weight(1f)) { NumberField("Visible clip", state.algoVisibleText, viewModel::setAlgoVisible) }
+                Box(Modifier.weight(1f)) { NumberField("Replenish (sec)", state.algoIntervalSecText, viewModel::setAlgoIntervalSec) }
+            }
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SideButton("Market children", !state.algoUseLimit, MarketColors.Accent, Modifier.weight(1f)) { viewModel.setAlgoUseLimit(false) }
+        SideButton("Limit children", state.algoUseLimit, MarketColors.Accent, Modifier.weight(1f)) { viewModel.setAlgoUseLimit(true) }
+    }
+    if (state.algoUseLimit) {
+        Spacer(Modifier.height(8.dp))
+        NumberField("Child limit price", state.algoLimitText, viewModel::setAlgoLimit)
+    }
+    // Preview the split.
+    Spacer(Modifier.height(8.dp))
+    val previewText = when (state.algoKind) {
+        AlgoKind.TWAP -> {
+            val sched = OrderCalc.twapSchedule(state.algoTotalQtyLong ?: 0L, state.algoSlicesInt ?: 0, (state.algoDurationSecLong ?: 0L) * 1000L)
+            if (sched.isEmpty()) "Enter total qty, slices (≤ total) and duration." else "${sched.size} slices, ${sched.first().qty}–${sched.last().qty} each, every ${((state.algoDurationSecLong ?: 0L) / (state.algoSlicesInt ?: 1))}s"
+        }
+        AlgoKind.ICEBERG -> {
+            val clips = OrderCalc.icebergClips(state.algoTotalQtyLong ?: 0L, state.algoVisibleLong ?: 0L)
+            if (clips.isEmpty()) "Enter total qty, visible clip and replenish interval." else "${clips.size} clips of ≤${state.algoVisibleLong}, last ${clips.last()}"
+        }
+    }
+    Text(previewText, color = MarketColors.TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "Client-side algos run only while the app is open. Track progress in More → Active Algos.",
+        color = PaperAmber,
+        fontSize = 10.sp,
+    )
+    Spacer(Modifier.height(12.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (state.canStartAlgo) sideColor else MarketColors.SurfaceAlt)
+            .clickable(enabled = state.canStartAlgo) { viewModel.startAlgo(bestBid, bestAsk, lastPrice) }
+            .testTag("algo_start")
+            .padding(vertical = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "Start ${state.algoKind.name} ${if (state.side == OrderSide.BUY) "Buy" else "Sell"}",
+            color = if (state.canStartAlgo) Color.Black else MarketColors.TextFaint,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
+        )
+    }
+    state.message?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = if (state.messageIsError) MarketColors.Down else MarketColors.Up, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
     }
 }

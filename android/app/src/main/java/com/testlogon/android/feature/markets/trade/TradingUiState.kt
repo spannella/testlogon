@@ -112,6 +112,22 @@ data class TradingUiState(
     val riskCalcOpen: Boolean = false,
     val riskAmountText: String = "",
     val riskStopText: String = "",
+    // Risk-% sizer (equity * pct / stop distance -> qty via OrderCalc.positionSizeQty).
+    val riskPctText: String = "",
+    // Bracket helper: optional attached take-profit + stop-loss placed after the entry fills.
+    val bracketEnabled: Boolean = false,
+    val bracketTpText: String = "",
+    val bracketSlText: String = "",
+    // Client-side algo orders (TWAP / Iceberg). algoMode swaps the entry panel for the algo builder.
+    val algoMode: Boolean = false,
+    val algoKind: AlgoKind = AlgoKind.TWAP,
+    val algoTotalQtyText: String = "",
+    val algoSlicesText: String = "",
+    val algoDurationSecText: String = "",
+    val algoVisibleText: String = "",
+    val algoIntervalSecText: String = "",
+    val algoUseLimit: Boolean = false,
+    val algoLimitText: String = "",
     val pm: com.testlogon.android.data.exchange.PmState? = null,   // set when this symbol is a binary prediction market
     val isAdmin: Boolean = false,   // resolved from CurrentUserRepository; gates the margin-config panel
     val marginConfig: MarginConfigForm = MarginConfigForm(),
@@ -244,6 +260,42 @@ data class TradingUiState(
     /** Estimated liquidation price of the current order, using [maintenanceMarginBps]. */
     fun previewLiquidationPrice(maintenanceMarginBps: Long): Long? =
         OrderMath.estLiquidationPrice(entryRefPrice, side, maintenanceMarginBps)
+
+    // ---- Risk-% sizer + bracket + algo (order-entry depth) ----
+
+    val riskPctInt: Int? get() = riskPctText.toIntOrNull()
+
+    /** Qty from equity * riskPct / |entry - stop| (0 when inputs are incomplete). */
+    fun riskPctSizedQty(refPrice: Long?): Long =
+        OrderCalc.positionSizeQty(effectiveBuyingPower, riskPctInt ?: 0, refPrice ?: entryRefPrice, riskStopLong)
+
+    val bracketTpLong: Long? get() = bracketTpText.toLongOrNull()
+    val bracketSlLong: Long? get() = bracketSlText.toLongOrNull()
+
+    /** Risk:reward for the bracket (entry + SL + TP). Null until all three are set with non-zero risk. */
+    fun bracketRiskReward(refPrice: Long?): OrderCalc.RiskReward? =
+        OrderCalc.riskReward(refPrice ?: entryRefPrice, bracketSlLong, bracketTpLong)
+
+    /** Break-even price after round-trip taker fees (est.), using the fee schedule when present. */
+    fun breakevenPrice(refPrice: Long?): Long? =
+        OrderCalc.breakevenPrice(refPrice ?: entryRefPrice, side, feeSchedule?.takerFeeBps?.toLong() ?: 0L)
+
+    // Algo builder parse accessors.
+    val algoTotalQtyLong: Long? get() = algoTotalQtyText.toLongOrNull()
+    val algoSlicesInt: Int? get() = algoSlicesText.toIntOrNull()
+    val algoDurationSecLong: Long? get() = algoDurationSecText.toLongOrNull()
+    val algoVisibleLong: Long? get() = algoVisibleText.toLongOrNull()
+    val algoIntervalSecLong: Long? get() = algoIntervalSecText.toLongOrNull()
+    val algoLimitLong: Long? get() = algoLimitText.toLongOrNull()
+
+    /** Whether the algo builder has the fields it needs to start. */
+    val canStartAlgo: Boolean get() = when (algoKind) {
+        AlgoKind.TWAP -> (algoTotalQtyLong ?: 0L) > 0L && (algoSlicesInt ?: 0) > 0 &&
+            (algoSlicesInt ?: 0).toLong() <= (algoTotalQtyLong ?: 0L) && (algoDurationSecLong ?: 0L) > 0L &&
+            (!algoUseLimit || (algoLimitLong ?: 0L) > 0L)
+        AlgoKind.ICEBERG -> (algoTotalQtyLong ?: 0L) > 0L && (algoVisibleLong ?: 0L) > 0L &&
+            (algoIntervalSecLong ?: 0L) > 0L && (!algoUseLimit || (algoLimitLong ?: 0L) > 0L)
+    }
 }
 
 
