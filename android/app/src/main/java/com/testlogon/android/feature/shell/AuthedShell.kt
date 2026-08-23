@@ -9,12 +9,14 @@ import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.DynamicFeed
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.ShowChart
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -47,6 +49,7 @@ enum class AuthedTab(
     HOME("authed/home", R.string.tab_home, Icons.Filled.Home, Icons.Outlined.Home),
     FEED("authed/feed", R.string.tab_feed, Icons.Filled.DynamicFeed, Icons.Outlined.DynamicFeed),
     DISCOVER("authed/discover", R.string.tab_discover, Icons.Filled.Explore, Icons.Outlined.Explore),
+    INVEST("authed/invest", R.string.tab_invest, Icons.Filled.ShowChart, Icons.Outlined.ShowChart),
     INBOX("authed/inbox", R.string.tab_inbox, Icons.Filled.Forum, Icons.Outlined.Forum),
     ME("authed/me", R.string.tab_me, Icons.Filled.Person, Icons.Outlined.Person, inNavBar = false),
     MORE("authed/more", R.string.tab_more, Icons.Filled.Apps, Icons.Outlined.Apps);
@@ -110,6 +113,8 @@ fun AuthedShellScreen(
                     tabNav.navigateToTab(AuthedTab.ME)
                 com.testlogon.android.navigation.MoreRoutes.SESSIONS -> onOpenSessions()
                 com.testlogon.android.navigation.MoreRoutes.MFA_DEVICES -> onOpenMfaDevices()
+                com.testlogon.android.navigation.MoreRoutes.INVEST ->
+                    tabNav.navigateToTab(AuthedTab.INVEST)
                 else -> onOpenRoute(route)
             }
         }
@@ -184,6 +189,15 @@ fun AuthedShellScreen(
                     onOpenVideo = { videoId ->
                         onOpenRoute(com.testlogon.android.navigation.VideoDetailDest.build(videoId))
                     },
+                )
+            }
+            // Unified INVEST hub, promoted to a first-class bottom-nav tab. The hub owns no detail
+            // routes; each card / see-all deep-links through onOpenRoute into the outer graph, exactly
+            // as when it was reached from the More hub / Dashboard.
+            composable(AuthedTab.INVEST.route) {
+                com.testlogon.android.feature.invest.InvestRoute(
+                    onBack = { tabNav.navigateToTab(AuthedTab.HOME) },
+                    onOpenRoute = onOpenRoute,
                 )
             }
             // Inbox — the conversation list, promoted to a first-class bottom-nav tab. Its row/search/

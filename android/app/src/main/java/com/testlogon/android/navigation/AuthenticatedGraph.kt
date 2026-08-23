@@ -316,9 +316,10 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // UNIFIED cross-instrument watchlist: one list of starred symbols + creator tokens +
         // strategy funds. Owns no detail routes; each row deep-links to the existing detail dest.
         watchlistDestination(navController)
-        // Unified INVEST hub: aggregates markets + creator tokens + strategy funds + staking +
-        // open opportunities client-side into one front door. Owns no detail routes — each card /
-        // see-all navigates to the existing per-product destination in this same graph.
+        // Unified INVEST hub: also a first-class bottom-nav tab (route "authed/invest" in the shell
+        // NavHost). Registered here as "invest" too for full-screen onOpenRoute callers (the
+        // Dashboard trading tile + deep-links). Different route strings -> no duplicate; the More
+        // hub entry jumps to the tab, the Dashboard tile opens this full-screen instance.
         investDestinations(navController)
         // Creator revenue-share TOKENS: mint + browse market + per-token detail (cap table /
         // revenue / upkeep / IPO auction). Endpoints degrade-on-404 (backend pending).

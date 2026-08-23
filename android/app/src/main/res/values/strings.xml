@@ -9,6 +9,7 @@
     <string name="tab_more">More</string>
     <string name="tab_discover">Discover</string>
     <string name="tab_inbox">Inbox</string>
+    <string name="tab_invest">Invest</string>
 
     <!-- Dashboard (AND-066 / AND-068 / AND-069) -->
     <string name="dashboard_title">Dashboard</string>
