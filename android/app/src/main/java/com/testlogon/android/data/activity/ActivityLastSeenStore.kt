@@ -20,19 +20,32 @@ private val Context.activityLastSeenDataStore by preferencesDataStore(name = "ac
  * has acknowledged) so unread markers survive re-entry / process death. Only a single Long is stored -
  * never any event payload. Reads degrade to 0 (everything unread) on an IO error.
  */
+/**
+ * Contract for the Activity Center last-seen high-water mark. Extracted as an interface so the
+ * ViewModel can be unit-tested against an in-memory fake; [ActivityLastSeenStoreImpl] is the real
+ * DataStore-backed implementation.
+ */
+interface ActivityLastSeenStore {
+    /** Hot stream of the persisted last-seen millis (0 when never set). */
+    val lastSeen: Flow<Long>
+
+    /** Advance the mark to [ts] (never moves it backwards). */
+    suspend fun setLastSeen(ts: Long)
+}
+
 @Singleton
-class ActivityLastSeenStore @Inject constructor(
+class ActivityLastSeenStoreImpl @Inject constructor(
     @ApplicationContext context: Context,
-) {
+) : ActivityLastSeenStore {
     private val dataStore = context.activityLastSeenDataStore
 
     /** Hot stream of the persisted last-seen millis (0 when never set). */
-    val lastSeen: Flow<Long> = dataStore.data
+    override val lastSeen: Flow<Long> = dataStore.data
         .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
         .map { it[KEY_LAST_SEEN] ?: 0L }
 
     /** Advance the mark to [ts] (never moves it backwards). */
-    suspend fun setLastSeen(ts: Long) {
+    override suspend fun setLastSeen(ts: Long) {
         dataStore.edit { prefs ->
             val current = prefs[KEY_LAST_SEEN] ?: 0L
             if (ts > current) prefs[KEY_LAST_SEEN] = ts
@@ -42,4 +55,13 @@ class ActivityLastSeenStore @Inject constructor(
     private companion object {
         val KEY_LAST_SEEN = longPreferencesKey("activity_last_seen_ms")
     }
+}
+
+/** Binds the Activity last-seen store contract to its DataStore-backed implementation. */
+@dagger.Module
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+abstract class ActivityLastSeenStoreModule {
+    @dagger.Binds
+    @Singleton
+    abstract fun bindActivityLastSeenStore(impl: ActivityLastSeenStoreImpl): ActivityLastSeenStore
 }

@@ -24,14 +24,25 @@ import javax.inject.Singleton
  * POST is not auto-retried. The custody<->trading bridge is four real routes (fund/settle x
  * spot/margin); a 422 rejection surfaces as a Failure whose parsed reason the ViewModel renders.
  */
+/**
+ * NARROW read-only custody contract exposing only the balance + staking reads consumed by the
+ * portfolio/invest aggregation ViewModels. Extracted so those ViewModels can be unit-tested against a
+ * lightweight fake without standing up the full Retrofit-backed [CustodyRepository]. The full
+ * repository implements it, so runtime wiring is unchanged.
+ */
+interface CustodyReader {
+    suspend fun getBalance(): ApiResult<CustodyBalances>
+    suspend fun getStaking(): ApiResult<StakingDashboard>
+}
+
 @Singleton
 class CustodyRepository @Inject constructor(
     private val api: CustodyApi,
     private val errorParser: ApiErrorParser,
-) {
+) : CustodyReader {
     private val io: CoroutineDispatcher = Dispatchers.IO
 
-    suspend fun getBalance(): ApiResult<CustodyBalances> = call {
+    override suspend fun getBalance(): ApiResult<CustodyBalances> = call {
         api.balance().toDomain()
     }
 
@@ -139,7 +150,7 @@ class CustodyRepository @Inject constructor(
      * surface. Providers + positions are fetched sequentially; if positions 404 but providers succeed the
      * providers still render (positions default empty).
      */
-    suspend fun getStaking(): ApiResult<StakingDashboard> = withContext(io) {
+    override suspend fun getStaking(): ApiResult<StakingDashboard> = withContext(io) {
         try {
             val providers = api.stakingProviders().providers.orEmpty().map { it.toDomain() }
             val posDto = api.stakingPositions()
@@ -482,4 +493,13 @@ object CustodyDataModule {
     @Provides
     @Singleton
     fun provideCustodyApi(retrofit: Retrofit): CustodyApi = retrofit.create(CustodyApi::class.java)
+}
+
+/** Binds the narrow read-only custody contract to the full [CustodyRepository]. */
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class CustodyReaderModule {
+    @dagger.Binds
+    @Singleton
+    abstract fun bindCustodyReader(impl: CustodyRepository): CustodyReader
 }

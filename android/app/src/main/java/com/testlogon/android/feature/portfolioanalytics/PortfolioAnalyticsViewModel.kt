@@ -3,7 +3,7 @@ package com.testlogon.android.feature.portfolioanalytics
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
-import com.testlogon.android.data.custody.CustodyRepository
+import com.testlogon.android.data.custody.CustodyReader
 import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.Instrument
 import com.testlogon.android.data.exchange.PriceMap
@@ -24,7 +24,7 @@ import kotlin.math.roundToLong
 
 /**
  * Read-only Portfolio Analytics ViewModel. Fans out the SIX independent holding sources in parallel —
- * custody balances + staking ([CustodyRepository]); spot + margin + indicative prices
+ * custody balances + staking ([CustodyReader]); spot + margin + indicative prices
  * ([TradingRepository]); creator tokens ([TokensRepository]); strategy funds ([StrategiesRepository])
  * — normalizes each into a [NormalizedPosition] in indicative USD cents, then folds everything through
  * the pure [PortfolioAnalyticsMath]. Per-asset return series for the risk math come from the exchange
@@ -34,7 +34,7 @@ import kotlin.math.roundToLong
  */
 @HiltViewModel
 class PortfolioAnalyticsViewModel @Inject constructor(
-    private val custody: CustodyRepository,
+    private val custody: CustodyReader,
     private val trading: TradingRepository,
     private val exchange: ExchangeRepository,
     private val tokens: TokensRepository,
