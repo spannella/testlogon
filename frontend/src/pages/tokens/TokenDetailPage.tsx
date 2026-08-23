@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, BellRing, Coins, Snowflake } from "lucide-react";
+import { ArrowLeft, BellRing, Coins, Snowflake, Star } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,8 @@ import {
 } from "@/hooks/useTokens";
 import type { Token, TokenStatus } from "@/api/endpoints/tokens";
 import { formatBps, formatCents } from "@/lib/tokens";
+import { cn } from "@/lib/utils";
+import { useWatchlist } from "@/hooks/useWatchlist";
 import { PendingBackend } from "./PendingBackend";
 import { CapTableSection } from "./sections/CapTableSection";
 import { RevenueSection } from "./sections/RevenueSection";
@@ -54,6 +56,9 @@ export default function TokenDetailPage() {
   const token: Token | undefined = tokenQ.data;
   const isIssuer = !!token && !!userId && token.creator_sub === userId;
   const isFrozen = token?.status === "frozen";
+
+  const { has: hasWatch, toggle: toggleWatch } = useWatchlist();
+  const isWatched = !!id && hasWatch("token", id);
 
   const [tab, setTab] = useState("captable");
 
@@ -103,7 +108,18 @@ export default function TokenDetailPage() {
           </Link>
         </Button>
         {header}
-        <Button asChild variant="outline" size="sm" className="ml-auto gap-1">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="ml-auto gap-1"
+          aria-pressed={isWatched}
+          onClick={() => id && toggleWatch("token", id)}
+        >
+          <Star className={cn("h-4 w-4", isWatched && "fill-amber-400 text-amber-400")} />
+          {isWatched ? "Watching" : "Watch"}
+        </Button>
+        <Button asChild variant="outline" size="sm" className="gap-1">
           <Link to={`/markets/price-alerts?kind=token&id=${encodeURIComponent(id ?? "")}`}>
             <BellRing className="h-4 w-4" /> Set price alert
           </Link>

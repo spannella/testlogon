@@ -16,6 +16,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -68,6 +70,7 @@ fun TokenDetailRoute(
     viewModel: TokenDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val watched by viewModel.isWatched.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -85,6 +88,14 @@ fun TokenDetailRoute(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = viewModel::toggleWatch, modifier = Modifier.testTag("token_watch_toggle")) {
+                        Icon(
+                            imageVector = if (watched) Icons.Filled.Star else Icons.Filled.StarBorder,
+                            contentDescription = if (watched) "Remove from watchlist" else "Add to watchlist",
+                        )
                     }
                 },
             )

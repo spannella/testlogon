@@ -10,11 +10,16 @@ import com.testlogon.android.data.tokens.TokenCapTable
 import com.testlogon.android.data.tokens.TokenRevenue
 import com.testlogon.android.data.tokens.TokenUpkeep
 import com.testlogon.android.data.tokens.TokensRepository
+import com.testlogon.android.data.exchange.watchlist.WatchKind
+import com.testlogon.android.data.exchange.watchlist.WatchlistStore
+import com.testlogon.android.data.exchange.watchlist.isWatched as isWatchedIn
 import com.testlogon.android.navigation.TokenDetailDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -45,6 +50,7 @@ data class TokenDetailUiState(
 @HiltViewModel
 class TokenDetailViewModel @Inject constructor(
     private val repository: TokensRepository,
+    private val watchlist: WatchlistStore,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -52,6 +58,18 @@ class TokenDetailViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(TokenDetailUiState(tokenId = tokenId))
     val uiState: StateFlow<TokenDetailUiState> = _uiState.asStateFlow()
+
+    /** Whether this token is on the unified watchlist (drives the detail star). */
+    val isWatched: StateFlow<Boolean> = watchlist.items
+        .map { items -> isWatchedIn(items, WatchKind.TOKEN, tokenId) }
+        .stateIn(
+            viewModelScope,
+            kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000),
+            watchlist.isWatched(WatchKind.TOKEN, tokenId),
+        )
+
+    /** Toggle this token on/off the unified watchlist. */
+    fun toggleWatch() { watchlist.toggle(WatchKind.TOKEN, tokenId) }
 
     init {
         load()

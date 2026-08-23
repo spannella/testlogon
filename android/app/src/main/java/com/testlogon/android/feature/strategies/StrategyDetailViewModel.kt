@@ -10,11 +10,17 @@ import com.testlogon.android.data.strategies.Strategy
 import com.testlogon.android.data.strategies.StrategyFees
 import com.testlogon.android.data.strategies.StrategyHolding
 import com.testlogon.android.data.strategies.StrategyNav
+import com.testlogon.android.data.exchange.watchlist.WatchKind
+import com.testlogon.android.data.exchange.watchlist.WatchlistStore
+import com.testlogon.android.data.exchange.watchlist.isWatched as isWatchedIn
 import com.testlogon.android.navigation.StrategyDetailDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -50,6 +56,7 @@ data class StrategyDetailUiState(
 @HiltViewModel
 class StrategyDetailViewModel @Inject constructor(
     private val repository: StrategiesRepository,
+    private val watchlist: WatchlistStore,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -57,6 +64,18 @@ class StrategyDetailViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(StrategyDetailUiState(strategyId = strategyId))
     val uiState: StateFlow<StrategyDetailUiState> = _uiState.asStateFlow()
+
+    /** Whether this strategy is on the unified watchlist (drives the detail star). */
+    val isWatched: StateFlow<Boolean> = watchlist.items
+        .map { items -> isWatchedIn(items, WatchKind.STRATEGY, strategyId) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            watchlist.isWatched(WatchKind.STRATEGY, strategyId),
+        )
+
+    /** Toggle this strategy on/off the unified watchlist. */
+    fun toggleWatch() { watchlist.toggle(WatchKind.STRATEGY, strategyId) }
 
     init { load() }
 

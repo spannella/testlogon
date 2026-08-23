@@ -150,6 +150,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
       { label: "Trading Home", i18nKey: "nav.tradingHome", path: "/home", icon: <Gauge className="h-5 w-5" /> },
       { label: "Markets", i18nKey: "nav.markets", path: "/markets", icon: <CandlestickChart className="h-5 w-5" /> },
+      { label: "Watchlist", i18nKey: "nav.watchlist", path: "/watchlist", icon: <Star className="h-5 w-5" /> },
       { label: "Invest", i18nKey: "nav.invest", path: "/invest", icon: <Sparkles className="h-5 w-5" /> },
       { label: "Analysis", i18nKey: "nav.analysis", path: "/analysis", icon: <LineChart className="h-5 w-5" /> },
       { label: "Price Alerts", i18nKey: "nav.priceAlerts", path: "/markets/price-alerts", icon: <Bell className="h-5 w-5" /> },
