@@ -109,6 +109,9 @@ object MoreRoutes {
     // Custody: native crypto custody surface (balances / deposit / withdraw / activity / officer approvals), wired to /me/custody/*.
     const val CUSTODY = CustodyDest.ROUTE
 
+    // Cash: native FIAT (USD) wallet deposit/withdraw wired to /ui/billing/wallet (trading/margin/fees balance).
+    const val CASH = CashDest.ROUTE
+
     // External custody providers (Fireblocks / BitGo / internal gateway): connect + per-vault provider + withdrawal approval.
     const val CUSTODY_PROVIDERS = CustodyProvidersDest.ROUTE
 
@@ -623,6 +626,7 @@ object MoreRoutes {
             ACTIVE_ALGOS,
             HOME,
             CUSTODY,
+            CASH,
             CUSTODY_PROVIDERS,
             PORTFOLIO,
             PORTFOLIO_ANALYTICS,

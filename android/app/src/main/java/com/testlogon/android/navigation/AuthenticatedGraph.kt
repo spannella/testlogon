@@ -218,6 +218,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         activeAlgosDestination(navController)
         // Custody: native crypto custody surface wired to /me/custody/* (officer approvals self-gate on the admin signal).
         custodyDestination(navController)
+        // Cash: native FIAT (USD) wallet deposit/withdraw wired to the /ui/billing/wallet endpoints.
+        cashDestination(navController)
         // External custody providers (Fireblocks / BitGo / internal gateway): connect + per-vault provider + withdrawal approval.
         custodyProvidersDestination(navController)
         // Trading Home / Dashboard: read-only launch surface (reached from More -> Wallet hub top).

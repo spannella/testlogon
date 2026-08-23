@@ -11,10 +11,12 @@ import {
   Rocket,
   ChevronRight,
   Search,
+  Banknote,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -575,15 +577,23 @@ export default function InvestHubPage() {
       <SurfaceIntro surfaceId="invest" />
 
       <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-6 w-6 text-primary" />
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Invest</h1>
-            <p className="text-sm text-muted-foreground">
-              One front door to everything investable — markets, creator tokens, strategy funds,
-              staking & open opportunities.
-            </p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-6 w-6 text-primary" />
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Invest</h1>
+              <p className="text-sm text-muted-foreground">
+                One front door to everything investable — markets, creator tokens, strategy funds,
+                staking & open opportunities.
+              </p>
+            </div>
           </div>
+          <Button asChild variant="outline" size="sm" className="shrink-0 gap-1.5">
+            <Link to="/custody/cash">
+              <Banknote className="h-4 w-4" />
+              Add cash
+            </Link>
+          </Button>
         </div>
         <div className="relative max-w-md">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
