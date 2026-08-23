@@ -130,6 +130,11 @@ internal data class PriceAlertJson(
     val createdTs: Long = 0L,
     val triggeredTs: Long? = null,
     val armed: Boolean = true,
+    // Added for the generalized SYMBOL|TOKEN|STRATEGY alert. Absent in legacy persisted entries, which
+    // therefore migrate transparently to a SYMBOL alert keyed by symbolId (subject == null default).
+    val subject: String? = null,
+    val subjectId: String? = null,
+    val subjectLabel: String? = null,
 )
 
 internal fun PriceAlertJson.toDomain() = PriceAlert(
@@ -142,6 +147,11 @@ internal fun PriceAlertJson.toDomain() = PriceAlert(
     createdTs = createdTs,
     triggeredTs = triggeredTs,
     armed = armed,
+    // Transparent migration: legacy entries (subject == null) become SYMBOL alerts keyed by symbolId.
+    subject = runCatching { subject?.let { PriceAlertSubject.valueOf(it) } }.getOrNull()
+        ?: PriceAlertSubject.SYMBOL,
+    subjectId = subjectId ?: symbolId.toString(),
+    subjectLabel = subjectLabel,
 )
 
 internal fun PriceAlert.toJson() = PriceAlertJson(
@@ -153,4 +163,7 @@ internal fun PriceAlert.toJson() = PriceAlertJson(
     createdTs = createdTs,
     triggeredTs = triggeredTs,
     armed = armed,
+    subject = subject.name,
+    subjectId = subjectId,
+    subjectLabel = subjectLabel,
 )
