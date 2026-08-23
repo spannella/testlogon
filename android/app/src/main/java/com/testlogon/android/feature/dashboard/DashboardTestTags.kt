@@ -28,4 +28,17 @@ object DashboardTestTags {
     const val HUB_COMMUNITY = "dashboard_hub_community"
     const val HUB_SHOP = "dashboard_hub_shop"
     const val HUB_ALL = "dashboard_hub_all"
+
+    // Trading & Investing quick-access section.
+    const val TRADING_SECTION = "dashboard_trading_section"
+    const val TRADING_INVEST = "dashboard_trading_invest"
+    const val TRADING_MARKETS = "dashboard_trading_markets"
+    const val TRADING_STRATEGIES = "dashboard_trading_strategies"
+    const val TRADING_PORTFOLIO_ANALYTICS = "dashboard_trading_portfolio_analytics"
+    const val TRADING_ACTIVITY_CENTER = "dashboard_trading_activity_center"
+    const val TRADING_ACTIVE_ALGOS = "dashboard_trading_active_algos"
+    const val TRADING_TOKENS = "dashboard_trading_tokens"
+    const val TRADING_BAILOUTS = "dashboard_trading_bailouts"
+    const val TRADING_CUSTODY_PROVIDERS = "dashboard_trading_custody_providers"
+    const val TRADING_TAX_GAINS = "dashboard_trading_tax_gains"
 }

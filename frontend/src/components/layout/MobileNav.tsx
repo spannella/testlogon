@@ -46,6 +46,14 @@ import {
   UserCog,
   Bot,
   LayoutGrid,
+  Sparkles,
+  CandlestickChart,
+  Boxes,
+  ShieldAlert,
+  Timer,
+  Landmark,
+  Building2,
+  Receipt,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -68,9 +76,21 @@ const PRIMARY_TABS = [
   { label: "Messages", i18nKey: "nav.messages", path: "/messages", icon: MessageSquare },
   { label: "Files", i18nKey: "nav.files", path: "/files", icon: FolderOpen },
   { label: "Shop", i18nKey: "nav.shop", path: "/shop", icon: Store },
+  { label: "Invest", i18nKey: "nav.invest", path: "/invest", icon: Sparkles },
 ];
 
 const MORE_LINKS = [
+  // ── Trading & Investing (surfaced prominently) ──
+  { label: "Invest", i18nKey: "nav.invest", path: "/invest", icon: Sparkles },
+  { label: "Markets", i18nKey: "nav.markets", path: "/markets", icon: CandlestickChart },
+  { label: "Strategy Funds", i18nKey: "nav.strategies", path: "/strategies", icon: Boxes },
+  { label: "Portfolio Risk", i18nKey: "nav.portfolioRisk", path: "/portfolio/analytics", icon: ShieldAlert },
+  { label: "Activity Center", i18nKey: "nav.activityCenter", path: "/activity-center", icon: Bell },
+  { label: "Active Algos", i18nKey: "nav.activeAlgos", path: "/algos", icon: Timer },
+  { label: "Creator Tokens", i18nKey: "nav.creatorTokens", path: "/tokens", icon: Landmark },
+  { label: "Bailouts", i18nKey: "nav.bailouts", path: "/bailouts", icon: LifeBuoy },
+  { label: "Custody Providers", i18nKey: "nav.custodyProviders", path: "/custody/providers", icon: Building2 },
+  { label: "Tax & Gains", i18nKey: "nav.taxGains", path: "/reports/tax", icon: Receipt },
   { label: "Call History", i18nKey: "nav.callHistory", path: "/calls/history", icon: Phone },
   { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: Rss },
   { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: Compass },
