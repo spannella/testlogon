@@ -11,6 +11,7 @@ import { useSymbols, useCandles } from "@/hooks/useMarketData";
 import type { MarketSymbol } from "@/api/endpoints/marketData";
 import { formatPrice } from "./format";
 import { loadDefaultSymbol } from "@/lib/tradingPrefs";
+import { useWatchlist } from "@/hooks/useWatchlist";
 import {
   ALL_CLASS,
   CLASS_EMPTY_COPY,
@@ -33,19 +34,6 @@ const FALLBACK_SYMBOLS: MarketSymbol[] = [
   { symbol: "ETHUSDC", symbol_id: 2, instrument_id: 2, price_scaler: 1, lot_size: 1, reference_price: 3000, matching_algo: "price_time", is_perpetual: false, funding_interval_s: 0 },
   { symbol: "SOLUSDC", symbol_id: 3, instrument_id: 3, price_scaler: 1, lot_size: 1, reference_price: 150, matching_algo: "price_time", is_perpetual: false, funding_interval_s: 0 },
 ];
-
-// Client-side watchlist. Stable insertion order preserved as an id array.
-const WATCHLIST_KEY = "md.watchlist.v1";
-
-function loadWatchlist(): number[] {
-  try {
-    const raw = localStorage.getItem(WATCHLIST_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "number") : [];
-  } catch {
-    return [];
-  }
-}
 
 /** Format a funding interval (seconds) as a compact human string. */
 function formatInterval(seconds: number | undefined): string {
@@ -194,20 +182,20 @@ export default function MarketsPage() {
   const [query, setQuery] = useState("");
   const [watchTab, setWatchTab] = useState<WatchTab>("all");
   const [classTab, setClassTab] = useState<ClassTab>(ALL_CLASS);
-  const [watchlist, setWatchlist] = useState<number[]>(loadWatchlist);
+  // Unified cross-instrument watchlist; this page shows/toggles the SYMBOL kind.
+  const { items: watchItems, has: hasWatch, toggle: toggleWatch } = useWatchlist();
+  const watchlist = useMemo(
+    () =>
+      watchItems
+        .filter((w) => w.kind === "symbol")
+        .map((w) => Number(w.id))
+        .filter((n) => Number.isFinite(n)),
+    [watchItems],
+  );
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
-    } catch {
-      /* ignore */
-    }
-  }, [watchlist]);
+  const toggleFav = (id: number) => toggleWatch("symbol", id);
 
-  const toggleFav = (id: number) =>
-    setWatchlist((w) => (w.includes(id) ? w.filter((x) => x !== id) : [...w, id]));
-
-  const isFav = (id: number) => watchlist.includes(id);
+  const isFav = (id: number) => hasWatch("symbol", id);
 
   // Search + watchlist pre-filter (class-agnostic), shared by both the class
   // probe scope and the final rows so we only probe what could be shown.

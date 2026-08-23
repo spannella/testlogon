@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material.icons.outlined.Loyalty
 import androidx.compose.material.icons.outlined.Apartment
@@ -1634,6 +1635,17 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_markets,
             icon = Icons.Outlined.TrendingUp,
             route = MoreRoutes.MARKETS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        // UNIFIED cross-instrument watchlist: one list of every starred item across exchange
+        // symbols + creator tokens + strategy funds, with a per-kind badge + live price/NAV.
+        // Degrades per-item on 404 (token/strategy backends pending); deep-links to each detail.
+        MoreEntry(
+            id = "watchlist",
+            labelRes = R.string.more_entry_watchlist,
+            icon = Icons.Outlined.Star,
+            route = MoreRoutes.WATCHLIST,
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),

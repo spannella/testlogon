@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, BellRing, Boxes, FlaskConical, Pencil, Rocket, Lock } from "lucide-react";
+import { ArrowLeft, BellRing, Boxes, FlaskConical, Pencil, Rocket, Lock, Star } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -50,6 +50,8 @@ import {
   type InvestBlockReason,
 } from "@/lib/strategies";
 import { PendingBackend, PooledNavNote } from "./PendingBackend";
+import { cn } from "@/lib/utils";
+import { useWatchlist } from "@/hooks/useWatchlist";
 
 const STATUS_VARIANT: Record<StrategyStatus, "default" | "secondary" | "destructive" | "outline"> = {
   draft: "outline",
@@ -88,6 +90,9 @@ export default function StrategyDetailPage() {
   const isCreator = !!strategy && !!userId && strategy.creator_sub === userId;
   const isDraft = strategy?.status === "draft";
   const isPublished = strategy?.status === "published";
+
+  const { has: hasWatch, toggle: toggleWatch } = useWatchlist();
+  const isWatched = !!id && hasWatch("strategy", id);
 
   const symName = (sid: number) =>
     symbolsQ.data?.symbols.find((s) => s.symbol_id === sid)?.symbol ?? `#${sid}`;
@@ -182,6 +187,16 @@ export default function StrategyDetailPage() {
           {header}
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-pressed={isWatched}
+            onClick={() => id && toggleWatch("strategy", id)}
+          >
+            <Star className={cn("mr-1 h-4 w-4", isWatched && "fill-amber-400 text-amber-400")} />
+            {isWatched ? "Watching" : "Watch"}
+          </Button>
           <Button asChild variant="outline" size="sm">
             <Link to={`/markets/price-alerts?kind=strategy&id=${encodeURIComponent(id ?? "")}`}>
               <BellRing className="mr-1 h-4 w-4" /> Set NAV alert

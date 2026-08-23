@@ -390,6 +390,9 @@ object MoreRoutes {
     // Markets (exchange market-data, VIEW-ONLY): instrument list -> per-symbol chart/book/tape.
     const val MARKETS = MarketsDest.ROUTE
 
+    // UNIFIED cross-instrument watchlist (starred symbols + creator tokens + strategy funds).
+    const val WATCHLIST = WatchlistDest.ROUTE
+
     // Unified INVEST hub: one front door aggregating markets + creator tokens + strategy funds +
     // staking + open opportunities. Degrades per-section on 404; owns no detail routes.
     const val INVEST = InvestDest.ROUTE
@@ -710,6 +713,7 @@ object MoreRoutes {
             WEBHOOKS,
             ADMIN_DASHBOARD,
             MARKETS,
+            WATCHLIST,
             INVEST,
             TOKENS,
             STRATEGIES,

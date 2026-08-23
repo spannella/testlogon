@@ -61,6 +61,7 @@ const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
 const DelegateFeedPage = lazy(() => import("@/pages/feed/DelegateFeedPage"));
 const HomePage = lazy(() => import("@/pages/home/HomePage"));
 const MarketsPage = lazy(() => import("@/pages/markets/MarketsPage"));
+const WatchlistPage = lazy(() => import("@/pages/watchlist/WatchlistPage"));
 const ActiveAlgosPage = lazy(() => import("@/pages/algos/ActiveAlgosPage"));
 const SymbolDetailPage = lazy(() => import("@/pages/markets/SymbolDetailPage"));
 const TokenMarketPage = lazy(() => import("@/pages/tokens/TokenMarketPage"));
@@ -761,6 +762,7 @@ export default function App() {
           <Route path="feed" element={<FeedPage />} />
           <Route path="home" element={<HomePage />} />
           <Route path="markets" element={<MarketsPage />} />
+          <Route path="watchlist" element={<WatchlistPage />} />
           <Route path="markets/:symbolId" element={<SymbolDetailPage />} />
           <Route path="tokens" element={<TokenMarketPage />} />
           <Route path="tokens/new" element={<MintTokenPage />} />
