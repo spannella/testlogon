@@ -60,4 +60,33 @@ jobs:
             src/pages/admin/__tests__/PaymentIncidentQueuePage.test.tsx \
             src/pages/admin/__tests__/PaymentIncidentQueuePage.e2e.test.tsx \
             src/pages/billing/__tests__/BillingOverview.paymentIssues.test.tsx \
-            src/pages/billing/__tests__/BillingOverview.paymentIssues.e2e.test.tsx
+            src/pages/billing/__tests__/BillingOverview.paymentIssues.e2e.test.tsx \
+            src/lib/paperEngine.test.ts \
+            src/lib/paperBlotter.test.ts \
+            src/lib/paperMode.test.ts \
+            src/lib/instrumentClass.test.ts \
+            src/lib/marketStats.test.ts \
+            src/lib/tokens.test.ts \
+            src/lib/bailout.test.ts \
+            src/lib/tradingCredentials.test.ts \
+            src/lib/custodyProviders.test.ts \
+            src/lib/strategies.test.ts \
+            src/lib/discover.test.ts \
+            src/lib/portfolioAnalytics.test.ts \
+            src/lib/taxLots.test.ts \
+            src/lib/activity.test.ts \
+            src/lib/orderCalc.test.ts \
+            src/lib/priceAlerts.test.ts \
+            src/lib/watchlist.test.ts \
+            src/lib/onboarding.test.ts \
+            src/pages/invest/InvestHubPage.smoke.test.tsx \
+            src/pages/strategies/StrategyMarketPage.smoke.test.tsx \
+            src/pages/tokens/TokenMarketPage.smoke.test.tsx \
+            src/pages/bailouts/BailoutsBoardPage.smoke.test.tsx \
+            src/pages/portfolio/PortfolioAnalyticsPage.smoke.test.tsx \
+            src/pages/activity-center/ActivityCenterPage.smoke.test.tsx \
+            src/pages/algos/ActiveAlgosPage.smoke.test.tsx \
+            src/pages/watchlist/WatchlistPage.smoke.test.tsx \
+            src/pages/reports/TaxReportPage.smoke.test.tsx \
+            src/pages/analysis/MarketAnalysisPage.smoke.test.tsx \
+            src/pages/custody/CustodyProvidersPage.smoke.test.tsx
