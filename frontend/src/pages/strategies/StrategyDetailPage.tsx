@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Boxes, FlaskConical, Pencil, Rocket, Lock } from "lucide-react";
+import { ArrowLeft, BellRing, Boxes, FlaskConical, Pencil, Rocket, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -182,6 +182,11 @@ export default function StrategyDetailPage() {
           {header}
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to={`/markets/price-alerts?kind=strategy&id=${encodeURIComponent(id ?? "")}`}>
+              <BellRing className="mr-1 h-4 w-4" /> Set NAV alert
+            </Link>
+          </Button>
           <Button asChild variant="outline" size="sm">
             <Link to={`/strategies/${encodeURIComponent(id ?? "")}/backtest`}>
               <FlaskConical className="mr-1 h-4 w-4" /> Paper &amp; backtest

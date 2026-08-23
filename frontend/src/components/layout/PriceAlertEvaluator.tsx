@@ -3,6 +3,9 @@ import * as React from "react";
 import { useCandles, useSymbols } from "@/hooks/useMarketData";
 import type { MarketSymbol } from "@/api/endpoints/marketData";
 import { formatPrice } from "@/pages/markets/format";
+import { formatCents } from "@/lib/tokens";
+import { useToken } from "@/hooks/useTokens";
+import { useStrategy, useStrategyNav } from "@/hooks/useStrategies";
 import {
   pushExternalTradingAlert,
   type ExternalTradingAlert,
@@ -35,10 +38,42 @@ function usePriceAlerts(): PriceAlert[] {
 }
 
 /**
+ * Shared fire path: for each armed alert whose current value MEETS its
+ * condition, push a `price` alert into the trading bell and mark it triggered
+ * (one-shot). `value` is in the subject's native integer units; `render`
+ * formats it for display. `subjectName` is the resolved display label.
+ */
+function fireCrossings(
+  alerts: PriceAlert[],
+  value: number,
+  subjectName: string,
+  render: (v: number) => string,
+) {
+  if (value == null || !Number.isFinite(value)) return;
+  for (const alert of alerts) {
+    if (!alert.armed) continue;
+    if (!evaluate(alert, value)) continue;
+    const dir = alert.direction === "above" ? "above" : "below";
+    const fieldWord = alert.field === "nav" ? "NAV" : "price";
+    const targetLabel = render(alert.price);
+    const detail: ExternalTradingAlert = {
+      id: `price:${alert.id}:${alert.triggeredTs ?? "armed"}`,
+      kind: "price",
+      title: `${subjectName} ${fieldWord} crossed ${dir} ${targetLabel}`,
+      message: alert.note
+        ? alert.note
+        : `Now ${render(value)} · target ${targetLabel}`,
+      ts: Date.now(),
+    };
+    // One-shot: stamp + disarm BEFORE pushing so a fast re-render can't double-fire.
+    markPriceAlertTriggered(alert.id, detail.ts);
+    pushExternalTradingAlert(detail);
+  }
+}
+
+/**
  * Watches ONE symbol's last price (candle close) and evaluates every armed
- * alert on that symbol. On a fire it pushes a `price` alert into the trading
- * bell (toast + OS notification) and marks the alert triggered (one-shot).
- * Renders nothing.
+ * alert on that symbol. Renders nothing.
  */
 function SymbolPriceWatcher({
   symbolId,
@@ -58,35 +93,66 @@ function SymbolPriceWatcher({
 
   React.useEffect(() => {
     if (lastClose == null || !Number.isFinite(lastClose)) return;
-    for (const alert of alerts) {
-      if (!alert.armed) continue;
-      if (!evaluate(alert, lastClose)) continue;
-      const dir = alert.direction === "above" ? "above" : "below";
-      const priceLabel = formatPrice(alert.price, scaler);
-      const detail: ExternalTradingAlert = {
-        id: `price:${alert.id}:${alert.triggeredTs ?? "armed"}`,
-        kind: "price",
-        title: `${name} crossed ${dir} ${priceLabel}`,
-        message: alert.note
-          ? alert.note
-          : `Last ${formatPrice(lastClose, scaler)} · target ${priceLabel}`,
-        ts: Date.now(),
-      };
-      // One-shot: stamp + disarm BEFORE pushing so a fast re-render can't double-fire.
-      markPriceAlertTriggered(alert.id, detail.ts);
-      pushExternalTradingAlert(detail);
-    }
-    // Re-run when the price or the alert set for this symbol changes.
+    fireCrossings(alerts, lastClose, name, (v) => formatPrice(v, scaler));
   }, [lastClose, alerts, scaler, name]);
 
   return null;
 }
 
 /**
- * App-chrome-level evaluator: for each distinct symbol that has an ARMED price
- * alert, mount a hidden watcher that polls its last price and fires crossings
- * through the trading-alerts bell. Mount this next to <TradingAlertsBell/> so it
- * runs whenever the user is logged in.
+ * Watches ONE creator token's last / clearing price (integer cents). Degrades
+ * silently on 404 (token backend not shipped) — no read, no fire. Renders nothing.
+ */
+function TokenPriceWatcher({
+  tokenId,
+  alerts,
+}: {
+  tokenId: string;
+  alerts: PriceAlert[];
+}) {
+  const { data } = useToken(tokenId);
+  const last = data?.clearing_price;
+  const name = data?.ticker ?? data?.name ?? tokenId;
+
+  React.useEffect(() => {
+    if (last == null || !Number.isFinite(last)) return;
+    fireCrossings(alerts, last, name, (v) => formatCents(v));
+  }, [last, alerts, name]);
+
+  return null;
+}
+
+/**
+ * Watches ONE strategy fund's NAV per unit (integer cents), polled by
+ * useStrategyNav. Falls back to the strategy detail's nav_per_unit when the NAV
+ * snapshot endpoint 404s. Degrades silently when neither is available. Renders
+ * nothing.
+ */
+function StrategyNavWatcher({
+  strategyId,
+  alerts,
+}: {
+  strategyId: string;
+  alerts: PriceAlert[];
+}) {
+  const navQ = useStrategyNav(strategyId);
+  const stratQ = useStrategy(strategyId);
+  const nav = navQ.data?.nav_per_unit ?? stratQ.data?.nav_per_unit;
+  const name = stratQ.data?.name ?? strategyId;
+
+  React.useEffect(() => {
+    if (nav == null || !Number.isFinite(nav)) return;
+    fireCrossings(alerts, nav, name, (v) => formatCents(v));
+  }, [nav, alerts, name]);
+
+  return null;
+}
+
+/**
+ * App-chrome-level evaluator: for each distinct SUBJECT (symbol / token /
+ * strategy) that has an ARMED alert, mount a hidden watcher that polls its
+ * current value and fires crossings through the trading-alerts bell. Mount this
+ * next to <TradingAlertsBell/> so it runs whenever the user is logged in.
  */
 export default function PriceAlertEvaluator({ enabled = true }: { enabled?: boolean }) {
   const alerts = usePriceAlerts();
@@ -98,29 +164,51 @@ export default function PriceAlertEvaluator({ enabled = true }: { enabled?: bool
     return m;
   }, [symbolsData]);
 
-  // Group armed alerts by symbol; only distinct armed symbols get a watcher.
+  // Group armed alerts by subject; only distinct armed subjects get a watcher.
   const grouped = React.useMemo(() => {
-    const m = new Map<number, PriceAlert[]>();
-    if (!enabled) return m;
+    const symbols = new Map<number, PriceAlert[]>();
+    const tokens = new Map<string, PriceAlert[]>();
+    const strategies = new Map<string, PriceAlert[]>();
+    if (!enabled) return { symbols, tokens, strategies };
     for (const a of alerts) {
       if (!a.armed) continue;
-      const list = m.get(a.symbolId) ?? [];
-      list.push(a);
-      m.set(a.symbolId, list);
+      if (a.subjectKind === "token") {
+        const list = tokens.get(a.subjectId) ?? [];
+        list.push(a);
+        tokens.set(a.subjectId, list);
+      } else if (a.subjectKind === "strategy") {
+        const list = strategies.get(a.subjectId) ?? [];
+        list.push(a);
+        strategies.set(a.subjectId, list);
+      } else {
+        const list = symbols.get(a.symbolId) ?? [];
+        list.push(a);
+        symbols.set(a.symbolId, list);
+      }
     }
-    return m;
+    return { symbols, tokens, strategies };
   }, [alerts, enabled]);
 
   if (!enabled) return null;
 
   return (
     <>
-      {[...grouped.entries()].map(([symbolId, symAlerts]) => (
+      {[...grouped.symbols.entries()].map(([symbolId, symAlerts]) => (
         <SymbolPriceWatcher
-          key={symbolId}
+          key={`sym:${symbolId}`}
           symbolId={symbolId}
           symbol={byId.get(symbolId)}
           alerts={symAlerts}
+        />
+      ))}
+      {[...grouped.tokens.entries()].map(([tokenId, tokAlerts]) => (
+        <TokenPriceWatcher key={`tok:${tokenId}`} tokenId={tokenId} alerts={tokAlerts} />
+      ))}
+      {[...grouped.strategies.entries()].map(([strategyId, stratAlerts]) => (
+        <StrategyNavWatcher
+          key={`strat:${strategyId}`}
+          strategyId={strategyId}
+          alerts={stratAlerts}
         />
       ))}
     </>

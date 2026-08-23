@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Coins, Snowflake } from "lucide-react";
+import { ArrowLeft, BellRing, Coins, Snowflake } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -103,6 +103,11 @@ export default function TokenDetailPage() {
           </Link>
         </Button>
         {header}
+        <Button asChild variant="outline" size="sm" className="ml-auto gap-1">
+          <Link to={`/markets/price-alerts?kind=token&id=${encodeURIComponent(id ?? "")}`}>
+            <BellRing className="h-4 w-4" /> Set price alert
+          </Link>
+        </Button>
       </div>
 
       {tokenQ.isError ? (
