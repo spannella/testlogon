@@ -42,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.feature.onboarding.SurfaceIntro
+import com.testlogon.android.feature.onboarding.OnboardingModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.util.Locale
 
@@ -97,6 +99,7 @@ fun PortfolioAnalyticsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item { SurfaceIntro(OnboardingModel.INTRO_PORTFOLIO_ANALYTICS) }
             item { HeaderCard(state) }
 
             when {

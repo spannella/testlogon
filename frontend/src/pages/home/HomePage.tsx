@@ -47,6 +47,7 @@ import {
   formatReturnBps,
 } from "@/pages/home/tradingSurfaces";
 import { formatPrice, formatQty } from "@/pages/markets/format";
+import WelcomeTour from "@/components/onboarding/WelcomeTour";
 
 // local helpers
 
@@ -757,6 +758,8 @@ function TradingInvestingCard() {
 export default function HomePage() {
   return (
     <div className="space-y-4">
+      <WelcomeTour />
+
       <div className="flex items-center gap-2">
         <HomeIcon className="h-6 w-6 text-primary" />
         <div>

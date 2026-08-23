@@ -41,6 +41,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.feature.onboarding.SurfaceIntro
+import com.testlogon.android.feature.onboarding.OnboardingModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.feature.markets.ui.MarketColors
 import com.testlogon.android.feature.markets.ui.MarketSurface
@@ -71,6 +73,7 @@ fun ActivityCenterRoute(
                 onRefresh = viewModel::refresh,
             )
             CategoryChips(selected = state.selected, onSelect = viewModel::selectCategory)
+            SurfaceIntro(OnboardingModel.INTRO_ACTIVITY_CENTER)
             if (state.degradedSources.isNotEmpty()) {
                 Text(
                     "Some feeds unavailable: " + state.degradedSources.joinToString(", "),

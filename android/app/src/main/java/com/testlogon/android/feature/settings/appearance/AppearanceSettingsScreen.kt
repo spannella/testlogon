@@ -30,6 +30,11 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.outlined.TravelExplore
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.testlogon.android.core.network.AppThemeMode
 import com.testlogon.android.core.network.AppearancePreferences
 
@@ -46,6 +51,7 @@ fun AppearanceSettingsRoute(
         dynamicColorSupported = viewModel.dynamicColorSupported,
         onModeSelected = viewModel::onModeSelected,
         onDynamicColorChanged = viewModel::onDynamicColorChanged,
+        onReplayProductTour = viewModel::onReplayProductTour,
         onBack = onBack,
         modifier = modifier,
     )
@@ -58,6 +64,7 @@ fun AppearanceSettingsScreen(
     dynamicColorSupported: Boolean,
     onModeSelected: (AppThemeMode) -> Unit,
     onDynamicColorChanged: (Boolean) -> Unit,
+    onReplayProductTour: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -102,8 +109,41 @@ fun AppearanceSettingsScreen(
                     onCheckedChange = onDynamicColorChanged,
                 )
             }
+            HorizontalDivider()
+            ProductTourRow(onReplayProductTour = onReplayProductTour)
         }
     }
+}
+
+/**
+ * A Settings control that replays the trading/investing product tour: taps clear the onboarding
+ * seen-set (welcome tour + every surface intro) so they show again, and a short inline confirmation
+ * is shown. Reachable from the Appearance settings screen.
+ */
+@Composable
+private fun ProductTourRow(onReplayProductTour: () -> Unit) {
+    var replayed by remember { mutableStateOf(false) }
+    ListItem(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("appearance_product_tour")
+            .clickable {
+                onReplayProductTour()
+                replayed = true
+            },
+        headlineContent = { Text(stringResource(R.string.settings_product_tour_title)) },
+        supportingContent = {
+            Text(
+                if (replayed) {
+                    stringResource(R.string.settings_product_tour_replayed)
+                } else {
+                    stringResource(R.string.settings_product_tour_subtitle)
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+        },
+        leadingContent = { Icon(Icons.Outlined.TravelExplore, contentDescription = null) },
+    )
 }
 
 @Composable

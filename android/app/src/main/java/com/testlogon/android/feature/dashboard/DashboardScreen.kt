@@ -76,6 +76,7 @@ import com.testlogon.android.feature.dashboard.states.DashboardStaleBanner
 import com.testlogon.android.feature.dashboard.widgets.HighlightsWidget
 import com.testlogon.android.feature.dashboard.widgets.SummaryWidget
 import com.testlogon.android.feature.more.MoreHub
+import com.testlogon.android.feature.onboarding.WelcomeTour
 import com.testlogon.android.feature.more.accent
 import com.testlogon.android.navigation.BroadcastBrowseDest
 import com.testlogon.android.navigation.ComposePostDest
@@ -112,6 +113,9 @@ fun DashboardRoute(
             }
         }
     }
+
+    // First-run guided tour of the new trading/investing surfaces (persisted show-once).
+    WelcomeTour(onOpenRoute = onOpenRoute)
 
     DashboardScreen(
         state = state,
