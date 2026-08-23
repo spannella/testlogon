@@ -40,6 +40,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.feature.onboarding.SurfaceIntro
+import com.testlogon.android.feature.onboarding.OnboardingModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.feature.markets.ui.MarketColors
@@ -89,6 +91,7 @@ private fun ActiveAlgosScreen(
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 12.dp)) {
+            SurfaceIntro(OnboardingModel.INTRO_ACTIVE_ALGOS)
             Spacer(Modifier.height(8.dp))
             Box(
                 Modifier.fillMaxWidth()

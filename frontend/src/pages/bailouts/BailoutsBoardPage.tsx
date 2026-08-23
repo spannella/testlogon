@@ -1,3 +1,4 @@
+import SurfaceIntro from "@/components/onboarding/SurfaceIntro";
 import { useMemo, useState } from "react";
 import { LifeBuoy, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -35,6 +36,8 @@ export default function BailoutsBoardPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 p-4 sm:p-6">
+      <SurfaceIntro surfaceId="bailouts" />
+
       <PageHeader
         title="Bailouts"
         description="Rescue distressed but still-solvent margin positions — inject capital for a position-share before a forced liquidation."

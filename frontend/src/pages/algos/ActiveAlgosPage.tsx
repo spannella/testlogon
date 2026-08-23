@@ -4,6 +4,7 @@
 // Placement itself happens in the trade ticket's runner (which must be open for
 // that symbol) — this page just reflects and steers the persisted state. Algos
 // run ONLY while a tab is open; cancelling stops all further scheduling.
+import SurfaceIntro from "@/components/onboarding/SurfaceIntro";
 import { useEffect, useMemo, useState } from "react";
 import { Timer, Layers, Pause, Play, X, Trash2, Info } from "lucide-react";
 
@@ -188,6 +189,8 @@ export default function ActiveAlgosPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4">
+      <SurfaceIntro surfaceId="algos" />
+
       <div className="flex items-center justify-between">
         <h1 className="flex items-center gap-2 text-xl font-semibold">
           <Timer className="h-5 w-5" /> Active Algos

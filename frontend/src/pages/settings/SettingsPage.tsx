@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
-import { Phone, Keyboard } from "lucide-react";
+import { Phone, Keyboard, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,9 @@ import { JiraIntegrationSettings } from "./JiraIntegrationSettings";
 import { TradingSettings } from "./TradingSettings";
 import { BailoutSettings } from "./BailoutSettings";
 import { openShortcutsHelp } from "@/components/layout/KeyboardShortcutsHost";
+import { openWelcomeTour } from "@/components/onboarding/WelcomeTour";
+import { resetOnboarding } from "@/lib/onboarding";
+import { toast } from "@/components/ui/use-toast";
 
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -111,6 +114,37 @@ export default function SettingsPage() {
           <Button variant="outline" onClick={() => openShortcutsHelp()}>
             View keyboard shortcuts
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Sparkles className="h-4 w-4" />
+            Product tour
+          </CardTitle>
+        </CardHeader>
+        <Separator />
+        <CardContent className="space-y-3 pt-4">
+          <p className="text-sm text-muted-foreground">
+            Re-run the welcome tour of the trading &amp; investing surfaces, or bring back the
+            dismissed intro callouts on each page.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => openWelcomeTour()} data-testid="replay-welcome-tour">
+              Replay welcome tour
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                resetOnboarding();
+                toast({ title: "Intros reset", description: "The welcome tour and page intros will show again." });
+              }}
+              data-testid="reset-onboarding"
+            >
+              Reset all intros
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

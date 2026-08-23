@@ -29,6 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.feature.onboarding.SurfaceIntro
+import com.testlogon.android.feature.onboarding.OnboardingModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
@@ -71,6 +73,7 @@ fun BailoutBoardRoute(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                item { SurfaceIntro(OnboardingModel.INTRO_BAILOUTS) }
                 item {
                     Text(
                         "Inject rescue capital into a distressed-but-solvent position for a slice of it (and its uPnL). Bids clear at a single least-dilutive share.",

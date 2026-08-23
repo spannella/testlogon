@@ -38,6 +38,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.feature.onboarding.SurfaceIntro
+import com.testlogon.android.feature.onboarding.OnboardingModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
@@ -78,6 +80,7 @@ fun TokensMarketRoute(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            SurfaceIntro(OnboardingModel.INTRO_TOKENS)
             TabRow(selectedTabIndex = if (state.tab == TokenListTab.MARKET) 0 else 1) {
                 Tab(
                     selected = state.tab == TokenListTab.MARKET,

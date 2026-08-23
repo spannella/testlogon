@@ -11,6 +11,7 @@
 // EVERYTHING degrades independently: any source that 404s/403s is excluded and
 // its contribution simply drops out; thin/absent history flips the risk section
 // to a "recent window only / limited history" banner. All reads, no mutations.
+import SurfaceIntro from "@/components/onboarding/SurfaceIntro";
 import { useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
@@ -484,6 +485,8 @@ export default function PortfolioAnalyticsPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
+      <SurfaceIntro surfaceId="portfolio-analytics" />
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <ShieldAlert className="h-6 w-6 text-primary" />

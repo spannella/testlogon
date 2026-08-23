@@ -1,3 +1,4 @@
+import SurfaceIntro from "@/components/onboarding/SurfaceIntro";
 import { Link } from "react-router-dom";
 import { Boxes, Plus, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -136,6 +137,8 @@ export default function StrategyMarketPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 p-4 md:p-6">
+      <SurfaceIntro surfaceId="strategies" />
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Boxes className="h-6 w-6 text-primary" />

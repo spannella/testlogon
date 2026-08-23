@@ -1,3 +1,4 @@
+import SurfaceIntro from "@/components/onboarding/SurfaceIntro";
 import * as React from "react";
 import { Link } from "react-router-dom";
 import {
@@ -179,6 +180,8 @@ export default function ActivityCenterPage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-4 p-4">
+      <SurfaceIntro surfaceId="activity-center" />
+
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Activity className="h-6 w-6 text-primary" />

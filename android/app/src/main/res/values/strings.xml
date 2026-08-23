@@ -241,6 +241,9 @@
     <string name="appearance_mode_system">System default</string>
     <string name="appearance_dynamic_color">Use dynamic color</string>
     <string name="appearance_dynamic_color_subtitle">Match colors to your wallpaper (Android 12+).</string>
+    <string name="settings_product_tour_title">Product tour</string>
+    <string name="settings_product_tour_subtitle">Replay the trading &amp; investing welcome tour and show all intro tips again.</string>
+    <string name="settings_product_tour_replayed">Tour reset. It will show next time you open Home and the new screens.</string>
 
     <!-- Media (call) preferences (AND-079) -->
     <string name="media_prefs_title">Media</string>

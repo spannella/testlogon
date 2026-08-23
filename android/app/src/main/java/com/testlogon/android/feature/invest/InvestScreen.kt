@@ -42,6 +42,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.EmptyState
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
+import com.testlogon.android.feature.onboarding.SurfaceIntro
+import com.testlogon.android.feature.onboarding.OnboardingModel
 
 /**
  * The unified INVEST hub — one front door aggregating every investable/tradeable product (markets,
@@ -109,6 +111,7 @@ private fun InvestContent(
         contentPadding = PaddingValues(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        item { SurfaceIntro(OnboardingModel.INTRO_INVEST) }
         item {
             OutlinedTextField(
                 value = state.query,

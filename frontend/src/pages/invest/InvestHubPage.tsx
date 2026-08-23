@@ -1,3 +1,4 @@
+import SurfaceIntro from "@/components/onboarding/SurfaceIntro";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -571,6 +572,8 @@ export default function InvestHubPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-8 p-4 md:p-6">
+      <SurfaceIntro surfaceId="invest" />
+
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <Sparkles className="h-6 w-6 text-primary" />
