@@ -386,6 +386,7 @@ e2e/tickets.spec.ts
 e2e/tier-manager.spec.ts
 e2e/tip-leaderboard.spec.ts
 e2e/tip-ledger.spec.ts
+e2e/trading-surfaces.spec.ts
 e2e/ups-shipping.spec.ts
 e2e/user-appeals.spec.ts
 e2e/user-blocking.spec.ts

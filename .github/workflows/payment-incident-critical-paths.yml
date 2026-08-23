@@ -89,4 +89,13 @@ jobs:
             src/pages/watchlist/WatchlistPage.smoke.test.tsx \
             src/pages/reports/TaxReportPage.smoke.test.tsx \
             src/pages/analysis/MarketAnalysisPage.smoke.test.tsx \
-            src/pages/custody/CustodyProvidersPage.smoke.test.tsx
+            src/pages/custody/CustodyProvidersPage.smoke.test.tsx \
+            src/hooks/useTokens.test.tsx \
+            src/hooks/useStrategies.test.tsx \
+            src/hooks/useBailouts.test.tsx \
+            src/hooks/useWatchlist.test.tsx \
+            src/hooks/useActivity.test.tsx \
+            src/pages/tokens/MintTokenPage.interaction.test.tsx \
+            src/pages/strategies/StrategyDetailPage.interaction.test.tsx \
+            src/pages/strategies/WatchStar.interaction.test.tsx \
+            src/pages/alerts/PriceAlertsPage.interaction.test.tsx
