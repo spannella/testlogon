@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -26,6 +29,16 @@ import androidx.compose.material.icons.outlined.MovieCreation
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material.icons.outlined.TrendingUp
+import androidx.compose.material.icons.outlined.ShowChart
+import androidx.compose.material.icons.outlined.CandlestickChart
+import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.Assessment
+import androidx.compose.material.icons.outlined.PieChart
+import androidx.compose.material.icons.outlined.Gavel
+import androidx.compose.material.icons.outlined.Savings
+import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.AccountBalance
+import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -66,6 +79,7 @@ import com.testlogon.android.feature.more.MoreHub
 import com.testlogon.android.feature.more.accent
 import com.testlogon.android.navigation.BroadcastBrowseDest
 import com.testlogon.android.navigation.ComposePostDest
+import com.testlogon.android.navigation.MoreRoutes
 
 /**
  * AND-066 — route-level Dashboard entry wired into the Home tab. Collects state lifecycle-aware,
@@ -214,6 +228,9 @@ private fun DashboardLaunchpad(
         }
 
         item { ShortcutsSection(onOpenHub = onOpenHub, onOpenMore = onOpenMore) }
+
+        // Trading & Investing quick-access: links to already-shipped invest/markets surfaces.
+        item { TradingSection(onOpenRoute = onOpenRoute) }
 
         // Activity / content: real widgets when present, else a slim inline note.
         if (data != null && !data.isEmpty) {
@@ -430,6 +447,139 @@ private fun ShortcutsSection(
             },
             right = { Box(modifier = Modifier.weight(1f)) {} },
         )
+    }
+}
+
+@Composable
+private fun TradingSection(
+    onOpenRoute: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = stringResource(R.string.dashboard_trading_title),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.semantics { heading() },
+        )
+        val scheme = MaterialTheme.colorScheme
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .testTag(DashboardTestTags.TRADING_SECTION),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TradingCard(
+                icon = Icons.Outlined.TrendingUp,
+                label = stringResource(R.string.dashboard_trading_invest),
+                testTag = DashboardTestTags.TRADING_INVEST,
+                circleColor = scheme.primaryContainer,
+                iconTint = scheme.onPrimaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.INVEST) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.CandlestickChart,
+                label = stringResource(R.string.dashboard_trading_markets),
+                testTag = DashboardTestTags.TRADING_MARKETS,
+                circleColor = scheme.tertiaryContainer,
+                iconTint = scheme.onTertiaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.MARKETS) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.Insights,
+                label = stringResource(R.string.dashboard_trading_strategies),
+                testTag = DashboardTestTags.TRADING_STRATEGIES,
+                circleColor = scheme.secondaryContainer,
+                iconTint = scheme.onSecondaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.STRATEGIES) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.PieChart,
+                label = stringResource(R.string.dashboard_trading_portfolio_analytics),
+                testTag = DashboardTestTags.TRADING_PORTFOLIO_ANALYTICS,
+                circleColor = scheme.primaryContainer,
+                iconTint = scheme.onPrimaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.PORTFOLIO_ANALYTICS) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.Assessment,
+                label = stringResource(R.string.dashboard_trading_activity_center),
+                testTag = DashboardTestTags.TRADING_ACTIVITY_CENTER,
+                circleColor = scheme.tertiaryContainer,
+                iconTint = scheme.onTertiaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.ACTIVITY_CENTER) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.ShowChart,
+                label = stringResource(R.string.dashboard_trading_active_algos),
+                testTag = DashboardTestTags.TRADING_ACTIVE_ALGOS,
+                circleColor = scheme.secondaryContainer,
+                iconTint = scheme.onSecondaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.ACTIVE_ALGOS) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.Paid,
+                label = stringResource(R.string.dashboard_trading_tokens),
+                testTag = DashboardTestTags.TRADING_TOKENS,
+                circleColor = scheme.primaryContainer,
+                iconTint = scheme.onPrimaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.TOKENS) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.Gavel,
+                label = stringResource(R.string.dashboard_trading_bailouts),
+                testTag = DashboardTestTags.TRADING_BAILOUTS,
+                circleColor = scheme.tertiaryContainer,
+                iconTint = scheme.onTertiaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.BAILOUTS) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.AccountBalance,
+                label = stringResource(R.string.dashboard_trading_custody_providers),
+                testTag = DashboardTestTags.TRADING_CUSTODY_PROVIDERS,
+                circleColor = scheme.secondaryContainer,
+                iconTint = scheme.onSecondaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.CUSTODY_PROVIDERS) },
+            )
+            TradingCard(
+                icon = Icons.Outlined.ReceiptLong,
+                label = stringResource(R.string.dashboard_trading_tax_gains),
+                testTag = DashboardTestTags.TRADING_TAX_GAINS,
+                circleColor = scheme.primaryContainer,
+                iconTint = scheme.onPrimaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.TAX_REPORT) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun TradingCard(
+    icon: ImageVector,
+    label: String,
+    testTag: String,
+    circleColor: Color,
+    iconTint: Color,
+    onClick: () -> Unit,
+) {
+    Card(onClick = onClick, modifier = Modifier.width(104.dp).testTag(testTag)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                modifier = Modifier.size(40.dp).clip(CircleShape).background(circleColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(22.dp))
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+            )
+        }
     }
 }
 

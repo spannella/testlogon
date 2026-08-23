@@ -45,6 +45,19 @@
     <string name="dashboard_activity_placeholder_title">No activity yet</string>
     <string name="dashboard_activity_placeholder_body">Your activity will show up here.</string>
 
+    <!-- Trading & Investing section on the Home launchpad -->
+    <string name="dashboard_trading_title">Trading &amp; Investing</string>
+    <string name="dashboard_trading_invest">Invest</string>
+    <string name="dashboard_trading_markets">Markets</string>
+    <string name="dashboard_trading_strategies">Strategy funds</string>
+    <string name="dashboard_trading_portfolio_analytics">Portfolio analytics</string>
+    <string name="dashboard_trading_activity_center">Activity center</string>
+    <string name="dashboard_trading_active_algos">Active algos</string>
+    <string name="dashboard_trading_tokens">Creator tokens</string>
+    <string name="dashboard_trading_bailouts">Bailouts</string>
+    <string name="dashboard_trading_custody_providers">Custody providers</string>
+    <string name="dashboard_trading_tax_gains">Tax &amp; gains</string>
+
     <!-- "More" hub (AND-067) -->
     <string name="more_title">More</string>
     <string name="more_empty">Nothing here yet</string>

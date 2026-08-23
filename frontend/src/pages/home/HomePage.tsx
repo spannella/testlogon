@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   Bell,
+  Sparkles,
   CandlestickChart,
   CheckCircle2,
   Circle,
@@ -36,6 +37,15 @@ import { getBalance } from "@/api/endpoints/custody";
 import { getFillsFees, type FillFee } from "@/api/endpoints/trading";
 import type { MarketSymbol } from "@/api/endpoints/marketData";
 import { loadDefaultSymbol } from "@/lib/tradingPrefs";
+import { useActivityUnread } from "@/hooks/useActivity";
+import { useAlgoOrders } from "@/lib/algoStore";
+import { useStrategyMarket } from "@/hooks/useStrategies";
+import {
+  TRADING_SURFACES,
+  formatUnreadBadge,
+  pickTopStrategy,
+  formatReturnBps,
+} from "@/pages/home/tradingSurfaces";
 import { formatPrice, formatQty } from "@/pages/markets/format";
 
 // local helpers
@@ -600,6 +610,148 @@ function OnboardingCard() {
   );
 }
 
+
+// 6. Trading & Investing surfaces
+
+function SnapshotTile({
+  label,
+  value,
+  hint,
+  to,
+}: {
+  label: string;
+  value: React.ReactNode;
+  hint?: string;
+  to: string;
+}) {
+  return (
+    <Link
+      to={to}
+      className="flex flex-col gap-0.5 rounded-lg border border-border bg-muted/30 px-3 py-2 hover:border-primary/40 hover:bg-muted/60"
+    >
+      <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      <span className="num text-lg font-bold tabular-nums leading-tight">{value}</span>
+      {hint && <span className="truncate text-[11px] text-muted-foreground">{hint}</span>}
+    </Link>
+  );
+}
+
+function TradingInvestingCard() {
+  // Live snapshots — all reuse existing hooks and degrade to "—" on 404 / empty.
+  const marginQ = useMarginAccount();
+  const spotQ = useSpotBalance();
+  const custodyQ = useQuery({
+    queryKey: ["home", "custody", "balance"],
+    queryFn: getBalance,
+    retry: false,
+    refetchInterval: 30_000,
+  });
+  const unread = useActivityUnread();
+  const { algos } = useAlgoOrders();
+  const strategyMarketQ = useStrategyMarket();
+
+  const equity = useMemo(() => {
+    let sum = 0;
+    let anySource = false;
+    if (marginQ.isSuccess) {
+      sum += num(marginQ.data?.balance);
+      anySource = true;
+    }
+    if (spotQ.isSuccess) {
+      sum += (spotQ.data?.balances ?? []).reduce((a, b) => a + num(b.balance), 0);
+      anySource = true;
+    }
+    if (custodyQ.isSuccess) {
+      for (const v of Object.values(custodyQ.data?.balances ?? {})) sum += num(v as number | string);
+      anySource = true;
+    }
+    return anySource
+      ? sum.toLocaleString(undefined, { maximumFractionDigits: 2 })
+      : "—";
+  }, [marginQ.isSuccess, spotQ.isSuccess, custodyQ.isSuccess, marginQ.data, spotQ.data, custodyQ.data]);
+
+  const runningAlgos = useMemo(
+    () => algos.filter((a) => a.status === "running").length,
+    [algos],
+  );
+
+  const unreadBadge = formatUnreadBadge(unread);
+  const topStrategy = useMemo(
+    () => pickTopStrategy(strategyMarketQ.data?.strategies),
+    [strategyMarketQ.data],
+  );
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <CardTitle className="text-sm">Trading & Investing</CardTitle>
+        </div>
+        <Link
+          to="/invest"
+          className="flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          Invest hub <ArrowUpRight className="h-3 w-3" />
+        </Link>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Live snapshot tiles (indicative; reuse existing feeds) */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <SnapshotTile
+            label="Equity (indicative)"
+            value={equity}
+            hint="Across trading & custody"
+            to="/portfolio"
+          />
+          <SnapshotTile
+            label="Activity"
+            value={unreadBadge ? `${unreadBadge} new` : "Up to date"}
+            hint="Fills, funding, liquidations"
+            to="/activity-center"
+          />
+          <SnapshotTile
+            label="Active algos"
+            value={runningAlgos}
+            hint="Running now"
+            to="/algos"
+          />
+          <SnapshotTile
+            label="Top strategy"
+            value={topStrategy ? formatReturnBps(topStrategy.inception_return_bps) : "—"}
+            hint={topStrategy ? topStrategy.name : "Explore strategy funds"}
+            to="/strategies"
+          />
+        </div>
+
+        {/* Quick-link grid to every trading / investing surface */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          {TRADING_SURFACES.map((sfc) => {
+            const Icon = sfc.icon;
+            return (
+              <Link
+                key={sfc.id}
+                to={sfc.path}
+                className="flex flex-col gap-1 rounded-lg border border-border p-3 transition-colors hover:border-primary/50 hover:bg-muted/60"
+              >
+                <span className="flex items-center gap-2">
+                  <Icon className="h-4 w-4 shrink-0 text-primary" />
+                  <span className="text-sm font-medium leading-tight">{sfc.label}</span>
+                </span>
+                <span className="text-[11px] leading-snug text-muted-foreground">
+                  {sfc.desc}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // Page
 
 export default function HomePage() {
@@ -625,6 +777,8 @@ export default function HomePage() {
       </div>
 
       <RecentActivityCard />
+
+      <TradingInvestingCard />
     </div>
   );
 }
