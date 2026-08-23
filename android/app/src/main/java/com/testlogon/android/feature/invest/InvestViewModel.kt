@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.bailout.BailoutRepository
-import com.testlogon.android.data.custody.CustodyRepository
+import com.testlogon.android.data.custody.CustodyReader
 import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.TradingRepository
 import com.testlogon.android.data.strategies.StrategiesRepository
@@ -82,7 +82,7 @@ class InvestViewModel @Inject constructor(
     private val exchange: ExchangeRepository,
     private val tokens: TokensRepository,
     private val strategies: StrategiesRepository,
-    private val custody: CustodyRepository,
+    private val custody: CustodyReader,
     private val bailout: BailoutRepository,
     private val trading: TradingRepository,
 ) : ViewModel() {

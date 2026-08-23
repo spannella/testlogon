@@ -21,39 +21,64 @@ import javax.inject.Singleton
  * Migration is transparent: on first construction any legacy entries (bare symbolIds under [KEY_FAV],
  * or un-prefixed keys) are folded into the unified set via [migrateLegacy] and written back.
  */
+/**
+ * Device-local UNIFIED watchlist store contract: the single source of truth for the starred set across
+ * exchange SYMBOLs, creator TOKENs, and STRATEGY funds. Extracted as an interface so ViewModels can be
+ * unit-tested against a lightweight in-memory fake; [WatchlistStoreImpl] is the real Context-backed impl.
+ */
+interface WatchlistStore {
+    /** The full unified watchlist, live. */
+    val items: StateFlow<Set<WatchItem>>
+
+    /** Snapshot read of the current unified set. */
+    fun current(): Set<WatchItem>
+
+    /** True when (kind, id) is currently watched. */
+    fun isWatched(kind: WatchKind, id: String): Boolean
+
+    /** Toggle (kind, id) in the watchlist, persisting the result. Returns the new watched-state. */
+    fun toggle(kind: WatchKind, id: String): Boolean
+
+    /** Remove (kind, id) if present. */
+    fun remove(kind: WatchKind, id: String)
+
+    /** Convenience: the SYMBOL entries as a numeric id set (the markets filter shape). */
+    fun symbolIds(): Set<Int>
+}
+
 @Singleton
-class WatchlistStore @Inject constructor(
+class WatchlistStoreImpl @Inject constructor(
     @ApplicationContext context: Context,
-) {
+) : WatchlistStore {
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private val _items = MutableStateFlow(loadAndMigrate())
 
     /** The full unified watchlist, live. */
-    val items: StateFlow<Set<WatchItem>> = _items.asStateFlow()
+    override val items: StateFlow<Set<WatchItem>> = _items.asStateFlow()
 
     /** Snapshot read of the current unified set. */
-    fun current(): Set<WatchItem> = _items.value
+    override fun current(): Set<WatchItem> = _items.value
 
     /** True when (kind, id) is currently watched. */
-    fun isWatched(kind: WatchKind, id: String): Boolean = isWatched(_items.value, kind, id)
+    override fun isWatched(kind: WatchKind, id: String): Boolean = isWatched(_items.value, kind, id)
 
     /** Toggle (kind, id) in the watchlist, persisting the result. Returns the new watched-state. */
-    fun toggle(kind: WatchKind, id: String): Boolean {
+    override fun toggle(kind: WatchKind, id: String): Boolean {
         val next = toggleWatch(_items.value, kind, id)
         persist(next)
         return isWatched(next, kind, id)
     }
 
     /** Remove (kind, id) if present. */
-    fun remove(kind: WatchKind, id: String) {
+    override fun remove(kind: WatchKind, id: String) {
         val existing = _items.value.firstOrNull { it.kind == kind && it.id == id } ?: return
         persist(_items.value - existing)
     }
 
     /** Convenience: the SYMBOL entries as a numeric id set (the markets filter shape). */
-    fun symbolIds(): Set<Int> = symbolIds(_items.value)
+    override fun symbolIds(): Set<Int> = symbolIds(_items.value)
 
     private fun persist(next: Set<WatchItem>) {
         prefs.edit()
@@ -92,4 +117,13 @@ class WatchlistStore @Inject constructor(
         const val KEY_FAV = "favorites"
         const val KEY_ITEMS = "watch_items"
     }
+}
+
+/** Binds the unified watchlist store contract to its Context-backed implementation. */
+@dagger.Module
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+abstract class WatchlistStoreModule {
+    @dagger.Binds
+    @Singleton
+    abstract fun bindWatchlistStore(impl: WatchlistStoreImpl): WatchlistStore
 }
