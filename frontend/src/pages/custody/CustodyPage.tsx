@@ -27,6 +27,7 @@ import {
   History,
   Sprout,
   Building2,
+  Banknote,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -976,7 +977,13 @@ export default function CustodyPage() {
             Hold, receive and send crypto from your custodial vault.
           </p>
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <Button asChild variant="outline" size="sm" className="gap-1.5">
+            <Link to="/custody/cash">
+              <Banknote className="h-4 w-4" />
+              Cash (USD)
+            </Link>
+          </Button>
           <Button asChild variant="outline" size="sm" className="gap-1.5">
             <Link to="/custody/providers">
               <Building2 className="h-4 w-4" />
