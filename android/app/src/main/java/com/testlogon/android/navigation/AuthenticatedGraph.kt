@@ -345,6 +345,7 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         dmcaAdminDestination(navController)
         // B5 admin financial-ops queues (refunds + disputes + appeals + fraud + payment incidents).
         refundAdminDestination(navController)
+        catalogAdminDestination(navController)
         disputeAdminDestination(navController)
         appealAdminDestination(navController)
         fraudAdminDestination(navController)

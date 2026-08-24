@@ -499,6 +499,9 @@ object MoreRoutes {
     // B5: admin refund-requests queue (status filter + approve/reject).
     const val ADMIN_REFUNDS = RefundAdminDest.ROUTE
 
+    // Operator rewards-catalog CRUD (redeemable rewards members see). Role-gated (backend 403 -> Forbidden).
+    const val ADMIN_REWARDS_CATALOG = CatalogAdminDest.ROUTE
+
     // B5: admin billing-disputes queue (status filter + respond/resolve).
     const val ADMIN_DISPUTES = DisputeAdminDest.ROUTE
 
@@ -769,6 +772,7 @@ object MoreRoutes {
             ADMIN_VIDEO_REVIEW,
             ADMIN_DMCA,
             ADMIN_REFUNDS,
+            ADMIN_REWARDS_CATALOG,
             ADMIN_DISPUTES,
             ADMIN_APPEALS,
             ADMIN_FRAUD,
