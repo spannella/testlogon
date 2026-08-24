@@ -398,6 +398,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         payoutsDestinations(navController)
         // AND-264: referrals dashboard (code/link + stats + share/copy + create-code CTA).
         referralsDestination(navController)
+        // REFERRALS + REWARDS surface: refer-&-earn (me/referral) + points/cash rewards (me/rewards, redeem).
+        rewardsDestinations(navController)
         // Alerts (system notifications) inbox.
         alertsDestination(navController)
         // MOD-D2: poster "My content under review" (moderation cases + respond/close).
