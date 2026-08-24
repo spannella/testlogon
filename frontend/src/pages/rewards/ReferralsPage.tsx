@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Copy, Share2, Users, CheckCircle, DollarSign, Clock, Gift } from "lucide-react";
+import { Copy, Share2, Users, CheckCircle, DollarSign, Clock, Gift, Trophy } from "lucide-react";
 import { toast } from "sonner";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -120,11 +120,18 @@ export default function ReferralsPage() {
             Share your code, track who joins, and earn a reward for every qualified referral.
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link to="/rewards">
-            <Gift className="mr-1.5 h-4 w-4" /> Rewards
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/rewards/leaderboard">
+              <Trophy className="mr-1.5 h-4 w-4" /> Leaderboard
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/rewards">
+              <Gift className="mr-1.5 h-4 w-4" /> Rewards
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* Your code + share */}

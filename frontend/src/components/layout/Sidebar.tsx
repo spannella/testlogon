@@ -198,6 +198,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: <Share2 className="h-5 w-5" /> },
       { label: "Rewards", i18nKey: "nav.rewards", path: "/rewards", icon: <Award className="h-5 w-5" /> },
       { label: "Refer & Earn", i18nKey: "nav.referAndEarn", path: "/rewards/referrals", icon: <Users className="h-5 w-5" /> },
+      { label: "Referral Leaderboard", i18nKey: "nav.referralLeaderboard", path: "/rewards/leaderboard", icon: <Trophy className="h-5 w-5" /> },
       { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: <Tag className="h-5 w-5" /> },
       { label: "Affiliates", i18nKey: "nav.affiliates", path: "/affiliates", icon: <Link2 className="h-5 w-5" /> },
       { label: "Collaborations", i18nKey: "nav.collaborations", path: "/collaborations", icon: <Handshake className="h-5 w-5" /> },

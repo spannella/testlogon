@@ -94,6 +94,37 @@ export interface RedeemResult {
   points_remaining: number;
 }
 
+// ── Referral leaderboard (degrade on 404 — NEW) ────────────────────
+
+export type LeaderboardPeriod = "all" | "month";
+
+/** One ranked referrer row on the leaderboard (name masked for privacy). */
+export interface ReferralLeaderboardEntry {
+  rank: number;
+  id: string;
+  masked_name: string;
+  is_you: boolean;
+  referred_count: number;
+  qualified_count: number;
+  reward_cents: number;
+}
+
+/** The signed-in user's own standing (present even when outside the top slice). */
+export interface ReferralLeaderboardYou {
+  rank: number;
+  referred_count: number;
+  qualified_count: number;
+  reward_cents: number;
+}
+
+export interface ReferralLeaderboard {
+  period: LeaderboardPeriod;
+  updated_ts: number;
+  entries: ReferralLeaderboardEntry[];
+  you?: ReferralLeaderboardYou;
+}
+
+
 // ── Reads (degrade on 404 — callers use retry:false) ─────────────────
 
 export const getReferralSummary = () =>
@@ -110,6 +141,9 @@ export const getRewardsHistory = () =>
 
 export const getRewardsCatalog = () =>
   api.get<RewardsCatalog>("/me/rewards/catalog");
+
+export const getReferralLeaderboard = (period: LeaderboardPeriod = "all") =>
+  api.get<ReferralLeaderboard>(`/me/referral/leaderboard?period=${period}`);
 
 // ── Mutation (clear error on 404 — never silent) ─────────────────────
 

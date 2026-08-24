@@ -4,6 +4,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
 import com.testlogon.android.feature.rewards.ReferralHubRoute
+import com.testlogon.android.feature.rewards.ReferralLeaderboardRoute
 import com.testlogon.android.feature.rewards.RewardsRoute
 
 /**
@@ -22,10 +23,20 @@ data object RewardsDest {
     const val ROUTE = "rewards"
 }
 
+data object ReferralLeaderboardDest {
+    const val ROUTE = "referral_leaderboard"
+}
+
 /** Registers the Referral hub + Rewards screens in the authenticated graph. Up / Back pops the stack. */
 fun NavGraphBuilder.rewardsDestinations(navController: NavHostController) {
     composable(ReferralHubDest.ROUTE) {
-        ReferralHubRoute(onBack = { navController.popBackStack() })
+        ReferralHubRoute(
+            onBack = { navController.popBackStack() },
+            onLeaderboard = { navController.navigate(ReferralLeaderboardDest.ROUTE) },
+        )
+    }
+    composable(ReferralLeaderboardDest.ROUTE) {
+        ReferralLeaderboardRoute(onBack = { navController.popBackStack() })
     }
     composable(RewardsDest.ROUTE) {
         RewardsRoute(onBack = { navController.popBackStack() })
