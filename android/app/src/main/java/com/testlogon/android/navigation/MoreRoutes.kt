@@ -212,6 +212,9 @@ object MoreRoutes {
     const val REFERRAL_HUB = ReferralHubDest.ROUTE
     const val REWARDS = RewardsDest.ROUTE
 
+    // Points statement + expiry (feature/rewards): running-balance ledger + 12-month expiry warnings.
+    const val POINTS_STATEMENT = PointsStatementDest.ROUTE
+
     // Referral leaderboard (feature/rewards): GET me/referral/leaderboard. Sub-nav from the Refer & earn hub.
     const val REFERRAL_LEADERBOARD = ReferralLeaderboardDest.ROUTE
 
@@ -664,6 +667,7 @@ object MoreRoutes {
             REFERRALS,
             REFERRAL_HUB,
             REWARDS,
+            POINTS_STATEMENT,
             REFERRAL_LEADERBOARD,
             ALERTS,
             MY_CONTENT_REVIEW,

@@ -4,6 +4,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
 import com.testlogon.android.feature.rewards.ReferralHubRoute
+import com.testlogon.android.feature.rewards.PointsStatementRoute
 import com.testlogon.android.feature.rewards.ReferralLeaderboardRoute
 import com.testlogon.android.feature.rewards.RewardsRoute
 
@@ -21,6 +22,10 @@ data object ReferralHubDest {
 
 data object RewardsDest {
     const val ROUTE = "rewards"
+}
+
+data object PointsStatementDest {
+    const val ROUTE = "points_statement"
 }
 
 data object ReferralLeaderboardDest {
@@ -43,6 +48,10 @@ fun NavGraphBuilder.rewardsDestinations(navController: NavHostController) {
             onBack = { navController.popBackStack() },
             onOpenFeeTiers = { navController.navigate(FeeTiersDest.ROUTE) },
             onOpenCash = { navController.navigate(CashDest.ROUTE) },
+            onOpenStatement = { navController.navigate(PointsStatementDest.ROUTE) },
         )
+    }
+    composable(PointsStatementDest.ROUTE) {
+        PointsStatementRoute(onBack = { navController.popBackStack() })
     }
 }

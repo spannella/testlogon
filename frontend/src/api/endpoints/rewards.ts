@@ -125,6 +125,35 @@ export interface ReferralLeaderboard {
 }
 
 
+
+
+// ── Rewards points expiry (optional authoritative — degrade on 404) ──
+
+/**
+ * One earn "lot" of points with its remaining balance and expiry date. Points
+ * expire `policy_months` after they were earned; lots are consumed FIFO
+ * (oldest-earned first) by redemptions/expirations.
+ */
+export interface RewardsExpiryLot {
+  earned_ts: number;
+  points_remaining: number;
+  expires_ts: number;
+}
+
+/**
+ * Authoritative points-EXPIRY read. Degrades on 404 -> the frontend computes
+ * the same view client-side (FIFO) from the rewards history (see
+ * `lib/pointsExpiry`). All timestamps are UNIX seconds; points are integers.
+ */
+export interface RewardsExpiry {
+  policy_months: number;
+  expiring_soon_points: number;
+  next_expiry_ts: number | null;
+  next_expiry_points: number;
+  lots: RewardsExpiryLot[];
+}
+
+
 // ── Trading rewards (points earned by trading volume — NEW) ──────
 
 /**
@@ -161,6 +190,9 @@ export const getRewardsCatalog = () =>
 
 export const getTradingRewards = () =>
   api.get<TradingRewards>("/me/rewards/trading");
+
+export const getRewardsExpiry = () =>
+  api.get<RewardsExpiry>("/me/rewards/expiry");
 
 export const getReferralLeaderboard = (period: LeaderboardPeriod = "all") =>
   api.get<ReferralLeaderboard>(`/me/referral/leaderboard?period=${period}`);
