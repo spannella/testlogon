@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Leaderboard
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -63,12 +64,14 @@ object ReferralHubTestTags {
     const val COMING_SOON = "referral_hub_coming_soon"
     const val SHARE = "referral_hub_share"
     const val COPY = "referral_hub_copy"
+    const val LEADERBOARD = "referral_hub_leaderboard"
 }
 
 /** Route-level Referral hub entry (reached from the More -> Growth hub). */
 @Composable
 fun ReferralHubRoute(
     onBack: () -> Unit,
+    onLeaderboard: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ReferralHubViewModel = hiltViewModel(),
 ) {
@@ -92,6 +95,7 @@ fun ReferralHubRoute(
         onRetry = viewModel::onRetry,
         onShare = viewModel::onShare,
         onCopy = viewModel::onCopy,
+        onLeaderboard = onLeaderboard,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -104,6 +108,7 @@ fun ReferralHubScreen(
     onRetry: () -> Unit,
     onShare: () -> Unit,
     onCopy: () -> Unit,
+    onLeaderboard: () -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -136,7 +141,7 @@ fun ReferralHubScreen(
                 // Clean 404 degrade: read succeeded as "unavailable" with no error -> honest coming-soon.
                 !state.available -> ReferralComingSoon()
 
-                else -> ReferralContent(state = state, onShare = onShare, onCopy = onCopy)
+                else -> ReferralContent(state = state, onShare = onShare, onCopy = onCopy, onLeaderboard = onLeaderboard)
             }
         }
     }
@@ -156,6 +161,7 @@ private fun ReferralContent(
     state: ReferralHubUiState,
     onShare: () -> Unit,
     onCopy: () -> Unit,
+    onLeaderboard: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -172,6 +178,10 @@ private fun ReferralContent(
         }
         CodeCard(summary = state.summary, hasShareable = state.hasShareable, onShare = onShare, onCopy = onCopy)
         StatsCard(state.summary)
+        OutlinedButton(onClick = onLeaderboard, modifier = Modifier.fillMaxWidth().testTag(ReferralHubTestTags.LEADERBOARD)) {
+            Icon(Icons.Outlined.Leaderboard, contentDescription = null)
+            Text("View leaderboard", modifier = Modifier.padding(start = 8.dp))
+        }
         if (state.referrals.isNotEmpty()) {
             ReferralListCard(state.referrals)
         }

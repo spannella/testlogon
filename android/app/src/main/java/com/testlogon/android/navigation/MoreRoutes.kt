@@ -212,6 +212,9 @@ object MoreRoutes {
     const val REFERRAL_HUB = ReferralHubDest.ROUTE
     const val REWARDS = RewardsDest.ROUTE
 
+    // Referral leaderboard (feature/rewards): GET me/referral/leaderboard. Sub-nav from the Refer & earn hub.
+    const val REFERRAL_LEADERBOARD = ReferralLeaderboardDest.ROUTE
+
     // Alerts (system notifications) inbox — mirrors web /alerts.
     const val ALERTS = AlertsDest.ROUTE
 
@@ -661,6 +664,7 @@ object MoreRoutes {
             REFERRALS,
             REFERRAL_HUB,
             REWARDS,
+            REFERRAL_LEADERBOARD,
             ALERTS,
             MY_CONTENT_REVIEW,
             APPEALS,

@@ -36,6 +36,7 @@ interface RewardsRepository {
     suspend fun rewardsHistory(): ApiResult<List<RewardsHistoryEntry>>
     suspend fun rewardsCatalog(): ApiResult<List<CatalogReward>>
     suspend fun redeem(rewardId: String): ApiResult<RedeemResult>
+    suspend fun referralLeaderboard(period: LeaderboardPeriod): ApiResult<ReferralLeaderboard>
 }
 
 @Singleton
@@ -80,6 +81,12 @@ class RewardsRepositoryImpl @Inject constructor(
     override suspend fun redeem(rewardId: String): ApiResult<RedeemResult> = call {
         api.redeem(RedeemRequestDto(rewardId = rewardId.trim())).toDomain()
     }
+
+    /** Referral leaderboard. A 404 (undeployed) degrades to an honest unavailable board; network errors surface. */
+    override suspend fun referralLeaderboard(period: LeaderboardPeriod): ApiResult<ReferralLeaderboard> = degrading(
+        block = { api.referralLeaderboard(period.wire).toDomain(period) },
+        onHttpError = { ReferralLeaderboard.unavailable(period) },
+    )
 
     /** Read wrapper: HTTP-error (incl. 404) degrades to [onHttpError]; transport -> NetworkError. */
     private suspend fun <T> degrading(

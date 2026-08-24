@@ -188,3 +188,92 @@ internal fun RedeemResultDto.toDomain(): RedeemResult = RedeemResult(
     pointsRemaining = pointsRemaining,
     reason = listOfNotNull(detail, error).firstOrNull { it.isNotBlank() },
 )
+
+// ---- Referral leaderboard ----
+
+/** The leaderboard time window. Unknown/absent -> [ALL] (the widest, most conservative view). */
+enum class LeaderboardPeriod(val wire: String) {
+    ALL("all"),
+    MONTH("month");
+
+    companion object {
+        fun fromWire(value: String?): LeaderboardPeriod = when (value?.trim()?.lowercase()) {
+            "month" -> MONTH
+            else -> ALL
+        }
+    }
+}
+
+/** A single ranked referrer row on the leaderboard. */
+data class LeaderboardEntry(
+    val rank: Int,
+    val id: String,
+    val maskedName: String,
+    val isYou: Boolean,
+    val referredCount: Int,
+    val qualifiedCount: Int,
+    val rewardCents: Long,
+)
+
+/** The caller's own rank when they fall OUTSIDE the shown slice (server-provided). */
+data class LeaderboardYou(
+    val rank: Int,
+    val referredCount: Int,
+    val qualifiedCount: Int,
+    val rewardCents: Long,
+)
+
+data class ReferralLeaderboard(
+    val period: LeaderboardPeriod,
+    val updatedTs: Long,
+    val entries: List<LeaderboardEntry>,
+    val you: LeaderboardYou?,
+    val available: Boolean,
+) {
+    companion object {
+        /** Honest "unavailable" leaderboard for the degrade-on-404 empty state. */
+        fun unavailable(period: LeaderboardPeriod = LeaderboardPeriod.ALL): ReferralLeaderboard =
+            ReferralLeaderboard(
+                period = period,
+                updatedTs = 0L,
+                entries = emptyList(),
+                you = null,
+                available = false,
+            )
+    }
+}
+
+// ---- Mappers (DTO -> domain; TOTAL, absent optionals default) ----
+
+internal fun ReferralLeaderboardEntryDto.toDomain(): LeaderboardEntry? {
+    val id = id?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    return LeaderboardEntry(
+        rank = rank ?: 0,
+        id = id,
+        maskedName = maskedName?.trim()?.takeIf { it.isNotBlank() } ?: "Referrer",
+        isYou = isYou == true,
+        referredCount = referredCount ?: 0,
+        qualifiedCount = qualifiedCount ?: 0,
+        rewardCents = rewardCents ?: 0L,
+    )
+}
+
+internal fun ReferralLeaderboardYouDto.toDomain(): LeaderboardYou? {
+    val rank = rank ?: return null
+    if (rank <= 0) return null
+    return LeaderboardYou(
+        rank = rank,
+        referredCount = referredCount ?: 0,
+        qualifiedCount = qualifiedCount ?: 0,
+        rewardCents = rewardCents ?: 0L,
+    )
+}
+
+internal fun ReferralLeaderboardDto.toDomain(requested: LeaderboardPeriod): ReferralLeaderboard =
+    ReferralLeaderboard(
+        period = LeaderboardPeriod.fromWire(period) .let { if (this.period == null) requested else it },
+        updatedTs = updatedTs ?: 0L,
+        entries = entries.mapNotNull { it.toDomain() },
+        you = you?.toDomain(),
+        available = true,
+    )

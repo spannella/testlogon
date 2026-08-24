@@ -8,6 +8,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
+import retrofit2.http.Query
 
 /**
  * Retrofit interface + Moshi DTOs for the REFERRALS + REWARDS surface, mirroring the web contract
@@ -49,6 +50,13 @@ interface RewardsApi {
     @Headers("Content-Type: application/json")
     @POST("me/rewards/redeem")
     suspend fun redeem(@Body body: RedeemRequestDto): RedeemResultDto
+
+    /**
+     * GET me/referral/leaderboard?period=all|month -> top referrers + (optionally) the caller's own
+     * out-of-slice rank. Read degrades on 404 to an honest coming-soon state.
+     */
+    @GET("me/referral/leaderboard")
+    suspend fun referralLeaderboard(@Query("period") period: String): ReferralLeaderboardDto
 }
 
 // ---- GET me/referral ----
@@ -145,4 +153,33 @@ data class RedeemResultDto(
     @LenientLong @Json(name = "points_remaining") val pointsRemaining: Long? = null,
     @Json(name = "detail") val detail: String? = null,
     @Json(name = "error") val error: String? = null,
+)
+
+// ---- GET me/referral/leaderboard ----
+
+@JsonClass(generateAdapter = true)
+data class ReferralLeaderboardDto(
+    @Json(name = "period") val period: String? = null,
+    @LenientLong @Json(name = "updated_ts") val updatedTs: Long? = null,
+    @Json(name = "entries") val entries: List<ReferralLeaderboardEntryDto> = emptyList(),
+    @Json(name = "you") val you: ReferralLeaderboardYouDto? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ReferralLeaderboardEntryDto(
+    @LenientInt @Json(name = "rank") val rank: Int? = null,
+    @Json(name = "id") val id: String? = null,
+    @Json(name = "masked_name") val maskedName: String? = null,
+    @Json(name = "is_you") val isYou: Boolean? = null,
+    @LenientInt @Json(name = "referred_count") val referredCount: Int? = null,
+    @LenientInt @Json(name = "qualified_count") val qualifiedCount: Int? = null,
+    @LenientLong @Json(name = "reward_cents") val rewardCents: Long? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ReferralLeaderboardYouDto(
+    @LenientInt @Json(name = "rank") val rank: Int? = null,
+    @LenientInt @Json(name = "referred_count") val referredCount: Int? = null,
+    @LenientInt @Json(name = "qualified_count") val qualifiedCount: Int? = null,
+    @LenientLong @Json(name = "reward_cents") val rewardCents: Long? = null,
 )
