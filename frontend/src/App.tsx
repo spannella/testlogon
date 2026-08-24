@@ -73,6 +73,9 @@ const StrategyMarketPage = lazy(() => import("@/pages/strategies/StrategyMarketP
 const StrategyBuilderPage = lazy(() => import("@/pages/strategies/StrategyBuilderPage"));
 const StrategyDetailPage = lazy(() => import("@/pages/strategies/StrategyDetailPage"));
 const StrategyBacktestPage = lazy(() => import("@/pages/strategies/StrategyBacktestPage"));
+const DcaPlansPage = lazy(() => import("@/pages/dca/DcaPlansPage"));
+const DcaCreatePage = lazy(() => import("@/pages/dca/DcaCreatePage"));
+const DcaDetailPage = lazy(() => import("@/pages/dca/DcaDetailPage"));
 const MarketAnalysisPage = lazy(() => import("@/pages/analysis/MarketAnalysisPage"));
 const PaperTradingPage = lazy(() => import("@/pages/paper/PaperTradingPage"));
 const PriceAlertsPage = lazy(() => import("@/pages/alerts/PriceAlertsPage"));
@@ -777,6 +780,9 @@ export default function App() {
           <Route path="strategies/:id/edit" element={<StrategyBuilderPage />} />
           <Route path="strategies/:id/backtest" element={<StrategyBacktestPage />} />
           <Route path="bailouts" element={<BailoutsBoardPage />} />
+          <Route path="dca" element={<DcaPlansPage />} />
+          <Route path="dca/new" element={<DcaCreatePage />} />
+          <Route path="dca/:id" element={<DcaDetailPage />} />
           <Route path="invest" element={<InvestHubPage />} />
           <Route path="analysis" element={<MarketAnalysisPage />} />
           <Route path="markets/price-alerts" element={<PriceAlertsPage />} />
