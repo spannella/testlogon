@@ -3,6 +3,8 @@ package com.testlogon.android.feature.rewards
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.exchange.TradingRepository
+import com.testlogon.android.feature.feetiers.FeeTierMath
 import com.testlogon.android.data.rewards.CatalogReward
 import com.testlogon.android.data.rewards.RewardsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,6 +30,7 @@ import javax.inject.Inject
 @HiltViewModel
 class RewardsViewModel @Inject constructor(
     private val repository: RewardsRepository,
+    private val trading: TradingRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RewardsUiState())
@@ -66,7 +69,28 @@ class RewardsViewModel @Inject constructor(
                 is ApiResult.Success -> _uiState.update { it.copy(history = h.data) }
                 else -> Unit
             }
+            loadTradingRewards()
         }
+    }
+
+    /**
+     * Resolve the TRADING-REWARDS card from the OPTIONAL authoritative read (GET me/rewards/trading) and
+     * the SAME live fills feed the Fee-Tier screen uses (GET me/fills/fees) for the client estimate.
+     * Both reads degrade-on-404, so a missing endpoint just yields the estimate (or an empty estimate);
+     * this never blocks the rest of the Rewards screen and never surfaces its own error.
+     */
+    private suspend fun loadTradingRewards() {
+        val authoritative = (repository.tradingRewards() as? ApiResult.Success)?.data
+        val volumeCents = clientVolume30dCents()
+        val summary = TradingRewardsMath.tradingRewardsSummary(volumeCents, authoritative)
+        _uiState.update { it.copy(tradingRewards = summary) }
+    }
+
+    /** The caller's 30-day trading volume (USD cents) from the live fills feed; 0 on any degrade. */
+    private suspend fun clientVolume30dCents(): Long {
+        val fills = (trading.fillsFees() as? ApiResult.Success)?.data?.fills ?: return 0L
+        if (fills.isEmpty()) return 0L
+        return FeeTierMath.volume30dCents(FeeTierMath.fromFills(fills), System.currentTimeMillis())
     }
 
     /** Called AFTER the redeem confirm is accepted. A rejection is a clear error, never a silent success. */

@@ -39,6 +39,9 @@ fun NavGraphBuilder.rewardsDestinations(navController: NavHostController) {
         ReferralLeaderboardRoute(onBack = { navController.popBackStack() })
     }
     composable(RewardsDest.ROUTE) {
-        RewardsRoute(onBack = { navController.popBackStack() })
+        RewardsRoute(
+            onBack = { navController.popBackStack() },
+            onOpenFeeTiers = { navController.navigate(FeeTiersDest.ROUTE) },
+        )
     }
 }

@@ -78,6 +78,30 @@ data class Rewards(
     }
 }
 
+/**
+ * OPTIONAL authoritative trading-rewards read (GET me/rewards/trading), mapped to domain. [available]
+ * is false when the read degraded (404 / undeployed) so the card falls back to the CLIENT ESTIMATE
+ * from the caller's own 30-day trading volume. Points are whole integers; volume is integer USD cents.
+ */
+data class TradingRewards(
+    val pointsPerDollar: Long,
+    val volume30dCents: Long,
+    val pointsEarned30d: Long,
+    val lifetimeTradingPoints: Long,
+    val available: Boolean,
+) {
+    companion object {
+        /** Honest "unavailable" value for the degrade-on-404 client-estimate fallback. */
+        fun unavailable(): TradingRewards = TradingRewards(
+            pointsPerDollar = 0L,
+            volume30dCents = 0L,
+            pointsEarned30d = 0L,
+            lifetimeTradingPoints = 0L,
+            available = false,
+        )
+    }
+}
+
 data class RewardsHistoryEntry(
     val ts: Long,
     val type: String,
@@ -145,6 +169,14 @@ internal fun RewardsSummaryDto.toDomain(): Rewards = Rewards(
     cashCents = cashCents ?: 0L,
     lifetimePoints = lifetimePoints ?: 0L,
     waysToEarn = waysToEarn.mapNotNull { it.toDomain() },
+    available = true,
+)
+
+internal fun TradingRewardsDto.toDomain(): TradingRewards = TradingRewards(
+    pointsPerDollar = pointsPerDollar ?: 0L,
+    volume30dCents = volume30dCents ?: 0L,
+    pointsEarned30d = pointsEarned30d ?: 0L,
+    lifetimeTradingPoints = lifetimeTradingPoints ?: 0L,
     available = true,
 )
 
