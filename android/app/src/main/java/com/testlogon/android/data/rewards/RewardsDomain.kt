@@ -293,6 +293,55 @@ internal fun RedeemCashResultDto.toDomain(): RedeemCashResult = RedeemCashResult
     reason = listOfNotNull(detail, error).firstOrNull { it.isNotBlank() },
 )
 
+// ---- Rewards status / loyalty tier (optional authoritative GET me/rewards/status) ----
+
+/**
+ * OPTIONAL authoritative REWARDS-STATUS / loyalty TIER read (GET me/rewards/status), mapped to domain.
+ * The loyalty membership ladder driven by LIFETIME reward points -- DISTINCT from the maker/taker FEE
+ * tiers. [available] is false when the read degraded (404 / undeployed) so the surface falls back to the
+ * CLIENT computation from lifetime points against the canonical status-tier table. Points are whole
+ * integers; [pointsMultiplierBps] is in basis points (10000 = 1.0x).
+ */
+data class RewardsStatus(
+    val tierId: String,
+    val name: String,
+    val lifetimePoints: Long,
+    val pointsMultiplierBps: Int,
+    val nextName: String?,
+    val nextThresholdPoints: Long?,
+    val perks: List<String>,
+    val available: Boolean,
+) {
+    companion object {
+        /** Honest "unavailable" value for the degrade-on-404 client-compute fallback. */
+        fun unavailable(): RewardsStatus = RewardsStatus(
+            tierId = "",
+            name = "",
+            lifetimePoints = 0L,
+            pointsMultiplierBps = 0,
+            nextName = null,
+            nextThresholdPoints = null,
+            perks = emptyList(),
+            available = false,
+        )
+    }
+}
+
+internal fun RewardsStatusDto.toDomain(): RewardsStatus {
+    val next = nextTier
+    val nextName = next?.name?.trim()?.takeIf { it.isNotBlank() }
+    return RewardsStatus(
+        tierId = tierId?.trim().orEmpty(),
+        name = name?.trim().orEmpty(),
+        lifetimePoints = (lifetimePoints ?: 0L).coerceAtLeast(0L),
+        pointsMultiplierBps = (pointsMultiplierBps ?: 0).coerceAtLeast(0),
+        nextName = nextName,
+        nextThresholdPoints = next?.thresholdPoints?.coerceAtLeast(0L),
+        perks = perks.mapNotNull { it.trim().takeIf { p -> p.isNotBlank() } },
+        available = true,
+    )
+}
+
 // ---- Referral leaderboard ----
 
 /** The leaderboard time window. Unknown/absent -> [ALL] (the widest, most conservative view). */

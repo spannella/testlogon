@@ -183,6 +183,7 @@ const RewardsPage = lazy(() => import("@/pages/rewards/RewardsPage"));
 const RewardsReferralsPage = lazy(() => import("@/pages/rewards/ReferralsPage"));
 const RewardsLeaderboardPage = lazy(() => import("@/pages/rewards/LeaderboardPage"));
 const RewardsStatementPage = lazy(() => import("@/pages/rewards/RewardsStatementPage"));
+const RewardsStatusPage = lazy(() => import("@/pages/rewards/RewardsStatusPage"));
 const PromoCodesPage = lazy(() => import("@/pages/promo/PromoCodesPage"));
 const SchedulerPage = lazy(() => import("@/pages/scheduler/SchedulerPage"));
 const RefundRequestsPage = lazy(() => import("@/pages/billing/RefundRequestsPage"));
@@ -877,6 +878,7 @@ export default function App() {
           <Route path="rewards/referrals" element={<RewardsReferralsPage />} />
           <Route path="rewards/leaderboard" element={<RewardsLeaderboardPage />} />
           <Route path="rewards/statement" element={<RewardsStatementPage />} />
+          <Route path="rewards/status" element={<RewardsStatusPage />} />
           <Route path="promo" element={<PromoCodesPage />} />
           <Route path="affiliates" element={<AffiliateDashboard />} />
           <Route path="achievements" element={<AchievementsPage />} />

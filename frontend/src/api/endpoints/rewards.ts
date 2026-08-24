@@ -171,6 +171,25 @@ export interface TradingRewards {
 }
 
 
+// ── Rewards STATUS / loyalty TIER LEVELS (optional authoritative — 404-degrade) ──
+
+/**
+ * Authoritative REWARDS-STATUS read: the user's LOYALTY-TIER standing driven by
+ * LIFETIME reward points (DISTINCT from the maker/taker fee tiers, see
+ * `lib/feeTiers`). Degrades on 404 -> the frontend computes the same view
+ * client-side from `getRewards().lifetime_points` against the canonical
+ * `STATUS_TIERS` table (see `lib/statusTiers`). Points are whole integers;
+ * `points_multiplier_bps` is in BASIS POINTS where 10000 = 1.0x.
+ */
+export interface RewardsStatus {
+  tier_id: string;
+  name: string;
+  lifetime_points: number;
+  points_multiplier_bps: number;
+  next_tier?: { name: string; threshold_points: number };
+  perks: string[];
+}
+
 // ── Reads (degrade on 404 — callers use retry:false) ─────────────────
 
 export const getReferralSummary = () =>
@@ -181,6 +200,9 @@ export const getReferralList = () =>
 
 export const getRewards = () =>
   api.get<RewardsSummary>("/me/rewards");
+
+export const getRewardsStatus = () =>
+  api.get<RewardsStatus>("/me/rewards/status");
 
 export const getRewardsHistory = () =>
   api.get<RewardsHistory>("/me/rewards/history");

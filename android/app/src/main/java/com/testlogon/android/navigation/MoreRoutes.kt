@@ -215,6 +215,10 @@ object MoreRoutes {
     // Points statement + expiry (feature/rewards): running-balance ledger + 12-month expiry warnings.
     const val POINTS_STATEMENT = PointsStatementDest.ROUTE
 
+    // Rewards STATUS / loyalty TIER LEVELS (feature/rewards): membership ladder by LIFETIME points.
+    // DISTINCT from FEE_TIERS (trading-volume maker/taker fees). Sub-nav from the Rewards screen.
+    const val STATUS_TIERS = StatusTierDest.ROUTE
+
     // Referral leaderboard (feature/rewards): GET me/referral/leaderboard. Sub-nav from the Refer & earn hub.
     const val REFERRAL_LEADERBOARD = ReferralLeaderboardDest.ROUTE
 
@@ -668,6 +672,7 @@ object MoreRoutes {
             REFERRAL_HUB,
             REWARDS,
             POINTS_STATEMENT,
+            STATUS_TIERS,
             REFERRAL_LEADERBOARD,
             ALERTS,
             MY_CONTENT_REVIEW,

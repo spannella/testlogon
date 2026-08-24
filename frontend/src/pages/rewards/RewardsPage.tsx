@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   Award,
+  Crown,
   Coins,
   Wallet,
   Sparkles,
@@ -230,6 +231,11 @@ export default function RewardsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/rewards/status">
+              <Crown className="mr-1.5 h-4 w-4" /> Status
+            </Link>
+          </Button>
           <Button asChild variant="outline" size="sm">
             <Link to="/rewards/statement">
               <ScrollText className="mr-1.5 h-4 w-4" /> Statement
