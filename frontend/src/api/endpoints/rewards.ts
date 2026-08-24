@@ -169,3 +169,19 @@ export const getReferralLeaderboard = (period: LeaderboardPeriod = "all") =>
 
 export const redeemReward = (rewardId: string) =>
   api.post<RedeemResult>("/me/rewards/redeem", { reward_id: rewardId });
+
+
+/** Result of a DIRECT points-to-cash conversion. */
+export interface RedeemCashResult {
+  ok: boolean;
+  cash_cents: number;
+  points_remaining: number;
+}
+
+/**
+ * DIRECT "convert points to USD cash wallet" redemption. The server debits the
+ * points and credits the USD cash wallet (`/custody/cash`). Degrades on 404 —
+ * the caller surfaces a clear error toast (never a silent success).
+ */
+export const redeemPointsForCash = (points: number) =>
+  api.post<RedeemCashResult>("/me/rewards/redeem-cash", { points });

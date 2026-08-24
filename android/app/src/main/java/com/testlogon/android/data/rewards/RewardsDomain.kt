@@ -127,6 +127,18 @@ data class RedeemResult(
     val reason: String?,
 )
 
+/**
+ * Result of POST me/rewards/redeem-cash (DIRECT points -> USD cash mutation). [ok] is true when the
+ * server accepted the conversion; [cashCents] is the amount credited and [pointsRemaining] the new
+ * points balance (both server-authoritative). [reason] carries a rejection message on failure.
+ */
+data class RedeemCashResult(
+    val ok: Boolean,
+    val cashCents: Long?,
+    val pointsRemaining: Long?,
+    val reason: String?,
+)
+
 // ---- Mappers (DTO -> domain; TOTAL, absent optionals default) ----
 
 private fun String?.toReferralStatus(): ReferralStatus = when (this?.trim()?.lowercase()) {
@@ -217,6 +229,13 @@ internal fun CatalogRewardDto.toDomain(): CatalogReward? {
 
 internal fun RedeemResultDto.toDomain(): RedeemResult = RedeemResult(
     ok = ok == true,
+    pointsRemaining = pointsRemaining,
+    reason = listOfNotNull(detail, error).firstOrNull { it.isNotBlank() },
+)
+
+internal fun RedeemCashResultDto.toDomain(): RedeemCashResult = RedeemCashResult(
+    ok = ok == true,
+    cashCents = cashCents,
     pointsRemaining = pointsRemaining,
     reason = listOfNotNull(detail, error).firstOrNull { it.isNotBlank() },
 )

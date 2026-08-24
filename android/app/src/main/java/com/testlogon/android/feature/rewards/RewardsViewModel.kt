@@ -47,6 +47,24 @@ class RewardsViewModel @Inject constructor(
 
     fun consumeMessages() = _uiState.update { it.copy(errorMessage = null, successMessage = null) }
 
+    /** Update the "convert points to cash" input, keeping only digits (never a sign / decimal). */
+    fun onCashPointsChanged(raw: String) {
+        val digits = raw.filter { it.isDigit() }.take(12)
+        _uiState.update { it.copy(cashPointsInput = digits) }
+    }
+
+    /** Preset: set the input to the points needed for a whole-dollar [cents] target (e.g. $5 / $10). */
+    fun onCashPreset(cents: Long) {
+        val pts = RewardsCashMath.pointsForCashCents(cents)
+        _uiState.update { it.copy(cashPointsInput = pts.toString()) }
+    }
+
+    /** Preset "Max": redeem the entire balance when it meets the minimum (else clears to an empty input). */
+    fun onCashMax() {
+        val max = RewardsCashMath.maxRedeemablePoints(_uiState.value.points)
+        _uiState.update { it.copy(cashPointsInput = if (max > 0L) max.toString() else "") }
+    }
+
     fun load() {
         _uiState.update { it.copy(loading = true, errorMessage = null, offline = false) }
         viewModelScope.launch {
@@ -127,6 +145,65 @@ class RewardsViewModel @Inject constructor(
                 }
                 is ApiResult.NetworkError -> _uiState.update {
                     it.copy(redeeming = false, errorMessage = "No connection. No points were spent.")
+                }
+            }
+        }
+    }
+
+    /**
+     * Called AFTER the "convert points to cash" money-safety confirm is accepted. Re-validates against the
+     * live balance (client-side gate), then POSTs the DIRECT redemption. Crediting is server-side: a
+     * rejection surfaces as a CLEAR error and NEVER a silent success, and balances are re-read from the
+     * server after a success (the client never fabricates the new points/cash balance).
+     */
+    fun confirmRedeemCash(points: Long) {
+        val s = _uiState.value
+        if (s.convertingCash) return
+        when (RewardsCashMath.validatePointsRedemption(points, s.points)) {
+            RewardsCashMath.Validation.NOT_POSITIVE -> {
+                _uiState.update { it.copy(errorMessage = "Enter how many points to convert.") }
+                return
+            }
+            RewardsCashMath.Validation.BELOW_MIN -> {
+                _uiState.update {
+                    it.copy(errorMessage = "Minimum is ${RewardsCashMath.formatPoints(RewardsCashMath.MIN_REDEEM_POINTS)} (${RewardsCashMath.formatCentsUsd(RewardsCashMath.minRedeemCents())}).")
+                }
+                return
+            }
+            RewardsCashMath.Validation.INSUFFICIENT -> {
+                _uiState.update {
+                    it.copy(errorMessage = "You only have ${RewardsCashMath.formatPoints(s.points)} to convert.")
+                }
+                return
+            }
+            RewardsCashMath.Validation.VALID -> Unit
+        }
+        _uiState.update { it.copy(convertingCash = true, errorMessage = null, successMessage = null) }
+        viewModelScope.launch {
+            when (val r = repository.redeemPointsForCash(points)) {
+                is ApiResult.Success -> {
+                    if (r.data.ok) {
+                        val credited = r.data.cashCents ?: RewardsCashMath.cashCentsForPoints(points)
+                        _uiState.update {
+                            it.copy(
+                                convertingCash = false,
+                                cashPointsInput = "",
+                                successMessage = "Converted ${RewardsCashMath.formatPoints(points)} to ${RewardsCashMath.formatCentsUsd(credited)} in your USD cash wallet.",
+                            )
+                        }
+                        // Re-read balances/history from the server (never fabricate the new balance).
+                        load()
+                    } else {
+                        _uiState.update {
+                            it.copy(convertingCash = false, errorMessage = r.data.reason?.ifBlank { null } ?: "Conversion was declined. No points were spent.")
+                        }
+                    }
+                }
+                is ApiResult.Failure -> _uiState.update {
+                    it.copy(convertingCash = false, errorMessage = r.error.message.ifBlank { "Converting isn't available right now. No points were spent." })
+                }
+                is ApiResult.NetworkError -> _uiState.update {
+                    it.copy(convertingCash = false, errorMessage = "No connection. No points were spent.")
                 }
             }
         }

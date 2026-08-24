@@ -67,11 +67,28 @@ data class RewardsUiState(
      */
     val tradingRewards: TradingRewardsMath.Summary? = null,
     val redeeming: Boolean = false,
+    /** Current raw text in the "convert points to cash" input (digits only; empty = nothing entered). */
+    val cashPointsInput: String = "",
+    /** True while a DIRECT points->cash conversion is in flight (blocks re-submit). */
+    val convertingCash: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null,
     val offline: Boolean = false,
 ) {
     val points: Long get() = rewards.points
+
+    /** The parsed non-negative points amount from [cashPointsInput]; 0 when empty/blank. */
+    val cashPoints: Long get() = cashPointsInput.trim().toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+
+    /** USD cents the current input would credit at the canonical rate (live "you'll receive"). */
+    val cashCentsForInput: Long get() = RewardsCashMath.cashCentsForPoints(cashPoints)
+
+    /** Validation of the current input against the live points balance. */
+    val cashValidation: RewardsCashMath.Validation
+        get() = RewardsCashMath.validatePointsRedemption(cashPoints, points)
+
+    /** True when the current input is a safe, confirmable points->cash redemption. */
+    val canConvertCash: Boolean get() = cashValidation == RewardsCashMath.Validation.VALID && !convertingCash
 }
 
 /** One-shot side effects handled by the Route (never replayed on rotation). */
