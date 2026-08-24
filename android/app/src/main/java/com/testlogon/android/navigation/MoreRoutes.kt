@@ -135,6 +135,10 @@ object MoreRoutes {
     // Tax lots & realized-gains: read-only client-side cost-basis report (Wallet hub, near Reports).
     const val TAX_REPORT = TaxReportDest.ROUTE
 
+    // Fee tiers (maker/taker VIP schedule by 30-day volume): client-computed from the fills feed;
+    // optional authoritative GET me/fees/tier overrides (Wallet hub, near Tax).
+    const val FEE_TIERS = FeeTiersDest.ROUTE
+
     // AND-219: the purchase history list + search.
     val PURCHASE_HISTORY: String get() = PurchaseHistoryDest.ROUTE
 
@@ -634,6 +638,7 @@ object MoreRoutes {
             PAPER,
             REPORTS,
             TAX_REPORT,
+            FEE_TIERS,
             PURCHASE_HISTORY,
             PAYMENT_METHODS,
             WALLET_TRANSACTIONS,

@@ -360,6 +360,32 @@ data class FillFeeDto(
  * GET me/fills/fees (REAL): {status, type:"fills", count, fills:[...]}. The [fills] carry the engine's
  * real per-fill [FillFeeDto.fee] + maker/taker liquidity -> the client no longer estimates the fee.
  */
+/**
+ * OPTIONAL authoritative fee-tier read: GET me/fees/tier. 404 until deployed -> the repository folds
+ * to null and the screen falls back to the client-computed tier. All numeric fields are lenient (the
+ * edge may stringify ids/bps/int64). [nextTier] (when present) carries the id + threshold of the tier
+ * above the current one.
+ */
+@JsonClass(generateAdapter = true)
+data class FeeTierNextDto(
+    @Json(name = "tier_id") val tierId: String? = null,
+    @Json(name = "name") val name: String? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "min_volume_cents") val minVolumeCents: Long? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "maker_bps") val makerBps: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "taker_bps") val takerBps: Int? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class FeeTierDto(
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "tier_id") val tierId: String? = null,
+    @Json(name = "name") val name: String? = null,
+    @com.testlogon.android.core.network.json.LenientLong @Json(name = "volume_30d_cents") val volume30dCents: Long? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "maker_bps") val makerBps: Int? = null,
+    @com.testlogon.android.core.network.json.LenientInt @Json(name = "taker_bps") val takerBps: Int? = null,
+    @Json(name = "next_tier") val nextTier: FeeTierNextDto? = null,
+)
+
 @JsonClass(generateAdapter = true)
 data class FillsFeesDto(
     @Json(name = "status") val status: String? = null,

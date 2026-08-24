@@ -107,6 +107,7 @@ import {
   CandlestickChart,
   PieChart,
   TrendingUp,
+  Percent,
   Timer,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -162,6 +163,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "PnL", i18nKey: "nav.pnl", path: "/pnl", icon: <LineChart className="h-5 w-5" /> },
       { label: "Reports", i18nKey: "nav.reports", path: "/reports", icon: <FileText className="h-5 w-5" /> },
       { label: "Tax & Gains", i18nKey: "nav.taxGains", path: "/reports/tax", icon: <Receipt className="h-5 w-5" /> },
+      { label: "Fee Tiers", i18nKey: "nav.feeTiers", path: "/fees", icon: <Percent className="h-5 w-5" /> },
       { label: "Activity", i18nKey: "nav.activity", path: "/activity", icon: <Activity className="h-5 w-5" /> },
       { label: "Activity Center", i18nKey: "nav.activityCenter", path: "/activity-center", icon: <Bell className="h-5 w-5" /> },
       { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: <Compass className="h-5 w-5" /> },

@@ -552,6 +552,14 @@ private fun TradingSection(
                 iconTint = scheme.onPrimaryContainer,
                 onClick = { onOpenRoute(MoreRoutes.TAX_REPORT) },
             )
+            TradingCard(
+                icon = Icons.Outlined.TrendingUp,
+                label = stringResource(R.string.dashboard_trading_fee_tiers),
+                testTag = DashboardTestTags.TRADING_FEE_TIERS,
+                circleColor = scheme.secondaryContainer,
+                iconTint = scheme.onSecondaryContainer,
+                onClick = { onOpenRoute(MoreRoutes.FEE_TIERS) },
+            )
         }
     }
 }

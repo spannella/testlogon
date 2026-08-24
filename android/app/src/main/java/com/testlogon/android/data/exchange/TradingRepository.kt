@@ -63,6 +63,11 @@ interface TradingRepository {
     /** Fees (custody-exchange-gaps): the caller's fee schedule + the enriched fills-fees feed. */
     suspend fun feeSchedule(symbolId: Int): ApiResult<FeeSchedule>
     suspend fun fillsFees(): ApiResult<FillsFees>
+    /**
+     * OPTIONAL authoritative fee-tier read (GET me/fees/tier). A 404 (endpoint not deployed) folds to
+     * Success(null) so the caller falls back to the client-computed tier; a real error still surfaces.
+     */
+    suspend fun feeTier(): ApiResult<FeeTierAuthoritative?>
     /** LIVE working orders straight from the engine (order-management read; 404 -> empty feed). */
     suspend fun ordersLive(): ApiResult<LiveOrders>
     /** Recent forced-liquidation events (404 -> empty feed). */
@@ -210,6 +215,9 @@ class TradingRepositoryImpl @Inject constructor(
 
     override suspend fun fillsFees(): ApiResult<FillsFees> =
         withContext(io) { emptyOn404(FillsFees(emptyList(), 0)) { api.getFillsFees().toDomain() } }
+
+    override suspend fun feeTier(): ApiResult<FeeTierAuthoritative?> =
+        withContext(io) { emptyOn404<FeeTierAuthoritative?>(null) { api.getFeeTier().toDomain() } }
 
     override suspend fun ordersLive(): ApiResult<LiveOrders> =
         withContext(io) { emptyOn404(LiveOrders(emptyList(), 0)) { api.getOrdersLive().toDomain() } }

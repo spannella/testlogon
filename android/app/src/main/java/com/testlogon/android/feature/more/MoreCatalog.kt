@@ -1050,6 +1050,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.APP,
         ),
         MoreEntry(
+            id = "fee_tiers",
+            labelRes = R.string.more_entry_fee_tiers,
+            icon = Icons.Outlined.TrendingUp,
+            route = MoreRoutes.FEE_TIERS,
+            hub = MoreHub.WALLET,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
             id = "catalog",
             labelRes = R.string.more_entry_catalog,
             icon = Icons.Outlined.Storefront,
