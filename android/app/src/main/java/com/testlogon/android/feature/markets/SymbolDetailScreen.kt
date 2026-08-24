@@ -59,6 +59,7 @@ import com.testlogon.android.feature.markets.chart.Timeframe
 import com.testlogon.android.data.exchange.OrderSide
 import com.testlogon.android.feature.markets.trade.TradeTicket
 import com.testlogon.android.feature.markets.trade.TradingViewModel
+import com.testlogon.android.navigation.FeeTiersDest
 import com.testlogon.android.feature.markets.ui.MarketColors
 import com.testlogon.android.feature.markets.ui.MarketSurface
 import java.text.SimpleDateFormat
@@ -71,6 +72,7 @@ private const val PRICE_SCALER = 1L
 @Composable
 fun SymbolDetailRoute(
     onBack: () -> Unit,
+    onOpenRoute: (String) -> Unit = {},
     viewModel: SymbolDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -90,6 +92,7 @@ fun SymbolDetailRoute(
                         onSetTool = viewModel::setTool,
                         onCommitDrawing = viewModel::addDrawing,
                         onClearDrawings = viewModel::clearDrawings,
+                        onOpenFeeTiers = { onOpenRoute(FeeTiersDest.ROUTE) },
                     )
                 }
             }
@@ -140,6 +143,7 @@ private fun SymbolDetailContent(
     onSetTool: (DrawingTool) -> Unit,
     onCommitDrawing: (ChartDrawing) -> Unit,
     onClearDrawings: () -> Unit,
+    onOpenFeeTiers: () -> Unit = {},
 ) {
     val selectedTf = Timeframe.entries.firstOrNull { it.seconds == state.intervalSec } ?: Timeframe.M1
     var chartType by remember { mutableStateOf(ChartType.CANDLES) }
@@ -251,6 +255,7 @@ private fun SymbolDetailContent(
                     lastPrice = state.candles.lastOrNull()?.close,
                     bestBid = state.orderBook?.bestBid,
                     bestAsk = state.orderBook?.bestAsk,
+                    onOpenFeeTiers = onOpenFeeTiers,
                     viewModel = tradingViewModel,
                 )
             }

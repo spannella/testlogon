@@ -150,4 +150,42 @@ object FeeTierMath {
         // fee = notional * bps / 10_000, rounded half-up for a deterministic result.
         return (notionalCents * bps + 5_000L) / 10_000L
     }
+
+    /**
+     * Whether an order of the given [orderTypeId] REMOVES liquidity (pays the TAKER rate) when it
+     * executes. Kept dependency-free: the caller passes the order type's lowercase id/label rather
+     * than the trade module's enum, so this module stays pure and unit-testable.
+     *
+     * Liquidity-taking (taker): market orders and stop / take-profit orders whose triggered leg is a
+     * MARKET order. A resting/plain LIMIT order (and the limit leg of a stop-limit / quote / OTO /
+     * OCO) ADDS liquidity and is charged the MAKER rate. Unknown ids default to taker (the
+     * conservative, never-underquote choice for a fee estimate). Case-insensitive; ignores spaces,
+     * hyphens and underscores so "STOP_LIMIT", "Stop-Limit" and "stop limit" all match.
+     */
+    fun isTakerOrderType(orderTypeId: String?): Boolean {
+        val id = orderTypeId?.lowercase()?.replace("-", "")?.replace("_", "")?.replace(" ", "")?.trim()
+            ?: return true
+        return when (id) {
+            // Maker legs: a resting limit (and the limit-priced legs) add liquidity.
+            "limit", "stoplimit", "quote", "oto", "oco", "funding" -> false
+            // Taker legs: market + stop / take-profit market triggers remove liquidity.
+            "market", "stop", "takeprofit", "tp" -> true
+            else -> true
+        }
+    }
+
+    /**
+     * Estimated fee (integer cents, rounded half-up) for a new order of [notionalCents] value at this
+     * account's [makerBps]/[takerBps] rates, choosing the applicable rate from the [orderTypeId] via
+     * [isTakerOrderType]. Non-positive notional -> 0.
+     */
+    fun orderFeeEstimateCents(
+        notionalCents: Long,
+        makerBps: Int,
+        takerBps: Int,
+        orderTypeId: String?,
+    ): Long {
+        val bps = if (isTakerOrderType(orderTypeId)) takerBps else makerBps
+        return makerTakerFeeCents(notionalCents, bps)
+    }
 }

@@ -138,4 +138,48 @@ class FeeTierMathTest {
         assertEquals(0L, FeeTierMath.makerTakerFeeCents(100_000L, 0))
         assertEquals(0L, FeeTierMath.makerTakerFeeCents(-1L, 15))
     }
+
+    @Test
+    fun isTakerOrderType_makerVsTaker_andNormalization() {
+        // Market + stop/take-profit market triggers REMOVE liquidity -> taker.
+        assertTrue(FeeTierMath.isTakerOrderType("market"))
+        assertTrue(FeeTierMath.isTakerOrderType("MARKET"))
+        assertTrue(FeeTierMath.isTakerOrderType("stop"))
+        assertTrue(FeeTierMath.isTakerOrderType("Take-Profit"))
+        // Resting limit + limit-priced legs ADD liquidity -> maker.
+        assertTrue(!FeeTierMath.isTakerOrderType("limit"))
+        assertTrue(!FeeTierMath.isTakerOrderType("LIMIT"))
+        assertTrue(!FeeTierMath.isTakerOrderType("Stop-Limit"))
+        assertTrue(!FeeTierMath.isTakerOrderType("stop_limit"))
+        assertTrue(!FeeTierMath.isTakerOrderType("quote"))
+        assertTrue(!FeeTierMath.isTakerOrderType("oto"))
+        // Unknown / null default to taker (never under-quote a fee estimate).
+        assertTrue(FeeTierMath.isTakerOrderType(null))
+        assertTrue(FeeTierMath.isTakerOrderType("mystery"))
+    }
+
+    @Test
+    fun orderFeeEstimate_picksTakerRateForMarket() {
+        // Standard tier: maker 10bps, taker 15bps. Market = taker: 1_000_00 * 15 / 10000 = 150.
+        assertEquals(150L, FeeTierMath.orderFeeEstimateCents(1_000_00L, 10, 15, "market"))
+    }
+
+    @Test
+    fun orderFeeEstimate_picksMakerRateForLimit() {
+        // Limit = maker: 1_000_00 * 10 / 10000 = 100.
+        assertEquals(100L, FeeTierMath.orderFeeEstimateCents(1_000_00L, 10, 15, "limit"))
+        // Stop-limit is a maker leg too.
+        assertEquals(100L, FeeTierMath.orderFeeEstimateCents(1_000_00L, 10, 15, "Stop-Limit"))
+    }
+
+    @Test
+    fun orderFeeEstimate_guardsAndTierRates() {
+        // Non-positive notional -> 0 regardless of type.
+        assertEquals(0L, FeeTierMath.orderFeeEstimateCents(0L, 10, 15, "market"))
+        assertEquals(0L, FeeTierMath.orderFeeEstimateCents(-5L, 10, 15, "limit"))
+        // Diamond tier: maker 2 / taker 6 bps on 1_000_000_00 notional.
+        // taker: 1_000_000_00 * 6 / 10000 = 60000 ; maker: * 2 / 10000 = 20000.
+        assertEquals(60_000L, FeeTierMath.orderFeeEstimateCents(1_000_000_00L, 2, 6, "market"))
+        assertEquals(20_000L, FeeTierMath.orderFeeEstimateCents(1_000_000_00L, 2, 6, "limit"))
+    }
 }
