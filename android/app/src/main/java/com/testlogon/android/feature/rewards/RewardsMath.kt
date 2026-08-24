@@ -56,9 +56,29 @@ object RewardsMath {
     fun pointsAfterRedeem(points: Long, reward: CatalogReward): Long =
         (points - reward.costPoints).coerceAtLeast(0L)
 
-    /** The subset of [catalog] the user can currently afford, preserving order. */
+    // ---- Stock / inventory limits ----
+
+    /**
+     * Remaining stock for [reward]: null when UNLIMITED (no stock_limit set), otherwise
+     * max(0, stock_limit - redeemed_count) so it never shows negative.
+     */
+    fun remainingStock(reward: CatalogReward): Long? {
+        val limit = reward.stockLimit ?: return null
+        return (limit - reward.redeemedCount).coerceAtLeast(0L)
+    }
+
+    /** True only when the reward is stock-limited AND has zero remaining. Unlimited is never out of stock. */
+    fun isOutOfStock(reward: CatalogReward): Boolean = remainingStock(reward) == 0L
+
+    /** Stable stock label: "Unlimited" / "Out of stock" / "N left". */
+    fun stockLabel(reward: CatalogReward): String {
+        val remaining = remainingStock(reward) ?: return "Unlimited"
+        return if (remaining <= 0L) "Out of stock" else "$remaining left"
+    }
+
+    /** The subset of [catalog] the user can currently afford AND that is in stock, preserving order. */
     fun redeemableCatalog(catalog: List<CatalogReward>, points: Long): List<CatalogReward> =
-        catalog.filter { canRedeem(it, points) }
+        catalog.filter { canRedeem(it, points) && !isOutOfStock(it) }
 
     /** The subset of [catalog] the user CANNOT yet afford (locked), preserving order. */
     fun lockedCatalog(catalog: List<CatalogReward>, points: Long): List<CatalogReward> =

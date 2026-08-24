@@ -463,6 +463,8 @@ private fun CatalogCard(
             state.catalog.forEachIndexed { i, reward ->
                 if (i > 0) Divider()
                 val affordable = RewardsMath.canRedeem(reward, state.points)
+                val outOfStock = RewardsMath.isOutOfStock(reward)
+                val stockLimited = RewardsMath.remainingStock(reward) != null
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -473,6 +475,13 @@ private fun CatalogCard(
                             Text(reward.name, style = MaterialTheme.typography.bodyLarge)
                             if (RewardsMath.isCashReward(reward)) {
                                 AssistChip(onClick = {}, label = { Text("Cash") })
+                            }
+                            if (stockLimited) {
+                                AssistChip(
+                                    onClick = {},
+                                    enabled = false,
+                                    label = { Text(RewardsMath.stockLabel(reward)) },
+                                )
                             }
                         }
                         if (reward.description.isNotBlank()) {
@@ -493,10 +502,18 @@ private fun CatalogCard(
                         }
                     }
                     OutlinedButton(
-                        enabled = affordable && !state.redeeming,
+                        enabled = affordable && !outOfStock && !state.redeeming,
                         onClick = { onRedeemClick(reward) },
                         modifier = Modifier.testTag(RewardsTestTags.REDEEM_PREFIX + reward.id),
-                    ) { Text(if (affordable) "Redeem" else "Locked") }
+                    ) {
+                        Text(
+                            when {
+                                outOfStock -> "Out of stock"
+                                affordable -> "Redeem"
+                                else -> "Locked"
+                            }
+                        )
+                    }
                 }
             }
         }

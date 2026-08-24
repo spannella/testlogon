@@ -83,6 +83,10 @@ export interface CatalogReward {
   cost_points: number;
   value_cents: number;
   kind: RewardKind;
+  /** Optional inventory cap. null/absent = UNLIMITED (back-compat default). */
+  stock_limit?: number | null;
+  /** How many have been redeemed (drives remaining stock). Absent = 0. */
+  redeemed_count?: number;
 }
 
 export interface RewardsCatalog {

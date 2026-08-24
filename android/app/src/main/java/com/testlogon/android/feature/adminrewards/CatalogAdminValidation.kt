@@ -32,6 +32,8 @@ data class CatalogDraft(
     val valueCents: Long = 0L,
     val kind: String = "perk",
     val active: Boolean = true,
+    /** Optional inventory cap; null = UNLIMITED (blank field). */
+    val stockLimit: Long? = null,
 )
 
 /** A blank draft for the CREATE form (a sensible default kind + active). */
@@ -46,6 +48,7 @@ fun validateCatalogItem(
     costPoints: Long,
     valueCents: Long,
     kind: String,
+    stockLimit: Long? = null,
 ): CatalogValidationResult {
     val errors = LinkedHashMap<String, String>()
 
@@ -57,6 +60,11 @@ fun validateCatalogItem(
     }
     if (valueCents < 0L) {
         errors["valueCents"] = "Value cannot be negative"
+    }
+
+    // Stock limit is OPTIONAL (null = unlimited); when present it must be a non-negative integer.
+    if (stockLimit != null && stockLimit < 0L) {
+        errors["stockLimit"] = "Stock limit cannot be negative"
     }
 
     val normalizedKind = kind.trim().lowercase()
@@ -72,4 +80,4 @@ fun validateCatalogItem(
 
 /** Convenience overload validating a whole [CatalogDraft]. */
 fun validateCatalogItem(draft: CatalogDraft): CatalogValidationResult =
-    validateCatalogItem(draft.name, draft.costPoints, draft.valueCents, draft.kind)
+    validateCatalogItem(draft.name, draft.costPoints, draft.valueCents, draft.kind, draft.stockLimit)

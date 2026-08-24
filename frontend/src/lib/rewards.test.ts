@@ -5,12 +5,15 @@ import {
   canRedeem,
   formatCents,
   formatPoints,
+  isOutOfStock,
   pointsAfterRedeem,
   redeemableCatalog,
   referralEarnedCents,
   referralPendingCents,
   referralShareText,
   referralStatusCounts,
+  remainingStock,
+  stockLabel,
 } from "@/lib/rewards";
 
 function ref(partial: Partial<ReferralEntry>): ReferralEntry {
@@ -31,6 +34,8 @@ function reward(partial: Partial<CatalogReward>): CatalogReward {
     cost_points: partial.cost_points ?? 100,
     value_cents: partial.value_cents ?? 100,
     kind: partial.kind ?? "cash",
+    stock_limit: partial.stock_limit,
+    redeemed_count: partial.redeemed_count,
   };
 }
 
@@ -115,6 +120,57 @@ describe("redeemableCatalog", () => {
   });
   it("returns [] for bad input", () => {
     expect(redeemableCatalog(undefined as unknown as CatalogReward[], 100)).toEqual([]);
+  });
+});
+
+describe("remainingStock", () => {
+  it("returns null (unlimited) when no stock_limit is set", () => {
+    expect(remainingStock(reward({}))).toBeNull();
+    expect(remainingStock(reward({ stock_limit: null }))).toBeNull();
+  });
+  it("subtracts redeemed_count from the limit", () => {
+    expect(remainingStock(reward({ stock_limit: 10, redeemed_count: 3 }))).toBe(7);
+    expect(remainingStock(reward({ stock_limit: 5 }))).toBe(5);
+  });
+  it("clamps at zero when over-redeemed", () => {
+    expect(remainingStock(reward({ stock_limit: 2, redeemed_count: 9 }))).toBe(0);
+  });
+});
+
+describe("isOutOfStock", () => {
+  it("is false for unlimited items", () => {
+    expect(isOutOfStock(reward({}))).toBe(false);
+  });
+  it("is true only when a limited item has zero remaining", () => {
+    expect(isOutOfStock(reward({ stock_limit: 3, redeemed_count: 3 }))).toBe(true);
+    expect(isOutOfStock(reward({ stock_limit: 3, redeemed_count: 1 }))).toBe(false);
+  });
+});
+
+describe("stockLabel", () => {
+  it("labels unlimited, remaining, and sold-out", () => {
+    expect(stockLabel(reward({}))).toBe("Unlimited");
+    expect(stockLabel(reward({ stock_limit: 1200, redeemed_count: 200 }))).toBe("1,000 left");
+    expect(stockLabel(reward({ stock_limit: 4, redeemed_count: 4 }))).toBe("Out of stock");
+  });
+});
+
+describe("redeemableCatalog + stock", () => {
+  it("marks an out-of-stock but affordable item as NOT affordable", () => {
+    const catalog = [
+      reward({ id: "u", cost_points: 100 }), // unlimited, affordable
+      reward({ id: "s", cost_points: 100, stock_limit: 2, redeemed_count: 2 }), // sold out
+    ];
+    const out = redeemableCatalog(catalog, 1000);
+    expect(out.find((r) => r.id === "u")?.affordable).toBe(true);
+    expect(out.find((r) => r.id === "s")?.affordable).toBe(false);
+  });
+  it("keeps an in-stock affordable item redeemable", () => {
+    const out = redeemableCatalog(
+      [reward({ id: "k", cost_points: 100, stock_limit: 5, redeemed_count: 1 })],
+      500,
+    );
+    expect(out.find((r) => r.id === "k")?.affordable).toBe(true);
   });
 });
 

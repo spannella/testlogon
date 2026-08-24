@@ -26,6 +26,8 @@ export interface AdminCatalogItem {
   kind: RewardKind;
   active: boolean;
   redeemed_count?: number;
+  /** Optional inventory cap. null/absent = UNLIMITED (back-compat default). */
+  stock_limit?: number | null;
 }
 
 export interface AdminCatalogList {
@@ -40,6 +42,8 @@ export interface AdminCatalogInput {
   value_cents: number;
   kind: RewardKind;
   active: boolean;
+  /** Optional inventory cap. null = UNLIMITED (blank field in the form). */
+  stock_limit?: number | null;
 }
 
 // ── Read (degrade on 404 — caller uses retry:false) ──────────────────

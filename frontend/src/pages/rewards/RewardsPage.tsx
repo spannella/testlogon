@@ -44,8 +44,11 @@ import type { CatalogReward, RewardHistoryEntry } from "@/api/endpoints/rewards"
 import {
   formatCents,
   formatPoints,
+  isOutOfStock,
   pointsAfterRedeem,
   redeemableCatalog,
+  remainingStock,
+  stockLabel,
 } from "@/lib/rewards";
 import {
   CENTS_PER_POINT,
@@ -518,7 +521,10 @@ export default function RewardsPage() {
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {catalog.map((r) => (
+              {catalog.map((r) => {
+                const remaining = remainingStock(r);
+                const outOfStock = isOutOfStock(r);
+                return (
                 <div
                   key={r.id}
                   className="flex flex-col justify-between gap-3 rounded-lg border p-4"
@@ -531,6 +537,14 @@ export default function RewardsPage() {
                       </Badge>
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">{r.description}</p>
+                    {remaining !== null ? (
+                      <Badge
+                        variant={outOfStock ? "destructive" : "secondary"}
+                        className="mt-2 tabular-nums"
+                      >
+                        {stockLabel(r)}
+                      </Badge>
+                    ) : null}
                   </div>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm">
@@ -549,11 +563,12 @@ export default function RewardsPage() {
                       disabled={!r.affordable || redeemMut.isPending}
                       onClick={() => setPending(r)}
                     >
-                      {r.affordable ? "Redeem" : "Locked"}
+                      {outOfStock ? "Out of stock" : r.affordable ? "Redeem" : "Locked"}
                     </Button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>

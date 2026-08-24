@@ -150,6 +150,10 @@ data class CatalogReward(
     val costPoints: Long,
     val valueCents: Long,
     val kind: RewardKind,
+    /** Optional inventory cap; null = UNLIMITED (back-compat: absent field). */
+    val stockLimit: Long? = null,
+    /** How many have been redeemed so far (server-authoritative); defaults 0. */
+    val redeemedCount: Long = 0L,
 )
 
 /** Result of POST me/rewards/redeem (mutation). ok=true when the server accepted the redemption. */
@@ -277,6 +281,8 @@ internal fun CatalogRewardDto.toDomain(): CatalogReward? {
         costPoints = costPoints ?: 0L,
         valueCents = valueCents ?: 0L,
         kind = kind.toRewardKind(),
+        stockLimit = stockLimit?.coerceAtLeast(0L),
+        redeemedCount = (redeemedCount ?: 0L).coerceAtLeast(0L),
     )
 }
 

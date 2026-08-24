@@ -79,6 +79,7 @@ data class AdminCatalogItemDto(
     @Json(name = "kind") val kind: String? = null,
     @Json(name = "active") val active: Boolean? = null,
     @LenientInt @Json(name = "redeemed_count") val redeemedCount: Int? = null,
+    @LenientLong @Json(name = "stock_limit") val stockLimit: Long? = null,
 )
 
 // ---- POST/PUT body ----
@@ -91,6 +92,8 @@ data class AdminCatalogItemReq(
     @Json(name = "value_cents") val valueCents: Long,
     @Json(name = "kind") val kind: String,
     @Json(name = "active") val active: Boolean,
+    /** Optional inventory cap; null = UNLIMITED (omitted-as-null on the wire). */
+    @Json(name = "stock_limit") val stockLimit: Long? = null,
 )
 
 // ---- DELETE ----

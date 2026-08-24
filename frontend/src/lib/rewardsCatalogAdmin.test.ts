@@ -61,7 +61,25 @@ describe("validateCatalogItem", () => {
     expect(r.ok).toBe(false);
     expect(Object.keys(r.errors).sort()).toEqual(["cost_points", "name", "value_cents"]);
   });
+
+  it("treats a blank/undefined stock_limit as valid (unlimited)", () => {
+    expect(validateCatalogItem({ ...valid }).ok).toBe(true);
+    expect(validateCatalogItem({ ...valid, stock_limit: undefined }).ok).toBe(true);
+    expect(validateCatalogItem({ ...valid, stock_limit: null }).ok).toBe(true);
+  });
+
+  it("accepts a whole-number stock_limit >= 0", () => {
+    expect(validateCatalogItem({ ...valid, stock_limit: 0 }).ok).toBe(true);
+    expect(validateCatalogItem({ ...valid, stock_limit: 250 }).ok).toBe(true);
+  });
+
+  it("rejects a negative or non-integer stock_limit", () => {
+    expect(validateCatalogItem({ ...valid, stock_limit: -1 }).errors.stock_limit).toBeDefined();
+    expect(validateCatalogItem({ ...valid, stock_limit: 3.5 }).errors.stock_limit).toBeDefined();
+    expect(validateCatalogItem({ ...valid, stock_limit: NaN }).ok).toBe(false);
+  });
 });
+
 
 describe("emptyDraft", () => {
   it("is an inactive-safe blank perk draft that FAILS validation until filled", () => {
@@ -73,6 +91,7 @@ describe("emptyDraft", () => {
       value_cents: 0,
       kind: "perk",
       active: true,
+      stock_limit: null,
     });
     expect(validateCatalogItem(d).ok).toBe(false);
   });
