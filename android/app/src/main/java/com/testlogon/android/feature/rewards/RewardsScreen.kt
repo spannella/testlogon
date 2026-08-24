@@ -60,12 +60,15 @@ object RewardsTestTags {
     const val COMING_SOON = "rewards_coming_soon"
     const val REDEEM_PREFIX = "rewards_redeem_"
     const val REDEEM_CONFIRM = "rewards_redeem_confirm"
+    const val TRADING = "rewards_trading_card"
+    const val TRADING_CTA = "rewards_trading_cta"
 }
 
 /** Route-level Rewards entry (reached from the More -> Growth hub). */
 @Composable
 fun RewardsRoute(
     onBack: () -> Unit,
+    onOpenFeeTiers: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: RewardsViewModel = hiltViewModel(),
 ) {
@@ -85,6 +88,7 @@ fun RewardsRoute(
         onBack = onBack,
         onRetry = viewModel::onRetry,
         onRedeem = viewModel::confirmRedeem,
+        onOpenFeeTiers = onOpenFeeTiers,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -96,6 +100,7 @@ fun RewardsScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onRedeem: (CatalogReward) -> Unit,
+    onOpenFeeTiers: () -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -136,6 +141,7 @@ fun RewardsScreen(
                 else -> RewardsContent(
                     state = state,
                     onRedeemClick = { pendingRedeem = it },
+                    onOpenFeeTiers = onOpenFeeTiers,
                 )
             }
         }
@@ -179,6 +185,7 @@ fun RewardsScreen(
 private fun RewardsContent(
     state: RewardsUiState,
     onRedeemClick: (CatalogReward) -> Unit,
+    onOpenFeeTiers: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -189,6 +196,7 @@ private fun RewardsContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         BalanceCard(state)
+        state.tradingRewards?.let { TradingRewardsCard(it, onOpenFeeTiers) }
         if (state.rewards.waysToEarn.isNotEmpty()) {
             WaysToEarnCard(state)
         }
@@ -197,6 +205,51 @@ private fun RewardsContent(
         }
         if (state.history.isNotEmpty()) {
             HistoryCard(state.history)
+        }
+    }
+}
+
+@Composable
+private fun TradingRewardsCard(
+    summary: TradingRewardsMath.Summary,
+    onOpenFeeTiers: () -> Unit,
+) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth().testTag(RewardsTestTags.TRADING)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Trading rewards", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                AssistChip(
+                    onClick = {},
+                    label = { Text(if (summary.isAuthoritative) "Live" else "Estimated") },
+                )
+            }
+            Text(
+                "Earn ${RewardsMath.formatPoints(summary.pointsPerDollar)} per $1 traded",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                "Your 30-day volume: ${RewardsMath.formatCentsUsd(summary.volume30dCents)} → ~${RewardsMath.formatPoints(summary.pointsEarned30d)}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (summary.isAuthoritative && summary.lifetimeTradingPoints > 0L) {
+                Text(
+                    "Lifetime trading points: ${RewardsMath.formatPoints(summary.lifetimeTradingPoints)}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+            Text(
+                if (summary.isAuthoritative) {
+                    "Points accrue automatically as your trades fill."
+                } else {
+                    "Estimated from your trade history. Points accrue automatically as your trades fill."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = onOpenFeeTiers,
+                modifier = Modifier.testTag(RewardsTestTags.TRADING_CTA),
+            ) { Text("Trade & view fee tiers") }
         }
     }
 }

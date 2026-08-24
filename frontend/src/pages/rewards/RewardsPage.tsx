@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Award, Coins, Wallet, Sparkles, Gift, Users } from "lucide-react";
+import { Award, Coins, Wallet, Sparkles, Gift, Users, TrendingUp, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,7 @@ import {
   getRewards,
   getRewardsHistory,
   getRewardsCatalog,
+  getTradingRewards,
   redeemReward,
 } from "@/api/endpoints/rewards";
 import type { CatalogReward, RewardHistoryEntry } from "@/api/endpoints/rewards";
@@ -32,6 +33,8 @@ import {
   pointsAfterRedeem,
   redeemableCatalog,
 } from "@/lib/rewards";
+import { tradingRewardsSummary } from "@/lib/tradingRewards";
+import { useFeeTier } from "@/hooks/useFeeTier";
 import { PendingRewards } from "./PendingRewards";
 
 function is404(err: unknown): boolean {
@@ -82,11 +85,33 @@ export default function RewardsPage() {
     queryFn: getRewardsCatalog,
     retry: false,
   });
+  const tradingQ = useQuery({
+    queryKey: ["me", "rewards", "trading"],
+    queryFn: getTradingRewards,
+    retry: false,
+  });
+
+  // 30-day executed-trade volume, reused from the shared fee-tier resolver.
+  const feeTier = useFeeTier();
 
   const rewards = rewardsQ.data;
   const points = rewards?.points ?? 0;
   const history: RewardHistoryEntry[] = historyQ.data?.entries ?? [];
   const catalog = redeemableCatalog(catalogQ.data?.rewards ?? [], points);
+
+  // Prefer the authoritative /me/rewards/trading read; else estimate from
+  // the caller’s own 30-day trade volume. Never throws, degrades gracefully.
+  const trading = tradingRewardsSummary(feeTier.volumeCents, tradingQ.data);
+  const tradingVolumeReady = !feeTier.isPending || tradingQ.isSuccess;
+
+  // Surface trading as a first-class "way to earn" alongside the backend list.
+  const tradingWayToEarn = {
+    id: "__trading",
+    title: "Trade to earn points",
+    points: trading.pointsPerDollar,
+    detail: `Earn ${formatPoints(trading.pointsPerDollar, false)} per $1 of trading volume.`,
+  };
+  const waysToEarn = [tradingWayToEarn, ...(rewards?.ways_to_earn ?? [])];
 
   const redeemMut = useMutation({
     mutationFn: (rewardId: string) => redeemReward(rewardId),
@@ -174,13 +199,13 @@ export default function RewardsPage() {
             <CardDescription>Rack up points across the platform.</CardDescription>
           </CardHeader>
           <CardContent>
-            {rewards.ways_to_earn.length === 0 ? (
+            {waysToEarn.length === 0 ? (
               <p className="py-4 text-center text-sm text-muted-foreground">
                 No earning opportunities listed right now.
               </p>
             ) : (
               <ul className="divide-y">
-                {rewards.ways_to_earn.map((w) => (
+                {waysToEarn.map((w) => (
                   <li key={w.id} className="flex items-center justify-between gap-3 py-3">
                     <div>
                       <p className="font-medium">{w.title}</p>
@@ -196,6 +221,84 @@ export default function RewardsPage() {
           </CardContent>
         </Card>
       ) : null}
+
+      {/* Trading rewards — earn points by trading volume */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5" /> Trade to earn points
+              </CardTitle>
+              <CardDescription>
+                Earn{" "}
+                <span className="font-medium text-foreground">
+                  {formatPoints(trading.pointsPerDollar, false)}
+                  {trading.pointsPerDollar === 1 ? " point" : " points"}
+                </span>{" "}
+                per $1 traded. Points accrue automatically on every fill.
+              </CardDescription>
+            </div>
+            <Badge variant={trading.source === "authoritative" ? "default" : "secondary"}>
+              {trading.source === "authoritative" ? "Live" : "Estimated"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {tradingVolumeReady ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4">
+              <div>
+                <p className="text-xs text-muted-foreground">Your 30-day volume</p>
+                <p className="text-xl font-semibold tabular-nums">
+                  {formatCents(trading.volume30dCents)}
+                </p>
+              </div>
+              <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <div className="text-right">
+                <p className="text-xs text-muted-foreground">
+                  {trading.source === "authoritative" ? "Points earned" : "~ Estimated points"}
+                </p>
+                <p className="text-xl font-semibold tabular-nums text-primary">
+                  {trading.source === "authoritative" ? "" : "~"}
+                  {formatPoints(trading.pointsEarned30d, false)}
+                </p>
+              </div>
+            </div>
+          ) : feeTier.isPending ? (
+            <Skeleton className="h-20 w-full" />
+          ) : (
+            <p className="rounded-lg border p-4 text-sm text-muted-foreground">
+              Your trading volume is unavailable right now. Start trading to earn{" "}
+              {formatPoints(trading.pointsPerDollar, false)} per $1 of volume.
+            </p>
+          )}
+
+          {trading.source === "authoritative" && trading.lifetimeTradingPoints > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Lifetime trading points:{" "}
+              <span className="font-medium text-foreground tabular-nums">
+                {formatPoints(trading.lifetimeTradingPoints)}
+              </span>
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Estimated from your recent trade history. Points are credited server-side as
+              your fills settle.
+            </p>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <Button asChild size="sm">
+              <Link to="/markets">
+                <TrendingUp className="mr-1.5 h-4 w-4" /> Trade now
+              </Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link to="/fees">Volume &amp; tiers</Link>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Redeem catalog */}
       <Card>

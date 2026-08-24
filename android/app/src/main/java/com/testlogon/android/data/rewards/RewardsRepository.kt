@@ -37,6 +37,11 @@ interface RewardsRepository {
     suspend fun rewardsCatalog(): ApiResult<List<CatalogReward>>
     suspend fun redeem(rewardId: String): ApiResult<RedeemResult>
     suspend fun referralLeaderboard(period: LeaderboardPeriod): ApiResult<ReferralLeaderboard>
+    /**
+     * OPTIONAL authoritative trading-rewards read. A 404 (undeployed) degrades to an honest
+     * unavailable value so the card falls back to the client estimate; network errors surface.
+     */
+    suspend fun tradingRewards(): ApiResult<TradingRewards>
 }
 
 @Singleton
@@ -86,6 +91,12 @@ class RewardsRepositoryImpl @Inject constructor(
     override suspend fun referralLeaderboard(period: LeaderboardPeriod): ApiResult<ReferralLeaderboard> = degrading(
         block = { api.referralLeaderboard(period.wire).toDomain(period) },
         onHttpError = { ReferralLeaderboard.unavailable(period) },
+    )
+
+    /** Trading rewards. A 404 (undeployed) degrades to an honest unavailable value; network errors surface. */
+    override suspend fun tradingRewards(): ApiResult<TradingRewards> = degrading(
+        block = { api.tradingRewards().toDomain() },
+        onHttpError = { TradingRewards.unavailable() },
     )
 
     /** Read wrapper: HTTP-error (incl. 404) degrades to [onHttpError]; transport -> NetworkError. */

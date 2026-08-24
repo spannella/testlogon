@@ -57,6 +57,14 @@ interface RewardsApi {
      */
     @GET("me/referral/leaderboard")
     suspend fun referralLeaderboard(@Query("period") period: String): ReferralLeaderboardDto
+
+    /**
+     * OPTIONAL authoritative TRADING-REWARDS read: points accrued from executed trading volume. Points
+     * accrue server-side; the client shows the earn rate + an estimate from the caller's own 30-day
+     * volume and swaps to these numbers when the endpoint ships. Read degrades on 404 -> client estimate.
+     */
+    @GET("me/rewards/trading")
+    suspend fun tradingRewards(): TradingRewardsDto
 }
 
 // ---- GET me/referral ----
@@ -104,6 +112,16 @@ data class WayToEarnDto(
     @Json(name = "title") val title: String? = null,
     @LenientLong @Json(name = "points") val points: Long? = null,
     @Json(name = "detail") val detail: String? = null,
+)
+
+// ---- GET me/rewards/trading (optional authoritative) ----
+
+@JsonClass(generateAdapter = true)
+data class TradingRewardsDto(
+    @LenientLong @Json(name = "points_per_dollar") val pointsPerDollar: Long? = null,
+    @LenientLong @Json(name = "volume_30d_cents") val volume30dCents: Long? = null,
+    @LenientLong @Json(name = "points_earned_30d") val pointsEarned30d: Long? = null,
+    @LenientLong @Json(name = "lifetime_trading_points") val lifetimeTradingPoints: Long? = null,
 )
 
 // ---- GET me/rewards/history ----

@@ -125,6 +125,23 @@ export interface ReferralLeaderboard {
 }
 
 
+// ── Trading rewards (points earned by trading volume — NEW) ──────
+
+/**
+ * Authoritative TRADING-REWARDS read: points accrued from executed trading
+ * volume. Points accrue server-side; the frontend shows the earn rate + an
+ * estimate from the caller’s own 30-day volume, and swaps to these numbers
+ * when the endpoint ships. Degrades on 404 -> client estimate (see
+ * `lib/tradingRewards`). Rate is points per whole US dollar of volume.
+ */
+export interface TradingRewards {
+  points_per_dollar: number;
+  volume_30d_cents: number;
+  points_earned_30d: number;
+  lifetime_trading_points: number;
+}
+
+
 // ── Reads (degrade on 404 — callers use retry:false) ─────────────────
 
 export const getReferralSummary = () =>
@@ -141,6 +158,9 @@ export const getRewardsHistory = () =>
 
 export const getRewardsCatalog = () =>
   api.get<RewardsCatalog>("/me/rewards/catalog");
+
+export const getTradingRewards = () =>
+  api.get<TradingRewards>("/me/rewards/trading");
 
 export const getReferralLeaderboard = (period: LeaderboardPeriod = "all") =>
   api.get<ReferralLeaderboard>(`/me/referral/leaderboard?period=${period}`);

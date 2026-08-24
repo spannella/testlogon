@@ -60,6 +60,12 @@ data class RewardsUiState(
     val rewards: Rewards = Rewards.unavailable(),
     val catalog: List<CatalogReward> = emptyList(),
     val history: List<RewardsHistoryEntry> = emptyList(),
+    /**
+     * Resolved TRADING-REWARDS summary for the trading-rewards card: the earn rate + points from the
+     * caller's own 30-day trading volume (authoritative from GET me/rewards/trading when present, else a
+     * client estimate from the same fills feed the Fee-Tier screen uses). Null until first resolved.
+     */
+    val tradingRewards: TradingRewardsMath.Summary? = null,
     val redeeming: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null,
