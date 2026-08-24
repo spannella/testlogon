@@ -62,13 +62,51 @@ export function referralStatusCounts(
   return counts;
 }
 
+/**
+ * Remaining redeemable stock for a catalog item.
+ *  - null  -> UNLIMITED (no `stock_limit` set / null / not a finite number)
+ *  - number -> max(0, stock_limit - redeemed_count) (clamped at zero)
+ */
+export function remainingStock(item: {
+  stock_limit?: number | null;
+  redeemed_count?: number;
+}): number | null {
+  const limit = item?.stock_limit;
+  if (limit === null || limit === undefined || !Number.isFinite(limit)) return null;
+  const redeemed = Number.isFinite(item?.redeemed_count) ? (item.redeemed_count as number) : 0;
+  return Math.max(0, Math.trunc(limit) - Math.max(0, Math.trunc(redeemed)));
+}
+
+/** True only when the item is stock-limited AND has zero remaining. */
+export function isOutOfStock(item: {
+  stock_limit?: number | null;
+  redeemed_count?: number;
+}): boolean {
+  return remainingStock(item) === 0;
+}
+
+/** Human stock label: "Unlimited", "N left", or "Out of stock". */
+export function stockLabel(item: {
+  stock_limit?: number | null;
+  redeemed_count?: number;
+}): string {
+  const remaining = remainingStock(item);
+  if (remaining === null) return "Unlimited";
+  if (remaining === 0) return "Out of stock";
+  const n = new Intl.NumberFormat("en-US").format(remaining);
+  return `${n} left`;
+}
+
 /** Annotate each catalog reward with an `affordable` flag for the given points. */
 export function redeemableCatalog(
   catalog: CatalogReward[],
   points: number,
 ): RedeemableReward[] {
   if (!Array.isArray(catalog)) return [];
-  return catalog.map((r) => ({ ...r, affordable: canRedeem(points, r.cost_points) }));
+  return catalog.map((r) => ({
+    ...r,
+    affordable: canRedeem(points, r.cost_points) && !isOutOfStock(r),
+  }));
 }
 
 /** Format whole points with thousands separators, e.g. 12345 -> "12,345 pts". */

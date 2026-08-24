@@ -52,6 +52,7 @@ import {
   formatPoints,
   formatCents,
 } from "@/lib/rewardsCatalogAdmin";
+import { remainingStock } from "@/lib/rewards";
 
 function is404(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
@@ -85,6 +86,7 @@ function CatalogItemDialog({
               value_cents: item.value_cents,
               kind: item.kind,
               active: item.active,
+              stock_limit: item.stock_limit ?? null,
             }
           : emptyDraft(),
       );
@@ -197,6 +199,34 @@ function CatalogItemDialog({
               </div>
             </div>
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="rc-stock">Stock limit</Label>
+            <Input
+              id="rc-stock"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              step={1}
+              placeholder="Blank = unlimited"
+              value={
+                draft.stock_limit === null || draft.stock_limit === undefined
+                  ? ""
+                  : String(draft.stock_limit)
+              }
+              onChange={(e) =>
+                set(
+                  "stock_limit",
+                  e.target.value.trim() === "" ? null : intFromInput(e.target.value),
+                )
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave blank for unlimited inventory.
+            </p>
+            {errors.stock_limit && (
+              <p className="text-sm text-destructive">{errors.stock_limit}</p>
+            )}
+          </div>
         </div>
 
         <DialogFooter>
@@ -277,6 +307,7 @@ export default function RewardsCatalogAdminPage() {
         value_cents: item.value_cents,
         kind: item.kind,
         active: !item.active,
+        stock_limit: item.stock_limit ?? null,
       },
     });
 
@@ -348,6 +379,7 @@ export default function RewardsCatalogAdminPage() {
                 <TableHead>Cost</TableHead>
                 <TableHead>Value</TableHead>
                 <TableHead>Kind</TableHead>
+                <TableHead className="text-right">Stock</TableHead>
                 <TableHead className="text-right">Redeemed</TableHead>
                 <TableHead>Active</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -374,6 +406,15 @@ export default function RewardsCatalogAdminPage() {
                     <Badge variant={item.kind === "cash" ? "default" : "secondary"}>
                       {item.kind}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {item.stock_limit === null || item.stock_limit === undefined ? (
+                      <span className="text-muted-foreground">∞</span>
+                    ) : (
+                      <span className={remainingStock(item) === 0 ? "text-destructive" : ""}>
+                        {remainingStock(item)}/{item.stock_limit}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {item.redeemed_count ?? 0}

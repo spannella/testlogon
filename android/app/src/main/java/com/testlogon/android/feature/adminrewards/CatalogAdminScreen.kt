@@ -258,6 +258,13 @@ private fun CatalogRow(
                 item.redeemedCount?.let {
                     Text("" + it + " redeemed", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                val limit = item.stockLimit
+                if (limit == null) {
+                    Text("Unlimited stock", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    val remaining = (limit - (item.redeemedCount ?: 0).toLong()).coerceAtLeast(0L)
+                    Text("" + remaining + " / " + limit + " left", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -300,10 +307,13 @@ private fun CatalogFormDialog(
     var valueText by remember { mutableStateOf(if (initial.valueCents > 0) initial.valueCents.toString() else "") }
     var kind by remember { mutableStateOf(initial.kind) }
     var active by remember { mutableStateOf(initial.active) }
+    var stockText by remember { mutableStateOf(initial.stockLimit?.toString() ?: "") }
 
     val costPoints = costText.trim().toLongOrNull() ?: 0L
     val valueCents = valueText.trim().toLongOrNull() ?: 0L
-    val validation = validateCatalogItem(name, costPoints, valueCents, kind)
+    // Blank stock field = UNLIMITED (null); any digits = a concrete cap.
+    val stockLimit: Long? = stockText.trim().takeIf { it.isNotEmpty() }?.toLongOrNull()
+    val validation = validateCatalogItem(name, costPoints, valueCents, kind, stockLimit)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -342,6 +352,18 @@ private fun CatalogFormDialog(
                     supportingText = { validation.errorFor("valueCents")?.let { Text(it) } },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedTextField(
+                    value = stockText,
+                    onValueChange = { stockText = it.filter(Char::isDigit) },
+                    label = { Text("Stock limit") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = validation.errorFor("stockLimit") != null,
+                    supportingText = {
+                        val err = validation.errorFor("stockLimit")
+                        if (err != null) Text(err) else Text("Blank = unlimited")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CATALOG_KINDS.forEach { k ->
                         FilterChip(
@@ -368,6 +390,7 @@ private fun CatalogFormDialog(
                             valueCents = valueCents,
                             kind = kind,
                             active = active,
+                            stockLimit = stockLimit,
                         )
                     )
                 },

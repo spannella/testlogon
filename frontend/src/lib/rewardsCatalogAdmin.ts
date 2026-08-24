@@ -11,11 +11,13 @@ export interface CatalogItemValidatable {
   cost_points: number;
   value_cents: number;
   kind: RewardKind;
+  /** Optional inventory cap. null/undefined = unlimited (valid). */
+  stock_limit?: number | null;
 }
 
 export interface ValidationResult {
   ok: boolean;
-  errors: Partial<Record<"name" | "cost_points" | "value_cents" | "kind", string>>;
+  errors: Partial<Record<"name" | "cost_points" | "value_cents" | "kind" | "stock_limit", string>>;
 }
 
 const REWARD_KINDS: readonly RewardKind[] = ["cash", "perk"];
@@ -61,6 +63,14 @@ export function validateCatalogItem(item: CatalogItemValidatable): ValidationRes
     errors.value_cents = "A cash reward must have a value greater than $0.00.";
   }
 
+  // stock_limit is OPTIONAL: null/undefined = unlimited (valid). When present it
+  // must be a whole number >= 0. NaN (e.g. a half-typed field) is invalid.
+  if (item.stock_limit !== null && item.stock_limit !== undefined) {
+    if (!isNonNegativeInt(item.stock_limit)) {
+      errors.stock_limit = "Stock limit must be a whole number (0 or more), or blank for unlimited.";
+    }
+  }
+
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
@@ -73,5 +83,6 @@ export function emptyDraft(): AdminCatalogInput {
     value_cents: 0,
     kind: "perk",
     active: true,
+    stock_limit: null,
   };
 }

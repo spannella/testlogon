@@ -158,6 +158,7 @@ internal fun CatalogDraft.toReq(): AdminCatalogItemReq = AdminCatalogItemReq(
     valueCents = valueCents,
     kind = kind.trim().lowercase(),
     active = active,
+    stockLimit = stockLimit,
 )
 
 /** Seed an editable draft from an existing catalog item (for the EDIT form). */
@@ -168,4 +169,5 @@ internal fun AdminCatalogItemDto.toDraft(): CatalogDraft = CatalogDraft(
     valueCents = valueCents ?: 0L,
     kind = (kind ?: "perk").trim().lowercase().let { if (it in CATALOG_KINDS) it else "perk" },
     active = active ?: false,
+    stockLimit = stockLimit?.coerceAtLeast(0L),
 )

@@ -86,6 +86,46 @@ class CatalogAdminValidationTest {
         assertTrue(validateCatalogItem(d).ok)
     }
 
+    @Test
+    fun stockLimit_absentIsUnlimited_ok() {
+        val r = validateCatalogItem(name = "Perk", costPoints = 100, valueCents = 0, kind = "perk", stockLimit = null)
+        assertTrue(r.ok)
+        assertNull(r.errorFor("stockLimit"))
+    }
+
+    @Test
+    fun stockLimit_zeroIsValid() {
+        // Zero is a valid (currently out-of-stock) cap, not an error.
+        val r = validateCatalogItem(name = "Perk", costPoints = 100, valueCents = 0, kind = "perk", stockLimit = 0)
+        assertTrue(r.ok)
+    }
+
+    @Test
+    fun stockLimit_positiveIsValid() {
+        val r = validateCatalogItem(name = "Perk", costPoints = 100, valueCents = 0, kind = "perk", stockLimit = 25)
+        assertTrue(r.ok)
+    }
+
+    @Test
+    fun stockLimit_negativeIsError() {
+        val r = validateCatalogItem(name = "Perk", costPoints = 100, valueCents = 0, kind = "perk", stockLimit = -1)
+        assertFalse(r.ok)
+        assertNotNullError(r, "stockLimit")
+    }
+
+    @Test
+    fun emptyDraft_stockLimitIsUnlimited() {
+        assertNull(emptyDraft().stockLimit)
+    }
+
+    @Test
+    fun draftOverload_carriesStockLimit() {
+        val d = CatalogDraft(name = "X", costPoints = 10, valueCents = 0, kind = "perk", active = true, stockLimit = -5)
+        val r = validateCatalogItem(d)
+        assertFalse(r.ok)
+        assertNotNullError(r, "stockLimit")
+    }
+
     private fun assertNotNullError(r: CatalogValidationResult, field: String) {
         assertTrue("expected error for \$field", r.errorFor(field) != null)
     }

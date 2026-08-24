@@ -6,6 +6,7 @@ import com.testlogon.android.data.rewards.ReferredUser
 import com.testlogon.android.data.rewards.RewardKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,8 +17,23 @@ import org.junit.Test
  */
 class RewardsMathTest {
 
-    private fun reward(id: String, cost: Long, valueCents: Long = 0, kind: RewardKind = RewardKind.PERK) =
-        CatalogReward(id = id, name = id, description = "", costPoints = cost, valueCents = valueCents, kind = kind)
+    private fun reward(
+        id: String,
+        cost: Long,
+        valueCents: Long = 0,
+        kind: RewardKind = RewardKind.PERK,
+        stockLimit: Long? = null,
+        redeemedCount: Long = 0L,
+    ) = CatalogReward(
+        id = id,
+        name = id,
+        description = "",
+        costPoints = cost,
+        valueCents = valueCents,
+        kind = kind,
+        stockLimit = stockLimit,
+        redeemedCount = redeemedCount,
+    )
 
     private fun ref(id: String, status: ReferralStatus, rewardCents: Long) =
         ReferredUser(id = id, maskedName = "A**", joinedTs = 0L, status = status, rewardCents = rewardCents)
@@ -91,6 +107,53 @@ class RewardsMathTest {
     fun isCashReward_onlyForCashKind() {
         assertTrue(RewardsMath.isCashReward(reward("c", 500, 500, RewardKind.CASH)))
         assertFalse(RewardsMath.isCashReward(reward("p", 500, 0, RewardKind.PERK)))
+    }
+
+    // ---- stock / inventory limits ----
+
+    @Test
+    fun remainingStock_nullWhenUnlimited() {
+        assertNull(RewardsMath.remainingStock(reward("a", 100)))
+    }
+
+    @Test
+    fun remainingStock_limitMinusRedeemedFlooredAtZero() {
+        assertEquals(3L, RewardsMath.remainingStock(reward("a", 100, stockLimit = 5, redeemedCount = 2)))
+        assertEquals(0L, RewardsMath.remainingStock(reward("a", 100, stockLimit = 5, redeemedCount = 5)))
+        // Over-redeemed never goes negative.
+        assertEquals(0L, RewardsMath.remainingStock(reward("a", 100, stockLimit = 5, redeemedCount = 9)))
+    }
+
+    @Test
+    fun isOutOfStock_onlyWhenLimitedAndExhausted() {
+        assertFalse(RewardsMath.isOutOfStock(reward("a", 100)))
+        assertFalse(RewardsMath.isOutOfStock(reward("a", 100, stockLimit = 5, redeemedCount = 4)))
+        assertTrue(RewardsMath.isOutOfStock(reward("a", 100, stockLimit = 5, redeemedCount = 5)))
+    }
+
+    @Test
+    fun stockLabel_unlimitedLeftAndOut() {
+        assertEquals("Unlimited", RewardsMath.stockLabel(reward("a", 100)))
+        assertEquals("3 left", RewardsMath.stockLabel(reward("a", 100, stockLimit = 5, redeemedCount = 2)))
+        assertEquals("Out of stock", RewardsMath.stockLabel(reward("a", 100, stockLimit = 5, redeemedCount = 5)))
+    }
+
+    @Test
+    fun redeemableCatalog_requiresAffordableAndInStock() {
+        val catalog = listOf(
+            reward("aff_stock", 100),
+            reward("aff_out", 100, stockLimit = 1, redeemedCount = 1),
+            reward("expensive", 1000),
+        )
+        // 500 points: can afford aff_stock + aff_out, but aff_out is out of stock; expensive unaffordable.
+        val redeemable = RewardsMath.redeemableCatalog(catalog, 500)
+        assertEquals(listOf("aff_stock"), redeemable.map { it.id })
+    }
+
+    @Test
+    fun redeemableCatalog_keepsAffordableLimitedButInStock() {
+        val catalog = listOf(reward("a", 100, stockLimit = 5, redeemedCount = 4))
+        assertEquals(listOf("a"), RewardsMath.redeemableCatalog(catalog, 500).map { it.id })
     }
 
     // ---- referral counting ----

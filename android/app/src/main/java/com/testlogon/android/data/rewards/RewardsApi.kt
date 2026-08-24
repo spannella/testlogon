@@ -220,6 +220,8 @@ data class CatalogRewardDto(
     @LenientLong @Json(name = "cost_points") val costPoints: Long? = null,
     @LenientLong @Json(name = "value_cents") val valueCents: Long? = null,
     @Json(name = "kind") val kind: String? = null,
+    @LenientLong @Json(name = "stock_limit") val stockLimit: Long? = null,
+    @LenientLong @Json(name = "redeemed_count") val redeemedCount: Long? = null,
 )
 
 // ---- POST me/rewards/redeem ----
