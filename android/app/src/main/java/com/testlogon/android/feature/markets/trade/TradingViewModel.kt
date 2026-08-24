@@ -9,6 +9,8 @@ import com.testlogon.android.data.exchange.TradingRepository
 import com.testlogon.android.data.exchange.ExchangeRepository
 import com.testlogon.android.data.exchange.FeeSchedule
 import com.testlogon.android.data.exchange.FillsFees
+import com.testlogon.android.data.exchange.FeeTierAuthoritative
+import com.testlogon.android.feature.feetiers.FeeTierMath
 import com.testlogon.android.data.feed.CurrentUserRepository
 import com.testlogon.android.feature.paper.PaperAccountStore
 import com.testlogon.android.feature.paper.PaperEngine
@@ -77,6 +79,7 @@ class TradingViewModel @Inject constructor(
         pollAccount()
         refreshPm()
         loadFees()
+        resolveFeeTier()
         refreshOrdersLive()
         resolveSymbols()
         loadStakeAuctionBrowse()
@@ -143,6 +146,52 @@ class TradingViewModel @Inject constructor(
                 is ApiResult.Success -> _uiState.update { it.copy(fundingPayments = r.data) }
                 else -> Unit
             }
+        }
+    }
+
+    /**
+     * Resolve the account's maker/taker FEE TIER once for the ticket's fee gauge. Prefers the
+     * AUTHORITATIVE backend read (GET me/fees/tier) when it serves a tier; on null/404 falls back to a
+     * CLIENT estimate computed from the SAME enriched fills feed the Fee Tiers screen uses
+     * (30-day volume -> tier via the pure [FeeTierMath] engine). A total failure just leaves the gauge
+     * hidden (no error surfaced on the ticket). Mirrors FeeTiersViewModel's resolution order.
+     */
+    fun resolveFeeTier() {
+        viewModelScope.launch {
+            val authoritative = (repository.feeTier() as? ApiResult.Success)?.data
+            if (authoritative != null && authoritative.tierId.isNotBlank()) {
+                applyAuthoritativeTier(authoritative)
+                return@launch
+            }
+            // Client estimate from the fills feed (may already be loaded; fetch if not).
+            val fills = _uiState.value.fillsFees?.fills
+                ?: (repository.fillsFees() as? ApiResult.Success)?.data?.fills
+                ?: emptyList()
+            val volume = FeeTierMath.volume30dCents(FeeTierMath.fromFills(fills), System.currentTimeMillis())
+            val tier = FeeTierMath.tierForVolume(volume)
+            _uiState.update {
+                it.copy(
+                    feeTierName = tier.name,
+                    feeTierMakerBps = tier.makerBps,
+                    feeTierTakerBps = tier.takerBps,
+                    feeTierEstimated = true,
+                )
+            }
+        }
+    }
+
+    /** Project an authoritative tier read onto the ticket gauge (canonical table fills any gaps). */
+    private fun applyAuthoritativeTier(a: FeeTierAuthoritative) {
+        val canonical = FeeTierMath.tierById(a.tierId)
+        val makerBps = a.makerBps.takeIf { it > 0 } ?: canonical?.makerBps ?: 0
+        val takerBps = a.takerBps.takeIf { it > 0 } ?: canonical?.takerBps ?: 0
+        _uiState.update {
+            it.copy(
+                feeTierName = a.name.ifBlank { canonical?.name ?: a.tierId },
+                feeTierMakerBps = makerBps,
+                feeTierTakerBps = takerBps,
+                feeTierEstimated = false,
+            )
         }
     }
 

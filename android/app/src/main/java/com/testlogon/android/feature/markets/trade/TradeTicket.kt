@@ -64,6 +64,7 @@ fun TradeTicket(
     modifier: Modifier = Modifier,
     bestBid: Long? = null,
     bestAsk: Long? = null,
+    onOpenFeeTiers: () -> Unit = {},
     viewModel: TradingViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -107,7 +108,7 @@ fun TradeTicket(
         Spacer(Modifier.height(12.dp))
 
         when (state.section) {
-            TicketSection.TRADE -> TradeSection(state, lastPrice, bestBid, bestAsk, viewModel)
+            TicketSection.TRADE -> TradeSection(state, lastPrice, bestBid, bestAsk, onOpenFeeTiers, viewModel)
             TicketSection.POSITIONS -> PositionsSection(state, lastPrice, viewModel)
             TicketSection.ORDERS -> OrdersSection(state, viewModel)
             TicketSection.FILLS -> FillsSection(state)
@@ -150,7 +151,7 @@ fun TradeTicket(
 // ======================= Sections =======================
 
 @Composable
-private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?, bestAsk: Long?, viewModel: TradingViewModel) {
+private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?, bestAsk: Long?, onOpenFeeTiers: () -> Unit, viewModel: TradingViewModel) {
     val sideColor = if (state.side == OrderSide.BUY) MarketColors.Up else MarketColors.Down
     var showDepositConfirm by remember { mutableStateOf(false) }
 
@@ -214,7 +215,7 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?
                 NumberField("Expires in (minutes)", state.expiryMinText, viewModel::setExpiryMin)
             }
             Spacer(Modifier.height(8.dp))
-            OrderPreview(state, refPrice, viewModel)
+            OrderPreview(state, refPrice, onOpenFeeTiers, viewModel)
             RiskCalculator(state, refPrice, viewModel)
             BracketHelper(state, refPrice, viewModel)
             AdvancedSection(state, viewModel)
@@ -225,7 +226,7 @@ private fun TradeSection(state: TradingUiState, lastPrice: Long?, bestBid: Long?
             Spacer(Modifier.height(4.dp))
             Text("Market order — fills immediately at the best available price.", color = MarketColors.TextSecondary, fontSize = 11.sp)
             Spacer(Modifier.height(8.dp))
-            OrderPreview(state, refPrice, viewModel)
+            OrderPreview(state, refPrice, onOpenFeeTiers, viewModel)
             RiskCalculator(state, refPrice, viewModel)
             BracketHelper(state, refPrice, viewModel)
             AdvancedSection(state, viewModel)
@@ -1128,7 +1129,7 @@ private fun QuickQuoteBtn(
  * initial margin the order would lock plus a first-order estimated liquidation price.
  */
 @Composable
-private fun OrderPreview(state: TradingUiState, refPrice: Long?, viewModel: TradingViewModel) {
+private fun OrderPreview(state: TradingUiState, refPrice: Long?, onOpenFeeTiers: () -> Unit, viewModel: TradingViewModel) {
     val notional = OrderMath.notional(refPrice, state.qtyLong)
     val avail = state.account?.availableBalance
     val maxQty = OrderMath.maxQtyForBalance(avail, refPrice)
@@ -1177,6 +1178,8 @@ private fun OrderPreview(state: TradingUiState, refPrice: Long?, viewModel: Trad
         PreviewLine("Margin impact (est.)", if (margin > 0L) fmt(margin.toDouble()) else "--", MarketColors.TextPrimary)
         Spacer(Modifier.height(4.dp))
         PreviewLine("Est. liquidation (est.)", liq?.let { fmt(it.toDouble()) } ?: "--", MarketColors.TextPrimary)
+        Spacer(Modifier.height(8.dp))
+        FeeTierGauge(state, onOpenFeeTiers)
         Spacer(Modifier.height(4.dp))
         Text(
             "Margin/liq. use assumed ${imBps / 100}%/${mmBps / 100}% (venue margin bps not exposed) - indicative only.",
@@ -1184,6 +1187,69 @@ private fun OrderPreview(state: TradingUiState, refPrice: Long?, viewModel: Trad
             fontSize = 10.sp,
         )
     }
+}
+
+/**
+ * Compact FEE-TIER GAUGE for the order preview: the account's current maker/taker VIP tier + rates
+ * (tappable -> the Fee Tiers screen; an "est." badge when the tier is client-estimated rather than an
+ * authoritative backend read) and the estimated fee for the order being entered (current notional x
+ * the applicable rate for the selected order type, updated live). In paper mode there is no real fee,
+ * so it shows "— (no fee, paper)". Hidden entirely until the tier resolves.
+ */
+@Composable
+private fun FeeTierGauge(state: TradingUiState, onOpenFeeTiers: () -> Unit) {
+    if (state.paperMode) {
+        PreviewLine("Est. fee", "— (no fee, paper)", MarketColors.TextFaint)
+        return
+    }
+    if (!state.hasFeeTier) return  // OFF-path: gauge stays hidden until the tier is known.
+
+    val takerBps = state.feeTierTakerBps
+    val makerBps = state.feeTierMakerBps
+    // Tier line: name + rates, tappable through to the Fee Tiers screen; est. badge when estimated.
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onOpenFeeTiers() }
+            .testTag("fee_tier_gauge")
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Fee tier", color = MarketColors.TextSecondary, fontSize = 12.sp)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (state.feeTierEstimated) {
+                Text(
+                    "est.",
+                    color = MarketColors.TextFaint,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .border(1.dp, MarketColors.Border, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                )
+            }
+            Text(
+                text = "${state.feeTierName} · maker $makerBps / taker $takerBps bps",
+                color = MarketColors.Accent,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+            )
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    // Est. fee for the order being entered (live from notional x applicable rate).
+    val fee = state.previewFeeCents
+    val liquidityLabel = if (state.isTakerOrder) "taker" else "maker"
+    val appliedBps = state.previewFeeBps
+    PreviewLine(
+        label = "Est. fee",
+        value = fee?.let { "${fmt(it.toDouble())} ($liquidityLabel $appliedBps bps)" } ?: "-- ($liquidityLabel $appliedBps bps)",
+        valueColor = if (fee != null && fee > 0L) MarketColors.TextPrimary else MarketColors.TextFaint,
+    )
 }
 
 @Composable

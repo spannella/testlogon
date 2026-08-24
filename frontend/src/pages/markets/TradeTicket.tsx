@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRegisterShortcuts, type ShortcutEntry } from "@/hooks/useKeyboardShortcuts";
+import { Link } from "react-router-dom";
+import { useFeeTier } from "@/hooks/useFeeTier";
+import { orderFeeEstimateCents } from "@/lib/feeTiers";
 import { useQuery } from "@tanstack/react-query";
 import { getFeeSchedule } from "@/api/endpoints/custody";
 import { cn } from "@/lib/utils";
@@ -589,6 +592,36 @@ export function TradeTicket({
       ? (side === "buy" ? bestAsk : bestBid) ?? lastPrice ?? refPrice
       : refPrice;
   const previewNotional = calcNotional(previewPrice, qtyN);
+  // ── Fee-tier gauge (maker/taker) ──────────────────────────────────────
+  // Resolve the caller's fee tier once (shared with the Fees page). The order
+  // preview shows the tier + the estimated fee for THIS order. Paper orders
+  // incur no real fee, so the gauge shows "no fee (paper)".
+  const feeTier = useFeeTier();
+  // Notional is in engine-tick space (price*qty scaled by price_scaler). The
+  // fee engine works in USD CENTS, so divide out the scaler and *100. The
+  // resulting fee cents convert back to tick space for display via formatPrice.
+  const previewNotionalCents =
+    previewNotional > 0 ? Math.round((previewNotional / (scaler || 1)) * 100) : 0;
+  // A resting limit that is post-only (or plain) pays maker; market/stop cross
+  // -> taker. isTakerOrderType (via orderFeeEstimateCents) owns that mapping.
+  const feeIsTaker =
+    postOnly
+      ? false
+      : orderType === "market" || orderType === "stop" || orderType === "take_profit"
+        ? true
+        : orderType === "limit" || orderType === "stop_limit"
+          ? false
+          : true;
+  const feeRateBps = feeIsTaker ? feeTier.takerBps : feeTier.makerBps;
+  const feeEstCents = orderFeeEstimateCents(
+    previewNotionalCents,
+    feeTier.makerBps,
+    feeTier.takerBps,
+    orderType,
+    postOnly,
+  );
+  // Back to tick space for formatPrice(scaler): cents -> dollars -> ticks.
+  const feeEstTicks = Math.round((feeEstCents / 100) * (scaler || 1));
   const maxAffordableQty = maxQtyForBalance(avail, previewPrice);
   // The exchange does NOT expose initial/maintenance margin bps to the client
   // (the fee schedule only carries maker/taker/liquidation-fee bps). So any
@@ -1796,6 +1829,38 @@ export function TradeTicket({
                   {orderType === "market" && (
                     <span className="text-[10px] text-muted-foreground">at {previewPrice ? formatPrice(previewPrice, scaler) : "—"} (proxy)</span>
                   )}
+                </div>
+                {/* Fee-tier gauge — current maker/taker tier + estimated order fee. */}
+                <div className="flex flex-wrap items-center justify-between gap-1.5 border-b pb-1.5" data-testid="fee_gauge">
+                  <Link
+                    to="/fees"
+                    data-testid="fee_tier_chip"
+                    className="inline-flex items-center gap-1 rounded-full border bg-background px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                    title="View your fee tier schedule"
+                  >
+                    <span className="text-foreground">Fee tier: {feeTier.tierName}</span>
+                    <span className="text-muted-foreground">
+                      · maker {feeTier.makerBps} bps / taker {feeTier.takerBps} bps
+                    </span>
+                    {feeTier.source === "estimated" && (
+                      <span className="rounded bg-muted px-1 text-[9px] uppercase tracking-wide text-muted-foreground">est</span>
+                    )}
+                  </Link>
+                  <span className="text-xs tabular-nums" data-testid="fee_est">
+                    {paperMode ? (
+                      <span className="text-muted-foreground">no fee (paper)</span>
+                    ) : feeEstCents > 0 ? (
+                      <>
+                        <span className="text-muted-foreground">Est. fee </span>
+                        <span className="font-semibold">{formatPrice(feeEstTicks, scaler)}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {" "}({feeIsTaker ? "taker" : "maker"} {feeRateBps} bps)
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Notional</span>

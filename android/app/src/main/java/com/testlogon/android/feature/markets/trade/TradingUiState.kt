@@ -14,6 +14,7 @@ import com.testlogon.android.data.exchange.SpotBalance
 import com.testlogon.android.data.exchange.MarginConfigAck
 import com.testlogon.android.data.exchange.EngineConfigAck
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.feature.feetiers.FeeTierMath
 
 /** Order entry type. LIMIT is the plain resting limit; the rest map to advanced engine endpoints. */
 enum class OrderType(val label: String) {
@@ -146,6 +147,13 @@ data class TradingUiState(
     val pmResolutions: List<com.testlogon.android.data.exchange.PmResolution> = emptyList(),
     val feeSchedule: FeeSchedule? = null,
     val fillsFees: FillsFees? = null,
+    // ---- FEE-TIER GAUGE (maker/taker VIP tier for the current account) ----
+    // Resolved once (authoritative GET me/fees/tier when served; else client-computed from the same
+    // fills feed the Fee Tiers screen uses). Drives the compact tier + est-fee line in the ticket.
+    val feeTierName: String? = null,      // e.g. "Standard"; null until resolved
+    val feeTierMakerBps: Int = 0,         // maker rate for the resolved tier
+    val feeTierTakerBps: Int = 0,         // taker rate for the resolved tier
+    val feeTierEstimated: Boolean = false, // true when client-estimated (no authoritative read)
     val liveOrders: LiveOrders? = null,
     val liquidations: Liquidations? = null,
     val fundingPayments: FundingPayments? = null,
@@ -240,6 +248,27 @@ data class TradingUiState(
 
     /** Exact notional (price x qty) for the ticket preview. */
     val previewNotional: Long? get() = OrderMath.notional(entryRefPrice, qtyLong)
+
+    /** Whether the current [orderType] pays the TAKER rate (removes liquidity) for the fee gauge. */
+    val isTakerOrder: Boolean get() = FeeTierMath.isTakerOrderType(orderType.name)
+
+    /** Whether the account's fee tier has resolved (name + rates available). */
+    val hasFeeTier: Boolean get() = feeTierName != null && (feeTierMakerBps > 0 || feeTierTakerBps > 0)
+
+    /**
+     * Estimated fee (USD cents) for the order being entered: current notional x the applicable
+     * maker/taker rate for [orderType]. Null in paper mode (no fee) or before the tier resolves / with
+     * no notional yet.
+     */
+    val previewFeeCents: Long? get() {
+        if (paperMode || !hasFeeTier) return null
+        val n = previewNotional ?: return null
+        if (n <= 0L) return null
+        return FeeTierMath.orderFeeEstimateCents(n, feeTierMakerBps, feeTierTakerBps, orderType.name)
+    }
+
+    /** bps applied by [previewFeeCents] for the current order type. */
+    val previewFeeBps: Int get() = if (isTakerOrder) feeTierTakerBps else feeTierMakerBps
 
     /** Max whole qty affordable at the reference price from available balance (no leverage). */
     fun maxAffordableQty(refPrice: Long?): Long =

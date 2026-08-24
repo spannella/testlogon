@@ -91,6 +91,9 @@ fun NavGraphBuilder.marketsDestinations(navController: NavHostController) {
             navArgument(SymbolDetailDest.ARG_SYMBOL_ID) { type = NavType.IntType },
         ),
     ) {
-        SymbolDetailRoute(onBack = { navController.popBackStack() })
+        SymbolDetailRoute(
+            onBack = { navController.popBackStack() },
+            onOpenRoute = { route -> navController.navigate(route) { launchSingleTop = true } },
+        )
     }
 }

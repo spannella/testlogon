@@ -158,3 +158,58 @@ export function makerTakerFeeCents(notionalCents: number, bps: number): number {
   // fee = notional * bps / 10_000. Round half-up for a deterministic result.
   return Math.round((n * b) / 10_000);
 }
+
+
+// ── order-time fee estimate (taker vs maker by order type) ───────────────
+
+/** Order-entry type union understood by {@link isTakerOrderType}. */
+export type FeeOrderType =
+  | "limit"
+  | "market"
+  | "stop"
+  | "stop_limit"
+  | "take_profit"
+  | (string & {});
+
+/**
+ * Whether an order of `type` is expected to pay the TAKER fee. Market and
+ * stop / take-profit orders trigger into a market fill and CROSS the book →
+ * taker. A resting `limit` ADDS liquidity → maker; at entry time a plain limit
+ * is treated as a maker (the typical/optimistic case), and `postOnly` forces
+ * maker. `stop_limit` triggers into a resting LIMIT, so it is a maker too.
+ * Unknown types default to taker (the conservative, higher estimate) unless
+ * `postOnly` is set.
+ */
+export function isTakerOrderType(type: FeeOrderType, postOnly = false): boolean {
+  if (postOnly) return false;
+  switch (type) {
+    case "limit":
+      return false; // resting maker
+    case "stop_limit":
+      return false; // triggers into a resting limit -> maker
+    case "market":
+    case "stop":
+    case "take_profit":
+      return true; // crosses the book -> taker
+    default:
+      return true; // unknown -> conservative taker estimate
+  }
+}
+
+/**
+ * Estimated order fee (integer USD cents, rounded half-up) for `notionalCents`
+ * at the caller's `makerBps` / `takerBps`, choosing the applicable rate from
+ * the order `type` (see {@link isTakerOrderType}). A `postOnly` limit is forced
+ * to the maker rate. Guards non-positive notional -> 0.
+ */
+export function orderFeeEstimateCents(
+  notionalCents: number,
+  makerBps: number,
+  takerBps: number,
+  type: FeeOrderType,
+  postOnly = false,
+): number {
+  const taker = isTakerOrderType(type, postOnly);
+  const bps = taker ? takerBps : makerBps;
+  return makerTakerFeeCents(notionalCents, bps);
+}

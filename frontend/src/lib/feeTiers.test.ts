@@ -8,6 +8,8 @@ import {
   progressToNextFraction,
   volumeToNextTierCents,
   makerTakerFeeCents,
+  isTakerOrderType,
+  orderFeeEstimateCents,
   type VolumeFill,
 } from "./feeTiers";
 
@@ -164,5 +166,47 @@ describe("makerTakerFeeCents", () => {
     expect(makerTakerFeeCents(100_00, 0)).toBe(0);
     expect(makerTakerFeeCents(-1, 15)).toBe(0);
     expect(makerTakerFeeCents(NaN, 15)).toBe(0);
+  });
+});
+
+
+describe("isTakerOrderType", () => {
+  it("classifies book-crossing types as taker", () => {
+    expect(isTakerOrderType("market")).toBe(true);
+    expect(isTakerOrderType("stop")).toBe(true);
+    expect(isTakerOrderType("take_profit")).toBe(true);
+  });
+  it("classifies resting-limit types as maker", () => {
+    expect(isTakerOrderType("limit")).toBe(false);
+    expect(isTakerOrderType("stop_limit")).toBe(false);
+  });
+  it("post-only forces maker even for a would-be taker", () => {
+    expect(isTakerOrderType("market", true)).toBe(false);
+    expect(isTakerOrderType("limit", true)).toBe(false);
+  });
+  it("defaults unknown types to taker (conservative)", () => {
+    expect(isTakerOrderType("weird" as never)).toBe(true);
+    expect(isTakerOrderType("weird" as never, true)).toBe(false);
+  });
+});
+
+describe("orderFeeEstimateCents", () => {
+  it("uses the taker rate for a market order", () => {
+    // $10,000 @ 15bps taker = $15.00
+    expect(orderFeeEstimateCents(1_000_000, 10, 15, "market")).toBe(15_00);
+  });
+  it("uses the maker rate for a resting limit order", () => {
+    // $10,000 @ 10bps maker = $10.00
+    expect(orderFeeEstimateCents(1_000_000, 10, 15, "limit")).toBe(10_00);
+  });
+  it("post-only limit stays on the maker rate", () => {
+    expect(orderFeeEstimateCents(1_000_000, 10, 15, "limit", true)).toBe(10_00);
+  });
+  it("post-only market drops from taker to maker rate", () => {
+    expect(orderFeeEstimateCents(1_000_000, 10, 15, "market", true)).toBe(10_00);
+  });
+  it("guards non-positive notional to 0", () => {
+    expect(orderFeeEstimateCents(0, 10, 15, "market")).toBe(0);
+    expect(orderFeeEstimateCents(-5, 10, 15, "limit")).toBe(0);
   });
 });

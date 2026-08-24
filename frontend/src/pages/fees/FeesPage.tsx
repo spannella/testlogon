@@ -12,7 +12,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Percent, Info, RefreshCw, TrendingUp } from "lucide-react";
 
 import { ApiError } from "@/api/client";
-import { getFeeTier, type FeeTierResponse } from "@/api/endpoints/fees";
+import { getFeeTier } from "@/api/endpoints/fees";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -30,9 +30,9 @@ import { useFillsFees } from "@/hooks/useTrading";
 import { useSymbols } from "@/hooks/useMarketData";
 import type { FillFee } from "@/api/endpoints/trading";
 import type { MarketSymbol } from "@/api/endpoints/marketData";
+import { useFeeTier } from "@/hooks/useFeeTier";
 import {
   FEE_TIERS,
-  volume30dCents,
   tierForVolume,
   tierById,
   nextTier,
@@ -62,6 +62,8 @@ export default function FeesPage() {
   const fillsQuery = useFillsFees();
 
   // Authoritative read; 404s until the edge deploys -> degrade to the estimate.
+  // Kept alongside the shared hook (same query key -> one network call) only to
+  // drive the "showing an estimate" notice below.
   const tierQuery = useQuery({
     queryKey: ["fees", "tier"],
     queryFn: getFeeTier,
@@ -90,30 +92,19 @@ export default function FeesPage() {
     return out;
   }, [rawFills, symById]);
 
-  const estimatedVolumeCents = useMemo(
-    () => volume30dCents(normalized, Date.now()),
-    [normalized],
-  );
-
-  // Prefer the authoritative read when it resolved; else the client estimate.
-  const authoritative: FeeTierResponse | undefined =
-    tierQuery.isSuccess ? tierQuery.data : undefined;
-  const isAuthoritative = !!authoritative;
-
-  const volumeCents = authoritative?.volume_30d_cents ?? estimatedVolumeCents;
-
-  // Current tier: from the authoritative id when present (fall back to volume
-  // lookup if the id is unknown), else derive from the estimated volume.
-  const currentTier: FeeTier =
-    (authoritative && tierById(authoritative.tier_id)) || tierForVolume(volumeCents);
+  // Shared resolver (authoritative -> estimate) — the single source of truth
+  // for the tier + maker/taker bps + backing volume, deduped with the ticket.
+  const resolved = useFeeTier();
+  const isAuthoritative = resolved.source === "authoritative";
+  const volumeCents = resolved.volumeCents;
+  const currentTier: FeeTier = tierById(resolved.tierId) || tierForVolume(volumeCents);
 
   const upcoming = nextTier(currentTier);
   const fraction = progressToNextFraction(volumeCents);
   const toNextCents = volumeToNextTierCents(volumeCents);
 
-  // maker/taker rates: authoritative overrides the tier defaults when present.
-  const makerBps = authoritative?.maker_bps ?? currentTier.makerBps;
-  const takerBps = authoritative?.taker_bps ?? currentTier.takerBps;
+  const makerBps = resolved.makerBps;
+  const takerBps = resolved.takerBps;
 
   const feedLoading = fillsQuery.isLoading || symbolsQuery.isLoading;
   const feedUnavailable =
