@@ -36,6 +36,11 @@ interface RewardsRepository {
     suspend fun rewardsHistory(): ApiResult<List<RewardsHistoryEntry>>
     suspend fun rewardsCatalog(): ApiResult<List<CatalogReward>>
     suspend fun redeem(rewardId: String): ApiResult<RedeemResult>
+    /**
+     * DIRECT convert reward points -> USD cash wallet (MUTATION). A rejection or undeployed 404 surfaces
+     * as a clear error, never a silent success (no points/cash are assumed moved on the client).
+     */
+    suspend fun redeemPointsForCash(points: Long): ApiResult<RedeemCashResult>
     suspend fun referralLeaderboard(period: LeaderboardPeriod): ApiResult<ReferralLeaderboard>
     /**
      * OPTIONAL authoritative trading-rewards read. A 404 (undeployed) degrades to an honest
@@ -85,6 +90,11 @@ class RewardsRepositoryImpl @Inject constructor(
     /** Redeem a reward (MUTATION). A rejection or undeployed 404 surfaces as a clear error, never a silent success. */
     override suspend fun redeem(rewardId: String): ApiResult<RedeemResult> = call {
         api.redeem(RedeemRequestDto(rewardId = rewardId.trim())).toDomain()
+    }
+
+    /** Convert points -> USD cash (MUTATION). A rejection or undeployed 404 surfaces as a clear error, never a silent success. */
+    override suspend fun redeemPointsForCash(points: Long): ApiResult<RedeemCashResult> = call {
+        api.redeemCash(RedeemCashRequestDto(points = points)).toDomain()
     }
 
     /** Referral leaderboard. A 404 (undeployed) degrades to an honest unavailable board; network errors surface. */

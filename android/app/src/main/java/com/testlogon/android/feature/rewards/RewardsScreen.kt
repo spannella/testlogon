@@ -24,7 +24,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -41,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -62,6 +65,11 @@ object RewardsTestTags {
     const val REDEEM_CONFIRM = "rewards_redeem_confirm"
     const val TRADING = "rewards_trading_card"
     const val TRADING_CTA = "rewards_trading_cta"
+    const val CONVERT_CARD = "rewards_convert_cash_card"
+    const val CONVERT_INPUT = "rewards_convert_cash_input"
+    const val CONVERT_CTA = "rewards_convert_cash_cta"
+    const val CONVERT_CONFIRM = "rewards_convert_cash_confirm"
+    const val CASH_LINK = "rewards_open_cash"
 }
 
 /** Route-level Rewards entry (reached from the More -> Growth hub). */
@@ -69,6 +77,7 @@ object RewardsTestTags {
 fun RewardsRoute(
     onBack: () -> Unit,
     onOpenFeeTiers: () -> Unit = {},
+    onOpenCash: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: RewardsViewModel = hiltViewModel(),
 ) {
@@ -89,6 +98,11 @@ fun RewardsRoute(
         onRetry = viewModel::onRetry,
         onRedeem = viewModel::confirmRedeem,
         onOpenFeeTiers = onOpenFeeTiers,
+        onOpenCash = onOpenCash,
+        onCashPointsChanged = viewModel::onCashPointsChanged,
+        onCashPreset = viewModel::onCashPreset,
+        onCashMax = viewModel::onCashMax,
+        onConvertCash = viewModel::confirmRedeemCash,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -101,10 +115,16 @@ fun RewardsScreen(
     onRetry: () -> Unit,
     onRedeem: (CatalogReward) -> Unit,
     onOpenFeeTiers: () -> Unit = {},
+    onOpenCash: () -> Unit = {},
+    onCashPointsChanged: (String) -> Unit = {},
+    onCashPreset: (Long) -> Unit = {},
+    onCashMax: () -> Unit = {},
+    onConvertCash: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     var pendingRedeem by remember { mutableStateOf<CatalogReward?>(null) }
+    var pendingCashPoints by remember { mutableStateOf<Long?>(null) }
 
     Scaffold(
         modifier = modifier.testTag(RewardsTestTags.SCREEN),
@@ -142,6 +162,11 @@ fun RewardsScreen(
                     state = state,
                     onRedeemClick = { pendingRedeem = it },
                     onOpenFeeTiers = onOpenFeeTiers,
+                    onOpenCash = onOpenCash,
+                    onCashPointsChanged = onCashPointsChanged,
+                    onCashPreset = onCashPreset,
+                    onCashMax = onCashMax,
+                    onConvertClick = { pendingCashPoints = it },
                 )
             }
         }
@@ -179,6 +204,39 @@ fun RewardsScreen(
             dismissButton = { TextButton(onClick = { pendingRedeem = null }) { Text("Cancel") } },
         )
     }
+
+    val cashPts = pendingCashPoints
+    if (cashPts != null) {
+        val credited = RewardsCashMath.cashCentsForPoints(cashPts)
+        AlertDialog(
+            onDismissRequest = { pendingCashPoints = null },
+            title = { Text("Convert points to cash") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    RedeemRow("Convert", RewardsCashMath.formatPoints(cashPts), emphasize = true)
+                    RedeemRow("You'll receive", RewardsCashMath.formatCentsUsd(credited), emphasize = true)
+                    RedeemRow("Points after", RewardsCashMath.formatPoints(RewardsCashMath.pointsAfterRedeem(state.points, cashPts)))
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Redeem ${RewardsCashMath.formatPoints(cashPts)} for ${RewardsCashMath.formatCentsUsd(credited)} to your USD cash wallet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !state.convertingCash,
+                    onClick = {
+                        pendingCashPoints = null
+                        onConvertCash(cashPts)
+                    },
+                    modifier = Modifier.testTag(RewardsTestTags.CONVERT_CONFIRM),
+                ) { Text("Convert") }
+            },
+            dismissButton = { TextButton(onClick = { pendingCashPoints = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
@@ -186,6 +244,11 @@ private fun RewardsContent(
     state: RewardsUiState,
     onRedeemClick: (CatalogReward) -> Unit,
     onOpenFeeTiers: () -> Unit,
+    onOpenCash: () -> Unit,
+    onCashPointsChanged: (String) -> Unit,
+    onCashPreset: (Long) -> Unit,
+    onCashMax: () -> Unit,
+    onConvertClick: (Long) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -196,6 +259,14 @@ private fun RewardsContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         BalanceCard(state)
+        ConvertToCashCard(
+            state = state,
+            onOpenCash = onOpenCash,
+            onCashPointsChanged = onCashPointsChanged,
+            onCashPreset = onCashPreset,
+            onCashMax = onCashMax,
+            onConvertClick = onConvertClick,
+        )
         state.tradingRewards?.let { TradingRewardsCard(it, onOpenFeeTiers) }
         if (state.rewards.waysToEarn.isNotEmpty()) {
             WaysToEarnCard(state)
@@ -250,6 +321,70 @@ private fun TradingRewardsCard(
                 onClick = onOpenFeeTiers,
                 modifier = Modifier.testTag(RewardsTestTags.TRADING_CTA),
             ) { Text("Trade & view fee tiers") }
+        }
+    }
+}
+
+@Composable
+private fun ConvertToCashCard(
+    state: RewardsUiState,
+    onOpenCash: () -> Unit,
+    onCashPointsChanged: (String) -> Unit,
+    onCashPreset: (Long) -> Unit,
+    onCashMax: () -> Unit,
+    onConvertClick: (Long) -> Unit,
+) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth().testTag(RewardsTestTags.CONVERT_CARD)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Convert points to cash", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Rate: ${RewardsCashMath.rateLabel()} · Min ${RewardsCashMath.formatPoints(RewardsCashMath.MIN_REDEEM_POINTS)} (${RewardsCashMath.formatCentsUsd(RewardsCashMath.minRedeemCents())})",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            OutlinedTextField(
+                value = state.cashPointsInput,
+                onValueChange = onCashPointsChanged,
+                singleLine = true,
+                label = { Text("Points to convert") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth().testTag(RewardsTestTags.CONVERT_INPUT),
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(onClick = { onCashPreset(500L) }, label = { Text("$5") })
+                AssistChip(onClick = { onCashPreset(1000L) }, label = { Text("$10") })
+                AssistChip(onClick = onCashMax, label = { Text("Max") })
+            }
+
+            Text(
+                "You'll receive ${RewardsCashMath.formatCentsUsd(state.cashCentsForInput)}",
+                style = MaterialTheme.typography.titleMedium,
+            )
+
+            val hint = when (state.cashValidation) {
+                RewardsCashMath.Validation.NOT_POSITIVE -> null
+                RewardsCashMath.Validation.BELOW_MIN ->
+                    "Minimum is ${RewardsCashMath.formatPoints(RewardsCashMath.MIN_REDEEM_POINTS)}."
+                RewardsCashMath.Validation.INSUFFICIENT ->
+                    "You only have ${RewardsCashMath.formatPoints(state.points)}."
+                RewardsCashMath.Validation.VALID -> null
+            }
+            if (hint != null) {
+                Text(hint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
+
+            Button(
+                enabled = state.canConvertCash,
+                onClick = { onConvertClick(state.cashPoints) },
+                modifier = Modifier.fillMaxWidth().testTag(RewardsTestTags.CONVERT_CTA),
+            ) { Text(if (state.convertingCash) "Converting..." else "Convert to cash") }
+
+            TextButton(
+                onClick = onOpenCash,
+                modifier = Modifier.testTag(RewardsTestTags.CASH_LINK),
+            ) { Text("Open USD cash wallet") }
         }
     }
 }

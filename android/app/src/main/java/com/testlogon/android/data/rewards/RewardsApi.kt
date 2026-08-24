@@ -52,6 +52,15 @@ interface RewardsApi {
     suspend fun redeem(@Body body: RedeemRequestDto): RedeemResultDto
 
     /**
+     * POST me/rewards/redeem-cash {points} -> {ok, cash_cents, points_remaining}. DIRECT convert of reward
+     * points into the USD cash wallet at the canonical rate. Mutation: a rejection / undeployed 404 surfaces
+     * as a clear error, never a silent success.
+     */
+    @Headers("Content-Type: application/json")
+    @POST("me/rewards/redeem-cash")
+    suspend fun redeemCash(@Body body: RedeemCashRequestDto): RedeemCashResultDto
+
+    /**
      * GET me/referral/leaderboard?period=all|month -> top referrers + (optionally) the caller's own
      * out-of-slice rank. Read degrades on 404 to an honest coming-soon state.
      */
@@ -168,6 +177,22 @@ data class RedeemRequestDto(
 @JsonClass(generateAdapter = true)
 data class RedeemResultDto(
     @Json(name = "ok") val ok: Boolean? = null,
+    @LenientLong @Json(name = "points_remaining") val pointsRemaining: Long? = null,
+    @Json(name = "detail") val detail: String? = null,
+    @Json(name = "error") val error: String? = null,
+)
+
+// ---- POST me/rewards/redeem-cash (DIRECT points -> USD cash) ----
+
+@JsonClass(generateAdapter = true)
+data class RedeemCashRequestDto(
+    @Json(name = "points") val points: Long,
+)
+
+@JsonClass(generateAdapter = true)
+data class RedeemCashResultDto(
+    @Json(name = "ok") val ok: Boolean? = null,
+    @LenientLong @Json(name = "cash_cents") val cashCents: Long? = null,
     @LenientLong @Json(name = "points_remaining") val pointsRemaining: Long? = null,
     @Json(name = "detail") val detail: String? = null,
     @Json(name = "error") val error: String? = null,

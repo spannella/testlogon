@@ -1,12 +1,23 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Award, Coins, Wallet, Sparkles, Gift, Users, TrendingUp, ArrowRight } from "lucide-react";
+import {
+  Award,
+  Coins,
+  Wallet,
+  Sparkles,
+  Gift,
+  Users,
+  TrendingUp,
+  ArrowRight,
+  DollarSign,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -25,6 +36,7 @@ import {
   getRewardsCatalog,
   getTradingRewards,
   redeemReward,
+  redeemPointsForCash,
 } from "@/api/endpoints/rewards";
 import type { CatalogReward, RewardHistoryEntry } from "@/api/endpoints/rewards";
 import {
@@ -33,6 +45,13 @@ import {
   pointsAfterRedeem,
   redeemableCatalog,
 } from "@/lib/rewards";
+import {
+  CENTS_PER_POINT,
+  MIN_REDEEM_POINTS,
+  cashCentsForPoints,
+  pointsForCashCents,
+  validatePointsRedemption,
+} from "@/lib/rewardsCash";
 import { tradingRewardsSummary } from "@/lib/tradingRewards";
 import { useFeeTier } from "@/hooks/useFeeTier";
 import { PendingRewards } from "./PendingRewards";
@@ -69,6 +88,10 @@ function BalanceCard({
 export default function RewardsPage() {
   const qc = useQueryClient();
   const [pending, setPending] = useState<CatalogReward | null>(null);
+
+  // DIRECT "convert points to cash" flow state.
+  const [convertInput, setConvertInput] = useState("");
+  const [convertConfirm, setConvertConfirm] = useState<number | null>(null);
 
   const rewardsQ = useQuery({
     queryKey: ["me", "rewards", "summary"],
@@ -119,6 +142,7 @@ export default function RewardsPage() {
       toast.success(`Redeemed. ${formatPoints(res.points_remaining)} remaining.`);
       qc.invalidateQueries({ queryKey: ["me", "rewards"] });
       qc.invalidateQueries({ queryKey: ["ui", "billing", "wallet"] });
+      qc.invalidateQueries({ queryKey: ["billing", "wallet"] });
       setPending(null);
     },
     onError: (err: unknown) => {
@@ -133,15 +157,65 @@ export default function RewardsPage() {
     },
   });
 
+  // DIRECT points-to-cash conversion mutation.
+  const convertMut = useMutation({
+    mutationFn: (pts: number) => redeemPointsForCash(pts),
+    onSuccess: (res) => {
+      toast.success(
+        `Converted to cash. ${formatCents(res.cash_cents)} added to your USD wallet — ${formatPoints(res.points_remaining)} remaining.`,
+      );
+      qc.invalidateQueries({ queryKey: ["me", "rewards"] });
+      qc.invalidateQueries({ queryKey: ["ui", "billing", "wallet"] });
+      qc.invalidateQueries({ queryKey: ["billing", "wallet"] });
+      setConvertConfirm(null);
+      setConvertInput("");
+    },
+    onError: (err: unknown) => {
+      if (is404(err)) {
+        toast.error("Cash conversion is not available yet — the rewards backend has not shipped.");
+      } else if (err instanceof ApiError) {
+        toast.error(err.message || "Could not convert your points to cash.");
+      } else {
+        toast.error("Could not convert your points to cash.");
+      }
+      setConvertConfirm(null);
+    },
+  });
+
   const rewardsPending = is404(rewardsQ.error);
   const historyPending = is404(historyQ.error);
   const catalogPending = is404(catalogQ.error);
+
+  // Parsed convert amount + live validation against the current points balance.
+  const convertPoints = useMemo(() => {
+    const trimmed = convertInput.trim();
+    if (trimmed === "") return Number.NaN;
+    return Number(trimmed);
+  }, [convertInput]);
+  const convertValidation = useMemo(
+    () => validatePointsRedemption(convertPoints, points),
+    [convertPoints, points],
+  );
+  const convertCashCents = Number.isFinite(convertPoints)
+    ? cashCentsForPoints(Math.max(0, Math.trunc(convertPoints)))
+    : 0;
+
+  const setPreset = (cents: number) => {
+    // Preset by target USD; clamp to the caller's available balance.
+    const wanted = pointsForCashCents(cents);
+    setConvertInput(String(Math.min(wanted, points)));
+  };
 
   const confirmDescription = pending
     ? pending.kind === "cash"
       ? `Redeem ${formatPoints(pending.cost_points)} for ${formatCents(pending.value_cents)}? This credits your USD cash wallet. You will have ${formatPoints(pointsAfterRedeem(points, pending.cost_points))} left.`
       : `Redeem ${formatPoints(pending.cost_points)} for "${pending.name}"? You will have ${formatPoints(pointsAfterRedeem(points, pending.cost_points))} left.`
     : "";
+
+  const convertDescription =
+    convertConfirm !== null
+      ? `Redeem ${formatPoints(convertConfirm)} for ${formatCents(cashCentsForPoints(convertConfirm))} to your USD cash wallet? You will have ${formatPoints(pointsAfterRedeem(points, convertConfirm))} left.`
+      : "";
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-4 md:p-6">
@@ -300,6 +374,108 @@ export default function RewardsPage() {
         </CardContent>
       </Card>
 
+      {/* Convert points to cash — DIRECT flexible redemption */}
+      {rewards && !rewardsPending ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <DollarSign className="h-5 w-5" /> Convert points to cash
+            </CardTitle>
+            <CardDescription>
+              {formatPoints(100 / CENTS_PER_POINT, false)} points = {formatCents(100)}. Cash lands
+              in your{" "}
+              <Link
+                to="/custody/cash"
+                className="font-medium text-primary underline-offset-4 hover:underline"
+              >
+                USD cash wallet
+              </Link>
+              . Minimum {formatPoints(MIN_REDEEM_POINTS)} ({formatCents(cashCentsForPoints(MIN_REDEEM_POINTS))}).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[10rem] flex-1">
+                <label htmlFor="convert-points" className="text-xs text-muted-foreground">
+                  Points to convert
+                </label>
+                <Input
+                  id="convert-points"
+                  type="number"
+                  inputMode="numeric"
+                  min={MIN_REDEEM_POINTS}
+                  step={1}
+                  placeholder={String(MIN_REDEEM_POINTS)}
+                  value={convertInput}
+                  onChange={(e) => setConvertInput(e.target.value)}
+                  className="mt-1 tabular-nums"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={points < pointsForCashCents(500)}
+                  onClick={() => setPreset(500)}
+                >
+                  $5
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={points < pointsForCashCents(1000)}
+                  onClick={() => setPreset(1000)}
+                >
+                  $10
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={points < MIN_REDEEM_POINTS}
+                  onClick={() => setConvertInput(String(points))}
+                >
+                  Max
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 rounded-lg border p-4">
+              <div>
+                <p className="text-xs text-muted-foreground">You have</p>
+                <p className="text-lg font-semibold tabular-nums">
+                  {formatPoints(points)}
+                </p>
+              </div>
+              <ArrowRight className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <div className="text-right">
+                <p className="text-xs text-muted-foreground">You&apos;ll receive</p>
+                <p className="text-lg font-semibold tabular-nums text-primary">
+                  {formatCents(convertCashCents)}
+                </p>
+              </div>
+            </div>
+
+            {convertInput.trim() !== "" && !convertValidation.ok ? (
+              <p className="text-sm text-destructive">{convertValidation.reason}</p>
+            ) : null}
+
+            <Button
+              className="w-full sm:w-auto"
+              disabled={!convertValidation.ok || convertMut.isPending}
+              onClick={() => {
+                if (convertValidation.ok) setConvertConfirm(Math.trunc(convertPoints));
+              }}
+            >
+              <DollarSign className="mr-1.5 h-4 w-4" />
+              Convert to cash
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Redeem catalog */}
       <Card>
         <CardHeader>
@@ -437,6 +613,20 @@ export default function RewardsPage() {
         loading={redeemMut.isPending}
         onConfirm={() => {
           if (pending) redeemMut.mutate(pending.id);
+        }}
+      />
+
+      <ConfirmDialog
+        open={convertConfirm !== null}
+        onOpenChange={(o) => {
+          if (!o) setConvertConfirm(null);
+        }}
+        title="Convert points to cash"
+        description={convertDescription}
+        confirmLabel="Convert to cash"
+        loading={convertMut.isPending}
+        onConfirm={() => {
+          if (convertConfirm !== null) convertMut.mutate(convertConfirm);
         }}
       />
     </div>

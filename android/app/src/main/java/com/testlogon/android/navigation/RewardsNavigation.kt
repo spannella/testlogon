@@ -42,6 +42,7 @@ fun NavGraphBuilder.rewardsDestinations(navController: NavHostController) {
         RewardsRoute(
             onBack = { navController.popBackStack() },
             onOpenFeeTiers = { navController.navigate(FeeTiersDest.ROUTE) },
+            onOpenCash = { navController.navigate(CashDest.ROUTE) },
         )
     }
 }
