@@ -83,6 +83,16 @@ interface RewardsApi {
      */
     @GET("me/rewards/expiry")
     suspend fun rewardsExpiry(): RewardsExpiryDto
+
+    /**
+     * OPTIONAL authoritative REWARDS-STATUS / loyalty TIER read: the caller's current status tier
+     * (name + points multiplier in bps + perks), their lifetime points, and the next tier (name +
+     * threshold). This is the loyalty membership ladder driven by LIFETIME points -- DISTINCT from the
+     * maker/taker FEE tiers. Read degrades on 404 -> the client computes the same shape from the rewards
+     * lifetime points against the canonical STATUS_TIERS table, so the surface works before it ships.
+     */
+    @GET("me/rewards/status")
+    suspend fun rewardsStatus(): RewardsStatusDto
 }
 
 // ---- GET me/referral ----
@@ -158,6 +168,24 @@ data class RewardsExpiryLotDto(
     @LenientLong @Json(name = "earned_ts") val earnedTs: Long? = null,
     @LenientLong @Json(name = "points_remaining") val pointsRemaining: Long? = null,
     @LenientLong @Json(name = "expires_ts") val expiresTs: Long? = null,
+)
+
+// ---- GET me/rewards/status (optional authoritative loyalty TIER read) ----
+
+@JsonClass(generateAdapter = true)
+data class RewardsStatusDto(
+    @Json(name = "tier_id") val tierId: String? = null,
+    @Json(name = "name") val name: String? = null,
+    @LenientLong @Json(name = "lifetime_points") val lifetimePoints: Long? = null,
+    @LenientInt @Json(name = "points_multiplier_bps") val pointsMultiplierBps: Int? = null,
+    @Json(name = "next_tier") val nextTier: RewardsStatusNextTierDto? = null,
+    @Json(name = "perks") val perks: List<String> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class RewardsStatusNextTierDto(
+    @Json(name = "name") val name: String? = null,
+    @LenientLong @Json(name = "threshold_points") val thresholdPoints: Long? = null,
 )
 
 // ---- GET me/rewards/history ----

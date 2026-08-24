@@ -79,6 +79,7 @@ fun RewardsRoute(
     onOpenFeeTiers: () -> Unit = {},
     onOpenCash: () -> Unit = {},
     onOpenStatement: () -> Unit = {},
+    onOpenStatusTiers: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: RewardsViewModel = hiltViewModel(),
 ) {
@@ -101,6 +102,7 @@ fun RewardsRoute(
         onOpenFeeTiers = onOpenFeeTiers,
         onOpenCash = onOpenCash,
         onOpenStatement = onOpenStatement,
+        onOpenStatusTiers = onOpenStatusTiers,
         onCashPointsChanged = viewModel::onCashPointsChanged,
         onCashPreset = viewModel::onCashPreset,
         onCashMax = viewModel::onCashMax,
@@ -119,6 +121,7 @@ fun RewardsScreen(
     onOpenFeeTiers: () -> Unit = {},
     onOpenCash: () -> Unit = {},
     onOpenStatement: () -> Unit = {},
+    onOpenStatusTiers: () -> Unit = {},
     onCashPointsChanged: (String) -> Unit = {},
     onCashPreset: (Long) -> Unit = {},
     onCashMax: () -> Unit = {},
@@ -167,6 +170,7 @@ fun RewardsScreen(
                     onOpenFeeTiers = onOpenFeeTiers,
                     onOpenCash = onOpenCash,
                     onOpenStatement = onOpenStatement,
+                    onOpenStatusTiers = onOpenStatusTiers,
                     onCashPointsChanged = onCashPointsChanged,
                     onCashPreset = onCashPreset,
                     onCashMax = onCashMax,
@@ -250,6 +254,7 @@ private fun RewardsContent(
     onOpenFeeTiers: () -> Unit,
     onOpenCash: () -> Unit,
     onOpenStatement: () -> Unit,
+    onOpenStatusTiers: () -> Unit,
     onCashPointsChanged: (String) -> Unit,
     onCashPreset: (Long) -> Unit,
     onCashMax: () -> Unit,
@@ -268,6 +273,10 @@ private fun RewardsContent(
             onClick = onOpenStatement,
             modifier = Modifier.fillMaxWidth().testTag("rewards_open_statement"),
         ) { Text("View statement & expiry") }
+        OutlinedButton(
+            onClick = onOpenStatusTiers,
+            modifier = Modifier.fillMaxWidth().testTag("rewards_open_status_tiers"),
+        ) { Text("Status & tiers") }
         ConvertToCashCard(
             state = state,
             onOpenCash = onOpenCash,

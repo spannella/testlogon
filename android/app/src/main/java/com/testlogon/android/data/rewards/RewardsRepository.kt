@@ -53,6 +53,13 @@ interface RewardsRepository {
      * value so the statement surface falls back to the CLIENT FIFO computation; network errors surface.
      */
     suspend fun rewardsExpiry(): ApiResult<PointsExpiry>
+
+    /**
+     * OPTIONAL authoritative REWARDS-STATUS / loyalty TIER read. A 404 (undeployed) degrades to an
+     * honest unavailable value so the status surface falls back to the CLIENT computation from lifetime
+     * points against the canonical status-tier table; network errors surface.
+     */
+    suspend fun rewardsStatus(): ApiResult<RewardsStatus>
 }
 
 @Singleton
@@ -119,6 +126,12 @@ class RewardsRepositoryImpl @Inject constructor(
     override suspend fun rewardsExpiry(): ApiResult<PointsExpiry> = degrading(
         block = { api.rewardsExpiry().toDomain() },
         onHttpError = { PointsExpiry.unavailable() },
+    )
+
+    /** Rewards status / loyalty tier. A 404 (undeployed) degrades to an honest unavailable value; network errors surface. */
+    override suspend fun rewardsStatus(): ApiResult<RewardsStatus> = degrading(
+        block = { api.rewardsStatus().toDomain() },
+        onHttpError = { RewardsStatus.unavailable() },
     )
 
     /** Read wrapper: HTTP-error (incl. 404) degrades to [onHttpError]; transport -> NetworkError. */

@@ -58,6 +58,7 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material.icons.outlined.Loyalty
+import androidx.compose.material.icons.outlined.WorkspacePremium
 import androidx.compose.material.icons.outlined.Apartment
 import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material.icons.outlined.AdminPanelSettings
@@ -1241,6 +1242,14 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_points_statement,
             icon = Icons.Outlined.ReceiptLong,
             route = MoreRoutes.POINTS_STATEMENT,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "rewards_status_tiers",
+            labelRes = R.string.more_entry_status_tiers,
+            icon = Icons.Outlined.WorkspacePremium,
+            route = MoreRoutes.STATUS_TIERS,
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),

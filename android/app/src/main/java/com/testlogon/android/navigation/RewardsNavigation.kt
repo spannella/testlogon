@@ -7,6 +7,7 @@ import com.testlogon.android.feature.rewards.ReferralHubRoute
 import com.testlogon.android.feature.rewards.PointsStatementRoute
 import com.testlogon.android.feature.rewards.ReferralLeaderboardRoute
 import com.testlogon.android.feature.rewards.RewardsRoute
+import com.testlogon.android.feature.rewards.StatusTierRoute
 
 /**
  * The REFERRALS + REWARDS surfaces (feature/rewards), reached from the More -> Growth hub.
@@ -32,6 +33,10 @@ data object ReferralLeaderboardDest {
     const val ROUTE = "referral_leaderboard"
 }
 
+data object StatusTierDest {
+    const val ROUTE = "rewards_status_tiers"
+}
+
 /** Registers the Referral hub + Rewards screens in the authenticated graph. Up / Back pops the stack. */
 fun NavGraphBuilder.rewardsDestinations(navController: NavHostController) {
     composable(ReferralHubDest.ROUTE) {
@@ -49,9 +54,13 @@ fun NavGraphBuilder.rewardsDestinations(navController: NavHostController) {
             onOpenFeeTiers = { navController.navigate(FeeTiersDest.ROUTE) },
             onOpenCash = { navController.navigate(CashDest.ROUTE) },
             onOpenStatement = { navController.navigate(PointsStatementDest.ROUTE) },
+            onOpenStatusTiers = { navController.navigate(StatusTierDest.ROUTE) },
         )
     }
     composable(PointsStatementDest.ROUTE) {
         PointsStatementRoute(onBack = { navController.popBackStack() })
+    }
+    composable(StatusTierDest.ROUTE) {
+        StatusTierRoute(onBack = { navController.popBackStack() })
     }
 }
