@@ -236,6 +236,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         reportsDestination(navController)
         // Tax lots & realized-gains: read-only client-side FIFO/LIFO/Average cost-basis report + CSV.
         taxReportDestination(navController)
+        // Fee tiers (maker/taker VIP schedule): client-computed 30d volume + tier + progress; authoritative override.
+        feeTiersDestination(navController)
         // AND-336: backend-mediated Google Drive import picker (authenticated-only).
         driveImportDestination(navController)
         // AND-335: owner share sheet (create/list/revoke share links) + the public share screen

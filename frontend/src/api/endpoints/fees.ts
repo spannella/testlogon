@@ -156,3 +156,40 @@ export function describeQuote(q: FeeQuote): QuoteDisplay {
  * this is the default beta set. Trim/extend as the server config evolves.
  */
 export const SUPPORTED_PAY_COINS: PayWith[] = ["USD", "USDC", "BTC", "ETH", "SOL"];
+
+// ============================================================================
+// Maker/taker VIP FEE-TIER by 30-day trading volume (authoritative read).
+//
+// OPTIONAL authoritative read that overrides the client-side estimate computed
+// from the trade-history feed. 404s until the exchange edge exposes it — callers
+// MUST degrade to the client computation (retry:false / catch 404).
+//
+//   GET /me/fees/tier -> FeeTierResponse
+// ============================================================================
+
+export interface FeeTierNext {
+  tier_id: string;
+  name: string;
+  /** 30-day volume (USD cents) required to reach this next tier. */
+  volume_30d_cents: number;
+  maker_bps: number;
+  taker_bps: number;
+}
+
+export interface FeeTierResponse {
+  /** Stable tier id (matches FEE_TIERS[].id in lib/feeTiers.ts). */
+  tier_id: string;
+  name: string;
+  /** The caller's authoritative 30-day rolling volume, USD cents. */
+  volume_30d_cents: number;
+  maker_bps: number;
+  taker_bps: number;
+  /** The next-higher tier, absent when already at the top. */
+  next_tier?: FeeTierNext | null;
+}
+
+/**
+ * The caller's authoritative maker/taker fee tier. 404s until the edge deploys —
+ * callers fall back to the client-side estimate from the fills feed.
+ */
+export const getFeeTier = () => api.get<FeeTierResponse>("/me/fees/tier");

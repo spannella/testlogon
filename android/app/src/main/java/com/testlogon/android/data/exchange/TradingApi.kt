@@ -108,6 +108,13 @@ interface TradingApi {
     suspend fun getFillsFees(): FillsFeesDto
 
     /**
+     * OPTIONAL authoritative maker/taker fee-tier read (30d volume + tier + rates + next tier). 404
+     * until deployed -> the repository folds to null and the screen falls back to the client estimate.
+     */
+    @GET("me/fees/tier")
+    suspend fun getFeeTier(): FeeTierDto
+
+    /**
      * The account's LIVE working (resting) orders straight from the engine (order-management read).
      * Unlike the session-tracked list, this survives app restarts + reflects quote/OTO legs. Parsed
      * defensively ({orders:[{clordid,symbolid,side,price,qty,...}]}); 404/undeployed -> empty feed.

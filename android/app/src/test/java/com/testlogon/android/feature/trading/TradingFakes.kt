@@ -28,6 +28,7 @@ import com.testlogon.android.data.exchange.PriceMap
 import com.testlogon.android.data.exchange.SpotBalance
 import com.testlogon.android.data.exchange.StakeRequestsBrowse
 import com.testlogon.android.data.exchange.Trade
+import com.testlogon.android.data.exchange.FeeTierAuthoritative
 import com.testlogon.android.data.exchange.TradingRepository
 
 /**
@@ -70,6 +71,7 @@ open class FakeTradingRepository : TradingRepository {
     var marginAccountResult: ApiResult<MarginAccount> = ApiResult.Success(MarginAccount(0, 0, 0, 0, null, 0, false, ""))
     var pricesResult: ApiResult<PriceMap> = ApiResult.Success(PriceMap.unavailable())
     var fillsFeesResult: ApiResult<FillsFees> = ApiResult.Success(FillsFees(emptyList(), 0))
+    var feeTierResult: ApiResult<FeeTierAuthoritative?> = ApiResult.Success(null)
     var fundingPaymentsResult: ApiResult<FundingPayments> = ApiResult.Success(FundingPayments(emptyList(), 0))
     var liquidationsResult: ApiResult<Liquidations> = ApiResult.Success(Liquidations(emptyList(), 0))
     var pmResolutionsResult: ApiResult<List<PmResolution>> = ApiResult.Success(emptyList())
@@ -80,6 +82,7 @@ open class FakeTradingRepository : TradingRepository {
     override suspend fun marginAccount(): ApiResult<MarginAccount> = marginAccountResult
     override suspend fun getPrices(): ApiResult<PriceMap> = pricesResult
     override suspend fun fillsFees(): ApiResult<FillsFees> = fillsFeesResult
+    override suspend fun feeTier(): ApiResult<FeeTierAuthoritative?> = feeTierResult
     override suspend fun fundingPayments(): ApiResult<FundingPayments> = fundingPaymentsResult
     override suspend fun liquidations(): ApiResult<Liquidations> = liquidationsResult
     override suspend fun pmResolutions(): ApiResult<List<PmResolution>> = pmResolutionsResult

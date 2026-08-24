@@ -41,4 +41,5 @@ object DashboardTestTags {
     const val TRADING_BAILOUTS = "dashboard_trading_bailouts"
     const val TRADING_CUSTODY_PROVIDERS = "dashboard_trading_custody_providers"
     const val TRADING_TAX_GAINS = "dashboard_trading_tax_gains"
+    const val TRADING_FEE_TIERS = "dashboard_trading_fee_tiers"
 }

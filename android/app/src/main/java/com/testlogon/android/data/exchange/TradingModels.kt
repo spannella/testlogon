@@ -378,6 +378,30 @@ fun FillFeeDto.toDomain(): FillFee = FillFee(
     tsNs = ts ?: 0L,
 )
 
+/**
+ * Authoritative fee-tier read (GET me/fees/tier), mapped to domain. When the backend serves this, the
+ * screen prefers it over the client estimate. [nextTierId] is the id of the tier above (null at top).
+ */
+data class FeeTierAuthoritative(
+    val tierId: String,
+    val name: String,
+    val volume30dCents: Long,
+    val makerBps: Int,
+    val takerBps: Int,
+    val nextTierId: String?,
+    val nextTierMinVolumeCents: Long?,
+)
+
+fun FeeTierDto.toDomain(): FeeTierAuthoritative = FeeTierAuthoritative(
+    tierId = tierId.orEmpty(),
+    name = name.orEmpty(),
+    volume30dCents = volume30dCents ?: 0L,
+    makerBps = makerBps ?: 0,
+    takerBps = takerBps ?: 0,
+    nextTierId = nextTier?.tierId,
+    nextTierMinVolumeCents = nextTier?.minVolumeCents,
+)
+
 fun FillsFeesDto.toDomain(): FillsFees = FillsFees(
     fills = fills.orEmpty().map { it.toDomain() },
     count = count ?: fills.orEmpty().size,
