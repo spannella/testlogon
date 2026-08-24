@@ -939,6 +939,7 @@
     <string name="more_entry_video_review">Video review</string>
     <string name="more_entry_dmca_admin">DMCA claims</string>
     <string name="more_entry_refund_admin">Refund requests</string>
+    <string name="more_entry_rewards_catalog_admin">Rewards catalog</string>
     <string name="more_entry_dispute_admin">Disputes</string>
     <string name="more_entry_appeal_admin">Appeals review</string>
     <string name="more_entry_fraud_admin">Fraud review</string>

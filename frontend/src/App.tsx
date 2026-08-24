@@ -221,6 +221,7 @@ const LicenseRevenuePage = lazy(() => import("@/pages/licenses/LicenseRevenuePag
 const RiskDashboardPage = lazy(() => import("@/pages/admin/RiskDashboardPage"));
 const SecurityDashboardPage = lazy(() => import("@/pages/admin/SecurityDashboardPage"));
 const SubscriptionTierManagerPage = lazy(() => import("@/pages/admin/SubscriptionTierManagerPage"));
+const RewardsCatalogAdminPage = lazy(() => import("@/pages/admin/RewardsCatalogAdminPage"));
 const BillingConfigPage = lazy(() => import("@/pages/admin/BillingConfigPage"));
 const CreatorDashboard = lazy(() => import("@/pages/dashboard/CreatorDashboard"));
 const OrgsPage = lazy(() => import("@/pages/orgs/OrgsPage"));
@@ -941,6 +942,7 @@ export default function App() {
           <Route path="admin/risk" element={<RiskDashboardPage />} />
           <Route path="admin/security" element={<SecurityDashboardPage />} />
           <Route path="admin/subscription-tiers" element={<SubscriptionTierManagerPage />} />
+          <Route path="admin/rewards-catalog" element={<RewardsCatalogAdminPage />} />
           <Route path="admin/billing-config" element={<BillingConfigPage />} />
           <Route path="licenses/requests" element={<LicenseRequestsPage />} />
           <Route path="kyc" element={<KycWizardPage />} />

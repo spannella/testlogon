@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.CandlestickChart
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Copyright
+import androidx.compose.material.icons.outlined.CardGiftcard
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.ManageSearch
 import androidx.compose.material.icons.outlined.Inventory2
@@ -216,6 +217,15 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_refund_admin,
             icon = Icons.Outlined.ReceiptLong,
             route = MoreRoutes.ADMIN_REFUNDS,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
+            id = "rewards_catalog_admin",
+            labelRes = R.string.more_entry_rewards_catalog_admin,
+            icon = Icons.Outlined.CardGiftcard,
+            route = MoreRoutes.ADMIN_REWARDS_CATALOG,
             hub = MoreHub.ADMIN,
             section = MoreSection.SUPPORT,
             operatorOnly = true,

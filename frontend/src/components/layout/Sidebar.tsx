@@ -67,6 +67,7 @@ import {
   Lightbulb,
   Palette,
   Gauge,
+  Gift,
   Receipt,
   Terminal,
   Package,
@@ -303,6 +304,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Security Dashboard", i18nKey: "nav.securityDashboard", path: "/admin/security", icon: <ShieldAlert className="h-5 w-5" /> },
       { label: "Legal Holds", i18nKey: "nav.legalHolds", path: "/admin/legal-holds", icon: <Gavel className="h-5 w-5" /> },
       { label: "Subscription Tiers", i18nKey: "nav.subscriptionTiers", path: "/admin/subscription-tiers", icon: <Layers className="h-5 w-5" /> },
+      { label: "Rewards Catalog", path: "/admin/rewards-catalog", icon: <Gift className="h-5 w-5" /> },
       { label: "Compute", i18nKey: "nav.compute", path: "/admin/compute", icon: <Server className="h-5 w-5" /> },
       { label: "Inventory", i18nKey: "nav.inventory", path: "/admin/inventory", icon: <Boxes className="h-5 w-5" /> },
       { label: "Financials", i18nKey: "nav.financials", path: "/admin/financials", icon: <BarChart3 className="h-5 w-5" /> },
@@ -453,6 +455,7 @@ export default function Sidebar() {
   const showPaymentIncidents = canAccessPaymentIncidentQueue(accessToken);
   const showInventoryAdmin =
     isInventoryReservationsEnabled() && canAccessGeneralAdminControls(accessToken);
+  const showRewardsCatalogAdmin = canAccessGeneralAdminControls(accessToken);
 
   const { data: convoData } = useQuery({
     queryKey: ["conversations"],
@@ -517,6 +520,7 @@ export default function Sidebar() {
             if (item.path === "/admin/ads/fraud") return showModerationBoard;
             if (item.path === "/admin/ad-platform") return showModerationBoard;
             if (item.path === "/admin/bulk-payouts") return showRootRoleManagement;
+            if (item.path === "/admin/rewards-catalog") return showRewardsCatalogAdmin;
             if (item.path === "/admin/inventory") return showInventoryAdmin;
             return true;
           });
