@@ -1688,6 +1688,17 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.ACCOUNT,
         ),
+        // DCA / RECURRING BUYS: schedule recurring buys of a symbol / creator token / strategy fund,
+        // funded from the USD cash wallet. Plan CRUD + schedule preview + history are client-side; the
+        // periodic execution is a server-side runner (reads degrade-on-404 until it ships).
+        MoreEntry(
+            id = "dca",
+            labelRes = R.string.more_entry_dca,
+            icon = Icons.Outlined.Schedule,
+            route = MoreRoutes.DCA,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
         // MARGIN DISTRESS / PRE-EMPTIVE BAILOUT AUCTION: the rescuer opportunity board (BROWSE open
         // bailouts to inject rescue capital for a position-share). The distress overview + per-position
         // auction + auto-bailout setting are reached from here / the margin position surface. All reads

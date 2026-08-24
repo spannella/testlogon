@@ -413,6 +413,11 @@ object MoreRoutes {
     // detail routes reached from there. All reads degrade-on-404 (the me/strategies backend is pending).
     const val STRATEGIES = StrategyMarketDest.ROUTE
 
+    // DCA / RECURRING BUYS: schedule recurring buys of a symbol / creator token / strategy fund, funded
+    // from the USD cash wallet. Plan CRUD + schedule preview + history live client-side; periodic
+    // EXECUTION is a server-side runner (reads degrade-on-404 until it ships).
+    const val DCA = DcaPlansDest.ROUTE
+
     // MARGIN DISTRESS / PRE-EMPTIVE BAILOUT AUCTION: the rescuer opportunity board (the navigable hub
     // BROWSE entry) + the distress overview + auto-bailout account setting. Per-position auction is a
     // detail route reached from those. All reads degrade-on-404 (the margin-distress backend is pending).
@@ -726,6 +731,7 @@ object MoreRoutes {
             INVEST,
             TOKENS,
             STRATEGIES,
+            DCA,
             BAILOUTS,
             MARGIN_DISTRESS,
             BAILOUT_SETTINGS,

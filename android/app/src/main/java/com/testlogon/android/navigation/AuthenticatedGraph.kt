@@ -331,6 +331,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // USER-CREATED STRATEGIES / BASKETS (investable funds): marketplace + builder + detail
         // (invest/redeem at NAV) + paper-run/backtest. Endpoints degrade-on-404 (backend pending).
         strategiesDestinations(navController)
+        // DCA / RECURRING BUYS: plan CRUD + schedule preview + history; execution is a server-side
+        // runner (reads degrade-on-404 until it ships). Funded from the USD cash wallet.
+        dcaDestinations(navController)
         // MARGIN DISTRESS / PRE-EMPTIVE BAILOUT AUCTION: distress overview + rescuer board + per-position
         // auction + auto-bailout setting. Endpoints degrade-on-404 (backend pending); distress never fabricated.
         bailoutDestinations(navController)

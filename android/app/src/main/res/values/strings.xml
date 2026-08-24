@@ -4313,6 +4313,7 @@
     <string name="more_entry_analysis">Analysis</string>
     <string name="more_entry_tokens">Creator Tokens</string>
     <string name="more_entry_strategies">Strategies &amp; Baskets</string>
+    <string name="more_entry_dca">Recurring Buys (DCA)</string>
     <string name="more_entry_bailouts">Bailout Auctions</string>
     <string name="more_entry_trading_alerts">Trading alerts</string>
     <string name="more_entry_activity_center">Activity Center</string>
