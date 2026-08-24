@@ -102,6 +102,38 @@ data class TradingRewards(
     }
 }
 
+/**
+ * OPTIONAL authoritative POINTS-EXPIRY read (GET me/rewards/expiry), mapped to domain. [available] is
+ * false when the read degraded (404 / undeployed) so the surface falls back to the CLIENT computation
+ * (same FIFO shape) from the rewards history. Points are whole integers; timestamps are epoch millis.
+ */
+data class PointsExpiryLot(
+    val earnedTs: Long,
+    val pointsRemaining: Long,
+    val expiresTs: Long,
+)
+
+data class PointsExpiry(
+    val policyMonths: Int,
+    val expiringSoonPoints: Long,
+    val nextExpiryTs: Long,
+    val nextExpiryPoints: Long,
+    val lots: List<PointsExpiryLot>,
+    val available: Boolean,
+) {
+    companion object {
+        /** Honest "unavailable" value for the degrade-on-404 client-compute fallback. */
+        fun unavailable(): PointsExpiry = PointsExpiry(
+            policyMonths = 0,
+            expiringSoonPoints = 0L,
+            nextExpiryTs = 0L,
+            nextExpiryPoints = 0L,
+            lots = emptyList(),
+            available = false,
+        )
+    }
+}
+
 data class RewardsHistoryEntry(
     val ts: Long,
     val type: String,
@@ -189,6 +221,27 @@ internal fun TradingRewardsDto.toDomain(): TradingRewards = TradingRewards(
     volume30dCents = volume30dCents ?: 0L,
     pointsEarned30d = pointsEarned30d ?: 0L,
     lifetimeTradingPoints = lifetimeTradingPoints ?: 0L,
+    available = true,
+)
+
+internal fun RewardsExpiryLotDto.toDomain(): PointsExpiryLot? {
+    val earned = earnedTs ?: return null
+    if (earned <= 0L) return null
+    val remaining = (pointsRemaining ?: 0L).coerceAtLeast(0L)
+    if (remaining <= 0L) return null
+    return PointsExpiryLot(
+        earnedTs = earned,
+        pointsRemaining = remaining,
+        expiresTs = expiresTs ?: 0L,
+    )
+}
+
+internal fun RewardsExpiryDto.toDomain(): PointsExpiry = PointsExpiry(
+    policyMonths = (policyMonths ?: 0).coerceAtLeast(0),
+    expiringSoonPoints = (expiringSoonPoints ?: 0L).coerceAtLeast(0L),
+    nextExpiryTs = nextExpiryTs ?: 0L,
+    nextExpiryPoints = (nextExpiryPoints ?: 0L).coerceAtLeast(0L),
+    lots = lots.mapNotNull { it.toDomain() }.sortedBy { it.expiresTs },
     available = true,
 )
 

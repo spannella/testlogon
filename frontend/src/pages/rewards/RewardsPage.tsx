@@ -8,6 +8,7 @@ import {
   Sparkles,
   Gift,
   Users,
+  ScrollText,
   TrendingUp,
   ArrowRight,
   DollarSign,
@@ -228,11 +229,18 @@ export default function RewardsPage() {
             Earn points from referrals and activity, then redeem for cash or perks.
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link to="/rewards/referrals">
-            <Users className="mr-1.5 h-4 w-4" /> Referrals
-          </Link>
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link to="/rewards/statement">
+              <ScrollText className="mr-1.5 h-4 w-4" /> Statement
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/rewards/referrals">
+              <Users className="mr-1.5 h-4 w-4" /> Referrals
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* Balances */}

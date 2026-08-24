@@ -74,6 +74,15 @@ interface RewardsApi {
      */
     @GET("me/rewards/trading")
     suspend fun tradingRewards(): TradingRewardsDto
+
+    /**
+     * OPTIONAL authoritative POINTS-EXPIRY read: the server-computed expiring-soon total, the next
+     * expiry (ts + points), and the remaining earn LOTS (earned_ts, points_remaining, expires_ts).
+     * Points expire [policy_months] after they are earned. Read degrades on 404 -> the client computes
+     * the same shape FIFO from the rewards history, so the surface still works before the endpoint ships.
+     */
+    @GET("me/rewards/expiry")
+    suspend fun rewardsExpiry(): RewardsExpiryDto
 }
 
 // ---- GET me/referral ----
@@ -131,6 +140,24 @@ data class TradingRewardsDto(
     @LenientLong @Json(name = "volume_30d_cents") val volume30dCents: Long? = null,
     @LenientLong @Json(name = "points_earned_30d") val pointsEarned30d: Long? = null,
     @LenientLong @Json(name = "lifetime_trading_points") val lifetimeTradingPoints: Long? = null,
+)
+
+// ---- GET me/rewards/expiry (optional authoritative) ----
+
+@JsonClass(generateAdapter = true)
+data class RewardsExpiryDto(
+    @LenientInt @Json(name = "policy_months") val policyMonths: Int? = null,
+    @LenientLong @Json(name = "expiring_soon_points") val expiringSoonPoints: Long? = null,
+    @LenientLong @Json(name = "next_expiry_ts") val nextExpiryTs: Long? = null,
+    @LenientLong @Json(name = "next_expiry_points") val nextExpiryPoints: Long? = null,
+    @Json(name = "lots") val lots: List<RewardsExpiryLotDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class RewardsExpiryLotDto(
+    @LenientLong @Json(name = "earned_ts") val earnedTs: Long? = null,
+    @LenientLong @Json(name = "points_remaining") val pointsRemaining: Long? = null,
+    @LenientLong @Json(name = "expires_ts") val expiresTs: Long? = null,
 )
 
 // ---- GET me/rewards/history ----

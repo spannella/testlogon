@@ -78,6 +78,7 @@ fun RewardsRoute(
     onBack: () -> Unit,
     onOpenFeeTiers: () -> Unit = {},
     onOpenCash: () -> Unit = {},
+    onOpenStatement: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: RewardsViewModel = hiltViewModel(),
 ) {
@@ -99,6 +100,7 @@ fun RewardsRoute(
         onRedeem = viewModel::confirmRedeem,
         onOpenFeeTiers = onOpenFeeTiers,
         onOpenCash = onOpenCash,
+        onOpenStatement = onOpenStatement,
         onCashPointsChanged = viewModel::onCashPointsChanged,
         onCashPreset = viewModel::onCashPreset,
         onCashMax = viewModel::onCashMax,
@@ -116,6 +118,7 @@ fun RewardsScreen(
     onRedeem: (CatalogReward) -> Unit,
     onOpenFeeTiers: () -> Unit = {},
     onOpenCash: () -> Unit = {},
+    onOpenStatement: () -> Unit = {},
     onCashPointsChanged: (String) -> Unit = {},
     onCashPreset: (Long) -> Unit = {},
     onCashMax: () -> Unit = {},
@@ -163,6 +166,7 @@ fun RewardsScreen(
                     onRedeemClick = { pendingRedeem = it },
                     onOpenFeeTiers = onOpenFeeTiers,
                     onOpenCash = onOpenCash,
+                    onOpenStatement = onOpenStatement,
                     onCashPointsChanged = onCashPointsChanged,
                     onCashPreset = onCashPreset,
                     onCashMax = onCashMax,
@@ -245,6 +249,7 @@ private fun RewardsContent(
     onRedeemClick: (CatalogReward) -> Unit,
     onOpenFeeTiers: () -> Unit,
     onOpenCash: () -> Unit,
+    onOpenStatement: () -> Unit,
     onCashPointsChanged: (String) -> Unit,
     onCashPreset: (Long) -> Unit,
     onCashMax: () -> Unit,
@@ -259,6 +264,10 @@ private fun RewardsContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         BalanceCard(state)
+        OutlinedButton(
+            onClick = onOpenStatement,
+            modifier = Modifier.fillMaxWidth().testTag("rewards_open_statement"),
+        ) { Text("View statement & expiry") }
         ConvertToCashCard(
             state = state,
             onOpenCash = onOpenCash,
