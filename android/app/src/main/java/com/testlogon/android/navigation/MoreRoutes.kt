@@ -207,6 +207,11 @@ object MoreRoutes {
     // AND-264: referrals dashboard (referral code/link + stats + share/copy + create-code).
     const val REFERRALS = ReferralsDest.ROUTE
 
+    // REFERRALS + REWARDS surface (feature/rewards): refer-&-earn hub (me/referral + list) and the
+    // points/cash rewards screen (me/rewards + history + catalog; POST me/rewards/redeem).
+    const val REFERRAL_HUB = ReferralHubDest.ROUTE
+    const val REWARDS = RewardsDest.ROUTE
+
     // Alerts (system notifications) inbox — mirrors web /alerts.
     const val ALERTS = AlertsDest.ROUTE
 
@@ -654,6 +659,8 @@ object MoreRoutes {
             ENGAGEMENT,
             ANALYTICS_DASHBOARD,
             REFERRALS,
+            REFERRAL_HUB,
+            REWARDS,
             ALERTS,
             MY_CONTENT_REVIEW,
             APPEALS,

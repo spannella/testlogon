@@ -2334,6 +2334,9 @@
 
     <!-- AND-264..267 More hub entries (creator growth tools). -->
     <string name="more_entry_referrals">Referrals</string>
+    <string name="more_entry_referral_hub">Refer &amp; earn</string>
+
+    <string name="more_entry_rewards">Rewards</string>
     <string name="more_entry_affiliates">Affiliates</string>
     <string name="more_entry_promo_codes">Promo codes</string>
     <string name="more_entry_discounts">Affiliate discounts</string>

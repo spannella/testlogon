@@ -1221,6 +1221,22 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
         ),
         MoreEntry(
+            id = "referral_hub",
+            labelRes = R.string.more_entry_referral_hub,
+            icon = Icons.Outlined.GroupAdd,
+            route = MoreRoutes.REFERRAL_HUB,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "rewards",
+            labelRes = R.string.more_entry_rewards,
+            icon = Icons.Outlined.Loyalty,
+            route = MoreRoutes.REWARDS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
             id = "affiliates",
             labelRes = R.string.more_entry_affiliates,
             icon = Icons.Outlined.Hub,
