@@ -64,11 +64,14 @@ object CatalogAdminTestTags {
     const val CREATE = "reward_catalog_admin_create"
     const val FORM_SUBMIT = "reward_catalog_admin_form_submit"
     const val FORM_NAME = "reward_catalog_admin_form_name"
+    const val FORM_SORT = "reward_catalog_admin_form_sort"
+    const val FORM_FEATURED = "reward_catalog_admin_form_featured"
     const val DELETE_CONFIRM = "reward_catalog_admin_delete_confirm"
     fun row(id: String) = "reward_catalog_row_" + id
     fun edit(id: String) = "reward_catalog_edit_" + id
     fun delete(id: String) = "reward_catalog_delete_" + id
     fun toggle(id: String) = "reward_catalog_toggle_" + id
+    fun featured(id: String) = "reward_catalog_featured_" + id
 }
 
 @Composable
@@ -243,11 +246,21 @@ private fun CatalogRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                AssistChip(
-                    onClick = {},
-                    enabled = false,
-                    label = { Text(item.kind ?: "perk") },
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (item.featured == true) {
+                        AssistChip(
+                            onClick = {},
+                            enabled = false,
+                            label = { Text("Featured") },
+                            modifier = Modifier.testTag(CatalogAdminTestTags.featured(item.id.orEmpty())),
+                        )
+                    }
+                    AssistChip(
+                        onClick = {},
+                        enabled = false,
+                        label = { Text(item.kind ?: "perk") },
+                    )
+                }
             }
             item.description?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -258,6 +271,7 @@ private fun CatalogRow(
                 item.redeemedCount?.let {
                     Text("" + it + " redeemed", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                Text("order " + (item.sortOrder ?: 0L), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val limit = item.stockLimit
                 if (limit == null) {
                     Text("Unlimited stock", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -307,13 +321,17 @@ private fun CatalogFormDialog(
     var valueText by remember { mutableStateOf(if (initial.valueCents > 0) initial.valueCents.toString() else "") }
     var kind by remember { mutableStateOf(initial.kind) }
     var active by remember { mutableStateOf(initial.active) }
+    var featured by remember { mutableStateOf(initial.featured) }
     var stockText by remember { mutableStateOf(initial.stockLimit?.toString() ?: "") }
+    var sortText by remember { mutableStateOf(if (initial.sortOrder != 0L) initial.sortOrder.toString() else "") }
 
     val costPoints = costText.trim().toLongOrNull() ?: 0L
     val valueCents = valueText.trim().toLongOrNull() ?: 0L
     // Blank stock field = UNLIMITED (null); any digits = a concrete cap.
     val stockLimit: Long? = stockText.trim().takeIf { it.isNotEmpty() }?.toLongOrNull()
-    val validation = validateCatalogItem(name, costPoints, valueCents, kind, stockLimit)
+    // Blank sort field = 0 (default weight); any digits = an explicit weight.
+    val sortOrder: Long = sortText.trim().toLongOrNull() ?: 0L
+    val validation = validateCatalogItem(name, costPoints, valueCents, kind, stockLimit, sortOrder)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -364,6 +382,18 @@ private fun CatalogFormDialog(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedTextField(
+                    value = sortText,
+                    onValueChange = { sortText = it.filter(Char::isDigit) },
+                    label = { Text("Sort order") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = validation.errorFor("sortOrder") != null,
+                    supportingText = {
+                        val err = validation.errorFor("sortOrder")
+                        if (err != null) Text(err) else Text("Lower shows first; blank = 0")
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag(CatalogAdminTestTags.FORM_SORT),
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CATALOG_KINDS.forEach { k ->
                         FilterChip(
@@ -376,6 +406,14 @@ private fun CatalogFormDialog(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(checked = active, onCheckedChange = { active = it })
                     Text(if (active) "Active" else "Inactive", style = MaterialTheme.typography.labelMedium)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = featured,
+                        onCheckedChange = { featured = it },
+                        modifier = Modifier.testTag(CatalogAdminTestTags.FORM_FEATURED),
+                    )
+                    Text(if (featured) "Featured" else "Not featured", style = MaterialTheme.typography.labelMedium)
                 }
             }
         },
@@ -391,6 +429,8 @@ private fun CatalogFormDialog(
                             kind = kind,
                             active = active,
                             stockLimit = stockLimit,
+                            featured = featured,
+                            sortOrder = sortOrder,
                         )
                     )
                 },

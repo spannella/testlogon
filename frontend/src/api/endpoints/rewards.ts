@@ -87,6 +87,10 @@ export interface CatalogReward {
   stock_limit?: number | null;
   /** How many have been redeemed (drives remaining stock). Absent = 0. */
   redeemed_count?: number;
+  /** Featured items sort first and get a badge. Absent/false = not featured. */
+  featured?: boolean;
+  /** Sort weight (asc) after featured, before name. Absent = 0. */
+  sort_order?: number;
 }
 
 export interface RewardsCatalog {

@@ -63,7 +63,7 @@ class CatalogAdminViewModel @Inject constructor(
         viewModelScope.launch {
             when (val r = repo.list()) {
                 is ApiResult.Success -> {
-                    val items = r.data.rewards
+                    val items = sortAdminCatalog(r.data.rewards)
                     _state.value = if (items.isEmpty()) CatalogAdminUiState.Empty
                     else CatalogAdminUiState.Content(items = items)
                 }
@@ -109,7 +109,7 @@ class CatalogAdminViewModel @Inject constructor(
     private suspend fun reloadAfterMutation(successMsg: String) {
         when (val r = repo.list()) {
             is ApiResult.Success -> {
-                val items = r.data.rewards
+                val items = sortAdminCatalog(r.data.rewards)
                 _state.value = if (items.isEmpty()) CatalogAdminUiState.Empty
                 else CatalogAdminUiState.Content(items = items, message = successMsg)
             }
@@ -150,6 +150,17 @@ class CatalogAdminViewModel @Inject constructor(
     }
 }
 
+/**
+ * Order the ADMIN catalog list the SAME way members see it (RewardsMath.sortCatalog): FEATURED first,
+ * then sort_order ascending (missing = 0), then name (case-insensitive) ascending. Pure + stable.
+ */
+internal fun sortAdminCatalog(items: List<AdminCatalogItemDto>): List<AdminCatalogItemDto> =
+    items.sortedWith(
+        compareByDescending<AdminCatalogItemDto> { it.featured == true }
+            .thenBy { it.sortOrder ?: 0L }
+            .thenBy { (it.name ?: "").trim().lowercase() },
+    )
+
 /** Map an editable draft to the create/update request body. */
 internal fun CatalogDraft.toReq(): AdminCatalogItemReq = AdminCatalogItemReq(
     name = name.trim(),
@@ -159,6 +170,8 @@ internal fun CatalogDraft.toReq(): AdminCatalogItemReq = AdminCatalogItemReq(
     kind = kind.trim().lowercase(),
     active = active,
     stockLimit = stockLimit,
+    featured = featured,
+    sortOrder = sortOrder.coerceAtLeast(0L),
 )
 
 /** Seed an editable draft from an existing catalog item (for the EDIT form). */
@@ -170,4 +183,6 @@ internal fun AdminCatalogItemDto.toDraft(): CatalogDraft = CatalogDraft(
     kind = (kind ?: "perk").trim().lowercase().let { if (it in CATALOG_KINDS) it else "perk" },
     active = active ?: false,
     stockLimit = stockLimit?.coerceAtLeast(0L),
+    featured = featured == true,
+    sortOrder = (sortOrder ?: 0L).coerceAtLeast(0L),
 )

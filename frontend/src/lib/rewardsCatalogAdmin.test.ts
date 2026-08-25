@@ -78,6 +78,22 @@ describe("validateCatalogItem", () => {
     expect(validateCatalogItem({ ...valid, stock_limit: 3.5 }).errors.stock_limit).toBeDefined();
     expect(validateCatalogItem({ ...valid, stock_limit: NaN }).ok).toBe(false);
   });
+
+  it("treats a blank/undefined sort_order as valid (default 0)", () => {
+    expect(validateCatalogItem({ ...valid }).ok).toBe(true);
+    expect(validateCatalogItem({ ...valid, sort_order: undefined }).ok).toBe(true);
+  });
+
+  it("accepts a whole-number sort_order >= 0", () => {
+    expect(validateCatalogItem({ ...valid, sort_order: 0 }).ok).toBe(true);
+    expect(validateCatalogItem({ ...valid, sort_order: 42 }).ok).toBe(true);
+  });
+
+  it("rejects a negative or non-integer sort_order", () => {
+    expect(validateCatalogItem({ ...valid, sort_order: -1 }).errors.sort_order).toBeDefined();
+    expect(validateCatalogItem({ ...valid, sort_order: 2.5 }).errors.sort_order).toBeDefined();
+    expect(validateCatalogItem({ ...valid, sort_order: NaN }).ok).toBe(false);
+  });
 });
 
 
@@ -92,6 +108,8 @@ describe("emptyDraft", () => {
       kind: "perk",
       active: true,
       stock_limit: null,
+      featured: false,
+      sort_order: 0,
     });
     expect(validateCatalogItem(d).ok).toBe(false);
   });

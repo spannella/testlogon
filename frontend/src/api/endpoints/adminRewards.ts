@@ -28,6 +28,10 @@ export interface AdminCatalogItem {
   redeemed_count?: number;
   /** Optional inventory cap. null/absent = UNLIMITED (back-compat default). */
   stock_limit?: number | null;
+  /** Featured items sort first + get a badge for users. Absent/false = no. */
+  featured?: boolean;
+  /** Sort weight (asc) after featured, before name. Absent = 0. */
+  sort_order?: number;
 }
 
 export interface AdminCatalogList {
@@ -44,6 +48,10 @@ export interface AdminCatalogInput {
   active: boolean;
   /** Optional inventory cap. null = UNLIMITED (blank field in the form). */
   stock_limit?: number | null;
+  /** Featured items sort first + get a badge for users. Default false. */
+  featured?: boolean;
+  /** Sort weight (asc) after featured, before name. Default 0. */
+  sort_order?: number;
 }
 
 // ── Read (degrade on 404 — caller uses retry:false) ──────────────────

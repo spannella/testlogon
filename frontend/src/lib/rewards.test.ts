@@ -13,6 +13,7 @@ import {
   referralShareText,
   referralStatusCounts,
   remainingStock,
+  sortCatalog,
   stockLabel,
 } from "@/lib/rewards";
 
@@ -36,6 +37,8 @@ function reward(partial: Partial<CatalogReward>): CatalogReward {
     kind: partial.kind ?? "cash",
     stock_limit: partial.stock_limit,
     redeemed_count: partial.redeemed_count,
+    featured: partial.featured,
+    sort_order: partial.sort_order,
   };
 }
 
@@ -203,5 +206,76 @@ describe("referralShareText", () => {
     expect(referralShareText("", "https://x.test")).toContain("https://x.test");
     expect(referralShareText("ABC", "")).toContain("ABC");
     expect(referralShareText("", "")).toBe("Join me here!");
+  });
+});
+
+
+describe("sortCatalog", () => {
+  it("puts featured items before non-featured", () => {
+    const a = reward({ id: "a", name: "Zed", featured: false });
+    const b = reward({ id: "b", name: "Apple", featured: true });
+    const out = sortCatalog([a, b]);
+    expect(out.map((r) => r.id)).toEqual(["b", "a"]);
+  });
+
+  it("orders by sort_order ascending within the same featured group", () => {
+    const a = reward({ id: "a", name: "A", sort_order: 5 });
+    const b = reward({ id: "b", name: "B", sort_order: 1 });
+    const c = reward({ id: "c", name: "C", sort_order: 3 });
+    expect(sortCatalog([a, b, c]).map((r) => r.id)).toEqual(["b", "c", "a"]);
+  });
+
+  it("treats missing/non-finite sort_order as 0", () => {
+    const a = reward({ id: "a", name: "A", sort_order: 2 });
+    const b = reward({ id: "b", name: "B" }); // undefined -> 0
+    expect(sortCatalog([a, b]).map((r) => r.id)).toEqual(["b", "a"]);
+  });
+
+  it("breaks sort_order ties by name ascending (case-insensitive)", () => {
+    const a = reward({ id: "a", name: "banana", sort_order: 0 });
+    const b = reward({ id: "b", name: "Apple", sort_order: 0 });
+    expect(sortCatalog([a, b]).map((r) => r.id)).toEqual(["b", "a"]);
+  });
+
+  it("is STABLE for fully-equal keys (preserves input order)", () => {
+    const a = reward({ id: "a", name: "Same" });
+    const b = reward({ id: "b", name: "Same" });
+    const c = reward({ id: "c", name: "Same" });
+    expect(sortCatalog([a, b, c]).map((r) => r.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("applies the full precedence: featured, then sort_order, then name", () => {
+    const items = [
+      reward({ id: "n1", name: "Beta", featured: false, sort_order: 1 }),
+      reward({ id: "f2", name: "Zeta", featured: true, sort_order: 2 }),
+      reward({ id: "f1", name: "Alpha", featured: true, sort_order: 2 }),
+      reward({ id: "n2", name: "Alpha", featured: false, sort_order: 0 }),
+    ];
+    // featured group (sort_order 2 tie -> name): f1(Alpha), f2(Zeta);
+    // then non-featured by sort_order: n2(0), n1(1)
+    expect(sortCatalog(items).map((r) => r.id)).toEqual(["f1", "f2", "n2", "n1"]);
+  });
+
+  it("is PURE — does not mutate the input array", () => {
+    const items = [
+      reward({ id: "a", name: "Z", featured: false }),
+      reward({ id: "b", name: "A", featured: true }),
+    ];
+    const copy = [...items];
+    const out = sortCatalog(items);
+    expect(items).toEqual(copy); // input order untouched
+    expect(out).not.toBe(items); // new array
+  });
+
+  it("returns [] for a non-array input", () => {
+    // @ts-expect-error exercising the defensive guard
+    expect(sortCatalog(undefined)).toEqual([]);
+  });
+
+  it("preserves current order for back-compat (all flags absent)", () => {
+    const a = reward({ id: "a", name: "B" });
+    const b = reward({ id: "b", name: "A" });
+    // no featured/sort_order -> tie broken by name (A before B)
+    expect(sortCatalog([a, b]).map((r) => r.id)).toEqual(["b", "a"]);
   });
 });

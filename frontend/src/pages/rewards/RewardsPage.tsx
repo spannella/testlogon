@@ -13,6 +13,7 @@ import {
   TrendingUp,
   ArrowRight,
   DollarSign,
+  Star,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -48,6 +49,7 @@ import {
   pointsAfterRedeem,
   redeemableCatalog,
   remainingStock,
+  sortCatalog,
   stockLabel,
 } from "@/lib/rewards";
 import {
@@ -125,7 +127,7 @@ export default function RewardsPage() {
   const rewards = rewardsQ.data;
   const points = rewards?.points ?? 0;
   const history: RewardHistoryEntry[] = historyQ.data?.entries ?? [];
-  const catalog = redeemableCatalog(catalogQ.data?.rewards ?? [], points);
+  const catalog = redeemableCatalog(sortCatalog(catalogQ.data?.rewards ?? []), points);
 
   // Prefer the authoritative /me/rewards/trading read; else estimate from
   // the caller’s own 30-day trade volume. Never throws, degrades gracefully.
@@ -527,7 +529,9 @@ export default function RewardsPage() {
                 return (
                 <div
                   key={r.id}
-                  className="flex flex-col justify-between gap-3 rounded-lg border p-4"
+                  className={`flex flex-col justify-between gap-3 rounded-lg border p-4${
+                    r.featured ? " border-primary/50 bg-primary/5" : ""
+                  }`}
                 >
                   <div>
                     <div className="flex items-center justify-between gap-2">
@@ -536,6 +540,11 @@ export default function RewardsPage() {
                         {r.kind === "cash" ? "Cash" : "Perk"}
                       </Badge>
                     </div>
+                    {r.featured ? (
+                      <Badge className="mt-1 gap-1">
+                        <Star className="h-3 w-3 fill-current" /> Featured
+                      </Badge>
+                    ) : null}
                     <p className="mt-1 text-sm text-muted-foreground">{r.description}</p>
                     {remaining !== null ? (
                       <Badge

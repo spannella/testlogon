@@ -24,15 +24,20 @@ class RewardsMathTest {
         kind: RewardKind = RewardKind.PERK,
         stockLimit: Long? = null,
         redeemedCount: Long = 0L,
+        featured: Boolean = false,
+        sortOrder: Long = 0L,
+        name: String = id,
     ) = CatalogReward(
         id = id,
-        name = id,
+        name = name,
         description = "",
         costPoints = cost,
         valueCents = valueCents,
         kind = kind,
         stockLimit = stockLimit,
         redeemedCount = redeemedCount,
+        featured = featured,
+        sortOrder = sortOrder,
     )
 
     private fun ref(id: String, status: ReferralStatus, rewardCents: Long) =
@@ -154,6 +159,72 @@ class RewardsMathTest {
     fun redeemableCatalog_keepsAffordableLimitedButInStock() {
         val catalog = listOf(reward("a", 100, stockLimit = 5, redeemedCount = 4))
         assertEquals(listOf("a"), RewardsMath.redeemableCatalog(catalog, 500).map { it.id })
+    }
+
+    // ---- catalog ordering (featured-first) ----
+
+    @Test
+    fun sortCatalog_featuredComeFirst() {
+        val catalog = listOf(
+            reward("plain", 100),
+            reward("star", 100, featured = true),
+        )
+        assertEquals(listOf("star", "plain"), RewardsMath.sortCatalog(catalog).map { it.id })
+    }
+
+    @Test
+    fun sortCatalog_withinGroupBySortOrderAsc() {
+        val catalog = listOf(
+            reward("c", 100, sortOrder = 30),
+            reward("a", 100, sortOrder = 10),
+            reward("b", 100, sortOrder = 20),
+        )
+        assertEquals(listOf("a", "b", "c"), RewardsMath.sortCatalog(catalog).map { it.id })
+    }
+
+    @Test
+    fun sortCatalog_missingSortOrderTreatedAsZeroThenName() {
+        // Both default to sort_order 0, so they fall back to case-insensitive name order.
+        val catalog = listOf(
+            reward("z", 100, name = "Zephyr"),
+            reward("a", 100, name = "apple"),
+        )
+        assertEquals(listOf("a", "z"), RewardsMath.sortCatalog(catalog).map { it.id })
+    }
+
+    @Test
+    fun sortCatalog_featuredBeatsLowerSortOrder() {
+        val catalog = listOf(
+            reward("cheapOrder", 100, sortOrder = 0),
+            reward("featuredHighOrder", 100, sortOrder = 999, featured = true),
+        )
+        assertEquals(
+            listOf("featuredHighOrder", "cheapOrder"),
+            RewardsMath.sortCatalog(catalog).map { it.id },
+        )
+    }
+
+    @Test
+    fun sortCatalog_featuredGroupOrderedBySortThenName() {
+        val catalog = listOf(
+            reward("f2", 100, featured = true, sortOrder = 5, name = "Bravo"),
+            reward("f1", 100, featured = true, sortOrder = 5, name = "Alpha"),
+            reward("f0", 100, featured = true, sortOrder = 1, name = "Zulu"),
+        )
+        assertEquals(listOf("f0", "f1", "f2"), RewardsMath.sortCatalog(catalog).map { it.id })
+    }
+
+    @Test
+    fun sortCatalog_isPureDoesNotMutateInput() {
+        val original = listOf(reward("plain", 100), reward("star", 100, featured = true))
+        val snapshot = original.map { it.id }
+        RewardsMath.sortCatalog(original)
+        assertEquals(snapshot, original.map { it.id })
+    }
+
+    @Test
+    fun sortCatalog_emptyIsEmpty() {
+        assertTrue(RewardsMath.sortCatalog(emptyList()).isEmpty())
     }
 
     // ---- referral counting ----

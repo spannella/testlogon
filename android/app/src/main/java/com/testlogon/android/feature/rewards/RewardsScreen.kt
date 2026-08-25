@@ -62,6 +62,7 @@ object RewardsTestTags {
     const val ERROR = "rewards_error"
     const val COMING_SOON = "rewards_coming_soon"
     const val REDEEM_PREFIX = "rewards_redeem_"
+    const val FEATURED_PREFIX = "rewards_featured_"
     const val REDEEM_CONFIRM = "rewards_redeem_confirm"
     const val TRADING = "rewards_trading_card"
     const val TRADING_CTA = "rewards_trading_cta"
@@ -460,7 +461,7 @@ private fun CatalogCard(
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Redeem points", style = MaterialTheme.typography.titleMedium)
-            state.catalog.forEachIndexed { i, reward ->
+            RewardsMath.sortCatalog(state.catalog).forEachIndexed { i, reward ->
                 if (i > 0) Divider()
                 val affordable = RewardsMath.canRedeem(reward, state.points)
                 val outOfStock = RewardsMath.isOutOfStock(reward)
@@ -473,6 +474,14 @@ private fun CatalogCard(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(reward.name, style = MaterialTheme.typography.bodyLarge)
+                            if (reward.featured) {
+                                AssistChip(
+                                    onClick = {},
+                                    enabled = false,
+                                    label = { Text("Featured") },
+                                    modifier = Modifier.testTag(RewardsTestTags.FEATURED_PREFIX + reward.id),
+                                )
+                            }
                             if (RewardsMath.isCashReward(reward)) {
                                 AssistChip(onClick = {}, label = { Text("Cash") })
                             }

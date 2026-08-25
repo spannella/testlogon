@@ -126,6 +126,54 @@ class CatalogAdminValidationTest {
         assertNotNullError(r, "stockLimit")
     }
 
+    @Test
+    fun sortOrder_absentDefaultsOk() {
+        val r = validateCatalogItem(name = "Perk", costPoints = 100, valueCents = 0, kind = "perk", sortOrder = null)
+        assertTrue(r.ok)
+        assertNull(r.errorFor("sortOrder"))
+    }
+
+    @Test
+    fun sortOrder_zeroIsValid() {
+        val r = validateCatalogItem(name = "Perk", costPoints = 100, valueCents = 0, kind = "perk", sortOrder = 0)
+        assertTrue(r.ok)
+    }
+
+    @Test
+    fun sortOrder_positiveIsValid() {
+        val r = validateCatalogItem(name = "Perk", costPoints = 100, valueCents = 0, kind = "perk", sortOrder = 42)
+        assertTrue(r.ok)
+    }
+
+    @Test
+    fun sortOrder_negativeIsError() {
+        val r = validateCatalogItem(name = "Perk", costPoints = 100, valueCents = 0, kind = "perk", sortOrder = -1)
+        assertFalse(r.ok)
+        assertNotNullError(r, "sortOrder")
+    }
+
+    @Test
+    fun emptyDraft_featuredFalseAndSortZero() {
+        val d = emptyDraft()
+        assertFalse(d.featured)
+        assertEquals(0L, d.sortOrder)
+    }
+
+    @Test
+    fun draftOverload_carriesSortOrder_negativeIsError() {
+        val d = CatalogDraft(name = "X", costPoints = 10, valueCents = 0, kind = "perk", active = true, sortOrder = -3)
+        val r = validateCatalogItem(d)
+        assertFalse(r.ok)
+        assertNotNullError(r, "sortOrder")
+    }
+
+    @Test
+    fun draftOverload_featuredDraftWithValidSortIsOk() {
+        val d = CatalogDraft(name = "X", costPoints = 10, valueCents = 0, kind = "perk", active = true, featured = true, sortOrder = 5)
+        assertTrue(validateCatalogItem(d).ok)
+        assertTrue(d.featured)
+    }
+
     private fun assertNotNullError(r: CatalogValidationResult, field: String) {
         assertTrue("expected error for \$field", r.errorFor(field) != null)
     }

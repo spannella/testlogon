@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Gift, Plus } from "lucide-react";
+import { Gift, Plus, Star } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/PageHeader";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -52,7 +52,7 @@ import {
   formatPoints,
   formatCents,
 } from "@/lib/rewardsCatalogAdmin";
-import { remainingStock } from "@/lib/rewards";
+import { remainingStock, sortCatalog } from "@/lib/rewards";
 
 function is404(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
@@ -87,6 +87,8 @@ function CatalogItemDialog({
               kind: item.kind,
               active: item.active,
               stock_limit: item.stock_limit ?? null,
+              featured: item.featured ?? false,
+              sort_order: item.sort_order ?? 0,
             }
           : emptyDraft(),
       );
@@ -227,6 +229,42 @@ function CatalogItemDialog({
               <p className="text-sm text-destructive">{errors.stock_limit}</p>
             )}
           </div>
+
+          <div className="grid grid-cols-2 items-start gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="rc-sort">Sort order</Label>
+              <Input
+                id="rc-sort"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                step={1}
+                value={draft.sort_order ? String(draft.sort_order) : ""}
+                onChange={(e) => set("sort_order", intFromInput(e.target.value))}
+                placeholder="0"
+              />
+              <p className="text-xs text-muted-foreground">
+                Lower shows first (after featured).
+              </p>
+              {errors.sort_order && (
+                <p className="text-sm text-destructive">{errors.sort_order}</p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="rc-featured">Featured</Label>
+              <div className="flex h-10 items-center gap-2">
+                <Switch
+                  id="rc-featured"
+                  checked={!!draft.featured}
+                  onCheckedChange={(v) => set("featured", v)}
+                />
+                <span className="text-sm text-muted-foreground">
+                  {draft.featured ? "Shown first with a badge" : "Not featured"}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
 
         <DialogFooter>
@@ -308,6 +346,8 @@ export default function RewardsCatalogAdminPage() {
         kind: item.kind,
         active: !item.active,
         stock_limit: item.stock_limit ?? null,
+        featured: item.featured ?? false,
+        sort_order: item.sort_order ?? 0,
       },
     });
 
@@ -316,7 +356,10 @@ export default function RewardsCatalogAdminPage() {
     else createMut.mutate(data);
   };
 
-  const items = useMemo(() => catalogQ.data?.rewards ?? [], [catalogQ.data]);
+  const items = useMemo(
+    () => sortCatalog(catalogQ.data?.rewards ?? []),
+    [catalogQ.data],
+  );
   const notAvailable = is404(catalogQ.error);
 
   if (!canAccess) {
@@ -376,6 +419,7 @@ export default function RewardsCatalogAdminPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead className="text-right">Order</TableHead>
                 <TableHead>Cost</TableHead>
                 <TableHead>Value</TableHead>
                 <TableHead>Kind</TableHead>
@@ -389,12 +433,22 @@ export default function RewardsCatalogAdminPage() {
               {items.map((item) => (
                 <TableRow key={item.id} className={item.active ? "" : "opacity-60"}>
                   <TableCell>
-                    <div className="font-medium">{item.name}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium">{item.name}</span>
+                      {item.featured ? (
+                        <Badge className="gap-1 px-1.5 py-0">
+                          <Star className="h-3 w-3 fill-current" /> Featured
+                        </Badge>
+                      ) : null}
+                    </div>
                     {item.description && (
                       <div className="text-xs text-muted-foreground line-clamp-2">
                         {item.description}
                       </div>
                     )}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {item.sort_order ?? 0}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
                     {formatPoints(item.cost_points)}
