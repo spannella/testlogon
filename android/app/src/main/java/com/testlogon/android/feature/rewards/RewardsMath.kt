@@ -84,6 +84,21 @@ object RewardsMath {
     fun lockedCatalog(catalog: List<CatalogReward>, points: Long): List<CatalogReward> =
         catalog.filter { !canRedeem(it, points) }
 
+    // ---- Catalog ordering (featured-first) ----
+
+    /**
+     * Canonical display order for the redeemable catalog: FEATURED items first, then by [CatalogReward.sortOrder]
+     * ascending (missing = 0), then by name (case-insensitive) ascending. STABLE + PURE (returns a new list,
+     * never mutates the input). Back-compat: when nothing is featured and all sort_orders are 0 this degrades to
+     * a plain name sort, which is a harmless re-order of the existing catalog.
+     */
+    fun sortCatalog(catalog: List<CatalogReward>): List<CatalogReward> =
+        catalog.sortedWith(
+            compareByDescending<CatalogReward> { it.featured }
+                .thenBy { it.sortOrder }
+                .thenBy { it.name.trim().lowercase() },
+        )
+
     /** Points still needed to afford [reward] (0 when already affordable). */
     fun pointsNeeded(reward: CatalogReward, points: Long): Long =
         (reward.costPoints - points).coerceAtLeast(0L)

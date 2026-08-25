@@ -34,6 +34,10 @@ data class CatalogDraft(
     val active: Boolean = true,
     /** Optional inventory cap; null = UNLIMITED (blank field). */
     val stockLimit: Long? = null,
+    /** Featured flag; featured items sort first + get a badge. Default false. */
+    val featured: Boolean = false,
+    /** Optional sort weight; lower sorts first (integer >= 0). Default 0. */
+    val sortOrder: Long = 0L,
 )
 
 /** A blank draft for the CREATE form (a sensible default kind + active). */
@@ -49,6 +53,7 @@ fun validateCatalogItem(
     valueCents: Long,
     kind: String,
     stockLimit: Long? = null,
+    sortOrder: Long? = null,
 ): CatalogValidationResult {
     val errors = LinkedHashMap<String, String>()
 
@@ -67,6 +72,11 @@ fun validateCatalogItem(
         errors["stockLimit"] = "Stock limit cannot be negative"
     }
 
+    // Sort order is OPTIONAL (absent -> 0); when present it must be a non-negative integer.
+    if (sortOrder != null && sortOrder < 0L) {
+        errors["sortOrder"] = "Sort order cannot be negative"
+    }
+
     val normalizedKind = kind.trim().lowercase()
     if (normalizedKind !in CATALOG_KINDS) {
         errors["kind"] = "Kind must be cash or perk"
@@ -80,4 +90,4 @@ fun validateCatalogItem(
 
 /** Convenience overload validating a whole [CatalogDraft]. */
 fun validateCatalogItem(draft: CatalogDraft): CatalogValidationResult =
-    validateCatalogItem(draft.name, draft.costPoints, draft.valueCents, draft.kind, draft.stockLimit)
+    validateCatalogItem(draft.name, draft.costPoints, draft.valueCents, draft.kind, draft.stockLimit, draft.sortOrder)

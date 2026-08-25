@@ -154,6 +154,10 @@ data class CatalogReward(
     val stockLimit: Long? = null,
     /** How many have been redeemed so far (server-authoritative); defaults 0. */
     val redeemedCount: Long = 0L,
+    /** Optional operator "featured" flag; featured items sort first + get a badge. Default false. */
+    val featured: Boolean = false,
+    /** Optional operator sort weight; lower sorts first (missing/absent = 0). Default 0. */
+    val sortOrder: Long = 0L,
 )
 
 /** Result of POST me/rewards/redeem (mutation). ok=true when the server accepted the redemption. */
@@ -283,6 +287,8 @@ internal fun CatalogRewardDto.toDomain(): CatalogReward? {
         kind = kind.toRewardKind(),
         stockLimit = stockLimit?.coerceAtLeast(0L),
         redeemedCount = (redeemedCount ?: 0L).coerceAtLeast(0L),
+        featured = featured == true,
+        sortOrder = sortOrder ?: 0L,
     )
 }
 

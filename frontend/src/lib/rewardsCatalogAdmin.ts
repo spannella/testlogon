@@ -13,11 +13,13 @@ export interface CatalogItemValidatable {
   kind: RewardKind;
   /** Optional inventory cap. null/undefined = unlimited (valid). */
   stock_limit?: number | null;
+  /** Optional display order (>= 0). undefined = default 0 (valid). */
+  sort_order?: number;
 }
 
 export interface ValidationResult {
   ok: boolean;
-  errors: Partial<Record<"name" | "cost_points" | "value_cents" | "kind" | "stock_limit", string>>;
+  errors: Partial<Record<"name" | "cost_points" | "value_cents" | "kind" | "stock_limit" | "sort_order", string>>;
 }
 
 const REWARD_KINDS: readonly RewardKind[] = ["cash", "perk"];
@@ -71,6 +73,14 @@ export function validateCatalogItem(item: CatalogItemValidatable): ValidationRes
     }
   }
 
+  // sort_order is OPTIONAL: undefined = default 0 (valid). When present it must
+  // be a whole number >= 0.
+  if (item.sort_order !== undefined && item.sort_order !== null) {
+    if (!isNonNegativeInt(item.sort_order)) {
+      errors.sort_order = "Sort order must be a whole number (0 or more).";
+    }
+  }
+
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
@@ -84,5 +94,7 @@ export function emptyDraft(): AdminCatalogInput {
     kind: "perk",
     active: true,
     stock_limit: null,
+    featured: false,
+    sort_order: 0,
   };
 }

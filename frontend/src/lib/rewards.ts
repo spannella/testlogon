@@ -97,6 +97,38 @@ export function stockLabel(item: {
   return `${n} left`;
 }
 
+/**
+ * Order a catalog for display: FEATURED first (true before false), then
+ * `sort_order` ascending (missing/non-finite = 0), then `name` ascending
+ * (case-insensitive). STABLE and PURE — returns a NEW array, never mutates the
+ * input; equal keys preserve original relative order (so absent featured/
+ * sort_order preserves the current order for ties).
+ */
+export function sortCatalog<T extends {
+  name?: string;
+  featured?: boolean;
+  sort_order?: number;
+}>(items: T[]): T[] {
+  if (!Array.isArray(items)) return [];
+  const weight = (n: unknown): number => (Number.isFinite(n) ? (n as number) : 0);
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const fa = a.item?.featured ? 1 : 0;
+      const fb = b.item?.featured ? 1 : 0;
+      if (fa !== fb) return fb - fa; // featured (1) before non-featured (0)
+      const sa = weight(a.item?.sort_order);
+      const sb = weight(b.item?.sort_order);
+      if (sa !== sb) return sa - sb; // sort_order ascending
+      const na = (a.item?.name ?? "").toString();
+      const nb = (b.item?.name ?? "").toString();
+      const byName = na.localeCompare(nb, undefined, { sensitivity: "base" });
+      if (byName !== 0) return byName; // name ascending
+      return a.index - b.index; // STABLE fallback
+    })
+    .map((w) => w.item);
+}
+
 /** Annotate each catalog reward with an `affordable` flag for the given points. */
 export function redeemableCatalog(
   catalog: CatalogReward[],
