@@ -59,7 +59,9 @@ import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
 import { MarketCard } from "./MarketCard";
 import { PositionCard } from "./PositionCard";
+import { CryptoTransferCard } from "./CryptoTransferCard";
 import type { PositionCardPayload } from "@/lib/tradingCards";
+import type { CryptoTransferPayload, TransferStatus } from "@/lib/cryptoTransfer";
 import { WaveformPlayer } from "./WaveformPlayer";
 import { VoicemailBubble } from "./VoicemailBubble";
 import { TranscriptControl } from "./TranscriptControl";
@@ -201,6 +203,8 @@ function replyPreviewText(msg: Message): string {
   if (msg.kind === "find_datetime") return "[Find a Time]";
   if (msg.kind === "market_card") return `[Market: ${msg.symbol ?? ""}]`;
   if (msg.kind === "position_card") return `[Position: ${msg.symbol ?? ""}]`;
+  if (msg.kind === "crypto_transfer")
+    return `[Crypto: ${[msg.amount, msg.asset].filter(Boolean).join(" ")}]`;
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -1947,6 +1951,27 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 price_scaler: message.price_scaler ?? undefined,
               } satisfies PositionCardPayload}
               ownerName={isOwn ? "You" : senderLabel(message.sender_id)}
+            />
+          )}
+
+          {/* ── Crypto transfer card (FE-111) ── */}
+          {message.kind === "crypto_transfer" && message.asset != null && message.amount != null && (
+            <CryptoTransferCard
+              sent={isOwn}
+              counterpartyName={
+                isOwn
+                  ? message.to ?? undefined
+                  : message.from ?? senderLabel(message.sender_id)
+              }
+              payload={{
+                asset: message.asset,
+                amount: String(message.amount),
+                decimals: message.decimals ?? 18,
+                to: message.to ?? undefined,
+                from: message.from ?? undefined,
+                fiat_cents: message.fiat_cents ?? undefined,
+                status: (message.status as TransferStatus) ?? "pending",
+              } satisfies CryptoTransferPayload}
             />
           )}
 

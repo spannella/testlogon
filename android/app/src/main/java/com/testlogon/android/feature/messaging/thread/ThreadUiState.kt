@@ -88,6 +88,8 @@ data class ThreadUiState(
     val marketPicker: MarketPickerState = MarketPickerState(),
     /** FE-102 — "Share position" picker + disclosure sheet (hidden until opened). */
     val positionPicker: PositionPickerState = PositionPickerState(),
+    /** FE-110 (EPIC B) — "Send crypto" composer sheet (asset + amount + confirm; hidden until opened). */
+    val cryptoSend: CryptoSendState = CryptoSendState(),
     /** MSG — receiver passphrase-unlock dialog for an encrypted message (non-null key = open). */
     val encryptUnlock: EncryptUnlockState = EncryptUnlockState(),
     /** MSG — view-once viewer dialog (non-null key = open, showing the consumed content). */
@@ -246,6 +248,37 @@ data class PositionPickerState(
     val positions: List<OpenPositionPick> = emptyList(),
     val error: String? = null,
 )
+
+/** FE-110 — one selectable custody asset in the "Send crypto" composer (symbol + spendable balance). */
+data class CryptoAssetOption(
+    val symbol: String,
+    val name: String,
+    val balance: Double,
+) {
+    /** Compact balance text (drops a trailing .0 for whole amounts). */
+    val balanceText: String
+        get() = if (balance == balance.toLong().toDouble()) balance.toLong().toString() else balance.toString()
+}
+
+/**
+ * FE-110 — "Send crypto" composer state. [assets] is loaded from the custody balances (spendable
+ * rows). [selectedSymbol] + [amount] drive the live validation/fiat estimate. [confirming] gates the
+ * confirm step; [sending] is set while the (text-path) send is in flight. [kycNote] carries an
+ * optional limits/KYC advisory string. A null-balance asset never blocks on funds.
+ */
+data class CryptoSendState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val assets: List<CryptoAssetOption> = emptyList(),
+    val selectedSymbol: String? = null,
+    val amount: String = "",
+    val confirming: Boolean = false,
+    val sending: Boolean = false,
+    val kycNote: String? = null,
+    val error: String? = null,
+) {
+    val selected: CryptoAssetOption? get() = assets.firstOrNull { it.symbol == selectedSymbol }
+}
 
 /**
  * AND-147 — viewer-roster ("Seen by") sheet. Non-null [messageId] = open. [viewers] are most-recent

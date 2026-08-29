@@ -50,6 +50,7 @@ import type {
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
+import type { CryptoTransferPayload } from "@/lib/cryptoTransfer";
 import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import { encryptBytes } from "@/lib/messageEncryption";
 
@@ -894,7 +895,7 @@ export async function sendCountdownMessage(
 async function sendCardMessage(
   conversationId: string,
   cardEndpoint: string,
-  kind: "market_card" | "position_card",
+  kind: "market_card" | "position_card" | "crypto_transfer",
   payload: Record<string, unknown>,
   replyToMessageId?: string,
 ): Promise<Message> {
@@ -940,6 +941,26 @@ export async function sendPositionCardMessage(
     conversationId,
     "position",
     "position_card",
+    { ...payload },
+    replyToMessageId,
+  );
+}
+
+// ---- Send crypto in chat (EPIC B: FE-110 composer, FE-111 transfer card) ----
+//
+// Preferred path is a dedicated /messaging/cards/crypto endpoint (BE-111). If the
+// backend has not shipped it yet (404), we degrade to a normal message carrying
+// kind "crypto_transfer" + the structured payload -- MessageBubble dispatches on
+// `kind` + payload so it renders identically either way.
+export async function sendCryptoTransferMessage(
+  conversationId: string,
+  payload: CryptoTransferPayload,
+  replyToMessageId?: string,
+): Promise<Message> {
+  return sendCardMessage(
+    conversationId,
+    "crypto",
+    "crypto_transfer",
     { ...payload },
     replyToMessageId,
   );

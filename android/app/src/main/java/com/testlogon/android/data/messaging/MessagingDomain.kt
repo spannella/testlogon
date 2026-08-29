@@ -244,6 +244,15 @@ sealed interface MessageMedia {
     data class PositionCard(
         val card: com.testlogon.android.feature.messaging.TradingCardModel.PositionCard,
     ) : MessageMedia
+
+    /**
+     * FE-111 (EPIC B) - a crypto transfer sent in chat. Rides a normal text message whose body carries
+     * an encoded [com.testlogon.android.feature.messaging.CryptoTransferModel] payload; [MessageDto.toMedia]
+     * parses the body into [card]. Direction (sent/received) is resolved at render time from the viewer sub.
+     */
+    data class CryptoTransfer(
+        val card: com.testlogon.android.feature.messaging.CryptoTransferModel.CryptoTransfer,
+    ) : MessageMedia
 }
 
 /** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
@@ -785,6 +794,10 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
     // FE-101/FE-102 — a trading card rides a normal text message; the body carries the encoded
     // TradingCardModel payload behind a sentinel. Parse it FIRST so it renders as a card, not raw text.
     // A non-card body falls through (parse == null) to the normal media resolution below.
+    // FE-111 (EPIC B) - a crypto-transfer card rides a normal text message behind its own sentinel.
+    // Parse it FIRST so it renders as a transfer card, not raw text; a non-card body falls through.
+    com.testlogon.android.feature.messaging.CryptoTransferModel.parse(text) != null ->
+        MessageMedia.CryptoTransfer(com.testlogon.android.feature.messaging.CryptoTransferModel.parse(text)!!)
     com.testlogon.android.feature.messaging.TradingCardModel.parse(text) != null -> {
         when (val c = com.testlogon.android.feature.messaging.TradingCardModel.parse(text)) {
             is com.testlogon.android.feature.messaging.TradingCardModel.MarketCard -> MessageMedia.MarketCard(c)

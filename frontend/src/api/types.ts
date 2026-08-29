@@ -1307,7 +1307,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime" | "market_card" | "position_card";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime" | "market_card" | "position_card" | "crypto_transfer";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -1389,6 +1389,17 @@ export interface Message {
   entry?: number | null;
   mark?: number | null;
   size?: number | null;
+  // Send-crypto-in-chat card fields (EPIC B: FE-110/FE-111). crypto_transfer
+  // carries the asset symbol + decimal amount (as a string) + token decimals,
+  // an indicative USD fiat_cents at compose time, from/to attribution and a
+  // pending/complete/failed status. These ride on a normal message keyed by kind.
+  asset?: string | null;
+  amount?: string | null;
+  decimals?: number | null;
+  to?: string | null;
+  from?: string | null;
+  fiat_cents?: number | null;
+  status?: "pending" | "complete" | "failed" | string | null;
   // B-COUNTDOWN #31: the stashed reveal payload, surfaced ONLY once the countdown
   // target has passed. Present on any message that carried countdown_reveal_* on
   // send (not just the dedicated "countdown" kind).

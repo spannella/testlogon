@@ -108,6 +108,7 @@ class ThreadViewModel @Inject constructor(
     private val apiErrorParser: com.testlogon.android.core.network.error.ApiErrorParser,
     private val exchangeRepository: com.testlogon.android.data.exchange.ExchangeRepository,
     private val tradingRepository: com.testlogon.android.data.exchange.TradingRepository,
+    private val custodyReader: com.testlogon.android.data.custody.CustodyReader,
 ) : ViewModel() {
 
     /**
@@ -2320,6 +2321,103 @@ class ThreadViewModel @Inject constructor(
         val card = com.testlogon.android.feature.messaging.TradingCardModel.project(raw, disclosure)
         val body = com.testlogon.android.feature.messaging.TradingCardModel.encode(card)
         val clientId = java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            repository.enqueueOptimistic(conversationId, clientId, body, clock())
+            repository.sendOutbox(conversationId, clientId, body)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    // ---- FE-110 / FE-111 (EPIC B): send crypto in chat ----
+
+    /** FE-110 — open the "Send crypto" composer + load spendable custody balances. */
+    fun onAttachCryptoSend() {
+        _state.update { it.copy(cryptoSend = CryptoSendState(visible = true, loading = true)) }
+        viewModelScope.launch {
+            when (val r = custodyReader.getBalance()) {
+                is ApiResult.Success -> {
+                    val opts = r.data.funded().map { row ->
+                        CryptoAssetOption(symbol = row.symbol, name = row.asset.name, balance = row.amount)
+                    }
+                    _state.update {
+                        it.copy(cryptoSend = it.cryptoSend.copy(
+                            loading = false,
+                            assets = opts,
+                            selectedSymbol = opts.firstOrNull()?.symbol,
+                            kycNote = "Transfers may be subject to your account's KYC status and daily limits.",
+                        ))
+                    }
+                }
+                else -> _state.update {
+                    it.copy(cryptoSend = it.cryptoSend.copy(loading = false, error = "Couldn't load your balances"))
+                }
+            }
+        }
+    }
+
+    fun onCryptoSelectAsset(symbol: String) {
+        _state.update { it.copy(cryptoSend = it.cryptoSend.copy(selectedSymbol = symbol, error = null)) }
+    }
+
+    fun onCryptoAmountChange(text: String) {
+        val cleaned = com.testlogon.android.feature.custody.MoneySafety.sanitizeDecimal(text)
+        _state.update { it.copy(cryptoSend = it.cryptoSend.copy(amount = cleaned, error = null)) }
+    }
+
+    /** FE-110 — fill the amount with the selected asset's full spendable balance. */
+    fun onCryptoMax() {
+        val cs = _state.value.cryptoSend
+        val bal = cs.selected?.balance ?: return
+        _state.update {
+            it.copy(cryptoSend = it.cryptoSend.copy(
+                amount = com.testlogon.android.feature.custody.MoneySafety.trimDecimal(bal),
+            ))
+        }
+    }
+
+    /** FE-110 — advance to the confirm step (only when the compose input validates). */
+    fun onCryptoReview() {
+        val cs = _state.value.cryptoSend
+        val v = com.testlogon.android.feature.messaging.CryptoTransferModel.validateSend(
+            cs.selectedSymbol, cs.amount, cs.selected?.balance,
+        )
+        if (!v.ok) return
+        _state.update { it.copy(cryptoSend = it.cryptoSend.copy(confirming = true, error = null)) }
+    }
+
+    fun onCryptoBack() {
+        _state.update { it.copy(cryptoSend = it.cryptoSend.copy(confirming = false, error = null)) }
+    }
+
+    fun onDismissCryptoSend() { _state.update { it.copy(cryptoSend = CryptoSendState()) } }
+
+    /**
+     * FE-110/FE-111 — send the crypto_transfer card as a normal text message carrying the encoded
+     * payload (degrade-safe; POST me/custody/transfer was retired, so this is the transport). The card
+     * records the parties + amount; the receiver renders it as a "Received" transfer card.
+     */
+    fun onSendCryptoTransfer() {
+        val cs = _state.value.cryptoSend
+        val asset = cs.selectedSymbol ?: return
+        val v = com.testlogon.android.feature.messaging.CryptoTransferModel.validateSend(asset, cs.amount, cs.selected?.balance)
+        if (!v.ok) return
+        val fromSub = selfSub() ?: ""
+        val toSub = _state.value.peerUserSub ?: ""
+        val fromName = fromSub.takeIf { it.isNotBlank() }?.let { displayNames.resolve(it) } ?: "You"
+        val toName = toSub.takeIf { it.isNotBlank() }?.let { displayNames.resolve(it) } ?: _state.value.title.ifBlank { "recipient" }
+        val card = com.testlogon.android.feature.messaging.CryptoTransferModel.CryptoTransfer(
+            asset = asset,
+            amount = cs.amount.trim(),
+            fromSub = fromSub,
+            toSub = toSub,
+            fromName = fromName,
+            toName = toName,
+            status = com.testlogon.android.feature.messaging.CryptoTransferModel.Status.COMPLETE,
+            memo = null,
+        )
+        val body = com.testlogon.android.feature.messaging.CryptoTransferModel.encode(card)
+        val clientId = java.util.UUID.randomUUID().toString()
+        _state.update { it.copy(cryptoSend = CryptoSendState()) }
         viewModelScope.launch {
             repository.enqueueOptimistic(conversationId, clientId, body, clock())
             repository.sendOutbox(conversationId, clientId, body)

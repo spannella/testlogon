@@ -20,6 +20,7 @@ import type { Conversation, Message, UserSearchResult } from "@/api/types";
 import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
 import { useAuthStore } from "@/stores/authStore";
+import { transferPreview } from "@/lib/cryptoTransfer";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { StalenessIndicator } from "@/components/shared/StalenessIndicator";
 
@@ -214,7 +215,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                         "truncate text-xs",
                         unread ? "font-medium text-foreground" : "text-muted-foreground",
                       )}>
-                        {getPreviewText(lastMsg, convo)}
+                        {getPreviewText(lastMsg, convo, userId ?? undefined)}
                       </span>
                       {unread && (
                         <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
@@ -321,7 +322,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
-function getPreviewText(lastMsg: Message | undefined, convo: Conversation): string {
+function getPreviewText(lastMsg: Message | undefined, convo: Conversation, currentUserId?: string): string {
   if (!lastMsg) return convo.last_message_preview ?? "No messages yet";
   if (lastMsg.expired) return "[This message has expired]";
   if (lastMsg.view_once && lastMsg.text === null) return "[Already viewed]";
@@ -333,6 +334,13 @@ function getPreviewText(lastMsg: Message | undefined, convo: Conversation): stri
   if (lastMsg.kind === "gif") return "[GIF]";
   if (lastMsg.kind === "sticker") return "[Sticker]";
   if (lastMsg.kind === "find_datetime") return "[Find a Time]";
+  if (lastMsg.kind === "market_card") return `[Market: ${lastMsg.symbol ?? ""}]`;
+  if (lastMsg.kind === "position_card") return `[Position: ${lastMsg.symbol ?? ""}]`;
+  if (lastMsg.kind === "crypto_transfer")
+    return transferPreview(
+      { sender_id: lastMsg.sender_id, asset: lastMsg.asset, amount: lastMsg.amount },
+      currentUserId,
+    );
   return lastMsg.text ?? convo.last_message_preview ?? "No messages yet";
 }
 

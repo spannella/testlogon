@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.CurrencyBitcoin
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.EmojiEmotions
@@ -431,6 +432,14 @@ fun ThreadRoute(
         onAttachPositionCard = viewModel::onAttachPositionCard,
         onDismissPositionPicker = viewModel::onDismissPositionPicker,
         onSendPositionCard = viewModel::onSendPositionCard,
+        onAttachCryptoSend = viewModel::onAttachCryptoSend,
+        onCryptoSelectAsset = viewModel::onCryptoSelectAsset,
+        onCryptoAmountChange = viewModel::onCryptoAmountChange,
+        onCryptoMax = viewModel::onCryptoMax,
+        onCryptoReview = viewModel::onCryptoReview,
+        onCryptoBack = viewModel::onCryptoBack,
+        onConfirmCryptoSend = viewModel::onSendCryptoTransfer,
+        onDismissCryptoSend = viewModel::onDismissCryptoSend,
         onOpenMessageOptions = viewModel::openMessageOptions,
         onClearMessageOptions = viewModel::clearMessageOptions,
         onRemoveStagedImage = viewModel::onRemoveStagedImage,
@@ -1048,6 +1057,14 @@ fun ThreadScreen(
     onAttachPositionCard: () -> Unit = {},
     onDismissPositionPicker: () -> Unit = {},
     onSendPositionCard: (OpenPositionPick, com.testlogon.android.feature.messaging.TradingCardModel.Disclosure) -> Unit = { _, _ -> },
+    onAttachCryptoSend: () -> Unit = {},
+    onCryptoSelectAsset: (String) -> Unit = {},
+    onCryptoAmountChange: (String) -> Unit = {},
+    onCryptoMax: () -> Unit = {},
+    onCryptoReview: () -> Unit = {},
+    onCryptoBack: () -> Unit = {},
+    onConfirmCryptoSend: () -> Unit = {},
+    onDismissCryptoSend: () -> Unit = {},
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
     onRemoveStagedFile: () -> Unit = {},
@@ -1327,6 +1344,7 @@ fun ThreadScreen(
                         onAttachFileShare = onAttachFileShare,
                         onAttachMarketCard = onAttachMarketCard,
                         onAttachPositionCard = onAttachPositionCard,
+                        onAttachCryptoSend = onAttachCryptoSend,
                         onOpenMessageOptions = onOpenMessageOptions,
                         onClearMessageOptions = onClearMessageOptions,
                         onRemoveStagedImage = onRemoveStagedImage,
@@ -1525,6 +1543,18 @@ fun ThreadScreen(
             onDismiss = onDismissPositionPicker,
         )
     }
+    if (state.cryptoSend.visible) {
+        CryptoSendSheet(
+            state = state.cryptoSend,
+            onSelectAsset = onCryptoSelectAsset,
+            onAmountChange = onCryptoAmountChange,
+            onMax = onCryptoMax,
+            onReview = onCryptoReview,
+            onBack = onCryptoBack,
+            onConfirmSend = onConfirmCryptoSend,
+            onDismiss = onDismissCryptoSend,
+        )
+    }
 
     if (state.tipSheet.messageId != null) {
         TipSheet(
@@ -1573,6 +1603,7 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
     // the raw body. Checked before the text fallback so the sentinel string never leaks into a quote.
     (m.media as? MessageMedia.MarketCard)?.let { return com.testlogon.android.feature.messaging.TradingCardModel.marketPreview(it.card.symbol) }
     (m.media as? MessageMedia.PositionCard)?.let { return com.testlogon.android.feature.messaging.TradingCardModel.positionPreview(it.card.symbol) }
+    (m.media as? MessageMedia.CryptoTransfer)?.let { return com.testlogon.android.feature.messaging.CryptoTransferModel.previewNeutral(it.card) }
     val text = m.text.trim()
     if (text.isNotBlank()) return text
     return when (m.media) {
@@ -1589,6 +1620,7 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
         is MessageMedia.MeetingPoll, is MessageMedia.FindDateTime -> "[poll]"
         is MessageMedia.MarketCard -> com.testlogon.android.feature.messaging.TradingCardModel.marketPreview((m.media as MessageMedia.MarketCard).card.symbol)
         is MessageMedia.PositionCard -> com.testlogon.android.feature.messaging.TradingCardModel.positionPreview((m.media as MessageMedia.PositionCard).card.symbol)
+        is MessageMedia.CryptoTransfer -> com.testlogon.android.feature.messaging.CryptoTransferModel.previewNeutral((m.media as MessageMedia.CryptoTransfer).card)
         is MessageMedia.Countdown -> "[countdown]"
         is MessageMedia.CalendarEvent, is MessageMedia.CalendarShare -> "[calendar]"
         is MessageMedia.Paid -> "[locked]"
@@ -2024,6 +2056,11 @@ private fun MessageBubble(
             is MessageMedia.PositionCard -> PositionCard(
                 card = media.card,
                 onTrade = onOpenSymbol,
+            )
+            is MessageMedia.CryptoTransfer -> CryptoTransferCard(
+                card = media.card,
+                // isOwn == the viewer is the sender -> SENT framing; else RECEIVED.
+                viewerSub = if (message.isOwn) media.card.fromSub else null,
             )
             is MessageMedia.Paid -> PaidMessageBubble(
                 monetization = media.monetization,
@@ -2561,6 +2598,7 @@ private fun MessageComposer(
     onAttachFileShare: () -> Unit = {},
     onAttachMarketCard: () -> Unit = {},
     onAttachPositionCard: () -> Unit = {},
+    onAttachCryptoSend: () -> Unit = {},
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
     onRemoveStagedImage: (Int) -> Unit = {},
@@ -2710,6 +2748,12 @@ private fun MessageComposer(
                         modifier = Modifier.size(44.dp).testTag(TradingComposerTestTags.ATTACH_POSITION),
                     ) {
                         Icon(Icons.Filled.Insights, contentDescription = "Share position", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachCryptoSend() },
+                        modifier = Modifier.size(44.dp).testTag(CryptoSendComposerTestTags.ATTACH),
+                    ) {
+                        Icon(Icons.Filled.CurrencyBitcoin, contentDescription = "Send crypto", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }
