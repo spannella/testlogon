@@ -81,6 +81,13 @@ data class ThreadUiState(
     val calendarShareComposer: CalendarPickerState = CalendarPickerState(),
     /** File-manager share composer (pick a file). */
     val fileShareComposer: FilePickerState = FilePickerState(),
+    // ---- FE-101 / FE-102: trading-in-chat cards ----
+    /** FE-101 — live market data (price/change/spark) per shared market card, keyed by symbolId. */
+    val marketCards: Map<Int, MarketCardLive> = emptyMap(),
+    /** FE-101 — "Share market" symbol-picker sheet (hidden until opened). */
+    val marketPicker: MarketPickerState = MarketPickerState(),
+    /** FE-102 — "Share position" picker + disclosure sheet (hidden until opened). */
+    val positionPicker: PositionPickerState = PositionPickerState(),
     /** MSG — receiver passphrase-unlock dialog for an encrypted message (non-null key = open). */
     val encryptUnlock: EncryptUnlockState = EncryptUnlockState(),
     /** MSG — view-once viewer dialog (non-null key = open, showing the consumed content). */
@@ -198,6 +205,45 @@ data class FilePickerState(
     val visible: Boolean = false,
     val loading: Boolean = false,
     val files: List<com.testlogon.android.data.messaging.FileEntryUi> = emptyList(),
+    val error: String? = null,
+)
+
+/** FE-101 — one selectable symbol in the "Share market" picker. */
+data class SymbolPick(val symbolId: Int, val symbol: String)
+
+/** FE-101 — "Share market" symbol-picker state (searchable). */
+data class MarketPickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val query: String = "",
+    val symbols: List<SymbolPick> = emptyList(),
+    val error: String? = null,
+) {
+    /** Case-insensitive filter over the loaded symbol list. */
+    val filtered: List<SymbolPick>
+        get() = if (query.isBlank()) symbols
+        else symbols.filter { it.symbol.contains(query.trim(), ignoreCase = true) }
+}
+
+/** FE-102 — one of the caller's open positions offered in the "Share position" picker. */
+data class OpenPositionPick(
+    val symbolId: Int,
+    val symbol: String,
+    val side: String?,
+    val qty: Long,
+    val entryPrice: Long,
+    val markPrice: Long,
+    val liquidationPrice: Long,
+    val unrealizedPnl: Long,
+    val pnlPct: Double?,
+    val roiPct: Double?,
+)
+
+/** FE-102 — "Share position" picker + disclosure-selector state. */
+data class PositionPickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val positions: List<OpenPositionPick> = emptyList(),
     val error: String? = null,
 )
 

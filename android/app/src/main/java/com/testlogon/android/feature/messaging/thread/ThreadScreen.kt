@@ -62,6 +62,8 @@ import androidx.compose.material.icons.filled.EditCalendar
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.EmojiEmotions
@@ -194,6 +196,7 @@ fun ThreadRoute(
     onBack: () -> Unit,
     onPlaceCall: (String) -> Unit = {},
     onViewContact: (userId: String) -> Unit = {},
+    onOpenSymbol: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
     onOpenGroupDetails: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel(),
@@ -346,6 +349,7 @@ fun ThreadRoute(
         onBack = onBack,
         onPlaceCall = onPlaceCall,
         onViewContact = onViewContact,
+        onOpenSymbol = onOpenSymbol,
         onOpenGroupDetails = onOpenGroupDetails,
         onRetry = viewModel::retry,
         onDraftChange = viewModel::onDraftChange,
@@ -420,6 +424,13 @@ fun ThreadRoute(
         onAttachFileShare = viewModel::onAttachFileShare,
         onDismissFileShare = viewModel::onDismissFileShareComposer,
         onSendFileShare = viewModel::onSendFileShare,
+        onAttachMarketCard = viewModel::onAttachMarketCard,
+        onMarketPickerQuery = viewModel::onMarketPickerQuery,
+        onDismissMarketPicker = viewModel::onDismissMarketPicker,
+        onSendMarketCard = viewModel::onSendMarketCard,
+        onAttachPositionCard = viewModel::onAttachPositionCard,
+        onDismissPositionPicker = viewModel::onDismissPositionPicker,
+        onSendPositionCard = viewModel::onSendPositionCard,
         onOpenMessageOptions = viewModel::openMessageOptions,
         onClearMessageOptions = viewModel::clearMessageOptions,
         onRemoveStagedImage = viewModel::onRemoveStagedImage,
@@ -1030,6 +1041,13 @@ fun ThreadScreen(
     onAttachFileShare: () -> Unit = {},
     onDismissFileShare: () -> Unit = {},
     onSendFileShare: (String) -> Unit = {},
+    onAttachMarketCard: () -> Unit = {},
+    onMarketPickerQuery: (String) -> Unit = {},
+    onDismissMarketPicker: () -> Unit = {},
+    onSendMarketCard: (SymbolPick) -> Unit = {},
+    onAttachPositionCard: () -> Unit = {},
+    onDismissPositionPicker: () -> Unit = {},
+    onSendPositionCard: (OpenPositionPick, com.testlogon.android.feature.messaging.TradingCardModel.Disclosure) -> Unit = { _, _ -> },
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
     onRemoveStagedFile: () -> Unit = {},
@@ -1055,6 +1073,7 @@ fun ThreadScreen(
     onOpenScheduled: () -> Unit = {},
     onPlaceCall: (String) -> Unit = {},
     onViewContact: (userId: String) -> Unit = {},
+    onOpenSymbol: (Int) -> Unit = {},
     searchBar: @Composable () -> Unit = {},
     // FULL-PARITY (delegate) — an optional banner slot rendered directly under the top app bar. The
     // ThreadRoute passes the "Managing @creator" DelegationBannerHost here so the reused thread makes it
@@ -1306,6 +1325,8 @@ fun ThreadScreen(
                         onAttachCalendarEvent = onAttachCalendarEvent,
                         onAttachCalendarShare = onAttachCalendarShare,
                         onAttachFileShare = onAttachFileShare,
+                        onAttachMarketCard = onAttachMarketCard,
+                        onAttachPositionCard = onAttachPositionCard,
                         onOpenMessageOptions = onOpenMessageOptions,
                         onClearMessageOptions = onClearMessageOptions,
                         onRemoveStagedImage = onRemoveStagedImage,
@@ -1382,6 +1403,7 @@ fun ThreadScreen(
                     onMessageLongPress = { actionTarget = it },
                     onJumpToMessage = onJumpToMessage,
                     pollVoter = pollVoter,
+                    onOpenSymbol = onOpenSymbol,
                     nowSeconds = nowSeconds,
                 )
             }
@@ -1488,6 +1510,21 @@ fun ThreadScreen(
             onDismiss = onDismissFileShare,
         )
     }
+    if (state.marketPicker.visible) {
+        MarketPickerSheet(
+            state = state.marketPicker,
+            onQuery = onMarketPickerQuery,
+            onPick = onSendMarketCard,
+            onDismiss = onDismissMarketPicker,
+        )
+    }
+    if (state.positionPicker.visible) {
+        PositionPickerSheet(
+            state = state.positionPicker,
+            onSend = onSendPositionCard,
+            onDismiss = onDismissPositionPicker,
+        )
+    }
 
     if (state.tipSheet.messageId != null) {
         TipSheet(
@@ -1532,6 +1569,10 @@ private fun defaultPollSlots(): List<com.testlogon.android.data.messaging.Meetin
  * present, else a media-kind placeholder ([image]/[file]/etc.) so non-text originals still read sensibly.
  */
 private fun replyQuoteSnippet(m: ThreadMessageUi): String {
+    // FE-101/FE-102 — a trading-card message's text IS the encoded payload; use the card label, never
+    // the raw body. Checked before the text fallback so the sentinel string never leaks into a quote.
+    (m.media as? MessageMedia.MarketCard)?.let { return com.testlogon.android.feature.messaging.TradingCardModel.marketPreview(it.card.symbol) }
+    (m.media as? MessageMedia.PositionCard)?.let { return com.testlogon.android.feature.messaging.TradingCardModel.positionPreview(it.card.symbol) }
     val text = m.text.trim()
     if (text.isNotBlank()) return text
     return when (m.media) {
@@ -1546,6 +1587,8 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
         is MessageMedia.Sticker -> "[sticker]"
         is MessageMedia.Poll -> "[poll]"
         is MessageMedia.MeetingPoll, is MessageMedia.FindDateTime -> "[poll]"
+        is MessageMedia.MarketCard -> com.testlogon.android.feature.messaging.TradingCardModel.marketPreview((m.media as MessageMedia.MarketCard).card.symbol)
+        is MessageMedia.PositionCard -> com.testlogon.android.feature.messaging.TradingCardModel.positionPreview((m.media as MessageMedia.PositionCard).card.symbol)
         is MessageMedia.Countdown -> "[countdown]"
         is MessageMedia.CalendarEvent, is MessageMedia.CalendarShare -> "[calendar]"
         is MessageMedia.Paid -> "[locked]"
@@ -1576,6 +1619,7 @@ private fun ThreadList(
     onMessageLongPress: (ThreadMessageUi) -> Unit,
     onJumpToMessage: (String) -> Unit = {},
     pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
+    onOpenSymbol: (Int) -> Unit = {},
     nowSeconds: Long,
 ) {
     // reverseLayout: index 0 is the newest message at the visual bottom.
@@ -1612,6 +1656,8 @@ private fun ThreadList(
                     voicePlayback = voicePlayback,
                     polls = state.polls,
                     unlock = state.unlocks[message.key] ?: UnlockUiState(),
+                    marketCards = state.marketCards,
+                    onOpenSymbol = onOpenSymbol,
                     onRetry = { onRetrySend(message.key) },
                     onOpenImage = onOpenImage,
                     onOpenGalleryVideo = onOpenGalleryVideo,
@@ -1725,6 +1771,8 @@ private fun MessageBubble(
     polls: Map<String, MeetingPollCardUiState>,
     unlock: UnlockUiState,
     pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
+    marketCards: Map<Int, MarketCardLive> = emptyMap(),
+    onOpenSymbol: (Int) -> Unit = {},
     onRetry: () -> Unit,
     onOpenImage: (String) -> Unit,
     onOpenGalleryVideo: (String) -> Unit = {},
@@ -1968,6 +2016,15 @@ private fun MessageBubble(
             )
             is MessageMedia.CalendarShare -> CalendarShareBubble(media = media, isOwn = message.isOwn)
             is MessageMedia.FindDateTime -> FindDateTimeCard(media = media)
+            is MessageMedia.MarketCard -> MarketCard(
+                card = media.card,
+                live = marketCards[media.card.symbolId] ?: MarketCardLive(),
+                onTrade = onOpenSymbol,
+            )
+            is MessageMedia.PositionCard -> PositionCard(
+                card = media.card,
+                onTrade = onOpenSymbol,
+            )
             is MessageMedia.Paid -> PaidMessageBubble(
                 monetization = media.monetization,
                 isOwn = message.isOwn,
@@ -2502,6 +2559,8 @@ private fun MessageComposer(
     onAttachCalendarEvent: () -> Unit = {},
     onAttachCalendarShare: () -> Unit = {},
     onAttachFileShare: () -> Unit = {},
+    onAttachMarketCard: () -> Unit = {},
+    onAttachPositionCard: () -> Unit = {},
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
     onRemoveStagedImage: (Int) -> Unit = {},
@@ -2639,6 +2698,18 @@ private fun MessageComposer(
                         modifier = Modifier.size(44.dp).testTag(RichMessageTestTags.ATTACH_FILE_SHARE),
                     ) {
                         Icon(Icons.Filled.FolderShared, contentDescription = "Share a file", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachMarketCard() },
+                        modifier = Modifier.size(44.dp).testTag(TradingComposerTestTags.ATTACH_MARKET),
+                    ) {
+                        Icon(Icons.Filled.ShowChart, contentDescription = "Share market", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachPositionCard() },
+                        modifier = Modifier.size(44.dp).testTag(TradingComposerTestTags.ATTACH_POSITION),
+                    ) {
+                        Icon(Icons.Filled.Insights, contentDescription = "Share position", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }

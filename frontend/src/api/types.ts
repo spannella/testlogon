@@ -1307,7 +1307,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime" | "market_card" | "position_card";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -1377,6 +1377,18 @@ export interface Message {
   target_datetime?: number | null;
   associated_event_type?: "broadcast" | "call" | "calendar" | "custom" | null;
   associated_event_id?: string | null;
+  // Trading-in-chat card fields (EPIC A). market_card carries symbol_id+symbol;
+  // position_card additionally carries side/disclosure/roi_pct and, at "full"
+  // disclosure, entry/mark/size. These ride on a normal message keyed by `kind`.
+  symbol_id?: number | null;
+  symbol?: string | null;
+  price_scaler?: number | null;
+  side?: "Long" | "Short" | null;
+  disclosure?: "full" | "pnl_pct" | "roi" | null;
+  roi_pct?: number | null;
+  entry?: number | null;
+  mark?: number | null;
+  size?: number | null;
   // B-COUNTDOWN #31: the stashed reveal payload, surfaced ONLY once the countdown
   // target has passed. Present on any message that carried countdown_reveal_* on
   // send (not just the dedicated "countdown" kind).

@@ -126,6 +126,16 @@ export function adaptMessage(raw: RawMessage): Message {
     target_datetime: raw.target_datetime,
     associated_event_type: raw.associated_event_type,
     associated_event_id: raw.associated_event_id,
+    // Trading-in-chat card fields (EPIC A)
+    symbol_id: raw.symbol_id,
+    symbol: raw.symbol,
+    price_scaler: raw.price_scaler,
+    side: raw.side,
+    disclosure: raw.disclosure,
+    roi_pct: raw.roi_pct,
+    entry: raw.entry,
+    mark: raw.mark,
+    size: raw.size,
     // GIF & Sticker fields (MSG-008)
     gif_url: raw.gif_url,
     gif_alt_text: raw.gif_alt_text,

@@ -106,6 +106,8 @@ class ThreadViewModel @Inject constructor(
     private val displayNames: com.testlogon.android.data.profile.DisplayNameResolver,
     // TIP-405 — decode the 402 tip_required detail body (min_tip_cents/recipient) off a failed send.
     private val apiErrorParser: com.testlogon.android.core.network.error.ApiErrorParser,
+    private val exchangeRepository: com.testlogon.android.data.exchange.ExchangeRepository,
+    private val tradingRepository: com.testlogon.android.data.exchange.TradingRepository,
 ) : ViewModel() {
 
     /**
@@ -370,7 +372,9 @@ class ThreadViewModel @Inject constructor(
                             ?: if (visible.isEmpty()) prior.isDm else otherSenders.size <= 1,
                     )
                 }
-                // AND-152 — once the deep-link target message is loaded, scroll to it (once).
+                // FE-101 — refresh live price/change/spark for any market cards now on screen.
+                refreshMarketCards()
+                                // AND-152 — once the deep-link target message is loaded, scroll to it (once).
                 val target = focusMessageId
                 if (target != null && visible.any { it.id == target || it.clientId == target }) {
                     focusMessageId = null
@@ -2205,6 +2209,149 @@ class ThreadViewModel @Inject constructor(
         viewModelScope.launch {
             repository.shareFile(conversationId, filePath, permission = "read", text = null)
             _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    // ---- FE-101 / FE-102: trading-in-chat cards ----
+
+    /** FE-101 — open the "Share market" symbol picker + load the symbol list. */
+    fun onAttachMarketCard() {
+        _state.update { it.copy(marketPicker = MarketPickerState(visible = true, loading = true)) }
+        viewModelScope.launch {
+            when (val r = exchangeRepository.symbols()) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(marketPicker = it.marketPicker.copy(
+                        loading = false,
+                        symbols = r.data.map { s -> SymbolPick(s.symbolId, s.symbol) },
+                    ))
+                }
+                else -> _state.update {
+                    it.copy(marketPicker = it.marketPicker.copy(loading = false, error = "Couldn't load symbols"))
+                }
+            }
+        }
+    }
+
+    fun onMarketPickerQuery(q: String) {
+        _state.update { it.copy(marketPicker = it.marketPicker.copy(query = q)) }
+    }
+
+    fun onDismissMarketPicker() { _state.update { it.copy(marketPicker = MarketPickerState()) } }
+
+    /** FE-101 — send a market_card as a normal text message carrying the encoded card payload. */
+    fun onSendMarketCard(pick: SymbolPick) {
+        _state.update { it.copy(marketPicker = MarketPickerState()) }
+        val body = com.testlogon.android.feature.messaging.TradingCardModel.encode(
+            com.testlogon.android.feature.messaging.TradingCardModel.MarketCard(pick.symbolId, pick.symbol),
+        )
+        val clientId = java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            repository.enqueueOptimistic(conversationId, clientId, body, clock())
+            repository.sendOutbox(conversationId, clientId, body)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    /** FE-102 — open the "Share position" picker + load the caller's open position(s). */
+    fun onAttachPositionCard() {
+        _state.update { it.copy(positionPicker = PositionPickerState(visible = true, loading = true)) }
+        viewModelScope.launch {
+            val symbolsById = (exchangeRepository.symbols() as? ApiResult.Success)?.data
+                ?.associateBy { it.symbolId } ?: emptyMap()
+            when (val r = tradingRepository.marginAccount()) {
+                is ApiResult.Success -> {
+                    val pos = r.data.position
+                    val picks = if (pos != null && pos.qty != 0L) {
+                        val inst = symbolsById[pos.symbolId]
+                        val sym = inst?.symbol ?: "Symbol ${pos.symbolId}"
+                        // Derive % figures for the disclosure headline: P&L% vs entry-notional and a
+                        // simple ROI% (uPnL over |entry notional|). Null-safe when entry is 0.
+                        val entryNotional = kotlin.math.abs(pos.entryPrice * pos.qty).toDouble()
+                        val pnlPct = if (entryNotional > 0) pos.unrealizedPnl / entryNotional * 100.0 else null
+                        val roiPct = pnlPct  // one-position demo: ROI over entry notional mirrors P&L%.
+                        listOf(
+                            OpenPositionPick(
+                                symbolId = pos.symbolId,
+                                symbol = sym,
+                                side = pos.side?.name?.lowercase(),
+                                qty = pos.qty,
+                                entryPrice = pos.entryPrice,
+                                markPrice = pos.entryPrice + (if (pos.qty != 0L) pos.unrealizedPnl / pos.qty else 0L),
+                                liquidationPrice = pos.liquidationPrice,
+                                unrealizedPnl = pos.unrealizedPnl,
+                                pnlPct = pnlPct,
+                                roiPct = roiPct,
+                            ),
+                        )
+                    } else {
+                        emptyList()
+                    }
+                    _state.update { it.copy(positionPicker = it.positionPicker.copy(loading = false, positions = picks)) }
+                }
+                else -> _state.update {
+                    it.copy(positionPicker = it.positionPicker.copy(loading = false, error = "Couldn't load your positions"))
+                }
+            }
+        }
+    }
+
+    fun onDismissPositionPicker() { _state.update { it.copy(positionPicker = PositionPickerState()) } }
+
+    /** FE-102 — project the position to the permitted fields, encode, and send as a text message. */
+    fun onSendPositionCard(
+        pick: OpenPositionPick,
+        disclosure: com.testlogon.android.feature.messaging.TradingCardModel.Disclosure,
+    ) {
+        _state.update { it.copy(positionPicker = PositionPickerState()) }
+        val ownerName = selfSub()?.let { displayNames.resolve(it) } ?: "You"
+        val raw = com.testlogon.android.feature.messaging.TradingCardModel.RawPosition(
+            symbolId = pick.symbolId,
+            symbol = pick.symbol,
+            owner = ownerName,
+            side = pick.side,
+            qty = pick.qty,
+            entryPrice = pick.entryPrice,
+            markPrice = pick.markPrice,
+            liquidationPrice = pick.liquidationPrice,
+            unrealizedPnl = pick.unrealizedPnl,
+            pnlPct = pick.pnlPct,
+            roiPct = pick.roiPct,
+        )
+        val card = com.testlogon.android.feature.messaging.TradingCardModel.project(raw, disclosure)
+        val body = com.testlogon.android.feature.messaging.TradingCardModel.encode(card)
+        val clientId = java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            repository.enqueueOptimistic(conversationId, clientId, body, clock())
+            repository.sendOutbox(conversationId, clientId, body)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    /** FE-101 — refresh live price/change/spark for the market cards currently in the thread. */
+    private fun refreshMarketCards() {
+        val symbolIds = _state.value.messages
+            .mapNotNull { (it.media as? MessageMedia.MarketCard)?.card?.symbolId }
+            .distinct()
+        if (symbolIds.isEmpty()) return
+        viewModelScope.launch {
+            val symbolsById = (exchangeRepository.symbols() as? ApiResult.Success)?.data
+                ?.associateBy { it.symbolId } ?: emptyMap()
+            val live = HashMap<Int, MarketCardLive>(_state.value.marketCards)
+            for (sid in symbolIds) {
+                val inst = symbolsById[sid] ?: continue
+                val lastRaw = (exchangeRepository.trades(sid) as? ApiResult.Success)?.data?.firstOrNull()?.price
+                val closes = (exchangeRepository.candles(sid, 60) as? ApiResult.Success)?.data
+                    ?.map { inst.display(it.close) } ?: emptyList()
+                val spark = com.testlogon.android.feature.markets.MarketSummaryMath.spark(closes, 30)
+                val change = com.testlogon.android.feature.markets.MarketSummaryMath.changePctOf(closes, 30)
+                val lastDisplay = lastRaw?.let { inst.display(it) } ?: closes.lastOrNull()
+                live[sid] = MarketCardLive(
+                    lastPriceDisplay = lastDisplay,
+                    changePct = change,
+                    spark = spark,
+                )
+            }
+            _state.update { it.copy(marketCards = live) }
         }
     }
 

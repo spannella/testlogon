@@ -19,6 +19,8 @@ import {
   sendMeetingPollMessage,
   sendFindDateTimeMessage,
   sendCountdownMessage,
+  sendMarketCardMessage,
+  sendPositionCardMessage,
   createLotteryMessage,
   sendVoiceMessage,
   markRead,
@@ -34,6 +36,7 @@ import {
 import { useAuthStore } from "@/stores/authStore";
 import { useOfflineStore } from "@/stores/offlineStore";
 import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, SendFindDateTimeReq, CreateLotteryMessageReq } from "@/api/types";
+import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
@@ -598,6 +601,24 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     onError: () => toast.error("Failed to create countdown"),
   });
 
+  const sendMarketCard = useMutation({
+    mutationFn: (payload: MarketCardPayload) => sendMarketCardMessage(convoId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share market"),
+  });
+
+  const sendPositionCard = useMutation({
+    mutationFn: (payload: PositionCardPayload) => sendPositionCardMessage(convoId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share position"),
+  });
+
   const sendLottery = useMutation({
     mutationFn: (params: Omit<CreateLotteryMessageReq, "conversation_id">) =>
       createLotteryMessage({ ...params, conversation_id: convoId }),
@@ -719,6 +740,10 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         .join(", ") || "Conversation");
 
   const participantCount = conversation.participants.length;
+
+  // Owner attribution for the shared position card (falls back to "You").
+  const currentUserName =
+    conversation.participants.find((p) => p.user_id === userId)?.display_name ?? "You";
 
   // Resolve a sender id to a friendly display name for message/reply labels
   // (falls back to the raw id when a participant isn't found).
@@ -1474,6 +1499,9 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendMeetingPoll={(params) => sendMeetingPoll.mutate(params)}
         onSendFindDateTime={(params) => sendFindDateTime.mutate(params)}
         onSendCountdown={(params) => sendCountdown.mutate(params)}
+        onSendMarketCard={(payload) => sendMarketCard.mutate(payload)}
+        onSendPositionCard={(payload) => sendPositionCard.mutate(payload)}
+        currentUserName={currentUserName}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}
         onSendVoiceMessage={(blob, meta) => sendVoice.mutate({ blob, meta })}
         onSendTtsVoice={(ttsText, opts) =>

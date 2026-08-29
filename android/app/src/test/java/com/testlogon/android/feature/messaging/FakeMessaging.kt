@@ -1285,4 +1285,6 @@ fun newThreadViewModel(
         typingRepository,
         fakeDisplayNameResolver(),
         fakeApiErrorParser(),
+        com.testlogon.android.feature.trading.FakeExchangeRepository(),
+        com.testlogon.android.feature.trading.FakeTradingRepository(),
     )

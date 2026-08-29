@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus, Check } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus, Check, TrendingUp, Activity } from "lucide-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { GifPicker } from "@/components/shared/GifPicker";
@@ -25,6 +25,9 @@ import { EventPickerDialog } from "./EventPickerDialog";
 import { MeetingPollComposer } from "./MeetingPollComposer";
 import { FindDateTimeComposer } from "./FindDateTimeComposer";
 import { CountdownComposerDialog, type CountdownSubmitData } from "./CountdownComposerDialog";
+import { MarketCardComposerDialog } from "./MarketCardComposerDialog";
+import { PositionCardComposerDialog } from "./PositionCardComposerDialog";
+import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { FilePickerDialog } from "./FilePickerDialog";
@@ -66,6 +69,9 @@ interface ComposeBarProps {
   onSendMeetingPoll?: (params: SendMeetingPollReq) => void;
   onSendFindDateTime?: (params: SendFindDateTimeReq) => void;
   onSendCountdown?: (params: CountdownSubmitData) => void;
+  onSendMarketCard?: (payload: MarketCardPayload) => void;
+  onSendPositionCard?: (payload: PositionCardPayload) => void;
+  currentUserName?: string;
   onSendLottery?: (params: Omit<CreateLotteryMessageReq, "conversation_id">) => void;
   onSendVoiceMessage?: (blob: Blob, meta: { duration: number; waveform: number[]; contentType: string; consumption_policy?: "none" | "listen_once"; reply_to_message_id?: string | null; send_at?: number | null }) => void;
   // MVA-010: synthesize the current draft text into a TTS voice message.
@@ -99,6 +105,9 @@ export function ComposeBar({
   onSendMeetingPoll,
   onSendFindDateTime,
   onSendCountdown,
+  onSendMarketCard,
+  onSendPositionCard,
+  currentUserName,
   onSendLottery,
   onSendVoiceMessage,
   onSendTtsVoice,
@@ -212,6 +221,8 @@ export function ComposeBar({
   const [meetingPollOpen, setMeetingPollOpen] = React.useState(false);
   const [findDateTimeOpen, setFindDateTimeOpen] = React.useState(false);
   const [countdownOpen, setCountdownOpen] = React.useState(false);
+  const [marketCardOpen, setMarketCardOpen] = React.useState(false);
+  const [positionCardOpen, setPositionCardOpen] = React.useState(false);
   const [activeDraftId, setActiveDraftId] = React.useState<string | null>(null);
   const [draftDirty, setDraftDirty] = React.useState(false);
   const [lastDraftSavedAt, setLastDraftSavedAt] = React.useState<number | null>(null);
@@ -1603,7 +1614,7 @@ export function ComposeBar({
       <div className="flex items-end gap-2">
         {(onSendVoiceMessage || onSendGallery || onSendLottery || onSendFileShare || onSendVideoShare ||
           onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendFindDateTime ||
-          onSendCountdown || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
+          onSendCountdown || onSendMarketCard || onSendPositionCard || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -1785,6 +1796,18 @@ export function ComposeBar({
                   <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
                     onClick={() => { setCountdownOpen(true); setMoreOpen(false); }} aria-label="Create a countdown">
                     <Timer className="h-4 w-4" /> Create a countdown
+                  </Button>
+                )}
+                {onSendMarketCard && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setMarketCardOpen(true); setMoreOpen(false); }} aria-label="Share market">
+                    <TrendingUp className="h-4 w-4" /> Share market
+                  </Button>
+                )}
+                {onSendPositionCard && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setPositionCardOpen(true); setMoreOpen(false); }} aria-label="Share position">
+                    <Activity className="h-4 w-4" /> Share position
                   </Button>
                 )}
                 {draftsEnabled && (
@@ -2098,6 +2121,27 @@ export function ComposeBar({
         />
       )}
 
+      {onSendMarketCard && (
+        <MarketCardComposerDialog
+          open={marketCardOpen}
+          onClose={() => setMarketCardOpen(false)}
+          onSubmit={(payload) => {
+            onSendMarketCard(payload);
+            setMarketCardOpen(false);
+          }}
+        />
+      )}
+      {onSendPositionCard && (
+        <PositionCardComposerDialog
+          open={positionCardOpen}
+          onClose={() => setPositionCardOpen(false)}
+          ownerName={currentUserName}
+          onSubmit={(payload) => {
+            onSendPositionCard(payload);
+            setPositionCardOpen(false);
+          }}
+        />
+      )}
       {onSendCountdown && (
         <CountdownComposerDialog
           open={countdownOpen}

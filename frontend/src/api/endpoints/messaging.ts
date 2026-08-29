@@ -1,4 +1,4 @@
-import { api } from "@/api/client";
+import { api, ApiError } from "@/api/client";
 import type {
   Conversation,
   Message,
@@ -49,6 +49,7 @@ import type {
   GalleryImageItem,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
+import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import { encryptBytes } from "@/lib/messageEncryption";
 
@@ -881,6 +882,67 @@ export async function sendCountdownMessage(
     params,
   );
   return adaptMessage(res);
+}
+
+// ---- Trading-in-chat cards (EPIC A: FE-101 market, FE-102 position) ----
+//
+// Preferred path is a dedicated /messaging/cards/* endpoint (BE-101/BE-102).
+// If the backend has not shipped it yet (404), we degrade to a normal message
+// carrying a new `kind` + structured payload -- the works-now path that renders
+// identically because MessageBubble dispatches purely on `kind` + payload.
+
+async function sendCardMessage(
+  conversationId: string,
+  cardEndpoint: string,
+  kind: "market_card" | "position_card",
+  payload: Record<string, unknown>,
+  replyToMessageId?: string,
+): Promise<Message> {
+  try {
+    const res = await api.post<Message>(
+      `/messaging/conversations/${conversationId}/cards/${cardEndpoint}`,
+      { ...payload, reply_to_message_id: replyToMessageId },
+    );
+    return adaptMessage(res);
+  } catch (err) {
+    // Degrade-on-404 (endpoint not deployed) to the normal kind+payload send.
+    if (err instanceof ApiError && err.status === 404) {
+      const res = await api.post<Message>(
+        `/messaging/conversations/${conversationId}/messages`,
+        { kind, ...payload, reply_to_message_id: replyToMessageId },
+      );
+      return adaptMessage(res);
+    }
+    throw err;
+  }
+}
+
+export async function sendMarketCardMessage(
+  conversationId: string,
+  payload: MarketCardPayload,
+  replyToMessageId?: string,
+): Promise<Message> {
+  return sendCardMessage(
+    conversationId,
+    "market",
+    "market_card",
+    { ...payload },
+    replyToMessageId,
+  );
+}
+
+export async function sendPositionCardMessage(
+  conversationId: string,
+  payload: PositionCardPayload,
+  replyToMessageId?: string,
+): Promise<Message> {
+  return sendCardMessage(
+    conversationId,
+    "position",
+    "position_card",
+    { ...payload },
+    replyToMessageId,
+  );
 }
 
 export async function sendGifMessage(
