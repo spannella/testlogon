@@ -146,6 +146,11 @@ fun NavGraphBuilder.messagingGraph(navController: NavHostController) {
             onViewContact = { peerUserId ->
                 navController.navigate(MessagingRoutes.contactCard(peerUserId)) { launchSingleTop = true }
             },
+            onOpenProduct = { categoryId, itemId ->
+                navController.navigate(
+                    com.testlogon.android.navigation.ProductDetailDest.build(categoryId, itemId),
+                ) { launchSingleTop = true }
+            },
             onOpenGroupDetails = {
                 if (conversationId.isNotBlank()) {
                     navController.navigate(MessagingRoutes.groupDetails(conversationId)) {

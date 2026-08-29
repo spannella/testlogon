@@ -51,6 +51,7 @@ import type {
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import type { CryptoTransferPayload } from "@/lib/cryptoTransfer";
+import type { ProductCardPayload, OrderCardPayload } from "@/lib/ecomCards";
 import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import { encryptBytes } from "@/lib/messageEncryption";
 
@@ -895,7 +896,7 @@ export async function sendCountdownMessage(
 async function sendCardMessage(
   conversationId: string,
   cardEndpoint: string,
-  kind: "market_card" | "position_card" | "crypto_transfer",
+  kind: "market_card" | "position_card" | "crypto_transfer" | "product_card" | "order_card",
   payload: Record<string, unknown>,
   replyToMessageId?: string,
 ): Promise<Message> {
@@ -961,6 +962,44 @@ export async function sendCryptoTransferMessage(
     conversationId,
     "crypto",
     "crypto_transfer",
+    { ...payload },
+    replyToMessageId,
+  );
+}
+
+// ---- Ecommerce-in-chat cards (EPIC F: FE-150 product, FE-151 order-share) ----
+//
+// Preferred path is a dedicated /messaging/cards/{product,order} endpoint. If the
+// backend has not shipped it yet (404), we degrade to a normal message carrying
+// kind "product_card"/"order_card" + the structured payload -- MessageBubble
+// dispatches on `kind` + payload so it renders identically either way.
+export async function sendProductCardMessage(
+  conversationId: string,
+  payload: ProductCardPayload,
+  replyToMessageId?: string,
+): Promise<Message> {
+  // Map payload.image onto the message field product_image (the plain image
+  // field on Message is the MessageImage attachment shape) so the
+  // degrade-on-404 message renders identically.
+  const { image, ...rest } = payload;
+  return sendCardMessage(
+    conversationId,
+    "product",
+    "product_card",
+    { ...rest, product_image: image },
+    replyToMessageId,
+  );
+}
+
+export async function sendOrderCardMessage(
+  conversationId: string,
+  payload: OrderCardPayload,
+  replyToMessageId?: string,
+): Promise<Message> {
+  return sendCardMessage(
+    conversationId,
+    "order",
+    "order_card",
     { ...payload },
     replyToMessageId,
   );

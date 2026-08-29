@@ -253,6 +253,24 @@ sealed interface MessageMedia {
     data class CryptoTransfer(
         val card: com.testlogon.android.feature.messaging.CryptoTransferModel.CryptoTransfer,
     ) : MessageMedia
+
+    /**
+     * FE-150 (EPIC F) - a shared storefront product. Rides a normal text message whose body carries an
+     * encoded [com.testlogon.android.feature.messaging.EcomCardModel] product payload; [MessageDto.toMedia]
+     * parses the body into [card]. The Buy button opens the product-detail screen for [card].
+     */
+    data class ProductCard(
+        val card: com.testlogon.android.feature.messaging.EcomCardModel.ProductCard,
+    ) : MessageMedia
+
+    /**
+     * FE-151 (EPIC F) - a shared purchase/order. Rides a normal text message whose body carries an
+     * encoded [com.testlogon.android.feature.messaging.EcomCardModel] order payload; [MessageDto.toMedia]
+     * parses the body into [card]. Receipt mode carries NO buyer PII (enforced by the model choke point).
+     */
+    data class OrderCard(
+        val card: com.testlogon.android.feature.messaging.EcomCardModel.OrderCard,
+    ) : MessageMedia
 }
 
 /** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
@@ -796,6 +814,12 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
     // A non-card body falls through (parse == null) to the normal media resolution below.
     // FE-111 (EPIC B) - a crypto-transfer card rides a normal text message behind its own sentinel.
     // Parse it FIRST so it renders as a transfer card, not raw text; a non-card body falls through.
+    // FE-150/FE-151 (EPIC F) - an ecom product/order card rides a normal text message behind its own
+    // sentinel. Parse it FIRST so it renders as a card, not raw text; a non-card body falls through.
+    com.testlogon.android.feature.messaging.EcomCardModel.parse(text) is com.testlogon.android.feature.messaging.EcomCardModel.ProductCard ->
+        MessageMedia.ProductCard(com.testlogon.android.feature.messaging.EcomCardModel.parse(text) as com.testlogon.android.feature.messaging.EcomCardModel.ProductCard)
+    com.testlogon.android.feature.messaging.EcomCardModel.parse(text) is com.testlogon.android.feature.messaging.EcomCardModel.OrderCard ->
+        MessageMedia.OrderCard(com.testlogon.android.feature.messaging.EcomCardModel.parse(text) as com.testlogon.android.feature.messaging.EcomCardModel.OrderCard)
     com.testlogon.android.feature.messaging.CryptoTransferModel.parse(text) != null ->
         MessageMedia.CryptoTransfer(com.testlogon.android.feature.messaging.CryptoTransferModel.parse(text)!!)
     com.testlogon.android.feature.messaging.TradingCardModel.parse(text) != null -> {
