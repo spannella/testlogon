@@ -27,7 +27,9 @@ import { FindDateTimeComposer } from "./FindDateTimeComposer";
 import { CountdownComposerDialog, type CountdownSubmitData } from "./CountdownComposerDialog";
 import { MarketCardComposerDialog } from "./MarketCardComposerDialog";
 import { PositionCardComposerDialog } from "./PositionCardComposerDialog";
+import { CryptoSendComposerDialog } from "./CryptoSendComposerDialog";
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
+import type { CryptoTransferPayload } from "@/lib/cryptoTransfer";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { FilePickerDialog } from "./FilePickerDialog";
@@ -71,6 +73,9 @@ interface ComposeBarProps {
   onSendCountdown?: (params: CountdownSubmitData) => void;
   onSendMarketCard?: (payload: MarketCardPayload) => void;
   onSendPositionCard?: (payload: PositionCardPayload) => void;
+  onSendCryptoTransfer?: (payload: CryptoTransferPayload) => void;
+  /** DM partner display name for the send-crypto composer attribution. */
+  recipientName?: string;
   currentUserName?: string;
   onSendLottery?: (params: Omit<CreateLotteryMessageReq, "conversation_id">) => void;
   onSendVoiceMessage?: (blob: Blob, meta: { duration: number; waveform: number[]; contentType: string; consumption_policy?: "none" | "listen_once"; reply_to_message_id?: string | null; send_at?: number | null }) => void;
@@ -107,6 +112,8 @@ export function ComposeBar({
   onSendCountdown,
   onSendMarketCard,
   onSendPositionCard,
+  onSendCryptoTransfer,
+  recipientName,
   currentUserName,
   onSendLottery,
   onSendVoiceMessage,
@@ -223,6 +230,7 @@ export function ComposeBar({
   const [countdownOpen, setCountdownOpen] = React.useState(false);
   const [marketCardOpen, setMarketCardOpen] = React.useState(false);
   const [positionCardOpen, setPositionCardOpen] = React.useState(false);
+  const [cryptoSendOpen, setCryptoSendOpen] = React.useState(false);
   const [activeDraftId, setActiveDraftId] = React.useState<string | null>(null);
   const [draftDirty, setDraftDirty] = React.useState(false);
   const [lastDraftSavedAt, setLastDraftSavedAt] = React.useState<number | null>(null);
@@ -1614,7 +1622,7 @@ export function ComposeBar({
       <div className="flex items-end gap-2">
         {(onSendVoiceMessage || onSendGallery || onSendLottery || onSendFileShare || onSendVideoShare ||
           onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendFindDateTime ||
-          onSendCountdown || onSendMarketCard || onSendPositionCard || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
+          onSendCountdown || onSendMarketCard || onSendPositionCard || onSendCryptoTransfer || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -1808,6 +1816,13 @@ export function ComposeBar({
                   <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
                     onClick={() => { setPositionCardOpen(true); setMoreOpen(false); }} aria-label="Share position">
                     <Activity className="h-4 w-4" /> Share position
+                  </Button>
+                )}
+                {onSendCryptoTransfer && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setCryptoSendOpen(true); setMoreOpen(false); }} aria-label="Send crypto"
+                    data-testid="compose-send-crypto">
+                    <DollarSign className="h-4 w-4" /> Send crypto
                   </Button>
                 )}
                 {draftsEnabled && (
@@ -2139,6 +2154,18 @@ export function ComposeBar({
           onSubmit={(payload) => {
             onSendPositionCard(payload);
             setPositionCardOpen(false);
+          }}
+        />
+      )}
+      {onSendCryptoTransfer && (
+        <CryptoSendComposerDialog
+          open={cryptoSendOpen}
+          onClose={() => setCryptoSendOpen(false)}
+          recipientName={recipientName}
+          senderName={currentUserName}
+          onSubmit={(payload) => {
+            onSendCryptoTransfer(payload);
+            setCryptoSendOpen(false);
           }}
         />
       )}
