@@ -90,6 +90,10 @@ data class ThreadUiState(
     val positionPicker: PositionPickerState = PositionPickerState(),
     /** FE-110 (EPIC B) — "Send crypto" composer sheet (asset + amount + confirm; hidden until opened). */
     val cryptoSend: CryptoSendState = CryptoSendState(),
+    /** FE-150 (EPIC F) — "Share product" catalog picker sheet (hidden until opened). */
+    val productPicker: ProductPickerState = ProductPickerState(),
+    /** FE-151 (EPIC F) — "Share purchase" order picker + mode-selector sheet (hidden until opened). */
+    val orderPicker: OrderPickerState = OrderPickerState(),
     /** MSG — receiver passphrase-unlock dialog for an encrypted message (non-null key = open). */
     val encryptUnlock: EncryptUnlockState = EncryptUnlockState(),
     /** MSG — view-once viewer dialog (non-null key = open, showing the consumed content). */
@@ -279,6 +283,45 @@ data class CryptoSendState(
 ) {
     val selected: CryptoAssetOption? get() = assets.firstOrNull { it.symbol == selectedSymbol }
 }
+
+/** FE-150 - one selectable catalog product in the "Share product" picker. */
+data class ProductPick(
+    val categoryId: String,
+    val itemId: String,
+    val title: String,
+    val priceCents: Long,
+    val currency: String,
+    val imageUrl: String?,
+    val inStock: Boolean,
+)
+
+/** FE-150 - "Share product" searchable catalog-picker state. */
+data class ProductPickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val query: String = "",
+    val products: List<ProductPick> = emptyList(),
+    val error: String? = null,
+)
+
+/** FE-151 - one of the caller's orders offered in the "Share purchase" picker. */
+data class OrderPick(
+    val orderId: String,
+    val summary: String,
+    val status: String,
+    val totalCents: Long?,
+    val currency: String?,
+    /** The caller's own display name; used only for gift/recommendation attribution (never in receipt). */
+    val buyerName: String?,
+)
+
+/** FE-151 - "Share purchase" order-picker + mode-selector state. */
+data class OrderPickerState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val orders: List<OrderPick> = emptyList(),
+    val error: String? = null,
+)
 
 /**
  * AND-147 — viewer-roster ("Seen by") sheet. Non-null [messageId] = open. [viewers] are most-recent

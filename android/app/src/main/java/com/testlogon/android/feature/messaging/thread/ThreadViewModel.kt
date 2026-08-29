@@ -109,6 +109,8 @@ class ThreadViewModel @Inject constructor(
     private val exchangeRepository: com.testlogon.android.data.exchange.ExchangeRepository,
     private val tradingRepository: com.testlogon.android.data.exchange.TradingRepository,
     private val custodyReader: com.testlogon.android.data.custody.CustodyReader,
+    private val catalogRepository: com.testlogon.android.data.catalog.CatalogRepository,
+    private val purchasesRepository: com.testlogon.android.data.purchases.PurchasesRepository,
 ) : ViewModel() {
 
     /**
@@ -2423,6 +2425,144 @@ class ThreadViewModel @Inject constructor(
             repository.sendOutbox(conversationId, clientId, body)
             _events.trySend(ThreadEvent.ScrollToBottom)
         }
+    }
+
+    // ---- FE-150 / FE-151 (EPIC F): share product / share purchase in chat ----
+
+    /** FE-150 - open the "Share product" picker + load the first page of the catalog (search). */
+    fun onAttachProductCard() {
+        _state.update { it.copy(productPicker = ProductPickerState(visible = true, loading = true)) }
+        loadProducts("")
+    }
+
+    fun onProductPickerQuery(q: String) {
+        _state.update { it.copy(productPicker = it.productPicker.copy(query = q, loading = true)) }
+        loadProducts(q)
+    }
+
+    /** Load catalog products for [q] (blank -> a broad search that returns a first page). */
+    private fun loadProducts(q: String) {
+        viewModelScope.launch {
+            // The catalog has no "list all items" GET; search with a broad term surfaces a first page.
+            val term = q.trim().ifBlank { "a" }
+            when (val r = catalogRepository.search(query = term, cursor = null)) {
+                is ApiResult.Success -> _state.update {
+                    // Ignore a stale response if the query changed since we launched.
+                    if (it.productPicker.query.trim() != q.trim()) it
+                    else it.copy(productPicker = it.productPicker.copy(
+                        loading = false,
+                        products = r.data.items.map { item ->
+                            ProductPick(
+                                categoryId = item.categoryId,
+                                itemId = item.itemId,
+                                title = item.name,
+                                priceCents = item.priceCents,
+                                currency = item.currency,
+                                imageUrl = item.thumbnailUrl,
+                                inStock = item.stockStatus != "out_of_stock" && (item.stockCount == null || item.stockCount > 0),
+                            )
+                        },
+                        error = null,
+                    ))
+                }
+                else -> _state.update {
+                    if (it.productPicker.query.trim() != q.trim()) it
+                    else it.copy(productPicker = it.productPicker.copy(loading = false, products = emptyList(), error = "Couldn't load products"))
+                }
+            }
+        }
+    }
+
+    fun onDismissProductPicker() { _state.update { it.copy(productPicker = ProductPickerState()) } }
+
+    /** FE-150 - send a product_card as a normal text message carrying the encoded card payload. */
+    fun onSendProductCard(pick: ProductPick) {
+        _state.update { it.copy(productPicker = ProductPickerState()) }
+        val card = com.testlogon.android.feature.messaging.EcomCardModel.buildProductPayload(
+            categoryId = pick.categoryId,
+            itemId = pick.itemId,
+            title = pick.title,
+            priceCents = pick.priceCents,
+            currency = pick.currency,
+            imageUrl = pick.imageUrl,
+            inStock = pick.inStock,
+        )
+        val body = com.testlogon.android.feature.messaging.EcomCardModel.encode(card)
+        val clientId = java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            repository.enqueueOptimistic(conversationId, clientId, body, clock())
+            repository.sendOutbox(conversationId, clientId, body)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    /** FE-151 - open the "Share purchase" picker + load the caller's purchase history. */
+    fun onAttachOrderCard() {
+        _state.update { it.copy(orderPicker = OrderPickerState(visible = true, loading = true)) }
+        viewModelScope.launch {
+            when (val r = purchasesRepository.list()) {
+                is ApiResult.Success -> _state.update {
+                    it.copy(orderPicker = it.orderPicker.copy(
+                        loading = false,
+                        orders = r.data.map { row ->
+                            OrderPick(
+                                orderId = row.id,
+                                summary = row.title,
+                                status = orderStatusLabel(row.status),
+                                totalCents = row.money.amount.movePointRight(2).toLong(),
+                                currency = row.money.currency,
+                                buyerName = selfSub()?.let { sub -> displayNames.resolve(sub) },
+                            )
+                        },
+                        error = null,
+                    ))
+                }
+                else -> _state.update {
+                    it.copy(orderPicker = it.orderPicker.copy(loading = false, error = "Couldn't load your purchases"))
+                }
+            }
+        }
+    }
+
+    fun onDismissOrderPicker() { _state.update { it.copy(orderPicker = OrderPickerState()) } }
+
+    /**
+     * FE-151 - send an order_share card as a normal text message. The mode is passed to the model
+     * choke point [EcomCardModel.buildOrderPayload], which STRIPS the buyer name in receipt mode (no
+     * name/address ever rides the wire for a receipt).
+     */
+    fun onSendOrderCard(
+        pick: OrderPick,
+        mode: com.testlogon.android.feature.messaging.EcomCardModel.OrderMode,
+    ) {
+        _state.update { it.copy(orderPicker = OrderPickerState()) }
+        val card = com.testlogon.android.feature.messaging.EcomCardModel.buildOrderPayload(
+            orderId = pick.orderId,
+            summary = pick.summary,
+            status = pick.status,
+            mode = mode,
+            totalCents = pick.totalCents,
+            currency = pick.currency,
+            buyerName = pick.buyerName,
+        )
+        val body = com.testlogon.android.feature.messaging.EcomCardModel.encode(card)
+        val clientId = java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            repository.enqueueOptimistic(conversationId, clientId, body, clock())
+            repository.sendOutbox(conversationId, clientId, body)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
+
+    /** FE-151 - a short human status label for a purchase-history order status. */
+    private fun orderStatusLabel(status: com.testlogon.android.data.purchases.OrderStatus): String = when (status) {
+        com.testlogon.android.data.purchases.OrderStatus.Pending -> "Pending"
+        com.testlogon.android.data.purchases.OrderStatus.Completed -> "Completed"
+        com.testlogon.android.data.purchases.OrderStatus.Cancelled -> "Cancelled"
+        com.testlogon.android.data.purchases.OrderStatus.Reverted -> "Reverted"
+        com.testlogon.android.data.purchases.OrderStatus.CancelRequested -> "Cancel requested"
+        com.testlogon.android.data.purchases.OrderStatus.CancelDenied -> "Cancel denied"
+        is com.testlogon.android.data.purchases.OrderStatus.Unknown -> "Order"
     }
 
     /** FE-101 — refresh live price/change/spark for the market cards currently in the thread. */

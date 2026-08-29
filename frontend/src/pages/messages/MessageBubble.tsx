@@ -60,6 +60,9 @@ import { FileMessageCard } from "./FileMessageCard";
 import { MarketCard } from "./MarketCard";
 import { PositionCard } from "./PositionCard";
 import { CryptoTransferCard } from "./CryptoTransferCard";
+import { ProductCard } from "./ProductCard";
+import { OrderShareCard } from "./OrderShareCard";
+import { orderCardPreview, productCardPreview, type OrderCardPayload, type ProductCardPayload } from "@/lib/ecomCards";
 import type { PositionCardPayload } from "@/lib/tradingCards";
 import type { CryptoTransferPayload, TransferStatus } from "@/lib/cryptoTransfer";
 import { WaveformPlayer } from "./WaveformPlayer";
@@ -203,6 +206,13 @@ function replyPreviewText(msg: Message): string {
   if (msg.kind === "find_datetime") return "[Find a Time]";
   if (msg.kind === "market_card") return `[Market: ${msg.symbol ?? ""}]`;
   if (msg.kind === "position_card") return `[Position: ${msg.symbol ?? ""}]`;
+  if (msg.kind === "product_card")
+    return productCardPreview({ title: msg.title ?? undefined });
+  if (msg.kind === "order_card")
+    return orderCardPreview({
+      order_items: (msg.items as { name: string; quantity: number }[] | undefined) ?? undefined,
+      order_item_count: msg.item_count ?? undefined,
+    });
   if (msg.kind === "crypto_transfer")
     return `[Crypto: ${[msg.amount, msg.asset].filter(Boolean).join(" ")}]`;
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
@@ -1972,6 +1982,37 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 fiat_cents: message.fiat_cents ?? undefined,
                 status: (message.status as TransferStatus) ?? "pending",
               } satisfies CryptoTransferPayload}
+            />
+          )}
+
+          {/* ── Product card (FE-150) ── */}
+          {message.kind === "product_card" && message.product_id != null && (
+            <ProductCard
+              payload={{
+                product_id: message.product_id,
+                category_id: message.category_id ?? undefined,
+                title: message.title ?? "",
+                price_cents: message.price_cents ?? 0,
+                currency: message.currency ?? "USD",
+                image: message.product_image ?? undefined,
+                in_stock: message.in_stock ?? true,
+              } satisfies ProductCardPayload}
+            />
+          )}
+
+          {/* ── Order/purchase-share card (FE-151) ── */}
+          {message.kind === "order_card" && message.order_id != null && (
+            <OrderShareCard
+              payload={{
+                order_id: message.order_id,
+                mode: (message.mode as OrderCardPayload["mode"]) ?? "receipt",
+                status: message.status ?? "unknown",
+                currency: message.currency ?? "USD",
+                amount_cents: message.amount_cents ?? undefined,
+                item_count: message.item_count ?? (message.items?.length ?? 0),
+                items:
+                  (message.items as { name: string; quantity: number }[] | undefined) ?? [],
+              } satisfies OrderCardPayload}
             />
           )}
 

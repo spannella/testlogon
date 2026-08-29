@@ -1288,4 +1288,54 @@ fun newThreadViewModel(
         com.testlogon.android.feature.trading.FakeExchangeRepository(),
         com.testlogon.android.feature.trading.FakeTradingRepository(),
         com.testlogon.android.feature.trading.FakeCustodyReader(),
+        fakeCatalogRepository(),
+        fakePurchasesRepository(),
     )
+
+/** EPIC F — minimal no-op catalog repo for thread tests (product-picker read returns empty). */
+private fun fakeCatalogRepository(): com.testlogon.android.data.catalog.CatalogRepository =
+    object : com.testlogon.android.data.catalog.CatalogRepository {
+        override suspend fun categories(nextToken: String?, pageSize: Int) =
+            com.testlogon.android.core.model.ApiResult.Success(
+                com.testlogon.android.data.catalog.CatalogCategoryPage(emptyList(), null),
+            )
+        override suspend fun categoryItems(categoryId: String, cursor: String?, limit: Int) =
+            com.testlogon.android.core.model.ApiResult.Success(
+                com.testlogon.android.data.catalog.CatalogItemPage(emptyList(), null),
+            )
+        override suspend fun search(query: String, cursor: String?, limit: Int) =
+            com.testlogon.android.core.model.ApiResult.Success(
+                com.testlogon.android.data.catalog.CatalogItemPage(emptyList(), null),
+            )
+        override suspend fun getItem(categoryId: String, itemId: String) =
+            com.testlogon.android.core.model.ApiResult.Failure(
+                com.testlogon.android.core.model.ApiError(status = 404, message = "nf"),
+            )
+        override suspend fun reviews(itemId: String, cursor: String?) =
+            com.testlogon.android.core.model.ApiResult.Success(
+                com.testlogon.android.data.catalog.CatalogReviewPage(emptyList(), null),
+            )
+        override suspend fun addReview(itemId: String, rating: Int, title: String?, body: String?, reviewer: String?) =
+            com.testlogon.android.core.model.ApiResult.Failure(
+                com.testlogon.android.core.model.ApiError(status = 400, message = "no"),
+            )
+        override suspend fun deleteReview(itemId: String, reviewId: String) =
+            com.testlogon.android.core.model.ApiResult.Success(Unit)
+    }
+
+/** EPIC F — minimal no-op purchases repo for thread tests (order-picker read returns empty). */
+private fun fakePurchasesRepository(): com.testlogon.android.data.purchases.PurchasesRepository =
+    object : com.testlogon.android.data.purchases.PurchasesRepository {
+        override suspend fun list(limit: Int, status: String?) =
+            com.testlogon.android.core.model.ApiResult.Success(emptyList<com.testlogon.android.data.purchases.PurchaseListItem>())
+        override suspend fun search(query: String, limit: Int) =
+            com.testlogon.android.core.model.ApiResult.Success(emptyList<com.testlogon.android.data.purchases.PurchaseListItem>())
+        override suspend fun detail(txnId: String) =
+            com.testlogon.android.core.model.ApiResult.Failure(
+                com.testlogon.android.core.model.ApiError(status = 404, message = "nf"),
+            )
+        override suspend fun confirmReceived(txnId: String) =
+            com.testlogon.android.core.model.ApiResult.Failure(
+                com.testlogon.android.core.model.ApiError(status = 404, message = "nf"),
+            )
+    }

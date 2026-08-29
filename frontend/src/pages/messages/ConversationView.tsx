@@ -22,6 +22,8 @@ import {
   sendMarketCardMessage,
   sendPositionCardMessage,
   sendCryptoTransferMessage,
+  sendProductCardMessage,
+  sendOrderCardMessage,
   createLotteryMessage,
   sendVoiceMessage,
   markRead,
@@ -39,6 +41,7 @@ import { useOfflineStore } from "@/stores/offlineStore";
 import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, SendFindDateTimeReq, CreateLotteryMessageReq } from "@/api/types";
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import type { CryptoTransferPayload } from "@/lib/cryptoTransfer";
+import type { ProductCardPayload, OrderCardPayload } from "@/lib/ecomCards";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
@@ -629,6 +632,24 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       toast.success("Crypto sent");
     },
     onError: () => toast.error("Failed to send crypto"),
+  });
+
+  const sendProductCard = useMutation({
+    mutationFn: (payload: ProductCardPayload) => sendProductCardMessage(convoId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share product"),
+  });
+
+  const sendOrderCard = useMutation({
+    mutationFn: (payload: OrderCardPayload) => sendOrderCardMessage(convoId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share purchase"),
   });
 
   const sendLottery = useMutation({
@@ -1514,6 +1535,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendMarketCard={(payload) => sendMarketCard.mutate(payload)}
         onSendPositionCard={(payload) => sendPositionCard.mutate(payload)}
         onSendCryptoTransfer={!isGroup ? (payload) => sendCryptoTransfer.mutate(payload) : undefined}
+        onSendProductCard={(payload) => sendProductCard.mutate(payload)}
+        onSendOrderCard={(payload) => sendOrderCard.mutate(payload)}
         recipientName={dmPartner?.display_name}
         currentUserName={currentUserName}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}

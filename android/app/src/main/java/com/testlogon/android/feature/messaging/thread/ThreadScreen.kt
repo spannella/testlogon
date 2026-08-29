@@ -65,6 +65,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.CurrencyBitcoin
+import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.EmojiEmotions
@@ -198,6 +200,7 @@ fun ThreadRoute(
     onPlaceCall: (String) -> Unit = {},
     onViewContact: (userId: String) -> Unit = {},
     onOpenSymbol: (Int) -> Unit = {},
+    onOpenProduct: (categoryId: String, itemId: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
     onOpenGroupDetails: () -> Unit = {},
     viewModel: ThreadViewModel = hiltViewModel(),
@@ -440,6 +443,14 @@ fun ThreadRoute(
         onCryptoBack = viewModel::onCryptoBack,
         onConfirmCryptoSend = viewModel::onSendCryptoTransfer,
         onDismissCryptoSend = viewModel::onDismissCryptoSend,
+        onAttachProductCard = viewModel::onAttachProductCard,
+        onProductPickerQuery = viewModel::onProductPickerQuery,
+        onDismissProductPicker = viewModel::onDismissProductPicker,
+        onSendProductCard = viewModel::onSendProductCard,
+        onOpenProduct = onOpenProduct,
+        onAttachOrderCard = viewModel::onAttachOrderCard,
+        onDismissOrderPicker = viewModel::onDismissOrderPicker,
+        onSendOrderCard = viewModel::onSendOrderCard,
         onOpenMessageOptions = viewModel::openMessageOptions,
         onClearMessageOptions = viewModel::clearMessageOptions,
         onRemoveStagedImage = viewModel::onRemoveStagedImage,
@@ -1058,6 +1069,14 @@ fun ThreadScreen(
     onDismissPositionPicker: () -> Unit = {},
     onSendPositionCard: (OpenPositionPick, com.testlogon.android.feature.messaging.TradingCardModel.Disclosure) -> Unit = { _, _ -> },
     onAttachCryptoSend: () -> Unit = {},
+    onAttachProductCard: () -> Unit = {},
+    onProductPickerQuery: (String) -> Unit = {},
+    onDismissProductPicker: () -> Unit = {},
+    onSendProductCard: (ProductPick) -> Unit = {},
+    onOpenProduct: (categoryId: String, itemId: String) -> Unit = { _, _ -> },
+    onAttachOrderCard: () -> Unit = {},
+    onDismissOrderPicker: () -> Unit = {},
+    onSendOrderCard: (OrderPick, com.testlogon.android.feature.messaging.EcomCardModel.OrderMode) -> Unit = { _, _ -> },
     onCryptoSelectAsset: (String) -> Unit = {},
     onCryptoAmountChange: (String) -> Unit = {},
     onCryptoMax: () -> Unit = {},
@@ -1345,6 +1364,8 @@ fun ThreadScreen(
                         onAttachMarketCard = onAttachMarketCard,
                         onAttachPositionCard = onAttachPositionCard,
                         onAttachCryptoSend = onAttachCryptoSend,
+                        onAttachProductCard = onAttachProductCard,
+                        onAttachOrderCard = onAttachOrderCard,
                         onOpenMessageOptions = onOpenMessageOptions,
                         onClearMessageOptions = onClearMessageOptions,
                         onRemoveStagedImage = onRemoveStagedImage,
@@ -1422,6 +1443,7 @@ fun ThreadScreen(
                     onJumpToMessage = onJumpToMessage,
                     pollVoter = pollVoter,
                     onOpenSymbol = onOpenSymbol,
+                    onOpenProduct = onOpenProduct,
                     nowSeconds = nowSeconds,
                 )
             }
@@ -1555,6 +1577,21 @@ fun ThreadScreen(
             onDismiss = onDismissCryptoSend,
         )
     }
+    if (state.productPicker.visible) {
+        ProductPickerSheet(
+            state = state.productPicker,
+            onQuery = onProductPickerQuery,
+            onPick = onSendProductCard,
+            onDismiss = onDismissProductPicker,
+        )
+    }
+    if (state.orderPicker.visible) {
+        OrderPickerSheet(
+            state = state.orderPicker,
+            onSend = onSendOrderCard,
+            onDismiss = onDismissOrderPicker,
+        )
+    }
 
     if (state.tipSheet.messageId != null) {
         TipSheet(
@@ -1604,6 +1641,8 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
     (m.media as? MessageMedia.MarketCard)?.let { return com.testlogon.android.feature.messaging.TradingCardModel.marketPreview(it.card.symbol) }
     (m.media as? MessageMedia.PositionCard)?.let { return com.testlogon.android.feature.messaging.TradingCardModel.positionPreview(it.card.symbol) }
     (m.media as? MessageMedia.CryptoTransfer)?.let { return com.testlogon.android.feature.messaging.CryptoTransferModel.previewNeutral(it.card) }
+    (m.media as? MessageMedia.ProductCard)?.let { return com.testlogon.android.feature.messaging.EcomCardModel.productPreview(it.card) }
+    (m.media as? MessageMedia.OrderCard)?.let { return com.testlogon.android.feature.messaging.EcomCardModel.orderPreview(it.card) }
     val text = m.text.trim()
     if (text.isNotBlank()) return text
     return when (m.media) {
@@ -1621,6 +1660,8 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
         is MessageMedia.MarketCard -> com.testlogon.android.feature.messaging.TradingCardModel.marketPreview((m.media as MessageMedia.MarketCard).card.symbol)
         is MessageMedia.PositionCard -> com.testlogon.android.feature.messaging.TradingCardModel.positionPreview((m.media as MessageMedia.PositionCard).card.symbol)
         is MessageMedia.CryptoTransfer -> com.testlogon.android.feature.messaging.CryptoTransferModel.previewNeutral((m.media as MessageMedia.CryptoTransfer).card)
+        is MessageMedia.ProductCard -> com.testlogon.android.feature.messaging.EcomCardModel.productPreview((m.media as MessageMedia.ProductCard).card)
+        is MessageMedia.OrderCard -> com.testlogon.android.feature.messaging.EcomCardModel.orderPreview((m.media as MessageMedia.OrderCard).card)
         is MessageMedia.Countdown -> "[countdown]"
         is MessageMedia.CalendarEvent, is MessageMedia.CalendarShare -> "[calendar]"
         is MessageMedia.Paid -> "[locked]"
@@ -1652,6 +1693,7 @@ private fun ThreadList(
     onJumpToMessage: (String) -> Unit = {},
     pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
     onOpenSymbol: (Int) -> Unit = {},
+    onOpenProduct: (categoryId: String, itemId: String) -> Unit = { _, _ -> },
     nowSeconds: Long,
 ) {
     // reverseLayout: index 0 is the newest message at the visual bottom.
@@ -1690,6 +1732,7 @@ private fun ThreadList(
                     unlock = state.unlocks[message.key] ?: UnlockUiState(),
                     marketCards = state.marketCards,
                     onOpenSymbol = onOpenSymbol,
+                    onOpenProduct = onOpenProduct,
                     onRetry = { onRetrySend(message.key) },
                     onOpenImage = onOpenImage,
                     onOpenGalleryVideo = onOpenGalleryVideo,
@@ -1805,6 +1848,7 @@ private fun MessageBubble(
     pollVoter: com.testlogon.android.data.poll.PollVoter? = null,
     marketCards: Map<Int, MarketCardLive> = emptyMap(),
     onOpenSymbol: (Int) -> Unit = {},
+    onOpenProduct: (categoryId: String, itemId: String) -> Unit = { _, _ -> },
     onRetry: () -> Unit,
     onOpenImage: (String) -> Unit,
     onOpenGalleryVideo: (String) -> Unit = {},
@@ -2062,6 +2106,11 @@ private fun MessageBubble(
                 // isOwn == the viewer is the sender -> SENT framing; else RECEIVED.
                 viewerSub = if (message.isOwn) media.card.fromSub else null,
             )
+            is MessageMedia.ProductCard -> ProductCard(
+                card = media.card,
+                onBuy = onOpenProduct,
+            )
+            is MessageMedia.OrderCard -> OrderShareCard(card = media.card)
             is MessageMedia.Paid -> PaidMessageBubble(
                 monetization = media.monetization,
                 isOwn = message.isOwn,
@@ -2599,6 +2648,8 @@ private fun MessageComposer(
     onAttachMarketCard: () -> Unit = {},
     onAttachPositionCard: () -> Unit = {},
     onAttachCryptoSend: () -> Unit = {},
+    onAttachProductCard: () -> Unit = {},
+    onAttachOrderCard: () -> Unit = {},
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
     onRemoveStagedImage: (Int) -> Unit = {},
@@ -2754,6 +2805,18 @@ private fun MessageComposer(
                         modifier = Modifier.size(44.dp).testTag(CryptoSendComposerTestTags.ATTACH),
                     ) {
                         Icon(Icons.Filled.CurrencyBitcoin, contentDescription = "Send crypto", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachProductCard() },
+                        modifier = Modifier.size(44.dp).testTag(EcomComposerTestTags.ATTACH_PRODUCT),
+                    ) {
+                        Icon(Icons.Filled.ShoppingBag, contentDescription = "Share product", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachOrderCard() },
+                        modifier = Modifier.size(44.dp).testTag(EcomComposerTestTags.ATTACH_ORDER),
+                    ) {
+                        Icon(Icons.Filled.ReceiptLong, contentDescription = "Share purchase", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }

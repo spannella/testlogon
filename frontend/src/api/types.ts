@@ -1307,7 +1307,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime" | "market_card" | "position_card" | "crypto_transfer";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime" | "market_card" | "position_card" | "crypto_transfer" | "product_card" | "order_card";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -1400,6 +1400,23 @@ export interface Message {
   from?: string | null;
   fiat_cents?: number | null;
   status?: "pending" | "complete" | "failed" | string | null;
+  // Ecommerce-in-chat card fields (EPIC F: FE-150/FE-151). product_card carries
+  // product_id/title/price_cents/currency/image/in_stock; order_card carries the
+  // share mode + status + (gift/recommendation only) amount + an item summary.
+  // These ride on a normal message keyed by `kind`. The order-card item summary
+  // NEVER carries buyer PII (name/address) -- see lib/ecomCards.
+  product_id?: string | null;
+  category_id?: string | null;
+  title?: string | null;
+  price_cents?: number | null;
+  currency?: string | null;
+  product_image?: string | null;
+  in_stock?: boolean | null;
+  order_id?: string | null;
+  mode?: "receipt" | "gift" | "recommendation" | string | null;
+  amount_cents?: number | null;
+  item_count?: number | null;
+  items?: { name: string; quantity: number }[] | null;
   // B-COUNTDOWN #31: the stashed reveal payload, surfaced ONLY once the countdown
   // target has passed. Present on any message that carried countdown_reveal_* on
   // send (not just the dedicated "countdown" kind).
