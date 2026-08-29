@@ -227,6 +227,23 @@ sealed interface MessageMedia {
     data class Paid(
         val monetization: MessageMonetization,
     ) : MessageMedia
+
+    /**
+     * FE-101 — a shared market reference (ticker + live price/change fetched at render time). Rides a
+     * normal text message whose body is a [com.testlogon.android.feature.messaging.TradingCardModel]
+     * payload; [MessageDto.toMedia] parses it. [card] is the parsed payload.
+     */
+    data class MarketCard(
+        val card: com.testlogon.android.feature.messaging.TradingCardModel.MarketCard,
+    ) : MessageMedia
+
+    /**
+     * FE-102 — a shared position P&L card carrying ONLY the fields permitted by its disclosure. Rides
+     * a normal text message; [MessageDto.toMedia] parses the body into [card].
+     */
+    data class PositionCard(
+        val card: com.testlogon.android.feature.messaging.TradingCardModel.PositionCard,
+    ) : MessageMedia
 }
 
 /** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
@@ -765,6 +782,16 @@ internal fun List<EditHistoryEntryDto>.toMessageEdits(): List<MessageEdit> =
 
 /** Maps the wire media object to the domain [MessageMedia] (pure; no Android types). */
 internal fun MessageDto.toMedia(): MessageMedia = when {
+    // FE-101/FE-102 — a trading card rides a normal text message; the body carries the encoded
+    // TradingCardModel payload behind a sentinel. Parse it FIRST so it renders as a card, not raw text.
+    // A non-card body falls through (parse == null) to the normal media resolution below.
+    com.testlogon.android.feature.messaging.TradingCardModel.parse(text) != null -> {
+        when (val c = com.testlogon.android.feature.messaging.TradingCardModel.parse(text)) {
+            is com.testlogon.android.feature.messaging.TradingCardModel.MarketCard -> MessageMedia.MarketCard(c)
+            is com.testlogon.android.feature.messaging.TradingCardModel.PositionCard -> MessageMedia.PositionCard(c)
+            else -> MessageMedia.None
+        }
+    }
     // C6 — gallery (multi-image) message. Sender + unlocked recipients get free_images here.
     kind == "gallery" && !freeImages.isNullOrEmpty() -> MessageMedia.Gallery(
         images = freeImages.map { gi ->

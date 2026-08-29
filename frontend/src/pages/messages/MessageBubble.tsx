@@ -57,6 +57,9 @@ import { ApiError } from "@/api/client";
 import type { GalleryImageItem, Message, MeetingPollAttachment, FindDateTimeAttachment, PaymentMethod } from "@/api/types";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
+import { MarketCard } from "./MarketCard";
+import { PositionCard } from "./PositionCard";
+import type { PositionCardPayload } from "@/lib/tradingCards";
 import { WaveformPlayer } from "./WaveformPlayer";
 import { VoicemailBubble } from "./VoicemailBubble";
 import { TranscriptControl } from "./TranscriptControl";
@@ -196,6 +199,8 @@ function replyPreviewText(msg: Message): string {
   if (msg.kind === "gif") return "[GIF]";
   if (msg.kind === "sticker") return "[Sticker]";
   if (msg.kind === "find_datetime") return "[Find a Time]";
+  if (msg.kind === "market_card") return `[Market: ${msg.symbol ?? ""}]`;
+  if (msg.kind === "position_card") return `[Position: ${msg.symbol ?? ""}]`;
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -1918,6 +1923,32 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 associatedEventId={message.associated_event_id}
               />
             )}
+
+          {/* ── Market card (FE-101) ── */}
+          {message.kind === "market_card" && message.symbol_id != null && (
+            <MarketCard
+              symbolId={message.symbol_id}
+              symbol={message.symbol ?? `#${message.symbol_id}`}
+            />
+          )}
+
+          {/* ── Position card (FE-102) ── */}
+          {message.kind === "position_card" && message.symbol_id != null && (
+            <PositionCard
+              payload={{
+                symbol_id: message.symbol_id,
+                symbol: message.symbol ?? `#${message.symbol_id}`,
+                side: message.side ?? "Long",
+                disclosure: message.disclosure ?? "roi",
+                roi_pct: message.roi_pct ?? 0,
+                entry: message.entry ?? undefined,
+                mark: message.mark ?? undefined,
+                size: message.size ?? undefined,
+                price_scaler: message.price_scaler ?? undefined,
+              } satisfies PositionCardPayload}
+              ownerName={isOwn ? "You" : senderLabel(message.sender_id)}
+            />
+          )}
 
           {/* ── GIF message (MSG-008) ── */}
           {message.kind === "gif" && message.gif_url && (
