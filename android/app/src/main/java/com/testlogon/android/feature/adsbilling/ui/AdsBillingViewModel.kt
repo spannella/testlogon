@@ -10,6 +10,16 @@ import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.data.billing.BillingRepository
 import com.testlogon.android.data.billing.PaymentMethod
 import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
+import com.testlogon.android.data.custody.CustodyAssets
+import com.testlogon.android.data.custody.CustodyReader
+import com.testlogon.android.data.fees.FeeQuote
+import com.testlogon.android.data.fees.FeesRepository
+import com.testlogon.android.feature.checkout.CheckoutCryptoMath
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlin.math.roundToLong
 import com.testlogon.android.navigation.AdsBillingDest
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +48,8 @@ import javax.inject.Inject
 class AdsBillingViewModel @Inject constructor(
     private val repository: AdsBillingRepository,
     private val billingRepository: BillingRepository,
+    private val feesRepository: FeesRepository,
+    private val custodyReader: CustodyReader,
     private val errorParser: ApiErrorParser,
     savedState: SavedStateHandle,
 ) : ViewModel() {
@@ -67,6 +79,17 @@ class AdsBillingViewModel @Inject constructor(
     /** ADV-306 - the card selected to fund the deposit (null until methods load / when the wallet is empty). */
     private val _selectedPaymentMethodId = MutableStateFlow<String?>(null)
     val selectedPaymentMethodId: StateFlow<String?> = _selectedPaymentMethodId.asStateFlow()
+
+    /** FE-160 - the "Fund with crypto balance" sub-state (asset picker + rate-locked quote + countdown). */
+    private val _crypto = MutableStateFlow(CryptoFundUiState())
+    val crypto: StateFlow<CryptoFundUiState> = _crypto.asStateFlow()
+
+    /** FE-160 - true when the user has switched the deposit sheet to the crypto-funding tab. */
+    private val _cryptoFundingMode = MutableStateFlow(false)
+    val cryptoFundingMode: StateFlow<Boolean> = _cryptoFundingMode.asStateFlow()
+
+    /** Drives the 1s rate-lock countdown; cancelled on re-quote / clear / onCleared. */
+    private var countdownJob: Job? = null
 
     init {
         load()
@@ -130,7 +153,10 @@ class AdsBillingViewModel @Inject constructor(
         _amountText.value = ""
         _depositState.value = DepositState.Idle
         _depositSheetVisible.value = true
+        _cryptoFundingMode.value = false
+        _crypto.value = CryptoFundUiState()
         loadPaymentMethods()
+        loadCryptoBalances()
     }
 
     /** ADV-306 - the user picked a card in the deposit sheet. */
@@ -172,9 +198,12 @@ class AdsBillingViewModel @Inject constructor(
     /** Dismisses the deposit sheet (only when not submitting) -> Idle. */
     fun dismissDeposit() {
         if (_depositState.value is DepositState.Submitting) return
+        countdownJob?.cancel()
         _amountText.value = ""
         _depositState.value = DepositState.Idle
         _depositSheetVisible.value = false
+        _cryptoFundingMode.value = false
+        _crypto.value = CryptoFundUiState()
     }
 
     /** True only when the current amount text parses to a valid in-range cents amount (5000..10000000). */
@@ -212,6 +241,167 @@ class AdsBillingViewModel @Inject constructor(
             }
         }
     }
+
+    // ---- FE-160: fund with crypto balance ----
+
+    /** Switches the deposit sheet between the card/wallet path and the crypto-funding path. */
+    fun setCryptoFundingMode(enabled: Boolean) {
+        if (enabled == _cryptoFundingMode.value) return
+        _cryptoFundingMode.value = enabled
+        if (!enabled) {
+            countdownJob?.cancel()
+            _crypto.update {
+                it.copy(selectedSymbol = null, quote = null, error = null, insufficient = false, secondsRemaining = 0L)
+            }
+        } else {
+            _crypto.value.selectedSymbol?.let { requestQuote(it) }
+        }
+    }
+
+    /** Applies a preset top-up (integer cents) into the amount field (validated by [AdDepositMath]). */
+    fun onPresetSelected(cents: Long) {
+        onAmountChanged(AdDepositMath.formatCents(cents))
+        if (_cryptoFundingMode.value) _crypto.value.selectedSymbol?.let { requestQuote(it) }
+    }
+
+    /** Loads the fundable custody balances (known assets with a positive balance) for the picker. */
+    private fun loadCryptoBalances() {
+        viewModelScope.launch {
+            val balances = (custodyReader.getBalance() as? ApiResult.Success)?.data ?: return@launch
+            val options = balances.rows
+                .filter { it.known && it.amount > 0.0 }
+                .mapNotNull { row ->
+                    val asset = CustodyAssets.findAsset(row.symbol) ?: return@mapNotNull null
+                    AdCryptoAssetOption(
+                        symbol = asset.symbol,
+                        name = asset.name,
+                        decimals = asset.decimals,
+                        balanceWhole = row.amount,
+                        balanceBaseUnits = wholeToBaseUnits(row.amount, asset.decimals),
+                    )
+                }
+            _crypto.update { it.copy(assets = options) }
+        }
+    }
+
+    /** The user picked a coin: reset the prior quote and request a fresh rate-locked quote. */
+    fun onCryptoAssetSelected(symbol: String) {
+        if (symbol == _crypto.value.selectedSymbol && _crypto.value.quote != null) return
+        _crypto.update { it.copy(selectedSymbol = symbol, quote = null, error = null, insufficient = false) }
+        requestQuote(symbol)
+    }
+
+    /**
+     * Requests a rate-locked fee quote for the CURRENT top-up amount + [symbol]. Ignored when the amount
+     * is not yet a valid top-up. A 404 -> Success(null) flips the crypto path off (degrade-on-404).
+     */
+    private fun requestQuote(symbol: String) {
+        countdownJob?.cancel()
+        val cents = parsedAmountCents()
+        if (cents == null || !AdDepositMath.isValidTopUpCents(cents)) {
+            _crypto.update { it.copy(quoting = false, quote = null, secondsRemaining = 0L) }
+            return
+        }
+        _crypto.update { it.copy(quoting = true, error = null) }
+        viewModelScope.launch {
+            when (val r = feesRepository.quoteFee(amountCents = cents, payWith = symbol)) {
+                is ApiResult.Success -> {
+                    val q = r.data
+                    if (q == null) {
+                        _crypto.update { it.copy(quoting = false, enabled = false, quote = null) }
+                    } else {
+                        applyQuote(symbol, q)
+                    }
+                }
+                is ApiResult.Failure ->
+                    _crypto.update { it.copy(quoting = false, quote = null, error = r.error.message) }
+                is ApiResult.NetworkError ->
+                    _crypto.update { it.copy(quoting = false, quote = null, error = OFFLINE_FALLBACK) }
+            }
+        }
+    }
+
+    private fun applyQuote(symbol: String, quote: FeeQuote) {
+        val bal = _crypto.value.assets.firstOrNull { it.symbol == symbol }?.balanceBaseUnits ?: 0L
+        val insufficient = CheckoutCryptoMath.insufficientForQuote(bal, quote.totalNative)
+        _crypto.update {
+            it.copy(
+                quoting = false,
+                enabled = true,
+                quote = quote,
+                insufficient = insufficient,
+                secondsRemaining = CheckoutCryptoMath.quoteExpirySeconds(quote.expiresAt, nowMs()),
+                error = null,
+            )
+        }
+        startCountdown(symbol, quote)
+    }
+
+    private fun startCountdown(symbol: String, quote: FeeQuote) {
+        countdownJob?.cancel()
+        countdownJob = viewModelScope.launch {
+            while (isActive) {
+                val remaining = CheckoutCryptoMath.quoteExpirySeconds(quote.expiresAt, nowMs())
+                _crypto.update { it.copy(secondsRemaining = remaining) }
+                if (remaining <= 0L) {
+                    requestQuote(symbol)
+                    return@launch
+                }
+                delay(1000L)
+            }
+        }
+    }
+
+    /**
+     * Funds the ad account from the selected crypto balance at the LOCKED rate. Ignored unless a live,
+     * affordable quote is ready. On success: reflect the new balance + refresh the ledger (same as the
+     * card path). A 409 quote_expired re-quotes; other failures surface a friendly deposit error.
+     */
+    fun fundWithCrypto() {
+        if (_depositState.value is DepositState.Submitting) return
+        val cState = _crypto.value
+        val quote = cState.quote ?: return
+        if (!cState.canFund) return
+        val cents = parsedAmountCents() ?: return
+        _depositState.value = DepositState.Submitting
+        viewModelScope.launch {
+            when (
+                val r = repository.deposit(
+                    accountId = accountId,
+                    amountCents = cents,
+                    paymentMethodId = null,
+                    payWith = quote.payWith,
+                    quoteToken = quote.quoteToken,
+                )
+            ) {
+                is ApiResult.Success -> {
+                    applyNewBalance(r.data.newBalanceCents)
+                    refreshLedger()
+                    countdownJob?.cancel()
+                    _amountText.value = ""
+                    _crypto.update { it.copy(quote = null, secondsRemaining = 0L) }
+                    _depositState.value = DepositState.Success(r.data.newBalanceCents)
+                }
+                is ApiResult.Failure -> {
+                    if (r.error.status == 409 || r.error.code == "quote_expired") {
+                        _depositState.value = DepositState.Idle
+                        requestQuote(quote.payWith)
+                    } else {
+                        _depositState.value = DepositState.Error(friendlyDepositError(r.error))
+                    }
+                }
+                is ApiResult.NetworkError ->
+                    _depositState.value = DepositState.Error(OFFLINE_FALLBACK)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        countdownJob?.cancel()
+        super.onCleared()
+    }
+
+    private fun nowMs(): Long = System.currentTimeMillis()
 
     // ---- internals ----
 
@@ -274,6 +464,15 @@ class AdsBillingViewModel @Inject constructor(
          * Parses a USD entry ("50", "50.00", "$50.00", "1,000.00") into integer cents, or null when
          * unparseable / negative. Caps at two decimal places. Mirrors the AND-364 / AND-366 helpers.
          */
+        /** whole-coin Double -> integer native base units (half-up, clamped >= 0). Mirrors FE-152. */
+        internal fun wholeToBaseUnits(whole: Double, decimals: Int): Long {
+            if (whole <= 0.0) return 0L
+            var scale = 1.0
+            repeat(if (decimals < 0) 0 else decimals) { scale *= 10.0 }
+            val v = (whole * scale).roundToLong()
+            return if (v < 0L) 0L else v
+        }
+
         internal fun parseUsdToCents(text: String): Long? {
             val cleaned = text.trim().removePrefix("$").replace(",", "")
             if (cleaned.isEmpty()) return null

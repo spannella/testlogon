@@ -131,6 +131,11 @@ data class AdInvoiceCampaignLineDto(
 data class AdDepositIn(
     @Json(name = "amount_cents") val amountCents: Long,
     @Json(name = "payment_method_id") val paymentMethodId: String? = null,
+    // FE-160: optional crypto-funding fields. When both are present the server funds the deposit from the
+    // caller custody balance at the LOCKED rate carried by `quote_token`; when both are null the existing
+    // card/wallet path is unchanged. Additive - omitting them keeps the AND-367 wire contract.
+    @Json(name = "pay_with") val payWith: String? = null,
+    @Json(name = "quote_token") val quoteToken: String? = null,
 )
 
 /**

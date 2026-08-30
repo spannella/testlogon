@@ -52,6 +52,12 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.core.ui.state.StaleBanner
 import com.testlogon.android.data.billing.PaymentMethod
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Tab
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import com.testlogon.android.feature.checkout.CheckoutCryptoMath
 
 /** AND-367 - stable testTags for the ads-account billing screen + deposit sheet. */
 object AdsBillingTestTags {
@@ -64,6 +70,14 @@ object AdsBillingTestTags {
     const val DEPOSIT_CONFIRM = "ads_deposit_confirm"
     const val DEPOSIT_SUCCESS = "ads_deposit_success"
     const val DEPOSIT_DONE = "ads_deposit_done"
+    const val FUND_TAB_CARD = "ads_fund_tab_card"
+    const val FUND_TAB_CRYPTO = "ads_fund_tab_crypto"
+    const val CRYPTO_ASSET_PICKER = "ads_crypto_asset_picker"
+    const val CRYPTO_RATE = "ads_crypto_rate"
+    const val CRYPTO_COUNTDOWN = "ads_crypto_countdown"
+    const val CRYPTO_INSUFFICIENT = "ads_crypto_insufficient"
+    const val CRYPTO_FUND_CONFIRM = "ads_crypto_fund_confirm"
+    const val CRYPTO_UNAVAILABLE = "ads_crypto_unavailable"
     const val ERROR_RETRY = "ads_error_retry"
 
     /** Per-row ledger tag (suffix is the row index). */
@@ -86,6 +100,8 @@ fun AdsBillingRoute(
     val amountText by viewModel.amountText.collectAsStateWithLifecycle()
     val paymentMethods by viewModel.paymentMethods.collectAsStateWithLifecycle()
     val selectedPaymentMethodId by viewModel.selectedPaymentMethodId.collectAsStateWithLifecycle()
+    val crypto by viewModel.crypto.collectAsStateWithLifecycle()
+    val cryptoFundingMode by viewModel.cryptoFundingMode.collectAsStateWithLifecycle()
     AdsBillingScreen(
         state = state,
         depositState = depositState,
@@ -94,6 +110,8 @@ fun AdsBillingRoute(
         paymentMethods = paymentMethods,
         selectedPaymentMethodId = selectedPaymentMethodId,
         canSubmitDeposit = viewModel.canSubmitDeposit,
+        crypto = crypto,
+        cryptoFundingMode = cryptoFundingMode,
         onBack = onBack,
         onRetry = viewModel::onRetry,
         onOpenDeposit = viewModel::openDeposit,
@@ -101,6 +119,10 @@ fun AdsBillingRoute(
         onAmountChanged = viewModel::onAmountChanged,
         onPaymentMethodSelected = viewModel::onPaymentMethodSelected,
         onConfirmDeposit = { viewModel.deposit() },
+        onPresetSelected = viewModel::onPresetSelected,
+        onCryptoModeChanged = viewModel::setCryptoFundingMode,
+        onCryptoAssetSelected = viewModel::onCryptoAssetSelected,
+        onConfirmCryptoFund = { viewModel.fundWithCrypto() },
     )
 }
 
@@ -114,6 +136,8 @@ fun AdsBillingScreen(
     paymentMethods: List<PaymentMethod>,
     selectedPaymentMethodId: String?,
     canSubmitDeposit: Boolean,
+    crypto: CryptoFundUiState,
+    cryptoFundingMode: Boolean,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onOpenDeposit: () -> Unit,
@@ -121,6 +145,10 @@ fun AdsBillingScreen(
     onAmountChanged: (String) -> Unit,
     onPaymentMethodSelected: (String) -> Unit,
     onConfirmDeposit: () -> Unit,
+    onPresetSelected: (Long) -> Unit,
+    onCryptoModeChanged: (Boolean) -> Unit,
+    onCryptoAssetSelected: (String) -> Unit,
+    onConfirmCryptoFund: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -167,10 +195,16 @@ fun AdsBillingScreen(
             paymentMethods = paymentMethods,
             selectedPaymentMethodId = selectedPaymentMethodId,
             canSubmitDeposit = canSubmitDeposit,
+            crypto = crypto,
+            cryptoFundingMode = cryptoFundingMode,
             onDismiss = onDismissDeposit,
             onAmountChanged = onAmountChanged,
             onPaymentMethodSelected = onPaymentMethodSelected,
             onConfirm = onConfirmDeposit,
+            onPresetSelected = onPresetSelected,
+            onCryptoModeChanged = onCryptoModeChanged,
+            onCryptoAssetSelected = onCryptoAssetSelected,
+            onConfirmCryptoFund = onConfirmCryptoFund,
         )
     }
 }
@@ -348,10 +382,16 @@ private fun DepositSheet(
     paymentMethods: List<PaymentMethod>,
     selectedPaymentMethodId: String?,
     canSubmitDeposit: Boolean,
+    crypto: CryptoFundUiState,
+    cryptoFundingMode: Boolean,
     onDismiss: () -> Unit,
     onAmountChanged: (String) -> Unit,
     onPaymentMethodSelected: (String) -> Unit,
     onConfirm: () -> Unit,
+    onPresetSelected: (Long) -> Unit,
+    onCryptoModeChanged: (Boolean) -> Unit,
+    onCryptoAssetSelected: (String) -> Unit,
+    onConfirmCryptoFund: () -> Unit,
 ) {
     // The sheet is open whenever a deposit interaction is in progress (Idle once opened, Submitting,
     // Success, or Error). When fully dismissed the VM sets Idle + empties the amount, and we render nothing.
@@ -377,6 +417,27 @@ private fun DepositSheet(
             )
 
             val submitting = depositState is DepositState.Submitting
+            val terminal = depositState is DepositState.Success
+
+            // FE-160: Card/wallet vs. Fund-with-crypto selector.
+            if (!terminal) {
+                TabRow(selectedTabIndex = if (cryptoFundingMode) 1 else 0) {
+                    Tab(
+                        selected = !cryptoFundingMode,
+                        onClick = { if (!submitting) onCryptoModeChanged(false) },
+                        text = { Text(stringResource(R.string.fund_tab_card)) },
+                        modifier = Modifier.testTag(AdsBillingTestTags.FUND_TAB_CARD),
+                    )
+                    Tab(
+                        selected = cryptoFundingMode,
+                        onClick = { if (!submitting) onCryptoModeChanged(true) },
+                        text = { Text(stringResource(R.string.fund_tab_crypto)) },
+                        modifier = Modifier.testTag(AdsBillingTestTags.FUND_TAB_CRYPTO),
+                    )
+                }
+                PresetTopUps(enabled = !submitting, onPresetSelected = onPresetSelected)
+            }
+
             val showInvalid = amountText.isNotBlank() && !canSubmitDeposit
             TlTextField(
                 value = amountText,
@@ -390,12 +451,20 @@ private fun DepositSheet(
                 modifier = Modifier.testTag(AdsBillingTestTags.DEPOSIT_AMOUNT),
             )
 
-            PaymentMethodPicker(
-                paymentMethods = paymentMethods,
-                selectedPaymentMethodId = selectedPaymentMethodId,
-                enabled = !submitting,
-                onSelect = onPaymentMethodSelected,
-            )
+            if (cryptoFundingMode) {
+                CryptoFundSection(
+                    crypto = crypto,
+                    enabled = !submitting,
+                    onCryptoAssetSelected = onCryptoAssetSelected,
+                )
+            } else {
+                PaymentMethodPicker(
+                    paymentMethods = paymentMethods,
+                    selectedPaymentMethodId = selectedPaymentMethodId,
+                    enabled = !submitting,
+                    onSelect = onPaymentMethodSelected,
+                )
+            }
 
             when (depositState) {
                 is DepositState.Error -> Text(
@@ -423,6 +492,16 @@ private fun DepositSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag(AdsBillingTestTags.DEPOSIT_DONE),
+                )
+            } else if (cryptoFundingMode) {
+                TlButton(
+                    text = stringResource(R.string.fund_crypto_confirm),
+                    onClick = onConfirmCryptoFund,
+                    enabled = canSubmitDeposit && crypto.canFund && !submitting,
+                    loading = submitting,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(AdsBillingTestTags.CRYPTO_FUND_CONFIRM),
                 )
             } else {
                 TlButton(
@@ -515,5 +594,153 @@ private fun LabeledRow(label: String, value: String, valueModifier: Modifier = M
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(text = value, style = MaterialTheme.typography.bodyMedium, modifier = valueModifier)
+    }
+}
+
+
+/**
+ * FE-160 - quick top-up preset chips ($25 / $50 / $100 / $250). Tapping one fills the amount field
+ * (which drives both the card deposit and the crypto quote).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PresetTopUps(enabled: Boolean, onPresetSelected: (Long) -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AdDepositMath.PRESET_TOPUPS_CENTS.forEach { cents ->
+            FilterChip(
+                selected = false,
+                enabled = enabled,
+                onClick = { onPresetSelected(cents) },
+                label = { Text(AdDepositMath.topUpLabel(cents)) },
+            )
+        }
+    }
+}
+
+/**
+ * FE-160 - the "Fund with crypto balance" section of the deposit sheet: asset picker from custody
+ * balances, the rate-lock display (rate + total coin + conversion fee + live "locked for Ns" countdown),
+ * and insufficient / unavailable handling. Mirrors the FE-152 checkout crypto section (CheckoutCryptoMath
+ * reused verbatim for the display lines + countdown).
+ */
+@Composable
+private fun CryptoFundSection(
+    crypto: CryptoFundUiState,
+    enabled: Boolean,
+    onCryptoAssetSelected: (String) -> Unit,
+) {
+    if (!crypto.enabled) {
+        Text(
+            text = stringResource(R.string.fund_crypto_unavailable),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag(AdsBillingTestTags.CRYPTO_UNAVAILABLE),
+        )
+        return
+    }
+    if (crypto.assets.isEmpty()) {
+        Text(
+            text = stringResource(R.string.fund_crypto_no_balance),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+
+    CryptoAssetPicker(
+        assets = crypto.assets,
+        selectedSymbol = crypto.selectedSymbol,
+        enabled = enabled,
+        onSelect = onCryptoAssetSelected,
+    )
+
+    val quote = crypto.quote
+    when {
+        crypto.quoting -> Text(
+            text = stringResource(R.string.fund_crypto_quoting),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        quote != null -> {
+            LabeledRow(
+                label = stringResource(R.string.fund_crypto_rate),
+                value = CheckoutCryptoMath.rateLine(quote),
+                valueModifier = Modifier.testTag(AdsBillingTestTags.CRYPTO_RATE),
+            )
+            LabeledRow(
+                label = stringResource(R.string.fund_crypto_fee),
+                value = CheckoutCryptoMath.feeLine(quote),
+            )
+            LabeledRow(
+                label = stringResource(R.string.fund_crypto_total),
+                value = CheckoutCryptoMath.totalLine(quote),
+            )
+            Text(
+                text = CheckoutCryptoMath.lockedForLabel(crypto.secondsRemaining),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag(AdsBillingTestTags.CRYPTO_COUNTDOWN),
+            )
+            if (crypto.insufficient) {
+                Text(
+                    text = stringResource(R.string.fund_crypto_insufficient),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag(AdsBillingTestTags.CRYPTO_INSUFFICIENT),
+                )
+            }
+        }
+    }
+    if (crypto.error != null) {
+        Text(
+            text = crypto.error,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+/** FE-160 - the custody-balance asset dropdown for crypto funding. */
+@Composable
+private fun CryptoAssetPicker(
+    assets: List<AdCryptoAssetOption>,
+    selectedSymbol: String?,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    val selected = assets.firstOrNull { it.symbol == selectedSymbol }
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = it },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        OutlinedTextField(
+            value = selected?.let { "${it.symbol} - ${it.balanceText} available" }
+                ?: stringResource(R.string.fund_crypto_pick_asset),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.fund_crypto_asset_label)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            enabled = enabled,
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+                .testTag(AdsBillingTestTags.CRYPTO_ASSET_PICKER),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            assets.forEach { asset ->
+                DropdownMenuItem(
+                    text = { Text("${asset.symbol} (${asset.name}) - ${asset.balanceText}") },
+                    onClick = {
+                        onSelect(asset.symbol)
+                        expanded = false
+                    },
+                )
+            }
+        }
     }
 }

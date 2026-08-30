@@ -310,10 +310,20 @@ export const whyThisAd = (
 
 // ─── Ad Billing (ADS-007) ────────────────────────────────────────────────
 
-/** Deposit funds into ad account */
+/**
+ * Deposit funds into an ad account.
+ *
+ * Card/default path: omit pay_with/quote_token (unchanged behaviour).
+ * Pay-with-crypto (FE-160 / BE-160): pass a locked FeeQuote pay_with +
+ * quote_token to fund the budget from a crypto balance at the shown rate —
+ * the same pay-any-coin contract as checkout (see api/endpoints/fees.ts).
+ * Server returns 409 quote_expired (re-quote) / 402 insufficient_<coin>.
+ */
 export const depositAdFunds = (accountId: string, data: {
   amount_cents: number;
   payment_method_id?: string;
+  pay_with?: string;
+  quote_token?: string;
 }) =>
   api.post<{ ok: boolean; entry_id: string; new_balance_cents: number }>(
     `/ui/ads/accounts/${accountId}/deposit`,

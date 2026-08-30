@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   listMyAdAccounts,
@@ -8,6 +8,25 @@ import {
   listCampaigns,
 } from "@/api/endpoints/ads";
 import type { AdAccount, AdBillingEntry, Campaign, AdInvoice } from "@/api/types";
+import { quoteFee, type FeeQuote } from "@/api/endpoints/fees";
+import { getBalance, mergeBalances } from "@/api/endpoints/custody";
+import { ApiError } from "@/api/client";
+import {
+  quoteExpirySeconds,
+  insufficientForCents,
+  rateLine,
+  totalLine,
+  feeLine,
+  formatCoin,
+  formatCountdown,
+} from "@/lib/checkoutCrypto";
+import {
+  PRESET_TOPUPS_CENTS,
+  isValidTopUpCents,
+  topUpLabel,
+  newBalanceCents,
+  dollarsToCents,
+} from "@/lib/adDeposit";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,8 +37,20 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
-import { DollarSign, Plus, Receipt, TrendingUp } from "lucide-react";
+import { toast } from "sonner";
+import {
+  DollarSign,
+  Plus,
+  Receipt,
+  TrendingUp,
+  Bitcoin,
+  CreditCard,
+  Loader2,
+  RefreshCw,
+  AlertTriangle,
+} from "lucide-react";
 
 function formatCents(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
@@ -41,6 +72,16 @@ export default function AdBillingPage() {
   const [invoiceMonth, setInvoiceMonth] = useState(
     new Date().toISOString().slice(0, 7),
   );
+
+  // Fund-with-crypto state (FE-160) — mirrors Checkout.tsx pay-with-crypto (FE-152).
+  const [payCrypto, setPayCrypto] = useState(false);
+  const [cryptoAsset, setCryptoAsset] = useState<string | null>(null);
+  const [quote, setQuote] = useState<FeeQuote | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState("");
+  const [cryptoUnavailable, setCryptoUnavailable] = useState(false);
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Fetch accounts
   const { data: accounts = [] } = useQuery<AdAccount[]>({
@@ -71,19 +112,147 @@ export default function AdBillingPage() {
     enabled: !!accountId && !!invoiceMonth,
   });
 
-  // Deposit mutation
-  const depositMut = useMutation({
-    mutationFn: (amount: number) =>
-      depositAdFunds(accountId, { amount_cents: amount }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ad-billing", accountId] });
-      queryClient.invalidateQueries({ queryKey: ["ad-accounts"] });
-      setDepositOpen(false);
-      setDepositAmount("");
-    },
+  // Crypto balances (custody). Degrade on 404 -> hide the crypto option.
+  const balanceQuery = useQuery({
+    queryKey: ["custody", "balance"],
+    queryFn: getBalance,
+    retry: false,
   });
 
   const currentAccount = accounts.find((a) => a.account_id === accountId);
+
+  // --- Fund-with-crypto derived state -------------------------------------
+  const cryptoAvailable = balanceQuery.isSuccess && !!balanceQuery.data;
+  const balanceRows = useMemo(
+    () => mergeBalances(balanceQuery.data?.balances),
+    [balanceQuery.data],
+  );
+  const selectedRow = useMemo(
+    () => balanceRows.find((r) => r.symbol === cryptoAsset) ?? null,
+    [balanceRows, cryptoAsset],
+  );
+  const selectedBalance = selectedRow ? Number(selectedRow.balance) : 0;
+  const secondsLeft = quote ? quoteExpirySeconds(quote.expires_at, nowSec) : 0;
+  const quoteStale = !!quote && secondsLeft <= 0;
+  const insufficient =
+    !!quote && !quoteStale && insufficientForCents(selectedBalance, quote);
+
+  // Parsed top-up amount (cents) + validity from the pure lib.
+  const topUpCents = dollarsToCents(depositAmount);
+  const validTopUp = isValidTopUpCents(topUpCents);
+
+  // --- Quote lifecycle (mirror of Checkout.tsx) ---------------------------
+  const fetchQuote = async (asset: string, amountCents: number) => {
+    if (!asset || amountCents <= 0) return;
+    setQuoteLoading(true);
+    setQuoteError("");
+    try {
+      const q = await quoteFee({ amount_cents: amountCents, pay_with: asset });
+      setQuote(q);
+      setNowSec(Math.floor(Date.now() / 1000));
+    } catch (err) {
+      const status = err instanceof ApiError ? err.status : 0;
+      if (status === 404) {
+        setCryptoUnavailable(true);
+        setPayCrypto(false);
+        setQuote(null);
+      } else {
+        setQuote(null);
+        setQuoteError(
+          err instanceof ApiError ? err.detail : "Could not get a rate. Try again.",
+        );
+      }
+    } finally {
+      setQuoteLoading(false);
+    }
+  };
+
+  const handleSelectCryptoAsset = (asset: string) => {
+    setPayCrypto(true);
+    setCryptoAsset(asset);
+    setQuote(null);
+    if (validTopUp) void fetchQuote(asset, topUpCents);
+  };
+
+  const handleRequote = () => {
+    if (cryptoAsset && validTopUp) void fetchQuote(cryptoAsset, topUpCents);
+  };
+
+  // Re-quote when the amount changes while a coin is chosen.
+  useEffect(() => {
+    if (!payCrypto || !cryptoAsset) return;
+    if (!validTopUp) {
+      setQuote(null);
+      return;
+    }
+    void fetchQuote(cryptoAsset, topUpCents);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topUpCents, cryptoAsset, payCrypto]);
+
+  // Live 1Hz countdown for the rate lock while a crypto quote is shown.
+  useEffect(() => {
+    if (!payCrypto || !quote) return;
+    const id = setInterval(
+      () => setNowSec(Math.floor(Date.now() / 1000)),
+      1000,
+    );
+    return () => clearInterval(id);
+  }, [payCrypto, quote]);
+
+  const resetDeposit = () => {
+    setDepositOpen(false);
+    setDepositAmount("");
+    setPayCrypto(false);
+    setCryptoAsset(null);
+    setQuote(null);
+    setQuoteError("");
+  };
+
+  // Deposit mutation (card/default OR crypto).
+  const depositMut = useMutation({
+    mutationFn: () => {
+      const body: {
+        amount_cents: number;
+        pay_with?: string;
+        quote_token?: string;
+      } = { amount_cents: topUpCents };
+      if (payCrypto && quote) {
+        body.pay_with = quote.pay_with;
+        body.quote_token = quote.quote_token;
+      }
+      return depositAdFunds(accountId, body);
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["ad-billing", accountId] });
+      queryClient.invalidateQueries({ queryKey: ["ad-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["custody", "balance"] });
+      setConfirmOpen(false);
+      toast.success(
+        `Funded — new balance ${formatCents(Number(res.new_balance_cents))}`,
+      );
+      resetDeposit();
+    },
+    onError: (err: unknown) => {
+      const detail = err instanceof ApiError ? err.detail : undefined;
+      const status = err instanceof ApiError ? err.status : 0;
+      if (status === 409 && payCrypto) {
+        toast.error("Rate expired — refreshing the quote.");
+        handleRequote();
+      } else if (status === 402 && payCrypto) {
+        toast.error(detail || "Insufficient crypto balance.");
+        setQuoteError(detail || "Insufficient crypto balance.");
+      } else {
+        toast.error(detail || "Deposit failed");
+      }
+    },
+  });
+
+  // Enablement for the primary deposit button.
+  const canSubmit =
+    validTopUp &&
+    (payCrypto
+      ? !!quote && !quoteStale && !insufficient && !quoteLoading
+      : true);
 
   return (
     <div className="space-y-6 p-6" data-testid="ad-billing-page">
@@ -284,7 +453,10 @@ export default function AdBillingPage() {
       )}
 
       {/* Deposit Dialog */}
-      <Dialog open={depositOpen} onOpenChange={setDepositOpen}>
+      <Dialog
+        open={depositOpen}
+        onOpenChange={(o) => (o ? setDepositOpen(true) : resetDeposit())}
+      >
         <DialogContent data-testid="deposit-dialog">
           <DialogHeader>
             <DialogTitle>Deposit Funds</DialogTitle>
@@ -294,48 +466,203 @@ export default function AdBillingPage() {
               <label className="text-sm text-muted-foreground">Amount (USD)</label>
               <Input
                 type="number"
-                min={50}
+                min={1}
                 step={1}
                 value={depositAmount}
                 onChange={(e) => setDepositAmount(e.target.value)}
-                placeholder="50.00"
+                placeholder="25.00"
                 data-testid="deposit-amount-input"
               />
+              {depositAmount && !validTopUp && (
+                <p className="mt-1 text-xs text-destructive" data-testid="topup-invalid">
+                  Enter a whole-cent amount of at least {topUpLabel(100)}.
+                </p>
+              )}
             </div>
-            <div className="flex gap-2">
-              {[50, 100, 250, 500].map((amt) => (
+            <div className="flex flex-wrap gap-2">
+              {PRESET_TOPUPS_CENTS.map((cents) => (
                 <Button
-                  key={amt}
+                  key={cents}
                   variant="outline"
                   size="sm"
-                  onClick={() => setDepositAmount(String(amt))}
+                  onClick={() => setDepositAmount(String(cents / 100))}
+                  data-testid={`topup-preset-${cents}`}
                 >
-                  ${amt}
+                  {topUpLabel(cents)}
                 </Button>
               ))}
             </div>
+
+            {/* Funding method: card/default vs crypto balance (FE-160) */}
+            <div className="space-y-2 pt-1">
+              <p className="text-xs font-medium text-muted-foreground">
+                Funding method
+              </p>
+              <button
+                type="button"
+                className={`flex w-full items-center gap-3 rounded-lg border px-4 py-2.5 text-left transition-colors ${
+                  !payCrypto ? "border-primary bg-primary/5" : "hover:bg-accent"
+                }`}
+                onClick={() => setPayCrypto(false)}
+                data-testid="fund-card-option"
+              >
+                <CreditCard className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <span className="text-sm font-medium">Card / default method</span>
+              </button>
+
+              {cryptoAvailable && !cryptoUnavailable && (
+                <button
+                  type="button"
+                  className={`flex w-full items-center gap-3 rounded-lg border px-4 py-2.5 text-left transition-colors ${
+                    payCrypto ? "border-primary bg-primary/5" : "hover:bg-accent"
+                  }`}
+                  onClick={() => setPayCrypto(true)}
+                  data-testid="fund-crypto-option"
+                >
+                  <Bitcoin className="h-5 w-5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-medium">
+                      Fund with crypto balance
+                    </span>
+                    <span className="ml-2 text-sm text-muted-foreground">
+                      any supported coin
+                    </span>
+                  </div>
+                </button>
+              )}
+
+              {cryptoUnavailable && (
+                <p className="text-xs text-muted-foreground" data-testid="crypto-unavailable">
+                  Crypto funding unavailable.
+                </p>
+              )}
+
+              {payCrypto && cryptoAvailable && !cryptoUnavailable && (
+                <div className="space-y-3 rounded-lg border border-dashed p-3">
+                  {/* Asset picker */}
+                  <div>
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                      Choose a coin
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {balanceRows.map((row) => (
+                        <button
+                          key={row.symbol}
+                          type="button"
+                          className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                            cryptoAsset === row.symbol
+                              ? "border-primary bg-primary/10 font-medium"
+                              : "hover:bg-accent"
+                          }`}
+                          onClick={() => handleSelectCryptoAsset(row.symbol)}
+                          data-testid={`crypto-asset-${row.symbol}`}
+                        >
+                          {row.symbol}
+                          <span className="ml-1.5 text-xs text-muted-foreground">
+                            {formatCoin(Number(row.balance))}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {!validTopUp && (
+                    <p className="text-xs text-muted-foreground">
+                      Enter an amount to get a locked rate.
+                    </p>
+                  )}
+
+                  {quoteLoading && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Fetching rate…
+                    </div>
+                  )}
+
+                  {quoteError && !quoteLoading && (
+                    <p className="text-sm text-destructive" data-testid="crypto-quote-error">
+                      {quoteError}
+                    </p>
+                  )}
+
+                  {quote && !quoteLoading && (
+                    <div className="space-y-1.5 rounded-md bg-muted/50 p-3 text-sm" data-testid="crypto-rate-lock">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">{rateLine(quote)}</span>
+                        {quoteStale ? (
+                          <Badge variant="destructive" className="text-[10px]">
+                            Rate expired
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-[10px]" data-testid="crypto-countdown">
+                            Locked {formatCountdown(secondsLeft)}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between font-medium">
+                        <span>{totalLine(quote)}</span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {feeLine(quote)} · balance {formatCoin(selectedBalance)}{" "}
+                        {quote.pay_with}
+                      </div>
+
+                      {insufficient && (
+                        <p className="flex items-center gap-1.5 text-xs text-destructive" data-testid="crypto-insufficient">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Insufficient {quote.pay_with} balance for this top-up.
+                        </p>
+                      )}
+
+                      {(quoteStale || !insufficient) && (
+                        <button
+                          type="button"
+                          className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
+                          onClick={handleRequote}
+                          data-testid="crypto-requote"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          {quoteStale ? "Refresh rate" : "Re-quote"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDepositOpen(false)}>
+            <Button variant="outline" onClick={resetDeposit}>
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                const cents = Math.round(parseFloat(depositAmount) * 100);
-                if (cents >= 5000) depositMut.mutate(cents);
-              }}
-              disabled={
-                !depositAmount ||
-                parseFloat(depositAmount) < 50 ||
-                depositMut.isPending
-              }
+              onClick={() => setConfirmOpen(true)}
+              disabled={!canSubmit || depositMut.isPending}
               data-testid="deposit-submit"
             >
-              {depositMut.isPending ? "Processing..." : "Deposit"}
+              {depositMut.isPending
+                ? "Processing..."
+                : payCrypto && quote && !quoteStale
+                  ? `Fund ${formatCoin(quote.total_native)} ${quote.pay_with}`
+                  : "Deposit"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Confirm Deposit"
+        description={
+          payCrypto && quote
+            ? `${totalLine(quote)} (${rateLine(quote)}) to add ${topUpLabel(topUpCents)} — new balance ${formatCents(newBalanceCents(Number(currentAccount?.balance_cents ?? 0), topUpCents))}?`
+            : `Add ${topUpLabel(topUpCents)} to your ad balance — new balance ${formatCents(newBalanceCents(Number(currentAccount?.balance_cents ?? 0), topUpCents))}?`
+        }
+        confirmLabel="Deposit"
+        onConfirm={() => depositMut.mutate()}
+        loading={depositMut.isPending}
+      />
     </div>
   );
 }
