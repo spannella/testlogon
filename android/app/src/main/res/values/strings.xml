@@ -1598,6 +1598,19 @@
     <string name="checkout_address_change">Change</string>
     <string name="checkout_address_required">Select a shipping address to continue.</string>
     <string name="checkout_shipping_tax_note">Shipping and sales tax are added at checkout.</string>
+    <!-- FE-152: pay with crypto balance. -->
+    <string name="checkout_crypto_section">Pay with crypto balance</string>
+    <string name="checkout_crypto_asset_label">Asset</string>
+    <string name="checkout_crypto_choose_asset">Choose a coin</string>
+    <string name="checkout_crypto_balance">Balance: %1$s %2$s</string>
+    <string name="checkout_crypto_quoting">Getting rate…</string>
+    <string name="checkout_crypto_locked_for">Rate %1$s</string>
+    <string name="checkout_crypto_requote">Rate expired — refreshing…</string>
+    <string name="checkout_crypto_insufficient">Not enough %1$s to cover this order.</string>
+    <string name="checkout_crypto_unavailable">Crypto pay unavailable</string>
+    <string name="checkout_crypto_pay">Pay with %1$s</string>
+    <string name="checkout_crypto_pay_generic">Pay with crypto</string>
+    <string name="checkout_crypto_expired_retry">Rate expired. Please try again.</string>
     <!-- ECOMX-43 (B5): digital library / access. -->
     <string name="order_digital_access_title">Digital items</string>
     <string name="order_digital_open">Open / Download</string>

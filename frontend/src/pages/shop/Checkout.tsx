@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -10,6 +10,9 @@ import {
   Tag,
   Loader2,
   X,
+  Bitcoin,
+  RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -26,6 +29,17 @@ import {
 } from "@/api/endpoints/cart";
 import { validatePromoCode } from "@/api/endpoints/promoCodes";
 import { getPaymentMethods } from "@/api/endpoints/billing";
+import { quoteFee, type FeeQuote } from "@/api/endpoints/fees";
+import { getBalance, mergeBalances } from "@/api/endpoints/custody";
+import {
+  quoteExpirySeconds,
+  insufficientForCents,
+  rateLine,
+  totalLine,
+  feeLine,
+  formatCoin,
+  formatCountdown,
+} from "@/lib/checkoutCrypto";
 import type { PaymentMethod, PromoValidateOut } from "@/api/types";
 import { ApiError } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
@@ -49,6 +63,15 @@ export default function Checkout() {
     "idle" | "success" | "error"
   >("idle");
   const [orderId, setOrderId] = useState("");
+
+  // Pay-with-crypto-balance state (FE-152)
+  const [payCrypto, setPayCrypto] = useState(false);
+  const [cryptoAsset, setCryptoAsset] = useState<string | null>(null);
+  const [quote, setQuote] = useState<FeeQuote | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState("");
+  const [cryptoUnavailable, setCryptoUnavailable] = useState(false);
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
 
   // Promo code state (SHOP-002)
   const [promoCode, setPromoCode] = useState("");
@@ -74,9 +97,31 @@ export default function Checkout() {
     queryFn: getPaymentMethods,
   });
 
+  // Crypto balances (custody). Degrade on 404 -> hide the crypto option.
+  const balanceQuery = useQuery({
+    queryKey: ["custody", "balance"],
+    queryFn: getBalance,
+    retry: false,
+  });
+
   const items = itemsQuery.data?.items ?? [];
   const total = totalQuery.data;
   const methods: PaymentMethod[] = Array.isArray(methodsQuery.data) ? methodsQuery.data : [];
+
+  const cryptoAvailable = balanceQuery.isSuccess && !!balanceQuery.data;
+  const balanceRows = useMemo(
+    () => mergeBalances(balanceQuery.data?.balances),
+    [balanceQuery.data],
+  );
+  const selectedRow = useMemo(
+    () => balanceRows.find((r) => r.symbol === cryptoAsset) ?? null,
+    [balanceRows, cryptoAsset],
+  );
+  const selectedBalance = selectedRow ? Number(selectedRow.balance) : 0;
+  const secondsLeft = quote ? quoteExpirySeconds(quote.expires_at, nowSec) : 0;
+  const quoteStale = !!quote && secondsLeft <= 0;
+  const insufficient =
+    !!quote && !quoteStale && insufficientForCents(selectedBalance, quote);
 
   // Derive creator_user_id from cart items for promo validation
   // Falls back to the current user's ID when items lack creator info
@@ -97,7 +142,57 @@ export default function Checkout() {
     ? promoResult.final_price_cents
     : total?.total_cents ?? 0;
 
-  // Promo validation handler
+  // --- Pay-with-crypto quote lifecycle (FE-152) ------------------------------
+  // Fetch a fresh 60s rate-locked quote for the given asset at the current
+  // effective order total. Degrade on 404 -> crypto pay unavailable.
+  const fetchQuote = async (asset: string, amountCents: number) => {
+    if (!asset || amountCents <= 0) return;
+    setQuoteLoading(true);
+    setQuoteError("");
+    try {
+      const q = await quoteFee({ amount_cents: amountCents, pay_with: asset });
+      setQuote(q);
+      setNowSec(Math.floor(Date.now() / 1000));
+    } catch (err) {
+      const status = err instanceof ApiError ? err.status : 0;
+      if (status === 404) {
+        setCryptoUnavailable(true);
+        setPayCrypto(false);
+        setQuote(null);
+      } else {
+        setQuote(null);
+        setQuoteError(
+          err instanceof ApiError ? err.detail : "Could not get a rate. Try again.",
+        );
+      }
+    } finally {
+      setQuoteLoading(false);
+    }
+  };
+
+  const handleSelectCryptoAsset = (asset: string) => {
+    setPayCrypto(true);
+    setSelectedMethodId(null);
+    setCryptoAsset(asset);
+    setQuote(null);
+    void fetchQuote(asset, effectiveTotal);
+  };
+
+  const handleRequote = () => {
+    if (cryptoAsset) void fetchQuote(cryptoAsset, effectiveTotal);
+  };
+
+  // Live countdown tick for the rate lock (1Hz) while a crypto quote is shown.
+  useEffect(() => {
+    if (!payCrypto || !quote) return;
+    const id = setInterval(
+      () => setNowSec(Math.floor(Date.now() / 1000)),
+      1000,
+    );
+    return () => clearInterval(id);
+  }, [payCrypto, quote]);
+
+    // Promo validation handler
   const handleApplyPromo = async () => {
     if (!promoCode.trim()) return;
     setPromoLoading(true);
@@ -131,8 +226,19 @@ export default function Checkout() {
   };
 
   const purchaseMutation = useMutation({
-    mutationFn: () =>
-      purchaseCart(cartId, promoResult ? { promo_code: promoCode } : undefined),
+    mutationFn: () => {
+      const body: {
+        promo_code?: string;
+        pay_with?: string;
+        quote_token?: string;
+      } = {};
+      if (promoResult) body.promo_code = promoCode;
+      if (payCrypto && quote) {
+        body.pay_with = quote.pay_with;
+        body.quote_token = quote.quote_token;
+      }
+      return purchaseCart(cartId, Object.keys(body).length ? body : undefined);
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["carts"] });
       queryClient.invalidateQueries({ queryKey: ["cart-items", cartId] });
@@ -146,7 +252,14 @@ export default function Checkout() {
         err instanceof ApiError ? err.detail : undefined;
       const status =
         err instanceof ApiError ? err.status : 0;
-      if (status === 422 && detail) {
+      if (status === 409 && payCrypto) {
+        // Locked rate lapsed server-side -> re-quote and let the user re-confirm.
+        toast.error("Rate expired — refreshing the quote.");
+        handleRequote();
+      } else if (status === 402 && payCrypto) {
+        toast.error(detail || "Insufficient crypto balance.");
+        setQuoteError(detail || "Insufficient crypto balance.");
+      } else if (status === 422 && detail) {
         // Promo code became invalid between validate and purchase
         setPromoError(detail);
         setPromoResult(null);
@@ -160,7 +273,7 @@ export default function Checkout() {
   });
 
   // Auto-select default payment method
-  if (!selectedMethodId && methods.length > 0) {
+  if (!selectedMethodId && !payCrypto && methods.length > 0) {
     const defaultMethod = methods.find((m) => m.is_default);
     if (defaultMethod) {
       setSelectedMethodId(defaultMethod.payment_method_id);
@@ -368,7 +481,10 @@ export default function Checkout() {
                         ? "border-primary bg-primary/5"
                         : "hover:bg-accent"
                     }`}
-                    onClick={() => setSelectedMethodId(method.payment_method_id)}
+                    onClick={() => {
+                      setSelectedMethodId(method.payment_method_id);
+                      setPayCrypto(false);
+                    }}
                   >
                     <CreditCard className="h-5 w-5 shrink-0 text-muted-foreground" />
                     <div className="min-w-0 flex-1">
@@ -388,6 +504,126 @@ export default function Checkout() {
                   </button>
                 ))
               )}
+
+              {/* Pay with crypto balance (FE-152) */}
+              {cryptoAvailable && !cryptoUnavailable && (
+                <>
+                  <button
+                    className={`flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors ${
+                      payCrypto
+                        ? "border-primary bg-primary/5"
+                        : "hover:bg-accent"
+                    }`}
+                    onClick={() => {
+                      setSelectedMethodId(null);
+                      setPayCrypto(true);
+                    }}
+                    data-testid="pay-crypto-option"
+                  >
+                    <Bitcoin className="h-5 w-5 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1">
+                      <span className="text-sm font-medium">
+                        Pay with crypto balance
+                      </span>
+                      <span className="ml-2 text-sm text-muted-foreground">
+                        any supported coin
+                      </span>
+                    </div>
+                  </button>
+
+                  {payCrypto && (
+                    <div className="space-y-3 rounded-lg border border-dashed p-3">
+                      {/* Asset picker */}
+                      <div>
+                        <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                          Choose a coin
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {balanceRows.map((row) => (
+                            <button
+                              key={row.symbol}
+                              className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                                cryptoAsset === row.symbol
+                                  ? "border-primary bg-primary/10 font-medium"
+                                  : "hover:bg-accent"
+                              }`}
+                              onClick={() => handleSelectCryptoAsset(row.symbol)}
+                              data-testid={`crypto-asset-${row.symbol}`}
+                            >
+                              {row.symbol}
+                              <span className="ml-1.5 text-xs text-muted-foreground">
+                                {formatCoin(Number(row.balance))}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Rate-lock display */}
+                      {quoteLoading && (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Fetching rate…
+                        </div>
+                      )}
+
+                      {quoteError && !quoteLoading && (
+                        <p className="text-sm text-destructive" data-testid="crypto-quote-error">
+                          {quoteError}
+                        </p>
+                      )}
+
+                      {quote && !quoteLoading && (
+                        <div className="space-y-1.5 rounded-md bg-muted/50 p-3 text-sm" data-testid="crypto-rate-lock">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">{rateLine(quote)}</span>
+                            {quoteStale ? (
+                              <Badge variant="destructive" className="text-[10px]">
+                                Rate expired
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary" className="text-[10px]" data-testid="crypto-countdown">
+                                Locked {formatCountdown(secondsLeft)}
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between font-medium">
+                            <span>{totalLine(quote)}</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {feeLine(quote)} · balance {formatCoin(selectedBalance)}{" "}
+                            {quote.pay_with}
+                          </div>
+
+                          {insufficient && (
+                            <p className="flex items-center gap-1.5 text-xs text-destructive" data-testid="crypto-insufficient">
+                              <AlertTriangle className="h-3.5 w-3.5" />
+                              Insufficient {quote.pay_with} balance for this order.
+                            </p>
+                          )}
+
+                          {(quoteStale || !insufficient) && (
+                            <button
+                              className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
+                              onClick={handleRequote}
+                              data-testid="crypto-requote"
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                              {quoteStale ? "Refresh rate" : "Re-quote"}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {cryptoUnavailable && (
+                <p className="text-xs text-muted-foreground" data-testid="crypto-unavailable">
+                  Crypto pay unavailable.
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -395,11 +631,19 @@ export default function Checkout() {
           <Button
             size="lg"
             className="w-full"
-            disabled={!selectedMethodId || items.length === 0}
+            disabled={
+              items.length === 0 ||
+              (payCrypto
+                ? !quote || quoteStale || insufficient || quoteLoading
+                : !selectedMethodId)
+            }
             onClick={() => setConfirmOpen(true)}
+            data-testid="place-order-btn"
           >
-            Place Order
-            {total
+            {payCrypto && quote && !quoteStale
+              ? `Pay ${formatCoin(quote.total_native)} ${quote.pay_with}`
+              : "Place Order"}
+            {!payCrypto && total
               ? ` — ${formatCents(effectiveTotal, total.currency)}`
               : ""}
           </Button>
@@ -408,7 +652,11 @@ export default function Checkout() {
             open={confirmOpen}
             onOpenChange={setConfirmOpen}
             title="Confirm Purchase"
-            description={`Place your order for ${total ? formatCents(effectiveTotal, total.currency) : "..."}?`}
+            description={
+              payCrypto && quote
+                ? `${totalLine(quote)} (${rateLine(quote)}) for your ${total ? formatCents(effectiveTotal, total.currency) : "..."} order?`
+                : `Place your order for ${total ? formatCents(effectiveTotal, total.currency) : "..."}?`
+            }
             confirmLabel="Place Order"
             onConfirm={() => purchaseMutation.mutate()}
             loading={purchaseMutation.isPending}
