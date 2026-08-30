@@ -55,6 +55,12 @@ import type { ProductCardPayload, OrderCardPayload } from "@/lib/ecomCards";
 import type { LocationCardPayload } from "@/lib/locationCards";
 import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import { encryptBytes } from "@/lib/messageEncryption";
+import {
+  MAX_UPLOAD_RETRIES,
+  isRetryableUploadStatus,
+  uploadBackoffMs,
+  uploadProgressPct,
+} from "@/lib/mediaCdn";
 
 export const getConversations = async (cursor?: string) => {
   const networkFn = async () => {
@@ -338,17 +344,86 @@ export const timeoutCall = (callId: string, body?: { reason?: string; idempotenc
     ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
   });
 
-const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: string) => {
-  const resp = await fetch(uploadUrl, {
-    method: "PUT",
-    body: file,
-    headers: {
-      "Content-Type": contentType,
-    },
+/** Progress callback: receives an integer 0..100 upload percent. */
+export type UploadProgressCb = (pct: number) => void;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * PUT a blob to a presigned URL using XMLHttpRequest so we can surface upload
+ * progress (FE-141), with a bounded retry loop on transient failures
+ * (network / 408 / 429 / 5xx). fetch() cannot report upload progress, hence XHR.
+ */
+const putBlobWithProgress = (
+  uploadUrl: string,
+  body: Blob,
+  contentType: string,
+  onProgress?: UploadProgressCb,
+): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", uploadUrl, true);
+    xhr.setRequestHeader("Content-Type", contentType);
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (e: ProgressEvent) => {
+        if (e.lengthComputable) onProgress(uploadProgressPct(e.loaded, e.total));
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (onProgress) onProgress(100);
+        resolve();
+      } else {
+        const err = new Error(`Upload failed (${xhr.status})`) as Error & { status?: number };
+        err.status = xhr.status;
+        reject(err);
+      }
+    };
+    // Network-level failures: report status 0 so the retry loop treats them as retryable.
+    xhr.onerror = () => {
+      const err = new Error("Upload failed (network error)") as Error & { status?: number };
+      err.status = 0;
+      reject(err);
+    };
+    xhr.onabort = () => {
+      const err = new Error("Upload aborted") as Error & { status?: number };
+      err.status = 0;
+      reject(err);
+    };
+    xhr.send(body);
   });
-  if (!resp.ok) {
-    throw new Error("Failed to upload image");
+
+const uploadBlobToPresignedUrl = async (
+  uploadUrl: string,
+  body: Blob,
+  contentType: string,
+  onProgress?: UploadProgressCb,
+): Promise<void> => {
+  let attempt = 0;
+  // Total tries = 1 initial + MAX_UPLOAD_RETRIES retries.
+  for (;;) {
+    try {
+      await putBlobWithProgress(uploadUrl, body, contentType, onProgress);
+      return;
+    } catch (e) {
+      const status = (e as { status?: number })?.status ?? 0;
+      const canRetry = attempt < MAX_UPLOAD_RETRIES && isRetryableUploadStatus(status);
+      if (!canRetry) throw e instanceof Error ? e : new Error("Failed to upload media");
+      attempt += 1;
+      // Reset the visible progress before the retry so the bar restarts cleanly.
+      if (onProgress) onProgress(0);
+      await sleep(uploadBackoffMs(attempt));
+    }
   }
+};
+
+const uploadToPresignedUrl = async (
+  uploadUrl: string,
+  file: File,
+  contentType: string,
+  onProgress?: UploadProgressCb,
+) => {
+  await uploadBlobToPresignedUrl(uploadUrl, file, contentType, onProgress);
 };
 
 /** Read natural width/height from an image File. Returns undefined for non-images (e.g. PDFs). */
@@ -394,6 +469,7 @@ export const sendImageMessage = async (
     tip_payment_method_id?: string;
     send_at?: number;
     encryption_password?: string;
+    onProgress?: UploadProgressCb;
   },
 ) => {
   const file = formData.get("file");
@@ -422,14 +498,19 @@ export const sendImageMessage = async (
     const { envelope, encryptedBytes } = await encryptBytes(fileBytes, options.encryption_password);
     encryptionEnvelope = { ...envelope };
     const encryptedBlob = new Blob([encryptedBytes], { type: "application/octet-stream" });
-    const resp = await fetch(presign.upload_url, {
-      method: "PUT",
-      body: encryptedBlob,
-      headers: { "Content-Type": "application/octet-stream" },
-    });
-    if (!resp.ok) throw new Error("Failed to upload encrypted media");
+    await uploadBlobToPresignedUrl(
+      presign.upload_url,
+      encryptedBlob,
+      "application/octet-stream",
+      options?.onProgress,
+    );
   } else {
-    await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType);
+    await uploadToPresignedUrl(
+      presign.upload_url,
+      file,
+      presign.content_type || contentType,
+      options?.onProgress,
+    );
   }
 
   const payload: SendImageMessageReq = {
@@ -468,13 +549,14 @@ export const sendImageMessage = async (
 export const uploadConversationMedia = async (
   conversationId: string,
   file: File,
+  onProgress?: UploadProgressCb,
 ): Promise<{ key: string; bucket: string; content_type: string }> => {
   const contentType = file.type || "application/octet-stream";
   const presign = await api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
     `/messaging/conversations/${conversationId}/images/presign`,
     { content_type: contentType, filename: file.name || "upload" },
   );
-  await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType);
+  await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType, onProgress);
   return { key: presign.key, bucket: presign.bucket, content_type: presign.content_type || contentType };
 };
 

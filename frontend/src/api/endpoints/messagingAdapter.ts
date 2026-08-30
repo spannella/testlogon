@@ -1,4 +1,8 @@
 import type { Conversation, Message } from "@/api/types";
+import { resolveMediaUrl } from "@/lib/mediaCdn";
+
+// FE-141: real CDN base for media, read at build. Empty -> mock path (dev unchanged).
+const MEDIA_CDN_BASE = (import.meta.env.VITE_MEDIA_CDN_BASE_URL as string | undefined) ?? "";
 
 type RawConversation = Partial<Conversation> & {
   created_at?: number | string;
@@ -20,8 +24,9 @@ type RawMessage = Partial<Message> & {
 };
 
 const buildS3ObjectUrl = (bucket?: string, key?: string): string | undefined => {
-  if (!bucket || !key) return undefined;
-  return `/mock/s3/${bucket}/${encodeURIComponent(key).replace(/%2F/g, "/")}`;
+  // FE-141: delegate to the pure resolver. With no CDN configured this returns
+  // the identical /mock/s3/... path, so dev/mock behavior is unchanged.
+  return resolveMediaUrl({ bucket, key }, { cdnBase: MEDIA_CDN_BASE });
 };
 
 const buildFileManagerUrl = (path?: string): string | undefined => {

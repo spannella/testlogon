@@ -90,6 +90,21 @@ interface ConversationViewProps {
   onClaimSuccess?: (state: string, agentUserId: string) => void;
 }
 
+// FE-141: payload for the image/media send mutation (also reused to retry a
+// failed upload with the identical arguments).
+type ImageUploadArgs = {
+  file: File;
+  consumptionPolicy?: "none" | "view_once";
+  caption?: string;
+  expires_in_seconds?: number;
+  lock_price_cents?: number;
+  lock_description?: string;
+  tip_amount_cents?: number;
+  tip_payment_method_id?: string;
+  send_at?: number;
+  encryption_password?: string;
+};
+
 export function ConversationView({ conversation, onBack, onClaimSuccess }: ConversationViewProps) {
   const userId = useAuthStore((s) => s.userId);
   const liveLocation = useLiveLocationShare();
@@ -136,6 +151,11 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     previewUrl: string;
     kind: "image" | "video" | "audio";
   } | null>(null);
+
+  // FE-141: image/media upload progress (0..100) + a Retry affordance for a
+  // failed upload. `failedImageArgs` holds the last failing mutation payload.
+  const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
+  const [failedImageArgs, setFailedImageArgs] = React.useState<ImageUploadArgs | null>(null);
 
   const classifyDroppedFile = React.useCallback((file: File): { kind: "image" | "video" | "audio" | null } => {
     if (file.type.startsWith("image/") || file.type === "application/pdf") return { kind: "image" };
@@ -440,18 +460,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   });
 
   const sendImage = useMutation({
-    mutationFn: (args: {
-      file: File;
-      consumptionPolicy?: "none" | "view_once";
-      caption?: string;
-      expires_in_seconds?: number;
-      lock_price_cents?: number;
-      lock_description?: string;
-      tip_amount_cents?: number;
-      tip_payment_method_id?: string;
-      send_at?: number;
-      encryption_password?: string;
-    }) => {
+    mutationFn: (args: ImageUploadArgs) => {
       const fd = new FormData();
       fd.append("file", args.file);
       return sendImageMessage(convoId, fd, {
@@ -464,9 +473,14 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         tip_payment_method_id: args.tip_payment_method_id,
         send_at: args.send_at,
         encryption_password: args.encryption_password,
+        // FE-141: drive the upload progress bar; scheduled sends stay indeterminate.
+        onProgress: args.send_at ? undefined : (pct) => setUploadProgress(pct),
       });
     },
     onMutate: async (args) => {
+      // FE-141: a fresh attempt clears any prior failure and starts the bar at 0.
+      setFailedImageArgs(null);
+      setUploadProgress(args.send_at ? null : 0);
       // Skip optimistic update for scheduled image messages
       if (args.send_at) return { snapshot: undefined, optimisticUrl: undefined, isScheduled: true };
 
@@ -522,12 +536,18 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       }
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      setUploadProgress(null);
+      setFailedImageArgs(null);
     },
-    onError: (_err, _args, context) => {
+    onError: (_err, args, context) => {
       if (context?.optimisticUrl) URL.revokeObjectURL(context.optimisticUrl);
       if (context?.snapshot) {
         queryClient.setQueryData(["messages", convoId], context.snapshot);
       }
+      // FE-141: retries inside uploadToPresignedUrl are exhausted by now; offer a
+      // manual Retry with the same payload.
+      setUploadProgress(null);
+      setFailedImageArgs(args);
       toast.error("Failed to send image");
     },
   });
@@ -1520,6 +1540,49 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
 
       {/* Typing indicator */}
       <TypingIndicator conversationId={convoId} />
+
+      {/* FE-141: media upload progress + retry-on-failure affordance. */}
+      {uploadProgress !== null && !failedImageArgs && (
+        <div className="px-3 pt-1" data-testid="upload-progress">
+          <div className="flex items-center gap-2">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-all"
+                style={{ width: `${uploadProgress}%` }}
+              />
+            </div>
+            <span className="text-xs text-muted-foreground tabular-nums">{uploadProgress}%</span>
+          </div>
+        </div>
+      )}
+      {failedImageArgs && (
+        <div
+          className="mx-3 mt-1 flex items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-1.5"
+          data-testid="upload-failed"
+        >
+          <span className="text-xs text-destructive">Upload failed.</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="text-xs font-medium text-primary hover:underline"
+              onClick={() => {
+                const args = failedImageArgs;
+                setFailedImageArgs(null);
+                if (args) sendImage.mutate(args);
+              }}
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:underline"
+              onClick={() => setFailedImageArgs(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Compose */}
       <ComposeBar
