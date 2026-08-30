@@ -116,6 +116,10 @@ export const createCampaign = (accountId: string, data: {
   budget_type: string;
   start_date?: number;
   end_date?: number;
+  // FE-162 (<- BE-161): promote-entity descriptor. Additive + optional; a
+  // backend that does not persist it ignores the extra keys.
+  promote_kind?: string;
+  promote_entity_id?: string;
 }) =>
   api.post<Campaign>(`/ui/ads/accounts/${accountId}/campaigns`, data);
 

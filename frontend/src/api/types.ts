@@ -6425,6 +6425,10 @@ export interface Campaign {
   status: string;
   created_at: number;
   updated_at: number;
+  // FE-162 (<- BE-161): what this campaign promotes. Additive + optional;
+  // absent on backends that do not yet persist the promote descriptor.
+  promote_kind?: string | null;
+  promote_entity_id?: string | null;
 }
 
 // ─── Ad Billing (ADS-007) ───────────────────────────────────────────
@@ -13754,6 +13758,10 @@ export interface AdTargeting {
   content_types?: string[] | null;
   exclude_creator_ids?: string[] | null;
   exclude_categories?: string[] | null;
+  // FE-162 (<- BE-162): entity-scoped targeting. Additive + optional.
+  market_ids?: string[] | null;
+  token_ids?: string[] | null;
+  product_ids?: string[] | null;
   created_at: number;
   updated_at: number;
 }

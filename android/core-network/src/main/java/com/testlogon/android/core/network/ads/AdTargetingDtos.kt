@@ -29,6 +29,10 @@ data class AdTargetingDto(
     @Json(name = "content_types") val contentTypes: List<String>? = null,
     @Json(name = "exclude_creator_ids") val excludeCreatorIds: List<String>? = null,
     @Json(name = "exclude_categories") val excludeCategories: List<String>? = null,
+    // FE-162 (EPIC G, <- BE-162) - entity-scoped targeting (additive, tolerated on read).
+    @Json(name = "market_ids") val marketIds: List<String>? = null,
+    @Json(name = "token_ids") val tokenIds: List<String>? = null,
+    @Json(name = "product_ids") val productIds: List<String>? = null,
     @Json(name = "created_at") val createdAt: Long? = null,
     @Json(name = "updated_at") val updatedAt: Long? = null,
 )
@@ -46,6 +50,12 @@ data class AdTargetingCreateIn(
     @Json(name = "active_hours") val activeHours: List<Int>? = null,
     @Json(name = "device_types") val deviceTypes: List<String>? = null,
     @Json(name = "new_user_only") val newUserOnly: Boolean = false,
+    // FE-162 (EPIC G, <- BE-162) - entity-scoped targeting. Additive + OPTIONAL: promote a specific
+    // market / creator-token / product to the segmented audience. A backend that ignores these keys still
+    // applies the demographic/behavioral segments (degrade-gracefully).
+    @Json(name = "market_ids") val marketIds: List<String>? = null,
+    @Json(name = "token_ids") val tokenIds: List<String>? = null,
+    @Json(name = "product_ids") val productIds: List<String>? = null,
 )
 
 /** Audience estimate returned by POST .../targeting/estimate. */
