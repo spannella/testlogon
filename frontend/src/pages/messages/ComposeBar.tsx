@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus, Check, TrendingUp, Activity, Package, ShoppingBag } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus, Check, TrendingUp, Activity, Package, ShoppingBag, MapPin } from "lucide-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { GifPicker } from "@/components/shared/GifPicker";
@@ -30,6 +30,8 @@ import { PositionCardComposerDialog } from "./PositionCardComposerDialog";
 import { CryptoSendComposerDialog } from "./CryptoSendComposerDialog";
 import { ProductCardComposerDialog } from "./ProductCardComposerDialog";
 import { OrderShareComposerDialog } from "./OrderShareComposerDialog";
+import { LocationComposerDialog } from "./LocationComposerDialog";
+import type { LocationCardPayload } from "@/lib/locationCards";
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import type { CryptoTransferPayload } from "@/lib/cryptoTransfer";
 import type { ProductCardPayload, OrderCardPayload } from "@/lib/ecomCards";
@@ -79,6 +81,7 @@ interface ComposeBarProps {
   onSendCryptoTransfer?: (payload: CryptoTransferPayload) => void;
   onSendProductCard?: (payload: ProductCardPayload) => void;
   onSendOrderCard?: (payload: OrderCardPayload) => void;
+  onSendLocation?: (payload: LocationCardPayload) => void;
   /** DM partner display name for the send-crypto composer attribution. */
   recipientName?: string;
   currentUserName?: string;
@@ -120,6 +123,7 @@ export function ComposeBar({
   onSendCryptoTransfer,
   onSendProductCard,
   onSendOrderCard,
+  onSendLocation,
   recipientName,
   currentUserName,
   onSendLottery,
@@ -244,6 +248,7 @@ export function ComposeBar({
   const [cryptoSendOpen, setCryptoSendOpen] = React.useState(false);
   const [productCardOpen, setProductCardOpen] = React.useState(false);
   const [orderCardOpen, setOrderCardOpen] = React.useState(false);
+  const [locationOpen, setLocationOpen] = React.useState(false);
   const [activeDraftId, setActiveDraftId] = React.useState<string | null>(null);
   const [draftDirty, setDraftDirty] = React.useState(false);
   const [lastDraftSavedAt, setLastDraftSavedAt] = React.useState<number | null>(null);
@@ -1677,7 +1682,7 @@ export function ComposeBar({
       <div className="flex items-end gap-2">
         {(onSendVoiceMessage || onSendGallery || onSendLottery || onSendFileShare || onSendVideoShare ||
           onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendFindDateTime ||
-          onSendCountdown || onSendMarketCard || onSendPositionCard || onSendCryptoTransfer || onSendProductCard || onSendOrderCard || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
+          onSendCountdown || onSendMarketCard || onSendPositionCard || onSendCryptoTransfer || onSendProductCard || onSendOrderCard || onSendLocation || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -1903,6 +1908,13 @@ export function ComposeBar({
                     onClick={() => { setOrderCardOpen(true); setMoreOpen(false); }} aria-label="Share purchase"
                     data-testid="compose-share-purchase">
                     <ShoppingBag className="h-4 w-4" /> Share purchase
+                  </Button>
+                )}
+                {onSendLocation && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setLocationOpen(true); setMoreOpen(false); }} aria-label="Share location"
+                    data-testid="compose-share-location">
+                    <MapPin className="h-4 w-4" /> Share location
                   </Button>
                 )}
                 {draftsEnabled && (
@@ -2276,6 +2288,16 @@ export function ComposeBar({
           onSubmit={(payload) => {
             onSendOrderCard(payload);
             setOrderCardOpen(false);
+          }}
+        />
+      )}
+      {onSendLocation && (
+        <LocationComposerDialog
+          open={locationOpen}
+          onClose={() => setLocationOpen(false)}
+          onSubmit={(payload) => {
+            onSendLocation(payload);
+            setLocationOpen(false);
           }}
         />
       )}

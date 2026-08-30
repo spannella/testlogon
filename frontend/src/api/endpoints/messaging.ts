@@ -52,6 +52,7 @@ import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import type { CryptoTransferPayload } from "@/lib/cryptoTransfer";
 import type { ProductCardPayload, OrderCardPayload } from "@/lib/ecomCards";
+import type { LocationCardPayload } from "@/lib/locationCards";
 import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import { encryptBytes } from "@/lib/messageEncryption";
 
@@ -896,7 +897,7 @@ export async function sendCountdownMessage(
 async function sendCardMessage(
   conversationId: string,
   cardEndpoint: string,
-  kind: "market_card" | "position_card" | "crypto_transfer" | "product_card" | "order_card",
+  kind: "market_card" | "position_card" | "crypto_transfer" | "product_card" | "order_card" | "location",
   payload: Record<string, unknown>,
   replyToMessageId?: string,
 ): Promise<Message> {
@@ -1000,6 +1001,47 @@ export async function sendOrderCardMessage(
     conversationId,
     "order",
     "order_card",
+    { ...payload },
+    replyToMessageId,
+  );
+}
+
+// ---- Location-in-chat card (EPIC D: FE-130) ----
+//
+// Preferred path is a dedicated /messaging/cards/location endpoint (BE-130). If
+// the backend has not shipped it yet (404), we degrade to a normal message
+// carrying kind "location" + the structured payload -- MessageBubble dispatches
+// on `kind` + payload so it renders identically either way.
+// BE-133 reverse-geocode read: resolve a lat/lng to a human place name. Best-
+// effort -- if the endpoint is missing (404) or the backend has no key
+// configured, we resolve undefined so the composer simply skips place_name
+// (coords-only card). Never throws for the not-configured / not-deployed case.
+export async function reverseGeocode(
+  lat: number,
+  lng: number,
+): Promise<string | undefined> {
+  try {
+    const res = await api.get<{ place_name?: string | null; display_name?: string | null }>(
+      `/messaging/geocode/reverse?lat=${lat}&lng=${lng}`,
+    );
+    const name = (res.place_name ?? res.display_name ?? "").trim();
+    return name || undefined;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return undefined;
+    // A geocode failure must never block sending the pin.
+    return undefined;
+  }
+}
+
+export async function sendLocationCard(
+  conversationId: string,
+  payload: LocationCardPayload,
+  replyToMessageId?: string,
+): Promise<Message> {
+  return sendCardMessage(
+    conversationId,
+    "location",
+    "location",
     { ...payload },
     replyToMessageId,
   );

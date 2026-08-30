@@ -1,4 +1,5 @@
 import * as React from "react";
+import { locationPreview } from "@/lib/locationCards";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, Plus, MessageSquare, Users, BellOff } from "lucide-react";
@@ -352,6 +353,8 @@ function getPreviewText(lastMsg: Message | undefined, convo: Conversation, curre
       { sender_id: lastMsg.sender_id, asset: lastMsg.asset, amount: lastMsg.amount },
       currentUserId,
     );
+  if (lastMsg.kind === "location")
+    return locationPreview(lastMsg.label ?? undefined, lastMsg.place_name ?? undefined);
   return lastMsg.text ?? convo.last_message_preview ?? "No messages yet";
 }
 

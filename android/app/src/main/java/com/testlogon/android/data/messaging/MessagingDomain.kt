@@ -287,6 +287,18 @@ sealed interface MessageMedia {
         val innerMedia: MessageMedia,
         val innerText: String,
     ) : MessageMedia
+
+    /**
+     * FE-130 (EPIC D, <- BE-130 post / BE-133 reverse-geocode) - a shared location pin. Rides a normal
+     * text message whose body carries an encoded
+     * [com.testlogon.android.feature.messaging.LocationCardModel] payload behind the TLLOC1 sentinel;
+     * [MessageDto.toMedia] parses the body into [card]. The renderer shows a static-map thumbnail +
+     * label/place-name and opens native maps/directions. Degrades to a coords-only card on map/geocode
+     * failure (never crashes).
+     */
+    data class Location(
+        val card: com.testlogon.android.feature.messaging.LocationCardModel.LocationCard,
+    ) : MessageMedia
 }
 
 /** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
@@ -844,7 +856,11 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
     // Parse it FIRST so it renders as a transfer card, not raw text; a non-card body falls through.
     // FE-150/FE-151 (EPIC F) - an ecom product/order card rides a normal text message behind its own
     // sentinel. Parse it FIRST so it renders as a card, not raw text; a non-card body falls through.
-    com.testlogon.android.feature.messaging.EcomCardModel.parse(text) is com.testlogon.android.feature.messaging.EcomCardModel.ProductCard ->
+    // FE-130 (EPIC D) - a location card rides a normal text message behind the TLLOC1 sentinel. Parse
+    // it FIRST so it renders as a map card, not raw text; a non-card body falls through.
+    com.testlogon.android.feature.messaging.LocationCardModel.parse(text) != null ->
+        MessageMedia.Location(com.testlogon.android.feature.messaging.LocationCardModel.parse(text)!!)
+        com.testlogon.android.feature.messaging.EcomCardModel.parse(text) is com.testlogon.android.feature.messaging.EcomCardModel.ProductCard ->
         MessageMedia.ProductCard(com.testlogon.android.feature.messaging.EcomCardModel.parse(text) as com.testlogon.android.feature.messaging.EcomCardModel.ProductCard)
     com.testlogon.android.feature.messaging.EcomCardModel.parse(text) is com.testlogon.android.feature.messaging.EcomCardModel.OrderCard ->
         MessageMedia.OrderCard(com.testlogon.android.feature.messaging.EcomCardModel.parse(text) as com.testlogon.android.feature.messaging.EcomCardModel.OrderCard)

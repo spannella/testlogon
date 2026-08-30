@@ -67,6 +67,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.CurrencyBitcoin
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -458,6 +459,10 @@ fun ThreadRoute(
         onAttachOrderCard = viewModel::onAttachOrderCard,
         onDismissOrderPicker = viewModel::onDismissOrderPicker,
         onSendOrderCard = viewModel::onSendOrderCard,
+        onAttachLocation = viewModel::onAttachLocation,
+        onDismissLocation = viewModel::onDismissLocation,
+        onReverseGeocode = viewModel::reverseGeocode,
+        onSendLocationCard = viewModel::onSendLocationCard,
         onOpenMessageOptions = viewModel::openMessageOptions,
         onClearMessageOptions = viewModel::clearMessageOptions,
         onRemoveStagedImage = viewModel::onRemoveStagedImage,
@@ -1115,6 +1120,10 @@ fun ThreadScreen(
     onAttachOrderCard: () -> Unit = {},
     onDismissOrderPicker: () -> Unit = {},
     onSendOrderCard: (OrderPick, com.testlogon.android.feature.messaging.EcomCardModel.OrderMode) -> Unit = { _, _ -> },
+    onAttachLocation: () -> Unit = {},
+    onDismissLocation: () -> Unit = {},
+    onReverseGeocode: suspend (Double, Double) -> String? = { _, _ -> null },
+    onSendLocationCard: (String) -> Unit = {},
     onCryptoSelectAsset: (String) -> Unit = {},
     onCryptoAmountChange: (String) -> Unit = {},
     onCryptoMax: () -> Unit = {},
@@ -1477,6 +1486,7 @@ fun ThreadScreen(
                         onAttachCryptoSend = onAttachCryptoSend,
                         onAttachProductCard = onAttachProductCard,
                         onAttachOrderCard = onAttachOrderCard,
+                        onAttachLocation = onAttachLocation,
                         onOpenMessageOptions = onOpenMessageOptions,
                         onClearMessageOptions = onClearMessageOptions,
                         onRemoveStagedImage = onRemoveStagedImage,
@@ -1703,6 +1713,13 @@ fun ThreadScreen(
             onDismiss = onDismissOrderPicker,
         )
     }
+    if (state.locationComposer.visible) {
+        LocationComposerSheet(
+            onSend = onSendLocationCard,
+            onReverseGeocode = onReverseGeocode,
+            onDismiss = onDismissLocation,
+        )
+    }
 
     if (state.tipSheet.messageId != null) {
         TipSheet(
@@ -1754,6 +1771,7 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
     (m.media as? MessageMedia.CryptoTransfer)?.let { return com.testlogon.android.feature.messaging.CryptoTransferModel.previewNeutral(it.card) }
     (m.media as? MessageMedia.ProductCard)?.let { return com.testlogon.android.feature.messaging.EcomCardModel.productPreview(it.card) }
     (m.media as? MessageMedia.OrderCard)?.let { return com.testlogon.android.feature.messaging.EcomCardModel.orderPreview(it.card) }
+    (m.media as? MessageMedia.Location)?.let { return com.testlogon.android.feature.messaging.LocationCardModel.preview(it.card) }
     val text = m.text.trim()
     if (text.isNotBlank()) return text
     return when (m.media) {
@@ -1773,6 +1791,7 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
         is MessageMedia.CryptoTransfer -> com.testlogon.android.feature.messaging.CryptoTransferModel.previewNeutral((m.media as MessageMedia.CryptoTransfer).card)
         is MessageMedia.ProductCard -> com.testlogon.android.feature.messaging.EcomCardModel.productPreview((m.media as MessageMedia.ProductCard).card)
         is MessageMedia.OrderCard -> com.testlogon.android.feature.messaging.EcomCardModel.orderPreview((m.media as MessageMedia.OrderCard).card)
+        is MessageMedia.Location -> com.testlogon.android.feature.messaging.LocationCardModel.preview((m.media as MessageMedia.Location).card)
         is MessageMedia.Countdown -> "[countdown]"
         is MessageMedia.CalendarEvent, is MessageMedia.CalendarShare -> "[calendar]"
         is MessageMedia.RevealLocked -> com.testlogon.android.feature.messaging.RevealAtMath.LOCKED_PREVIEW
@@ -2155,6 +2174,7 @@ private fun MessageBubble(
                     )
                     is MessageMedia.ProductCard -> ProductCard(card = inner.card, onBuy = onOpenProduct)
                     is MessageMedia.OrderCard -> OrderShareCard(card = inner.card)
+                    is MessageMedia.Location -> LocationCard(card = inner.card)
                     else -> Surface(
                         color = bubbleColor,
                         contentColor = if (message.isOwn) {
@@ -2265,6 +2285,7 @@ private fun MessageBubble(
                 onBuy = onOpenProduct,
             )
             is MessageMedia.OrderCard -> OrderShareCard(card = media.card)
+            is MessageMedia.Location -> LocationCard(card = media.card)
             is MessageMedia.Paid -> PaidMessageBubble(
                 monetization = media.monetization,
                 isOwn = message.isOwn,
@@ -2804,6 +2825,7 @@ private fun MessageComposer(
     onAttachCryptoSend: () -> Unit = {},
     onAttachProductCard: () -> Unit = {},
     onAttachOrderCard: () -> Unit = {},
+    onAttachLocation: () -> Unit = {},
     onOpenMessageOptions: () -> Unit = {},
     onClearMessageOptions: () -> Unit = {},
     onRemoveStagedImage: (Int) -> Unit = {},
@@ -2971,6 +2993,12 @@ private fun MessageComposer(
                         modifier = Modifier.size(44.dp).testTag(EcomComposerTestTags.ATTACH_ORDER),
                     ) {
                         Icon(Icons.Filled.ReceiptLong, contentDescription = "Share purchase", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(
+                        onClick = { actionsExpanded = false; onAttachLocation() },
+                        modifier = Modifier.size(44.dp).testTag(LocationComposerTestTags.ATTACH),
+                    ) {
+                        Icon(Icons.Filled.Place, contentDescription = "Share location", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }

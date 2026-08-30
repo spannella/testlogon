@@ -1307,7 +1307,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime" | "market_card" | "position_card" | "crypto_transfer" | "product_card" | "order_card";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail" | "countdown" | "gif" | "sticker" | "find_datetime" | "market_card" | "position_card" | "crypto_transfer" | "product_card" | "order_card" | "location";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -1417,6 +1417,13 @@ export interface Message {
   amount_cents?: number | null;
   item_count?: number | null;
   items?: { name: string; quantity: number }[] | null;
+  // Location-in-chat card fields (EPIC D: FE-130). `location` carries a lat/lng
+  // pin, an optional user label and an optional BE-133 reverse-geocoded
+  // place_name. These ride on a normal message keyed by `kind`.
+  lat?: number | null;
+  lng?: number | null;
+  label?: string | null;
+  place_name?: string | null;
   // B-COUNTDOWN #31: the stashed reveal payload, surfaced ONLY once the countdown
   // target has passed. Present on any message that carried countdown_reveal_* on
   // send (not just the dedicated "countdown" kind).
