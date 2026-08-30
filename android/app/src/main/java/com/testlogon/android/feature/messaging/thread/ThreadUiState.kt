@@ -101,6 +101,8 @@ data class ThreadUiState(
     val orderPicker: OrderPickerState = OrderPickerState(),
     /** FE-130 (EPIC D) — "Share location" composer sheet (map pin; hidden until opened). */
     val locationComposer: LocationComposerState = LocationComposerState(),
+    /** FE-131 (EPIC D) — "Share live location" duration-picker sheet (hidden until opened). */
+    val liveLocationComposer: LiveLocationComposerState = LiveLocationComposerState(),
     /** MSG — receiver passphrase-unlock dialog for an encrypted message (non-null key = open). */
     val encryptUnlock: EncryptUnlockState = EncryptUnlockState(),
     /** MSG — view-once viewer dialog (non-null key = open, showing the consumed content). */
@@ -324,6 +326,11 @@ data class OrderPick(
 
 /** FE-130 - "Share location" composer state. Just visibility; the sheet owns its transient input. */
 data class LocationComposerState(
+    val visible: Boolean = false,
+)
+
+/** FE-131 - "Share live location" composer state. Just visibility; the sheet owns its transient input. */
+data class LiveLocationComposerState(
     val visible: Boolean = false,
 )
 

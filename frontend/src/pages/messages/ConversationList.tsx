@@ -355,6 +355,7 @@ function getPreviewText(lastMsg: Message | undefined, convo: Conversation, curre
     );
   if (lastMsg.kind === "location")
     return locationPreview(lastMsg.label ?? undefined, lastMsg.place_name ?? undefined);
+  if (lastMsg.kind === "live_location") return "📍 Live location";
   return lastMsg.text ?? convo.last_message_preview ?? "No messages yet";
 }
 

@@ -114,6 +114,7 @@ class ThreadViewModel @Inject constructor(
     private val geocodeRepository: com.testlogon.android.data.messaging.geocode.GeocodeRepository,
     private val groupRepository: com.testlogon.android.data.messaging.group.GroupRepository,
     private val muteStore: com.testlogon.android.data.messaging.mute.ConversationMuteStore,
+    private val liveLocationRepository: com.testlogon.android.data.messaging.livelocation.LiveLocationRepository,
 ) : ViewModel() {
 
     /**
@@ -139,6 +140,11 @@ class ThreadViewModel @Inject constructor(
         get() = voicePlayerOrNull ?: playerFactory.create().also { voicePlayerOrNull = it }
 
     private var recorderObserver: kotlinx.coroutines.Job? = null
+
+    /** FE-131 - the running live-location updater loop (per active share); cancelled on stop/expiry/onCleared. */
+    private var liveLocationJob: kotlinx.coroutines.Job? = null
+    /** FE-131 - the clientId of the outbox message carrying the active live-location card (for re-encode on stop). */
+    private var liveLocationClientId: String? = null
     private var capturedPeaks: List<Float> = emptyList()
 
     /** Epoch-seconds clock; overridable in tests for deterministic optimistic timestamps. */
@@ -2649,6 +2655,136 @@ class ThreadViewModel @Inject constructor(
         }
     }
 
+    // ---- FE-131 (EPIC D, <- BE-131): LIVE location sharing ----
+
+    /** FE-131 - open the "Share live location" duration-picker sheet. */
+    fun onAttachLiveLocation() {
+        _state.update { it.copy(liveLocationComposer = LiveLocationComposerState(visible = true)) }
+    }
+
+    fun onDismissLiveLocation() {
+        _state.update { it.copy(liveLocationComposer = LiveLocationComposerState()) }
+    }
+
+    /**
+     * FE-131 - start a live-location share. The composer has captured the first fix + chosen duration.
+     *
+     * Flow: try BE-131 [LiveLocationRepository.start] to get a server-authoritative share_id/window;
+     * degrade-on-404 to a locally-minted share_id + locally-computed expiry (optimistic). Emit the
+     * TLLIVE1 card as a normal outbox text message (degrade-safe transport - renders as a live card on
+     * upgraded clients, plain text otherwise), then launch a single updater loop that, WHILE the share
+     * is active, posts a fresh fix every [LiveLocationModel.UPDATE_INTERVAL_SEC] (BE-131 relay) and
+     * re-encodes/re-sends the card body so the local pin + last-known coords advance too. The loop
+     * AUTO-STOPS the instant the share is no longer active (expiry), and is cancelled on manual stop or
+     * onCleared - one structured-concurrency job, no leak.
+     *
+     * NOTE: true background tracking would need a foreground service (out of scope). Updates flow only
+     * while the thread is foregrounded; the card's own countdown + auto-expiry are clock-driven so the
+     * card still ends correctly even with no further updates.
+     */
+    fun onStartLiveLocation(lat: Double, lng: Double, durationSec: Long) {
+        _state.update { it.copy(liveLocationComposer = LiveLocationComposerState()) }
+        val startedLocal = clock()
+        viewModelScope.launch {
+            val started = liveLocationRepository.start(conversationId, durationSec)
+            val shareId = started?.shareId ?: ("live_" + java.util.UUID.randomUUID().toString())
+            val startedAt = started?.startedAtSec ?: startedLocal
+            val expiresAt = started?.expiresAtSec
+                ?: com.testlogon.android.feature.messaging.LiveLocationModel.computeExpiresAt(startedAt, durationSec)
+
+            val share = com.testlogon.android.feature.messaging.LiveLocationModel.LiveShare(
+                shareId = shareId,
+                lat = lat,
+                lng = lng,
+                startedAtSec = startedAt,
+                expiresAtSec = expiresAt,
+                stoppedAtSec = null,
+            )
+            val clientId = java.util.UUID.randomUUID().toString()
+            liveLocationClientId = clientId
+            val body = com.testlogon.android.feature.messaging.LiveLocationModel.encode(share)
+            repository.enqueueOptimistic(conversationId, clientId, body, clock())
+            repository.sendOutbox(conversationId, clientId, body)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+
+            // If the relay was unavailable AND the app can't relay updates, the card still degrades to
+            // the last-known pin + LIVE badge + countdown + auto-expiry (no crash). Surface a soft hint.
+            if (started == null) {
+                _state.update { it.copy(transientMessage = "Live location shared. Recipients will see your last-known pin until it expires.") }
+            }
+
+            // Single updater loop: cancel any prior one first (only one active share per thread).
+            liveLocationJob?.cancel()
+            liveLocationJob = viewModelScope.launch {
+                var current = share
+                while (com.testlogon.android.feature.messaging.LiveLocationModel.isLiveActive(
+                        current.expiresAtSec, current.stoppedAtSec, clock(),
+                    )
+                ) {
+                    delay(com.testlogon.android.feature.messaging.LiveLocationModel.UPDATE_INTERVAL_SEC * 1000L)
+                    if (!com.testlogon.android.feature.messaging.LiveLocationModel.isLiveActive(
+                            current.expiresAtSec, current.stoppedAtSec, clock(),
+                        )
+                    ) break
+                    val fix = latestFix() ?: continue
+                    current = current.copy(lat = fix.first, lng = fix.second)
+                    // BE-131 relay (best-effort; no-op degrade when undeployed).
+                    liveLocationRepository.update(shareId, fix.first, fix.second)
+                    // Advance the local card body so the pin moves for this client too.
+                    repository.enqueueOptimistic(
+                        conversationId, clientId,
+                        com.testlogon.android.feature.messaging.LiveLocationModel.encode(current), clock(),
+                    )
+                }
+                // AUTO-STOP at expiry: mark the card ended + best-effort backend stop.
+                finalizeLiveShare(current, clientId, shareId)
+            }
+        }
+    }
+
+    /** FE-131 - manual "Stop sharing" tap from the card. Cancels the updater + ends the share now. */
+    fun onStopLiveLocation(share: com.testlogon.android.feature.messaging.LiveLocationModel.LiveShare) {
+        liveLocationJob?.cancel()
+        liveLocationJob = null
+        val clientId = liveLocationClientId ?: java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            val ended = share.copy(stoppedAtSec = clock())
+            finalizeLiveShare(ended, clientId, share.shareId)
+        }
+    }
+
+    /** FE-131 - re-encode the (stopped/expired) share so the card flips to the ended state + relay stop. */
+    private suspend fun finalizeLiveShare(
+        share: com.testlogon.android.feature.messaging.LiveLocationModel.LiveShare,
+        clientId: String,
+        shareId: String,
+    ) {
+        val ended = if (share.stoppedAtSec == null) share.copy(stoppedAtSec = clock()) else share
+        repository.enqueueOptimistic(
+            conversationId, clientId,
+            com.testlogon.android.feature.messaging.LiveLocationModel.encode(ended), clock(),
+        )
+        liveLocationRepository.stop(shareId)
+        if (liveLocationClientId == clientId) {
+            liveLocationClientId = null
+            liveLocationJob = null
+        }
+    }
+
+    /** FE-131 - best-effort current fix (lat,lng) from the last-known providers; null when unavailable. */
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun latestFix(): Pair<Double, Double>? {
+        val lm = appContext.getSystemService(android.content.Context.LOCATION_SERVICE) as? android.location.LocationManager
+            ?: return null
+        val loc = runCatching {
+            lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+                ?: lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(android.location.LocationManager.PASSIVE_PROVIDER)
+        }.getOrNull() ?: return null
+        return loc.latitude to loc.longitude
+    }
+
+
     /**
      * FE-151 - send an order_share card as a normal text message. The mode is passed to the model
      * choke point [EcomCardModel.buildOrderPayload], which STRIPS the buyer name in receipt mode (no
@@ -3364,6 +3500,9 @@ class ThreadViewModel @Inject constructor(
         super.onCleared()
         recorderOrNull?.release()
         voicePlayerOrNull?.release()
+        // FE-131 - stop the location updater so no coroutine leaks past the thread closing.
+        liveLocationJob?.cancel()
+        liveLocationJob = null
     }
 
     private fun reduceLoadFailure(message: String) {
