@@ -24,7 +24,7 @@ class ConversationListViewModelTest {
     private val repo = FakeMessagingRepository()
     private val stream = FakeMessagingEventStream()
 
-    private fun vm() = ConversationListViewModel(repo, stream)
+    private fun vm() = ConversationListViewModel(repo, stream, com.testlogon.android.feature.messaging.FakeConversationMuteStore())
 
     private fun conv(id: String, unread: Int = 0, activity: Long = 100) = Conversation(
         id = id, title = id, iconUrl = null, lastMessagePreview = "p",

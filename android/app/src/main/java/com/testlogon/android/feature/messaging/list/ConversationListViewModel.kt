@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -36,6 +37,7 @@ sealed interface ConversationListEvent {
 class ConversationListViewModel @Inject constructor(
     private val repository: MessagingRepository,
     private val eventStream: MessagingEventStream,
+    private val muteStore: com.testlogon.android.data.messaging.mute.ConversationMuteStore,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<ConversationListUiState>(ConversationListUiState.Loading)
@@ -76,8 +78,15 @@ class ConversationListViewModel @Inject constructor(
 
     private fun observeCache() {
         viewModelScope.launch {
-            repository.observeConversations().collect { conversations ->
-                cached = conversations.map(Conversation::toRow)
+            // FE-140 - join the conversation cache with the local mute mirror so each row can show a
+            // bell-off indicator. Unknown ids default to 0 (not muted).
+            combine(
+                repository.observeConversations(),
+                muteStore.observeAll(),
+            ) { conversations, muteMap ->
+                conversations.map { c -> c.toRow().copy(mutedUntil = muteMap[c.id] ?: 0L) }
+            }.collect { rows ->
+                cached = rows
                 renderCache()
             }
         }

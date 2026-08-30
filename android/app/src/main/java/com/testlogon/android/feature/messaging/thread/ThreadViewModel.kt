@@ -111,6 +111,8 @@ class ThreadViewModel @Inject constructor(
     private val custodyReader: com.testlogon.android.data.custody.CustodyReader,
     private val catalogRepository: com.testlogon.android.data.catalog.CatalogRepository,
     private val purchasesRepository: com.testlogon.android.data.purchases.PurchasesRepository,
+    private val groupRepository: com.testlogon.android.data.messaging.group.GroupRepository,
+    private val muteStore: com.testlogon.android.data.messaging.mute.ConversationMuteStore,
 ) : ViewModel() {
 
     /**
@@ -250,6 +252,66 @@ class ThreadViewModel @Inject constructor(
         startTyping()
         observePeerPhoto()
         resolvePeerFromParticipants()
+        observeMute()
+    }
+
+    /**
+     * FE-140 - reflect the per-conversation mute state (from the locally-mirrored ConversationMuteStore)
+     * in the top bar. The store is refreshed on every conversation fetch and updated immediately on
+     * mute/unmute, so the header bell + label stay in sync without a bespoke network round-trip here.
+     */
+    private fun observeMute() {
+        viewModelScope.launch {
+            muteStore.observeMutedUntil(conversationId).collect { until ->
+                _state.update { it.copy(mutedUntil = until) }
+            }
+        }
+    }
+
+    /**
+     * FE-140 - mute this conversation for the chosen [optionId] (see [MuteMath.muteOptions]). Calls the
+     * shared conversation-level mute endpoint (AND-159 GroupRepository.setMute, which works for any
+     * conversation type). Optimistically writes the local store so the notification-suppress path + UI
+     * update at once; reverts on failure. until_off sends muted_until=null (server persists a
+     * sentinel) and stores the far-future sentinel locally.
+     */
+    fun onMute(optionId: String) {
+        if (_state.value.muteActionInFlight) return
+        val nowSec = clock()
+        val untilForever = optionId == com.testlogon.android.feature.messaging.mute.MuteMath.OPT_UNTIL_OFF
+        val localUntil = com.testlogon.android.feature.messaging.mute.MuteMath.computeMutedUntil(optionId, nowSec)
+        val serverUntil: Long? = if (untilForever) null else localUntil
+        val prior = _state.value.mutedUntil
+        _state.update { it.copy(muteActionInFlight = true) }
+        viewModelScope.launch {
+            muteStore.setMuted(conversationId, localUntil) // optimistic (drives observeMute + suppress)
+            when (val r = groupRepository.setMute(conversationId, muted = true, mutedUntilEpochSeconds = serverUntil)) {
+                is ApiResult.Success -> _state.update { it.copy(muteActionInFlight = false) }
+                is ApiResult.Failure -> revertMute(prior, r.error.message)
+                is ApiResult.NetworkError -> revertMute(prior, OFFLINE_MESSAGE)
+            }
+        }
+    }
+
+    /** FE-140 - unmute this conversation (muted=false, muted_until=0). Optimistic + reverts on failure. */
+    fun onUnmute() {
+        if (_state.value.muteActionInFlight) return
+        val prior = _state.value.mutedUntil
+        _state.update { it.copy(muteActionInFlight = true) }
+        viewModelScope.launch {
+            muteStore.setMuted(conversationId, 0L)
+            when (val r = groupRepository.setMute(conversationId, muted = false, mutedUntilEpochSeconds = null)) {
+                is ApiResult.Success -> _state.update { it.copy(muteActionInFlight = false) }
+                is ApiResult.Failure -> revertMute(prior, r.error.message)
+                is ApiResult.NetworkError -> revertMute(prior, OFFLINE_MESSAGE)
+            }
+        }
+    }
+
+    private suspend fun revertMute(priorUntil: Long, message: String) {
+        muteStore.setMuted(conversationId, priorUntil)
+        _state.update { it.copy(muteActionInFlight = false) }
+        _events.send(ThreadEvent.Toast(message))
     }
 
     /**

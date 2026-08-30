@@ -25,6 +25,7 @@ import com.testlogon.android.data.messaging.realtime.MessagingStreamEvent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import java.io.IOException
 
@@ -1269,6 +1270,9 @@ fun newThreadViewModel(
     billing: com.testlogon.android.data.messaging.BillingAuthorizer,
     draftRepository: com.testlogon.android.data.messaging.DraftRepository = FakeDraftRepository(),
     typingRepository: com.testlogon.android.data.messaging.typing.TypingRepository = FakeTypingRepository(),
+    groupRepository: com.testlogon.android.data.messaging.group.GroupRepository =
+        com.testlogon.android.data.messaging.group.FakeGroupRepository(),
+    muteStore: com.testlogon.android.data.messaging.mute.ConversationMuteStore = FakeConversationMuteStore(),
 ): com.testlogon.android.feature.messaging.thread.ThreadViewModel =
     com.testlogon.android.feature.messaging.thread.ThreadViewModel(
         handle,
@@ -1290,6 +1294,8 @@ fun newThreadViewModel(
         com.testlogon.android.feature.trading.FakeCustodyReader(),
         fakeCatalogRepository(),
         fakePurchasesRepository(),
+        groupRepository,
+        muteStore,
     )
 
 /** EPIC F — minimal no-op catalog repo for thread tests (product-picker read returns empty). */
@@ -1339,3 +1345,24 @@ private fun fakePurchasesRepository(): com.testlogon.android.data.purchases.Purc
                 com.testlogon.android.core.model.ApiError(status = 404, message = "nf"),
             )
     }
+
+
+/** FE-140 - in-memory mute store for thread/list tests (no DataStore I/O off-device). */
+class FakeConversationMuteStore : com.testlogon.android.data.messaging.mute.ConversationMuteStore {
+    private val flow = kotlinx.coroutines.flow.MutableStateFlow<Map<String, Long>>(emptyMap())
+    override suspend fun mutedUntil(conversationId: String): Long = flow.value[conversationId] ?: 0L
+    override fun observeMutedUntil(conversationId: String): kotlinx.coroutines.flow.Flow<Long> =
+        flow.map { m -> m[conversationId] ?: 0L }
+    override fun observeAll(): kotlinx.coroutines.flow.Flow<Map<String, Long>> = flow
+    override suspend fun setMuted(conversationId: String, mutedUntil: Long) {
+        flow.value = flow.value.toMutableMap().apply {
+            if (mutedUntil > 0L) put(conversationId, mutedUntil) else remove(conversationId)
+        }
+    }
+    override suspend fun syncFromList(pairs: List<Pair<String, Long>>) {
+        flow.value = flow.value.toMutableMap().apply {
+            for ((id, until) in pairs) if (until > 0L) put(id, until) else remove(id)
+        }
+    }
+    override suspend fun clear() { flow.value = emptyMap() }
+}

@@ -61,6 +61,11 @@ data class ThreadUiState(
     // ---- AND-141: drafts ----
     /** True when a non-blank draft exists for this conversation (gates "Discard draft"). */
     val hasDraft: Boolean = false,
+    /** FE-140 - per-conversation mute: muted_until epoch SECONDS (0 = not muted). Mirrored from the
+     *  ConversationMuteStore, which is synced from the conversation fetch + updated on mute/unmute. */
+    val mutedUntil: Long = 0L,
+    /** FE-140 - true while a mute/unmute network call is in flight (disables the menu item). */
+    val muteActionInFlight: Boolean = false,
     /** Last draft sync outcome (non-blocking UX only). */
     val draftSyncState: DraftSyncState = DraftSyncState.Idle,
     // ---- AND-147: read receipts / views ----

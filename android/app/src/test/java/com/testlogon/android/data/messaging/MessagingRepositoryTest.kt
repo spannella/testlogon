@@ -558,6 +558,7 @@ class MessagingRepositoryTest {
         storageClient = storageClient,
         attachmentDownloader = attachmentDownloader,
         moshi = Moshi.Builder().build(),
+        muteStore = com.testlogon.android.feature.messaging.FakeConversationMuteStore(),
     )
 
     private fun convEntity(id: String, unread: Int) = ConversationEntity(
