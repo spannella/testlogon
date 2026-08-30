@@ -22,6 +22,11 @@ import com.testlogon.android.data.billing.Subscription
 import com.testlogon.android.data.billing.WalletBalance
 import com.testlogon.android.core.testing.MainDispatcherRule
 import com.testlogon.android.feature.adsbilling.data.AdsBillingRepository
+import com.testlogon.android.data.custody.CustodyBalances
+import com.testlogon.android.data.custody.CustodyReader
+import com.testlogon.android.data.fees.CheckoutPayResult
+import com.testlogon.android.data.fees.FeeQuote
+import com.testlogon.android.data.fees.FeesRepository
 import com.testlogon.android.feature.adsbilling.ui.AdsBillingUiState
 import com.testlogon.android.feature.adsbilling.ui.AdsBillingViewModel
 import com.testlogon.android.feature.adsbilling.ui.DepositState
@@ -92,16 +97,40 @@ class AdsBillingViewModelTest {
         ) = error("updateCampaign not used in this test")
         override suspend fun getInvoice(accountId: String, month: String) = invoiceOutcome
 
+        var lastDepositPayWith: String? = null
+
         override suspend fun deposit(
             accountId: String,
             amountCents: Long,
             paymentMethodId: String?,
+            payWith: String?,
+            quoteToken: String?,
         ): ApiResult<DepositResult> {
             depositCount++
             lastDepositCents = amountCents
+            lastDepositPayWith = payWith
             depositGate?.await()
             return depositOutcome
         }
+    }
+
+    /** FE-160 - fees fake: quote/pay outcomes for the crypto-funding path. */
+    private class FakeFeesRepo(
+        var quoteOutcome: ApiResult<FeeQuote?> = ApiResult.Success(null),
+    ) : FeesRepository {
+        override suspend fun quoteFee(amountCents: Long, payWith: String): ApiResult<FeeQuote?> = quoteOutcome
+        override suspend fun payCheckoutOrder(orderId: String, quote: FeeQuote): ApiResult<CheckoutPayResult> =
+            ApiResult.Success(CheckoutPayResult(status = null, orderId = orderId, txnId = null, coinNativeDebited = null))
+    }
+
+    /** FE-160 - custody fake: canned balances for the asset picker. */
+    private class FakeCustodyReader(
+        var balances: ApiResult<CustodyBalances> =
+            ApiResult.Success(CustodyBalances(vault = "v", tier = "t", rows = emptyList())),
+    ) : CustodyReader {
+        override suspend fun getBalance(): ApiResult<CustodyBalances> = balances
+        override suspend fun getStaking(): ApiResult<com.testlogon.android.data.custody.StakingDashboard> =
+            ApiResult.Failure(ApiError(status = 404, message = "n/a"))
     }
 
     /** ADV-306 - minimal general-billing fake backing the deposit card picker ([pms] = saved cards). */
@@ -127,10 +156,14 @@ class AdsBillingViewModelTest {
     private fun vm(
         repo: AdsBillingRepository = FakeBillingRepo(),
         billing: BillingRepository = FakeGeneralBilling(),
+        fees: FeesRepository = FakeFeesRepo(),
+        custody: CustodyReader = FakeCustodyReader(),
         accountId: String = ACCOUNT_ID,
     ): AdsBillingViewModel = AdsBillingViewModel(
         repository = repo,
         billingRepository = billing,
+        feesRepository = fees,
+        custodyReader = custody,
         errorParser = ApiErrorParser(Moshi.Builder().build()),
         savedState = SavedStateHandle(mapOf(AdsBillingViewModel.ARG_ACCOUNT_ID to accountId)),
     )

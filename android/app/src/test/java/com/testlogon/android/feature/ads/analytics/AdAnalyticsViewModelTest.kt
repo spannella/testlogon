@@ -114,6 +114,8 @@ class AdAnalyticsViewModelTest {
             accountId: String,
             amountCents: Long,
             paymentMethodId: String?,
+            payWith: String?,
+            quoteToken: String?,
         ): ApiResult<DepositResult> = throw NotImplementedError()
     }
 

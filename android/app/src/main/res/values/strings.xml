@@ -4020,6 +4020,19 @@
     <string name="deposit_success">Deposit successful.</string>
     <string name="deposit_done">Done</string>
     <string name="deposit_success_with_balance">Deposit successful. New balance: %1$s</string>
+    <!-- FE-160: fund ad account with crypto balance -->
+    <string name="fund_tab_card">Card / wallet</string>
+    <string name="fund_tab_crypto">Crypto balance</string>
+    <string name="fund_crypto_asset_label">Pay with</string>
+    <string name="fund_crypto_pick_asset">Choose a crypto balance</string>
+    <string name="fund_crypto_no_balance">No crypto balance available to fund with.</string>
+    <string name="fund_crypto_unavailable">Crypto funding unavailable.</string>
+    <string name="fund_crypto_quoting">Fetching rate…</string>
+    <string name="fund_crypto_rate">Rate</string>
+    <string name="fund_crypto_fee">Conversion fee</string>
+    <string name="fund_crypto_total">Total</string>
+    <string name="fund_crypto_insufficient">Insufficient balance for this amount.</string>
+    <string name="fund_crypto_confirm">Fund with crypto</string>
 
     <!-- AND-368: READ-ONLY ad-analytics dashboard -->
     <string name="more_entry_ad_analytics">Ad analytics</string>

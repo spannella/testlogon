@@ -72,6 +72,8 @@ class AdsAccountsViewModelTest {
             accountId: String,
             amountCents: Long,
             paymentMethodId: String?,
+            payWith: String?,
+            quoteToken: String?,
         ): ApiResult<DepositResult> = ApiResult.Success(DepositResult())
     }
 

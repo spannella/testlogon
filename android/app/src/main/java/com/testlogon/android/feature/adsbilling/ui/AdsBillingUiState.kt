@@ -4,6 +4,7 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ads.AdAccountSummary
 import com.testlogon.android.core.model.ads.AdBillingEntry
 import com.testlogon.android.core.model.ads.AdInvoice
+import com.testlogon.android.data.fees.FeeQuote
 
 /**
  * AND-367 - hoisted UI state for the ads-account billing screen (the READ view).
@@ -51,4 +52,48 @@ sealed interface DepositState {
     data class Success(val newBalanceCents: Long?) : DepositState
 
     data class Error(val message: String) : DepositState
+}
+
+
+/**
+ * FE-160 - one selectable crypto asset row in the "Fund with crypto balance" picker: symbol, human name
+ * and the custody balance in BOTH whole units (display) and integer base units (the insufficient compare
+ * against a quote total_native). Mirrors the FE-152 checkout CryptoAssetOption.
+ */
+data class AdCryptoAssetOption(
+    val symbol: String,
+    val name: String,
+    val decimals: Int,
+    val balanceWhole: Double,
+    val balanceBaseUnits: Long,
+) {
+    val balanceText: String
+        get() = if (balanceWhole == balanceWhole.toLong().toDouble()) balanceWhole.toLong().toString()
+        else balanceWhole.toString()
+}
+
+/**
+ * FE-160 - the "Fund with crypto balance" sub-state layered onto the ads deposit sheet. Additive: the
+ * existing card/wallet deposit path is untouched. [enabled] flips false once the fee-quote endpoint 404s
+ * (degrade-on-404 -> "Crypto funding unavailable"). [assets] is the fundable custody balance set; [quote]
+ * is the live rate-locked quote for [selectedSymbol]; [secondsRemaining] drives the countdown chip;
+ * [insufficient] disables funding with a message; [error] carries a quote/pay error. [enabledForFunding]
+ * mirrors the checkout canPay gate.
+ */
+data class CryptoFundUiState(
+    val enabled: Boolean = true,
+    val assets: List<AdCryptoAssetOption> = emptyList(),
+    val selectedSymbol: String? = null,
+    val quoting: Boolean = false,
+    val quote: FeeQuote? = null,
+    val secondsRemaining: Long = 0L,
+    val insufficient: Boolean = false,
+    val error: String? = null,
+) {
+    val selectedAsset: AdCryptoAssetOption?
+        get() = assets.firstOrNull { it.symbol == selectedSymbol }
+
+    /** True only when a live, non-expired, affordable quote is ready to fund with. */
+    val canFund: Boolean
+        get() = enabled && quote != null && secondsRemaining > 0L && !insufficient && !quoting
 }

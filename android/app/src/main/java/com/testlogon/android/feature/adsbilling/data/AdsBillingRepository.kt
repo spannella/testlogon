@@ -88,6 +88,8 @@ interface AdsBillingRepository {
         accountId: String,
         amountCents: Long,
         paymentMethodId: String? = null,
+        payWith: String? = null,
+        quoteToken: String? = null,
     ): ApiResult<DepositResult>
 }
 
@@ -160,11 +162,18 @@ class AdsBillingRepositoryImpl @Inject constructor(
         accountId: String,
         amountCents: Long,
         paymentMethodId: String?,
+        payWith: String?,
+        quoteToken: String?,
     ): ApiResult<DepositResult> = withContext(Dispatchers.IO) {
         call {
             api.deposit(
                 accountId,
-                AdDepositIn(amountCents = amountCents, paymentMethodId = paymentMethodId),
+                AdDepositIn(
+                    amountCents = amountCents,
+                    paymentMethodId = paymentMethodId,
+                    payWith = payWith,
+                    quoteToken = quoteToken,
+                ),
             ).toDomain()
         }
     }
