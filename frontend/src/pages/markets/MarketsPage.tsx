@@ -27,6 +27,9 @@ import {
   fundingIntervalOf,
 } from "@/hooks/useInstrumentClasses";
 import { impliedYes, type PmState } from "@/api/endpoints/trading";
+import { interleaveSponsored } from "@/lib/sponsoredSlots";
+import { useSponsoredSlot } from "@/pages/ads/useSponsoredSlot";
+import { SponsoredSlotCard } from "@/pages/ads/SponsoredSlotCard";
 
 // Fallback catalog if the symbols endpoint errors or returns empty.
 const FALLBACK_SYMBOLS: MarketSymbol[] = [
@@ -231,6 +234,22 @@ export default function MarketsPage() {
     [preClass, classTab, probe],
   );
 
+  // FE-161: sponsored slots for token discovery. Fetch is best-effort and
+  // gated on a list long enough to host a slot; degrades to [] on 404/unfilled.
+  const { ads: sponsoredAds } = useSponsoredSlot({
+    surface: "token_discovery",
+    slotType: "sponsored_post",
+    count: 2,
+    enabled: rows.length >= 5,
+  });
+  const interleavedRows = useMemo(
+    () =>
+      interleaveSponsored(rows, sponsoredAds, { everyN: 5, max: 2 }, (sym) =>
+        String(sym.symbol_id),
+      ),
+    [rows, sponsoredAds],
+  );
+
   const emptyWatchlist = watchTab === "watchlist" && watchlist.length === 0;
 
   // Column span for the "no rows" cell adapts to the extra columns.
@@ -325,19 +344,30 @@ export default function MarketsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((sym) => (
-                  <MarketRow
-                    key={sym.symbol_id}
-                    sym={sym}
-                    fav={isFav(sym.symbol_id)}
-                    onToggleFav={toggleFav}
-                    activeClass={classTab}
-                    extras={{
-                      fundingRateBps: fundingRates.get(sym.symbol_id),
-                      pm: probe.pmById.get(sym.symbol_id),
-                    }}
-                  />
-                ))}
+                {interleavedRows.map((entry) =>
+                  entry.type === "sponsored" ? (
+                    <SponsoredSlotCard
+                      key={entry.key}
+                      ad={entry.ad}
+                      surface="token_discovery"
+                      slotType="sponsored_post"
+                      variant="row"
+                      colSpan={colSpan}
+                    />
+                  ) : (
+                    <MarketRow
+                      key={entry.key}
+                      sym={entry.item}
+                      fav={isFav(entry.item.symbol_id)}
+                      onToggleFav={toggleFav}
+                      activeClass={classTab}
+                      extras={{
+                        fundingRateBps: fundingRates.get(entry.item.symbol_id),
+                        pm: probe.pmById.get(entry.item.symbol_id),
+                      }}
+                    />
+                  ),
+                )}
                 {rows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={colSpan} className="py-4 text-center text-sm text-muted-foreground">

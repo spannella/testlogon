@@ -33,11 +33,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.testlogon.android.data.shopads.SponsoredProduct
+import com.testlogon.android.feature.ads.SlotEntry
+import com.testlogon.android.feature.ads.SponsoredSlotCard
 import com.testlogon.android.feature.onboarding.SurfaceIntro
 import com.testlogon.android.feature.onboarding.OnboardingModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -50,6 +54,11 @@ import com.testlogon.android.data.tokens.Token
  * Creator revenue-share TOKEN market/browse list. Two tabs: the LISTED market (browse) and the
  * caller's ISSUED tokens. A row taps through to detail; a FAB opens Mint. Every read degrades to an
  * honest empty state when the (not-yet-built) backend 404s.
+ *
+ * FE-161 (EPIC G) — the MARKET (token-discovery) tab additionally interleaves clearly-labeled
+ * SPONSORED slots (served best-effort) every ~5 organic rows; impression fires when a slot is shown,
+ * a tap fires the CLICK beacon + opens the ad cta_url. Degrade-on-404 -> no slots, organic list
+ * unchanged.
  */
 @Composable
 fun TokensMarketRoute(
@@ -59,6 +68,7 @@ fun TokensMarketRoute(
     viewModel: TokensMarketViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val uriHandler = LocalUriHandler.current
     Scaffold(
         topBar = {
             TopAppBar(
@@ -113,7 +123,17 @@ fun TokensMarketRoute(
                                 },
                             )
                         } else {
-                            TokenList(rows = state.rows, onOpenToken = onOpenToken)
+                            TokenList(
+                                slots = state.marketSlots,
+                                onOpenToken = onOpenToken,
+                                onSponsoredImpression = viewModel::onSponsoredImpression,
+                                onSponsoredClick = { product ->
+                                    viewModel.onSponsoredClick(product)
+                                    product.tracking.ctaUrl?.takeIf { it.isNotBlank() }?.let { url ->
+                                        runCatching { uriHandler.openUri(url) }
+                                    }
+                                },
+                            )
                         }
                 }
             }
@@ -122,14 +142,36 @@ fun TokensMarketRoute(
 }
 
 @Composable
-private fun TokenList(rows: List<Token>, onOpenToken: (String) -> Unit) {
+private fun TokenList(
+    slots: List<SlotEntry<Token, SponsoredProduct>>,
+    onOpenToken: (String) -> Unit,
+    onSponsoredImpression: (SponsoredProduct) -> Unit,
+    onSponsoredClick: (SponsoredProduct) -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("tokens_list"),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(rows, key = { it.tokenId }) { token ->
-            TokenRowCard(token = token, onClick = { onOpenToken(token.tokenId) })
+        items(
+            items = slots,
+            key = { slot ->
+                when (slot) {
+                    is SlotEntry.Organic -> "token_" + slot.item.tokenId
+                    is SlotEntry.Sponsored -> slot.key
+                }
+            },
+        ) { slot ->
+            when (slot) {
+                is SlotEntry.Organic ->
+                    TokenRowCard(token = slot.item, onClick = { onOpenToken(slot.item.tokenId) })
+                is SlotEntry.Sponsored ->
+                    SponsoredSlotCard(
+                        product = slot.ad,
+                        onImpression = { onSponsoredImpression(slot.ad) },
+                        onClick = { onSponsoredClick(slot.ad) },
+                    )
+            }
         }
     }
 }

@@ -13810,6 +13810,13 @@ export interface AdServeResponse {
   reviewed_by?: string | null;
   promo_code_id?: string | null;
   affiliate_link_id?: string | null;
+  /** FE-161: sponsored-slot labeling + tracking fields (present when filled). */
+  campaign_id?: string | null;
+  account_id?: string | null;
+  creator_id?: string | null;
+  sponsor_label?: string | null;
+  impression_url?: string | null;
+  click_url?: string | null;
 }
 
 export interface AdTrackRequest {

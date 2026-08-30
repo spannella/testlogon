@@ -16,6 +16,9 @@ import {
   searchCatalogItems,
 } from "@/api/endpoints/cart";
 import type { CatalogItem } from "@/api/types";
+import { interleaveSponsored } from "@/lib/sponsoredSlots";
+import { useSponsoredSlot } from "@/pages/ads/useSponsoredSlot";
+import { SponsoredSlotCard } from "@/pages/ads/SponsoredSlotCard";
 
 function formatPrice(cents: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", {
@@ -52,6 +55,21 @@ export function Catalog() {
     ? (searchQuery.data?.items ?? [])
     : (itemsQuery.data?.items ?? []);
   const isLoadingItems = isSearching ? searchQuery.isLoading : itemsQuery.isLoading;
+
+  // FE-161: sponsored slots in the catalog/search grid. Best-effort; degrades
+  // to [] (organic grid unchanged) on 404/unfilled.
+  const { ads: sponsoredAds } = useSponsoredSlot({
+    surface: "catalog",
+    slotType: "sponsored_post",
+    count: 3,
+    enabled: items.length >= 5,
+  });
+  const gridEntries = interleaveSponsored(
+    items,
+    sponsoredAds,
+    { everyN: 5, max: 3 },
+    (item) => item.item_id,
+  );
 
   // Auto-select first category
   if (!selectedCategory && categories.length > 0 && !isSearching) {
@@ -149,21 +167,30 @@ export function Catalog() {
           />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {items.map((item) => (
+            {gridEntries.map((entry) =>
+              entry.type === "sponsored" ? (
+                <SponsoredSlotCard
+                  key={entry.key}
+                  ad={entry.ad}
+                  surface="catalog"
+                  slotType="sponsored_post"
+                  variant="card"
+                />
+              ) : (
               <Card
-                key={item.item_id}
+                key={entry.key}
                 className="cursor-pointer transition-shadow hover:shadow-md"
                 onClick={() =>
-                  navigate(`/shop/${item.category_id}/${item.item_id}`)
+                  navigate(`/shop/${entry.item.category_id}/${entry.item.item_id}`)
                 }
               >
                 <CardContent className="p-0">
                   {/* Image placeholder */}
                   <div className="flex h-36 items-center justify-center rounded-t-xl bg-muted">
-                    {item.image_urls.length > 0 ? (
+                    {entry.item.image_urls.length > 0 ? (
                       <img
-                        src={item.image_urls[0]}
-                        alt={item.name}
+                        src={entry.item.image_urls[0]}
+                        alt={entry.item.name}
                         className="h-full w-full rounded-t-xl object-cover"
                       />
                     ) : (
@@ -172,28 +199,29 @@ export function Catalog() {
                   </div>
                   <div className="p-3">
                     <h4 className="text-sm font-medium leading-tight line-clamp-2">
-                      {item.name}
+                      {entry.item.name}
                     </h4>
                     <p className="mt-1 text-base font-semibold text-primary">
-                      {formatPrice(item.price_cents, item.currency)}
+                      {formatPrice(entry.item.price_cents, entry.item.currency)}
                     </p>
-                    {item.stock_status === "low_stock" && (
+                    {entry.item.stock_status === "low_stock" && (
                       <Badge variant="outline" className="mt-1 border-orange-500 text-orange-600 text-[10px]" data-testid="stock-badge">
-                        Only {item.stock_count} left
+                        Only {entry.item.stock_count} left
                       </Badge>
                     )}
-                    {item.stock_status === "out_of_stock" && (
+                    {entry.item.stock_status === "out_of_stock" && (
                       <Badge variant="destructive" className="mt-1 text-[10px]" data-testid="stock-badge">
                         Out of Stock
                       </Badge>
                     )}
-                    {item.stock_status !== "low_stock" && item.stock_status !== "out_of_stock" && (
+                    {entry.item.stock_status !== "low_stock" && entry.item.stock_status !== "out_of_stock" && (
                       <p className="mt-1 text-[10px] text-muted-foreground">No reviews yet</p>
                     )}
                   </div>
                 </CardContent>
               </Card>
-            ))}
+              ),
+            )}
           </div>
         )}
       </div>
