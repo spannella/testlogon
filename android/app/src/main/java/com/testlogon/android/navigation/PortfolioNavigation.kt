@@ -19,6 +19,11 @@ fun NavGraphBuilder.portfolioDestination(navController: NavHostController) {
     composable(PortfolioDest.ROUTE) {
         PortfolioRoute(
             onBack = { navController.popBackStack() },
+            // FE-171 — after a report request, jump to the FE-170 Trading Documents route (existing
+            // destination in the files graph; NO new route literal, so MoreCatalog is unaffected).
+            onOpenTradingDocs = {
+                navController.navigate(TradingDocsDest.ROUTE) { launchSingleTop = true }
+            },
         )
     }
 }

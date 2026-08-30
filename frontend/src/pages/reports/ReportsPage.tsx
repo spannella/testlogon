@@ -65,6 +65,7 @@ import {
   type PeriodPreset,
   type PeriodRange,
 } from "@/lib/reportPeriod";
+import StatementsReportsCard from "./StatementsReportsCard";
 
 // --- helpers ----------------------------------------------------
 
@@ -365,6 +366,16 @@ export default function ReportsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Statements & reports (FE-171) — request PDF docs + download CSVs */}
+      <div className="print:hidden">
+        <StatementsReportsCard
+          fills={allFills}
+          resolve={resolve}
+          quoteScaler={quoteScaler}
+          fillsUnavailable={fillsUnavailable}
+        />
+      </div>
 
       {/* Print-only report heading */}
       <div className="hidden print:block">

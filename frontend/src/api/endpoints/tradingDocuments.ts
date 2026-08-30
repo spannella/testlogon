@@ -77,3 +77,42 @@ export async function getTradingDocumentDownloadUrl(docId: string): Promise<stri
 export function tradingDocumentDownloadPath(docId: string): string {
   return `/ui/trading-documents/${encodeURIComponent(docId)}/download`;
 }
+
+// ── request generation (BE-170) ──────────────────────────────────────
+
+/** Params accepted by the request endpoint (only what a given type needs). */
+export interface TradingDocumentRequest {
+  type: TradingDocType;
+  period_start?: string;
+  period_end?: string;
+  tax_year?: number;
+}
+
+export interface TradingDocumentRequestResult {
+  /** True when the backend accepted the request (queued/generated). */
+  accepted: boolean;
+  /** Present when the backend created/queued a document. */
+  doc_id?: string;
+  status?: TradingDocStatus;
+}
+
+/**
+ * Ask the backend to GENERATE a trading document (BE-170). Returns
+ * `{accepted:true, ...}` on success. DEGRADES-ON-404/501/offline to
+ * `{accepted:false}` so the caller can show an honest "not available yet"
+ * message instead of crashing. Other errors propagate.
+ */
+export async function requestTradingDocument(
+  req: TradingDocumentRequest,
+): Promise<TradingDocumentRequestResult> {
+  try {
+    const res = await api.post<Partial<TradingDocumentRequestResult>>(
+      "/ui/trading-documents/request",
+      req,
+    );
+    return { accepted: true, doc_id: res?.doc_id, status: res?.status };
+  } catch (err) {
+    if (isAbsent(err)) return { accepted: false };
+    throw err;
+  }
+}

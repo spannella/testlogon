@@ -40,6 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.testlogon.android.feature.tradingdocs.ReportRequestSection
+import com.testlogon.android.feature.tradingdocs.ReportRequestViewModel
+import com.testlogon.android.feature.tradingdocs.ReportSubmissionState
 
 /** Green/red for uPnL, independent of the app theme (matches the markets convention). */
 private val PnlUp = Color(0xFF16A34A)
@@ -48,14 +51,23 @@ private val PnlDown = Color(0xFFDC2626)
 @Composable
 fun PortfolioRoute(
     onBack: () -> Unit,
+    onOpenTradingDocs: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: PortfolioViewModel = hiltViewModel(),
+    reportViewModel: ReportRequestViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val submission by reportViewModel.submission.collectAsStateWithLifecycle()
     PortfolioScreen(
         state = state,
+        submission = submission,
         onBack = onBack,
         onRefresh = viewModel::refresh,
+        onGenerateReport = reportViewModel::generate,
+        onOpenTradingDocs = {
+            reportViewModel.reset()
+            onOpenTradingDocs()
+        },
         modifier = modifier,
     )
 }
@@ -63,8 +75,11 @@ fun PortfolioRoute(
 @Composable
 fun PortfolioScreen(
     state: PortfolioUiState,
+    submission: ReportSubmissionState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
+    onGenerateReport: (type: String, periodStart: Long?, periodEnd: Long?, taxYear: Int?) -> Unit,
+    onOpenTradingDocs: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -101,6 +116,14 @@ fun PortfolioScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { TotalEquityHeader(state) }
+
+            item {
+                ReportRequestSection(
+                    submission = submission,
+                    onGenerate = onGenerateReport,
+                    onViewDocuments = onOpenTradingDocs,
+                )
+            }
 
             if (state.anyLoading && state.cards.all { it.loading }) {
                 item { LoadingBlock() }

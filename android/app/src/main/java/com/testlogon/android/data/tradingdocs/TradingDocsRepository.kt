@@ -28,6 +28,18 @@ interface TradingDocsRepository {
 
     /** Resolve a presigned download URL for [docId]; null on any error (degrade-on-404). */
     suspend fun getDownloadUrl(docId: String): String?
+
+    /**
+     * FE-171 (BE-170) — request generation of a trading document. Returns true when the backend
+     * ACCEPTED the request; false on any error (incl. a 404 when BE-170 is undeployed) — degrade-on-404,
+     * the caller then shows the honest "not available yet" message.
+     */
+    suspend fun requestTradingDocument(
+        type: String,
+        periodStart: Long? = null,
+        periodEnd: Long? = null,
+        taxYear: Int? = null,
+    ): Boolean
 }
 
 @Singleton
@@ -48,6 +60,25 @@ class TradingDocsRepositoryImpl @Inject constructor(
 
     override suspend fun getDownloadUrl(docId: String): String? = withContext(io) {
         callOr(null) { api.getDownload(docId).downloadUrl?.takeIf { it.isNotBlank() } }
+    }
+
+    override suspend fun requestTradingDocument(
+        type: String,
+        periodStart: Long?,
+        periodEnd: Long?,
+        taxYear: Int?,
+    ): Boolean = withContext(io) {
+        callOr(false) {
+            api.requestTradingDocument(
+                TradingDocRequestDto(
+                    type = type,
+                    periodStart = periodStart,
+                    periodEnd = periodEnd,
+                    taxYear = taxYear,
+                ),
+            )
+            true
+        }
     }
 
     /** Runs [block], returning [fallback] on HTTP (incl. 404) / transport errors. Re-throws cancellation. */
