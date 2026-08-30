@@ -6,9 +6,17 @@ import com.testlogon.android.core.model.ApiError
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.model.ads.AdAccountSummary
 import com.testlogon.android.core.model.ads.AdCampaign
+import com.testlogon.android.core.network.ads.AdTargetingCreateIn
+import com.testlogon.android.data.catalog.CatalogRepository
+import com.testlogon.android.data.tokens.TokensRepository
+import com.testlogon.android.feature.ads.create.campaign.PromoteTargetingMath.PromoteEntityKind
+import com.testlogon.android.feature.ads.create.campaign.PromoteTargetingMath.SelectedSegments
 import com.testlogon.android.feature.ads.create.data.AdsCreateRepository
 import com.testlogon.android.feature.ads.create.data.AdsStudioSelection
+import com.testlogon.android.feature.ads.targeting.data.AdTargetingRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +30,16 @@ import javax.inject.Inject
  * auto-resolve: a REAL account PICKER chooses which account the campaign lives under, and the created
  * campaign is recorded as the studio [AdsStudioSelection] so targeting/scheduling/optimization open against it.
  *
+ * FE-162 (EPIC G, <- BE-161/BE-162/BE-163) - additionally drives the PROMOTE-ENTITY picker (choose to promote
+ * a market / creator-token / product, searchable from the existing tokens + catalog reads) and a BEHAVIORAL
+ * TARGETING SEGMENTS panel (age/gender/country/device/content-category multi-selects + new-user-only) that is
+ * OPT-IN-RESPECTING (a disclosure the UI shows). A LIVE audience ESTIMATE is requested (debounced) as segments
+ * change. On submit the campaign is created WITH the promote descriptor, then a targeting set is created from
+ * the selected segments ([PromoteTargetingMath.buildTargetingPayload] + entity ids). Everything ADDITIVE:
+ * with no kind/segments chosen the plain create path is unchanged. All FE-162 network is DEGRADE-ON-404:
+ * a 404 (undeployed backend) is swallowed - the estimate hides, targeting-create failure never blocks the
+ * campaign that already succeeded.
+ *
  * The account list is loaded on init ([accountsState]); the form pre-selects the studio-selected account (or
  * the first active one). Create is NON-idempotent (in-flight guard, no auto-retry). Budget/bid are entered in
  * USD and parsed to integer cents (budget >= $1; bid $0.50..$200, default $5.00).
@@ -30,6 +48,9 @@ import javax.inject.Inject
 class CreateCampaignViewModel @Inject constructor(
     private val repository: AdsCreateRepository,
     private val selection: AdsStudioSelection,
+    private val tokensRepository: TokensRepository,
+    private val catalogRepository: CatalogRepository,
+    private val targetingRepository: AdTargetingRepository,
 ) : ViewModel() {
 
     sealed interface AccountsState {
@@ -51,6 +72,26 @@ class CreateCampaignViewModel @Inject constructor(
         data object Submitting : ReviewState
         data class Done(val status: String) : ReviewState
         data class Error(val message: String) : ReviewState
+    }
+
+    /** FE-162 - one searchable promote-entity candidate (market / token / product). */
+    data class PromoteEntity(val id: String, val title: String, val subtitle: String? = null)
+
+    /** FE-162 - the promote-entity picker's load state for the selected kind. */
+    sealed interface PromoteEntitiesState {
+        data object Idle : PromoteEntitiesState
+        data object Loading : PromoteEntitiesState
+        data class Content(val entities: List<PromoteEntity>) : PromoteEntitiesState
+        data object Empty : PromoteEntitiesState
+        data class Error(val message: String) : PromoteEntitiesState
+    }
+
+    /** FE-162 - the live audience-estimate state. [Unavailable] = degrade-on-404 (hide the estimate). */
+    sealed interface EstimateState {
+        data object Idle : EstimateState
+        data object Loading : EstimateState
+        data class Ready(val reach: Long, val display: String) : EstimateState
+        data object Unavailable : EstimateState
     }
 
     private val _accountsState = MutableStateFlow<AccountsState>(AccountsState.Loading)
@@ -98,11 +139,43 @@ class CreateCampaignViewModel @Inject constructor(
     private val _endDateMillis = MutableStateFlow<Long?>(null)
     val endDateMillis: StateFlow<Long?> = _endDateMillis.asStateFlow()
 
+    // ---- FE-162: promote-entity picker state ----
+
+    /** The chosen promote-entity KIND (null = plain create path, no entity promoted). */
+    private val _promoteKind = MutableStateFlow<PromoteEntityKind?>(null)
+    val promoteKind: StateFlow<PromoteEntityKind?> = _promoteKind.asStateFlow()
+
+    /** The picker query for filtering candidates. */
+    private val _promoteQuery = MutableStateFlow("")
+    val promoteQuery: StateFlow<String> = _promoteQuery.asStateFlow()
+
+    /** The loaded candidate list for the current kind (already filtered). */
+    private val _promoteEntities = MutableStateFlow<PromoteEntitiesState>(PromoteEntitiesState.Idle)
+    val promoteEntities: StateFlow<PromoteEntitiesState> = _promoteEntities.asStateFlow()
+
+    /** The selected entity to promote (id + label for display). */
+    private val _selectedEntity = MutableStateFlow<PromoteEntity?>(null)
+    val selectedEntity: StateFlow<PromoteEntity?> = _selectedEntity.asStateFlow()
+
+    // Raw (unfiltered) candidates cached per kind so client-side filtering never re-hits the network.
+    private var loadedEntities: List<PromoteEntity> = emptyList()
+    private var entitiesLoadJob: Job? = null
+
+    // ---- FE-162: behavioral targeting segments state ----
+
+    private val _segments = MutableStateFlow(SelectedSegments())
+    val segments: StateFlow<SelectedSegments> = _segments.asStateFlow()
+
+    private val _estimate = MutableStateFlow<EstimateState>(EstimateState.Idle)
+    val estimate: StateFlow<EstimateState> = _estimate.asStateFlow()
+
     private val _submitState = MutableStateFlow<SubmitState>(SubmitState.Idle)
     val submitState: StateFlow<SubmitState> = _submitState.asStateFlow()
 
     private val _reviewState = MutableStateFlow<ReviewState>(ReviewState.Idle)
     val reviewState: StateFlow<ReviewState> = _reviewState.asStateFlow()
+
+    private var estimateJob: Job? = null
 
     init {
         loadAccounts()
@@ -140,6 +213,157 @@ class CreateCampaignViewModel @Inject constructor(
     fun onStartDate(millis: Long?) { _startDateMillis.value = millis }
     fun onEndDate(millis: Long?) { _endDateMillis.value = millis }
 
+    // ---- FE-162: promote-entity picker actions ----
+
+    /** Choose (or clear) what to promote; loads the candidate list for the kind and resets the selection. */
+    fun onPromoteKind(kind: PromoteEntityKind?) {
+        if (_promoteKind.value == kind) return
+        _promoteKind.value = kind
+        _selectedEntity.value = null
+        _promoteQuery.value = ""
+        loadedEntities = emptyList()
+        clearError()
+        if (kind == null) {
+            entitiesLoadJob?.cancel()
+            _promoteEntities.value = PromoteEntitiesState.Idle
+        } else {
+            loadPromoteEntities(kind)
+        }
+    }
+
+    /** Update the picker filter query and re-filter the cached candidates client-side. */
+    fun onPromoteQuery(text: String) {
+        _promoteQuery.value = text
+        if (_promoteEntities.value is PromoteEntitiesState.Content ||
+            _promoteEntities.value is PromoteEntitiesState.Empty
+        ) {
+            applyEntityFilter()
+        }
+    }
+
+    /** Select a candidate to promote. */
+    fun onPromoteEntitySelected(entity: PromoteEntity) {
+        _selectedEntity.value = entity
+        clearError()
+    }
+
+    private fun loadPromoteEntities(kind: PromoteEntityKind) {
+        entitiesLoadJob?.cancel()
+        _promoteEntities.value = PromoteEntitiesState.Loading
+        entitiesLoadJob = viewModelScope.launch {
+            val result: ApiResult<List<PromoteEntity>> = when (kind) {
+                // Markets = LISTED creator tokens (the tradeable market view).
+                PromoteEntityKind.MARKET -> tokensRepository.market().mapEntities { t ->
+                    PromoteEntity(id = t.symbolId ?: t.tokenId, title = t.name, subtitle = t.ticker)
+                }
+                // Creator tokens = all tokens the caller has ISSUED (mint output).
+                PromoteEntityKind.CREATOR_TOKEN -> tokensRepository.issued().mapEntities { t ->
+                    PromoteEntity(id = t.tokenId, title = t.name, subtitle = t.ticker)
+                }
+                // Products = catalog items (empty query = a first page of the catalog).
+                PromoteEntityKind.PRODUCT -> catalogRepository.search(query = "", cursor = null)
+                    .let { r ->
+                        when (r) {
+                            is ApiResult.Success -> ApiResult.Success(
+                                r.data.items.map { item ->
+                                    PromoteEntity(id = item.itemId, title = item.name, subtitle = null)
+                                },
+                            )
+                            is ApiResult.Failure -> r
+                            is ApiResult.NetworkError -> r
+                        }
+                    }
+            }
+            when (result) {
+                is ApiResult.Success -> {
+                    loadedEntities = result.data
+                    applyEntityFilter()
+                }
+                // DEGRADE-ON-404: an undeployed entity read surfaces as Empty (no scary error).
+                is ApiResult.Failure ->
+                    _promoteEntities.value = if (result.error.status == HTTP_NOT_FOUND) {
+                        PromoteEntitiesState.Empty
+                    } else {
+                        PromoteEntitiesState.Error(result.error.message)
+                    }
+                is ApiResult.NetworkError -> _promoteEntities.value = PromoteEntitiesState.Error(OFFLINE)
+            }
+        }
+    }
+
+    private fun applyEntityFilter() {
+        val q = _promoteQuery.value.trim().lowercase()
+        val filtered = if (q.isEmpty()) {
+            loadedEntities
+        } else {
+            loadedEntities.filter {
+                it.title.lowercase().contains(q) || (it.subtitle?.lowercase()?.contains(q) == true)
+            }
+        }
+        _promoteEntities.value =
+            if (filtered.isEmpty()) PromoteEntitiesState.Empty else PromoteEntitiesState.Content(filtered)
+    }
+
+    // ---- FE-162: behavioral targeting segments actions ----
+
+    /** Toggle one value in a multi-select segment; recomputes the live estimate (debounced). */
+    fun onToggleAgeRange(value: String) = updateSegments { it.copy(ageRanges = it.ageRanges.toggled(value)) }
+    fun onToggleGender(value: String) = updateSegments { it.copy(genders = it.genders.toggled(value)) }
+    fun onToggleCountry(code: String) = updateSegments { it.copy(countryCodes = it.countryCodes.toggled(code)) }
+    fun onToggleDevice(value: String) = updateSegments { it.copy(deviceTypes = it.deviceTypes.toggled(value)) }
+    fun onToggleContentCategory(value: String) =
+        updateSegments { it.copy(contentCategories = it.contentCategories.toggled(value)) }
+    fun onNewUserOnly(on: Boolean) = updateSegments { it.copy(newUserOnly = on) }
+
+    private inline fun updateSegments(transform: (SelectedSegments) -> SelectedSegments) {
+        _segments.value = transform(_segments.value)
+        requestEstimateDebounced()
+    }
+
+    private fun List<String>.toggled(value: String): List<String> =
+        if (contains(value)) this - value else this + value
+
+    /**
+     * FE-162 - request a live audience estimate for the current segments, DEBOUNCED. Needs a
+     * campaign context; before the campaign exists we estimate against the just-created campaign only after
+     * submit, so pre-submit we surface a client-side "Everyone/segmented" preview via the summary and mark
+     * the numeric estimate Idle. DEGRADE-ON-404 -> Unavailable (hidden).
+     */
+    private fun requestEstimateDebounced() {
+        val campaignId = (_submitState.value as? SubmitState.Success)?.campaign?.campaignId
+        if (campaignId == null) {
+            // No campaign yet: the numeric estimate is only meaningful post-create; keep it Idle.
+            _estimate.value = EstimateState.Idle
+            return
+        }
+        estimateJob?.cancel()
+        estimateJob = viewModelScope.launch {
+            delay(ESTIMATE_DEBOUNCE_MS)
+            _estimate.value = EstimateState.Loading
+            val body = currentTargetingBody()
+            when (val r = targetingRepository.estimateAudience(campaignId, body)) {
+                is ApiResult.Success ->
+                    _estimate.value = EstimateState.Ready(r.data, PromoteTargetingMath.formatEstimatedReach(r.data))
+                // DEGRADE-ON-404: undeployed estimate endpoint -> hide.
+                is ApiResult.Failure ->
+                    _estimate.value =
+                        if (r.error.status == HTTP_NOT_FOUND) EstimateState.Unavailable else EstimateState.Unavailable
+                is ApiResult.NetworkError -> _estimate.value = EstimateState.Unavailable
+            }
+        }
+    }
+
+    /** The targeting body for the current segments + selected promote entity (entity ids attached). */
+    private fun currentTargetingBody(): AdTargetingCreateIn = PromoteTargetingMath.withPromoteEntity(
+        body = PromoteTargetingMath.buildTargetingPayload(_segments.value.copy(name = _name.value.trim())),
+        kind = _promoteKind.value,
+        entityId = _selectedEntity.value?.id,
+    )
+
+    /** A client-side summary of the current segments (opt-in suffix always appended). */
+    val targetingSummary: String
+        get() = PromoteTargetingMath.summarizeTargeting(currentTargetingBody())
+
     /** True when an account is selected, a name is present, and budget/bid parse into their valid ranges. */
     val canSubmit: Boolean
         get() = _selectedAccountId.value != null &&
@@ -173,6 +397,10 @@ class CreateCampaignViewModel @Inject constructor(
             cpa = parseCents(_bidCpaUsd.value)?.takeIf { it in MIN_CPA_CENTS..MAX_CPA_CENTS }?.toInt() ?: return
         }
 
+        // FE-162 - the promote-entity descriptor (null when nothing is being promoted).
+        val kind = _promoteKind.value
+        val entityId = _selectedEntity.value?.id
+
         _submitState.value = SubmitState.Submitting
         viewModelScope.launch {
             val result = repository.createCampaign(
@@ -190,16 +418,40 @@ class CreateCampaignViewModel @Inject constructor(
                 endDate = if (selfPromo) null else _endDateMillis.value?.let { it / 1000 },
                 isSelfPromo = selfPromo,
                 selfPromoMode = if (selfPromo) _selfPromoMode.value else null,
+                // FE-162 - persist WHAT is being promoted on the campaign (additive; ignored if undeployed).
+                promoteKind = if (entityId != null) kind?.wire else null,
+                promoteEntityId = entityId,
             )
             when (result) {
                 is ApiResult.Success -> {
                     selection.selectCampaign(result.data.campaignId, accountId)
+                    // FE-162 - create the targeting set (segments + entity ids) against the new campaign.
+                    // DEGRADE-ON-404: a targeting-create failure NEVER undoes the campaign that succeeded.
+                    persistTargeting(result.data.campaignId)
                     _submitState.value = SubmitState.Success(result.data)
+                    // Now that a campaign exists, a live estimate is meaningful.
+                    requestEstimateDebounced()
                 }
                 is ApiResult.Failure -> _submitState.value = SubmitState.Error(result.error.friendly())
                 is ApiResult.NetworkError -> _submitState.value = SubmitState.Error(OFFLINE)
             }
         }
+    }
+
+    /**
+     * FE-162 - create the behavioral-targeting set for the just-created [campaignId] from the selected
+     * segments + promote-entity ids. Best-effort: only sent when segments or a promote entity are present;
+     * any failure (incl. 404) is swallowed so it never blocks the created campaign.
+     */
+    private suspend fun persistTargeting(campaignId: String) {
+        val hasSegments = _segments.value.let {
+            it.ageRanges.isNotEmpty() || it.genders.isNotEmpty() || it.countryCodes.isNotEmpty() ||
+                it.deviceTypes.isNotEmpty() || it.contentCategories.isNotEmpty() || it.newUserOnly
+        }
+        val hasEntity = _selectedEntity.value != null && _promoteKind.value != null
+        if (!hasSegments && !hasEntity) return
+        // Ignore the result: degrade-on-404 / any failure is non-fatal to the campaign.
+        targetingRepository.createTargeting(campaignId, currentTargetingBody())
     }
 
     /** ADV-108 - submit the just-created draft campaign for admin review. */
@@ -236,6 +488,15 @@ class CreateCampaignViewModel @Inject constructor(
         else -> message
     }
 
+    /** Maps an entity read to promote candidates, preserving Failure/NetworkError variants. */
+    private inline fun <T> ApiResult<List<T>>.mapEntities(
+        transform: (T) -> PromoteEntity,
+    ): ApiResult<List<PromoteEntity>> = when (this) {
+        is ApiResult.Success -> ApiResult.Success(data.map(transform))
+        is ApiResult.Failure -> this
+        is ApiResult.NetworkError -> this
+    }
+
     companion object {
         val OBJECTIVES = listOf("awareness", "traffic", "conversions")
         val BUDGET_TYPES = listOf("lifetime", "daily")
@@ -256,7 +517,9 @@ class CreateCampaignViewModel @Inject constructor(
         const val DEFAULT_CPA_USD = "5.00"
 
         private const val HTTP_FORBIDDEN = 403
+        private const val HTTP_NOT_FOUND = 404
         private const val OFFLINE = "Couldn't reach the server. Try again."
+        private const val ESTIMATE_DEBOUNCE_MS = 400L
 
         /** Parses a USD entry into integer cents, or null when unparseable/negative. */
         internal fun parseCents(text: String): Long? {

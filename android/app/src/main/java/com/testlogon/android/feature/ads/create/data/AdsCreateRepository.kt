@@ -66,6 +66,9 @@ interface AdsCreateRepository {
         endDate: Long?,
         isSelfPromo: Boolean = false,
         selfPromoMode: String? = null,
+        // FE-162 - optional promote-entity descriptor persisted onto the campaign (null on the plain path).
+        promoteKind: String? = null,
+        promoteEntityId: String? = null,
     ): ApiResult<AdCampaign>
 
     /** ADV-108 - submit a draft campaign for admin review. */
@@ -131,6 +134,8 @@ class AdsCreateRepositoryImpl @Inject constructor(
         endDate: Long?,
         isSelfPromo: Boolean,
         selfPromoMode: String?,
+        promoteKind: String?,
+        promoteEntityId: String?,
     ): ApiResult<AdCampaign> = withContext(Dispatchers.IO) {
         call {
             api.createCampaign(
@@ -148,6 +153,8 @@ class AdsCreateRepositoryImpl @Inject constructor(
                     endDate = endDate,
                     isSelfPromo = isSelfPromo,
                     selfPromoMode = selfPromoMode,
+                    promoteKind = promoteKind,
+                    promoteEntityId = promoteEntityId,
                 ),
             ).toDomain()
         }

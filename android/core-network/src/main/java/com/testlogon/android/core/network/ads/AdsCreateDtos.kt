@@ -58,6 +58,11 @@ data class AdCampaignCreateIn(
     // fill_only (serve only when no paying ad is eligible) vs always_win (always win the own-content slot).
     @Json(name = "is_self_promo") val isSelfPromo: Boolean = false,
     @Json(name = "self_promo_mode") val selfPromoMode: String? = null,
+    // FE-162 (EPIC G, <- BE-161) - promote-entity descriptor. Additive + OPTIONAL: the market / creator-token /
+    // product this campaign promotes. A backend that does not persist these simply ignores the extra keys
+    // (ignore-unknown). Null when the plain create path is used (nothing promoted).
+    @Json(name = "promote_kind") val promoteKind: String? = null,
+    @Json(name = "promote_entity_id") val promoteEntityId: String? = null,
 )
 
 /**

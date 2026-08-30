@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Megaphone, Plus, Pause, Play, Send, Archive } from "lucide-react";
+import { Megaphone, Plus, Pause, Play, Send, Archive, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,7 @@ import {
 } from "@/api/endpoints/ads";
 import type { Campaign } from "@/api/types";
 import CampaignEditor from "./CampaignEditor";
+import PromoteCampaignDialog from "./PromoteCampaignDialog";
 
 const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   draft: "outline",
@@ -29,6 +30,7 @@ export default function CampaignList() {
   const accountId = params.get("account") ?? "";
   const queryClient = useQueryClient();
   const [editorOpen, setEditorOpen] = useState(false);
+  const [promoteOpen, setPromoteOpen] = useState(false);
 
   const { data: campaigns = [], isLoading } = useQuery({
     queryKey: ["ad-campaigns", accountId],
@@ -81,10 +83,16 @@ export default function CampaignList() {
             <Megaphone className="h-6 w-6" />
             <CardTitle>Campaigns</CardTitle>
           </div>
-          <Button onClick={() => setEditorOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create Campaign
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setPromoteOpen(true)}>
+              <Sparkles className="mr-2 h-4 w-4" />
+              Promote
+            </Button>
+            <Button onClick={() => setEditorOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Campaign
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -179,6 +187,15 @@ export default function CampaignList() {
         onOpenChange={setEditorOpen}
         onSubmit={(data) => createMut.mutate(data)}
         isPending={createMut.isPending}
+      />
+
+      <PromoteCampaignDialog
+        open={promoteOpen}
+        onOpenChange={setPromoteOpen}
+        accountId={accountId}
+        onCreated={() =>
+          queryClient.invalidateQueries({ queryKey: ["ad-campaigns", accountId] })
+        }
       />
     </div>
   );

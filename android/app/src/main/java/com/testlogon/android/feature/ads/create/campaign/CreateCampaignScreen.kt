@@ -1,12 +1,15 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package com.testlogon.android.feature.ads.create.campaign
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,6 +25,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +52,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.model.ads.AdAccountSummary
+import com.testlogon.android.feature.ads.create.campaign.PromoteTargetingMath.PromoteEntityKind
+import com.testlogon.android.feature.ads.create.campaign.PromoteTargetingMath.SelectedSegments
 
 /** ADV-108 - stable testTags for the create-campaign screen. */
 object CreateCampaignTestTags {
@@ -68,6 +75,12 @@ object CreateCampaignTestTags {
     const val SUCCESS = "create_campaign_success"
     const val REVIEW = "create_campaign_review"
     const val CONTINUE = "create_campaign_continue"
+    // FE-162
+    const val PROMOTE_KIND = "create_campaign_promote_kind"
+    const val PROMOTE_SEARCH = "create_campaign_promote_search"
+    const val PROMOTE_ENTITY = "create_campaign_promote_entity"
+    const val TARGETING = "create_campaign_targeting"
+    const val ESTIMATE = "create_campaign_estimate"
 }
 
 /** ADV-108 - route-level create-campaign entry. [onCreated] carries the new campaign id to continue into creative creation. */
@@ -93,6 +106,13 @@ fun CreateCampaignRoute(
     val endDate by viewModel.endDateMillis.collectAsStateWithLifecycle()
     val submit by viewModel.submitState.collectAsStateWithLifecycle()
     val review by viewModel.reviewState.collectAsStateWithLifecycle()
+    // FE-162
+    val promoteKind by viewModel.promoteKind.collectAsStateWithLifecycle()
+    val promoteQuery by viewModel.promoteQuery.collectAsStateWithLifecycle()
+    val promoteEntities by viewModel.promoteEntities.collectAsStateWithLifecycle()
+    val selectedEntity by viewModel.selectedEntity.collectAsStateWithLifecycle()
+    val segments by viewModel.segments.collectAsStateWithLifecycle()
+    val estimate by viewModel.estimate.collectAsStateWithLifecycle()
 
     CreateCampaignScreen(
         accounts = accounts,
@@ -109,6 +129,22 @@ fun CreateCampaignRoute(
         submitState = submit,
         reviewState = review,
         canSubmit = viewModel.canSubmit,
+        promoteKind = promoteKind,
+        promoteQuery = promoteQuery,
+        promoteEntities = promoteEntities,
+        selectedEntity = selectedEntity,
+        segments = segments,
+        estimate = estimate,
+        targetingSummary = viewModel.targetingSummary,
+        onPromoteKind = viewModel::onPromoteKind,
+        onPromoteQuery = viewModel::onPromoteQuery,
+        onPromoteEntity = viewModel::onPromoteEntitySelected,
+        onToggleAge = viewModel::onToggleAgeRange,
+        onToggleGender = viewModel::onToggleGender,
+        onToggleCountry = viewModel::onToggleCountry,
+        onToggleDevice = viewModel::onToggleDevice,
+        onToggleContentCategory = viewModel::onToggleContentCategory,
+        onNewUserOnly = viewModel::onNewUserOnly,
         onAccount = viewModel::onAccountSelected,
         onName = viewModel::onName,
         onObjective = viewModel::onObjective,
@@ -148,6 +184,22 @@ fun CreateCampaignScreen(
     submitState: CreateCampaignViewModel.SubmitState,
     reviewState: CreateCampaignViewModel.ReviewState,
     canSubmit: Boolean,
+    promoteKind: PromoteEntityKind?,
+    promoteQuery: String,
+    promoteEntities: CreateCampaignViewModel.PromoteEntitiesState,
+    selectedEntity: CreateCampaignViewModel.PromoteEntity?,
+    segments: SelectedSegments,
+    estimate: CreateCampaignViewModel.EstimateState,
+    targetingSummary: String,
+    onPromoteKind: (PromoteEntityKind?) -> Unit,
+    onPromoteQuery: (String) -> Unit,
+    onPromoteEntity: (CreateCampaignViewModel.PromoteEntity) -> Unit,
+    onToggleAge: (String) -> Unit,
+    onToggleGender: (String) -> Unit,
+    onToggleCountry: (String) -> Unit,
+    onToggleDevice: (String) -> Unit,
+    onToggleContentCategory: (String) -> Unit,
+    onNewUserOnly: (Boolean) -> Unit,
     onAccount: (String) -> Unit,
     onName: (String) -> Unit,
     onObjective: (String) -> Unit,
@@ -234,6 +286,31 @@ fun CreateCampaignScreen(
                 singleLine = true,
                 enabled = !submitting,
                 modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.NAME),
+            )
+
+            // FE-162 (EPIC G) — promote-entity picker (choose what to promote) + behavioral targeting panel.
+            PromoteEntitySection(
+                promoteKind = promoteKind,
+                query = promoteQuery,
+                entities = promoteEntities,
+                selected = selectedEntity,
+                enabled = !submitting,
+                onPromoteKind = onPromoteKind,
+                onQuery = onPromoteQuery,
+                onEntity = onPromoteEntity,
+            )
+
+            TargetingSegmentsSection(
+                segments = segments,
+                summary = targetingSummary,
+                estimate = estimate,
+                enabled = !submitting,
+                onToggleAge = onToggleAge,
+                onToggleGender = onToggleGender,
+                onToggleCountry = onToggleCountry,
+                onToggleDevice = onToggleDevice,
+                onToggleContentCategory = onToggleContentCategory,
+                onNewUserOnly = onNewUserOnly,
             )
 
             // ADV2-306 (F3) — free "promote my content" self-advertising toggle. When on, the money fields
@@ -385,6 +462,213 @@ fun CreateCampaignScreen(
     }
 }
 
+/**
+ * FE-162 — the promote-entity picker: a KIND chooser (market / creator-token / product; "none" clears it)
+ * plus a searchable candidate list from the existing tokens/catalog reads. Degrades to an honest empty
+ * state when the entity read 404s (no crash, no scary error). Entirely optional — leaving the kind unset
+ * keeps the plain create path.
+ */
+@Composable
+private fun PromoteEntitySection(
+    promoteKind: PromoteEntityKind?,
+    query: String,
+    entities: CreateCampaignViewModel.PromoteEntitiesState,
+    selected: CreateCampaignViewModel.PromoteEntity?,
+    enabled: Boolean,
+    onPromoteKind: (PromoteEntityKind?) -> Unit,
+    onQuery: (String) -> Unit,
+    onEntity: (CreateCampaignViewModel.PromoteEntity) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.PROMOTE_KIND)) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Promote", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Optionally pick a market, creator token, or product to promote with this campaign.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(
+                    selected = promoteKind == null,
+                    onClick = { if (enabled) onPromoteKind(null) },
+                    label = { Text("None") },
+                    enabled = enabled,
+                )
+                PromoteEntityKind.entries.forEach { kind ->
+                    FilterChip(
+                        selected = promoteKind == kind,
+                        onClick = { if (enabled) onPromoteKind(kind) },
+                        label = { Text(kind.label) },
+                        enabled = enabled,
+                    )
+                }
+            }
+
+            if (promoteKind != null) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQuery,
+                    label = { Text("Search ${promoteKind.label.lowercase()}") },
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.PROMOTE_SEARCH),
+                )
+                when (entities) {
+                    is CreateCampaignViewModel.PromoteEntitiesState.Loading ->
+                        CircularProgressIndicator(modifier = Modifier.padding(8.dp))
+                    is CreateCampaignViewModel.PromoteEntitiesState.Empty ->
+                        Text(
+                            "Nothing to promote here yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    is CreateCampaignViewModel.PromoteEntitiesState.Error ->
+                        Text(
+                            entities.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    is CreateCampaignViewModel.PromoteEntitiesState.Content ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 220.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            entities.entities.forEach { entity ->
+                                FilterChip(
+                                    selected = selected?.id == entity.id,
+                                    onClick = { if (enabled) onEntity(entity) },
+                                    label = {
+                                        Text(
+                                            entity.subtitle?.let { "${entity.title} · $it" } ?: entity.title,
+                                        )
+                                    },
+                                    enabled = enabled,
+                                    modifier = Modifier.testTag(CreateCampaignTestTags.PROMOTE_ENTITY),
+                                )
+                            }
+                        }
+                    CreateCampaignViewModel.PromoteEntitiesState.Idle -> Unit
+                }
+                selected?.let {
+                    Text(
+                        "Promoting: ${it.title}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * FE-162 — behavioral targeting segments (age / gender / country / device / content-category multi-selects +
+ * new-user-only) with an explicit OPT-IN-RESPECTING disclosure and a live audience estimate. Targeting is
+ * additive: leaving everything unset reaches everyone. The estimate hides when the endpoint 404s.
+ */
+@Composable
+private fun TargetingSegmentsSection(
+    segments: SelectedSegments,
+    summary: String,
+    estimate: CreateCampaignViewModel.EstimateState,
+    enabled: Boolean,
+    onToggleAge: (String) -> Unit,
+    onToggleGender: (String) -> Unit,
+    onToggleCountry: (String) -> Unit,
+    onToggleDevice: (String) -> Unit,
+    onToggleContentCategory: (String) -> Unit,
+    onNewUserOnly: (Boolean) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().testTag(CreateCampaignTestTags.TARGETING)) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Audience targeting", style = MaterialTheme.typography.titleMedium)
+
+            // Opt-in disclosure — a product invariant, always shown.
+            Text(
+                PromoteTargetingMath.RESPECTS_OPT_IN_NOTE,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            ChipMultiSelect("Age", PromoteTargetingMath.SEGMENT_AGE_RANGES, segments.ageRanges, enabled, onToggleAge)
+            ChipMultiSelect("Gender", PromoteTargetingMath.SEGMENT_GENDERS, segments.genders, enabled, onToggleGender)
+            ChipMultiSelect(
+                label = "Country",
+                options = PromoteTargetingMath.SEGMENT_COUNTRIES.map { it.code },
+                selected = segments.countryCodes,
+                enabled = enabled,
+                onToggle = onToggleCountry,
+            )
+            ChipMultiSelect("Device", PromoteTargetingMath.SEGMENT_DEVICE_TYPES, segments.deviceTypes, enabled, onToggleDevice)
+            ChipMultiSelect(
+                label = "Content category",
+                options = PromoteTargetingMath.SEGMENT_CONTENT_CATEGORIES,
+                selected = segments.contentCategories,
+                enabled = enabled,
+                onToggle = onToggleContentCategory,
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("New users only", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = segments.newUserOnly, onCheckedChange = onNewUserOnly, enabled = enabled)
+            }
+
+            HorizontalDivider()
+            Text(summary, style = MaterialTheme.typography.bodyMedium)
+
+            when (estimate) {
+                is CreateCampaignViewModel.EstimateState.Loading ->
+                    Text(
+                        "Estimating reach…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag(CreateCampaignTestTags.ESTIMATE),
+                    )
+                is CreateCampaignViewModel.EstimateState.Ready ->
+                    Text(
+                        "Estimated reach: ~${estimate.display}",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.testTag(CreateCampaignTestTags.ESTIMATE),
+                    )
+                // Idle (pre-create) / Unavailable (404) — no numeric estimate shown.
+                else -> Unit
+            }
+        }
+    }
+}
+
+/** A labeled row of FilterChips backing a multi-select segment. */
+@Composable
+private fun ChipMultiSelect(
+    label: String,
+    options: List<String>,
+    selected: List<String>,
+    enabled: Boolean,
+    onToggle: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.titleSmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            options.forEach { opt ->
+                FilterChip(
+                    selected = opt in selected,
+                    onClick = { if (enabled) onToggle(opt) },
+                    label = { Text(opt) },
+                    enabled = enabled,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun CampaignCreatedCard(
     reviewState: CreateCampaignViewModel.ReviewState,
@@ -514,7 +798,7 @@ private fun FlightDateField(
 @Composable
 private fun selfPromoModeLabel(mode: String): String = stringResource(
     if (mode == "always_win") R.string.create_campaign_fill_mode_always_win
-    else R.string.create_campaign_fill_mode_fill_only,
+    else R.string.create_campaign_fill_mode_fill_only
 )
 
 /** A labeled exposed-dropdown picker over [options] (value to label). */
