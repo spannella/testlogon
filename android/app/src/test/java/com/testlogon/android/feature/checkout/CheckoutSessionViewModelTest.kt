@@ -65,6 +65,8 @@ class CheckoutSessionViewModelTest {
         FakeCartRepoForCheckout(),
         com.testlogon.android.data.ads.AdClickAttributionStore(),
         billing,
+        FakeFeesRepository(),
+        FakeCustodyReader(),
         saved,
     )
 
@@ -216,4 +218,24 @@ private class FakeCartRepoForCheckout : CartRepository {
             ),
         )
     }
+}
+
+
+/** FE-152 — fake fees repo; the pay-with-crypto path is not exercised by these session tests. */
+private class FakeFeesRepository : com.testlogon.android.data.fees.FeesRepository {
+    override suspend fun quoteFee(amountCents: Long, payWith: String): ApiResult<com.testlogon.android.data.fees.FeeQuote?> =
+        ApiResult.Success(null)
+    override suspend fun payCheckoutOrder(
+        orderId: String,
+        quote: com.testlogon.android.data.fees.FeeQuote,
+    ): ApiResult<com.testlogon.android.data.fees.CheckoutPayResult> =
+        ApiResult.Success(com.testlogon.android.data.fees.CheckoutPayResult(null, orderId, null, null))
+}
+
+/** FE-152 — fake custody reader returning no balances (crypto asset picker stays empty). */
+private class FakeCustodyReader : com.testlogon.android.data.custody.CustodyReader {
+    override suspend fun getBalance(): ApiResult<com.testlogon.android.data.custody.CustodyBalances> =
+        ApiResult.Success(com.testlogon.android.data.custody.CustodyBalances("v", "t", emptyList()))
+    override suspend fun getStaking(): ApiResult<com.testlogon.android.data.custody.StakingDashboard> =
+        ApiResult.Failure(ApiError(status = 404, message = "n/a"))
 }

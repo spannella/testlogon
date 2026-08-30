@@ -42,7 +42,14 @@ export const getCartTotal = (cartId: string) =>
 
 export const purchaseCart = (
   cartId: string,
-  body?: { promo_code?: string; promo_code_id?: string },
+  body?: {
+    promo_code?: string;
+    promo_code_id?: string;
+    // Pay-any-coin (FE-152): pay the order total with a crypto balance at a
+    // server-locked quote. Both are passed together; omit for card/wallet.
+    pay_with?: string;
+    quote_token?: string;
+  },
 ) => {
   // The purchase endpoint requires an X-Idempotency-Key header (backend returns
   // 400 idempotency_key_required without it). Generate one per attempt so retries

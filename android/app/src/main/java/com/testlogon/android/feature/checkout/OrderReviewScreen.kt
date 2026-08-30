@@ -16,13 +16,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -48,7 +51,7 @@ import com.testlogon.android.data.checkout.CheckoutLineItem
 import com.testlogon.android.data.checkout.CheckoutSession
 import com.testlogon.android.feature.catalog.formatPrice
 
-/** AND-213 — stable test tags for the order-review screen. */
+/** AND-213 / FE-152 — stable test tags for the order-review screen. */
 object OrderReviewTestTags {
     const val SCREEN = "order_review_screen"
     const val LIST = "order_review_list"
@@ -58,33 +61,40 @@ object OrderReviewTestTags {
     const val EMPTY = "order_review_empty"
     const val ERROR = "order_review_error"
 
+    // FE-152: pay-with-crypto section.
+    const val CRYPTO_SECTION = "order_review_crypto_section"
+    const val CRYPTO_QUOTE = "order_review_crypto_quote"
+    const val CRYPTO_COUNTDOWN = "order_review_crypto_countdown"
+    const val CRYPTO_INSUFFICIENT = "order_review_crypto_insufficient"
+    const val CRYPTO_PAY = "order_review_crypto_pay"
+    const val CRYPTO_UNAVAILABLE = "order_review_crypto_unavailable"
+
     fun line(sku: String) = "order_review_line_$sku"
+    fun cryptoAsset(symbol: String) = "order_review_crypto_asset_$symbol"
 }
 
 /**
- * AND-213 — order-review route. Creates the checkout session, renders it, and routes the (stubbed)
- * payment outcome to a snackbar. Payment is intentionally unavailable (AND-031 not wired).
+ * AND-213 — order-review route. Creates the checkout session, renders it, routes the payment outcome
+ * to a snackbar. FE-152 adds the additive "Pay with crypto balance" section (asset picker + rate-lock
+ * countdown + insufficient handling + confirm), degrading to nothing when the quote endpoint 404s.
  */
 @Composable
 fun OrderReviewRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    // ECOMX-40 (B3): open the shipping-address step.
     onSelectAddress: () -> Unit = {},
-    // ECOMX-40 (B3): the address_id handed back from the address step (nav SavedStateHandle).
     selectedAddressId: String? = null,
-    // FIX (ecom residual #1): fired when the reliable purchase completes; routes to order confirmation.
     onOrderComplete: (txnId: String?, orderId: String) -> Unit = { _, _ -> },
     viewModel: CheckoutSessionViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val placing by viewModel.placing.collectAsStateWithLifecycle()
     val addressId by viewModel.selectedAddressId.collectAsStateWithLifecycle()
+    val crypto by viewModel.crypto.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val paymentsUnavailable = stringResource(R.string.checkout_payments_unavailable)
     val addressRequired = stringResource(R.string.checkout_address_required)
 
-    // ECOMX-40 (B3): fold the address step's result back into the VM state.
     LaunchedEffect(selectedAddressId) {
         if (selectedAddressId != null) viewModel.onAddressSelected(selectedAddressId)
     }
@@ -103,10 +113,13 @@ fun OrderReviewRoute(
     OrderReviewScreen(
         state = state,
         placing = placing,
+        crypto = crypto,
         selectedAddressId = addressId,
         snackbarHostState = snackbarHostState,
         onPlaceOrder = viewModel::placeOrder,
         onSelectAddress = onSelectAddress,
+        onCryptoAssetSelected = viewModel::onCryptoAssetSelected,
+        onPayWithCrypto = viewModel::payWithCrypto,
         onRetry = viewModel::retry,
         onBack = onBack,
         modifier = modifier,
@@ -122,9 +135,11 @@ fun OrderReviewScreen(
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    // ECOMX-40 (B3): the currently selected shipping address (null until picked).
+    crypto: CryptoPayUiState = CryptoPayUiState(),
     selectedAddressId: String? = null,
     onSelectAddress: () -> Unit = {},
+    onCryptoAssetSelected: (String) -> Unit = {},
+    onPayWithCrypto: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(OrderReviewTestTags.SCREEN),
@@ -178,6 +193,9 @@ fun OrderReviewScreen(
                         session = state.session,
                         selectedAddressId = selectedAddressId,
                         onSelectAddress = onSelectAddress,
+                        crypto = crypto,
+                        onCryptoAssetSelected = onCryptoAssetSelected,
+                        onPayWithCrypto = onPayWithCrypto,
                     )
             }
         }
@@ -189,13 +207,15 @@ private fun OrderReviewContent(
     session: CheckoutSession,
     selectedAddressId: String?,
     onSelectAddress: () -> Unit,
+    crypto: CryptoPayUiState,
+    onCryptoAssetSelected: (String) -> Unit,
+    onPayWithCrypto: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag(OrderReviewTestTags.LIST),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // ECOMX-40 (B3): the reachable shipping-address step. Required before Place order.
         item(key = "__address_row") {
             ShippingAddressRow(hasAddress = !selectedAddressId.isNullOrBlank(), onSelectAddress = onSelectAddress)
             HorizontalDivider()
@@ -204,10 +224,148 @@ private fun OrderReviewContent(
             OrderReviewLine(line, session.currency)
             HorizontalDivider()
         }
+        // FE-152: additive "Pay with crypto balance" section. Only shown when the backend supports
+        // pay-any-coin quoting (degrade-on-404) AND there is a fundable crypto balance to pick from.
+        if (crypto.available && crypto.assets.isNotEmpty()) {
+            item(key = "__crypto_pay") {
+                CryptoPaySection(
+                    crypto = crypto,
+                    hasAddress = !selectedAddressId.isNullOrBlank(),
+                    onCryptoAssetSelected = onCryptoAssetSelected,
+                    onPayWithCrypto = onPayWithCrypto,
+                )
+            }
+        } else if (!crypto.available) {
+            item(key = "__crypto_unavailable") {
+                Text(
+                    text = stringResource(R.string.checkout_crypto_unavailable),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp).testTag(OrderReviewTestTags.CRYPTO_UNAVAILABLE),
+                )
+            }
+        }
     }
 }
 
-/** ECOMX-40 (B3) — the tappable "Shipping address" row that opens the address step. */
+/** FE-152 — the pay-with-crypto method: asset picker + rate-lock display + insufficient + confirm. */
+@Composable
+private fun CryptoPaySection(
+    crypto: CryptoPayUiState,
+    hasAddress: Boolean,
+    onCryptoAssetSelected: (String) -> Unit,
+    onPayWithCrypto: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag(OrderReviewTestTags.CRYPTO_SECTION),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.checkout_crypto_section),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        // Asset picker: one chip per funded, registry-known custody balance.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            crypto.assets.forEach { asset ->
+                FilterChip(
+                    selected = asset.symbol == crypto.selectedSymbol,
+                    onClick = { onCryptoAssetSelected(asset.symbol) },
+                    label = { Text(asset.symbol) },
+                    modifier = Modifier.testTag(OrderReviewTestTags.cryptoAsset(asset.symbol)),
+                )
+            }
+        }
+        crypto.selectedAsset?.let { sel ->
+            Text(
+                text = stringResource(R.string.checkout_crypto_balance, sel.balanceText, sel.symbol),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        when {
+            crypto.quoting -> Text(
+                text = stringResource(R.string.checkout_crypto_quoting),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+
+            crypto.quote != null -> {
+                val quote = crypto.quote
+                Column(
+                    Modifier.fillMaxWidth().testTag(OrderReviewTestTags.CRYPTO_QUOTE),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(CheckoutCryptoMath.rateLine(quote), style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        CheckoutCryptoMath.feeLine(quote),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(CheckoutCryptoMath.totalLine(quote), style = MaterialTheme.typography.titleSmall)
+                    // Live rate-lock countdown chip. Re-quotes automatically on expiry.
+                    if (crypto.secondsRemaining > 0L) {
+                        AssistChip(
+                            onClick = {},
+                            enabled = false,
+                            label = {
+                                Text(
+                                    stringResource(
+                                        R.string.checkout_crypto_locked_for,
+                                        CheckoutCryptoMath.lockedForLabel(crypto.secondsRemaining),
+                                    ),
+                                )
+                            },
+                            modifier = Modifier.testTag(OrderReviewTestTags.CRYPTO_COUNTDOWN),
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.checkout_crypto_requote),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            crypto.error != null -> Text(
+                text = crypto.error,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        if (crypto.insufficient) {
+            Text(
+                text = stringResource(
+                    R.string.checkout_crypto_insufficient,
+                    crypto.selectedSymbol.orEmpty(),
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag(OrderReviewTestTags.CRYPTO_INSUFFICIENT),
+            )
+        }
+
+        val payLabel = crypto.selectedSymbol?.let {
+            stringResource(R.string.checkout_crypto_pay, it)
+        } ?: stringResource(R.string.checkout_crypto_pay_generic)
+        OutlinedButton(
+            onClick = onPayWithCrypto,
+            enabled = crypto.canPay && hasAddress,
+            modifier = Modifier.fillMaxWidth().testTag(OrderReviewTestTags.CRYPTO_PAY),
+        ) {
+            if (crypto.paying) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(payLabel)
+        }
+    }
+}
+
 @Composable
 private fun ShippingAddressRow(hasAddress: Boolean, onSelectAddress: () -> Unit) {
     Row(
@@ -282,15 +440,11 @@ private fun PlaceOrderBar(
                     modifier = Modifier.testTag(OrderReviewTestTags.TOTAL),
                 )
             }
-            // ECOMX-40 (B3): merchandise subtotal shown; shipping + sales tax are computed at
-            // charge time from the shipping address and reflected on the confirmation/receipt.
             Text(
                 text = stringResource(R.string.checkout_shipping_tax_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            // ECOMX-41 (B4): ONE checkout CTA (the dual "Choose payment method" button is removed).
-            // Disabled until a shipping address is chosen (ECOMX-40 B3).
             Button(
                 onClick = onPlaceOrder,
                 enabled = !placing && hasAddress,
