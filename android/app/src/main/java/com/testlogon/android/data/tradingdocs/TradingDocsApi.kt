@@ -2,7 +2,9 @@ package com.testlogon.android.data.tradingdocs
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -36,6 +38,16 @@ interface TradingDocsApi {
     suspend fun getDownload(
         @Path("doc_id") docId: String,
     ): TradingDocDownloadDto
+
+    /**
+     * FE-171 (BE-170) — request generation of a new trading document (statement / pnl / fills / 1099).
+     * Body: { type, period_start?, period_end?, tax_year? }. The generated file lands in the FE-170
+     * list once ready. Returns the (possibly still-generating) document descriptor.
+     */
+    @POST("ui/trading-documents/request")
+    suspend fun requestTradingDocument(
+        @Body body: TradingDocRequestDto,
+    ): TradingDocRequestResultDto
 }
 
 // ---- DTOs ----
@@ -66,4 +78,20 @@ data class TradingDocDto(
 @JsonClass(generateAdapter = true)
 data class TradingDocDownloadDto(
     @Json(name = "download_url") val downloadUrl: String? = null,
+)
+
+/** FE-171 (BE-170) — request-generate body. Only params relevant to the type are populated. */
+@JsonClass(generateAdapter = true)
+data class TradingDocRequestDto(
+    @Json(name = "type") val type: String,
+    @Json(name = "period_start") val periodStart: Long? = null,
+    @Json(name = "period_end") val periodEnd: Long? = null,
+    @Json(name = "tax_year") val taxYear: Int? = null,
+)
+
+/** FE-171 (BE-170) — request-generate result; the (possibly generating) document descriptor. */
+@JsonClass(generateAdapter = true)
+data class TradingDocRequestResultDto(
+    @Json(name = "doc_id") val docId: String? = null,
+    @Json(name = "status") val status: String = "generating",
 )
