@@ -744,10 +744,18 @@ data class MessageOptions(
     /** TIP-106 - attach a tip (cents) to the next text message on send; null = no tip. DM-only, and
      *  mutually exclusive with [lockPriceCents] (mirrors the backend 400). */
     val tipAmountCents: Long? = null,
+    /**
+     * FE-120 (EPIC C) — an optional "reveal at" epoch SECONDS armed for the NEXT text message. When set
+     * (and in the future), the composed body is wrapped in the TLRVL1 sentinel on send so recipients see
+     * a locked/countdown bubble until the reveal; null = reveal now (plain send). The sender always sees
+     * the content. Degrades naturally on an un-upgraded client (shows the raw text).
+     */
+    val revealAtEpochSeconds: Long? = null,
 ) {
     val isActive: Boolean
         get() = encrypted || viewOnce || lockPriceCents != null || scheduledAtEpochSeconds != null ||
-            expiresInSeconds != null || countdownTargetEpochSeconds != null || tipAmountCents != null
+            expiresInSeconds != null || countdownTargetEpochSeconds != null || tipAmountCents != null ||
+            revealAtEpochSeconds != null
 
     /** Short summary chip text, or null when no option is set. */
     val summary: String?
@@ -759,6 +767,7 @@ data class MessageOptions(
                 if (scheduledAtEpochSeconds != null) add("Scheduled")
                 expiresInSeconds?.let { add("Expires in " + expiryLabel(it)) }
                 if (countdownTargetEpochSeconds != null) add("Countdown")
+                if (revealAtEpochSeconds != null) add("Reveal scheduled")
                 tipAmountCents?.let { add("Tip $" + "%.2f".format(it / 100.0)) }
             }
             return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")

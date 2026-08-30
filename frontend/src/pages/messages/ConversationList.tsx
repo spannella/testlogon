@@ -21,6 +21,7 @@ import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
 import { useAuthStore } from "@/stores/authStore";
 import { transferPreview } from "@/lib/cryptoTransfer";
+import { isRevealLocked } from "@/lib/revealAt";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { StalenessIndicator } from "@/components/shared/StalenessIndicator";
 import { isMuted } from "@/lib/conversationMute";
@@ -332,6 +333,9 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
 function getPreviewText(lastMsg: Message | undefined, convo: Conversation, currentUserId?: string): string {
   if (!lastMsg) return convo.last_message_preview ?? "No messages yet";
   if (lastMsg.expired) return "[This message has expired]";
+  // FE-120: hide scheduled-reveal content from recipients until reveal time.
+  if (isRevealLocked(lastMsg.reveal_at, lastMsg.sender_id === currentUserId, Math.floor(Date.now() / 1000)))
+    return "🔒 Scheduled reveal";
   if (lastMsg.view_once && lastMsg.text === null) return "[Already viewed]";
   if (lastMsg.locked && !lastMsg.is_unlocked) return "[Locked message]";
   if (lastMsg.kind === "voice_message") return "[Voice message]";

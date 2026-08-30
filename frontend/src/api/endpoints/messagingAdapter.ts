@@ -112,6 +112,9 @@ export function adaptMessage(raw: RawMessage): Message {
     expired: raw.expired,
     scheduled: raw.scheduled,
     deliver_at: raw.deliver_at,
+    // FE-120: scheduled reveal.
+    reveal_at: raw.reveal_at,
+    reveal_revealed: raw.reveal_revealed,
     edited: Boolean(raw.edited_at),
     revoked: Boolean(raw.revoked_at),
     file_share: raw.file_share,

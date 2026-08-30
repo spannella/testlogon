@@ -40,6 +40,7 @@ export function useMessagingStream(enabled = true) {
           eventType === "conversation_updated" ||
           eventType === "message:reaction" ||
           eventType === "message:expired" ||
+          eventType === "message:revealed" ||
           eventType === "helpdesk.conversation.alerted" ||
           eventType === "helpdesk.conversation.assigned" ||
           eventType === "helpdesk.conversation.released" ||
@@ -230,6 +231,7 @@ export function useMessagingStream(enabled = true) {
       "message:locked",
       "message:unlocked",
       "message:expired",
+      "message:revealed",
       "message:viewed",
       "once_media_consumed",
       "once_media_state_changed",

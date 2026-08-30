@@ -201,6 +201,10 @@ export function ComposeBar({
   const [countdownAttachTitle, setCountdownAttachTitle] = React.useState("");
   const [countdownAttachInput, setCountdownAttachInput] = React.useState<string>(""); // "YYYY-MM-DDTHH:mm"
   const [countdownAttachRevealText, setCountdownAttachRevealText] = React.useState("");
+  // FE-120: optional scheduled reveal ("drop"). Recipients see a locked
+  // countdown card until this time; the sender always sees content.
+  const [revealEnabled, setRevealEnabled] = React.useState(false);
+  const [revealInput, setRevealInput] = React.useState<string>(""); // "YYYY-MM-DDTHH:mm"
   // Gallery mode state
   const [galleryMode, setGalleryMode] = React.useState(false);
   const [lotteryMode, setLotteryMode] = React.useState(false);
@@ -409,8 +413,8 @@ export function ComposeBar({
     });
   };
 
-  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id" | "countdown_target_datetime" | "countdown_title" | "countdown_reveal_text"> => {
-    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id" | "countdown_target_datetime" | "countdown_title" | "countdown_reveal_text"> = {};
+  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id" | "countdown_target_datetime" | "countdown_title" | "countdown_reveal_text" | "reveal_at"> => {
+    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id" | "countdown_target_datetime" | "countdown_title" | "countdown_reveal_text" | "reveal_at"> = {};
     if (lockEnabled) {
       const cents = Math.round(parseFloat(lockPrice) * 100);
       if (!isNaN(cents) && cents > 0) extra.lock_price_cents = cents;
@@ -439,6 +443,11 @@ export function ComposeBar({
         if (countdownAttachTitle.trim()) extra.countdown_title = countdownAttachTitle.trim();
         if (countdownAttachRevealText.trim()) extra.countdown_reveal_text = countdownAttachRevealText.trim();
       }
+    }
+    // FE-120: attach a scheduled reveal time (epoch seconds). Degrade-on-404.
+    if (revealEnabled && revealInput) {
+      const revealMs = new Date(revealInput).getTime();
+      if (!isNaN(revealMs)) extra.reveal_at = Math.floor(revealMs / 1000);
     }
     return extra;
   };
@@ -739,6 +748,7 @@ export function ComposeBar({
         setCountdownAttachInput("");
         setCountdownAttachRevealText("");
       }
+      if (revealEnabled) { setRevealEnabled(false); setRevealInput(""); }
     };
 
     // For image/PDF: send image with text as caption in a single bubble
@@ -968,6 +978,24 @@ export function ComposeBar({
               value={countdownAttachRevealText}
               onChange={(e) => setCountdownAttachRevealText(e.target.value)}
               placeholder="Shown once the countdown completes"
+              className="rounded border border-input bg-background px-2 py-1"
+              disabled={disabled || sending}
+            />
+          </div>
+        </div>
+      )}
+      {revealEnabled && (
+        <div className="mb-2 rounded-md border border-indigo-300/70 bg-indigo-50/40 p-2 text-xs space-y-1.5" data-testid="compose-reveal-panel">
+          <div className="flex items-center gap-1.5 font-medium text-indigo-800">
+            <Lock className="h-3.5 w-3.5" /> Schedule reveal
+          </div>
+          <p className="text-[11px] text-indigo-700/80">Recipients see a locked countdown until this time; you always see the content.</p>
+          <div className="flex flex-col gap-1">
+            <label className="text-muted-foreground">Reveal at</label>
+            <input
+              type="datetime-local"
+              value={revealInput}
+              onChange={(e) => setRevealInput(e.target.value)}
               className="rounded border border-input bg-background px-2 py-1"
               disabled={disabled || sending}
             />
@@ -1475,6 +1503,24 @@ export function ComposeBar({
         </div>
       )}
 
+      {/* FE-120: armed reveal pill */}
+      {revealEnabled && revealInput && (
+        <div className="mb-2 flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-100 px-2.5 py-1 text-[11px] font-medium text-indigo-800" data-testid="compose-reveal-pill">
+            <Lock className="h-3 w-3" />
+            Reveals: {new Date(revealInput).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+          </span>
+          <button
+            type="button"
+            onClick={() => { setRevealEnabled(false); setRevealInput(""); }}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="Remove scheduled reveal"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Scheduled pill */}
       {scheduledAt && (
         <div className="mb-2 flex items-center gap-2">
@@ -1735,6 +1781,17 @@ export function ComposeBar({
                   data-testid="compose-toggle-countdown-attach"
                 >
                   <Timer className="h-4 w-4" /> Attach countdown
+                </Button>
+                <Button
+                  type="button"
+                  variant={revealEnabled ? "secondary" : "ghost"}
+                  className="h-9 justify-start gap-2 px-2"
+                  onClick={() => { setRevealEnabled((v) => !v); setMoreOpen(false); }}
+                  disabled={disabled || sending || encrypting}
+                  aria-label="Toggle schedule reveal"
+                  data-testid="compose-toggle-reveal"
+                >
+                  <Lock className="h-4 w-4" /> Schedule reveal
                 </Button>
                 <div className="my-1 border-t border-border" />
                 {onSendVoiceMessage && !voiceRecording && (

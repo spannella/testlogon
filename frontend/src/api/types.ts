@@ -1487,6 +1487,11 @@ export interface Message {
   expired?: boolean;
   scheduled?: boolean;
   deliver_at?: number;
+  // FE-120 (← BE-120/BE-121): optional scheduled reveal. Before `reveal_at`
+  // (epoch seconds) recipients see a locked card + countdown; the sender always
+  // sees content. `reveal_revealed` is a server hint that the reveal has fired.
+  reveal_at?: number;
+  reveal_revealed?: boolean;
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -1539,6 +1544,9 @@ export interface SendTextMessageReq extends CountdownRevealFieldsReq {
   lock_price_cents?: number;
   lock_description?: string;
   send_at?: number;
+  // FE-120: optional scheduled reveal time (epoch seconds). Degrade-on-404:
+  // if the backend ignores it, the message just sends normally.
+  reveal_at?: number;
   // B-SCHED2 #21: wall-clock + IANA tz alternative to send_at.
   send_at_local?: string;
   send_at_tz?: string;
