@@ -1,5 +1,6 @@
 package com.testlogon.android.data.messaging
 import com.testlogon.android.data.poll.toDomain
+import com.testlogon.android.feature.messaging.media.MediaCdnMath
 
 /**
  * AND-120..AND-124 — domain models for the messaging feature (no Moshi/Room leakage past the
@@ -898,15 +899,21 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
             val isVideo = gi.mediaKind?.equals("video", ignoreCase = true)
                 ?: gi.contentType?.startsWith("video/") == true
             MessageMedia.GalleryImage(
-                url = gi.url?.takeIf { it.isNotBlank() } ?: deriveS3Url(gi.bucket, gi.key),
+                url = MediaCdnMath.resolveMediaUrl(gi.url, gi.bucket, gi.key, mediaCdnBase()),
                 isVideo = isVideo,
                 posterUrl = deriveS3Url(gi.previewBucket, gi.previewKey),
             )
         },
     )
     image != null -> MessageMedia.Image(
-        url = image.url?.takeIf { it.isNotBlank() }
-            ?: deriveS3Url(image.bucket, image.key),
+        // FE-141 — prefer the API-provided absolute CDN url; else derive from a configured CDN
+        // base, else the mock-relative gateway path (dev/mock unchanged).
+        url = MediaCdnMath.resolveMediaUrl(
+            url = image.url,
+            bucket = image.bucket,
+            key = image.key,
+            cdnBase = mediaCdnBase(),
+        ),
         width = image.width,
         height = image.height,
     )
@@ -1065,13 +1072,15 @@ internal fun MessageFileDto.toFileMedia(policy: String, isShare: Boolean): Messa
  */
 internal fun deriveS3Url(bucket: String?, key: String?): String? {
     if (bucket.isNullOrBlank() || key.isNullOrBlank()) return null
-    // The backend serves uploaded objects through its storage gateway at /mock/s3/<bucket>/<key> --
-    // the same server-relative path the list/get endpoints return as image.url and that presign hands
-    // out for upload. The image-CREATE response omits url, so the sender's just-sent bubble must
-    // derive it here; Coil's RelativeUrlMapper resolves the leading-"/" path against the API origin.
-    // (Without this the sender saw a broken/blank thumbnail until a thread refresh re-fetched url.)
-    return "/mock/s3/$bucket/$key"
+    // FE-141 — the image-CREATE response omits url, so the sender's just-sent bubble derives one
+    // here. resolveMediaUrl builds a CDN object url when MEDIA_CDN_BASE is configured, else the
+    // server-relative /mock/s3/<bucket>/<key> path (Coil's RelativeUrlMapper resolves the leading
+    // "/" against the API origin). Dev/mock behavior is unchanged when MEDIA_CDN_BASE is empty.
+    return MediaCdnMath.resolveMediaUrl(url = null, bucket = bucket, key = key, cdnBase = mediaCdnBase())
 }
+
+/** FE-141 — configured media CDN origin (empty in dev/mock -> resolver uses the mock-relative path). */
+private fun mediaCdnBase(): String = com.testlogon.android.BuildConfig.MEDIA_CDN_BASE
 
 /**
  * #13 — resolve a lottery outcome's media_asset_id to a server-relative object url. The backend

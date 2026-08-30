@@ -4,6 +4,7 @@ import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download,
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { resolveMediaUrl } from "@/lib/mediaCdn";
 import { isMessagingEncryptionEnabled, isMessagingTranslationEnabled, messagingTranslationDefaultLang } from "@/lib/featureFlags";
 import { translateMessage } from "@/api/endpoints/messagingAi";
 import { isEmojiOnly } from "@/utils/emoji";
@@ -198,10 +199,18 @@ const openBlobInEphemeralWindow = (blob: Blob) => {
   }
 };
 
+// FE-141: real CDN base for media, read at build. Empty -> mock path (dev unchanged).
+const MEDIA_CDN_BASE = (import.meta.env.VITE_MEDIA_CDN_BASE_URL as string | undefined) ?? "";
+
 const buildS3ObjectUrl = (bucket?: string, key?: string): string | undefined => {
-  if (!bucket || !key) return undefined;
-  return `/mock/s3/${bucket}/${encodeURIComponent(key).replace(/%2F/g, "/")}`;
+  // FE-141: delegate to the shared resolver; identical /mock/s3 fallback when no CDN.
+  return resolveMediaUrl({ bucket, key }, { cdnBase: MEDIA_CDN_BASE });
 };
+
+// FE-141: resolve a possibly-relative media URL from the API against the CDN
+// base. Already-absolute http(s) URLs pass through unchanged.
+const cdnUrl = (u?: string | null): string | undefined =>
+  resolveMediaUrl(u ?? undefined, { cdnBase: MEDIA_CDN_BASE });
 
 function replyPreviewText(msg: Message): string {
   // FE-120: never leak the content of a still-locked scheduled reveal.
@@ -1279,7 +1288,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               {message.kind === "image" && message.image?.preview_url && (
                 <div className="relative overflow-hidden rounded-lg">
                   <img
-                    src={message.image.preview_url}
+                    src={cdnUrl(message.image.preview_url)}
                     alt="Locked image preview"
                     className="w-full max-h-48 object-cover"
                     style={{ imageRendering: "pixelated", filter: "blur(2px)", transform: "scale(1.05)" }}
@@ -1585,7 +1594,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 className="mt-1 block"
               >
                 <img
-                  src={message.image.url}
+                  src={cdnUrl(message.image.url)}
                   alt="Shared image"
                   className="max-h-64 rounded-lg object-cover"
                 />
@@ -1603,7 +1612,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                       item.content_type?.startsWith("video/") ? (
                         <video
                           key={i}
-                          src={item.url}
+                          src={cdnUrl(item.url)}
                           className="w-full aspect-square object-cover rounded"
                           muted
                           playsInline
@@ -1613,7 +1622,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                       ) : (
                         <img
                           key={i}
-                          src={item.url}
+                          src={cdnUrl(item.url)}
                           alt={item.filename ?? `Image ${i + 1}`}
                           className="w-full aspect-square object-cover rounded"
                         />
@@ -1634,7 +1643,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                           item.content_type?.startsWith("video/") ? (
                             <video
                               key={i}
-                              src={item.url}
+                              src={cdnUrl(item.url)}
                               className="w-full aspect-square object-cover rounded"
                               muted
                               playsInline
@@ -1644,7 +1653,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                           ) : (
                             <img
                               key={i}
-                              src={item.url}
+                              src={cdnUrl(item.url)}
                               alt={item.filename ?? `Locked image ${i + 1}`}
                               className="w-full aspect-square object-cover rounded"
                             />
@@ -1849,7 +1858,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 <span className="text-xs text-muted-foreground">Voice message</span>
               </div>
               <WaveformPlayer
-                audioUrl={message.voice_message.audio_url}
+                audioUrl={cdnUrl(message.voice_message.audio_url) ?? message.voice_message.audio_url}
                 waveform={message.voice_message.waveform_data}
                 durationSeconds={message.voice_message.duration_seconds}
                 consumed={message.consumption_state === "consumed"}
@@ -2572,7 +2581,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 </button>
               )}
               <a
-                href={message.image.url}
+                href={cdnUrl(message.image.url)}
                 download
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
                 onClick={(e) => {
@@ -2595,7 +2604,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             <DialogDescription className="sr-only">Full-size image view</DialogDescription>
             <div className="flex items-center justify-center min-h-[60vh] p-4">
               <img
-                src={message.image.url}
+                src={cdnUrl(message.image.url)}
                 alt="Full size image"
                 className="max-h-[80vh] max-w-full object-contain rounded-lg"
               />

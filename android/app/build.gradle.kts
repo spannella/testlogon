@@ -39,6 +39,12 @@ android {
         // client hashes stop matching server hashes. Non-secret (see that module's docstring).
         buildConfigField("String", "CONTACT_MATCH_SALT", "\"tl_contact_match_v1\"")
         buildConfigField("boolean", "WEBRTC_FORCE_RELAY", "false")
+        // FE-141 (EPIC E) - optional media CDN origin. EMPTY by default so media urls fall
+        // back to the existing dev/mock server-relative path (RelativeUrlMapper resolves it
+        // against API_BASE_URL). Set to an absolute https origin to derive prod CDN object
+        // urls for DTOs that omit an absolute url. Prod DTOs already carry an absolute url,
+        // which resolveMediaUrl always prefers; this is a hardening fallback.
+        buildConfigField("String", "MEDIA_CDN_BASE", "\"\"")
     }
 
     buildTypes {
