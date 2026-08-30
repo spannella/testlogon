@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
@@ -132,6 +133,9 @@ object FilesTestTags {
     const val APPEND_FOOTER = "files_append_footer"
     const val APPEND_RETRY = "files_append_retry"
 
+    /** FE-170 - the Trading Documents entry-point tile at the file-manager root. */
+    const val TRADING_DOCS_TILE = "files_trading_docs_tile"
+
     /** FM1 - the floating chip shown while a row is being dragged to a folder. */
     const val DRAG_CHIP = "files_drag_chip"
 
@@ -225,6 +229,9 @@ fun FilesRoute(
     // AND-336 - "Import from Google Drive" affordance: opens the backend-mediated Drive picker for the
     // folder currently on screen (defaults to no-op so existing call sites/tests are unaffected).
     onImportFromDrive: (String) -> Unit = {},
+    // FE-170 - open the Trading Documents area (statements/1099s/confirmations). Defaults no-op so
+    // existing call sites / tests are unaffected.
+    onOpenTradingDocuments: () -> Unit = {},
     viewModel: FilesViewModel = hiltViewModel(),
     uploadViewModel: com.testlogon.android.feature.files.upload.FilesUploadViewModel = hiltViewModel(),
     downloadViewModel: com.testlogon.android.feature.files.download.FileActionsViewModel = hiltViewModel(),
@@ -318,6 +325,8 @@ fun FilesRoute(
         onShareFile = { node -> onShareFile(node.path) },
         // AND-336 - the Drive-import action carries the folder on screen as the import target.
         onImportFromDrive = { onImportFromDrive(state.currentPath) },
+        // FE-170 - the Trading Documents entry point (a tile at the files root).
+        onOpenTradingDocuments = onOpenTradingDocuments,
         // F13 - long-press CRUD context-menu actions wired to the existing FilesViewModel ops.
         onRename = { node, newName -> viewModel.rename(node.path, newName, node.type == FileNodeType.FOLDER) },
         onDelete = { node -> viewModel.delete(node.path, node.type == FileNodeType.FOLDER) },
@@ -389,6 +398,9 @@ fun FilesScreen(
     // AND-336 - "Import from Google Drive" action (null -> the affordance is hidden, so existing AND-332
     // FilesScreen callers / tests are unaffected).
     onImportFromDrive: (() -> Unit)? = null,
+    // FE-170 - Trading Documents entry point (null -> the tile is hidden, so existing FilesScreen
+    // callers / tests are unaffected).
+    onOpenTradingDocuments: (() -> Unit)? = null,
     // F13 - long-press context-menu CRUD actions (defaulted no-op so existing callers / tests are
     // unaffected). Rename/Delete/New-folder are fully wired; Move targets a destination folder path.
     onRename: (FileNode, String) -> Unit = { _, _ -> },
@@ -479,6 +491,13 @@ fun FilesScreen(
                 onToggleMode = onToggleSearchMode,
             )
             HorizontalDivider()
+            // FE-170 - Trading Documents entry point: a tile at the file-manager root that navigates to
+            // the statements / 1099s / trade-confirmations area. Shown only at the root and only when the
+            // host wired the callback (defaulted-off so existing FilesScreen callers / tests are unaffected).
+            if (onOpenTradingDocuments != null && !state.isSearching && state.currentPath == FilePath.ROOT) {
+                TradingDocsTile(onClick = onOpenTradingDocuments)
+                HorizontalDivider()
+            }
             // FM6/FM3 - destination-picker banner: while a transfer is active the user navigates into the
             // target folder (folder taps drill in, breadcrumbs jump) then taps Move/Copy here. Cancel exits.
             transfer?.let { t ->
@@ -1503,4 +1522,50 @@ private fun thumbnailUrl(node: FileNode): String {
     node.posterUrl?.takeIf { it.isNotBlank() }?.let { return it }
     val encoded = java.net.URLEncoder.encode(node.path, "UTF-8")
     return "/v1/fs/preview?path=$encoded"
+}
+
+
+/**
+ * FE-170 - a tappable "Trading Documents" tile at the file-manager root that opens the statements /
+ * 1099s / trade-confirmations area. Mirrors the list-row idiom used elsewhere on this screen.
+ */
+@Composable
+private fun TradingDocsTile(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag(FilesTestTags.TRADING_DOCS_TILE),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.ReceiptLong,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.trading_docs_title),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                text = stringResource(R.string.trading_docs_tile_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.Filled.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }

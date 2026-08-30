@@ -31,6 +31,11 @@ fun NavGraphBuilder.filesDestination(navController: NavHostController) {
             onImportFromDrive = { targetFolderPath ->
                 navController.navigate(DriveImportDest.build(targetFolderPath)) { launchSingleTop = true }
             },
+            // FE-170 - Trading Documents area (statements/1099s/trade confirmations) reachable from the
+            // file manager. Navigates to the trading-docs list route (files feature graph).
+            onOpenTradingDocuments = {
+                navController.navigate(TradingDocsDest.ROUTE) { launchSingleTop = true }
+            },
         )
     }
 }

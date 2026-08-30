@@ -212,6 +212,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         videoUploadDestination(navController)
         // AND-332: read-only file-manager browse (path nav + breadcrumbs + search + sort + paged listing).
         filesDestination(navController)
+        // FE-170: Trading Documents area (statements/1099s/confirmations) reached from the file manager.
+        tradingDocsDestination(navController)
         // Trading Blotter: native orders/fills/positions blotter (web parity; sample data + ticker).
         blotterDestination(navController)
         // Active Algos monitor: client-side TWAP / Iceberg algo progress + pause/cancel.

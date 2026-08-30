@@ -1988,6 +1988,16 @@
     <string name="tax_docs_row_subtitle">%1$s · %2$d transactions</string>
     <string name="tax_docs_download_cd">Download %1$s tax statement</string>
     <string name="tax_docs_no_viewer">No app available to open this file.</string>
+    <!-- FE-170 Trading Documents (statements / 1099s / trade confirmations) in the file manager -->
+    <string name="trading_docs_title">Trading Documents</string>
+    <string name="trading_docs_tile_subtitle">Statements, 1099s, trade confirmations</string>
+    <string name="trading_docs_loading">Loading trading documents\u2026</string>
+    <string name="trading_docs_empty">No trading documents yet</string>
+    <string name="trading_docs_no_viewer">No app available to open this document.</string>
+    <string name="trading_docs_download_unavailable">This document isn\'t available to download yet.</string>
+    <string name="trading_docs_share_chooser">Share document</string>
+    <string name="trading_docs_download_cd">Download %1$s</string>
+    <string name="trading_docs_share_cd">Share %1$s</string>
     <!-- PAR-24 earnings summary card -->
     <string name="tax_docs_summary_title">Earnings summary</string>
     <string name="tax_docs_summary_year">%1$d</string>
