@@ -69,6 +69,8 @@ import { WaveformPlayer } from "./WaveformPlayer";
 import { VoicemailBubble } from "./VoicemailBubble";
 import { TranscriptControl } from "./TranscriptControl";
 import { CountdownCard } from "./CountdownCard";
+import { RevealLockedCard } from "./RevealLockedCard";
+import { isRevealLocked } from "@/lib/revealAt";
 import { FindDateTimeCard } from "./FindDateTimeCard";
 import { VideoShareCard } from "./VideoShareCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
@@ -195,6 +197,8 @@ const buildS3ObjectUrl = (bucket?: string, key?: string): string | undefined => 
 };
 
 function replyPreviewText(msg: Message): string {
+  // FE-120: never leak the content of a still-locked scheduled reveal.
+  if (isRevealLocked(msg.reveal_at, false, Math.floor(Date.now() / 1000))) return "🔒 Scheduled reveal";
   if (msg.kind === "image") return "[Image]";
   if (msg.kind === "video") return "[Video]";
   if (msg.kind === "audio") return "[Audio]";
@@ -480,6 +484,8 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [lotteryRevealError, setLotteryRevealError] = useState<string | null>(null);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const revealTimerRef = useRef<number | null>(null);
+  // FE-120: 1s clock driving the scheduled-reveal gate for recipients.
+  const [revealNow, setRevealNow] = useState<number>(() => Math.floor(Date.now() / 1000));
   // MVA-006: per-message translation. `translatedText` holds the fetched
   // translation; `showOriginal` toggles between original and translation.
   const [translatedText, setTranslatedText] = useState<string | null>(
@@ -768,6 +774,19 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
   }, []);
+
+  // FE-120: gate content behind a scheduled reveal for recipients only.
+  const revealLocked = isRevealLocked(message.reveal_at, isOwn, revealNow);
+  useEffect(() => {
+    if (!message.reveal_at || isOwn) return;
+    if (Math.floor(Date.now() / 1000) >= message.reveal_at) { setRevealNow(message.reveal_at); return; }
+    const id = window.setInterval(() => {
+      const t = Math.floor(Date.now() / 1000);
+      setRevealNow(t);
+      if (t >= (message.reveal_at ?? 0)) window.clearInterval(id);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [message.reveal_at, isOwn]);
 
   useEffect(() => {
     setLotteryRevealError(null);
@@ -1123,7 +1142,21 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             </div>
           )}
 
-          {(expiryCountdown === "expired" || message.expired) ? (
+          {revealLocked ? (
+            <RevealLockedCard
+              revealAt={message.reveal_at as number}
+              onReveal={() => {
+                void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+                void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+              }}
+            >
+              {message.text ? (
+                <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
+              ) : (
+                <p className="text-sm italic text-muted-foreground">Revealed content</p>
+              )}
+            </RevealLockedCard>
+          ) : (expiryCountdown === "expired" || message.expired) ? (
             <div className="flex items-center gap-1.5 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground italic">
               <EyeOff className="h-3.5 w-3.5 shrink-0" />
               This message has expired

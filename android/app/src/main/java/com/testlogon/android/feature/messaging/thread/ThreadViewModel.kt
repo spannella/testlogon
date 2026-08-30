@@ -663,6 +663,17 @@ class ThreadViewModel @Inject constructor(
             return
         }
         if (body.isEmpty() || composer.overLimit) return
+        // FE-120 (EPIC C) — when a reveal time is armed (and still in the future), wrap the body in
+        // the TLRVL1 sentinel so recipients get the locked/countdown bubble until the reveal. The
+        // sender always sees content (toMedia maps it; the bubble ungates for isOwn). Encrypted sends
+        // stay plain (no cross-client sentinel to parse under an envelope).
+        val revealAt = composer.options.revealAtEpochSeconds
+            ?.takeIf { com.testlogon.android.feature.messaging.RevealAtMath.isRevealable(it, clock()) }
+        val outboundBody = if (revealAt != null && !composer.options.encrypted) {
+            com.testlogon.android.feature.messaging.RevealAtMath.encode(revealAt, body)
+        } else {
+            body
+        }
         val clientId = UUID.randomUUID().toString()
         val replyToId = composer.replyingTo?.messageId
         val opts = composer.options
@@ -707,7 +718,9 @@ class ThreadViewModel @Inject constructor(
                     }
                 }
                 repository.sendOutbox(
-                    conversationId, clientId, body, replyToId,
+                    // FE-120 — send the (possibly reveal-wrapped) body; the optimistic row above keeps the
+                    // plain body so the sender sees content immediately (their own view is never locked).
+                    conversationId, clientId, outboundBody, replyToId,
                     viewOnce = opts.viewOnce,
                     lockPriceCents = opts.lockPriceCents,
                     lockDescription = opts.lockDescription,
@@ -912,6 +925,21 @@ class ThreadViewModel @Inject constructor(
     fun setScheduledAt(epochSeconds: Long?) {
         _state.update {
             it.copy(composer = it.composer.copy(options = it.composer.options.copy(scheduledAtEpochSeconds = epochSeconds)))
+        }
+    }
+
+    /**
+     * FE-120 (EPIC C) — arm/clear a scheduled "reveal at" time for the NEXT text message. On send the
+     * composed body is wrapped in the TLRVL1 sentinel (see onSend) so recipients see a locked/countdown
+     * bubble until this instant. A non-future time is ignored (nothing to schedule).
+     */
+    fun setRevealAt(epochSeconds: Long?) {
+        val nowSec = clock()
+        val armed = epochSeconds?.takeIf {
+            com.testlogon.android.feature.messaging.RevealAtMath.isRevealable(it, nowSec)
+        }
+        _state.update {
+            it.copy(composer = it.composer.copy(options = it.composer.options.copy(revealAtEpochSeconds = armed)))
         }
     }
 

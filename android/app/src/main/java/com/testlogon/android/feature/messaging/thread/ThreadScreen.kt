@@ -553,6 +553,7 @@ fun ThreadRoute(
             onAttachTipChange = viewModel::setAttachTip,
             onScheduleChange = viewModel::setScheduledAt,
             onScheduleTzChange = viewModel::setScheduledTimeZone,
+            onRevealChange = viewModel::setRevealAt,
             onExpiresChange = viewModel::setExpiresIn,
             onEncryptedChange = viewModel::setEncrypted,
             onPassphraseChange = viewModel::setEncryptionPassphrase,
@@ -792,6 +793,7 @@ private fun MessageOptionsSheet(
     onAttachTipChange: (String) -> Unit,
     onScheduleChange: (Long?) -> Unit,
     onScheduleTzChange: (String) -> Unit,
+    onRevealChange: (Long?) -> Unit,
     onExpiresChange: (Long?) -> Unit,
     onEncryptedChange: (Boolean) -> Unit,
     onPassphraseChange: (String) -> Unit,
@@ -912,6 +914,32 @@ private fun MessageOptionsSheet(
                 )
                 if (options.scheduledAtEpochSeconds != null) {
                     TextButton(onClick = { onScheduleChange(null) }) { Text("Clear") }
+                }
+            }
+            // FE-120 (EPIC C) — schedule a reveal: recipients see a locked/blurred bubble + live
+            // countdown until this time, then it auto-reveals. The sender always sees content. Encrypted
+            // is not combinable (an envelope has no cross-client sentinel to parse), so it is disabled then.
+            Text("Schedule reveal", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 12.dp))
+            Text(
+                if (options.encrypted) "Not available with encryption" else "Recipients see a locked countdown until the reveal time",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                com.testlogon.android.feature.common.DateTimePickerField(
+                    selectedEpochSeconds = options.revealAtEpochSeconds,
+                    onPicked = onRevealChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = "Reveal now (tap to schedule)",
+                    testTag = RevealLockedTestTags.OPTION_FIELD,
+                    zoneId = options.scheduledTimeZoneId,
+                )
+                if (options.revealAtEpochSeconds != null) {
+                    TextButton(onClick = { onRevealChange(null) }) { Text("Clear") }
                 }
             }
             // Expiring (self-destruct after delivery)
@@ -1747,6 +1775,7 @@ private fun replyQuoteSnippet(m: ThreadMessageUi): String {
         is MessageMedia.OrderCard -> com.testlogon.android.feature.messaging.EcomCardModel.orderPreview((m.media as MessageMedia.OrderCard).card)
         is MessageMedia.Countdown -> "[countdown]"
         is MessageMedia.CalendarEvent, is MessageMedia.CalendarShare -> "[calendar]"
+        is MessageMedia.RevealLocked -> com.testlogon.android.feature.messaging.RevealAtMath.LOCKED_PREVIEW
         is MessageMedia.Paid -> "[locked]"
         MessageMedia.None -> "message"
     }
@@ -2103,6 +2132,48 @@ private fun MessageBubble(
                 testTag = "thread_view_once_bubble",
             )
         } else when (val media = message.media) {
+            // FE-120 (EPIC C) — a scheduled "reveal at" drop. The recipient sees a locked/blurred
+            // bubble + live countdown until the reveal instant; the sender (isOwn) and everyone at/after
+            // the reveal see the inner content. RevealLockedBubble owns the sender/now gate + auto-flip;
+            // its onRevealed lambda renders the inner body (plain text, or an inner card) exactly like a
+            // normal message. Only the two common inner shapes (plain text / an ecom-or-trading card) are
+            // dispatched here; anything else degrades to the inner text so nothing is ever swallowed.
+            is MessageMedia.RevealLocked -> RevealLockedBubble(
+                media = media,
+                isOwn = message.isOwn,
+            ) {
+                when (val inner = media.innerMedia) {
+                    is MessageMedia.MarketCard -> MarketCard(
+                        card = inner.card,
+                        live = marketCards[inner.card.symbolId] ?: MarketCardLive(),
+                        onTrade = onOpenSymbol,
+                    )
+                    is MessageMedia.PositionCard -> PositionCard(card = inner.card, onTrade = onOpenSymbol)
+                    is MessageMedia.CryptoTransfer -> CryptoTransferCard(
+                        card = inner.card,
+                        viewerSub = if (message.isOwn) inner.card.fromSub else null,
+                    )
+                    is MessageMedia.ProductCard -> ProductCard(card = inner.card, onBuy = onOpenProduct)
+                    is MessageMedia.OrderCard -> OrderShareCard(card = inner.card)
+                    else -> Surface(
+                        color = bubbleColor,
+                        contentColor = if (message.isOwn) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        shape = bubbleShape(message.isOwn),
+                        tonalElevation = 1.dp,
+                        modifier = Modifier.widthIn(max = 280.dp).testTag("thread_reveal_revealed"),
+                    ) {
+                        Text(
+                            text = media.innerText,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                        )
+                    }
+                }
+            }
             is MessageMedia.Image -> ImageBubble(
                 media = media,
                 onOpenImage = onOpenImage,

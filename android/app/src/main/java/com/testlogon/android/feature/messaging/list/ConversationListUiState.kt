@@ -39,7 +39,10 @@ internal fun Conversation.toRow(): ConversationRow = ConversationRow(
     id = id,
     title = title,
     iconUrl = iconUrl,
-    preview = lastMessagePreview,
+    // FE-120 (EPIC C) — mask a reveal-wrapped last message so the raw TLRVL1 sentinel never
+    // leaks into the inbox row; the inner content is never shown here (viewer-agnostic).
+    preview = com.testlogon.android.feature.messaging.RevealAtMath.previewForBody(lastMessagePreview)
+        ?: lastMessagePreview,
     lastActivityEpochSeconds = lastActivityEpochSeconds,
     unreadCount = unreadCount,
 )

@@ -271,6 +271,22 @@ sealed interface MessageMedia {
     data class OrderCard(
         val card: com.testlogon.android.feature.messaging.EcomCardModel.OrderCard,
     ) : MessageMedia
+
+    /**
+     * FE-120 (EPIC C, <- BE-120/BE-121) - a scheduled "reveal at" drop. The message DTO carries no
+     * `reveal_at` field, so the reveal time + inner body ride a NORMAL text message behind the TLRVL1
+     * sentinel ([com.testlogon.android.feature.messaging.RevealAtMath]); [MessageDto.toMedia] parses it
+     * into this transient type. BEFORE [revealAtSec] the RECIPIENT renders a locked/blurred bubble +
+     * live countdown; the SENDER (and everyone at/after the reveal) sees [innerMedia] / [innerText]. The
+     * lock/now gate is applied at render time (the mapper does not know the viewer). [innerMedia] is the
+     * recursively-resolved media of the inner body (so a reveal can wrap ANOTHER card), or [None] for a
+     * plain-text reveal (whose content is [innerText]).
+     */
+    data class RevealLocked(
+        val revealAtSec: Long,
+        val innerMedia: MessageMedia,
+        val innerText: String,
+    ) : MessageMedia
 }
 
 /** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
@@ -809,6 +825,18 @@ internal fun List<EditHistoryEntryDto>.toMessageEdits(): List<MessageEdit> =
 
 /** Maps the wire media object to the domain [MessageMedia] (pure; no Android types). */
 internal fun MessageDto.toMedia(): MessageMedia = when {
+    // FE-120 (EPIC C) - a reveal-scheduled message rides a normal text body behind the TLRVL1 sentinel.
+    // Parse it FIRST: resolve the INNER body (which may be plain text OR another card sentinel) via a
+    // recursive re-map, and carry both so the bubble can flip sender/now -> inner content at reveal. A
+    // non-wrapped body falls through (parse == null) to the normal media resolution below.
+    com.testlogon.android.feature.messaging.RevealAtMath.parse(text) != null -> {
+        val w = com.testlogon.android.feature.messaging.RevealAtMath.parse(text)!!
+        MessageMedia.RevealLocked(
+            revealAtSec = w.revealAtSec,
+            innerMedia = copy(text = w.innerBody).toMedia(),
+            innerText = w.innerBody,
+        )
+    }
     // FE-101/FE-102 — a trading card rides a normal text message; the body carries the encoded
     // TradingCardModel payload behind a sentinel. Parse it FIRST so it renders as a card, not raw text.
     // A non-card body falls through (parse == null) to the normal media resolution below.
