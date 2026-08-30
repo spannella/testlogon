@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Cloud,
   HardDrive,
+  Receipt,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -1039,6 +1040,13 @@ export default function FilesPage() {
       <PageHeader
         title="Files"
         description="Manage your files and folders"
+        actions={
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/files/trading-documents">
+              <Receipt className="mr-1.5 h-4 w-4" /> Trading Documents
+            </Link>
+          </Button>
+        }
       />
       <ImpersonationRouteIndicator area="files" />
 

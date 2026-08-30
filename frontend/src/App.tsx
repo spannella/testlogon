@@ -29,6 +29,7 @@ const AdminLicenseCompliancePage = lazy(
   () => import("@/pages/licenses/AdminLicenseCompliancePage"),
 );
 const FilesPage = lazy(() => import("@/pages/files/FilesPage"));
+const TradingDocumentsPage = lazy(() => import("@/pages/files/TradingDocumentsPage"));
 const KycWorkloadPage = lazy(() => import("@/pages/admin/KycWorkloadPage"));
 const KycDocumentTemplatesPage = lazy(() => import("@/pages/admin/KycDocumentTemplatesPage"));
 const KycTranslationsPage = lazy(() => import("@/pages/admin/KycTranslationsPage"));
@@ -549,6 +550,7 @@ export default function App() {
           <Route path="contacts" element={<ContactsPage />} />
           <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
+          <Route path="files/trading-documents" element={<TradingDocumentsPage />} />
           <Route path="files/share-links" element={<ShareLinksPage />} />
           <Route path="signing" element={<SigningPage />} />
           <Route path="signing/new" element={<CreateSignatureRequestPage />} />
