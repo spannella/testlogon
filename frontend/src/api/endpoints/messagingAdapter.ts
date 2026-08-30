@@ -129,6 +129,11 @@ export function adaptMessage(raw: RawMessage): Message {
     target_datetime: raw.target_datetime,
     associated_event_type: raw.associated_event_type,
     associated_event_id: raw.associated_event_id,
+    // Location-in-chat card fields (EPIC D: FE-130)
+    lat: raw.lat,
+    lng: raw.lng,
+    label: raw.label,
+    place_name: raw.place_name,
     // Trading-in-chat card fields (EPIC A)
     symbol_id: raw.symbol_id,
     symbol: raw.symbol,

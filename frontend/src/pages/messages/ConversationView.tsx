@@ -24,6 +24,7 @@ import {
   sendCryptoTransferMessage,
   sendProductCardMessage,
   sendOrderCardMessage,
+  sendLocationCard,
   createLotteryMessage,
   sendVoiceMessage,
   markRead,
@@ -43,6 +44,7 @@ import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendC
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import type { CryptoTransferPayload } from "@/lib/cryptoTransfer";
 import type { ProductCardPayload, OrderCardPayload } from "@/lib/ecomCards";
+import type { LocationCardPayload } from "@/lib/locationCards";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
@@ -673,6 +675,15 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
     onError: () => toast.error("Failed to share purchase"),
+  });
+
+  const sendLocation = useMutation({
+    mutationFn: (payload: LocationCardPayload) => sendLocationCard(convoId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share location"),
   });
 
   const sendLottery = useMutation({
@@ -1598,6 +1609,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendCryptoTransfer={!isGroup ? (payload) => sendCryptoTransfer.mutate(payload) : undefined}
         onSendProductCard={(payload) => sendProductCard.mutate(payload)}
         onSendOrderCard={(payload) => sendOrderCard.mutate(payload)}
+        onSendLocation={(payload) => sendLocation.mutate(payload)}
         recipientName={dmPartner?.display_name}
         currentUserName={currentUserName}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}

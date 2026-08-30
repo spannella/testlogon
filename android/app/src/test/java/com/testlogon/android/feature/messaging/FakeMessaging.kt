@@ -1294,9 +1294,16 @@ fun newThreadViewModel(
         com.testlogon.android.feature.trading.FakeCustodyReader(),
         fakeCatalogRepository(),
         fakePurchasesRepository(),
+        fakeGeocodeRepository(),
         groupRepository,
         muteStore,
     )
+
+/** FE-130 (EPIC D) — no-op reverse-geocode repo for thread tests (always degrades to null). */
+private fun fakeGeocodeRepository(): com.testlogon.android.data.messaging.geocode.GeocodeRepository =
+    object : com.testlogon.android.data.messaging.geocode.GeocodeRepository {
+        override suspend fun reverse(lat: Double, lng: Double): String? = null
+    }
 
 /** EPIC F — minimal no-op catalog repo for thread tests (product-picker read returns empty). */
 private fun fakeCatalogRepository(): com.testlogon.android.data.catalog.CatalogRepository =

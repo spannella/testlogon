@@ -9,6 +9,8 @@
          against platform users. Requested at RUNTIME behind an explicit "Find people you know"
          action; emails/phones are hashed on-device and NEVER uploaded (only hashes are sent). -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!-- FE-130 (EPIC D) - coarse location for the "Use current location" chat-composer action (optional; manual entry is the fallback). -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- AND-297: full-screen incoming-call notification (CATEGORY_CALL qualifies on API 34+). The
          notifier still degrades to a heads-up call notification when canUseFullScreenIntent() is false. -->

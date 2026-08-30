@@ -62,7 +62,9 @@ import { PositionCard } from "./PositionCard";
 import { CryptoTransferCard } from "./CryptoTransferCard";
 import { ProductCard } from "./ProductCard";
 import { OrderShareCard } from "./OrderShareCard";
+import { LocationCard } from "./LocationCard";
 import { orderCardPreview, productCardPreview, type OrderCardPayload, type ProductCardPayload } from "@/lib/ecomCards";
+import { locationPreview, type LocationCardPayload } from "@/lib/locationCards";
 import type { PositionCardPayload } from "@/lib/tradingCards";
 import type { CryptoTransferPayload, TransferStatus } from "@/lib/cryptoTransfer";
 import { WaveformPlayer } from "./WaveformPlayer";
@@ -219,6 +221,8 @@ function replyPreviewText(msg: Message): string {
     });
   if (msg.kind === "crypto_transfer")
     return `[Crypto: ${[msg.amount, msg.asset].filter(Boolean).join(" ")}]`;
+  if (msg.kind === "location")
+    return locationPreview(msg.label ?? undefined, msg.place_name ?? undefined);
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -2050,6 +2054,19 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           )}
 
           {/* ── GIF message (MSG-008) ── */}
+          {message.kind === "location" &&
+            message.lat != null &&
+            message.lng != null && (
+              <LocationCard
+                payload={{
+                  lat: message.lat,
+                  lng: message.lng,
+                  label: message.label ?? undefined,
+                  place_name: message.place_name ?? undefined,
+                } satisfies LocationCardPayload}
+              />
+            )}
+
           {message.kind === "gif" && message.gif_url && (
             <div className="max-w-xs" data-testid="gif-message">
               <img

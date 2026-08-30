@@ -41,7 +41,10 @@ internal fun Conversation.toRow(): ConversationRow = ConversationRow(
     iconUrl = iconUrl,
     // FE-120 (EPIC C) — mask a reveal-wrapped last message so the raw TLRVL1 sentinel never
     // leaks into the inbox row; the inner content is never shown here (viewer-agnostic).
-    preview = com.testlogon.android.feature.messaging.RevealAtMath.previewForBody(lastMessagePreview)
+    // FE-130 (EPIC D) - mask a location-card last message so the raw TLLOC1 sentinel never leaks into
+    // the inbox row; falls through the reveal mask, then to the server text preview.
+    preview = com.testlogon.android.feature.messaging.LocationCardModel.previewForBody(lastMessagePreview)
+        ?: com.testlogon.android.feature.messaging.RevealAtMath.previewForBody(lastMessagePreview)
         ?: lastMessagePreview,
     lastActivityEpochSeconds = lastActivityEpochSeconds,
     unreadCount = unreadCount,

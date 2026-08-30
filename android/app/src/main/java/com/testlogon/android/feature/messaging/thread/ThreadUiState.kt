@@ -99,6 +99,8 @@ data class ThreadUiState(
     val productPicker: ProductPickerState = ProductPickerState(),
     /** FE-151 (EPIC F) — "Share purchase" order picker + mode-selector sheet (hidden until opened). */
     val orderPicker: OrderPickerState = OrderPickerState(),
+    /** FE-130 (EPIC D) — "Share location" composer sheet (map pin; hidden until opened). */
+    val locationComposer: LocationComposerState = LocationComposerState(),
     /** MSG — receiver passphrase-unlock dialog for an encrypted message (non-null key = open). */
     val encryptUnlock: EncryptUnlockState = EncryptUnlockState(),
     /** MSG — view-once viewer dialog (non-null key = open, showing the consumed content). */
@@ -318,6 +320,11 @@ data class OrderPick(
     val currency: String?,
     /** The caller's own display name; used only for gift/recommendation attribution (never in receipt). */
     val buyerName: String?,
+)
+
+/** FE-130 - "Share location" composer state. Just visibility; the sheet owns its transient input. */
+data class LocationComposerState(
+    val visible: Boolean = false,
 )
 
 /** FE-151 - "Share purchase" order-picker + mode-selector state. */

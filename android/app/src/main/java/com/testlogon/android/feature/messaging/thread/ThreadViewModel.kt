@@ -111,6 +111,7 @@ class ThreadViewModel @Inject constructor(
     private val custodyReader: com.testlogon.android.data.custody.CustodyReader,
     private val catalogRepository: com.testlogon.android.data.catalog.CatalogRepository,
     private val purchasesRepository: com.testlogon.android.data.purchases.PurchasesRepository,
+    private val geocodeRepository: com.testlogon.android.data.messaging.geocode.GeocodeRepository,
     private val groupRepository: com.testlogon.android.data.messaging.group.GroupRepository,
     private val muteStore: com.testlogon.android.data.messaging.mute.ConversationMuteStore,
 ) : ViewModel() {
@@ -2615,6 +2616,38 @@ class ThreadViewModel @Inject constructor(
     }
 
     fun onDismissOrderPicker() { _state.update { it.copy(orderPicker = OrderPickerState()) } }
+
+    // ---- FE-130 (EPIC D): share location in chat ----
+
+    /** FE-130 - open the "Share location" composer sheet. */
+    fun onAttachLocation() {
+        _state.update { it.copy(locationComposer = LocationComposerState(visible = true)) }
+    }
+
+    fun onDismissLocation() {
+        _state.update { it.copy(locationComposer = LocationComposerState()) }
+    }
+
+    /**
+     * FE-130 (<- BE-133) - best-effort reverse-geocode a coordinate to a place name for the composer.
+     * NEVER blocks or fails a send: any error / missing endpoint resolves to null (coords-only card).
+     */
+    suspend fun reverseGeocode(lat: Double, lng: Double): String? = geocodeRepository.reverse(lat, lng)
+
+    /**
+     * FE-130 - send a location card as a normal text message carrying the encoded [LocationCardModel]
+     * payload behind the TLLOC1 sentinel (degrade-safe transport; no dedicated endpoint). The composer
+     * has already validated coords + resolved the optional place name; [body] is the encoded payload.
+     */
+    fun onSendLocationCard(body: String) {
+        _state.update { it.copy(locationComposer = LocationComposerState()) }
+        val clientId = java.util.UUID.randomUUID().toString()
+        viewModelScope.launch {
+            repository.enqueueOptimistic(conversationId, clientId, body, clock())
+            repository.sendOutbox(conversationId, clientId, body)
+            _events.trySend(ThreadEvent.ScrollToBottom)
+        }
+    }
 
     /**
      * FE-151 - send an order_share card as a normal text message. The mode is passed to the model
