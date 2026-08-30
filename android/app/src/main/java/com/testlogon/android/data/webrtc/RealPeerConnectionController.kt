@@ -59,6 +59,9 @@ class RealPeerConnectionController @Inject constructor(
     )
     override val localIceCandidates: SharedFlow<IceCandidate> = _localIce.asSharedFlow()
 
+    private val _iceState = MutableStateFlow("NEW")
+    override val iceState: StateFlow<String> = _iceState.asStateFlow()
+
     private var peer: PeerConnection? = null
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
@@ -160,6 +163,41 @@ class RealPeerConnectionController @Inject constructor(
         }
     }
 
+    override suspend fun restartIce(): PeerResult<SdpDescription?> {
+        val pc = peer ?: return PeerResult.NotConfigured
+        return try {
+            // Kick libwebrtc to re-gather relay/host candidates on the existing peer.
+            pc.restartIce()
+            // Offerer produces a fresh iceRestart offer to forward over signaling; answerer just primes.
+            val constraints = MediaConstraints().apply {
+                mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
+            }
+            val offer = awaitCreate { pc.createOffer(it, constraints) }
+                ?: return PeerResult.Ok(null)
+            if (!awaitSet { pc.setLocalDescription(it, offer) }) return PeerResult.Ok(null)
+            PeerResult.Ok(offer.toDomain())
+        } catch (t: Throwable) {
+            PeerResult.Failed(t.javaClass.simpleName)
+        }
+    }
+
+    override fun setConfiguration(iceServers: List<IceServer>) {
+        val pc = peer ?: return
+        val servers = iceServers.map { srv ->
+            val b = PeerConnection.IceServer.builder(srv.urls)
+            srv.username?.let { b.setUsername(it) }
+            srv.credential?.let { b.setPassword(it) }
+            b.createIceServer()
+        }
+        val cfg = PeerConnection.RTCConfiguration(servers).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+        }
+        runCatching { pc.setConfiguration(cfg) }
+    }
+
     override fun close() {
         runCatching { capturer?.stopCapture() }
         runCatching { capturer?.dispose() }
@@ -171,6 +209,7 @@ class RealPeerConnectionController @Inject constructor(
         capturer = null; surfaceHelper = null; videoSource = null; audioSource = null
         videoTrack = null; audioTrack = null; peer = null
         mediaHolder.clear()
+        _iceState.value = "CLOSED"
         _lifecycle.value = PeerLifecycle.Closed
     }
 
@@ -207,7 +246,10 @@ class RealPeerConnectionController @Inject constructor(
             }
         }
 
-        override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) { Log.d("TLHUB", "peer iceState=$s") }
+        override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) {
+            Log.d("TLHUB", "peer iceState=$s")
+            _iceState.value = s.name
+        }
         override fun onIceCandidatesRemoved(candidates: Array<out RtcIceCandidate>) {}
         override fun onSignalingChange(s: PeerConnection.SignalingState) {}
         override fun onIceGatheringChange(s: PeerConnection.IceGatheringState) {}

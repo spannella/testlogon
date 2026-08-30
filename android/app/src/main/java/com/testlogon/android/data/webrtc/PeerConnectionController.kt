@@ -27,6 +27,13 @@ interface PeerConnectionController {
     val lifecycle: StateFlow<PeerLifecycle>
 
     /**
+     * FE-143 — the raw libwebrtc ICE connection-state NAME (NEW/CHECKING/CONNECTED/COMPLETED/
+     * DISCONNECTED/FAILED/CLOSED). Hot; starts "NEW". Fed to [CallConnectionMath] for the connection-state
+     * UI + the ICE-restart decision. The stub stays "NEW".
+     */
+    val iceState: StateFlow<String>
+
+    /**
      * Locally-gathered (trickled) ICE candidates to forward to the peer over signaling. Hot; the real impl
      * emits one per `onIceCandidate`. The stub never emits.
      */
@@ -46,6 +53,19 @@ interface PeerConnectionController {
 
     /** Accept a remote ICE candidate. */
     suspend fun addIceCandidate(candidate: IceCandidate): PeerResult<Unit>
+
+    /**
+     * FE-143 — trigger an ICE restart (re-gather candidates + renegotiate) on an existing peer, e.g. after
+     * an ICE FAILED/persisted-DISCONNECTED. The offerer produces a fresh iceRestart offer to forward over
+     * signaling; the answerer only primes its side. No-op (NotConfigured) if no peer exists.
+     */
+    suspend fun restartIce(): PeerResult<SdpDescription?>
+
+    /**
+     * FE-143 — apply a refreshed ICE-server list to the live peer (setConfiguration) so a long call keeps
+     * valid TURN relays past the credential TTL. No-op if no peer exists.
+     */
+    fun setConfiguration(iceServers: List<IceServer>)
 
     /** Idempotent teardown. Disposes native refs + stops capture. */
     fun close()
@@ -102,6 +122,9 @@ class StubPeerConnectionController @Inject constructor() : PeerConnectionControl
     private val _lifecycle = MutableStateFlow<PeerLifecycle>(PeerLifecycle.Idle)
     override val lifecycle: StateFlow<PeerLifecycle> = _lifecycle.asStateFlow()
 
+    private val _iceState = MutableStateFlow("NEW")
+    override val iceState: StateFlow<String> = _iceState.asStateFlow()
+
     private val _ice = MutableSharedFlow<IceCandidate>()
     override val localIceCandidates: SharedFlow<IceCandidate> = _ice.asSharedFlow()
 
@@ -110,6 +133,9 @@ class StubPeerConnectionController @Inject constructor() : PeerConnectionControl
     override suspend fun createAnswer(): PeerResult<SdpDescription> = PeerResult.NotConfigured
     override suspend fun setRemoteDescription(sdp: SdpDescription): PeerResult<Unit> = PeerResult.NotConfigured
     override suspend fun addIceCandidate(candidate: IceCandidate): PeerResult<Unit> = PeerResult.NotConfigured
+
+    override suspend fun restartIce(): PeerResult<SdpDescription?> = PeerResult.NotConfigured
+    override fun setConfiguration(iceServers: List<IceServer>) { /* no peer in the stub */ }
 
     override fun close() {
         _lifecycle.value = PeerLifecycle.Closed

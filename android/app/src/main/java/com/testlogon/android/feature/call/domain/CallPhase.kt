@@ -54,6 +54,12 @@ data class CallSessionState(
     val peerName: String? = null,
     val elapsedSeconds: Long = 0,
     val warnLowBalance: Boolean = false,
+    /**
+     * FE-143 — coarse WebRTC connection status derived from the peer ICE connection state
+     * ([CallConnectionMath.mapConnectionStatus]). Null until the peer starts negotiating; the UI renders a
+     * Connecting / Connected / Reconnecting / Connection-failed badge from it.
+     */
+    val connectionStatus: CallConnectionStatus? = null,
     val minutesRemaining: Double? = null,
     /**
      * AND-296/297 — set true when the FLAGGED WebRTC media stubs returned NotConfigured, so the UI can
