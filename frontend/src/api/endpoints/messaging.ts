@@ -1047,6 +1047,52 @@ export async function sendLocationCard(
   );
 }
 
+// ---- Live location (EPIC D: FE-131 <- BE-131) --------------------------------
+//
+// The moving-pin relay REQUIRES BE-131. There is no degrade-on-404 fabrication
+// of a live share: if the start endpoint is absent the action must fail clearly
+// (the caller surfaces a toast) and the chat falls back to the FE-130 static
+// pin. `startLiveLocation` creates the `live_location` message server-side;
+// `updateLiveLocation` pushes each new fix; `stopLiveLocation` ends the share.
+
+export interface StartLiveLocationResp {
+  share_id: string;
+  started_at: number;
+  expires_at: number;
+  message?: Message;
+}
+
+/**
+ * Begin a live-location share for `durationSec`. Throws on any error (including
+ * a 404 when BE-131 is not deployed) so the composer can degrade with a clear
+ * toast -- we never fabricate a share that cannot actually relay position.
+ */
+export async function startLiveLocation(
+  conversationId: string,
+  durationSec: number,
+  initial?: { lat: number; lng: number },
+): Promise<StartLiveLocationResp> {
+  const res = await api.post<StartLiveLocationResp>(
+    `/messaging/conversations/${conversationId}/live-location/start`,
+    { duration_sec: durationSec, ...(initial ? { lat: initial.lat, lng: initial.lng } : {}) },
+  );
+  return res;
+}
+
+/** Push a new position for an active share. Best-effort per tick. */
+export async function updateLiveLocation(
+  shareId: string,
+  lat: number,
+  lng: number,
+): Promise<void> {
+  await api.post<unknown>(`/messaging/live-location/${shareId}/update`, { lat, lng });
+}
+
+/** End a share early (manual "Stop sharing" or on unmount). */
+export async function stopLiveLocation(shareId: string): Promise<void> {
+  await api.post<unknown>(`/messaging/live-location/${shareId}/stop`, {});
+}
+
 export async function sendGifMessage(
   conversationId: string,
   params: {

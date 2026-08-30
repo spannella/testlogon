@@ -63,6 +63,7 @@ import { CryptoTransferCard } from "./CryptoTransferCard";
 import { ProductCard } from "./ProductCard";
 import { OrderShareCard } from "./OrderShareCard";
 import { LocationCard } from "./LocationCard";
+import { LiveLocationCard } from "./LiveLocationCard";
 import { orderCardPreview, productCardPreview, type OrderCardPayload, type ProductCardPayload } from "@/lib/ecomCards";
 import { locationPreview, type LocationCardPayload } from "@/lib/locationCards";
 import type { PositionCardPayload } from "@/lib/tradingCards";
@@ -115,6 +116,10 @@ interface MessageBubbleProps {
   onViewOnce?: (messageId: string) => void;
   /** Resolve a sender id (sub/email) to a friendly display name. */
   resolveSenderName?: (id: string) => string;
+  /** FE-131: stop the sharers own live-location share (from the card). */
+  onStopLiveLocation?: () => void;
+  /** FE-131: true while the stop request is in flight. */
+  liveLocationStopping?: boolean;
 }
 
 type LotteryRevealPhase = "idle" | "unlocking" | "revealing" | "revealed";
@@ -223,6 +228,7 @@ function replyPreviewText(msg: Message): string {
     return `[Crypto: ${[msg.amount, msg.asset].filter(Boolean).join(" ")}]`;
   if (msg.kind === "location")
     return locationPreview(msg.label ?? undefined, msg.place_name ?? undefined);
+  if (msg.kind === "live_location") return "📍 Live location";
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -448,7 +454,7 @@ function OfflineStatusBadge({ offline, onRetry, onDiscard }: OfflineStatusBadgeP
   return null;
 }
 
-export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, onViewThread, replyToMessage, viewedOnceIds, onViewOnce, resolveSenderName }: MessageBubbleProps) {
+export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, onViewThread, replyToMessage, viewedOnceIds, onViewOnce, resolveSenderName, onStopLiveLocation, liveLocationStopping }: MessageBubbleProps) {
   const senderLabel = (id: string) => resolveSenderName?.(id) ?? id;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -2064,6 +2070,25 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                   label: message.label ?? undefined,
                   place_name: message.place_name ?? undefined,
                 } satisfies LocationCardPayload}
+              />
+            )}
+
+          {message.kind === "live_location" &&
+            message.lat != null &&
+            message.lng != null &&
+            message.expires_at != null && (
+              <LiveLocationCard
+                isOwn={isOwn}
+                stopping={liveLocationStopping}
+                onStop={onStopLiveLocation}
+                payload={{
+                  lat: message.lat,
+                  lng: message.lng,
+                  label: message.label ?? undefined,
+                  place_name: message.place_name ?? undefined,
+                  expires_at: message.expires_at,
+                  stopped_at: message.stopped_at ?? undefined,
+                }}
               />
             )}
 

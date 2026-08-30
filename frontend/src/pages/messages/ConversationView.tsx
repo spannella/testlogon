@@ -39,6 +39,7 @@ import {
   type DirectCallMode,
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
+import { useLiveLocationShare } from "./useLiveLocationShare";
 import { useOfflineStore } from "@/stores/offlineStore";
 import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, SendFindDateTimeReq, CreateLotteryMessageReq } from "@/api/types";
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
@@ -91,6 +92,7 @@ interface ConversationViewProps {
 
 export function ConversationView({ conversation, onBack, onClaimSuccess }: ConversationViewProps) {
   const userId = useAuthStore((s) => s.userId);
+  const liveLocation = useLiveLocationShare();
   const queryClient = useQueryClient();
   const addToQueueWithId = useOfflineStore((s) => s.addToQueueWithId);
   const isOnline = useOfflineStore((s) => s.isOnline);
@@ -1504,6 +1506,12 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
                 viewedOnceIds={viewedOnceIds}
                 onViewOnce={handleViewOnce}
                 resolveSenderName={resolveSenderName}
+                onStopLiveLocation={
+                  msg.kind === "live_location" &&
+                  liveLocation.active?.shareId === (msg.share_id ?? undefined)
+                    ? () => { void liveLocation.stop(); }
+                    : undefined
+                }
               />
             </div>
           ))
@@ -1610,6 +1618,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendProductCard={(payload) => sendProductCard.mutate(payload)}
         onSendOrderCard={(payload) => sendOrderCard.mutate(payload)}
         onSendLocation={(payload) => sendLocation.mutate(payload)}
+        onSendLiveLocation={(durationSec) => { void liveLocation.start(convoId, durationSec); }}
+        liveLocationStarting={liveLocation.starting}
         recipientName={dmPartner?.display_name}
         currentUserName={currentUserName}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}

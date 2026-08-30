@@ -299,6 +299,19 @@ sealed interface MessageMedia {
     data class Location(
         val card: com.testlogon.android.feature.messaging.LocationCardModel.LocationCard,
     ) : MessageMedia
+
+    /**
+     * FE-131 (EPIC D, <- BE-131) - a LIVE (moving-pin) location share. Rides a normal text message
+     * whose body carries an encoded
+     * [com.testlogon.android.feature.messaging.LiveLocationModel] payload behind the TLLIVE1 sentinel;
+     * [MessageDto.toMedia] parses the body into [share]. The renderer shows a static-map thumbnail that
+     * refreshes as lat/lng change, a pulsing LIVE badge + live countdown to expiry, and (for the
+     * sharer) a Stop button. Recipient position refresh depends on BE-131 relaying updates; without it
+     * it degrades to the last-known pin + LIVE badge + countdown + auto-expiry. Never crashes.
+     */
+    data class LiveLocation(
+        val share: com.testlogon.android.feature.messaging.LiveLocationModel.LiveShare,
+    ) : MessageMedia
 }
 
 /** AND-137 — the kind of item a countdown is associated with (display/pass-through only). */
@@ -858,6 +871,10 @@ internal fun MessageDto.toMedia(): MessageMedia = when {
     // sentinel. Parse it FIRST so it renders as a card, not raw text; a non-card body falls through.
     // FE-130 (EPIC D) - a location card rides a normal text message behind the TLLOC1 sentinel. Parse
     // it FIRST so it renders as a map card, not raw text; a non-card body falls through.
+    // FE-131 (EPIC D) - a LIVE location share rides a normal text message behind the TLLIVE1 sentinel.
+    // Parse it FIRST so it renders as a live map card, not raw text; a non-card body falls through.
+    com.testlogon.android.feature.messaging.LiveLocationModel.parse(text) != null ->
+        MessageMedia.LiveLocation(com.testlogon.android.feature.messaging.LiveLocationModel.parse(text)!!)
     com.testlogon.android.feature.messaging.LocationCardModel.parse(text) != null ->
         MessageMedia.Location(com.testlogon.android.feature.messaging.LocationCardModel.parse(text)!!)
         com.testlogon.android.feature.messaging.EcomCardModel.parse(text) is com.testlogon.android.feature.messaging.EcomCardModel.ProductCard ->

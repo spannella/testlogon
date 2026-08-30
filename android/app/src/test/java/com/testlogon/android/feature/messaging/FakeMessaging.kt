@@ -1297,7 +1297,16 @@ fun newThreadViewModel(
         fakeGeocodeRepository(),
         groupRepository,
         muteStore,
+        fakeLiveLocationRepository(),
     )
+
+/** FE-131 (EPIC D) — no-op live-location relay for thread tests (always degrades to local/optimistic). */
+private fun fakeLiveLocationRepository(): com.testlogon.android.data.messaging.livelocation.LiveLocationRepository =
+    object : com.testlogon.android.data.messaging.livelocation.LiveLocationRepository {
+        override suspend fun start(conversationId: String, durationSec: Long): com.testlogon.android.data.messaging.livelocation.StartedLiveShare? = null
+        override suspend fun update(shareId: String, lat: Double, lng: Double): Boolean = false
+        override suspend fun stop(shareId: String): Boolean = false
+    }
 
 /** FE-130 (EPIC D) — no-op reverse-geocode repo for thread tests (always degrades to null). */
 private fun fakeGeocodeRepository(): com.testlogon.android.data.messaging.geocode.GeocodeRepository =

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus, Check, TrendingUp, Activity, Package, ShoppingBag, MapPin } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic, Timer, Smile, Sticker as StickerIcon, Plus, Check, TrendingUp, Activity, Package, ShoppingBag, MapPin, Radio } from "lucide-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { GifPicker } from "@/components/shared/GifPicker";
@@ -31,6 +31,7 @@ import { CryptoSendComposerDialog } from "./CryptoSendComposerDialog";
 import { ProductCardComposerDialog } from "./ProductCardComposerDialog";
 import { OrderShareComposerDialog } from "./OrderShareComposerDialog";
 import { LocationComposerDialog } from "./LocationComposerDialog";
+import { LiveLocationComposerDialog } from "./LiveLocationComposerDialog";
 import type { LocationCardPayload } from "@/lib/locationCards";
 import type { MarketCardPayload, PositionCardPayload } from "@/lib/tradingCards";
 import type { CryptoTransferPayload } from "@/lib/cryptoTransfer";
@@ -82,6 +83,10 @@ interface ComposeBarProps {
   onSendProductCard?: (payload: ProductCardPayload) => void;
   onSendOrderCard?: (payload: OrderCardPayload) => void;
   onSendLocation?: (payload: LocationCardPayload) => void;
+  /** FE-131: start a live-location share for the chosen duration (seconds). */
+  onSendLiveLocation?: (durationSec: number) => void;
+  /** FE-131: true while the live-location start request is in flight. */
+  liveLocationStarting?: boolean;
   /** DM partner display name for the send-crypto composer attribution. */
   recipientName?: string;
   currentUserName?: string;
@@ -124,6 +129,8 @@ export function ComposeBar({
   onSendProductCard,
   onSendOrderCard,
   onSendLocation,
+  onSendLiveLocation,
+  liveLocationStarting,
   recipientName,
   currentUserName,
   onSendLottery,
@@ -249,6 +256,7 @@ export function ComposeBar({
   const [productCardOpen, setProductCardOpen] = React.useState(false);
   const [orderCardOpen, setOrderCardOpen] = React.useState(false);
   const [locationOpen, setLocationOpen] = React.useState(false);
+  const [liveLocationOpen, setLiveLocationOpen] = React.useState(false);
   const [activeDraftId, setActiveDraftId] = React.useState<string | null>(null);
   const [draftDirty, setDraftDirty] = React.useState(false);
   const [lastDraftSavedAt, setLastDraftSavedAt] = React.useState<number | null>(null);
@@ -1682,7 +1690,7 @@ export function ComposeBar({
       <div className="flex items-end gap-2">
         {(onSendVoiceMessage || onSendGallery || onSendLottery || onSendFileShare || onSendVideoShare ||
           onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll || onSendFindDateTime ||
-          onSendCountdown || onSendMarketCard || onSendPositionCard || onSendCryptoTransfer || onSendProductCard || onSendOrderCard || onSendLocation || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
+          onSendCountdown || onSendMarketCard || onSendPositionCard || onSendCryptoTransfer || onSendProductCard || onSendOrderCard || onSendLocation || onSendLiveLocation || draftsEnabled || (onSendTtsVoice && ttsEnabled)) && (
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -1915,6 +1923,13 @@ export function ComposeBar({
                     onClick={() => { setLocationOpen(true); setMoreOpen(false); }} aria-label="Share location"
                     data-testid="compose-share-location">
                     <MapPin className="h-4 w-4" /> Share location
+                  </Button>
+                )}
+                {onSendLiveLocation && (
+                  <Button variant="ghost" className="h-9 justify-start gap-2 px-2"
+                    onClick={() => { setLiveLocationOpen(true); setMoreOpen(false); }} aria-label="Share live location"
+                    data-testid="compose-share-live-location">
+                    <Radio className="h-4 w-4" /> Share live location
                   </Button>
                 )}
                 {draftsEnabled && (
@@ -2298,6 +2313,17 @@ export function ComposeBar({
           onSubmit={(payload) => {
             onSendLocation(payload);
             setLocationOpen(false);
+          }}
+        />
+      )}
+      {onSendLiveLocation && (
+        <LiveLocationComposerDialog
+          open={liveLocationOpen}
+          starting={liveLocationStarting}
+          onClose={() => setLiveLocationOpen(false)}
+          onSubmit={(durationSec) => {
+            onSendLiveLocation(durationSec);
+            setLiveLocationOpen(false);
           }}
         />
       )}
