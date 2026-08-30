@@ -16,6 +16,8 @@ data class ConversationRow(
     /** Epoch SECONDS, formatted relative-to-now at render time. */
     val lastActivityEpochSeconds: Long,
     val unreadCount: Int,
+    /** FE-140 - muted_until epoch SECONDS (0 = not muted); rendered as a bell-off on the row. */
+    val mutedUntil: Long = 0L,
 ) {
     val isUnread: Boolean get() = unreadCount > 0
 }

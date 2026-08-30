@@ -4,6 +4,8 @@ import com.testlogon.android.data.messaging.group.GroupApi
 import com.testlogon.android.data.messaging.group.GroupRepository
 import com.testlogon.android.data.messaging.group.GroupRepositoryImpl
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskApi
+import com.testlogon.android.data.messaging.mute.ConversationMuteStore
+import com.testlogon.android.data.messaging.mute.DataStoreConversationMuteStore
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskRepository
 import com.testlogon.android.data.messaging.helpdesk.HelpdeskRepositoryImpl
 import com.testlogon.android.data.messaging.mass.MassMessageApi
@@ -97,4 +99,11 @@ abstract class MessagingDataModule {
     @Binds
     @Singleton
     abstract fun bindBillingAuthorizer(impl: RealBillingAuthorizer): BillingAuthorizer
+
+    /** FE-140 — binds the per-conversation mute mirror (DataStore-backed muted_until map). */
+    @Binds
+    @Singleton
+    abstract fun bindConversationMuteStore(
+        impl: DataStoreConversationMuteStore,
+    ): ConversationMuteStore
 }

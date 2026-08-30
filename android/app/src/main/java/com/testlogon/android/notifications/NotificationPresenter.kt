@@ -86,6 +86,7 @@ class NotificationDisplaySink @Inject constructor(
     private val parser: PushPayloadParser,
     private val presenter: NotificationPresenter,
     private val callPushHandler: com.testlogon.android.feature.call.incoming.CallPushHandler,
+    private val muteStore: com.testlogon.android.data.messaging.mute.ConversationMuteStore,
 ) : com.testlogon.android.push.PushMessageSink {
 
     override fun onMessage(message: com.testlogon.android.push.PushMessage) {
@@ -97,6 +98,22 @@ class NotificationDisplaySink @Inject constructor(
             com.testlogon.android.push.PushLog.d("notif dropped reason=invalid_payload")
             return
         }
+
+        // FE-140 - client-side per-conversation mute respect. For a MESSAGE notification, entityId is
+        // the conversation id: if the user muted that conversation (muted_until in the future per the
+        // locally-mirrored ConversationMuteStore) skip posting. Fails OPEN when state is unknown
+        // (mutedUntil defaults to 0 -> not muted -> post as today). Non-message + call kinds unaffected.
+        if (payload.kind == NotificationKind.MESSAGE) {
+            val nowSec = System.currentTimeMillis() / 1000L
+            val mutedUntil = kotlinx.coroutines.runBlocking { muteStore.mutedUntil(payload.entityId) }
+            if (com.testlogon.android.feature.messaging.mute.MuteMath.isMuted(mutedUntil, nowSec)) {
+                com.testlogon.android.push.PushLog.d(
+                    "notif dropped reason=conversation_muted entityId=" + payload.entityId,
+                )
+                return
+            }
+        }
+
         presenter.show(payload)
     }
 }

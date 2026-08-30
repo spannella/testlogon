@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video, Upload } from "lucide-react";
+import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video, Upload, Bell, BellOff } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ import {
   createLotteryMessage,
   sendVoiceMessage,
   markRead,
+  muteConversation,
   claimHelpdeskConversation,
   transferHelpdeskConversation,
   listHelpdeskGroupAgents,
@@ -71,8 +72,13 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import { GroupCallButton } from "./GroupCallOverlay";
+import { MUTE_OPTIONS, computeMutedUntil, isMuted as isConversationMuted, mutedLabel } from "@/lib/conversationMute";
 
 interface ConversationViewProps {
   conversation: Conversation;
@@ -343,6 +349,23 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [convoId, queryClient]);
+
+  // ── Per-conversation mute (FE-140) ─────────────────────────────
+  const nowSec = Math.floor(Date.now() / 1000);
+  const conversationMuted = isConversationMuted(conversation.muted_until, nowSec);
+  const mutedText = mutedLabel(conversation.muted_until, nowSec);
+
+  const muteMutation = useMutation({
+    mutationFn: (mutedUntil: number) => muteConversation(convoId, mutedUntil),
+    onSuccess: (_data, mutedUntil) => {
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      void queryClient.invalidateQueries({ queryKey: ["conversation", convoId] });
+      toast.success(mutedUntil > 0 ? "Conversation muted" : "Conversation unmuted");
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to update mute setting");
+    },
+  });
 
   // ── Send mutations ─────────────────────────────────────────────
 
@@ -1225,6 +1248,12 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
               {participantCount} participant{participantCount !== 1 && "s"}
             </p>
           )}
+          {conversationMuted && (
+            <p className="flex items-center gap-1 text-xs text-muted-foreground" aria-label={mutedText}>
+              <BellOff className="h-3 w-3" />
+              {mutedText}
+            </p>
+          )}
         </div>
         {galleryEnabled && (
           <Button
@@ -1294,6 +1323,38 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
               <EyeOff className="mr-2 h-4 w-4" />
               Hidden messages
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {conversationMuted ? (
+              <DropdownMenuItem
+                onClick={() => muteMutation.mutate(0)}
+                disabled={muteMutation.isPending}
+              >
+                <Bell className="mr-2 h-4 w-4" />
+                Unmute
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <BellOff className="mr-2 h-4 w-4" />
+                  Mute notifications
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  {MUTE_OPTIONS.map((opt) => (
+                    <DropdownMenuItem
+                      key={opt.id}
+                      onClick={() =>
+                        muteMutation.mutate(
+                          computeMutedUntil(opt.id, Math.floor(Date.now() / 1000)),
+                        )
+                      }
+                      disabled={muteMutation.isPending}
+                    >
+                      {opt.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
             {callRecordingEnabled && (
               <DropdownMenuItem onClick={() => setRecordingsOpen(true)}>
                 <Video className="mr-2 h-4 w-4" />

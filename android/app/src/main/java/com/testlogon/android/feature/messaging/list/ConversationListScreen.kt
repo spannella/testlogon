@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Contacts
@@ -63,6 +64,7 @@ object ConversationListTestTags {
     const val LIST = "conv_list"
     const val ROW = "conv_row"
     const val UNREAD_BADGE = "conv_unread_badge"
+    const val MUTE_BADGE = "conv_mute_badge"
     const val STALE_BANNER = "conv_stale_banner"
 
     /** AND-152 — global message-search entry icon. */
@@ -245,7 +247,12 @@ internal fun ConversationRowItem(row: ConversationRow, onClick: () -> Unit) {
     }
     val previewText = row.preview ?: stringResource(R.string.conv_list_no_messages)
     val unreadLabel = if (row.isUnread) "${row.unreadCount} unread, " else ""
-    val cd = "${row.title}, $unreadLabel$relative, $previewText"
+    // FE-140 - muted indicator (bell-off). Display-only now-read is fine for an indicator.
+    val muted = com.testlogon.android.feature.messaging.mute.MuteMath.isMuted(
+        row.mutedUntil, System.currentTimeMillis() / 1000L,
+    )
+    val mutedLabel = if (muted) "muted, " else ""
+    val cd = "${row.title}, $unreadLabel${mutedLabel}$relative, $previewText"
 
     Row(
         modifier = Modifier
@@ -297,6 +304,16 @@ internal fun ConversationRowItem(row: ConversationRow, onClick: () -> Unit) {
                     text = relative,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (muted) {
+                Icon(
+                    imageVector = Icons.Filled.NotificationsOff,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .testTag(ConversationListTestTags.MUTE_BADGE),
                 )
             }
             if (row.isUnread) {

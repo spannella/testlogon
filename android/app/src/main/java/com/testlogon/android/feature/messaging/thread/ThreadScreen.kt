@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -188,6 +190,9 @@ object ThreadTestTags {
 
     /** AND-158/159 — open group details/settings. */
     const val OPEN_GROUP_DETAILS = "thread_open_group_details"
+    // FE-140 - mute controls.
+    const val MUTE_MENU_ITEM = "thread_mute_menu_item"
+    const val MUTE_BADGE = "thread_mute_badge"
 
     /** #19 — the single "+" that opens the conversation-actions dropdown menu. */
     const val TOPBAR_MENU = "thread_topbar_menu"
@@ -355,6 +360,8 @@ fun ThreadRoute(
         onViewContact = onViewContact,
         onOpenSymbol = onOpenSymbol,
         onOpenGroupDetails = onOpenGroupDetails,
+        onMute = viewModel::onMute,
+        onUnmute = viewModel::onUnmute,
         onRetry = viewModel::retry,
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::onSend,
@@ -995,6 +1002,9 @@ fun ThreadScreen(
     onBack: () -> Unit,
     // AND-158/159 — open the group details/settings surface from the thread top bar.
     onOpenGroupDetails: () -> Unit = {},
+    // FE-140 — per-conversation mute: onMute(optionId) / onUnmute, wired to the mute repo call.
+    onMute: (String) -> Unit = {},
+    onUnmute: () -> Unit = {},
     onRetry: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -1123,6 +1133,9 @@ fun ThreadScreen(
     var actionTarget by remember { mutableStateOf<ThreadMessageUi?>(null) }
     // #25/#27 — the gallery VIDEO item currently open in the full-screen player (null = closed).
     var galleryVideoUrl by remember { mutableStateOf<String?>(null) }
+    // FE-140 - per-conversation mute options bottom sheet.
+    var showMuteSheet by remember { mutableStateOf(false) }
+    val isConversationMuted = com.testlogon.android.feature.messaging.mute.MuteMath.isMuted(state.mutedUntil, nowSeconds)
     // #3 KEYBOARD DISMISS — clear the composer's focus + hide the IME without leaving the thread.
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -1152,6 +1165,37 @@ fun ThreadScreen(
             onConfirm = blockVm::onBlockConfirmed,
             onDismiss = blockVm::onBlockDismissed,
         )
+    }
+    // FE-140 - mute-duration chooser. Picks an option, computes muted_until locally, and hands the
+    // option id to onMute (the VM does the repo call + optimistic store write).
+    if (showMuteSheet) {
+        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showMuteSheet = false }) {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp),
+            ) {
+                Text(
+                    text = "Mute notifications",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                )
+                com.testlogon.android.feature.messaging.mute.MuteMath.muteOptions().forEach { opt ->
+                    Text(
+                        text = com.testlogon.android.feature.messaging.mute.MuteMath.formatMuteOption(opt),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showMuteSheet = false
+                                onMute(opt)
+                            }
+                            .padding(horizontal = 24.dp, vertical = 16.dp)
+                            .testTag("thread_mute_option_" + opt),
+                    )
+                }
+            }
+        }
     }
     Scaffold(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
@@ -1194,6 +1238,18 @@ fun ThreadScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        // FE-140 - a bell-off badge next to the title when this
+                        // conversation is muted (reads state.mutedUntil vs nowSeconds).
+                        if (isConversationMuted) {
+                            Icon(
+                                imageVector = Icons.Filled.NotificationsOff,
+                                contentDescription = "Muted",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .testTag(ThreadTestTags.MUTE_BADGE),
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -1281,6 +1337,33 @@ fun ThreadScreen(
                             leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
                             onClick = { menuOpen = false; onOpenGroupDetails() },
                             modifier = Modifier.testTag(ThreadTestTags.OPEN_GROUP_DETAILS),
+                        )
+                        // FE-140 - per-conversation mute / unmute.
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (isConversationMuted) {
+                                        val lbl = com.testlogon.android.feature.messaging.mute.MuteMath
+                                            .mutedLabel(state.mutedUntil, nowSeconds)
+                                        if (lbl.isNotEmpty()) "Unmute (" + lbl + ")" else "Unmute"
+                                    } else {
+                                        "Mute notifications"
+                                    },
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    if (isConversationMuted) Icons.Filled.Notifications
+                                    else Icons.Filled.NotificationsOff,
+                                    contentDescription = null,
+                                )
+                            },
+                            enabled = !state.muteActionInFlight,
+                            onClick = {
+                                menuOpen = false
+                                if (isConversationMuted) onUnmute() else showMuteSheet = true
+                            },
+                            modifier = Modifier.testTag(ThreadTestTags.MUTE_MENU_ITEM),
                         )
                         // AND-140 — pinned messages.
                         androidx.compose.material3.DropdownMenuItem(

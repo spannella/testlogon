@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Plus, MessageSquare, Users } from "lucide-react";
+import { Search, Plus, MessageSquare, Users, BellOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -23,6 +23,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { transferPreview } from "@/lib/cryptoTransfer";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { StalenessIndicator } from "@/components/shared/StalenessIndicator";
+import { isMuted } from "@/lib/conversationMute";
 
 interface ConversationListProps {
   activeId?: string;
@@ -204,6 +205,12 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                       >
                         {name}
                       </span>
+                      {isMuted(convo.muted_until, Math.floor(Date.now() / 1000)) && (
+                        <BellOff
+                          className="h-3 w-3 shrink-0 text-muted-foreground"
+                          aria-label="Muted"
+                        />
+                      )}
                       {lastMsg && (
                         <span className="shrink-0 text-[10px] text-muted-foreground">
                           {formatTimestamp(lastMsg.created_at)}

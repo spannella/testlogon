@@ -924,6 +924,7 @@ class MessagingRepositoryImpl @Inject constructor(
     private val storageClient: com.testlogon.android.data.upload.StorageUploadClient,
     private val attachmentDownloader: AttachmentDownloader,
     private val moshi: com.squareup.moshi.Moshi,
+    private val muteStore: com.testlogon.android.data.messaging.mute.ConversationMuteStore,
 ) : MessagingRepository {
 
     private val io: CoroutineDispatcher = Dispatchers.IO
@@ -937,6 +938,9 @@ class MessagingRepositoryImpl @Inject constructor(
                 is ApiResult.Success -> {
                     val domain = result.data.map(ConversationDto::toDomain).sortedNewestFirst()
                     conversationDao.upsertAll(domain.map(Conversation::toEntity))
+                    // FE-140 — mirror each conversation's authoritative muted_until so the
+                    // notification path + list/thread mute indicators have a durable local source.
+                    muteStore.syncFromList(result.data.map { it.conversationId to it.mutedUntil })
                     ApiResult.Success(domain)
                 }
                 is ApiResult.Failure -> result
