@@ -58,6 +58,18 @@ class CallManager @Inject constructor(
     private var ringTimeoutJob: Job? = null
     private var heartbeatJob: Job? = null
 
+    init {
+        // FE-143 - mirror the peer ICE connection state into the call snapshot so the call UI can render a
+        // connection-state badge. App-scoped: one shared peer / one active call, so a single collector is
+        // sufficient; it projects the raw ICE state name via the pure CallConnectionMath mapping.
+        scope.launch {
+            peer.iceState.collect { iceName ->
+                if (_state.value.call == null) return@collect
+                _state.update { it.copy(connectionStatus = CallConnectionMath.mapConnectionStatus(iceName)) }
+            }
+        }
+    }
+
     /** True while a call occupies the manager (single-active-call invariant, AND-296 FR-10). */
     fun isBusy(): Boolean = _state.value.phase != CallPhase.Idle && !_state.value.phase.isTerminal
 
@@ -181,7 +193,7 @@ class CallManager @Inject constructor(
         }
         android.util.Log.d("TLHUB", "onConnected: phase->Connected call=${active.callId}")
         ringTimeoutJob?.cancel()
-        _state.update { it.copy(phase = CallPhase.Connected(clock.now())) }
+        _state.update { it.copy(phase = CallPhase.Connected(clock.now()), connectionStatus = CallConnectionStatus.CONNECTED) }
         startHeartbeat(active)
     }
 

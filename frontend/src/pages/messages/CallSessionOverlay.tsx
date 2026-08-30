@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import type { DirectCallMode } from "@/api/endpoints/messaging";
 import { useConnectionQuality, type ConnectionQuality } from "@/hooks/useConnectionQuality";
 import { CallBillingOverlay } from "@/components/calls/CallBillingOverlay";
+import { mapConnectionStatus, connectionBadge, type ConnectionBadgeTone } from "@/lib/callConnection";
 
 export type CallUiState =
   | "idle"
@@ -48,6 +49,8 @@ interface Props {
   localStream?: MediaStream | null;
   remoteStream?: MediaStream | null;
   peerConnection?: RTCPeerConnection | null;
+  connectionState?: RTCPeerConnectionState | null;
+  iceConnectionState?: RTCIceConnectionState | null;
   isMuted?: boolean;
   isCameraOff?: boolean;
   onAccept: () => void;
@@ -293,6 +296,49 @@ function ConnectionQualityIndicator({
   );
 }
 
+// ─── Connection-state badge (FE-143) ───────────────────────────────────────
+
+const badgeToneClass: Record<ConnectionBadgeTone, string> = {
+  neutral: "bg-muted text-muted-foreground",
+  info: "bg-blue-500/15 text-blue-600 dark:text-blue-300",
+  success: "bg-green-500/15 text-green-600 dark:text-green-300",
+  warning: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300",
+  danger: "bg-red-500/15 text-red-600 dark:text-red-300",
+};
+
+/**
+ * Renders the granular WebRTC connection state (from mapConnectionStatus) as a
+ * small pill next to the coarse phase text. Hidden until at least one of the
+ * RTC state enums is known.
+ */
+function ConnectionStateBadge({
+  connectionState,
+  iceConnectionState,
+  className,
+}: {
+  connectionState?: RTCPeerConnectionState | null;
+  iceConnectionState?: RTCIceConnectionState | null;
+  className?: string;
+}) {
+  if (connectionState == null && iceConnectionState == null) return null;
+  const { status } = mapConnectionStatus(connectionState, iceConnectionState);
+  const badge = connectionBadge(status);
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+        badgeToneClass[badge.tone],
+        className,
+      )}
+      data-testid="connection-state-badge"
+      data-connection-status={status}
+      aria-label={`Connection: ${badge.label}`}
+    >
+      {badge.label}
+    </span>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────
 
 /** Detect if a failure is permission-related based on the reason message. */
@@ -310,6 +356,8 @@ export function CallSessionOverlay({
   localStream,
   remoteStream,
   peerConnection,
+  connectionState,
+  iceConnectionState,
   isMuted,
   isCameraOff,
   onAccept,
@@ -449,6 +497,10 @@ export function CallSessionOverlay({
               />
               <span className="text-sm font-medium">{session.peerName}</span>
               <CallTimer running />
+              <ConnectionStateBadge
+                connectionState={connectionState}
+                iceConnectionState={iceConnectionState}
+              />
             </div>
           </div>
 
@@ -569,7 +621,10 @@ export function CallSessionOverlay({
                   rtt={connectionQuality.rtt}
                   packetLoss={connectionQuality.packetLoss}
                 />
-                <span className="text-xs text-muted-foreground">Connected</span>
+                <ConnectionStateBadge
+                  connectionState={connectionState}
+                  iceConnectionState={iceConnectionState}
+                />
                 <CallTimer running />
               </div>
             </div>
@@ -659,6 +714,14 @@ export function CallSessionOverlay({
             {!isPermissionDenied && session.state === "outgoing_connecting" && `Connecting to ${session.peerName}…`}
             {!isPermissionDenied && session.state === "reconnecting" && `Reconnecting to ${session.peerName}…`}
             {!isPermissionDenied && isOutcome && (session.reasonMessage ?? outcomeCopy[session.state as keyof typeof outcomeCopy])}
+            {!isPermissionDenied && (session.state === "outgoing_connecting" || session.state === "reconnecting") && (
+              <span className="ml-2 align-middle">
+                <ConnectionStateBadge
+                  connectionState={connectionState}
+                  iceConnectionState={iceConnectionState}
+                />
+              </span>
+            )}
           </DialogDescription>
         </DialogHeader>
 

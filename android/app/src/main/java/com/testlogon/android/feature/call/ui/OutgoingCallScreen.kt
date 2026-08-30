@@ -111,6 +111,17 @@ fun OutgoingCallScreen(
                 .testTag("outgoing_call_phase")
                 .semantics { liveRegion = LiveRegionMode.Polite },
         )
+        connectionBadge(state)?.let { badge ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = badge,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .testTag("outgoing_call_connection")
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
         if (state.mediaUnavailable) {
             Spacer(Modifier.height(8.dp))
             Text(
@@ -185,4 +196,22 @@ internal fun formatDuration(totalSeconds: Long): String {
     val minutes = s / 60
     val seconds = s % 60
     return "%02d:%02d".format(minutes, seconds)
+}
+
+/**
+ * FE-143 - connection-state badge copy for the call screen. Rendered alongside the phase label so a user on
+ * a flaky NAT sees Connecting / Connected / Reconnecting / Connection failed as the ICE state changes.
+ * Only shown once the WebRTC connection status is known (i.e. negotiation has started).
+ */
+@Composable
+private fun connectionBadge(state: CallUiState): String? = when (state.connectionStatus) {
+    com.testlogon.android.feature.call.domain.CallConnectionStatus.CONNECTING ->
+        stringResource(R.string.call_conn_connecting)
+    com.testlogon.android.feature.call.domain.CallConnectionStatus.CONNECTED ->
+        stringResource(R.string.call_conn_connected)
+    com.testlogon.android.feature.call.domain.CallConnectionStatus.RECONNECTING ->
+        stringResource(R.string.call_conn_reconnecting)
+    com.testlogon.android.feature.call.domain.CallConnectionStatus.FAILED ->
+        stringResource(R.string.call_conn_failed)
+    com.testlogon.android.feature.call.domain.CallConnectionStatus.CLOSED, null -> null
 }

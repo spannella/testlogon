@@ -16,6 +16,11 @@ import type { CallUiState } from "@/pages/messages/CallSessionOverlay";
 import type { DirectCallMode, SignalingPayload } from "@/api/endpoints/messaging";
 import { fetchTurnCredentials, sendSignalingEvent } from "@/api/endpoints/messaging";
 import { acquireLocalMedia, createIceCandidateBuffer, generateNonce, generateEventId } from "@/lib/webrtc";
+import {
+  shouldIceRestart,
+  shouldRefreshTurn,
+  TURN_REFRESH_LEAD_SEC,
+} from "@/lib/callConnection";
 
 /** Grace period (ms) before escalating ICE "disconnected" to CONNECTION_LOST. */
 const ICE_DISCONNECT_GRACE_MS = 3000;
@@ -40,6 +45,7 @@ export interface UseRtcPeerConnectionReturn {
   remoteStream: MediaStream | null;
   resources: CallRuntimeResources | null;
   connectionState: RTCPeerConnectionState | null;
+  iceConnectionState: RTCIceConnectionState | null;
   performIceRestart: () => Promise<void>;
 }
 
@@ -85,6 +91,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
   const [localStream, setLocalStream] = React.useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = React.useState<MediaStream | null>(null);
   const [connectionState, setConnectionState] = React.useState<RTCPeerConnectionState | null>(null);
+  const [iceConnectionState, setIceConnectionState] = React.useState<RTCIceConnectionState | null>(null);
   const [resources, setResources] = React.useState<CallRuntimeResources | null>(null);
 
   // Stable refs for callbacks to avoid re-triggering the effect
@@ -99,6 +106,10 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
   const setupCallIdRef = React.useRef<string | null>(null);
   const pcRef = React.useRef<RTCPeerConnection | null>(null);
   const iceDisconnectTimerRef = React.useRef<number | null>(null);
+  // TURN credential expiry (epoch seconds) for proactive refresh on long calls.
+  const turnExpiresAtRef = React.useRef<number | null>(null);
+  // Guards against overlapping ICE restarts (failed + disconnected can both fire).
+  const iceRestartInProgressRef = React.useRef<boolean>(false);
 
   const activate = enabled && !!callId && shouldActivate(phase, role);
 
@@ -125,6 +136,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
           username: s.username,
           credential: s.credential,
         }));
+        turnExpiresAtRef.current = turnResp.expires_at ?? null;
       } catch {
         // TURN fetch may fail (feature disabled, etc.) — continue with empty ICE servers
         // (will use STUN/host candidates only, or fail gracefully)
@@ -215,6 +227,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
       //    their own within this window.
       pc.oniceconnectionstatechange = () => {
         const state = pc.iceConnectionState;
+        setIceConnectionState(state);
 
         if (state === "disconnected") {
           // Start grace period
@@ -226,6 +239,10 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
             // Re-check — might have recovered during grace period
             if (pc.iceConnectionState === "disconnected") {
               onConnectionLostRef.current?.("ICE connection interrupted.");
+              // FE-143: past grace on a persistent disconnect — restart ICE.
+              if (shouldIceRestart("disconnected", true)) {
+                void maybeIceRestartRef.current?.();
+              }
             }
           }, ICE_DISCONNECT_GRACE_MS);
         } else if (state === "failed") {
@@ -235,6 +252,10 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
             iceDisconnectTimerRef.current = null;
           }
           onConnectionLostRef.current?.("ICE connection failed.");
+          // FE-143: attempt an ICE restart (refreshes TURN relays first).
+          if (shouldIceRestart(state)) {
+            void maybeIceRestartRef.current?.();
+          }
         } else if (state === "connected" || state === "completed") {
           // Connection recovered — cancel any pending grace timer and notify success
           if (iceDisconnectTimerRef.current != null) {
@@ -428,6 +449,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
       if (iceServers.length > 0) {
         pc.setConfiguration({ iceServers });
       }
+      turnExpiresAtRef.current = turnResp.expires_at ?? turnExpiresAtRef.current;
     } catch {
       // TURN refresh failed — continue with existing credentials
     }
@@ -455,6 +477,66 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
     }
   }, [callId, conversationId, peerId]);
 
+  // FE-143: overlap-guarded ICE restart. Multiple ICE state transitions
+  // (disconnected-past-grace, then failed) can each request a restart; the
+  // guard ensures only one renegotiation is in flight at a time.
+  const maybeIceRestart = React.useCallback(async () => {
+    if (iceRestartInProgressRef.current) return;
+    const pc = pcRef.current;
+    if (!pc || pc.connectionState === "closed") return;
+    iceRestartInProgressRef.current = true;
+    try {
+      await performIceRestart();
+    } finally {
+      iceRestartInProgressRef.current = false;
+    }
+  }, [performIceRestart]);
+
+  // Ref so the (stable) PC event handlers set up in the setup effect can reach
+  // the latest maybeIceRestart without re-running setup.
+  const maybeIceRestartRef = React.useRef(maybeIceRestart);
+  maybeIceRestartRef.current = maybeIceRestart;
+
+  // FE-143: refresh TURN credentials before the allocation TTL expires so calls
+  // that outlive the TTL keep valid relays. Re-uses fetchTurnCredentials and
+  // pushes the new ice_servers into the live PC via setConfiguration. Degrades
+  // gracefully (no-op) when TURN is disabled / returns no servers.
+  const refreshTurnCredentials = React.useCallback(async () => {
+    const pc = pcRef.current;
+    if (!pc || pc.connectionState === "closed" || !callId) return;
+    try {
+      const turnResp = await fetchTurnCredentials(callId);
+      const iceServers: RTCIceServer[] = turnResp.ice_servers.map((s) => ({
+        urls: s.urls,
+        username: s.username,
+        credential: s.credential,
+      }));
+      if (iceServers.length > 0) {
+        pc.setConfiguration({ iceServers });
+      }
+      turnExpiresAtRef.current = turnResp.expires_at ?? turnExpiresAtRef.current;
+    } catch {
+      // TURN refresh failed (feature disabled, transient error) — keep going on
+      // existing credentials / STUN. Never crash the call over a refresh miss.
+    }
+  }, [callId]);
+
+  // Periodic TTL check while connected. A single interval polls a pure
+  // predicate (shouldRefreshTurn) against the tracked expiry; the timer is torn
+  // down when the hook deactivates (see deps) so there are no leaks.
+  React.useEffect(() => {
+    if (!activate || !callId) return;
+    const intervalId = window.setInterval(() => {
+      const expiresAt = turnExpiresAtRef.current;
+      if (expiresAt == null) return; // STUN-only / TURN disabled — nothing to refresh
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (shouldRefreshTurn(expiresAt, nowSec, TURN_REFRESH_LEAD_SEC)) {
+        void refreshTurnCredentials();
+      }
+    }, 15000);
+    return () => window.clearInterval(intervalId);
+  }, [activate, callId, refreshTurnCredentials]);
+
   // Trigger ICE restart when state machine moves to outgoing_connecting after
   // a reconnect attempt (retryCount > 0).
   React.useEffect(() => {
@@ -480,8 +562,11 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
         setLocalStream(null);
         setRemoteStream(null);
         setConnectionState(null);
+        setIceConnectionState(null);
         setupCallIdRef.current = null;
         pcRef.current = null;
+        turnExpiresAtRef.current = null;
+        iceRestartInProgressRef.current = false;
       }
       // Clear any pending ICE disconnect timer
       if (iceDisconnectTimerRef.current != null) {
@@ -513,6 +598,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
     remoteStream,
     resources,
     connectionState,
+    iceConnectionState,
     performIceRestart,
   };
 }

@@ -32,6 +32,8 @@ data class CallUiState(
     val elapsedSeconds: Long,
     val mediaUnavailable: Boolean,
     val canRetry: Boolean,
+    // FE-143 - WebRTC connection status for the connection-state badge (null until negotiation starts).
+    val connectionStatus: com.testlogon.android.feature.call.domain.CallConnectionStatus? = null,
 )
 
 /** Coarse UI phase derived from the domain [CallPhase]. */
@@ -181,6 +183,7 @@ class OutgoingCallViewModel @Inject constructor(
         elapsedSeconds = elapsedSeconds,
         mediaUnavailable = mediaUnavailable,
         canRetry = phase is CallPhase.Failed,
+        connectionStatus = connectionStatus,
     )
 
     private fun CallPhase.toUiPhase(): CallUiPhase = when (this) {

@@ -16,6 +16,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import com.testlogon.android.feature.call.domain.CallConnectionMath
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -41,6 +45,8 @@ class CallSignalingHub @Inject constructor(
     private val callManager: CallManager,
     private val peer: PeerConnectionController,
     private val iceServers: IceServersProvider,
+    private val iceServersRepository: IceServersRepository,
+    private val clock: com.testlogon.android.core.data.cache.Clock,
     private val signalingApi: SignalingApi,
     private val scope: CoroutineScope,
 ) {
@@ -55,6 +61,9 @@ class CallSignalingHub @Inject constructor(
     private var started = false
     private var negotiationJob: Job? = null
     private var negotiatingCallId: String? = null
+
+    // FE-143 - how often the TURN-refresh ticker re-checks the credential TTL on a live call.
+    private val TURN_REFRESH_POLL_MS = 15_000L
 
     @Synchronized
     fun start() {
@@ -177,6 +186,67 @@ class CallSignalingHub @Inject constructor(
             peer.lifecycle.collect { lc ->
                 Log.d("TLHUB", "negotiate lifecycle=$lc call=${call.callId}")
                 if (lc is PeerLifecycle.Connected) callManager.onConnected()
+            }
+        }
+
+        // FE-143 - ICE restart on reconnect. Watch the raw ICE connection state; when it FAILS (or sits
+        // DISCONNECTED past the grace) re-fetch fresh TURN creds (forceRefresh), apply them to the live
+        // peer, and drive an ICE restart. The offerer forwards a fresh iceRestart offer; the answerer will
+        // answer the peer's restart offer through the existing inbound handler. A mutex guards overlapping
+        // restarts so a burst of FAILED/DISCONNECTED callbacks cannot fire concurrent restarts.
+        val restartMutex = Mutex()
+        launch {
+            var disconnectedSinceMs = 0L
+            peer.iceState.collect { iceName ->
+                val upper = iceName.trim().uppercase()
+                val nowMs = clock.now()
+                if (upper == "DISCONNECTED") {
+                    if (disconnectedSinceMs == 0L) disconnectedSinceMs = nowMs
+                } else {
+                    disconnectedSinceMs = 0L
+                }
+                val disconnectedForSec =
+                    if (disconnectedSinceMs == 0L) Long.MAX_VALUE else (nowMs - disconnectedSinceMs) / 1_000L
+                if (call.role == PeerRole.OFFERER &&
+                    CallConnectionMath.shouldIceRestart(iceName, disconnectedForSec) &&
+                    !restartMutex.isLocked
+                ) {
+                    restartMutex.withLock {
+                        Log.d("TLHUB", "ICE restart trigger iceState=$iceName call=${call.callId}")
+                        val fresh = iceServersRepository.getIceServers(call.callId, forceRefresh = true)
+                        if (fresh is com.testlogon.android.core.model.ApiResult.Success) {
+                            peer.setConfiguration(fresh.data.servers)
+                        }
+                        when (val restart = peer.restartIce()) {
+                            is PeerResult.Ok -> restart.value?.let {
+                                send(call, "webrtc.offer", mapOf("sdp" to it.sdp, "sdp_type" to "offer"))
+                            }
+                            else -> Log.d("TLHUB", "ICE restart returned $restart")
+                        }
+                    }
+                }
+            }
+        }
+
+        // FE-143 - refresh TURN creds before the TTL expires on a long call, so relays stay valid past the
+        // granted TTL. Polls the repository (cached / stale-while-revalidate) and, once inside the refresh
+        // lead window, force-refreshes and applies the new servers to the live peer with setConfiguration.
+        // This job is a child of negotiate()'s coroutineScope, so it is cancelled with the negotiation on
+        // any terminal phase (structured concurrency - no leak).
+        launch {
+            while (isActive) {
+                delay(TURN_REFRESH_POLL_MS)
+                val nowSec = clock.now() / 1_000L
+                val current = iceServersRepository.getIceServers(call.callId)
+                if (current !is com.testlogon.android.core.model.ApiResult.Success) continue
+                val expiresAtSec = current.data.expiresAtEpochMs / 1_000L
+                if (CallConnectionMath.shouldRefreshTurn(expiresAtSec, nowSec)) {
+                    Log.d("TLHUB", "TURN refresh before TTL call=${call.callId}")
+                    val refreshed = iceServersRepository.getIceServers(call.callId, forceRefresh = true)
+                    if (refreshed is com.testlogon.android.core.model.ApiResult.Success) {
+                        peer.setConfiguration(refreshed.data.servers)
+                    }
+                }
             }
         }
         launch {
