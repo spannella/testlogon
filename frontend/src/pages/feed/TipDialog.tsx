@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { tipPostDirect, tipComment } from "@/api/endpoints/newsfeed";
+import { tipVideoComment } from "@/api/endpoints/gallery";
+import { validateTipCents } from "@/lib/videoCommentTip";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import type { PaymentMethod } from "@/api/types";
 
@@ -25,16 +27,23 @@ interface TipDialogProps {
   authorId: string;
   /** If provided, tips the comment instead of the post directly */
   commentId?: string;
+  /**
+   * TIP-303 (web): when provided, this dialog tips a VIDEO comment via the
+   * gallery endpoint instead of the newsfeed post/comment endpoints. Reuses the
+   * same amount picker + payment-method selector idiom.
+   */
+  videoComment?: { videoId: string; commentId: string };
 }
 
-export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: TipDialogProps) {
+export function TipDialog({ open, onOpenChange, postId, authorId, commentId, videoComment }: TipDialogProps) {
   const queryClient = useQueryClient();
   const [amountCents, setAmountCents] = useState<number>(100);
   const [customValue, setCustomValue] = useState("");
   const [isCustom, setIsCustom] = useState(false);
   const [selectedPmId, setSelectedPmId] = useState<string | null>(null);
 
-  const isCommentTip = Boolean(commentId);
+  const isVideoCommentTip = Boolean(videoComment);
+  const isCommentTip = Boolean(commentId) && !isVideoCommentTip;
 
   // TIPX-B4 (F9) — payment methods are needed for BOTH post AND comment tips now, so the tipper can
   // pick a card and the comment tip honors it (previously comment tips silently used the default).
@@ -77,7 +86,30 @@ export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: T
     onError: () => toast.error("Failed to send tip"),
   });
 
-  const mutation = isCommentTip ? commentTipMutation : postTipMutation;
+  const videoCommentTipMutation = useMutation({
+    mutationFn: () =>
+      tipVideoComment(
+        videoComment!.videoId,
+        videoComment!.commentId,
+        amountCents,
+        effectivePm?.payment_method_id,
+      ),
+    onSuccess: () => {
+      toast.success(`Tip of $${(amountCents / 100).toFixed(2)} sent!`);
+      void queryClient.invalidateQueries({
+        queryKey: ["video-comments", videoComment!.videoId],
+      });
+      onOpenChange(false);
+      resetState();
+    },
+    onError: () => toast.error("Failed to send tip"),
+  });
+
+  const mutation = isVideoCommentTip
+    ? videoCommentTipMutation
+    : isCommentTip
+      ? commentTipMutation
+      : postTipMutation;
 
   const resetState = () => {
     setAmountCents(100);
@@ -104,11 +136,16 @@ export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: T
   // TIPX-B4 (F9) — a saved PM is required (and selectable) for BOTH post and comment tips now.
   const pmRequired = paymentMethods.length > 0;
   const canSubmit =
-    amountCents > 0 &&
+    validateTipCents(amountCents).ok &&
     !mutation.isPending &&
     (!pmRequired || Boolean(effectivePm));
 
   const handleSend = () => {
+    const check = validateTipCents(amountCents);
+    if (!check.ok) {
+      toast.error(check.error ?? "Enter a valid tip amount.");
+      return;
+    }
     mutation.mutate();
   };
 
@@ -123,7 +160,7 @@ export function TipDialog({ open, onOpenChange, postId, authorId, commentId }: T
 
         <p className="text-sm text-muted-foreground">
           Tip <span className="font-medium text-foreground">{authorId}</span>
-          {isCommentTip ? " for their comment" : " for this post"}
+          {isVideoCommentTip || isCommentTip ? " for their comment" : " for this post"}
         </p>
 
         {/* Preset amounts */}
