@@ -7,6 +7,7 @@ import {
   Heart,
   MessageCircle,
   Send,
+  DollarSign,
   Trash2,
   Loader2,
   Smile,
@@ -59,6 +60,7 @@ import { uploadPostImage } from "@/api/endpoints/newsfeed";
 import { useAuthStore } from "@/stores/authStore";
 import { cn } from "@/lib/utils";
 import SimilarVideos from "@/pages/videos/SimilarVideos";
+import { TipDialog } from "@/pages/feed/TipDialog";
 
 const COMMENT_REACTION_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮"];
 
@@ -87,6 +89,7 @@ function VideoCommentRow({
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(comment.text ?? "");
   const [reportOpen, setReportOpen] = useState(false);
+  const [tipOpen, setTipOpen] = useState(false);
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["video-comments", videoId] });
@@ -225,6 +228,25 @@ function VideoCommentRow({
             <p className="text-sm">{comment.text}</p>
           )}
 
+          {/* TIP-303: tip total + Tip action (non-own comments) */}
+          <div className="mt-0.5 flex items-center gap-2">
+            {(comment.tip_total_cents ?? 0) > 0 && (
+              <span className="text-[10px] text-emerald-600">
+                ${((comment.tip_total_cents ?? 0) / 100).toFixed(2)} tipped
+              </span>
+            )}
+            {!isOwn && (
+              <button
+                type="button"
+                onClick={() => setTipOpen(true)}
+                className="flex items-center gap-0.5 text-[10px] text-muted-foreground transition-colors hover:text-emerald-600"
+              >
+                <DollarSign className="h-3 w-3" />
+                Tip
+              </button>
+            )}
+          </div>
+
           {/* Reaction bar */}
           <div className="mt-1 flex flex-wrap items-center gap-1">
             {COMMENT_REACTION_EMOJIS.map((emoji) => {
@@ -313,6 +335,16 @@ function VideoCommentRow({
           onSubmit={async (payload) => {
             await reportMut.mutateAsync(payload);
           }}
+        />
+      )}
+
+      {!isOwn && (
+        <TipDialog
+          open={tipOpen}
+          onOpenChange={setTipOpen}
+          postId={videoId}
+          authorId={comment.user_id}
+          videoComment={{ videoId, commentId: comment.comment_id }}
         />
       )}
     </>

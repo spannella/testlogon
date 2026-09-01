@@ -89,6 +89,8 @@ export interface VideoComment {
   image_height?: number | null;
   reactions_counts?: Record<string, number>;
   my_reactions?: string[];
+  // TIP-303: running total tipped to this comment (cents).
+  tip_total_cents?: number;
 }
 
 export interface AddVideoCommentReq {
@@ -213,6 +215,33 @@ export const unreactFromVideoComment = (
   api.post<VideoComment>(
     `/ui/videos/${videoId}/comments/${commentId}/unreact`,
     { emoji },
+  );
+
+export interface VideoCommentTipResponse {
+  ok: boolean;
+  video_id: string;
+  comment_id: string;
+  amount_cents: number;
+  currency: string;
+  tip_total_cents: number;
+}
+
+// TIP-303 (web): tip a video comment. Mirrors the newsfeed comment-tip idiom
+// (POST /ui/videos/{id}/comments/{cid}/tip) and threads the chosen payment
+// method so the tipper is charged on their selected card.
+export const tipVideoComment = (
+  videoId: string,
+  commentId: string,
+  amountCents: number,
+  paymentMethodId?: string,
+): Promise<VideoCommentTipResponse> =>
+  api.post<VideoCommentTipResponse>(
+    `/ui/videos/${videoId}/comments/${commentId}/tip`,
+    {
+      amount_cents: amountCents,
+      currency: "usd",
+      ...(paymentMethodId ? { payment_method_id: paymentMethodId } : {}),
+    },
   );
 
 export const listVideoComments = (
