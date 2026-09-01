@@ -398,6 +398,30 @@ private fun PublicContent(
                     onDismiss = blockVm::onBlockDismissed,
                 )
             }
+
+            // SOCIAL-007: snooze this user's content (only meaningful for someone the viewer follows).
+            // Hidden while blocked (block dominates every follow affordance).
+            if (profile.isFollowing && !blockState.blockedByMe) {
+                val snoozeVm: SnoozeInteractionViewModel = hiltViewModel()
+                val snoozeState by snoozeVm.uiState.collectAsStateWithLifecycle()
+                LaunchedEffect(profile.userId) { snoozeVm.hydrate(profile.userId) }
+                OutlinedButton(
+                    onClick = { if (snoozeState.isSnoozed) snoozeVm.onUnsnooze() else snoozeVm.onSnooze() },
+                    enabled = !snoozeState.inFlight,
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .fillMaxWidth()
+                        .testTag("public_snooze_user"),
+                ) {
+                    Text(
+                        if (snoozeState.isSnoozed) {
+                            snoozeState.label ?: stringResource(R.string.snooze_action_unsnooze)
+                        } else {
+                            stringResource(R.string.snooze_action_snooze)
+                        },
+                    )
+                }
+            }
         } else {
             Button(
                 onClick = onSignIn,
