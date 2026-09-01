@@ -17,21 +17,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -46,6 +54,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -74,6 +83,9 @@ object AffiliatesTestTags {
     const val CHART = "affiliates_chart"
     const val KPI_PREFIX = "affiliates_kpi_"
     const val LINK_PREFIX = "affiliates_link_"
+    const val CREATE_FAB = "affiliates_create_fab"
+    const val CREATE_DIALOG = "affiliates_create_dialog"
+    const val DELETE_DIALOG = "affiliates_delete_dialog"
 }
 
 /** AND-265 — route-level affiliates entry (reachable from the More hub). */
@@ -107,6 +119,13 @@ fun AffiliatesRoute(
         onChartPointSelected = viewModel::onChartPointSelected,
         onCopyLink = viewModel::onCopyLink,
         onShareLink = viewModel::onShareLink,
+        onOpenCreate = viewModel::onOpenCreate,
+        onDismissCreate = viewModel::onDismissCreate,
+        onCreateFormChanged = viewModel::onCreateFormChanged,
+        onSubmitCreate = viewModel::onSubmitCreate,
+        onRequestDelete = viewModel::onRequestDelete,
+        onDismissDelete = viewModel::onDismissDelete,
+        onConfirmDelete = viewModel::onConfirmDelete,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -121,6 +140,13 @@ fun AffiliatesScreen(
     onChartPointSelected: (Int?) -> Unit,
     onCopyLink: (String) -> Unit,
     onShareLink: (String) -> Unit,
+    onOpenCreate: () -> Unit,
+    onDismissCreate: () -> Unit,
+    onCreateFormChanged: (String?, String?, String?, String?) -> Unit,
+    onSubmitCreate: () -> Unit,
+    onRequestDelete: (String) -> Unit,
+    onDismissDelete: () -> Unit,
+    onConfirmDelete: () -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -139,6 +165,16 @@ fun AffiliatesScreen(
                     }
                 },
             )
+        },
+        floatingActionButton = {
+            if (state.phase != AffiliatesUiState.Phase.Loading) {
+                ExtendedFloatingActionButton(
+                    onClick = onOpenCreate,
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text(stringResource(R.string.affiliates_create_action)) },
+                    modifier = Modifier.testTag(AffiliatesTestTags.CREATE_FAB),
+                )
+            }
         },
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -199,12 +235,30 @@ fun AffiliatesScreen(
                                         link = link,
                                         onCopy = { onCopyLink(link.id) },
                                         onShare = { onShareLink(link.id) },
+                                        onDelete = { onRequestDelete(link.id) },
                                     )
                                 }
                             }
                         }
                     }
                 }
+            }
+
+            state.createForm?.let { form ->
+                CreateLinkDialog(
+                    form = form,
+                    onChanged = onCreateFormChanged,
+                    onDismiss = onDismissCreate,
+                    onSubmit = onSubmitCreate,
+                )
+            }
+
+            state.pendingDelete?.let { pending ->
+                DeleteLinkDialog(
+                    pending = pending,
+                    onDismiss = onDismissDelete,
+                    onConfirm = onConfirmDelete,
+                )
             }
         }
     }
@@ -262,7 +316,12 @@ private fun Kpi(key: String, labelRes: Int, value: String) {
 }
 
 @Composable
-private fun LinkRow(link: AffiliateLink, onCopy: () -> Unit, onShare: () -> Unit) {
+private fun LinkRow(
+    link: AffiliateLink,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
+    onDelete: () -> Unit,
+) {
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -301,6 +360,7 @@ private fun LinkRow(link: AffiliateLink, onCopy: () -> Unit, onShare: () -> Unit
             }
             val copyCd = stringResource(R.string.affiliates_action_copy)
             val shareCd = stringResource(R.string.affiliates_action_share)
+            val deleteCd = stringResource(R.string.affiliates_action_delete)
             IconButton(
                 onClick = onCopy,
                 modifier = Modifier.clearAndSetSemantics { contentDescription = copyCd },
@@ -313,8 +373,116 @@ private fun LinkRow(link: AffiliateLink, onCopy: () -> Unit, onShare: () -> Unit
             ) {
                 Icon(Icons.Outlined.Share, contentDescription = null)
             }
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier
+                    .testTag(AffiliatesTestTags.LINK_PREFIX + link.id + "_delete")
+                    .clearAndSetSemantics { contentDescription = deleteCd },
+            ) {
+                Icon(Icons.Outlined.Delete, contentDescription = null)
+            }
         }
     }
+}
+
+@Composable
+private fun CreateLinkDialog(
+    form: AffiliatesUiState.CreateForm,
+    onChanged: (String?, String?, String?, String?) -> Unit,
+    onDismiss: () -> Unit,
+    onSubmit: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(AffiliatesTestTags.CREATE_DIALOG),
+        title = { Text(stringResource(R.string.affiliates_create_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = form.targetId,
+                    onValueChange = { onChanged(null, it, null, null) },
+                    label = { Text(stringResource(R.string.affiliates_create_target_id)) },
+                    singleLine = true,
+                    enabled = !form.submitting,
+                    modifier = Modifier.fillMaxWidth().testTag("affiliates_create_target_id"),
+                )
+                OutlinedTextField(
+                    value = form.targetType,
+                    onValueChange = { onChanged(it, null, null, null) },
+                    label = { Text(stringResource(R.string.affiliates_create_target_type)) },
+                    singleLine = true,
+                    enabled = !form.submitting,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = form.commissionPercent,
+                    onValueChange = { onChanged(null, null, it, null) },
+                    label = { Text(stringResource(R.string.affiliates_create_commission)) },
+                    singleLine = true,
+                    enabled = !form.submitting,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = form.customCode,
+                    onValueChange = { onChanged(null, null, null, it) },
+                    label = { Text(stringResource(R.string.affiliates_create_custom_code)) },
+                    singleLine = true,
+                    enabled = !form.submitting,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                form.errorRes?.let {
+                    Text(
+                        stringResource(it),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onSubmit,
+                enabled = form.canSubmit,
+                modifier = Modifier.testTag("affiliates_create_submit"),
+            ) {
+                Text(stringResource(R.string.affiliates_create_submit))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !form.submitting) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun DeleteLinkDialog(
+    pending: AffiliatesUiState.PendingDelete,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(AffiliatesTestTags.DELETE_DIALOG),
+        title = { Text(stringResource(R.string.affiliates_delete_title)) },
+        text = { Text(stringResource(R.string.affiliates_delete_body, pending.label)) },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = !pending.deleting,
+                modifier = Modifier.testTag("affiliates_delete_confirm"),
+            ) {
+                Text(stringResource(R.string.affiliates_delete_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !pending.deleting) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
 }
 
 // ---- Android side-effect seams (only the URL string crosses; never amounts/account ids) ----

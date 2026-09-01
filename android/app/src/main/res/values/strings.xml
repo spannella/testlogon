@@ -2425,6 +2425,25 @@
     <string name="affiliates_chart_title">Commission earned per link</string>
     <string name="affiliates_status_unknown">Unknown</string>
     <string name="affiliates_link_metrics">%1$s clicks · %2$s conversions · %3$s commission · %4$s earned</string>
+    <string name="affiliates_action_delete">Delete link</string>
+    <string name="affiliates_create_action">New link</string>
+    <string name="affiliates_create_title">Create affiliate link</string>
+    <string name="affiliates_create_target_id">Target ID</string>
+    <string name="affiliates_create_target_type">Target type</string>
+    <string name="affiliates_create_commission">Commission %</string>
+    <string name="affiliates_create_custom_code">Custom code (optional)</string>
+    <string name="affiliates_create_submit">Create</string>
+    <string name="affiliates_create_success">Affiliate link created</string>
+    <string name="affiliates_create_error_target">Enter a target ID.</string>
+    <string name="affiliates_create_error_commission">Commission must be a whole number between 0 and 100.</string>
+    <string name="affiliates_create_error_code">Custom code must be 3-64 letters, numbers, - or _.</string>
+    <string name="affiliates_create_error_generic">Couldn\'t create that link. Try again.</string>
+    <string name="affiliates_create_error_offline">Couldn\'t reach the server. Try again.</string>
+    <string name="affiliates_delete_title">Delete affiliate link?</string>
+    <string name="affiliates_delete_body">Delete \"%1$s\"? This can\'t be undone.</string>
+    <string name="affiliates_delete_confirm">Delete</string>
+    <string name="affiliates_delete_success">Affiliate link deleted</string>
+    <string name="affiliates_delete_failed">Couldn\'t delete that link.</string>
 
     <!-- AND-267 Affiliate discounts (read-only list attached to the caller\'s ad creatives). -->
     <string name="discounts_title">Affiliate discounts</string>
