@@ -419,6 +419,7 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         stylistDestinations(navController)
         // B4 web-parity: Marketing content agent (dashboard + editor + calendar + engagement).
         marketingDestinations(navController)
+        marketingCampaignsDestinations(navController)
         // B4 web-parity: Accountant/cost agent (overview + breakdown + budgets + alerts).
         costsDestinations(navController)
         // B4 web-parity: Compliance/Security agent (findings + audits + compliance + trends).
