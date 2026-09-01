@@ -3535,6 +3535,18 @@ export interface DeleteProviderCredentialResp {
   deleted: boolean;
 }
 
+export interface ProviderOAuthStartResp {
+  provider: string;
+  authorization_url: string;
+  state: string;
+  expires_at: string;
+}
+
+export interface ProviderOAuthCallbackReq {
+  code: string;
+  state: string;
+}
+
 // ─── Contacts ─────────────────────────────────────────────────────────────
 
 export interface ContactEntry {
