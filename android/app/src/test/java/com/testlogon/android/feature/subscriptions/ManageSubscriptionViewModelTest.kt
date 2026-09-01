@@ -228,4 +228,62 @@ class ManageSubscriptionViewModelTest {
         assertFalse(state.subscription.cancelAtPeriodEnd) // unchanged; no optimistic mutation
         job.cancel()
     }
+
+    @Test
+    fun convertTrial_trialingSub_callsConvert_reflectsActive() = runTest {
+        val repo = TestSubscriptionsRepository().apply {
+            mySubsResult = ApiResult.Success(listOf(sampleSubscription(status = SubscriptionState.TRIALING)))
+            convertTrialResult = ApiResult.Success(sampleSubscription(status = SubscriptionState.ACTIVE))
+        }
+        val model = vm(repo)
+        val job = launch { model.uiState.collect {} }
+        advanceUntilIdle()
+
+        val before = model.uiState.value as ManageSubscriptionUiState.Content
+        assertTrue(before.canConvertTrial)
+
+        model.onConvertTrialClicked()
+        advanceUntilIdle()
+
+        assertEquals(1, repo.convertTrialCalls)
+        val after = model.uiState.value as ManageSubscriptionUiState.Content
+        assertEquals(SubscriptionState.ACTIVE, after.subscription.status)
+        assertEquals(MutationStatus.Idle, after.mutation)
+        job.cancel()
+    }
+
+    @Test
+    fun convertTrial_notTrialing_noCall() = runTest {
+        val repo = TestSubscriptionsRepository().apply {
+            mySubsResult = ApiResult.Success(listOf(sampleSubscription(status = SubscriptionState.ACTIVE)))
+        }
+        val model = vm(repo)
+        val job = launch { model.uiState.collect {} }
+        advanceUntilIdle()
+
+        model.onConvertTrialClicked()
+        advanceUntilIdle()
+
+        assertEquals(0, repo.convertTrialCalls)
+        job.cancel()
+    }
+
+    @Test
+    fun convertTrial_declined_setsMutationFailed() = runTest {
+        val repo = TestSubscriptionsRepository().apply {
+            mySubsResult = ApiResult.Success(listOf(sampleSubscription(status = SubscriptionState.TRIALING)))
+            convertTrialResult = ApiResult.Failure(ApiError(status = 402, message = "payment_failed"))
+        }
+        val model = vm(repo)
+        val job = launch { model.uiState.collect {} }
+        advanceUntilIdle()
+
+        model.onConvertTrialClicked()
+        advanceUntilIdle()
+
+        val state = model.uiState.value as ManageSubscriptionUiState.Content
+        assertTrue(state.mutation is MutationStatus.Failed)
+        assertEquals(SubscriptionState.TRIALING, state.subscription.status)
+        job.cancel()
+    }
 }

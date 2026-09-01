@@ -172,6 +172,19 @@ interface SubscriptionsApi {
         @Body body: RetryPaymentReqDto,
     ): SubscriptionOutDto
 
+    /**
+     * SUBX-52 - MANUALLY convert a TRIALING subscription to paid EARLY (POST .../trial/convert). Charges
+     * the up-front-captured PM via the SAME funds-guarded rail the sweeper uses at trial_end (backend
+     * convert_trial, subscription_server.py:2645). No request body. On a real collected charge the sub
+     * clears to active; a decline / missing PM returns HTTP 402; a non-trial sub returns HTTP 400. Returns
+     * the updated SubscriptionOut.
+     */
+    @POST("api/subscriptions/{subscriptionId}/trial/convert")
+    suspend fun convertTrial(
+        @Header("X-User-Id") userId: String,
+        @Path("subscriptionId") subscriptionId: String,
+    ): SubscriptionOutDto
+
     // ---- SUB-E4-3: creator subscriber management + MRR/analytics ----
 
     /** SUB-E4-1 - owner-scoped creator subscriber list (CREATOR#SUB# index). Requires X-User-Id. */

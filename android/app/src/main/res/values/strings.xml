@@ -5560,6 +5560,7 @@
     <string name="manage_sub_past_due_banner">Your last payment failed. Update your card and retry to keep your subscription.</string>
     <string name="manage_sub_update_card_action">Update payment method</string>
     <string name="manage_sub_retry_payment_action">Retry payment</string>
+    <string name="manage_sub_convert_trial_action">Start subscription now</string>
     <string name="subscribe_view_content">View content</string>
     <string name="subscribe_add_card_action">Add a payment method</string>
     <string name="profile_public_subscribe">Subscribe</string>

@@ -101,6 +101,8 @@ data class CreatorSubscription(
     val priceCents: Long?,
     val currency: String?,
     val autoRenew: Boolean,
+    /** SUBX-52 - the trial window end (epoch seconds), when the sub is/was on a trial; null otherwise. */
+    val trialEndEpochSeconds: Long? = null,
 )
 
 /** Single-subscription summary read projection. */
@@ -151,6 +153,7 @@ internal fun SubscriptionOutDto.toDomain(): CreatorSubscription = CreatorSubscri
     priceCents = priceCents,
     currency = currency,
     autoRenew = autoRenew,
+    trialEndEpochSeconds = trialEnd,
 )
 
 internal fun SubscriptionSummaryDto.toDomain(): CreatorSubscriptionSummary = CreatorSubscriptionSummary(
