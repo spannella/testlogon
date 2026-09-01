@@ -84,4 +84,78 @@ class DelegateSurfaceDtoJsonTest {
         assertEquals("Acme", decoded.title)
         assertNull(decoded.lastMessagePreview)
     }
+
+    // ---- AND-360 broadcast moderation read DTOs (added) ----
+
+    private fun moderatorListAdapter() = moshi.adapter<List<DelegatedBroadcastModeratorOut>>(
+        Types.newParameterizedType(List::class.java, DelegatedBroadcastModeratorOut::class.java),
+    )
+
+    private fun banListAdapter() = moshi.adapter<List<DelegatedBroadcastBanOut>>(
+        Types.newParameterizedType(List::class.java, DelegatedBroadcastBanOut::class.java),
+    )
+
+    private fun logListAdapter() = moshi.adapter<List<DelegatedBroadcastModLogEntry>>(
+        Types.newParameterizedType(List::class.java, DelegatedBroadcastModLogEntry::class.java),
+    )
+
+    @Test
+    fun moderator_decodesRequiredId_andDefaultsOptionals() {
+        val mods = requireNotNull(
+            moderatorListAdapter().fromJson(
+                """[
+                    {"delegate_id":"d_1","display_name":"Sam","connected_at":123,"status":"online","actions_count":4},
+                    {"delegate_id":"d_2"}
+                ]""",
+            ),
+        )
+        assertEquals("d_1", mods[0].delegateId)
+        assertEquals("Sam", mods[0].displayName)
+        assertEquals(4, mods[0].actionsCount)
+        assertNull(mods[1].displayName)
+        assertNull(mods[1].connectedAt)
+    }
+
+    @Test
+    fun ban_decodesRequiredFields_andDefaultsOptionals() {
+        val bans = requireNotNull(
+            banListAdapter().fromJson(
+                """[
+                    {"user_id":"u_1","banned_by":"d_1","banned_by_display_name":"Sam","banned_at":99,"reason":"spam"},
+                    {"user_id":"u_2","banned_by":"d_1"}
+                ]""",
+            ),
+        )
+        assertEquals("u_1", bans[0].userId)
+        assertEquals("d_1", bans[0].bannedBy)
+        assertEquals("spam", bans[0].reason)
+        assertNull(bans[1].reason)
+        assertNull(bans[1].bannedAt)
+    }
+
+    @Test
+    fun modLog_decodesEntry_withOptionalTargets() {
+        val log = requireNotNull(
+            logListAdapter().fromJson(
+                """[
+                    {"event_id":"e_1","moderator_id":"d_1","moderation_type":"ban","target_user_id":"u_9","ts":42},
+                    {"event_id":"e_2","moderator_id":"d_1","moderation_type":"pin","target_message_id":"m_3"}
+                ]""",
+            ),
+        )
+        assertEquals("e_1", log[0].eventId)
+        assertEquals("ban", log[0].moderationType)
+        assertEquals("u_9", log[0].targetUserId)
+        assertNull(log[0].targetMessageId)
+        assertEquals("m_3", log[1].targetMessageId)
+        assertNull(log[1].targetUserId)
+    }
+
+    @Test
+    fun announcementIn_serializesText() {
+        val adapter = moshi.adapter(DelegatedAnnouncementIn::class.java)
+        val json = adapter.toJson(DelegatedAnnouncementIn(text = "attention"))
+        assertTrue(json.contains("\"text\":\"attention\""))
+    }
+
 }

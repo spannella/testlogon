@@ -182,4 +182,110 @@ class DelegateFeatureApiTest {
         assertEquals("/ui/broadcast/delegate/cr_1/sessions/sess_5/ban", recorded.requestUrl?.encodedPath)
         assertTrue(recorded.body.readUtf8().contains("\"user_id\":\"u_9\""))
     }
+
+    // ---- AND-360 broadcast moderation endpoints (added) ----
+
+    @Test
+    fun unbanViewer_deletesBanPath_withUidSubstituted() = runTest {
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        broadcastApi().unbanViewer("cr_1", "sess_5", "u_9")
+
+        val recorded = server.takeRequest()
+        assertEquals("DELETE", recorded.method)
+        assertEquals("/ui/broadcast/delegate/cr_1/sessions/sess_5/ban/u_9", recorded.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun postAnnouncement_postsAnnouncementPath_withTextBody() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+
+        broadcastApi().postAnnouncement("cr_1", "sess_5", DelegatedAnnouncementIn(text = "hi all"))
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals("/ui/broadcast/delegate/cr_1/sessions/sess_5/announcement", recorded.requestUrl?.encodedPath)
+        assertTrue(recorded.body.readUtf8().contains("\"text\":\"hi all\""))
+    }
+
+    @Test
+    fun pinAndUnpin_useChatPinPath_withMidSubstituted() = runTest {
+        server.enqueue(MockResponse().setResponseCode(204))
+        broadcastApi().pinMessage("cr_1", "sess_5", "m_3")
+        val pin = server.takeRequest()
+        assertEquals("POST", pin.method)
+        assertEquals("/ui/broadcast/delegate/cr_1/sessions/sess_5/chat/m_3/pin", pin.requestUrl?.encodedPath)
+
+        server.enqueue(MockResponse().setResponseCode(204))
+        broadcastApi().unpinMessage("cr_1", "sess_5", "m_3")
+        val unpin = server.takeRequest()
+        assertEquals("DELETE", unpin.method)
+        assertEquals("/ui/broadcast/delegate/cr_1/sessions/sess_5/chat/m_3/pin", unpin.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun deleteChatMessage_deletesChatPath_withMidSubstituted() = runTest {
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        broadcastApi().deleteChatMessage("cr_1", "sess_5", "m_3")
+
+        val recorded = server.takeRequest()
+        assertEquals("DELETE", recorded.method)
+        assertEquals("/ui/broadcast/delegate/cr_1/sessions/sess_5/chat/m_3", recorded.requestUrl?.encodedPath)
+    }
+
+    @Test
+    fun registerModerator_postsModeratorRegisterPath() = runTest {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+
+        broadcastApi().registerModerator("cr_1", "sess_5")
+
+        val recorded = server.takeRequest()
+        assertEquals("POST", recorded.method)
+        assertEquals(
+            "/ui/broadcast/delegate/cr_1/sessions/sess_5/moderator/register",
+            recorded.requestUrl?.encodedPath,
+        )
+    }
+
+    @Test
+    fun listModerators_getsBareArray() = runTest {
+        server.enqueue(jsonResponse("""[{"delegate_id":"d_1","display_name":"Sam"}]"""))
+
+        val mods = broadcastApi().listModerators("cr_1", "sess_5")
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/ui/broadcast/delegate/cr_1/sessions/sess_5/moderators", recorded.requestUrl?.encodedPath)
+        assertEquals("d_1", mods.single().delegateId)
+    }
+
+    @Test
+    fun listBans_getsBareArray() = runTest {
+        server.enqueue(jsonResponse("""[{"user_id":"u_1","banned_by":"d_1","reason":"spam"}]"""))
+
+        val bans = broadcastApi().listBans("cr_1", "sess_5")
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/ui/broadcast/delegate/cr_1/sessions/sess_5/bans", recorded.requestUrl?.encodedPath)
+        assertEquals("u_1", bans.single().userId)
+    }
+
+    @Test
+    fun getModerationLog_getsBareArray_withLimitQuery() = runTest {
+        server.enqueue(jsonResponse("""[{"event_id":"e_1","moderator_id":"d_1","moderation_type":"ban"}]"""))
+
+        val log = broadcastApi().getModerationLog("cr_1", "sess_5", limit = 25)
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals(
+            "/ui/broadcast/delegate/cr_1/sessions/sess_5/moderation-log",
+            recorded.requestUrl?.encodedPath,
+        )
+        assertEquals("25", recorded.requestUrl?.queryParameter("limit"))
+        assertEquals("e_1", log.single().eventId)
+    }
+
 }

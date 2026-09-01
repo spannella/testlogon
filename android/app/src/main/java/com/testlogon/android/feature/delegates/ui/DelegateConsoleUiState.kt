@@ -35,4 +35,7 @@ data class DelegateConsoleUiState(
     val managedError: Boolean = false,
     /** An Enter action is in flight for this creatorId (the row shows progress + is disabled). */
     val entering: String? = null,
+    // ---- AND-360: broadcast moderation console sub-state ----
+    /** Broadcast moderation console (moderators / bans / log + control), gated by broadcast_moderate / _control. */
+    val moderation: DelegateModConsoleState = DelegateModConsoleState(),
 )

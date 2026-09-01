@@ -244,4 +244,146 @@ class DelegateRepositoriesTest {
         assertTrue((result as ApiResult.Success).data.permissions.none { it.name == "FEED_POST" })
         assertTrue(!f.feed.canPost())
     }
+
+    // ---- AND-360 broadcast moderation (added) ----
+
+    @Test
+    fun broadcastUnban_withModerate_callsDelegatePath() = runTest {
+        val f = fixtures(scope = backgroundScope)
+        f.store.setManagingCreator(managing("broadcast_moderate"))
+        runCurrent()
+
+        val result = f.broadcast.unbanViewer("sess_1", "u_9")
+
+        assertTrue(result is ApiResult.Success)
+        assertEquals(Triple("cr_1", "sess_1", "u_9"), f.broadcastApi.unbanCalls.single())
+    }
+
+    @Test
+    fun broadcastAnnouncement_withoutModerate_doesNotCallApi() = runTest {
+        val f = fixtures(scope = backgroundScope)
+        f.store.setManagingCreator(managing("broadcast_control")) // control but NOT moderate
+        runCurrent()
+
+        val result = f.broadcast.postAnnouncement("sess_1", "hello all")
+
+        assertTrue(result is ApiResult.Failure)
+        assertEquals(403, (result as ApiResult.Failure).error.status)
+        assertTrue(f.broadcastApi.announcementCalls.isEmpty())
+    }
+
+    @Test
+    fun broadcastAnnouncement_withModerate_callsWithText() = runTest {
+        val f = fixtures(scope = backgroundScope)
+        f.store.setManagingCreator(managing("broadcast_moderate"))
+        runCurrent()
+
+        f.broadcast.postAnnouncement("sess_1", "hello all")
+
+        assertEquals("hello all", f.broadcastApi.announcementCalls.single().third.text)
+    }
+
+    @Test
+    fun broadcastPinDeleteRegister_withModerate_callDelegatePath() = runTest {
+        val f = fixtures(scope = backgroundScope)
+        f.store.setManagingCreator(managing("broadcast_moderate"))
+        runCurrent()
+
+        assertTrue(f.broadcast.pinMessage("sess_1", "m_1") is ApiResult.Success)
+        assertTrue(f.broadcast.unpinMessage("sess_1", "m_1") is ApiResult.Success)
+        assertTrue(f.broadcast.deleteChatMessage("sess_1", "m_2") is ApiResult.Success)
+        assertTrue(f.broadcast.registerModerator("sess_1") is ApiResult.Success)
+
+        assertEquals(Triple("cr_1", "sess_1", "m_1"), f.broadcastApi.pinCalls.single())
+        assertEquals(Triple("cr_1", "sess_1", "m_1"), f.broadcastApi.unpinCalls.single())
+        assertEquals(Triple("cr_1", "sess_1", "m_2"), f.broadcastApi.deleteChatCalls.single())
+        assertEquals("cr_1" to "sess_1", f.broadcastApi.registerModeratorCalls.single())
+    }
+
+    @Test
+    fun broadcastReads_withoutModerate_doNotCallApi() = runTest {
+        val f = fixtures(scope = backgroundScope)
+        f.store.setManagingCreator(managing("broadcast_control"))
+        runCurrent()
+
+        assertTrue(f.broadcast.moderators("sess_1") is ApiResult.Failure)
+        assertTrue(f.broadcast.bans("sess_1") is ApiResult.Failure)
+        assertTrue(f.broadcast.moderationLog("sess_1") is ApiResult.Failure)
+        assertTrue(f.broadcastApi.moderatorsCalls.isEmpty())
+        assertTrue(f.broadcastApi.bansCalls.isEmpty())
+        assertTrue(f.broadcastApi.logCalls.isEmpty())
+    }
+
+    @Test
+    fun broadcastReads_withModerate_returnListsAndCallPath() = runTest {
+        val broadcastApi = FakeDelegateBroadcastApi(
+            moderatorList = listOf(
+                com.testlogon.android.core.network.delegates.DelegatedBroadcastModeratorOut(delegateId = "d_1"),
+            ),
+            banList = listOf(
+                com.testlogon.android.core.network.delegates.DelegatedBroadcastBanOut(
+                    userId = "u_1", bannedBy = "d_1",
+                ),
+            ),
+            logList = listOf(
+                com.testlogon.android.core.network.delegates.DelegatedBroadcastModLogEntry(
+                    eventId = "e_1", moderatorId = "d_1", moderationType = "ban",
+                ),
+            ),
+        )
+        val f = fixtures(broadcastApi = broadcastApi, scope = backgroundScope)
+        f.store.setManagingCreator(managing("broadcast_moderate"))
+        runCurrent()
+
+        val mods = f.broadcast.moderators("sess_1")
+        val bans = f.broadcast.bans("sess_1")
+        val log = f.broadcast.moderationLog("sess_1", limit = 25)
+
+        assertTrue(mods is ApiResult.Success)
+        assertEquals("d_1", (mods as ApiResult.Success).data.single().delegateId)
+        assertTrue(bans is ApiResult.Success)
+        assertEquals("u_1", (bans as ApiResult.Success).data.single().userId)
+        assertTrue(log is ApiResult.Success)
+        assertEquals("ban", (log as ApiResult.Success).data.single().moderationType)
+        assertEquals(Triple("cr_1", "sess_1", 25), broadcastApi.logCalls.single())
+    }
+
+    @Test
+    fun broadcastReads_on404_degradeToHonestEmpty() = runTest {
+        val broadcastApi = FakeDelegateBroadcastApi(throwHttp = 404)
+        val f = fixtures(broadcastApi = broadcastApi, scope = backgroundScope)
+        f.store.setManagingCreator(managing("broadcast_moderate"))
+        runCurrent()
+
+        val mods = f.broadcast.moderators("sess_1")
+        val bans = f.broadcast.bans("sess_1")
+        val log = f.broadcast.moderationLog("sess_1")
+
+        assertTrue(mods is ApiResult.Success)
+        assertTrue((mods as ApiResult.Success).data.isEmpty())
+        assertTrue(bans is ApiResult.Success)
+        assertTrue((bans as ApiResult.Success).data.isEmpty())
+        assertTrue(log is ApiResult.Success)
+        assertTrue((log as ApiResult.Success).data.isEmpty())
+        // the API WAS called (recorded) - the softening happens at the repository, not by skipping the call
+        assertEquals(1, broadcastApi.moderatorsCalls.size)
+    }
+
+    @Test
+    fun broadcastReads_on403_stayFailure_notEmptied() = runTest {
+        val broadcastApi = FakeDelegateBroadcastApi(throwHttp = 403)
+        // still managed so no auto-exit interference
+        val delegatesApi = FakeDelegatesApi(
+            managed = listOf(ManagedCreatorOut(creatorId = "cr_1", status = "active")),
+        )
+        val f = fixtures(broadcastApi = broadcastApi, delegatesApi = delegatesApi, scope = backgroundScope)
+        f.store.setManagingCreator(managing("broadcast_moderate"))
+        runCurrent()
+
+        val mods = f.broadcast.moderators("sess_1")
+
+        assertTrue(mods is ApiResult.Failure)
+        assertEquals(403, (mods as ApiResult.Failure).error.status)
+    }
+
 }

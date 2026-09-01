@@ -3920,6 +3920,31 @@
     <string name="delegate_console_managed_empty">No creators have added you as a delegate yet.</string>
     <string name="delegate_console_managed_error">Couldn\'t load the creators you can manage.</string>
     <string name="delegate_console_managed_retry">Retry</string>
+    <string name="delegate_mod_heading">Broadcast moderation</string>
+    <string name="delegate_mod_no_permission">You don\'t have permission to moderate this creator\'s broadcast.</string>
+    <string name="delegate_mod_session_hint">Broadcast session id</string>
+    <string name="delegate_mod_load">Load</string>
+    <string name="delegate_mod_register">Join as moderator</string>
+    <string name="delegate_mod_registered">You\'re an active moderator</string>
+    <string name="delegate_mod_start">Start broadcast</string>
+    <string name="delegate_mod_stop">Stop broadcast</string>
+    <string name="delegate_mod_moderators_heading">Active moderators</string>
+    <string name="delegate_mod_moderators_empty">No active moderators.</string>
+    <string name="delegate_mod_bans_heading">Banned viewers</string>
+    <string name="delegate_mod_bans_empty">No banned viewers.</string>
+    <string name="delegate_mod_unban">Unban</string>
+    <string name="delegate_mod_log_heading">Moderation log</string>
+    <string name="delegate_mod_log_empty">No moderation actions yet.</string>
+    <string name="delegate_mod_read_failed">Couldn\'t load moderation data.</string>
+    <string name="delegate_mod_announce_hint">Announcement…</string>
+    <string name="delegate_mod_announce">Announce</string>
+    <string name="delegate_mod_target_user_hint">Viewer id</string>
+    <string name="delegate_mod_ban">Ban</string>
+    <string name="delegate_mod_mute">Mute</string>
+    <string name="delegate_mod_target_message_hint">Message id</string>
+    <string name="delegate_mod_pin">Pin</string>
+    <string name="delegate_mod_delete">Delete</string>
+
 
     <!-- AND-364: content boost (paid post promotion). -->
     <string name="boost_title">Boost post</string>

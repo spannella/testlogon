@@ -3,6 +3,7 @@ package com.testlogon.android.feature.delegates.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.feature.delegates.data.DelegateBroadcastRepository
 import com.testlogon.android.feature.delegates.data.DelegateFeedRepository
 import com.testlogon.android.feature.delegates.data.DelegateMessagingRepository
 import com.testlogon.android.feature.delegates.data.DelegationContextProvider
@@ -17,8 +18,10 @@ import javax.inject.Inject
 /**
  * AND-360 - the focused demonstration ViewModel: in delegate mode it loads the managed creator's delegate
  * feed posts (feed_read) + conversations (chat_read) and offers create-post (feed_post) / send-message
- * (chat_respond), each gated by the delegate repositories. This proves "a delegate can act in delegated
- * surfaces" without retrofitting the mature feed / broadcast / messaging screens.
+ * (chat_respond), each gated by the delegate repositories. It ALSO hosts the broadcast MODERATION console
+ * (broadcast_moderate / broadcast_control): register-as-moderator, moderators / bans / moderation-log
+ * reads (degrade-on-404 to empty), and the mutations (ban / unban / mute / pin / delete / announce / start
+ * / stop). This proves "a delegate can act in delegated surfaces" without retrofitting the mature screens.
  *
  * It observes the typed delegation context; when there is no active context the UI shows the enter prompt.
  * The repositories already block a permission-less action WITHOUT calling the API and AUTO-EXIT on a 403,
@@ -30,6 +33,7 @@ class DelegateConsoleViewModel @Inject constructor(
     private val delegationRepository: DelegationRepository,
     private val feedRepository: DelegateFeedRepository,
     private val messagingRepository: DelegateMessagingRepository,
+    private val broadcastRepository: DelegateBroadcastRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DelegateConsoleUiState())
@@ -56,6 +60,10 @@ class DelegateConsoleViewModel @Inject constructor(
                         canReadChat = messagingRepository.canRead(),
                         canRespond = messagingRepository.canRespond(),
                         entering = null,
+                        moderation = _uiState.value.moderation.copy(
+                            canModerate = broadcastRepository.canModerate(),
+                            canControl = broadcastRepository.canControl(),
+                        ),
                     )
                     load()
                 }
@@ -146,6 +154,110 @@ class DelegateConsoleViewModel @Inject constructor(
             when (messagingRepository.send(conversationId, text.trim())) {
                 is ApiResult.Success -> _uiState.value = _uiState.value.copy(notice = null)
                 else -> _uiState.value = _uiState.value.copy(notice = NOTICE_ACTION_FAILED)
+            }
+        }
+    }
+
+    // ---- AND-360 broadcast moderation console ----
+
+    /** Updates the session id the moderation console acts on. Does not fetch (the user taps Load). */
+    fun setModerationSession(sessionId: String) {
+        _uiState.value = _uiState.value.copy(
+            moderation = _uiState.value.moderation.copy(sessionId = sessionId),
+        )
+    }
+
+    /** Loads the moderators / bans / moderation-log for the entered session (reads degrade-on-404 to empty). */
+    fun loadModeration() {
+        val session = _uiState.value.moderation.sessionId.trim()
+        if (session.isBlank() || !broadcastRepository.canModerate()) return
+        _uiState.value = _uiState.value.copy(
+            moderation = _uiState.value.moderation.copy(loading = true, readFailed = false),
+        )
+        viewModelScope.launch {
+            val mods = broadcastRepository.moderators(session)
+            val bans = broadcastRepository.bans(session)
+            val log = broadcastRepository.moderationLog(session)
+            _uiState.value = _uiState.value.copy(
+                moderation = _uiState.value.moderation.copy(
+                    loading = false,
+                    moderators = (mods as? ApiResult.Success)?.data.orEmpty(),
+                    bans = (bans as? ApiResult.Success)?.data.orEmpty(),
+                    log = (log as? ApiResult.Success)?.data.orEmpty(),
+                    readFailed = mods !is ApiResult.Success ||
+                        bans !is ApiResult.Success ||
+                        log !is ApiResult.Success,
+                ),
+            )
+        }
+    }
+
+    /** REGISTER the caller as an active moderator for the entered session; reloads on success. */
+    fun registerAsModerator() {
+        runModeration { session ->
+            broadcastRepository.registerModerator(session).also {
+                if (it is ApiResult.Success) {
+                    _uiState.value = _uiState.value.copy(
+                        moderation = _uiState.value.moderation.copy(registered = true),
+                    )
+                }
+            }
+        }
+    }
+
+    /** BAN a viewer, then reload the console lists. */
+    fun banViewer(userId: String, reason: String?) =
+        runModeration { session -> broadcastRepository.banViewer(session, userId.trim(), reason?.trim()) }
+
+    /** UNBAN a viewer, then reload the console lists. */
+    fun unbanViewer(userId: String) =
+        runModeration { session -> broadcastRepository.unbanViewer(session, userId) }
+
+    /** MUTE a viewer, then reload the console lists. */
+    fun muteViewer(userId: String, reason: String?) =
+        runModeration { session -> broadcastRepository.muteViewer(session, userId.trim(), reason?.trim()) }
+
+    /** PIN a chat message, then reload the console lists. */
+    fun pinMessage(messageId: String) =
+        runModeration { session -> broadcastRepository.pinMessage(session, messageId.trim()) }
+
+    /** DELETE a chat message, then reload the console lists. */
+    fun deleteChatMessage(messageId: String) =
+        runModeration { session -> broadcastRepository.deleteChatMessage(session, messageId.trim()) }
+
+    /** POST an announcement, then reload the console lists. */
+    fun postAnnouncement(text: String) {
+        if (text.isBlank()) return
+        runModeration { session -> broadcastRepository.postAnnouncement(session, text.trim()) }
+    }
+
+    /** START the broadcast (gated by broadcast_control). */
+    fun startBroadcast() =
+        runModeration(reload = false) { session -> broadcastRepository.startSession(session) }
+
+    /** STOP the broadcast (gated by broadcast_control). */
+    fun stopBroadcast() =
+        runModeration(reload = false) { session -> broadcastRepository.stopSession(session) }
+
+    /**
+     * Shared runner for a moderation mutation: guards against a blank session / busy state, runs [action]
+     * with the trimmed session id, surfaces a notice on failure, and (when [reload]) refreshes the lists on
+     * success. A permission-less / revoked action is already blocked (or auto-exits) inside the repository.
+     */
+    private fun runModeration(
+        reload: Boolean = true,
+        action: suspend (session: String) -> ApiResult<Unit>,
+    ) {
+        val session = _uiState.value.moderation.sessionId.trim()
+        if (session.isBlank() || _uiState.value.moderation.busy) return
+        _uiState.value = _uiState.value.copy(moderation = _uiState.value.moderation.copy(busy = true))
+        viewModelScope.launch {
+            val result = action(session)
+            _uiState.value = _uiState.value.copy(moderation = _uiState.value.moderation.copy(busy = false))
+            if (result is ApiResult.Success) {
+                if (reload) loadModeration()
+            } else {
+                _uiState.value = _uiState.value.copy(notice = NOTICE_ACTION_FAILED)
             }
         }
     }
