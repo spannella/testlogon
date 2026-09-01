@@ -3872,6 +3872,24 @@
     <string name="collaboration_revision_number">Revision %1$d</string>
     <string name="collaboration_revision_proposed_by">Proposed by %1$s</string>
 
+    <!-- FIN-011: collaboration revenue records + disputes panel + settings. -->
+    <string name="collaboration_records_heading">Revenue splits</string>
+    <string name="collaboration_record_disputed">Under dispute</string>
+    <string name="collaboration_disputes_heading">Disputes</string>
+    <string name="collaboration_dispute_file">Dispute this split</string>
+    <string name="collaboration_dispute_title">Dispute split</string>
+    <string name="collaboration_dispute_reason_hint">Why is this split wrong?</string>
+    <string name="collaboration_dispute_submit">File dispute</string>
+    <string name="collaboration_dispute_filed">Dispute filed.</string>
+    <string name="collaboration_dispute_resolved">Dispute resolved.</string>
+    <string name="collaboration_dispute_accept">Accept</string>
+    <string name="collaboration_dispute_reject">Reject</string>
+    <string name="collaboration_resolve_title">Resolve dispute</string>
+    <string name="collaboration_resolve_hint">Resolution note</string>
+    <string name="collaboration_dispute_state_open">Open</string>
+    <string name="collaboration_dispute_state_resolved">Resolved</string>
+    <string name="collaboration_dispute_state_unknown">Dispute</string>
+
     <!-- AND-360: delegate / manage-as-creator overlay (banner + delegate console demonstration). -->
     <string name="delegation_banner_managing">Managing @%1$s</string>
     <string name="delegation_banner_managing_unnamed">Managing a creator</string>

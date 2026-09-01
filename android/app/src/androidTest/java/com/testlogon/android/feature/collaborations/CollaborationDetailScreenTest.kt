@@ -47,6 +47,8 @@ class CollaborationDetailScreenTest {
                     onCounter = {},
                     onCancel = {},
                     onTerminate = {},
+                    onFileDispute = { _, _ -> },
+                    onResolveDispute = { _, _, _ -> },
                 )
             }
         }
