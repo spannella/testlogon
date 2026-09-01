@@ -44,6 +44,7 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.watchparties.ParticipantRole
 import com.testlogon.android.data.watchparties.WatchParty
+import com.testlogon.android.data.watchparties.WatchPartyMath
 import com.testlogon.android.data.watchparties.WatchPartyParticipant
 
 /** Stable testTags for the party detail screen. */
@@ -57,6 +58,13 @@ object WatchPartyDetailTestTags {
     const val LEAVE = "watch_party_detail_leave"
     const val SYNC_CARD = "watch_party_detail_sync_card"
     const val SYNC_STATUS = "watch_party_detail_sync_status"
+    const val HOST_CONTROLS = "watch_party_detail_host_controls"
+    const val PLAY = "watch_party_detail_play"
+    const val PAUSE = "watch_party_detail_pause"
+    const val SEEK = "watch_party_detail_seek"
+    const val END = "watch_party_detail_end"
+    const val COHOST_PREFIX = "watch_party_detail_cohost_"
+    const val KICK_PREFIX = "watch_party_detail_kick_"
 }
 
 /** Route-level party detail entry. */
@@ -90,6 +98,12 @@ fun WatchPartyDetailRoute(
         onRetry = viewModel::onRetry,
         onJoin = viewModel::onJoin,
         onLeave = viewModel::onLeave,
+        onPlay = viewModel::onPlay,
+        onPause = viewModel::onPause,
+        onSeek = viewModel::onSeek,
+        onGrantCoHost = viewModel::onGrantCoHost,
+        onKick = viewModel::onKick,
+        onEnd = viewModel::onEnd,
         snackbarHostState = snackbarHostState,
         modifier = modifier,
     )
@@ -102,6 +116,12 @@ fun WatchPartyDetailScreen(
     onRetry: () -> Unit,
     onJoin: () -> Unit,
     onLeave: () -> Unit,
+    onPlay: () -> Unit = {},
+    onPause: () -> Unit = {},
+    onSeek: (Double) -> Unit = {},
+    onGrantCoHost: (String) -> Unit = {},
+    onKick: (String) -> Unit = {},
+    onEnd: () -> Unit = {},
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -154,12 +174,19 @@ fun WatchPartyDetailScreen(
                 WatchPartyDetailUiState.Phase.Content ->
                     state.party?.let { party ->
                         DetailContent(
+                            state = state,
                             party = party,
                             participants = state.activeParticipants,
                             isMutating = state.isMutating,
                             playbackSync = state.playbackSync,
                             onJoin = onJoin,
                             onLeave = onLeave,
+                            onPlay = onPlay,
+                            onPause = onPause,
+                            onSeek = onSeek,
+                            onGrantCoHost = onGrantCoHost,
+                            onKick = onKick,
+                            onEnd = onEnd,
                         )
                     }
             }
@@ -169,12 +196,19 @@ fun WatchPartyDetailScreen(
 
 @Composable
 private fun DetailContent(
+    state: WatchPartyDetailUiState,
     party: WatchParty,
     participants: List<WatchPartyParticipant>,
     isMutating: Boolean,
     playbackSync: WatchPartyDetailUiState.PlaybackSyncState?,
     onJoin: () -> Unit,
     onLeave: () -> Unit,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onSeek: (Double) -> Unit,
+    onGrantCoHost: (String) -> Unit,
+    onKick: (String) -> Unit,
+    onEnd: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -240,6 +274,24 @@ private fun DetailContent(
             }
         }
 
+        // Host controls (v2): only visible to a driver (host / active co-host). Playback transport for
+        // anyone who can control; grant-co-host / kick / end are host-only (gated in the VM too).
+        if (state.canControlPlayback) {
+            val nowSeconds = System.currentTimeMillis() / 1000L
+            val currentPos = playbackSync?.targetPositionSeconds(nowSeconds)
+                ?: party.positionSeconds.toDouble()
+            HostControlsCard(
+                isPlaying = playbackSync?.isPlaying == true,
+                isControlling = state.isControlling,
+                canManage = state.canManageParty,
+                currentPositionSeconds = currentPos,
+                onPlay = onPlay,
+                onPause = onPause,
+                onSeek = onSeek,
+                onEnd = onEnd,
+            )
+        }
+
         // Info card
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -288,20 +340,43 @@ private fun DetailContent(
                 } else {
                     participants.forEachIndexed { index, p ->
                         if (index > 0) HorizontalDivider()
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                text = p.userSub,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                text = roleLabel(p.role),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = p.userSub,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = roleLabel(p.role),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            // Host-only moderation for this participant.
+                            if (state.canManageParty && WatchPartyMath.canTargetParticipant(party, state.currentUserSub, p)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (state.canPromote(p)) {
+                                        OutlinedButton(
+                                            onClick = { onGrantCoHost(p.userSub) },
+                                            enabled = !state.isControlling,
+                                            modifier = Modifier.testTag(WatchPartyDetailTestTags.COHOST_PREFIX + p.userSub),
+                                        ) {
+                                            Text(stringResource(R.string.watch_parties_action_make_cohost))
+                                        }
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onKick(p.userSub) },
+                                        enabled = !state.isControlling,
+                                        modifier = Modifier.testTag(WatchPartyDetailTestTags.KICK_PREFIX + p.userSub),
+                                    ) {
+                                        Text(stringResource(R.string.watch_parties_action_kick))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -333,6 +408,75 @@ private fun DetailContent(
         }
     }
 }
+
+/** Host / co-host playback transport + (host-only) End. Gated by the caller. */
+@Composable
+private fun HostControlsCard(
+    isPlaying: Boolean,
+    isControlling: Boolean,
+    canManage: Boolean,
+    currentPositionSeconds: Double,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onSeek: (Double) -> Unit,
+    onEnd: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().testTag(WatchPartyDetailTestTags.HOST_CONTROLS)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.watch_parties_detail_host_controls_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { onSeek((currentPositionSeconds - SEEK_STEP_SECONDS).coerceAtLeast(0.0)) },
+                    enabled = !isControlling,
+                    modifier = Modifier.testTag(WatchPartyDetailTestTags.SEEK + "_back"),
+                ) {
+                    Text(stringResource(R.string.watch_parties_action_seek_back))
+                }
+                if (isPlaying) {
+                    Button(
+                        onClick = onPause,
+                        enabled = !isControlling,
+                        modifier = Modifier.weight(1f).testTag(WatchPartyDetailTestTags.PAUSE),
+                    ) {
+                        Text(stringResource(R.string.watch_parties_action_pause))
+                    }
+                } else {
+                    Button(
+                        onClick = onPlay,
+                        enabled = !isControlling,
+                        modifier = Modifier.weight(1f).testTag(WatchPartyDetailTestTags.PLAY),
+                    ) {
+                        Text(stringResource(R.string.watch_parties_action_play))
+                    }
+                }
+                OutlinedButton(
+                    onClick = { onSeek(currentPositionSeconds + SEEK_STEP_SECONDS) },
+                    enabled = !isControlling,
+                    modifier = Modifier.testTag(WatchPartyDetailTestTags.SEEK + "_fwd"),
+                ) {
+                    Text(stringResource(R.string.watch_parties_action_seek_forward))
+                }
+            }
+            if (canManage) {
+                OutlinedButton(
+                    onClick = onEnd,
+                    enabled = !isControlling,
+                    modifier = Modifier.fillMaxWidth().testTag(WatchPartyDetailTestTags.END),
+                ) {
+                    Text(stringResource(R.string.watch_parties_action_end))
+                }
+            }
+        }
+    }
+}
+
+private const val SEEK_STEP_SECONDS = 10.0
 
 @Composable
 private fun InfoRow(label: String, value: String) {

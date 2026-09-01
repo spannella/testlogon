@@ -38,6 +38,7 @@ class WatchPartiesViewModelTest {
         maxParticipants = 50,
         participantCount = 1,
         positionSeconds = 0,
+        positionUpdatedAtSeconds = 0,
         createdAtSeconds = 1,
         endedAtSeconds = null,
     )
@@ -52,6 +53,11 @@ class WatchPartiesViewModelTest {
         var joinResult: ApiResult<Unit> = ApiResult.Success(Unit)
         var leaveResult: ApiResult<Unit> = ApiResult.Success(Unit)
         var resolveResult: ApiResult<InviteResolution> = ApiResult.Failure(ApiError(404, "x"))
+        var controlResult: ApiResult<WatchParty> = ApiResult.Failure(ApiError(500, "x"))
+        var coHostResult: ApiResult<Unit> = ApiResult.Success(Unit)
+        var kickResult: ApiResult<Unit> = ApiResult.Success(Unit)
+        var endResult: ApiResult<WatchParty> = ApiResult.Failure(ApiError(500, "x"))
+        var heartbeatResult: ApiResult<WatchParty> = ApiResult.Failure(ApiError(500, "x"))
 
         var createCalls = 0
         var lastCreateVideoId: String? = null
@@ -62,6 +68,15 @@ class WatchPartiesViewModelTest {
         var lastJoinPartyId: String? = null
         var lastLeavePartyId: String? = null
         var lastResolveCode: String? = null
+        var controlCalls = 0
+        var lastControlAction: String? = null
+        var lastControlPosition: Double? = null
+        var coHostCalls = 0
+        var lastCoHostTarget: String? = null
+        var kickCalls = 0
+        var lastKickTarget: String? = null
+        var endCalls = 0
+        var heartbeatCalls = 0
 
         override suspend fun loadParties(): ApiResult<List<WatchParty>> = listResult
 
@@ -97,6 +112,39 @@ class WatchPartiesViewModelTest {
         override suspend fun resolveInvite(inviteCode: String): ApiResult<InviteResolution> {
             lastResolveCode = inviteCode
             return resolveResult
+        }
+
+        override suspend fun controlPlayback(
+            partyId: String,
+            action: String,
+            positionSeconds: Double?,
+        ): ApiResult<WatchParty> {
+            controlCalls++
+            lastControlAction = action
+            lastControlPosition = positionSeconds
+            return controlResult
+        }
+
+        override suspend fun grantCoHost(partyId: String, targetUserSub: String): ApiResult<Unit> {
+            coHostCalls++
+            lastCoHostTarget = targetUserSub
+            return coHostResult
+        }
+
+        override suspend fun kickParticipant(partyId: String, targetUserSub: String): ApiResult<Unit> {
+            kickCalls++
+            lastKickTarget = targetUserSub
+            return kickResult
+        }
+
+        override suspend fun endParty(partyId: String): ApiResult<WatchParty> {
+            endCalls++
+            return endResult
+        }
+
+        override suspend fun heartbeat(partyId: String): ApiResult<WatchParty> {
+            heartbeatCalls++
+            return heartbeatResult
         }
 
         override fun cached(): List<WatchParty>? = cachedValue
