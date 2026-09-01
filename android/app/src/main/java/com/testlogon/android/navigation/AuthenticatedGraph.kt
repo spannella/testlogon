@@ -518,6 +518,9 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // list (Paging-3 over the AND-371 next_cursor) -> a ticket thread (embedded messages, mine-vs-other).
         // Composing / replying / member or status edits are AND-373 and OUT OF SCOPE.
         ticketsDestinations(navController)
+        // KB-AND-1: READ-ONLY Knowledge Base (help centre). Article list / search -> article detail.
+        // Degrade-on-404 when knowledge_base_enabled is off (clean empty / not-found).
+        knowledgeBaseDestinations(navController)
         // B-SUP (batch 7): role-branched Support. The landing resolves /ui/me.is_admin and renders the
         // USER help experience (create + view my tickets) or the ADMIN helpdesk/moderation queue, then
         // drills into a shared ticket thread (isAdmin nav arg gates the admin status/assign controls).
