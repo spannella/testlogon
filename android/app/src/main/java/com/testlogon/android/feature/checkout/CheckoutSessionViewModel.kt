@@ -10,6 +10,11 @@ import com.testlogon.android.data.checkout.CheckoutRepository
 import com.testlogon.android.data.checkout.CheckoutSession
 import com.testlogon.android.data.checkout.CheckoutSessionRequest
 import com.testlogon.android.data.custody.CustodyAssets
+import com.testlogon.android.data.promo.PromoCodesRepository
+import com.testlogon.android.data.promo.PromoValidation
+import com.testlogon.android.data.promo.RedeemPromoRequestDto
+import com.testlogon.android.data.promo.ValidatePromoRequestDto
+import com.testlogon.android.feature.promo.PromoCodeMath
 import com.testlogon.android.data.custody.CustodyReader
 import com.testlogon.android.data.fees.FeeQuote
 import com.testlogon.android.data.fees.FeesRepository
@@ -78,6 +83,26 @@ data class CryptoPayUiState(
         get() = available && quote != null && secondsRemaining > 0L && !insufficient && !quoting && !paying
 }
 
+/**
+ * AND-266 (buyer surface) — the additive promo-code sub-state layered onto the order-review screen.
+ * [available] is false once /validate 404s (degrade-on-404) so the field hides itself. [applied] is the
+ * server-validated discount (null until a valid code is applied); [error] carries an invalid-code reason.
+ * The existing "Place order" path is untouched; the promo is redeemed best-effort AFTER a successful buy.
+ */
+data class PromoUiState(
+    val available: Boolean = true,
+    val input: String = "",
+    val applying: Boolean = false,
+    val applied: PromoValidation? = null,
+    val error: String? = null,
+) {
+    /** True once a valid code has been applied and reduced the price. */
+    val hasDiscount: Boolean get() = applied?.valid == true && applied.discountCents > 0
+    /** The code may be applied when the field is non-blank, format-valid and not already applying. */
+    val canApply: Boolean
+        get() = available && !applying && applied == null && PromoCodeMath.isValidFormat(input)
+}
+
 /** AND-213 / AND-031 - the payment-attempt outcome surfaced from "Place order". */
 sealed interface CheckoutEvent {
     data object PaymentsUnavailable : CheckoutEvent
@@ -95,12 +120,16 @@ class CheckoutSessionViewModel @Inject constructor(
     private val billingAuthorizer: com.testlogon.android.data.messaging.BillingAuthorizer,
     private val feesRepository: FeesRepository,
     private val custodyReader: CustodyReader,
+    private val promoRepository: PromoCodesRepository,
     private val savedState: SavedStateHandle,
 ) : ViewModel() {
 
     private val cartId: String? = savedState[ARG_CART_ID]
     private val totalCents: Long = savedState[ARG_TOTAL_CENTS] ?: 0L
     private val currency: String = savedState[ARG_CURRENCY] ?: "USD"
+
+    /** AND-266: optional seller/creator scope for promo validation; empty when the cart is anonymous. */
+    private val creatorUserId: String = savedState[ARG_CREATOR_ID] ?: ""
 
     private val _selectedAddressId = MutableStateFlow<String?>(savedState[KEY_ADDRESS_ID])
     val selectedAddressId: StateFlow<String?> = _selectedAddressId.asStateFlow()
@@ -123,6 +152,9 @@ class CheckoutSessionViewModel @Inject constructor(
 
     private val _crypto = MutableStateFlow(CryptoPayUiState())
     val crypto: StateFlow<CryptoPayUiState> = _crypto.asStateFlow()
+
+    private val _promo = MutableStateFlow(PromoUiState())
+    val promo: StateFlow<PromoUiState> = _promo.asStateFlow()
     private var countdownJob: Job? = null
 
     private val _events = Channel<CheckoutEvent>(Channel.BUFFERED)
@@ -192,12 +224,77 @@ class CheckoutSessionViewModel @Inject constructor(
                 adClickId = adAttribution.peek(),
                 addressId = addressId,
             )) {
-                is ApiResult.Success ->
+                is ApiResult.Success -> {
+                    redeemAppliedPromo(r.data.orderId)
                     _events.send(CheckoutEvent.PurchaseComplete(r.data.purchaseTxnId, r.data.orderId))
+                }
                 is ApiResult.Failure -> _events.send(CheckoutEvent.PaymentFailed(r.error.message))
                 is ApiResult.NetworkError -> _events.send(CheckoutEvent.PaymentFailed(OFFLINE_MESSAGE))
             }
             _placing.update { false }
+        }
+    }
+
+    // ---------------- AND-266: buyer promo code ----------------
+
+    fun onPromoCodeChange(value: String) {
+        _promo.update { it.copy(input = value, error = null) }
+    }
+
+    /** The price the promo validates against: the applied final price, else the cart total. */
+    val effectiveTotalCents: Long
+        get() = _promo.value.applied?.takeIf { it.valid }?.finalPriceCents?.toLong() ?: totalCents
+
+    fun applyPromoCode() {
+        val state = _promo.value
+        if (!state.canApply) return
+        val code = PromoCodeMath.normalizeCode(state.input)
+        _promo.update { it.copy(applying = true, error = null) }
+        viewModelScope.launch {
+            val req = ValidatePromoRequestDto(
+                code = code,
+                checkoutType = CHECKOUT_TYPE_SHOP,
+                itemPriceCents = totalCents.toInt(),
+                creatorUserId = creatorUserId,
+            )
+            when (val r = promoRepository.validate(req)) {
+                is ApiResult.Success -> {
+                    val v = r.data
+                    when {
+                        // Degrade-on-404: promo surface unavailable -> hide the field entirely.
+                        v == null -> _promo.update { it.copy(applying = false, available = false) }
+                        v.valid -> _promo.update { it.copy(applying = false, applied = v, error = null) }
+                        else -> _promo.update {
+                            it.copy(applying = false, applied = null, error = v.message ?: INVALID_PROMO)
+                        }
+                    }
+                }
+                is ApiResult.Failure ->
+                    _promo.update { it.copy(applying = false, error = r.error.message) }
+                is ApiResult.NetworkError ->
+                    _promo.update { it.copy(applying = false, error = OFFLINE_MESSAGE) }
+            }
+        }
+    }
+
+    fun clearPromoCode() {
+        _promo.update { PromoUiState(available = it.available) }
+    }
+
+    /** Best-effort post-purchase redemption. Failures never block the completed order. */
+    private fun redeemAppliedPromo(orderId: String) {
+        val applied = _promo.value.applied?.takeIf { it.valid } ?: return
+        val codeId = applied.codeId ?: return
+        viewModelScope.launch {
+            promoRepository.redeem(
+                RedeemPromoRequestDto(
+                    codeId = codeId,
+                    originalPriceCents = totalCents.toInt(),
+                    finalPriceCents = applied.finalPriceCents,
+                    checkoutType = CHECKOUT_TYPE_SHOP,
+                    checkoutItemId = orderId,
+                ),
+            )
         }
     }
 
@@ -324,10 +421,13 @@ class CheckoutSessionViewModel @Inject constructor(
         const val ARG_CART_ID = "cartId"
         const val ARG_TOTAL_CENTS = "totalCents"
         const val ARG_CURRENCY = "currency"
+        const val ARG_CREATOR_ID = "creatorUserId"
         const val KEY_IDEMPOTENCY = "idem_key"
         const val KEY_ADDRESS_ID = "checkout_address_id"
         private const val OFFLINE_MESSAGE = "You are offline"
         private const val GENERIC_PAYMENT_ERROR = "Payment failed"
+        private const val CHECKOUT_TYPE_SHOP = "shop"
+        private const val INVALID_PROMO = "This promo code is not valid"
 
         internal fun wholeToBaseUnits(whole: Double, decimals: Int): Long {
             if (whole <= 0.0) return 0L

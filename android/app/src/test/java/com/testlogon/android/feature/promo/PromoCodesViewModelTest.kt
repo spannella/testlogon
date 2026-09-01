@@ -9,6 +9,8 @@ import com.testlogon.android.data.promo.PromoCode
 import com.testlogon.android.data.promo.PromoCodesRepository
 import com.testlogon.android.data.promo.RedeemPromoRequestDto
 import com.testlogon.android.data.promo.RedeemResult
+import com.testlogon.android.data.promo.PromoValidation
+import com.testlogon.android.data.promo.ValidatePromoRequestDto
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -47,6 +49,8 @@ class PromoCodesViewModelTest {
         override suspend fun deactivate(codeId: String): ApiResult<Unit> = deactivateResult
         override suspend fun redeem(request: RedeemPromoRequestDto): ApiResult<RedeemResult> =
             ApiResult.Success(RedeemResult(true, 0))
+        override suspend fun validate(request: ValidatePromoRequestDto): ApiResult<PromoValidation?> =
+            ApiResult.Success(null)
     }
 
     @Test

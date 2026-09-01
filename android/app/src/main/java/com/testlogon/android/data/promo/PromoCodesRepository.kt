@@ -31,6 +31,13 @@ interface PromoCodesRepository {
     suspend fun deactivate(codeId: String): ApiResult<Unit>
 
     suspend fun redeem(request: RedeemPromoRequestDto): ApiResult<RedeemResult>
+
+    /**
+     * Validate a code for a checkout context. Returns Success(null) when the promo-codes surface is
+     * not deployed on this backend (404 -> degrade-on-404): the checkout field simply hides itself.
+     * Every other HTTP/parse/transport failure folds to Failure/NetworkError as usual.
+     */
+    suspend fun validate(request: ValidatePromoRequestDto): ApiResult<PromoValidation?>
 }
 
 @Singleton
@@ -56,6 +63,23 @@ class PromoCodesRepositoryImpl @Inject constructor(
     override suspend fun redeem(request: RedeemPromoRequestDto): ApiResult<RedeemResult> = withContext(io) {
         call { api.redeem(request).toDomain() }
     }
+
+    override suspend fun validate(request: ValidatePromoRequestDto): ApiResult<PromoValidation?> =
+        withContext(io) {
+            try {
+                ApiResult.Success(api.validate(request).toDomain())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: HttpException) {
+                // Degrade-on-404: promo-codes not enabled/deployed on this backend.
+                if (e.code() == 404) ApiResult.Success(null)
+                else ApiResult.Failure(errorParser.from(e))
+            } catch (e: com.squareup.moshi.JsonDataException) {
+                ApiResult.Failure(errorParser.fromThrowable(e))
+            } catch (e: IOException) {
+                ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+            }
+        }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())
