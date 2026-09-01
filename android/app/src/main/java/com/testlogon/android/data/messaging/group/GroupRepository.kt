@@ -88,6 +88,13 @@ interface GroupRepository {
 
     /** Accept a pending invite; re-GETs the conversation so membership flips to active. */
     suspend fun acceptInvite(conversationId: String): ApiResult<GroupSettings>
+
+    /**
+     * AND-160 — delete the conversation entirely (the final conversation-lifecycle route). On success
+     * (or a benign 404/410 already-gone) evicts the conversation + its roster from the local cache so
+     * the AND-121 list drops it at once. Non-idempotent (no auto-retry).
+     */
+    suspend fun deleteConversation(conversationId: String): ApiResult<Unit>
 }
 
 @Singleton
@@ -281,6 +288,27 @@ class GroupRepositoryImpl @Inject constructor(
                 is ApiResult.Failure ->
                     // 409 already-a-member -> coalesce to success by re-reading state.
                     if (r.error.status == HTTP_CONFLICT) getGroupSettings(conversationId) else r
+                is ApiResult.NetworkError -> r
+            }
+        }
+
+    override suspend fun deleteConversation(conversationId: String): ApiResult<Unit> =
+        withContext(io) {
+            when (val r = apiCall { api.deleteConversation(conversationId) }) {
+                is ApiResult.Success -> {
+                    conversationDao.deleteById(conversationId)
+                    participantDao.clearForConversation(conversationId)
+                    ApiResult.Success(Unit)
+                }
+                is ApiResult.Failure ->
+                    // A 404/410 (already deleted / gone) is benign — the end state matches success.
+                    if (ConversationDeleteMath.isBenignDeleteFailure(r.error.status)) {
+                        conversationDao.deleteById(conversationId)
+                        participantDao.clearForConversation(conversationId)
+                        ApiResult.Success(Unit)
+                    } else {
+                        r
+                    }
                 is ApiResult.NetworkError -> r
             }
         }

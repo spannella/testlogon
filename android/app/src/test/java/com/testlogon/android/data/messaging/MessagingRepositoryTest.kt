@@ -52,6 +52,9 @@ class MessagingRepositoryTest {
         }
         override fun observeUnreadConversationCount(): Flow<Int> =
             rows.map { list -> list.count { it.unreadCount > 0 } }
+        override suspend fun deleteById(id: String) {
+            rows.value = rows.value.filterNot { it.conversationId == id }
+        }
         override suspend fun clear() { rows.value = emptyList() }
     }
 

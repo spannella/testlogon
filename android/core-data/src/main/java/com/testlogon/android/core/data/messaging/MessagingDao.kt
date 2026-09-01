@@ -34,6 +34,14 @@ interface ConversationDao {
     @Query("SELECT COALESCE(SUM(CASE WHEN unreadCount > 0 THEN 1 ELSE 0 END), 0) FROM conversations")
     fun observeUnreadConversationCount(): Flow<Int>
 
+    /**
+     * Delete ONE conversation row from the local cache by id. Used by the thread-level
+     * "Delete conversation" action (DELETE /messaging/conversations/{id}); the reactive
+     * [observeAll] stream drops it from the list at once. No-op if the id is absent.
+     */
+    @Query("DELETE FROM conversations WHERE conversationId = :id")
+    suspend fun deleteById(id: String)
+
     @Query("DELETE FROM conversations")
     suspend fun clear()
 }

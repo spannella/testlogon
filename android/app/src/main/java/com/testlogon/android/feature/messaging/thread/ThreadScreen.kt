@@ -198,6 +198,12 @@ object ThreadTestTags {
 
     /** #19 — the single "+" that opens the conversation-actions dropdown menu. */
     const val TOPBAR_MENU = "thread_topbar_menu"
+
+    /** AND-160 — delete-conversation overflow item + its confirm dialog. */
+    const val DELETE_CONVERSATION = "thread_delete_conversation"
+    const val DELETE_CONFIRM = "thread_delete_confirm"
+    const val DELETE_CONFIRM_YES = "thread_delete_confirm_yes"
+    const val DELETE_CONFIRM_CANCEL = "thread_delete_confirm_cancel"
 }
 
 /** AND-123 — route-level thread, reached from the conversation list. */
@@ -311,6 +317,7 @@ fun ThreadRoute(
                 is ThreadEvent.OpenFile -> openDownloadedFile(context, event.localPath, event.mimeType)
                 is ThreadEvent.Toast ->
                     android.widget.Toast.makeText(context, event.message, android.widget.Toast.LENGTH_SHORT).show()
+                is ThreadEvent.ConversationDeleted -> onBack()
                 is ThreadEvent.ScrollToMessage -> {
                     // AND-140 — jump-to-pinned: the list is reverseLayout, so map the key to its index.
                     val idx = state.messages.indexOfFirst { it.key == event.messageKey }
@@ -364,6 +371,7 @@ fun ThreadRoute(
         onOpenGroupDetails = onOpenGroupDetails,
         onMute = viewModel::onMute,
         onUnmute = viewModel::onUnmute,
+        onDeleteConversation = viewModel::onDeleteConversation,
         onRetry = viewModel::retry,
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::onSend,
@@ -1043,6 +1051,8 @@ fun ThreadScreen(
     // FE-140 — per-conversation mute: onMute(optionId) / onUnmute, wired to the mute repo call.
     onMute: (String) -> Unit = {},
     onUnmute: () -> Unit = {},
+    // AND-160 — delete the whole conversation from the thread overflow menu (confirm dialog gates it).
+    onDeleteConversation: () -> Unit = {},
     onRetry: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -1181,6 +1191,8 @@ fun ThreadScreen(
     var galleryVideoUrl by remember { mutableStateOf<String?>(null) }
     // FE-140 - per-conversation mute options bottom sheet.
     var showMuteSheet by remember { mutableStateOf(false) }
+    // AND-160 - delete-conversation confirm dialog visibility.
+    var showDeleteConfirm by remember { mutableStateOf(false) }
     val isConversationMuted = com.testlogon.android.feature.messaging.mute.MuteMath.isMuted(state.mutedUntil, nowSeconds)
     // #3 KEYBOARD DISMISS — clear the composer's focus + hide the IME without leaving the thread.
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -1242,6 +1254,32 @@ fun ThreadScreen(
                 }
             }
         }
+    }
+    // AND-160 - confirm before the destructive delete. Confirm calls onDeleteConversation (the VM
+    // deletes + evicts the cache + emits ConversationDeleted so the route pops back to the list).
+    if (showDeleteConfirm) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(stringResource(R.string.thread_delete_conversation_title)) },
+            text = { Text(stringResource(R.string.thread_delete_conversation_body)) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDeleteConversation()
+                    },
+                    enabled = !state.deleteInFlight,
+                    modifier = Modifier.testTag(ThreadTestTags.DELETE_CONFIRM_YES),
+                ) { Text(stringResource(R.string.thread_delete_conversation_confirm)) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { showDeleteConfirm = false },
+                    modifier = Modifier.testTag(ThreadTestTags.DELETE_CONFIRM_CANCEL),
+                ) { Text(stringResource(R.string.action_cancel)) }
+            },
+            modifier = Modifier.testTag(ThreadTestTags.DELETE_CONFIRM),
+        )
     }
     Scaffold(
         modifier = modifier.testTag(ThreadTestTags.SCREEN),
@@ -1434,6 +1472,15 @@ fun ThreadScreen(
                                 modifier = Modifier.testTag(ThreadTestTags.DISCARD_DRAFT),
                             )
                         }
+                        // AND-160 — delete the whole conversation (final lifecycle route). Opens a
+                        // confirm dialog; the VM does the delete + cache eviction + pop-back.
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(stringResource(R.string.thread_delete_conversation)) },
+                            leadingIcon = { Icon(Icons.Filled.DeleteOutline, contentDescription = null) },
+                            enabled = !state.deleteInFlight,
+                            onClick = { menuOpen = false; showDeleteConfirm = true },
+                            modifier = Modifier.testTag(ThreadTestTags.DELETE_CONVERSATION),
+                        )
                     }
                 },
                 )

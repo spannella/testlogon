@@ -76,6 +76,9 @@ sealed interface ThreadEvent {
 
     /** #9 — show a transient toast (e.g. save-to-phone result). */
     data class Toast(val message: String) : ThreadEvent
+
+    /** AND-160 — the conversation was deleted; the screen should pop back to the list. */
+    data object ConversationDeleted : ThreadEvent
 }
 
 /**
@@ -319,6 +322,34 @@ class ThreadViewModel @Inject constructor(
         muteStore.setMuted(conversationId, priorUntil)
         _state.update { it.copy(muteActionInFlight = false) }
         _events.send(ThreadEvent.Toast(message))
+    }
+
+    /**
+     * AND-160 — delete this conversation entirely (the final conversation-lifecycle route). Guards
+     * against a double-tap, calls the shared GroupRepository.deleteConversation (which evicts the
+     * local cache so the AND-121 list drops it), then emits [ThreadEvent.ConversationDeleted] so the
+     * screen pops back. A benign 404/410 is coalesced to success inside the repo. On a real failure a
+     * toast is shown and the screen stays put.
+     */
+    fun onDeleteConversation() {
+        if (_state.value.deleteInFlight) return
+        _state.update { it.copy(deleteInFlight = true) }
+        viewModelScope.launch {
+            when (val r = groupRepository.deleteConversation(conversationId)) {
+                is ApiResult.Success -> {
+                    _state.update { it.copy(deleteInFlight = false) }
+                    _events.send(ThreadEvent.ConversationDeleted)
+                }
+                is ApiResult.Failure -> {
+                    _state.update { it.copy(deleteInFlight = false) }
+                    _events.send(ThreadEvent.Toast(r.error.message))
+                }
+                is ApiResult.NetworkError -> {
+                    _state.update { it.copy(deleteInFlight = false) }
+                    _events.send(ThreadEvent.Toast(OFFLINE_MESSAGE))
+                }
+            }
+        }
     }
 
     /**

@@ -66,6 +66,8 @@ data class ThreadUiState(
     val mutedUntil: Long = 0L,
     /** FE-140 - true while a mute/unmute network call is in flight (disables the menu item). */
     val muteActionInFlight: Boolean = false,
+    /** AND-160 - true while the delete-conversation network call is in flight (disables the menu item). */
+    val deleteInFlight: Boolean = false,
     /** Last draft sync outcome (non-blocking UX only). */
     val draftSyncState: DraftSyncState = DraftSyncState.Idle,
     // ---- AND-147: read receipts / views ----
