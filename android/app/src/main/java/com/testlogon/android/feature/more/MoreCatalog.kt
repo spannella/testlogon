@@ -909,6 +909,14 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.APP,
         ),
         MoreEntry(
+            id = "marketing_campaigns",
+            labelRes = R.string.more_entry_marketing_campaigns,
+            icon = Icons.Outlined.Campaign,
+            route = MoreRoutes.MARKETING_CAMPAIGNS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
             id = "costs",
             labelRes = R.string.more_entry_costs,
             icon = Icons.Outlined.AccountBalance,

@@ -5172,6 +5172,12 @@
     <!-- B4 web-parity: More entries for Stylist + Marketing agents -->
     <string name="more_entry_stylist">Design (Stylist)</string>
     <string name="more_entry_marketing">Marketing</string>
+    <string name="more_entry_marketing_campaigns">Marketing campaigns</string>
+    <!-- Marketing campaigns (OFBiz MKT) hub -->
+    <string name="mktc_campaign_created">Campaign created</string>
+    <string name="mktc_list_created">List created</string>
+    <string name="mktc_action_done">Done</string>
+    <string name="mktc_action_failed">Action failed</string>
 
     <!-- Stylist / UI-design agent -->
     <string name="stylist_overview_title">Design Overview</string>

@@ -259,6 +259,8 @@ object MoreRoutes {
 
     // B4 web-parity: Marketing content agent (web /agents/marketing). require_ui_session (usable).
     const val MARKETING = MarketingDashboardDest.ROUTE
+    // OFBiz Marketing CAMPAIGNS hub (web /ui/marketing: campaigns/lists/segments). require_ui_session.
+    const val MARKETING_CAMPAIGNS = MarketingCampaignsDest.ROUTE
     // B4 web-parity: Accountant/cost-tracking agent (web /agents/costs). require_ui_session (usable).
     const val COSTS = CostOverviewDest.ROUTE
     // B4 web-parity: Compliance agent (web /agents/compliance). require_ui_session (usable).
@@ -693,6 +695,7 @@ object MoreRoutes {
             DOC_COVERAGE,
             STYLIST,
             MARKETING,
+            MARKETING_CAMPAIGNS,
             COSTS,
             COMPLIANCE,
             SECURITY,
