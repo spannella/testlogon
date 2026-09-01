@@ -1360,6 +1360,10 @@ private fun fakePurchasesRepository(): com.testlogon.android.data.purchases.Purc
             com.testlogon.android.core.model.ApiResult.Failure(
                 com.testlogon.android.core.model.ApiError(status = 404, message = "nf"),
             )
+        override suspend fun events(txnId: String, limit: Int) =
+            com.testlogon.android.core.model.ApiResult.Success(emptyList<com.testlogon.android.data.purchases.PurchaseEvent>())
+        override suspend fun receipt(txnId: String) =
+            com.testlogon.android.core.model.ApiResult.Success<com.testlogon.android.data.purchases.PurchaseReceipt?>(null)
     }
 
 
