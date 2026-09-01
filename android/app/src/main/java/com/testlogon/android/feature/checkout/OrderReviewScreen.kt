@@ -26,6 +26,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -49,6 +51,7 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.checkout.CheckoutLineItem
 import com.testlogon.android.data.checkout.CheckoutSession
+import com.testlogon.android.data.promo.PromoValidation
 import com.testlogon.android.feature.catalog.formatPrice
 
 /** AND-213 / FE-152 — stable test tags for the order-review screen. */
@@ -68,6 +71,12 @@ object OrderReviewTestTags {
     const val CRYPTO_INSUFFICIENT = "order_review_crypto_insufficient"
     const val CRYPTO_PAY = "order_review_crypto_pay"
     const val CRYPTO_UNAVAILABLE = "order_review_crypto_unavailable"
+
+    // AND-266: buyer promo-code field.
+    const val PROMO_FIELD = "order_review_promo_field"
+    const val PROMO_APPLY = "order_review_promo_apply"
+    const val PROMO_APPLIED = "order_review_promo_applied"
+    const val PROMO_ERROR = "order_review_promo_error"
 
     fun line(sku: String) = "order_review_line_$sku"
     fun cryptoAsset(symbol: String) = "order_review_crypto_asset_$symbol"
@@ -91,6 +100,7 @@ fun OrderReviewRoute(
     val placing by viewModel.placing.collectAsStateWithLifecycle()
     val addressId by viewModel.selectedAddressId.collectAsStateWithLifecycle()
     val crypto by viewModel.crypto.collectAsStateWithLifecycle()
+    val promo by viewModel.promo.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val paymentsUnavailable = stringResource(R.string.checkout_payments_unavailable)
     val addressRequired = stringResource(R.string.checkout_address_required)
@@ -114,12 +124,16 @@ fun OrderReviewRoute(
         state = state,
         placing = placing,
         crypto = crypto,
+        promo = promo,
         selectedAddressId = addressId,
         snackbarHostState = snackbarHostState,
         onPlaceOrder = viewModel::placeOrder,
         onSelectAddress = onSelectAddress,
         onCryptoAssetSelected = viewModel::onCryptoAssetSelected,
         onPayWithCrypto = viewModel::payWithCrypto,
+        onPromoChange = viewModel::onPromoCodeChange,
+        onApplyPromo = viewModel::applyPromoCode,
+        onClearPromo = viewModel::clearPromoCode,
         onRetry = viewModel::retry,
         onBack = onBack,
         modifier = modifier,
@@ -136,10 +150,14 @@ fun OrderReviewScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     crypto: CryptoPayUiState = CryptoPayUiState(),
+    promo: PromoUiState = PromoUiState(),
     selectedAddressId: String? = null,
     onSelectAddress: () -> Unit = {},
     onCryptoAssetSelected: (String) -> Unit = {},
     onPayWithCrypto: () -> Unit = {},
+    onPromoChange: (String) -> Unit = {},
+    onApplyPromo: () -> Unit = {},
+    onClearPromo: () -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.testTag(OrderReviewTestTags.SCREEN),
@@ -196,6 +214,10 @@ fun OrderReviewScreen(
                         crypto = crypto,
                         onCryptoAssetSelected = onCryptoAssetSelected,
                         onPayWithCrypto = onPayWithCrypto,
+                        promo = promo,
+                        onPromoChange = onPromoChange,
+                        onApplyPromo = onApplyPromo,
+                        onClearPromo = onClearPromo,
                     )
             }
         }
@@ -210,6 +232,10 @@ private fun OrderReviewContent(
     crypto: CryptoPayUiState,
     onCryptoAssetSelected: (String) -> Unit,
     onPayWithCrypto: () -> Unit,
+    promo: PromoUiState,
+    onPromoChange: (String) -> Unit,
+    onApplyPromo: () -> Unit,
+    onClearPromo: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag(OrderReviewTestTags.LIST),
@@ -223,6 +249,19 @@ private fun OrderReviewContent(
         items(session.lineItems, key = { it.sku }) { line ->
             OrderReviewLine(line, session.currency)
             HorizontalDivider()
+        }
+        // AND-266: buyer promo-code field. Hidden once /validate 404s (degrade-on-404).
+        if (promo.available) {
+            item(key = "__promo_code") {
+                PromoCodeSection(
+                    promo = promo,
+                    currency = session.currency,
+                    onPromoChange = onPromoChange,
+                    onApplyPromo = onApplyPromo,
+                    onClearPromo = onClearPromo,
+                )
+                HorizontalDivider()
+            }
         }
         // FE-152: additive "Pay with crypto balance" section. Only shown when the backend supports
         // pay-any-coin quoting (degrade-on-404) AND there is a fundable crypto balance to pick from.
@@ -242,6 +281,79 @@ private fun OrderReviewContent(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 8.dp).testTag(OrderReviewTestTags.CRYPTO_UNAVAILABLE),
+                )
+            }
+        }
+    }
+}
+
+/** AND-266 — buyer promo-code field: input + Apply, or the applied discount summary + Remove. */
+@Composable
+private fun PromoCodeSection(
+    promo: PromoUiState,
+    currency: String,
+    onPromoChange: (String) -> Unit,
+    onApplyPromo: () -> Unit,
+    onClearPromo: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(text = "Promo code", style = MaterialTheme.typography.titleSmall)
+        val applied = promo.applied
+        if (applied != null && applied.valid) {
+            Row(
+                Modifier.fillMaxWidth().testTag(OrderReviewTestTags.PROMO_APPLIED),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text(
+                        text = "Code applied",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = "-" + formatPrice(applied.discountCents.toLong(), currency) +
+                            " · new total " + formatPrice(applied.finalPriceCents.toLong(), currency),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onClearPromo) { Text("Remove") }
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = promo.input,
+                    onValueChange = onPromoChange,
+                    singleLine = true,
+                    label = { Text("Enter code") },
+                    isError = promo.error != null,
+                    modifier = Modifier.weight(1f).testTag(OrderReviewTestTags.PROMO_FIELD),
+                )
+                OutlinedButton(
+                    onClick = onApplyPromo,
+                    enabled = promo.canApply,
+                    modifier = Modifier.testTag(OrderReviewTestTags.PROMO_APPLY),
+                ) {
+                    if (promo.applying) {
+                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                    } else {
+                        Text("Apply")
+                    }
+                }
+            }
+            if (promo.error != null) {
+                Text(
+                    text = promo.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag(OrderReviewTestTags.PROMO_ERROR),
                 )
             }
         }

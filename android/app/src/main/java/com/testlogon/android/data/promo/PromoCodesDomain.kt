@@ -76,3 +76,37 @@ internal fun PromoCodeListDto.toDomain(): List<PromoCode> = items.map { it.toDom
 data class RedeemResult(val ok: Boolean, val redeemedAtEpochSeconds: Long)
 
 internal fun RedeemPromoResponseDto.toDomain(): RedeemResult = RedeemResult(ok = ok, redeemedAtEpochSeconds = redeemedAt)
+
+
+/**
+ * AND-266 (buyer surface) — the outcome of validating a code against a checkout context. Mirrors the
+ * PromoValidateOut wire shape. When [valid] is false, [errorCode]/[message] carry the reason (the UI
+ * shows [message]); [discountCents]/[finalPriceCents] are 0/original respectively. Money is Int cents.
+ */
+data class PromoValidation(
+    val valid: Boolean,
+    val codeId: String?,
+    val discountType: DiscountType,
+    val rawDiscountType: String?,
+    val discountCents: Int,
+    val discountPct: Int?,
+    val originalPriceCents: Int,
+    val finalPriceCents: Int,
+    val freeTrialDays: Int,
+    val errorCode: String?,
+    val message: String?,
+)
+
+internal fun PromoValidateDto.toDomain(): PromoValidation = PromoValidation(
+    valid = valid,
+    codeId = codeId,
+    discountType = DiscountType.from(discountType),
+    rawDiscountType = discountType,
+    discountCents = discountCents,
+    discountPct = discountPct,
+    originalPriceCents = originalPriceCents,
+    finalPriceCents = finalPriceCents,
+    freeTrialDays = freeTrialDays,
+    errorCode = errorCode,
+    message = message,
+)

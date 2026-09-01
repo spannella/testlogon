@@ -40,6 +40,9 @@ interface PromoCodesApi {
     @POST("ui/promo-codes/redeem")
     suspend fun redeem(@Body body: RedeemPromoRequestDto): RedeemPromoResponseDto
 
+    @POST("ui/promo-codes/validate")
+    suspend fun validate(@Body body: ValidatePromoRequestDto): PromoValidateDto
+
     @DELETE("ui/promo-codes/{code_id}")
     suspend fun deactivate(@Path("code_id") codeId: String): PromoDeactivateDto
 }
@@ -103,4 +106,26 @@ data class PromoDeactivateDto(
     val ok: Boolean = true,
     @Json(name = "code_id") val codeId: String = "",
     val active: Boolean = false,
+)
+
+@JsonClass(generateAdapter = true)
+data class ValidatePromoRequestDto(
+    val code: String,
+    @Json(name = "checkout_type") val checkoutType: String,
+    @Json(name = "item_price_cents") val itemPriceCents: Int,
+    @Json(name = "creator_user_id") val creatorUserId: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class PromoValidateDto(
+    val valid: Boolean = false,
+    @Json(name = "code_id") val codeId: String? = null,
+    @Json(name = "discount_type") val discountType: String? = null,
+    @Json(name = "discount_cents") val discountCents: Int = 0,
+    @Json(name = "discount_pct") val discountPct: Int? = null,
+    @Json(name = "original_price_cents") val originalPriceCents: Int = 0,
+    @Json(name = "final_price_cents") val finalPriceCents: Int = 0,
+    @Json(name = "free_trial_days") val freeTrialDays: Int = 0,
+    @Json(name = "error_code") val errorCode: String? = null,
+    val message: String? = null,
 )

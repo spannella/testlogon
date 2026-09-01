@@ -17,6 +17,13 @@ import com.testlogon.android.data.checkout.CheckoutStatus
 import com.testlogon.android.data.messaging.BillingAuthorizer
 import com.testlogon.android.data.messaging.BillingResult
 import com.testlogon.android.data.messaging.StubBillingAuthorizer
+import com.testlogon.android.data.promo.PromoCode
+import com.testlogon.android.data.promo.PromoCodesRepository
+import com.testlogon.android.data.promo.PromoValidation
+import com.testlogon.android.data.promo.RedeemPromoRequestDto
+import com.testlogon.android.data.promo.RedeemResult
+import com.testlogon.android.data.promo.ValidatePromoRequestDto
+import com.testlogon.android.data.promo.CreatePromoRequestDto
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -67,6 +74,7 @@ class CheckoutSessionViewModelTest {
         billing,
         FakeFeesRepository(),
         FakeCustodyReader(),
+        FakePromoRepositoryForCheckout(),
         saved,
     )
 
@@ -238,4 +246,17 @@ private class FakeCustodyReader : com.testlogon.android.data.custody.CustodyRead
         ApiResult.Success(com.testlogon.android.data.custody.CustodyBalances("v", "t", emptyList()))
     override suspend fun getStaking(): ApiResult<com.testlogon.android.data.custody.StakingDashboard> =
         ApiResult.Failure(ApiError(status = 404, message = "n/a"))
+}
+
+
+private class FakePromoRepositoryForCheckout : PromoCodesRepository {
+    override suspend fun listCodes(): ApiResult<List<PromoCode>> = ApiResult.Success(emptyList())
+    override suspend fun create(request: CreatePromoRequestDto): ApiResult<PromoCode> =
+        ApiResult.Failure(ApiError(status = 404, message = "n/a"))
+    override suspend fun deactivate(codeId: String): ApiResult<Unit> = ApiResult.Success(Unit)
+    override suspend fun redeem(request: RedeemPromoRequestDto): ApiResult<RedeemResult> =
+        ApiResult.Success(RedeemResult(ok = true, redeemedAtEpochSeconds = 0L))
+    // Degrade-on-404 by default: the checkout promo field stays hidden in these tests.
+    override suspend fun validate(request: ValidatePromoRequestDto): ApiResult<PromoValidation?> =
+        ApiResult.Success(null)
 }
