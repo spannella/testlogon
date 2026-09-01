@@ -24,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
@@ -48,9 +49,13 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
+import com.testlogon.android.core.model.collaborations.CollabDispute
 import com.testlogon.android.core.model.collaborations.CollabRevision
+import com.testlogon.android.core.model.collaborations.CollabSplitRecordModel
 import com.testlogon.android.core.model.collaborations.CollabStatus
 import com.testlogon.android.core.model.collaborations.Collaboration
+import com.testlogon.android.core.model.collaborations.CollaborationMath
+import com.testlogon.android.core.model.collaborations.DisputeState
 import com.testlogon.android.core.model.collaborations.SplitDistribution
 import com.testlogon.android.core.model.syndicates.formatCents
 import com.testlogon.android.core.ui.input.TlButton
@@ -82,9 +87,23 @@ object CollaborationsTestTags {
     const val CONFIRM_ACCEPT = "collab_confirm_accept"
     const val REVISIONS = "collab_revisions"
 
+    // FIN-011 revenue records + disputes panel.
+    const val SPLIT_RECORDS = "collab_split_records"
+    const val DISPUTES = "collab_disputes"
+    const val DISPUTE_SHEET = "collab_dispute_sheet"
+    const val DISPUTE_REASON = "collab_dispute_reason"
+    const val DISPUTE_SUBMIT = "collab_dispute_submit"
+    const val RESOLVE_DIALOG = "collab_resolve_dialog"
+    const val RESOLVE_TEXT = "collab_resolve_text"
+    const val RESOLVE_ACCEPT = "collab_resolve_accept"
+    const val RESOLVE_REJECT = "collab_resolve_reject"
+
     fun splitRow(userId: String) = "collab_split_row_$userId"
     fun distribution(index: Int) = "collab_distribution_$index"
     fun revision(index: Int) = "collab_revision_$index"
+    fun splitRecord(index: Int) = "collab_split_record_$index"
+    fun dispute(index: Int) = "collab_dispute_$index"
+    fun disputeSplit(splitId: String) = "collab_dispute_split_$splitId"
 }
 
 /** AND-358 / PAR-04 - route-level detail entry; collects the detail state + one-shot action effects. */
@@ -101,6 +120,8 @@ fun CollaborationDetailRoute(
     val counteredMsg = stringResource(R.string.collaboration_action_countered)
     val cancelledMsg = stringResource(R.string.collaboration_action_cancelled)
     val terminatedMsg = stringResource(R.string.collaboration_action_terminated)
+    val disputeFiledMsg = stringResource(R.string.collaboration_dispute_filed)
+    val disputeResolvedMsg = stringResource(R.string.collaboration_dispute_resolved)
 
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
@@ -111,6 +132,8 @@ fun CollaborationDetailRoute(
                     CollabAction.COUNTER -> counteredMsg
                     CollabAction.CANCEL -> cancelledMsg
                     CollabAction.TERMINATE -> terminatedMsg
+                    CollabAction.FILE_DISPUTE -> disputeFiledMsg
+                    CollabAction.RESOLVE_DISPUTE -> disputeResolvedMsg
                 }
                 is CollaborationDetailEffect.ActionFailed -> effect.message
             }
@@ -129,6 +152,10 @@ fun CollaborationDetailRoute(
         onCounter = viewModel::counter,
         onCancel = viewModel::cancel,
         onTerminate = { viewModel.terminate() },
+        onFileDispute = { splitId, reason -> viewModel.fileDispute(splitId, reason) },
+        onResolveDispute = { disputeId, resolution, accept ->
+            viewModel.resolveDispute(disputeId, resolution, accept)
+        },
     )
 }
 
@@ -144,6 +171,8 @@ fun CollaborationDetailScreen(
     onCounter: (Int) -> Unit,
     onCancel: () -> Unit,
     onTerminate: () -> Unit,
+    onFileDispute: (splitId: String, reason: String) -> Unit,
+    onResolveDispute: (disputeId: String, resolution: String, accept: Boolean) -> Unit,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -194,6 +223,8 @@ fun CollaborationDetailScreen(
                     onCounter = onCounter,
                     onCancel = onCancel,
                     onTerminate = onTerminate,
+                    onFileDispute = onFileDispute,
+                    onResolveDispute = onResolveDispute,
                     modifier = Modifier.padding(padding),
                 )
         }
@@ -212,11 +243,18 @@ private fun DetailBody(
     onCounter: (Int) -> Unit,
     onCancel: () -> Unit,
     onTerminate: () -> Unit,
+    onFileDispute: (splitId: String, reason: String) -> Unit,
+    onResolveDispute: (disputeId: String, resolution: String, accept: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val collab = state.collab
     var showCounter by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<ConfirmKind?>(null) }
+    // FIN-011 - the split record a file-dispute sheet is open for, and the dispute a resolve dialog is open for.
+    var disputeForSplit by remember { mutableStateOf<CollabSplitRecordModel?>(null) }
+    var resolveDispute by remember { mutableStateOf<CollabDispute?>(null) }
+    val isParticipant = viewerId != null &&
+        (viewerId == collab.initiatorId || viewerId == collab.recipientId)
 
     LazyColumn(modifier = modifier.fillMaxSize()) {
         if (state.isStale) {
@@ -275,6 +313,79 @@ private fun DetailBody(
                 RevisionRow(rev = rev, index = index, viewerId = viewerId)
             }
         }
+
+        // FIN-011 - the executed-split revenue view (each record can be disputed by a participant).
+        if (state.splitRecords.isNotEmpty()) {
+            item(key = "records_heading") {
+                SectionHeading(
+                    stringResource(R.string.collaboration_records_heading),
+                    modifier = Modifier.testTag(CollaborationsTestTags.SPLIT_RECORDS),
+                )
+            }
+            itemsIndexed(
+                state.splitRecords,
+                key = { _, r -> "record_${r.splitId}" },
+            ) { index, record ->
+                SplitRecordRow(
+                    record = record,
+                    index = index,
+                    canDispute = CollaborationMath.canFileDispute(record.disputeStatus, isParticipant),
+                    busy = state.busy,
+                    onDispute = { disputeForSplit = record },
+                )
+            }
+        }
+
+        // FIN-011 - the disputes panel (participant/admin can resolve an open dispute they didn't file).
+        if (state.disputes.isNotEmpty()) {
+            item(key = "disputes_heading") {
+                SectionHeading(
+                    stringResource(R.string.collaboration_disputes_heading),
+                    modifier = Modifier.testTag(CollaborationsTestTags.DISPUTES),
+                )
+            }
+            itemsIndexed(
+                state.disputes,
+                key = { _, d -> "dispute_${d.disputeId}" },
+            ) { index, dispute ->
+                DisputeRow(
+                    dispute = dispute,
+                    index = index,
+                    canResolve = CollaborationMath.canResolveDispute(
+                        disputeStatus = dispute.status,
+                        filedBy = dispute.filedBy,
+                        viewerId = viewerId,
+                        isAdmin = false,
+                        isParticipant = isParticipant,
+                    ),
+                    busy = state.busy,
+                    onResolve = { resolveDispute = dispute },
+                )
+            }
+        }
+    }
+
+    disputeForSplit?.let { record ->
+        FileDisputeSheet(
+            record = record,
+            busy = state.busy,
+            onDismiss = { disputeForSplit = null },
+            onSubmit = { reason ->
+                disputeForSplit = null
+                onFileDispute(record.splitId, reason)
+            },
+        )
+    }
+
+    resolveDispute?.let { dispute ->
+        ResolveDisputeDialog(
+            dispute = dispute,
+            onDismiss = { resolveDispute = null },
+            onResolve = { resolution, accept ->
+                resolveDispute = null
+                onResolveDispute(dispute.disputeId, resolution, accept)
+            },
+        )
     }
 
     if (showCounter) {
@@ -755,12 +866,274 @@ private fun DistributionRow(dist: SplitDistribution, index: Int) {
     }
 }
 
+/**
+ * FIN-011 - one executed split record (a revenue event that was auto-split across the parties). Shows the
+ * gross + source + per-party distributions; a participant may file a dispute when [canDispute] (the record is
+ * not already under an open / resolved dispute).
+ */
 @Composable
-private fun SectionHeading(text: String) {
+private fun SplitRecordRow(
+    record: CollabSplitRecordModel,
+    index: Int,
+    canDispute: Boolean,
+    busy: Boolean,
+    onDispute: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(CollaborationsTestTags.splitRecord(index))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = formatCents(record.grossAmountCents, FALLBACK_CURRENCY),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            val source = record.source
+            if (!source.isNullOrBlank()) {
+                Text(
+                    text = source,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        record.distributions.forEach { dist ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = dist.userId ?: stringResource(R.string.collaborations_unknown_party),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                val cents = dist.amountCents
+                Text(
+                    text = if (cents != null) {
+                        formatCents(cents, FALLBACK_CURRENCY)
+                    } else {
+                        stringResource(R.string.collaboration_percent, dist.percent)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        if (record.isDisputed) {
+            Text(
+                text = stringResource(R.string.collaboration_record_disputed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else if (canDispute) {
+            TlButton(
+                text = stringResource(R.string.collaboration_dispute_file),
+                onClick = onDispute,
+                variant = TlButtonVariant.Secondary,
+                enabled = !busy,
+                modifier = Modifier.testTag(CollaborationsTestTags.disputeSplit(record.splitId)),
+            )
+        }
+        HorizontalDivider()
+    }
+}
+
+/**
+ * FIN-011 - one dispute in the panel. Shows the filer + reason + state; a participant (not the filer) or an
+ * admin may resolve an open dispute via [onResolve] when [canResolve].
+ */
+@Composable
+private fun DisputeRow(
+    dispute: CollabDispute,
+    index: Int,
+    canResolve: Boolean,
+    busy: Boolean,
+    onResolve: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(CollaborationsTestTags.dispute(index))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = dispute.filedBy?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.collaborations_unknown_party),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = disputeStateLabel(dispute.state),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (dispute.isOpen) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+        if (dispute.reason.isNotBlank()) {
+            Text(text = dispute.reason, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (dispute.resolution.isNotBlank()) {
+            Text(
+                text = dispute.resolution,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (canResolve) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TlButton(
+                    text = stringResource(R.string.collaboration_dispute_accept),
+                    onClick = onResolve,
+                    enabled = !busy,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag(CollaborationsTestTags.RESOLVE_ACCEPT),
+                )
+            }
+        }
+        HorizontalDivider()
+    }
+}
+
+/**
+ * FIN-011 - the file-dispute bottom sheet. A required free-text reason (>=10 chars server-side) is captured;
+ * Submit is disabled while [busy] or the reason is too short.
+ */
+@Composable
+private fun FileDisputeSheet(
+    record: CollabSplitRecordModel,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (reason: String) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    var reason by remember { mutableStateOf("") }
+    val canSubmit = !busy && reason.trim().length >= MIN_DISPUTE_REASON_LEN
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag(CollaborationsTestTags.DISPUTE_SHEET),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.collaboration_dispute_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = formatCents(record.grossAmountCents, FALLBACK_CURRENCY),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = reason,
+                onValueChange = { reason = it },
+                label = { Text(stringResource(R.string.collaboration_dispute_reason_hint)) },
+                enabled = !busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(CollaborationsTestTags.DISPUTE_REASON),
+            )
+            TlButton(
+                text = stringResource(R.string.collaboration_dispute_submit),
+                onClick = { onSubmit(reason.trim()) },
+                enabled = canSubmit,
+                loading = busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(CollaborationsTestTags.DISPUTE_SUBMIT),
+            )
+        }
+    }
+}
+
+/**
+ * FIN-011 - the resolve-dispute dialog. A required resolution note (>=5 chars server-side) is captured; Accept
+ * applies the proposed re-split, Reject keeps the original split. Both are disabled until the note is long
+ * enough.
+ */
+@Composable
+private fun ResolveDisputeDialog(
+    dispute: CollabDispute,
+    onDismiss: () -> Unit,
+    onResolve: (resolution: String, accept: Boolean) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    val canResolve = text.trim().length >= MIN_RESOLUTION_LEN
+
+    AlertDialog(
+        modifier = Modifier.testTag(CollaborationsTestTags.RESOLVE_DIALOG),
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.collaboration_resolve_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (dispute.reason.isNotBlank()) {
+                    Text(text = dispute.reason, style = MaterialTheme.typography.bodyMedium)
+                }
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text(stringResource(R.string.collaboration_resolve_hint)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(CollaborationsTestTags.RESOLVE_TEXT),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onResolve(text.trim(), true) },
+                enabled = canResolve,
+                modifier = Modifier.testTag(CollaborationsTestTags.RESOLVE_ACCEPT + "_confirm"),
+            ) {
+                Text(stringResource(R.string.collaboration_dispute_accept))
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = { onResolve(text.trim(), false) },
+                enabled = canResolve,
+                modifier = Modifier.testTag(CollaborationsTestTags.RESOLVE_REJECT),
+            ) {
+                Text(stringResource(R.string.collaboration_dispute_reject))
+            }
+        },
+    )
+}
+
+/** FIN-011 - a localized label for the parsed dispute state (falls back to a generic when UNKNOWN). */
+@Composable
+private fun disputeStateLabel(state: DisputeState): String = when (state) {
+    DisputeState.OPEN -> stringResource(R.string.collaboration_dispute_state_open)
+    DisputeState.RESOLVED -> stringResource(R.string.collaboration_dispute_state_resolved)
+    DisputeState.NONE, DisputeState.UNKNOWN ->
+        stringResource(R.string.collaboration_dispute_state_unknown)
+}
+
+@Composable
+private fun SectionHeading(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp),
     )
 }
 
@@ -821,3 +1194,7 @@ private const val FALLBACK_CURRENCY = "USD"
 private const val MIN_SPLIT_PCT = 1
 private const val MAX_SPLIT_PCT = 99
 private const val DEFAULT_INITIATOR_PCT = 50
+
+/** FIN-011 - minimum free-text lengths mirroring the server validators (reason >=10, resolution >=5). */
+private const val MIN_DISPUTE_REASON_LEN = 10
+private const val MIN_RESOLUTION_LEN = 5

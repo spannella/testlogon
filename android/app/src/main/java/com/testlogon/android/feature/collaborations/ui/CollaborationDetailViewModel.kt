@@ -19,27 +19,20 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * AND-358 / PAR-04 - drives the [CollaborationDetailUiState] for the collaboration detail.
+ * AND-358 / PAR-04 / FIN-011 - drives the [CollaborationDetailUiState] for the collaboration detail.
  *
- * collabId arrives as a nav arg via [SavedStateHandle] (survives process death). [load] reads the
- * collaboration and (best-effort) its split history + negotiation revisions; a split-history / revisions
- * failure is TOLERATED (folds to an empty list) since those sections are optional. An unrecoverable 401 (after
- * the shared client's one auth refresh) -> [CollaborationDetailUiState.SessionExpired] SIGNAL (routing is
- * owned elsewhere).
+ * collabId arrives as a nav arg via [SavedStateHandle]. [load] reads the collaboration and (best-effort) its
+ * split-history distributions, negotiation revisions, executed split RECORDS (FIN-011 revenue view) and
+ * DISPUTES; a failure of any optional section is TOLERATED (folds to an empty list). An unrecoverable 401
+ * (after the shared client's one auth refresh) -> [CollaborationDetailUiState.SessionExpired].
  *
- * STALE (in-memory only): [refresh] re-reads but, on a failure, KEEPS the last-good
- * [CollaborationDetailUiState.Content] and flips isStale true (the snapshot lives only in this StateFlow - it
- * is NOT persisted to disk; Room persistence across process death is DEFERRED, no migration this wave). There
- * is NO poll loop.
+ * STALE (in-memory only): [refresh] re-reads but, on a failure, KEEPS the last-good Content and flips isStale
+ * true. There is NO poll loop.
  *
- * PAR-04 (deal actions): [accept] / [reject] / [counter] / [cancel] / [terminate] are STATE-only mutations
- * (NOT money-bearing, NOT routed through BillingAuthorizer). Each sets [CollaborationDetailUiState.Content.busy]
- * true, calls the repo, emits a one-shot [CollaborationDetailEffect] (success localized per [CollabAction], or
- * the raw failure message), then RELOADS the detail (the backend is the source of truth). A 401 during an
- * action -> SessionExpired. Actions no-op when there is no content or a mutation is already in flight.
- *
- * [viewerId] is the viewer's own user id (from [AuthStateStore]); the screen uses it to gate which actions
- * show (awaiting-response / active / pending-and-initiator) and to highlight the viewer's own split row.
+ * PAR-04 (deal actions): accept / reject / counter / cancel / terminate are STATE-only. FIN-011 adds
+ * [fileDispute] (file a dispute on a split record) + [resolveDispute] (accept/reject a proposed re-split).
+ * Each sets busy, calls the repo, emits a one-shot effect, then RELOADS the detail (the backend is the source
+ * of truth). A 401 during an action -> SessionExpired.
  */
 @HiltViewModel
 class CollaborationDetailViewModel @Inject constructor(
@@ -82,15 +75,21 @@ class CollaborationDetailViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = repository.getCollaboration(collabId)) {
                 is ApiResult.Success -> {
-                    // The split history + revisions are OPTIONAL: a failure folds to an empty list.
+                    // The optional sections are best-effort: a failure folds to an empty list.
                     val distributions =
                         (repository.getSplits(collabId) as? ApiResult.Success)?.data ?: emptyList()
                     val revisions =
                         (repository.getRevisions(collabId) as? ApiResult.Success)?.data ?: emptyList()
+                    val splitRecords =
+                        (repository.getSplitRecords(collabId) as? ApiResult.Success)?.data ?: emptyList()
+                    val disputes =
+                        (repository.getDisputes(collabId) as? ApiResult.Success)?.data ?: emptyList()
                     _uiState.value = CollaborationDetailUiState.Content(
                         collab = result.data,
                         distributions = distributions,
                         revisions = revisions,
+                        splitRecords = splitRecords,
+                        disputes = disputes,
                         isStale = false,
                         busy = false,
                     )
@@ -124,26 +123,36 @@ class CollaborationDetailViewModel @Inject constructor(
     // ---- PAR-04 deal actions (STATE-only; NOT money-bearing) --------------------------------------------
 
     /** Accept the current proposal, then reload. */
-    fun accept() = mutate(CollabAction.ACCEPT) { repository.accept(collabId) }
+    fun accept() = mutate(CollabAction.ACCEPT) { repository.accept(collabId).map() }
 
     /** Reject the current proposal, then reload. */
-    fun reject() = mutate(CollabAction.REJECT) { repository.reject(collabId) }
+    fun reject() = mutate(CollabAction.REJECT) { repository.reject(collabId).map() }
 
     /** Send a counter-offer ([splitPct] = the initiator's new percent, 1..99), then reload. */
-    fun counter(splitPct: Int) = mutate(CollabAction.COUNTER) { repository.counter(collabId, splitPct) }
+    fun counter(splitPct: Int) = mutate(CollabAction.COUNTER) { repository.counter(collabId, splitPct).map() }
 
     /** Cancel the pending request (initiator only), then reload. */
-    fun cancel() = mutate(CollabAction.CANCEL) { repository.cancel(collabId) }
+    fun cancel() = mutate(CollabAction.CANCEL) { repository.cancel(collabId).map() }
 
     /** Terminate the active agreement (optional [reason]), then reload. */
-    fun terminate(reason: String? = null) = mutate(CollabAction.TERMINATE) { repository.terminate(collabId, reason) }
+    fun terminate(reason: String? = null) = mutate(CollabAction.TERMINATE) { repository.terminate(collabId, reason).map() }
+
+    // ---- FIN-011 dispute actions ------------------------------------------------------------------------
+
+    /** File a dispute on [splitId] with a required [reason] + optional proposed re-split, then reload. */
+    fun fileDispute(splitId: String, reason: String, proposedSplit: Map<String, Int>? = null) =
+        mutate(CollabAction.FILE_DISPUTE) { repository.fileDispute(collabId, splitId, reason, proposedSplit).map() }
+
+    /** Resolve an open dispute ([disputeId]) with a required [resolution] + [accept] flag, then reload. */
+    fun resolveDispute(disputeId: String, resolution: String, accept: Boolean) =
+        mutate(CollabAction.RESOLVE_DISPUTE) { repository.resolveDispute(collabId, disputeId, resolution, accept).map() }
 
     /**
-     * Runs a state-only deal action: flips busy on the current Content, calls the repo, emits a one-shot
-     * success / failure effect, and RELOADS the detail on success (the backend is the source of truth). No-ops
-     * when there is no content or a mutation is already in flight. A 401 -> SessionExpired.
+     * Runs an action: flips busy on the current Content, calls the repo, emits a one-shot success / failure
+     * effect, and RELOADS the detail on success. No-ops when there is no content or a mutation is already in
+     * flight. A 401 -> SessionExpired. The [block] result type is erased (only success/failure matters here).
      */
-    private fun mutate(action: CollabAction, block: suspend () -> ApiResult<Collaboration>) {
+    private fun mutate(action: CollabAction, block: suspend () -> ApiResult<Unit>) {
         val current = _uiState.value as? CollaborationDetailUiState.Content ?: return
         if (current.busy) return
         _uiState.value = current.copy(busy = true)
@@ -151,7 +160,6 @@ class CollaborationDetailViewModel @Inject constructor(
             when (val result = block()) {
                 is ApiResult.Success -> {
                     _effects.send(CollaborationDetailEffect.ActionSucceeded(action))
-                    // Re-read from the source of truth; refreshInternal clears busy on the new Content.
                     refreshInternal(isRefresh = true)
                 }
                 is ApiResult.Failure -> {
@@ -174,6 +182,13 @@ class CollaborationDetailViewModel @Inject constructor(
     private fun clearBusy() {
         val current = _uiState.value as? CollaborationDetailUiState.Content ?: return
         _uiState.value = current.copy(busy = false)
+    }
+
+    /** Erases a successful payload to Unit so heterogeneous mutations share the one [mutate] path. */
+    private fun <T> ApiResult<T>.map(): ApiResult<Unit> = when (this) {
+        is ApiResult.Success -> ApiResult.Success(Unit)
+        is ApiResult.Failure -> this
+        is ApiResult.NetworkError -> this
     }
 
     companion object {
