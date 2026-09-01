@@ -2,7 +2,7 @@ import * as React from "react";
 import { locationPreview } from "@/lib/locationCards";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Plus, MessageSquare, Users, BellOff } from "lucide-react";
+import { Search, Plus, MessageSquare, Users, BellOff, Settings2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -21,6 +21,7 @@ import type { Conversation, Message, UserSearchResult } from "@/api/types";
 import { isPendingInvite } from "@/lib/conversationActions";
 import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
+import { MessagePrivacyDialog } from "./MessagePrivacyDialog";
 import { useAuthStore } from "@/stores/authStore";
 import { transferPreview } from "@/lib/cryptoTransfer";
 import { isRevealLocked } from "@/lib/revealAt";
@@ -37,6 +38,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
   const navigate = useNavigate();
   const [search, setSearch] = React.useState("");
   const [newConvoOpen, setNewConvoOpen] = React.useState(false);
+  const [privacyOpen, setPrivacyOpen] = React.useState(false);
   const [isGroupMode, setIsGroupMode] = React.useState(false);
   const [groupTitle, setGroupTitle] = React.useState("");
   const [groupParticipants, setGroupParticipants] = React.useState<UserSearchResult[]>([]);
@@ -265,6 +267,15 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
           <Users className="h-4 w-4" />
           New Group
         </Button>
+        <Button
+          variant="outline"
+          size="icon"
+          aria-label="Message privacy settings"
+          title="Message privacy"
+          onClick={() => setPrivacyOpen(true)}
+        >
+          <Settings2 className="h-4 w-4" />
+        </Button>
       </div>
 
       {/* New conversation dialog */}
@@ -332,6 +343,9 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Pay-to-message (TIP-401) privacy settings */}
+      <MessagePrivacyDialog open={privacyOpen} onOpenChange={setPrivacyOpen} />
     </div>
   );
 }

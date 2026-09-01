@@ -1653,3 +1653,83 @@ export async function sendVoicemail(
     mode: meta.mode,
   });
 }
+
+// ---- Pay-to-message privacy (TIP-401) ---------------------------------------
+//
+// Backend: GET/PUT /messaging/privacy/message,
+// POST /messaging/privacy/message/allowlist,
+// DELETE /messaging/privacy/message/allowlist/{allow_user_id}.
+// The read degrades-on-404 to an honest-empty gate (feature not deployed);
+// mutations propagate their errors so the UI can surface an error toast.
+import {
+  normalizeMessagePrivacy,
+  defaultMessagePrivacy,
+  type MessagePrivacy,
+} from "@/lib/messagePrivacy";
+
+export interface MessagePrivacyUpdate {
+  require_tip_to_message?: boolean;
+  min_tip_cents?: number;
+  tip_free_allowlist?: string[];
+}
+
+/**
+ * Read the callers pay-to-message settings. Degrade-on-404: if the endpoint is
+
+// ---- Pay-to-message privacy (TIP-401) ---------------------------------------
+//
+// Backend: GET/PUT /messaging/privacy/message,
+// POST /messaging/privacy/message/allowlist,
+// DELETE /messaging/privacy/message/allowlist/{allow_user_id}.
+// The read degrades-on-404 to an honest-empty gate (feature not deployed);
+// mutations propagate their errors so the UI can surface an error toast.
+import {
+  normalizeMessagePrivacy,
+  defaultMessagePrivacy,
+  type MessagePrivacy,
+} from "@/lib/messagePrivacy";
+
+export interface MessagePrivacyUpdate {
+  require_tip_to_message?: boolean;
+  min_tip_cents?: number;
+  tip_free_allowlist?: string[];
+}
+
+/**
+ * Read the caller's pay-to-message settings. Degrade-on-404: if the endpoint is
+ * not deployed we return the honest-empty default (gate off) rather than throw,
+ * so the settings surface renders an inert "off" state.
+ */
+export async function getMessagePrivacy(): Promise<MessagePrivacy> {
+  try {
+    const res = await api.get<unknown>("/messaging/privacy/message");
+    return normalizeMessagePrivacy(res);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return defaultMessagePrivacy();
+    throw err;
+  }
+}
+
+/** Update (partial) the caller's pay-to-message settings. */
+export async function updateMessagePrivacy(
+  patch: MessagePrivacyUpdate,
+): Promise<MessagePrivacy> {
+  const res = await api.put<unknown>("/messaging/privacy/message", patch);
+  return normalizeMessagePrivacy(res);
+}
+
+/** Add a user to the tip-free allowlist. Returns the updated settings. */
+export async function addAllowlist(userId: string): Promise<MessagePrivacy> {
+  const res = await api.post<unknown>("/messaging/privacy/message/allowlist", {
+    user_id: userId,
+  });
+  return normalizeMessagePrivacy(res);
+}
+
+/** Remove a user from the tip-free allowlist. Returns the updated settings. */
+export async function removeAllowlist(userId: string): Promise<MessagePrivacy> {
+  const res = await api.del<unknown>(
+    `/messaging/privacy/message/allowlist/${encodeURIComponent(userId)}`,
+  );
+  return normalizeMessagePrivacy(res);
+}

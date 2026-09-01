@@ -9,14 +9,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-import kotlin.math.roundToInt
 
 /**
  * TIP-B4 (TIP-404) — drives [MessagePrivacyUiState] for the pay-to-message settings.
  *
- * Loads the caller's gate, validates the min-tip (must be > $0 when the gate is on, <= $1000), and
- * on Save PUTs require_tip_to_message + min_tip_cents. The allowlist add/remove go through the
- * dedicated endpoints and refresh the list from the server's echo.
+ * Loads the caller's gate, validates the min-tip via [MessagePrivacyMath] (must be > $0 when the
+ * gate is on, <= $1000), and on Save PUTs require_tip_to_message + min_tip_cents. The allowlist
+ * add/remove go through the dedicated endpoints and refresh the list from the server's echo. All
+ * pure validation/formatting lives in [MessagePrivacyMath].
  */
 @HiltViewModel
 class MessagePrivacyViewModel @Inject constructor(
@@ -54,18 +54,11 @@ class MessagePrivacyViewModel @Inject constructor(
         val current = _uiState.value as? MessagePrivacyUiState.Content ?: return
         if (current.saving || current.mutatingAllowlist != null) return
 
-        val minCents = if (current.requireTip) {
-            val dollars = current.minTipDollars.trim().toDoubleOrNull()
-            when {
-                dollars == null || dollars <= 0.0 ->
-                    return fail(current, "Set a minimum tip greater than \$0 to require a tip.")
-                dollars > 1000.0 ->
-                    return fail(current, "Minimum tip can't exceed \$1000.")
-                else -> (dollars * 100).roundToInt()
-            }
-        } else {
-            // Gate off: preserve whatever min is on file (default 0 when blank/invalid).
-            ((current.minTipDollars.trim().toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0) * 100).roundToInt()
+        val minCents = when (
+            val v = MessagePrivacyMath.validateMinTip(current.requireTip, current.minTipDollars)
+        ) {
+            is MessagePrivacyMath.MinTipResult.Invalid -> return fail(current, v.message)
+            is MessagePrivacyMath.MinTipResult.Valid -> v.cents
         }
 
         _uiState.value = current.copy(saving = true, formError = null, savedMessage = null)
@@ -83,9 +76,9 @@ class MessagePrivacyViewModel @Inject constructor(
 
     fun addAllowlist() {
         val current = _uiState.value as? MessagePrivacyUiState.Content ?: return
-        val userId = current.allowlistInput.trim()
-        if (userId.isEmpty()) return fail(current, "Enter a user id to allow.")
-        if (current.allowlist.any { it.equals(userId, ignoreCase = true) }) {
+        val userId = MessagePrivacyMath.normalizeAllowlistInput(current.allowlistInput)
+            ?: return fail(current, "Enter a user id to allow.")
+        if (MessagePrivacyMath.isDuplicateAllowlistEntry(current.allowlist, userId)) {
             return fail(current, "That user is already on the allowlist.")
         }
         if (current.saving || current.mutatingAllowlist != null) return
@@ -127,7 +120,7 @@ class MessagePrivacyViewModel @Inject constructor(
         savedMessage: String? = null,
     ) = MessagePrivacyUiState.Content(
         requireTip = requireTipToMessage,
-        minTipDollars = if (minTipCents > 0) (minTipCents / 100.0).toString() else "1.0",
+        minTipDollars = MessagePrivacyMath.centsToDollarsField(minTipCents),
         allowlist = tipFreeAllowlist,
         allowlistInput = allowlistInput,
         savedMessage = savedMessage,

@@ -43,8 +43,23 @@ class DefaultMessagePrivacyRepository @Inject constructor(
     private val errorParser: ApiErrorParser,
 ) : MessagePrivacyRepository {
 
+    /**
+     * Degrade-on-404: a caller who has never configured a gate has no row server-side. If the
+     * endpoint answers 404 we coalesce to the default OFF gate rather than surfacing an error, so
+     * the settings screen still opens and lets them turn the gate on.
+     */
     override suspend fun get(): ApiResult<MessagePrivacy> =
-        withContext(Dispatchers.IO) { call { api.get().toDomain() } }
+        withContext(Dispatchers.IO) {
+            when (val result = call { api.get().toDomain() }) {
+                is ApiResult.Failure ->
+                    if (MessagePrivacyMath.isBenignMissingConfig(result.error.status)) {
+                        ApiResult.Success(DEFAULT)
+                    } else {
+                        result
+                    }
+                else -> result
+            }
+        }
 
     override suspend fun update(requireTipToMessage: Boolean, minTipCents: Int): ApiResult<MessagePrivacy> =
         withContext(Dispatchers.IO) {
@@ -84,5 +99,14 @@ class DefaultMessagePrivacyRepository @Inject constructor(
         ApiResult.Failure(errorParser.fromThrowable(e))
     } catch (e: IOException) {
         ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+    }
+
+    private companion object {
+        /** Default gate for a caller with no server-side config (degrade-on-404). */
+        val DEFAULT = MessagePrivacy(
+            requireTipToMessage = false,
+            minTipCents = 0,
+            tipFreeAllowlist = emptyList(),
+        )
     }
 }
