@@ -104,6 +104,14 @@ interface GroupApi {
     /** AND-159 — accept a pending invite (no body). Empty 200. Non-idempotent POST. */
     @POST("messaging/conversations/{id}/accept")
     suspend fun accept(@Path("id") id: String)
+
+    /**
+     * AND-160 — delete the whole conversation (the final conversation-lifecycle route). No body;
+     * HTTP 200 with a body that is intentionally ignored (mirrors [removeParticipant]). A 404 means
+     * it is already gone — the repository degrades that to success. Non-idempotent DELETE.
+     */
+    @DELETE("messaging/conversations/{id}")
+    suspend fun deleteConversation(@Path("id") id: String)
 }
 
 /**

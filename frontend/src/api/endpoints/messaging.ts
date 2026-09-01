@@ -727,6 +727,26 @@ export const updateParticipantRole = (
     body,
   );
 
+// Admin removes another participant from a group conversation.
+export const removeParticipant = (conversationId: string, participantId: string) =>
+  api.del<{ ok: boolean }>(
+    `/messaging/conversations/${conversationId}/participants/${participantId}`,
+  );
+
+// ─── Conversation lifecycle ────────────────
+
+// Accept a pending conversation invite (viewer status pending -> active).
+export const acceptConversation = (conversationId: string) =>
+  api.post<{ ok: boolean }>(`/messaging/conversations/${conversationId}/accept`, {});
+
+// Leave a conversation. Also used to DECLINE a pending invite (same endpoint).
+export const leaveConversation = (conversationId: string) =>
+  api.post<{ ok: boolean }>(`/messaging/conversations/${conversationId}/leave`, {});
+
+// Delete a conversation (only permitted for the last remaining active participant).
+export const deleteConversation = (conversationId: string) =>
+  api.del<{ ok: boolean; deleted: boolean }>(`/messaging/conversations/${conversationId}`);
+
 
 export const unlockMessage = (conversationId: string, messageId: string, paymentMethodId?: string) =>
   api.post<{ ok: boolean }>(`/messaging/conversations/${conversationId}/messages/${messageId}/unlock`, {

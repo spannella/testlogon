@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video, Upload, Bell, BellOff } from "lucide-react";
+import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video, Upload, Bell, BellOff, LogOut, Trash2, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -36,8 +36,18 @@ import {
   acceptCallInvite,
   declineCallInvite,
   endCall,
+  acceptConversation,
+  leaveConversation,
+  deleteConversation,
   type DirectCallMode,
 } from "@/api/endpoints/messaging";
+import {
+  isPendingInvite,
+  canLeave,
+  canDelete,
+  leaveActionLabel,
+  deleteActionLabel,
+} from "@/lib/conversationActions";
 import { useAuthStore } from "@/stores/authStore";
 import { useLiveLocationShare } from "./useLiveLocationShare";
 import { useOfflineStore } from "@/stores/offlineStore";
@@ -796,6 +806,48 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     onError: () => toast.error("Failed to claim conversation"),
   });
 
+  // -- Conversation lifecycle (accept / decline / leave / delete) --
+  const pendingInvite = isPendingInvite(conversation);
+
+  const acceptMutation = useMutation({
+    mutationFn: () => acceptConversation(convoId),
+    onSuccess: () => {
+      toast.success("Invite accepted");
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      void queryClient.invalidateQueries({ queryKey: ["conversation-detail", convoId] });
+    },
+    onError: () => toast.error("Failed to accept invite"),
+  });
+
+  // Leaving an active conversation AND declining a pending invite both POST /leave.
+  const leaveMutation = useMutation({
+    mutationFn: () => leaveConversation(convoId),
+    onSuccess: () => {
+      toast.success(pendingInvite ? "Invite declined" : "You left the conversation");
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      onBack?.();
+    },
+    onError: () => toast.error(pendingInvite ? "Failed to decline invite" : "Failed to leave conversation"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteConversation(convoId),
+    onSuccess: () => {
+      toast.success("Conversation deleted");
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      onBack?.();
+    },
+    onError: (err) => {
+      const msg = err instanceof ApiError && err.status === 400
+        ? "Can't delete — other participants are still in this conversation"
+        : "Failed to delete conversation";
+      toast.error(msg);
+    },
+  });
+
+  const showLeave = canLeave(conversation);
+  const showDelete = canDelete(conversation);
+
   const [transferTarget, setTransferTarget] = React.useState("");
   const [transferDialogOpen, setTransferDialogOpen] = React.useState(false);
   const transferMutation = useMutation({
@@ -1394,6 +1446,26 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
                 Recordings
               </DropdownMenuItem>
             )}
+            {showLeave && (
+              <DropdownMenuItem
+                onClick={() => leaveMutation.mutate()}
+                disabled={leaveMutation.isPending}
+                className="text-destructive focus:text-destructive"
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                {leaveActionLabel(conversation)}
+              </DropdownMenuItem>
+            )}
+            {showDelete && (
+              <DropdownMenuItem
+                onClick={() => deleteMutation.mutate()}
+                disabled={deleteMutation.isPending}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                {deleteActionLabel(conversation)}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {isGroup && (
@@ -1538,6 +1610,34 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         )}
       </div>
 
+      {/* Pending invite: accept/decline instead of composing */}
+      {pendingInvite ? (
+        <div className="border-t border-border bg-muted/40 px-4 py-3">
+          <p className="mb-2 text-sm text-muted-foreground">
+            You have been invited to this conversation.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              onClick={() => acceptMutation.mutate()}
+              disabled={acceptMutation.isPending || leaveMutation.isPending}
+            >
+              <Check className="mr-1.5 h-4 w-4" />
+              Accept
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => leaveMutation.mutate()}
+              disabled={acceptMutation.isPending || leaveMutation.isPending}
+            >
+              <X className="mr-1.5 h-4 w-4" />
+              Decline
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
       {/* Typing indicator */}
       <TypingIndicator conversationId={convoId} />
 
@@ -1695,6 +1795,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         replyingTo={replyingTo}
         onCancelReply={() => setReplyingTo(null)}
       />
+        </>
+      )}
 
 
       {galleryEnabled && (

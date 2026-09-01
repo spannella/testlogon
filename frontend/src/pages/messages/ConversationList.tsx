@@ -18,6 +18,7 @@ import { EmptyState } from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
 import { getConversations, startConversation, startGroupConversation } from "@/api/endpoints/messaging";
 import type { Conversation, Message, UserSearchResult } from "@/api/types";
+import { isPendingInvite } from "@/lib/conversationActions";
 import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
 import { useAuthStore } from "@/stores/authStore";
@@ -154,6 +155,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
               const active = convo.conversation_id === activeId;
               const lastMsg = convo.last_message;
               const unread = (convo.unread_count ?? 0) > 0;
+              const pending = isPendingInvite(convo);
 
               const other = convo.type === "dm" ? convo.participants.find((p) => p.user_id !== userId) : undefined;
               const profilePath = other
@@ -207,6 +209,11 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                       >
                         {name}
                       </span>
+                      {pending && (
+                        <Badge variant="secondary" className="shrink-0 text-[10px]">
+                          Invite
+                        </Badge>
+                      )}
                       {isMuted(convo.muted_until, Math.floor(Date.now() / 1000)) && (
                         <BellOff
                           className="h-3 w-3 shrink-0 text-muted-foreground"

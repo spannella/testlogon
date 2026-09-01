@@ -851,6 +851,11 @@
 
     <!-- AND-141 — drafts -->
     <string name="draft_discard">Discard draft</string>
+    <!-- AND-160 - delete conversation (thread overflow) -->
+    <string name="thread_delete_conversation">Delete conversation</string>
+    <string name="thread_delete_conversation_title">Delete conversation?</string>
+    <string name="thread_delete_conversation_body">This removes the conversation from your list. This cannot be undone.</string>
+    <string name="thread_delete_conversation_confirm">Delete</string>
     <string name="draft_restored">Draft restored</string>
 
     <!-- AND-145 — presence -->

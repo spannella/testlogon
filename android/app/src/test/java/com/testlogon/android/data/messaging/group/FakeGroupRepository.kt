@@ -101,4 +101,12 @@ class FakeGroupRepository : GroupRepository {
         acceptCalls++
         return acceptResult
     }
+
+    var deleteCalls = mutableListOf<String>()
+    var deleteResult: ApiResult<Unit> = ApiResult.Success(Unit)
+
+    override suspend fun deleteConversation(conversationId: String): ApiResult<Unit> {
+        deleteCalls += conversationId
+        return deleteResult
+    }
 }
