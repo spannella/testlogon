@@ -1487,6 +1487,7 @@
     <string name="more_entry_active_algos">Active Algos</string>
     <string name="more_entry_home">Home</string>
     <string name="more_entry_custody">Custody</string>
+    <string name="more_entry_banking">Banking accounts</string>
     <string name="more_entry_cash">Cash</string>
     <string name="more_entry_custody_providers">Custody providers</string>
     <string name="more_entry_portfolio">Portfolio</string>
