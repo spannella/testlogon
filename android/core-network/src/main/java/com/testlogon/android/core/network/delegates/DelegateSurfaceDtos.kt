@@ -103,3 +103,50 @@ data class DelegatedModerationIn(
     @Json(name = "user_id") val userId: String,
     @Json(name = "reason") val reason: String? = null,
 )
+
+/**
+ * AND-360 - body to post an ANNOUNCEMENT in the managed creator's broadcast chat (delegate path,
+ * broadcast_moderate). [text] is the announcement copy. Mirrors the web BroadcastAnnouncementReq.
+ */
+data class DelegatedAnnouncementIn(
+    @Json(name = "text") val text: String,
+)
+
+/**
+ * AND-360 - one active MODERATOR of a managed creator's broadcast session (delegate path, read). Mirrors
+ * the web BroadcastModeratorOut. [delegateId] is required; the rest is best-effort metadata that defaults
+ * leniently so a sparse row never crashes decoding.
+ */
+data class DelegatedBroadcastModeratorOut(
+    @Json(name = "delegate_id") val delegateId: String,
+    @Json(name = "display_name") val displayName: String? = null,
+    @Json(name = "connected_at") val connectedAt: Long? = null,
+    @Json(name = "status") val status: String? = null,
+    @Json(name = "actions_count") val actionsCount: Int? = null,
+)
+
+/**
+ * AND-360 - one BANNED viewer of a managed creator's broadcast session (delegate path, read). Mirrors the
+ * web BroadcastBanOut. [userId] + [bannedBy] are required; the rest defaults leniently.
+ */
+data class DelegatedBroadcastBanOut(
+    @Json(name = "user_id") val userId: String,
+    @Json(name = "banned_by") val bannedBy: String,
+    @Json(name = "banned_by_display_name") val bannedByDisplayName: String? = null,
+    @Json(name = "banned_at") val bannedAt: Long? = null,
+    @Json(name = "reason") val reason: String? = null,
+)
+
+/**
+ * AND-360 - one entry in a managed creator's broadcast MODERATION LOG (delegate path, read). Mirrors the
+ * web BroadcastModerationLogEntry. [eventId] + [moderatorId] are required; targets / details are optional.
+ */
+data class DelegatedBroadcastModLogEntry(
+    @Json(name = "event_id") val eventId: String,
+    @Json(name = "moderator_id") val moderatorId: String,
+    @Json(name = "moderator_display_name") val moderatorDisplayName: String? = null,
+    @Json(name = "moderation_type") val moderationType: String? = null,
+    @Json(name = "target_user_id") val targetUserId: String? = null,
+    @Json(name = "target_message_id") val targetMessageId: String? = null,
+    @Json(name = "ts") val ts: Long? = null,
+)

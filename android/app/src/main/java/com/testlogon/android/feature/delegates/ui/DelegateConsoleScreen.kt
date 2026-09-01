@@ -42,6 +42,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.R
 import com.testlogon.android.core.model.delegates.ManagedCreator
+import com.testlogon.android.core.network.delegates.DelegatedBroadcastBanOut
+import com.testlogon.android.core.network.delegates.DelegatedBroadcastModLogEntry
+import com.testlogon.android.core.network.delegates.DelegatedBroadcastModeratorOut
 import com.testlogon.android.core.network.delegates.DelegatedConversationOut
 import com.testlogon.android.core.network.delegates.DelegatedPostOut
 
@@ -60,13 +63,32 @@ object DelegateConsoleTestTags {
     const val MANAGED_ROW_PREFIX = "delegate_console_managed_row_"
     const val MANAGED_ENTER_PREFIX = "delegate_console_managed_enter_"
     const val MANAGED_RETRY = "delegate_console_managed_retry"
+    // AND-360 — broadcast moderation console section.
+    const val MOD_SESSION_INPUT = "delegate_mod_session_input"
+    const val MOD_LOAD = "delegate_mod_load"
+    const val MOD_REGISTER = "delegate_mod_register"
+    const val MOD_START = "delegate_mod_start"
+    const val MOD_STOP = "delegate_mod_stop"
+    const val MOD_ANNOUNCE_INPUT = "delegate_mod_announce_input"
+    const val MOD_ANNOUNCE_SUBMIT = "delegate_mod_announce_submit"
+    const val MOD_USER_INPUT = "delegate_mod_user_input"
+    const val MOD_BAN = "delegate_mod_ban"
+    const val MOD_MUTE = "delegate_mod_mute"
+    const val MOD_MESSAGE_INPUT = "delegate_mod_message_input"
+    const val MOD_PIN = "delegate_mod_pin"
+    const val MOD_DELETE = "delegate_mod_delete"
+    const val MOD_BAN_ROW_PREFIX = "delegate_mod_ban_row_"
+    const val MOD_UNBAN_PREFIX = "delegate_mod_unban_"
+    const val MOD_MODERATOR_ROW_PREFIX = "delegate_mod_moderator_row_"
+    const val MOD_LOG_ROW_PREFIX = "delegate_mod_log_row_"
 }
 
 /**
  * AND-360 - route-level delegate console. Reachable from the More hub behind the managed-creator state. It
  * lists the managed creator's delegate feed posts + conversations and offers create-post / send-message
- * gated by feed_post / chat_respond, with the persistent banner - proving "a delegate can act in delegated
- * surfaces" WITHOUT touching the mature feed / messaging screens.
+ * gated by feed_post / chat_respond, plus the broadcast MODERATION console (broadcast_moderate /
+ * broadcast_control), with the persistent banner - proving "a delegate can act in delegated surfaces"
+ * WITHOUT touching the mature feed / messaging screens.
  */
 @Composable
 fun DelegateConsoleRoute(
@@ -85,8 +107,36 @@ fun DelegateConsoleRoute(
         onEnterCreator = viewModel::enter,
         onRetryManaged = viewModel::loadManagedCreators,
         onOpenThread = onOpenThread,
+        modActions = DelegateModActions(
+            onSessionChange = viewModel::setModerationSession,
+            onLoad = viewModel::loadModeration,
+            onRegister = viewModel::registerAsModerator,
+            onStart = viewModel::startBroadcast,
+            onStop = viewModel::stopBroadcast,
+            onAnnounce = viewModel::postAnnouncement,
+            onBan = { userId, reason -> viewModel.banViewer(userId, reason) },
+            onUnban = viewModel::unbanViewer,
+            onMute = { userId, reason -> viewModel.muteViewer(userId, reason) },
+            onPin = viewModel::pinMessage,
+            onDelete = viewModel::deleteChatMessage,
+        ),
     )
 }
+
+/** AND-360 - the moderation console callbacks bundled so the screen signature stays readable. */
+data class DelegateModActions(
+    val onSessionChange: (String) -> Unit = {},
+    val onLoad: () -> Unit = {},
+    val onRegister: () -> Unit = {},
+    val onStart: () -> Unit = {},
+    val onStop: () -> Unit = {},
+    val onAnnounce: (String) -> Unit = {},
+    val onBan: (userId: String, reason: String?) -> Unit = { _, _ -> },
+    val onUnban: (String) -> Unit = {},
+    val onMute: (userId: String, reason: String?) -> Unit = { _, _ -> },
+    val onPin: (String) -> Unit = {},
+    val onDelete: (String) -> Unit = {},
+)
 
 /** AND-360 - stateless delegate console screen. */
 @Composable
@@ -100,6 +150,7 @@ fun DelegateConsoleScreen(
     onEnterCreator: (String) -> Unit = {},
     onRetryManaged: () -> Unit = {},
     onOpenThread: (String) -> Unit = {},
+    modActions: DelegateModActions = DelegateModActions(),
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val loadFailedMessage = stringResource(R.string.delegate_console_load_failed)
@@ -148,6 +199,7 @@ fun DelegateConsoleScreen(
                     onCreatePost = onCreatePost,
                     onSendMessage = onSendMessage,
                     onOpenThread = onOpenThread,
+                    modActions = modActions,
                 )
             }
         }
@@ -265,6 +317,7 @@ private fun DelegateConsoleContent(
     onCreatePost: (String) -> Unit,
     onSendMessage: (conversationId: String, text: String) -> Unit,
     onOpenThread: (String) -> Unit = {},
+    modActions: DelegateModActions = DelegateModActions(),
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -311,6 +364,245 @@ private fun DelegateConsoleContent(
                     onOpenThread = onOpenThread,
                 )
             }
+        }
+
+        // ---- AND-360 broadcast moderation console ----
+        item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+        item {
+            Text(
+                stringResource(R.string.delegate_mod_heading),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        moderationSection(state = state.moderation, actions = modActions)
+    }
+}
+
+/**
+ * AND-360 - the broadcast moderation console section (rendered inside the delegate console LazyColumn as
+ * `items`). Gated by broadcast_moderate for the section + broadcast_control for start/stop. The reads
+ * degrade-on-404 to empty in the repository, so an empty list = "nothing to show" not an error.
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.moderationSection(
+    state: DelegateModConsoleState,
+    actions: DelegateModActions,
+) {
+    if (!state.canModerate) {
+        item { Text(stringResource(R.string.delegate_mod_no_permission)) }
+        return
+    }
+    item { ModerationSessionBar(state = state, actions = actions) }
+    if (state.canControl) {
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = actions.onStart,
+                    enabled = !state.busy && state.sessionId.isNotBlank(),
+                    modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_START),
+                ) { Text(stringResource(R.string.delegate_mod_start)) }
+                OutlinedButton(
+                    onClick = actions.onStop,
+                    enabled = !state.busy && state.sessionId.isNotBlank(),
+                    modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_STOP),
+                ) { Text(stringResource(R.string.delegate_mod_stop)) }
+            }
+        }
+    }
+    if (state.readFailed) {
+        item {
+            Text(
+                stringResource(R.string.delegate_mod_read_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+    item { ModerationActionBar(state = state, actions = actions) }
+
+    // Moderators
+    item {
+        Text(
+            stringResource(R.string.delegate_mod_moderators_heading),
+            style = MaterialTheme.typography.titleSmall,
+        )
+    }
+    if (state.moderators.isEmpty()) {
+        item { Text(stringResource(R.string.delegate_mod_moderators_empty)) }
+    } else {
+        items(state.moderators, key = { it.delegateId }) { mod -> ModeratorRow(mod) }
+    }
+
+    // Bans
+    item {
+        Text(
+            stringResource(R.string.delegate_mod_bans_heading),
+            style = MaterialTheme.typography.titleSmall,
+        )
+    }
+    if (state.bans.isEmpty()) {
+        item { Text(stringResource(R.string.delegate_mod_bans_empty)) }
+    } else {
+        items(state.bans, key = { it.userId }) { ban ->
+            BanRow(ban = ban, enabled = !state.busy, onUnban = { actions.onUnban(ban.userId) })
+        }
+    }
+
+    // Log
+    item {
+        Text(
+            stringResource(R.string.delegate_mod_log_heading),
+            style = MaterialTheme.typography.titleSmall,
+        )
+    }
+    if (state.log.isEmpty()) {
+        item { Text(stringResource(R.string.delegate_mod_log_empty)) }
+    } else {
+        items(state.log, key = { it.eventId }) { entry -> LogRow(entry) }
+    }
+    item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+}
+
+@Composable
+private fun ModerationSessionBar(state: DelegateModConsoleState, actions: DelegateModActions) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = state.sessionId,
+            onValueChange = actions.onSessionChange,
+            placeholder = { Text(stringResource(R.string.delegate_mod_session_hint)) },
+            modifier = Modifier.weight(1f).testTag(DelegateConsoleTestTags.MOD_SESSION_INPUT),
+        )
+        Button(
+            onClick = actions.onLoad,
+            enabled = state.sessionId.isNotBlank() && !state.loading,
+            modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_LOAD),
+        ) { Text(stringResource(R.string.delegate_mod_load)) }
+    }
+    if (state.registered) {
+        Text(
+            stringResource(R.string.delegate_mod_registered),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.tertiary,
+        )
+    } else {
+        OutlinedButton(
+            onClick = actions.onRegister,
+            enabled = state.sessionId.isNotBlank() && !state.busy,
+            modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_REGISTER),
+        ) { Text(stringResource(R.string.delegate_mod_register)) }
+    }
+}
+
+@Composable
+private fun ModerationActionBar(state: DelegateModConsoleState, actions: DelegateModActions) {
+    var announce by remember { mutableStateOf("") }
+    var userId by remember { mutableStateOf("") }
+    var messageId by remember { mutableStateOf("") }
+    val enabled = !state.busy && state.sessionId.isNotBlank()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Announcement
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = announce,
+                onValueChange = { announce = it },
+                placeholder = { Text(stringResource(R.string.delegate_mod_announce_hint)) },
+                modifier = Modifier.weight(1f).testTag(DelegateConsoleTestTags.MOD_ANNOUNCE_INPUT),
+            )
+            Button(
+                onClick = { actions.onAnnounce(announce); announce = "" },
+                enabled = enabled && announce.isNotBlank(),
+                modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_ANNOUNCE_SUBMIT),
+            ) { Text(stringResource(R.string.delegate_mod_announce)) }
+        }
+        // Viewer target: ban / mute
+        OutlinedTextField(
+            value = userId,
+            onValueChange = { userId = it },
+            placeholder = { Text(stringResource(R.string.delegate_mod_target_user_hint)) },
+            modifier = Modifier.fillMaxWidth().testTag(DelegateConsoleTestTags.MOD_USER_INPUT),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { actions.onBan(userId, null) },
+                enabled = enabled && userId.isNotBlank(),
+                modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_BAN),
+            ) { Text(stringResource(R.string.delegate_mod_ban)) }
+            OutlinedButton(
+                onClick = { actions.onMute(userId, null) },
+                enabled = enabled && userId.isNotBlank(),
+                modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_MUTE),
+            ) { Text(stringResource(R.string.delegate_mod_mute)) }
+        }
+        // Message target: pin / delete
+        OutlinedTextField(
+            value = messageId,
+            onValueChange = { messageId = it },
+            placeholder = { Text(stringResource(R.string.delegate_mod_target_message_hint)) },
+            modifier = Modifier.fillMaxWidth().testTag(DelegateConsoleTestTags.MOD_MESSAGE_INPUT),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { actions.onPin(messageId) },
+                enabled = enabled && messageId.isNotBlank(),
+                modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_PIN),
+            ) { Text(stringResource(R.string.delegate_mod_pin)) }
+            OutlinedButton(
+                onClick = { actions.onDelete(messageId) },
+                enabled = enabled && messageId.isNotBlank(),
+                modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_DELETE),
+            ) { Text(stringResource(R.string.delegate_mod_delete)) }
+        }
+    }
+}
+
+@Composable
+private fun ModeratorRow(mod: DelegatedBroadcastModeratorOut) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(DelegateConsoleTestTags.MOD_MODERATOR_ROW_PREFIX + mod.delegateId),
+    ) {
+        Text(mod.displayName ?: mod.delegateId, style = MaterialTheme.typography.bodyMedium)
+        mod.status?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+    }
+}
+
+@Composable
+private fun BanRow(ban: DelegatedBroadcastBanOut, enabled: Boolean, onUnban: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(DelegateConsoleTestTags.MOD_BAN_ROW_PREFIX + ban.userId),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(ban.userId, style = MaterialTheme.typography.bodyMedium)
+            ban.reason?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+        }
+        OutlinedButton(
+            onClick = onUnban,
+            enabled = enabled,
+            modifier = Modifier.testTag(DelegateConsoleTestTags.MOD_UNBAN_PREFIX + ban.userId),
+        ) { Text(stringResource(R.string.delegate_mod_unban)) }
+    }
+}
+
+@Composable
+private fun LogRow(entry: DelegatedBroadcastModLogEntry) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(DelegateConsoleTestTags.MOD_LOG_ROW_PREFIX + entry.eventId),
+    ) {
+        Text(
+            com.testlogon.android.core.model.delegates.DelegateModMath.moderationLabel(entry.moderationType),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        val target = entry.targetUserId ?: entry.targetMessageId
+        if (target != null) {
+            Text(target, style = MaterialTheme.typography.labelSmall)
         }
     }
 }

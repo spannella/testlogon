@@ -3,6 +3,10 @@ package com.testlogon.android.feature.delegates.testing
 import com.testlogon.android.core.network.delegates.DelegateBroadcastApi
 import com.testlogon.android.core.network.delegates.DelegateFeedApi
 import com.testlogon.android.core.network.delegates.DelegateMessagingApi
+import com.testlogon.android.core.network.delegates.DelegatedAnnouncementIn
+import com.testlogon.android.core.network.delegates.DelegatedBroadcastBanOut
+import com.testlogon.android.core.network.delegates.DelegatedBroadcastModLogEntry
+import com.testlogon.android.core.network.delegates.DelegatedBroadcastModeratorOut
 import com.testlogon.android.core.network.delegates.DelegatedConversationOut
 import com.testlogon.android.core.network.delegates.DelegatedMessageOut
 import com.testlogon.android.core.network.delegates.DelegatedModerationIn
@@ -93,6 +97,9 @@ class FakeDelegateMessagingApi(
 /** AND-360 - fake [DelegateBroadcastApi] recording control + moderation calls. */
 class FakeDelegateBroadcastApi(
     var throwHttp: Int? = null,
+    var moderatorList: List<DelegatedBroadcastModeratorOut> = emptyList(),
+    var banList: List<DelegatedBroadcastBanOut> = emptyList(),
+    var logList: List<DelegatedBroadcastModLogEntry> = emptyList(),
 ) : DelegateBroadcastApi {
 
     val startCalls = mutableListOf<Pair<String, String>>()
@@ -100,6 +107,15 @@ class FakeDelegateBroadcastApi(
     val scheduleCalls = mutableListOf<Pair<String, DelegatedScheduleSessionIn>>()
     val muteCalls = mutableListOf<Triple<String, String, DelegatedModerationIn>>()
     val banCalls = mutableListOf<Triple<String, String, DelegatedModerationIn>>()
+    val unbanCalls = mutableListOf<Triple<String, String, String>>()
+    val announcementCalls = mutableListOf<Triple<String, String, DelegatedAnnouncementIn>>()
+    val pinCalls = mutableListOf<Triple<String, String, String>>()
+    val unpinCalls = mutableListOf<Triple<String, String, String>>()
+    val deleteChatCalls = mutableListOf<Triple<String, String, String>>()
+    val registerModeratorCalls = mutableListOf<Pair<String, String>>()
+    val moderatorsCalls = mutableListOf<Pair<String, String>>()
+    val bansCalls = mutableListOf<Pair<String, String>>()
+    val logCalls = mutableListOf<Triple<String, String, Int>>()
 
     override suspend fun startSession(creatorId: String, sid: String): Response<Unit> {
         startCalls += creatorId to sid
@@ -140,5 +156,70 @@ class FakeDelegateBroadcastApi(
         banCalls += Triple(creatorId, sid, body)
         throwHttp?.let { throw httpError(it) }
         return Response.success(Unit)
+    }
+
+    override suspend fun unbanViewer(creatorId: String, sid: String, uid: String): Response<Unit> {
+        unbanCalls += Triple(creatorId, sid, uid)
+        throwHttp?.let { throw httpError(it) }
+        return Response.success(Unit)
+    }
+
+    override suspend fun postAnnouncement(
+        creatorId: String,
+        sid: String,
+        body: DelegatedAnnouncementIn,
+    ): Response<Unit> {
+        announcementCalls += Triple(creatorId, sid, body)
+        throwHttp?.let { throw httpError(it) }
+        return Response.success(Unit)
+    }
+
+    override suspend fun pinMessage(creatorId: String, sid: String, mid: String): Response<Unit> {
+        pinCalls += Triple(creatorId, sid, mid)
+        throwHttp?.let { throw httpError(it) }
+        return Response.success(Unit)
+    }
+
+    override suspend fun unpinMessage(creatorId: String, sid: String, mid: String): Response<Unit> {
+        unpinCalls += Triple(creatorId, sid, mid)
+        throwHttp?.let { throw httpError(it) }
+        return Response.success(Unit)
+    }
+
+    override suspend fun deleteChatMessage(creatorId: String, sid: String, mid: String): Response<Unit> {
+        deleteChatCalls += Triple(creatorId, sid, mid)
+        throwHttp?.let { throw httpError(it) }
+        return Response.success(Unit)
+    }
+
+    override suspend fun registerModerator(creatorId: String, sid: String): Response<Unit> {
+        registerModeratorCalls += creatorId to sid
+        throwHttp?.let { throw httpError(it) }
+        return Response.success(Unit)
+    }
+
+    override suspend fun listModerators(
+        creatorId: String,
+        sid: String,
+    ): List<DelegatedBroadcastModeratorOut> {
+        moderatorsCalls += creatorId to sid
+        throwHttp?.let { throw httpError(it) }
+        return moderatorList
+    }
+
+    override suspend fun listBans(creatorId: String, sid: String): List<DelegatedBroadcastBanOut> {
+        bansCalls += creatorId to sid
+        throwHttp?.let { throw httpError(it) }
+        return banList
+    }
+
+    override suspend fun getModerationLog(
+        creatorId: String,
+        sid: String,
+        limit: Int,
+    ): List<DelegatedBroadcastModLogEntry> {
+        logCalls += Triple(creatorId, sid, limit)
+        throwHttp?.let { throw httpError(it) }
+        return logList
     }
 }
