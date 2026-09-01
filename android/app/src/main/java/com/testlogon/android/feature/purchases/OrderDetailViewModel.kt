@@ -9,6 +9,8 @@ import com.testlogon.android.data.cart.CartRepository
 import com.testlogon.android.data.entitlements.LibraryEntitlement
 import com.testlogon.android.data.entitlements.OrderEntitlementsRepository
 import com.testlogon.android.data.purchases.PurchaseDetail
+import com.testlogon.android.data.purchases.PurchaseEvent
+import com.testlogon.android.data.purchases.PurchaseReceipt
 import com.testlogon.android.data.purchases.PurchasesRepository
 import com.testlogon.android.data.tracking.TrackingRepository
 import com.testlogon.android.feature.tracking.TrackingUiState
@@ -30,6 +32,10 @@ import javax.inject.Inject
  * (header/status/dates/amount), the resolved cart line [items] (from metadata.cart_id via the existing
  * AND-206/210 [CartRepository] — no new endpoint), and the embedded AND-215 [tracking] state. Tracking is
  * isolated: a tracking failure renders an inline tracking error but never fails the whole screen.
+ *
+ * AND-218-extras — Content additionally carries the transaction [events] timeline and the [receipt]
+ * link. Both are best-effort: a 404 / any failure degrades to an empty list / null so the section is
+ * simply hidden, never failing the whole screen.
  */
 sealed interface OrderDetailUiState {
     data object Loading : OrderDetailUiState
@@ -39,6 +45,10 @@ sealed interface OrderDetailUiState {
         val tracking: TrackingUiState,
         // ECOMX-43 (B5): digital goods granted by this order, accessible/openable in-app.
         val entitlements: List<LibraryEntitlement> = emptyList(),
+        // AND-218-extras: transaction event timeline (newest-first); empty -> section hidden.
+        val events: List<PurchaseEvent> = emptyList(),
+        // AND-218-extras: receipt link; null -> section hidden. isOpenable gates the open/download CTA.
+        val receipt: PurchaseReceipt? = null,
         // ECOMX-42 (B6): true while a "confirm delivery" call is in flight.
         val confirming: Boolean = false,
     ) : OrderDetailUiState
@@ -86,8 +96,15 @@ class OrderDetailViewModel @Inject constructor(
                     val items = resolveItems(order)
                     val tracking = resolveTracking(order)
                     val entitlements = resolveEntitlements(order)
+                    val timeline = resolveEvents()
+                    val receipt = resolveReceipt()
                     _state.value = OrderDetailUiState.Content(
-                        order = order, items = items, tracking = tracking, entitlements = entitlements,
+                        order = order,
+                        items = items,
+                        tracking = tracking,
+                        entitlements = entitlements,
+                        events = timeline,
+                        receipt = receipt,
                     )
                 }
                 is ApiResult.Failure ->
@@ -149,6 +166,26 @@ class OrderDetailViewModel @Inject constructor(
             is ApiResult.Failure, is ApiResult.NetworkError -> emptyList()
         }
     }
+
+    /**
+     * AND-218-extras — the transaction event timeline. Best-effort: a 404 (no events) / any failure
+     * degrades to an empty list so the section is hidden and never fails the whole screen.
+     */
+    private suspend fun resolveEvents(): List<PurchaseEvent> =
+        when (val r = purchasesRepository.events(txnId)) {
+            is ApiResult.Success -> r.data
+            is ApiResult.Failure, is ApiResult.NetworkError -> emptyList()
+        }
+
+    /**
+     * AND-218-extras — the receipt link. Best-effort: a 404 (no receipt) / any failure degrades to null
+     * so the section is hidden and never fails the whole screen.
+     */
+    private suspend fun resolveReceipt(): PurchaseReceipt? =
+        when (val r = purchasesRepository.receipt(txnId)) {
+            is ApiResult.Success -> r.data
+            is ApiResult.Failure, is ApiResult.NetworkError -> null
+        }
 
     /**
      * Resolves the embedded AND-215 tracking state. When the order shows no shipment at all there is

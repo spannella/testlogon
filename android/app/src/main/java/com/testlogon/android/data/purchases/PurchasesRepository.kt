@@ -21,6 +21,10 @@ import javax.inject.Singleton
  * Paging / coroutine cancellation works; HTTP errors fold to Failure and transport failures to
  * NetworkError. List and search return a single bounded page (the backend has no pagination); the
  * single-page Paging 3 wiring (AND-219/AND-221) layers above this.
+ *
+ * AND-218-extras — the detail extras ([events] / [receipt]) map their wire DTOs to the pure render
+ * models in PurchaseHistoryMath. They are best-effort on the detail screen: the ViewModel degrades a
+ * 404 / any failure to "no timeline" / "no receipt" so a missing extra never fails the whole screen.
  */
 interface PurchasesRepository {
 
@@ -41,6 +45,15 @@ interface PurchasesRepository {
 
     /** ECOMX-42 (B6) — buyer confirms delivery; returns the refreshed (completed) detail. */
     suspend fun confirmReceived(txnId: String): ApiResult<PurchaseDetail>
+
+    /** AND-218-extras — the transaction event timeline (newest-first). Empty when there are no events. */
+    suspend fun events(
+        txnId: String,
+        limit: Int = PurchasesApi.EVENTS_LIMIT,
+    ): ApiResult<List<PurchaseEvent>>
+
+    /** AND-218-extras — the receipt link for the transaction (null body when none / not generated yet). */
+    suspend fun receipt(txnId: String): ApiResult<PurchaseReceipt?>
 }
 
 @Singleton
@@ -71,6 +84,16 @@ class PurchasesRepositoryImpl @Inject constructor(
     override suspend fun confirmReceived(txnId: String): ApiResult<PurchaseDetail> =
         withContext(io) {
             call { api.confirmReceived(txnId) }.map { it.toDomain() }
+        }
+
+    override suspend fun events(txnId: String, limit: Int): ApiResult<List<PurchaseEvent>> =
+        withContext(io) {
+            call { api.getEvents(txnId, limit = limit) }.map { it.toTimeline() }
+        }
+
+    override suspend fun receipt(txnId: String): ApiResult<PurchaseReceipt?> =
+        withContext(io) {
+            call { api.getReceipt(txnId) }.map { it.toReceiptOrNull() }
         }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {

@@ -4,7 +4,9 @@ import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.data.purchases.Money
 import com.testlogon.android.data.purchases.OrderStatus
 import com.testlogon.android.data.purchases.PurchaseDetail
+import com.testlogon.android.data.purchases.PurchaseEvent
 import com.testlogon.android.data.purchases.PurchaseListItem
+import com.testlogon.android.data.purchases.PurchaseReceipt
 import com.testlogon.android.data.purchases.PurchasesRepository
 import java.math.BigDecimal
 
@@ -44,6 +46,21 @@ class FakePurchasesRepository(
     override suspend fun confirmReceived(txnId: String): ApiResult<PurchaseDetail> {
         confirmReceivedCalls++
         return confirmReceivedResult
+    }
+
+    // AND-218-extras: event timeline + receipt; default to empty/null (degrade-on-404 parity).
+    var eventsResult: ApiResult<List<PurchaseEvent>> = ApiResult.Success(emptyList())
+    var eventsCalls = 0
+    override suspend fun events(txnId: String, limit: Int): ApiResult<List<PurchaseEvent>> {
+        eventsCalls++
+        return eventsResult
+    }
+
+    var receiptResult: ApiResult<PurchaseReceipt?> = ApiResult.Success(null)
+    var receiptCalls = 0
+    override suspend fun receipt(txnId: String): ApiResult<PurchaseReceipt?> {
+        receiptCalls++
+        return receiptResult
     }
 
     companion object {
