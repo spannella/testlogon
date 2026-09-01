@@ -30,6 +30,7 @@ data class WatchParty(
     val maxParticipants: Int,
     val participantCount: Int,
     val positionSeconds: Long,
+    val positionUpdatedAtSeconds: Long,
     val createdAtSeconds: Long,
     val endedAtSeconds: Long?,
 ) {
@@ -87,6 +88,7 @@ internal fun WatchPartyDto.toDomain(): WatchParty = WatchParty(
     maxParticipants = maxParticipants,
     participantCount = participantCount,
     positionSeconds = position.toLong(),
+    positionUpdatedAtSeconds = positionUpdatedAt,
     createdAtSeconds = createdAt,
     endedAtSeconds = endedAt,
 )

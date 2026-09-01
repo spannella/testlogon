@@ -7,6 +7,12 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
 
+/** {ok:true}-style ack returned by the co-host / kick mutations. */
+@JsonClass(generateAdapter = true)
+data class WatchPartyAckDto(
+    val ok: Boolean = false,
+)
+
 /**
  * Retrofit interface + Moshi DTOs for the watch-parties feature (web ENGAGE-004).
  *
@@ -16,8 +22,13 @@ import retrofit2.http.Path
  * authoritative). v1 covers: list (GET ui/watch-parties/), create (POST ui/watch-parties/),
  * detail (GET ui/watch-parties/{id}), participants (GET ui/watch-parties/{id}/participants),
  * join / leave (POST .../join, .../leave) and invite-resolve (GET ui/watch-parties/join/{code}).
- * Realtime playback control (.../control, heartbeat, playback-url) is intentionally NOT surfaced
- * here - live sync is out of scope for v1. Session cookies / Bearer / X-CSRF are interceptor-added.
+ *
+ * v2 (host controls) adds the host-authoritative mutations that drive live sync: playback control
+ * (POST .../control {action,position}), grant co-host (POST .../co-host {user_sub}), kick
+ * (POST .../kick/{targetUserSub}), end (POST .../end) and heartbeat (POST .../heartbeat). Control /
+ * end / heartbeat return the updated party; co-host / kick return an {ok:true} ack. Participants
+ * still RECEIVE the resulting playback state over the realtime SSE/poll stream (unchanged). Session
+ * cookies / Bearer / X-CSRF are interceptor-added.
  */
 interface WatchPartiesApi {
 
@@ -48,6 +59,37 @@ interface WatchPartiesApi {
     /** Resolves an invite code to a lightweight party summary (web /party/{code}). */
     @GET("ui/watch-parties/join/{inviteCode}")
     suspend fun resolveInvite(@Path("inviteCode") inviteCode: String): InviteResolveRespDto
+
+    // ---- Host controls (v2) ----
+
+    /** Host / co-host drives playback (play|pause|seek); returns the updated party. */
+    @POST("ui/watch-parties/{partyId}/control")
+    suspend fun controlPlayback(
+        @Path("partyId") partyId: String,
+        @Body body: PlaybackControlReqDto,
+    ): WatchPartyDto
+
+    /** Host grants co-host to a participant. */
+    @POST("ui/watch-parties/{partyId}/co-host")
+    suspend fun grantCoHost(
+        @Path("partyId") partyId: String,
+        @Body body: GrantCoHostReqDto,
+    ): WatchPartyAckDto
+
+    /** Host removes a participant from the party. */
+    @POST("ui/watch-parties/{partyId}/kick/{targetUserSub}")
+    suspend fun kickParticipant(
+        @Path("partyId") partyId: String,
+        @Path("targetUserSub") targetUserSub: String,
+    ): WatchPartyAckDto
+
+    /** Host ends the party; returns the terminal party state. */
+    @POST("ui/watch-parties/{partyId}/end")
+    suspend fun endParty(@Path("partyId") partyId: String): WatchPartyDto
+
+    /** Marks the caller present (updates last_seen); returns the current party state. */
+    @POST("ui/watch-parties/{partyId}/heartbeat")
+    suspend fun heartbeat(@Path("partyId") partyId: String): WatchPartyDto
 }
 
 // ---- DTOs ----
@@ -65,6 +107,7 @@ data class WatchPartyDto(
     @Json(name = "max_participants") val maxParticipants: Int = 0,
     @Json(name = "participant_count") val participantCount: Int = 0,
     val position: Double = 0.0,
+    @Json(name = "position_updated_at") val positionUpdatedAt: Long = 0,
     @Json(name = "created_at") val createdAt: Long = 0,
     @Json(name = "updated_at") val updatedAt: Long = 0,
     @Json(name = "ended_at") val endedAt: Long? = null,
@@ -85,6 +128,19 @@ data class CreatePartyReqDto(
     @Json(name = "video_id") val videoId: String,
     val title: String? = null,
     @Json(name = "max_participants") val maxParticipants: Int? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class PlaybackControlReqDto(
+    /** One of "play" | "pause" | "seek" (matches PlaybackControlIn on the backend). */
+    val action: String,
+    /** Target position in seconds; required for seek, optional otherwise. */
+    val position: Double? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class GrantCoHostReqDto(
+    @Json(name = "user_sub") val userSub: String,
 )
 
 @JsonClass(generateAdapter = true)

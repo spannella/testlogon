@@ -18,7 +18,9 @@ import javax.inject.Singleton
  * All calls are wrapped in [ApiResult] (CancellationException re-thrown, HTTP -> Failure,
  * malformed body -> Failure, transport -> NetworkError). The list keeps a last-known-good in-memory
  * snapshot so a failed refresh can fall back to stale content; [clear] empties it (logout cleanup).
- * Mutations (create/join/leave) are not auto-retried. Realtime playback is intentionally absent.
+ * Mutations (create/join/leave) are not auto-retried. Host-control mutations
+ * (control/co-host/kick/end/heartbeat) are host-authoritative and return the updated party where the
+ * backend does; participants observe the resulting playback over the realtime stream.
  */
 interface WatchPartiesRepository {
 
@@ -35,6 +37,21 @@ interface WatchPartiesRepository {
     suspend fun leaveParty(partyId: String): ApiResult<Unit>
 
     suspend fun resolveInvite(inviteCode: String): ApiResult<InviteResolution>
+
+    /** Host / co-host drives playback (play|pause|seek); returns the updated party. */
+    suspend fun controlPlayback(partyId: String, action: String, positionSeconds: Double?): ApiResult<WatchParty>
+
+    /** Host grants co-host to [targetUserSub]. */
+    suspend fun grantCoHost(partyId: String, targetUserSub: String): ApiResult<Unit>
+
+    /** Host removes [targetUserSub] from the party. */
+    suspend fun kickParticipant(partyId: String, targetUserSub: String): ApiResult<Unit>
+
+    /** Host ends the party; returns the terminal party state. */
+    suspend fun endParty(partyId: String): ApiResult<WatchParty>
+
+    /** Marks the caller present; returns the current party state. */
+    suspend fun heartbeat(partyId: String): ApiResult<WatchParty>
 
     fun cached(): List<WatchParty>?
 
@@ -92,6 +109,32 @@ class WatchPartiesRepositoryImpl @Inject constructor(
 
     override suspend fun resolveInvite(inviteCode: String): ApiResult<InviteResolution> = withContext(io) {
         call { api.resolveInvite(inviteCode).toDomain() }
+    }
+
+    override suspend fun controlPlayback(
+        partyId: String,
+        action: String,
+        positionSeconds: Double?,
+    ): ApiResult<WatchParty> = withContext(io) {
+        call {
+            api.controlPlayback(partyId, PlaybackControlReqDto(action = action, position = positionSeconds)).toDomain()
+        }
+    }
+
+    override suspend fun grantCoHost(partyId: String, targetUserSub: String): ApiResult<Unit> = withContext(io) {
+        call { api.grantCoHost(partyId, GrantCoHostReqDto(userSub = targetUserSub)); Unit }
+    }
+
+    override suspend fun kickParticipant(partyId: String, targetUserSub: String): ApiResult<Unit> = withContext(io) {
+        call { api.kickParticipant(partyId, targetUserSub); Unit }
+    }
+
+    override suspend fun endParty(partyId: String): ApiResult<WatchParty> = withContext(io) {
+        call { api.endParty(partyId).toDomain() }
+    }
+
+    override suspend fun heartbeat(partyId: String): ApiResult<WatchParty> = withContext(io) {
+        call { api.heartbeat(partyId).toDomain() }
     }
 
     override fun cached(): List<WatchParty>? = snapshot

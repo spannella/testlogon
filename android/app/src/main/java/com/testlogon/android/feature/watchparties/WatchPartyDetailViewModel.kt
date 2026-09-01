@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.R
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.auth.AuthStateStore
 import com.testlogon.android.data.watchparties.WatchParty
 import com.testlogon.android.data.watchparties.WatchPartiesRepository
+import com.testlogon.android.data.watchparties.WatchPartyMath
 import com.testlogon.android.data.watchparties.WatchPartyParticipant
 import com.testlogon.android.data.messaging.realtime.MessagingEvent
 import com.testlogon.android.data.messaging.realtime.MessagingEventStream
@@ -27,13 +29,17 @@ import javax.inject.Inject
  *
  * Reads its [partyId] from [SavedStateHandle] (the nav arg) and loads the party + participants once on
  * construction. Join / Leave POST against the REST endpoints (in-flight guarded) and reload on success.
- * Realtime playback sync is intentionally NOT implemented - the screen shows the static party state and
- * an honest note. A hard 401 maps to SessionExpired.
+ * Participants RECEIVE host-authoritative playback over the realtime stream ([observePlaybackSync]);
+ * the HOST (or an active co-host) additionally DRIVES it via [onPlay]/[onPause]/[onSeek] plus the
+ * host-only [onGrantCoHost]/[onKick]/[onEnd]. All host-control mutations are permission-gated through
+ * [WatchPartyMath] and guarded by [WatchPartyDetailUiState.isControlling]. A hard 401 maps to
+ * SessionExpired.
  */
 @HiltViewModel
 class WatchPartyDetailViewModel @Inject constructor(
     private val repository: WatchPartiesRepository,
     private val eventStream: MessagingEventStream,
+    private val authStateStore: AuthStateStore,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -48,6 +54,7 @@ class WatchPartyDetailViewModel @Inject constructor(
     val effects: Flow<WatchPartyDetailEffect> = _effects.receiveAsFlow()
 
     init {
+        _uiState.update { it.copy(currentUserSub = authStateStore.userSub.value) }
         load()
         observePlaybackSync()
     }
@@ -88,6 +95,132 @@ class WatchPartyDetailViewModel @Inject constructor(
         }
     }
 
+    // ---- Host controls ----
+
+    fun onPlay() = control("play", positionSeconds = null)
+
+    fun onPause() = control("pause", positionSeconds = currentSyncPosition())
+
+    fun onSeek(positionSeconds: Double) = control("seek", positionSeconds = positionSeconds.coerceAtLeast(0.0))
+
+    /**
+     * POST a playback control. Permission-gated (host / active co-host) via [WatchPartyMath] so a
+     * member can never issue a control. On success we reflect the host-authoritative state locally
+     * (optimistic) so the driver sees immediate feedback even before the SSE echo lands.
+     */
+    private fun control(action: String, positionSeconds: Double?) {
+        val state = _uiState.value
+        val party = state.party ?: return
+        if (state.isControlling) return
+        if (!WatchPartyMath.canControlPlayback(party, state.participants, state.currentUserSub)) {
+            viewModelScope.launch {
+                _effects.send(WatchPartyDetailEffect.ShowMessage(R.string.watch_parties_control_forbidden))
+            }
+            return
+        }
+        val normalized = WatchPartyMath.normalizeAction(action) ?: return
+        _uiState.update { it.copy(isControlling = true) }
+        viewModelScope.launch {
+            when (val result = repository.controlPlayback(partyId, normalized, positionSeconds)) {
+                is ApiResult.Success -> {
+                    val updated = result.data
+                    _uiState.update {
+                        it.copy(
+                            isControlling = false,
+                            party = updated,
+                            playbackSync = WatchPartyDetailUiState.PlaybackSyncState(
+                                isPlaying = updated.status == com.testlogon.android.data.watchparties.WatchPartyStatus.PLAYING,
+                                positionSeconds = updated.positionSeconds.toDouble(),
+                                positionUpdatedAtEpochSeconds = updated.positionUpdatedAtSeconds,
+                                controlledBy = it.currentUserSub.orEmpty(),
+                                lastAction = normalized,
+                                serverTimeEpochSeconds = updated.positionUpdatedAtSeconds,
+                            ),
+                        )
+                    }
+                }
+                is ApiResult.Failure ->
+                    failControl(if (result.error.status == HTTP_UNAUTHORIZED) HTTP_UNAUTHORIZED else 0)
+                is ApiResult.NetworkError -> failControl(0)
+            }
+        }
+    }
+
+    fun onGrantCoHost(targetUserSub: String) {
+        val state = _uiState.value
+        val party = state.party ?: return
+        if (state.isControlling || !WatchPartyMath.canManageParty(party, state.currentUserSub)) return
+        _uiState.update { it.copy(isControlling = true) }
+        viewModelScope.launch {
+            when (repository.grantCoHost(partyId, targetUserSub)) {
+                is ApiResult.Success -> {
+                    _effects.send(WatchPartyDetailEffect.ShowMessage(R.string.watch_parties_cohost_success))
+                    reload()
+                }
+                else -> {
+                    _uiState.update { it.copy(isControlling = false) }
+                    _effects.send(WatchPartyDetailEffect.ShowMessage(R.string.watch_parties_cohost_failed))
+                }
+            }
+        }
+    }
+
+    fun onKick(targetUserSub: String) {
+        val state = _uiState.value
+        val party = state.party ?: return
+        if (state.isControlling || !WatchPartyMath.canManageParty(party, state.currentUserSub)) return
+        _uiState.update { it.copy(isControlling = true) }
+        viewModelScope.launch {
+            when (repository.kickParticipant(partyId, targetUserSub)) {
+                is ApiResult.Success -> {
+                    _effects.send(WatchPartyDetailEffect.ShowMessage(R.string.watch_parties_kick_success))
+                    reload()
+                }
+                else -> {
+                    _uiState.update { it.copy(isControlling = false) }
+                    _effects.send(WatchPartyDetailEffect.ShowMessage(R.string.watch_parties_kick_failed))
+                }
+            }
+        }
+    }
+
+    fun onEnd() {
+        val state = _uiState.value
+        val party = state.party ?: return
+        if (state.isControlling || !WatchPartyMath.canManageParty(party, state.currentUserSub)) return
+        _uiState.update { it.copy(isControlling = true) }
+        viewModelScope.launch {
+            when (val result = repository.endParty(partyId)) {
+                is ApiResult.Success -> {
+                    _uiState.update { it.copy(isControlling = false, party = result.data) }
+                    _effects.send(WatchPartyDetailEffect.ShowMessage(R.string.watch_parties_end_success))
+                    reload()
+                }
+                else -> {
+                    _uiState.update { it.copy(isControlling = false) }
+                    _effects.send(WatchPartyDetailEffect.ShowMessage(R.string.watch_parties_end_failed))
+                }
+            }
+        }
+    }
+
+    private suspend fun failControl(status: Int) {
+        if (status == HTTP_UNAUTHORIZED) {
+            _uiState.update { it.copy(phase = WatchPartyDetailUiState.Phase.SessionExpired, isControlling = false) }
+            return
+        }
+        _uiState.update { it.copy(isControlling = false) }
+        _effects.send(WatchPartyDetailEffect.ShowMessage(R.string.watch_parties_control_failed))
+    }
+
+    /** Best-known current position (live sync if present, else the party's last stored position). */
+    private fun currentSyncPosition(): Double {
+        val s = _uiState.value
+        val sync = s.playbackSync
+        val now = System.currentTimeMillis() / 1000L
+        return sync?.targetPositionSeconds(now) ?: (s.party?.positionSeconds?.toDouble() ?: 0.0)
+    }
+
     /** Refresh after a mutation; clears the mutation guard regardless of outcome. */
     private fun reload() {
         viewModelScope.launch {
@@ -125,6 +258,7 @@ class WatchPartyDetailViewModel @Inject constructor(
                         party = partyResult.data,
                         participants = participants,
                         isMutating = false,
+                        isControlling = false,
                         errorMessage = null,
                     )
                 }
@@ -132,7 +266,11 @@ class WatchPartyDetailViewModel @Inject constructor(
             is ApiResult.Failure -> {
                 if (partyResult.error.status == HTTP_UNAUTHORIZED) {
                     _uiState.update {
-                        it.copy(phase = WatchPartyDetailUiState.Phase.SessionExpired, isMutating = false)
+                        it.copy(
+                            phase = WatchPartyDetailUiState.Phase.SessionExpired,
+                            isMutating = false,
+                            isControlling = false,
+                        )
                     }
                 } else {
                     reduceFailure(partyResult.error.message, offline = false, clearMutating = clearMutating)
@@ -147,13 +285,14 @@ class WatchPartyDetailViewModel @Inject constructor(
         val hasContent = _uiState.value.party != null
         if (hasContent && clearMutating) {
             // A mutation succeeded but the refresh failed: keep showing prior content.
-            _uiState.update { it.copy(isMutating = false) }
+            _uiState.update { it.copy(isMutating = false, isControlling = false) }
             return
         }
         _uiState.update {
             it.copy(
                 phase = if (offline) WatchPartyDetailUiState.Phase.Offline else WatchPartyDetailUiState.Phase.Error,
                 isMutating = false,
+                isControlling = false,
                 errorMessage = message,
             )
         }

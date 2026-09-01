@@ -2,6 +2,7 @@ package com.testlogon.android.feature.watchparties
 
 import androidx.annotation.StringRes
 import com.testlogon.android.data.watchparties.WatchParty
+import com.testlogon.android.data.watchparties.WatchPartyMath
 import com.testlogon.android.data.watchparties.WatchPartyParticipant
 
 /**
@@ -38,13 +39,17 @@ sealed interface WatchPartiesListEffect {
  * Render-ready state for the party DETAIL screen. [party] + [participants] are the static REST state.
  * [playbackSync] is the LIVE host-authoritative playback state reconciled from the realtime event
  * stream (/messaging/events/poll); null until the first frame arrives. Join/Leave is guarded by
- * [isMutating].
+ * [isMutating]; host-control mutations (play/pause/seek/co-host/kick/end) by [isControlling].
+ * [currentUserSub] is the signed-in user, used purely to gate the host-control surface via
+ * [WatchPartyMath].
  */
 data class WatchPartyDetailUiState(
     val phase: Phase = Phase.Loading,
     val party: WatchParty? = null,
     val participants: List<WatchPartyParticipant> = emptyList(),
     val isMutating: Boolean = false,
+    val isControlling: Boolean = false,
+    val currentUserSub: String? = null,
     val errorMessage: String? = null,
     val playbackSync: PlaybackSyncState? = null,
 ) {
@@ -52,6 +57,26 @@ data class WatchPartyDetailUiState(
 
     val activeParticipants: List<WatchPartyParticipant>
         get() = participants.filter { it.isActive }
+
+    /** True when the signed-in user may drive playback (host or active co-host). */
+    val canControlPlayback: Boolean
+        get() = party?.let { WatchPartyMath.canControlPlayback(it, participants, currentUserSub) } ?: false
+
+    /** True when the signed-in user may moderate (grant co-host / kick / end) — host only. */
+    val canManageParty: Boolean
+        get() = party?.let { WatchPartyMath.canManageParty(it, currentUserSub) } ?: false
+
+    /** Host-side moderation targets (active, non-host, not self). */
+    fun manageableTargets(): List<WatchPartyParticipant> {
+        val p = party ?: return emptyList()
+        return participants.filter { WatchPartyMath.canTargetParticipant(p, currentUserSub, it) }
+    }
+
+    /** True when [target] may be promoted to co-host by the signed-in host. */
+    fun canPromote(target: WatchPartyParticipant): Boolean {
+        val p = party ?: return false
+        return WatchPartyMath.canPromoteToCoHost(p, currentUserSub, target)
+    }
 
     /**
      * Live playback state pushed from the host over the realtime channel. [isPlaying] drives the
@@ -68,19 +93,22 @@ data class WatchPartyDetailUiState(
         val serverTimeEpochSeconds: Long,
     ) {
         /** Host position extrapolated to [nowEpochSeconds] (advances only while playing). */
-        fun targetPositionSeconds(nowEpochSeconds: Long): Double {
-            if (!isPlaying) return positionSeconds
-            val elapsed = (nowEpochSeconds - positionUpdatedAtEpochSeconds).coerceAtLeast(0L)
-            return positionSeconds + elapsed
-        }
+        fun targetPositionSeconds(nowEpochSeconds: Long): Double =
+            WatchPartyMath.targetPositionSeconds(positionSeconds, positionUpdatedAtEpochSeconds, isPlaying, nowEpochSeconds)
 
         /** True when a local player at [localPositionSeconds] has drifted past tolerance. */
         fun shouldReseek(localPositionSeconds: Double, nowEpochSeconds: Long): Boolean =
-            kotlin.math.abs(targetPositionSeconds(nowEpochSeconds) - localPositionSeconds) > DRIFT_TOLERANCE_SECONDS
+            WatchPartyMath.shouldReseek(
+                positionSeconds,
+                positionUpdatedAtEpochSeconds,
+                isPlaying,
+                localPositionSeconds,
+                nowEpochSeconds,
+            )
 
         companion object {
             /** Re-seek only when the participant is more than this far from the host (avoids churn). */
-            const val DRIFT_TOLERANCE_SECONDS: Double = 2.0
+            const val DRIFT_TOLERANCE_SECONDS: Double = WatchPartyMath.DRIFT_TOLERANCE_SECONDS
         }
     }
 }
