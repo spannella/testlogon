@@ -3,6 +3,7 @@ import type {
   PurchaseTransactionSummary,
   PurchaseTransactionInfo,
   PurchaseShipping,
+  CarrierTrackingView,
 } from "@/api/types";
 
 // ─── List & Search ──────────────────────────────────────────────
@@ -92,3 +93,15 @@ export interface ReceiptLink {
 
 export const getReceipt = (txnId: string) =>
   api.get<ReceiptLink>(`/ui/purchase-history/transactions/${txnId}/receipt`);
+
+// ─── Shipment Tracking ────────────────────────────────
+
+/**
+ * Read the constructed shipment-tracking view (carrier, tracking URL/number,
+ * status, carrier scan events). Returns an honest-empty payload (null fields)
+ * when the order has no carrier/tracking number yet.
+ */
+export const getTransactionTracking = (txnId: string) =>
+  api.get<CarrierTrackingView>(
+    `/ui/purchase-history/transactions/${txnId}/tracking`,
+  );

@@ -12,6 +12,7 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,6 +25,7 @@ import {
   getTransaction,
   listEvents,
   getReceipt,
+  getTransactionTracking,
   markComplete,
   markReverted,
   requestCancel,
@@ -32,6 +34,8 @@ import {
 import type { TransactionEvent } from "@/api/endpoints/purchases";
 import { pollCarrierTracking } from "@/api/endpoints/carrierTracking";
 import { getCartItems } from "@/api/endpoints/cart";
+import { ApiError } from "@/api/client";
+import { summarizeTracking } from "@/lib/trackingSummary";
 import type { CartItem } from "@/api/types";
 
 // ─── Helpers ──────────────────────────────────────────────────
@@ -150,6 +154,102 @@ function CartItemsCard({ cartId }: { cartId: string }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ─── Shipment Tracking Sub-component ─────────────────────────
+
+function TrackingCard({ txnId }: { txnId: string }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["purchases", txnId, "tracking"],
+    queryFn: () => getTransactionTracking(txnId),
+    // Degrade-on-404: a missing tracking record is honest-empty, not an error.
+    retry: (failureCount, err) =>
+      !(err instanceof ApiError && err.status === 404) && failureCount < 2,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {Array.from({ length: 2 }).map((_, i) => (
+          <Skeleton key={i} className="h-10 w-full rounded-lg" />
+        ))}
+      </div>
+    );
+  }
+
+  // On a 404 (no tracking record) treat as honest-empty.
+  const view = error instanceof ApiError && error.status === 404 ? null : data;
+  const summary = summarizeTracking(view);
+
+  if (!summary.hasTracking) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No shipment tracking is available for this order yet.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-muted-foreground">Carrier</dt>
+          <dd className="font-medium">{summary.carrierLabel}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Status</dt>
+          <dd>{summary.statusLabel}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-muted-foreground">Tracking</dt>
+          <dd>
+            {summary.trackingUrl ? (
+              <a
+                href={summary.trackingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-xs text-primary underline hover:text-primary/80"
+                data-testid="tracking-detail-link"
+                title={`Track on ${summary.carrierLabel}`}
+              >
+                {summary.trackingNumber}
+                <ExternalLink className="ml-1 inline h-3 w-3" />
+              </a>
+            ) : (
+              <span className="font-mono text-xs">{summary.trackingNumber}</span>
+            )}
+          </dd>
+        </div>
+        {summary.estimatedDelivery && (
+          <div>
+            <dt className="text-muted-foreground">Est. Delivery</dt>
+            <dd>{summary.estimatedDelivery}</dd>
+          </div>
+        )}
+      </dl>
+
+      {summary.events.length > 0 && (
+        <div className="relative pl-6">
+          {/* Vertical line */}
+          <div className="absolute left-[9px] top-2 bottom-2 w-px bg-border" />
+          {summary.events.map((event, i) => (
+            <div key={i} className="relative flex gap-3 pb-4 last:pb-0">
+              {/* Dot */}
+              <div className="absolute left-[-15px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-primary bg-background" />
+              <div className="min-w-0 flex-1">
+                {event.description && (
+                  <p className="text-sm font-medium">{event.description}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {[event.location, event.timestamp].filter(Boolean).join(" · ") || "—"}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -629,6 +729,19 @@ export function TransactionDetail() {
           </Button>
         </div>
       )}
+
+      {/* Shipment Tracking */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-1.5 text-sm font-medium">
+            <Truck className="h-4 w-4" />
+            Shipment Tracking
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <TrackingCard txnId={txnId!} />
+        </CardContent>
+      </Card>
 
       {/* Events Audit Trail */}
       <Card>

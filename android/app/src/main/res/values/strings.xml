@@ -1688,6 +1688,12 @@
     <string name="order_detail_reference">Reference: %1$s</string>
     <string name="order_detail_items_title">Items</string>
     <string name="order_detail_item_qty_price">Qty %1$d · %2$s each</string>
+    <!-- AND-218-extras: transaction event timeline + receipt -->
+    <string name="order_events_title">Order activity</string>
+    <string name="order_receipt_title">Receipt</string>
+    <string name="order_receipt_generated">Generated %1$s</string>
+    <string name="order_receipt_open">Open / Download receipt</string>
+    <string name="order_receipt_unavailable">Receipt is being prepared.</string>
 
     <!-- AND-224: Payment methods management -->
     <string name="more_entry_payment_methods">Payment methods</string>

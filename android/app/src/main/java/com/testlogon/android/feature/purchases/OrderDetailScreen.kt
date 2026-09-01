@@ -45,6 +45,8 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.cart.CartItem
 import com.testlogon.android.data.purchases.PurchaseDetail
+import com.testlogon.android.data.purchases.PurchaseEvent
+import com.testlogon.android.data.purchases.PurchaseReceipt
 import com.testlogon.android.feature.tracking.TrackingSection
 
 /** AND-220 — stable test tags for the order-detail screen. */
@@ -62,12 +64,20 @@ object OrderDetailTestTags {
     const val CONFIRM_DELIVERY_BTN = "order_detail_confirm_delivery_btn"
     const val DIGITAL_ITEMS = "order_detail_digital_items"
     const val DIGITAL_OPEN = "order_detail_digital_open"
+    // AND-218-extras.
+    const val EVENTS = "order_detail_events"
+    const val EVENT_ROW = "order_detail_event_row"
+    const val RECEIPT = "order_detail_receipt"
+    const val RECEIPT_OPEN = "order_detail_receipt_open"
 }
 
 /**
  * AND-220 — order (transaction) detail route. Renders the header/summary, the resolved cart line items,
  * and EMBEDS the AND-215 [TrackingSection] (no duplication of carrier parsing / status display). The
  * "Track package" link is launched via an https-only ACTION_VIEW guard (intent-redirection hardening).
+ *
+ * AND-218-extras — additionally renders the transaction event timeline and a receipt open/download
+ * affordance (launched via the same external-browser / open-with idiom).
  */
 @Composable
 fun OrderDetailRoute(
@@ -123,6 +133,8 @@ fun OrderDetailRoute(
                         order = s.order,
                         items = s.items,
                         entitlements = s.entitlements,
+                        events = s.events,
+                        receipt = s.receipt,
                         confirming = s.confirming,
                         onConfirmReceived = viewModel::confirmReceived,
                         onRequestRefund = { onRequestRefund(s.order.id) },
@@ -147,6 +159,8 @@ private fun OrderDetailContent(
     order: PurchaseDetail,
     items: List<CartItem>,
     entitlements: List<com.testlogon.android.data.entitlements.LibraryEntitlement>,
+    events: List<PurchaseEvent>,
+    receipt: PurchaseReceipt?,
     confirming: Boolean,
     onConfirmReceived: () -> Unit,
     onRequestRefund: () -> Unit,
@@ -164,6 +178,14 @@ private fun OrderDetailContent(
             item { OrderItemsCard(items, order.money.currency) }
         }
         item { tracking() }
+        // AND-218-extras: transaction event timeline (hidden when there are no events).
+        if (events.isNotEmpty()) {
+            item { OrderEventsCard(events) }
+        }
+        // AND-218-extras: receipt open/download (hidden when there is no receipt).
+        if (receipt != null) {
+            item { ReceiptCard(receipt = receipt, context = context) }
+        }
         // ECOMX-42 (B6): confirm-delivery affordance once the order has shipped.
         if (order.canConfirmDelivery) {
             item { ConfirmDeliveryCard(confirming = confirming, onConfirmReceived = onConfirmReceived) }
@@ -174,6 +196,73 @@ private fun OrderDetailContent(
         }
         // AND-244/AND-245: billing-adjacent actions against this transaction.
         item { OrderBillingActions(onRequestRefund = onRequestRefund, onOpenDispute = onOpenDispute) }
+    }
+}
+
+/** AND-218-extras — the transaction event timeline: newest-first, label + date + optional detail. */
+@Composable
+private fun OrderEventsCard(events: List<PurchaseEvent>) {
+    Card(Modifier.fillMaxWidth().testTag(OrderDetailTestTags.EVENTS)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.order_events_title), style = MaterialTheme.typography.titleMedium)
+            events.forEachIndexed { index, event ->
+                if (index > 0) HorizontalDivider()
+                Column(
+                    Modifier.fillMaxWidth().testTag(OrderDetailTestTags.EVENT_ROW),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(event.label, style = MaterialTheme.typography.bodyLarge)
+                    event.atEpochSec?.let {
+                        Text(
+                            text = formatEpochSeconds(it),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    event.detail?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * AND-218-extras — receipt card. When the receipt URL is an absolute http(s) link it offers an
+ * "Open / Download" action launched via the external-browser / open-with idiom; otherwise it shows the
+ * generated-at date only (a not-yet-hosted / relative dev-host URL is not launchable).
+ */
+@Composable
+private fun ReceiptCard(receipt: PurchaseReceipt, context: Context) {
+    Card(Modifier.fillMaxWidth().testTag(OrderDetailTestTags.RECEIPT)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.order_receipt_title), style = MaterialTheme.typography.titleMedium)
+            receipt.generatedAtEpochSec?.let {
+                Text(
+                    text = stringResource(R.string.order_receipt_generated, formatEpochSeconds(it)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (receipt.isOpenable) {
+                val url = receipt.url
+                androidx.compose.material3.TextButton(
+                    onClick = { if (url != null) openReceiptUrl(context, url) },
+                    modifier = Modifier.testTag(OrderDetailTestTags.RECEIPT_OPEN),
+                ) { Text(stringResource(R.string.order_receipt_open)) }
+            } else {
+                Text(
+                    text = stringResource(R.string.order_receipt_unavailable),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -356,6 +445,21 @@ internal fun openCarrierUrl(context: Context, url: String) {
         context.startActivity(intent)
     } catch (_: ActivityNotFoundException) {
         // No browser available; the CTA is best-effort.
+    }
+}
+
+/**
+ * AND-218-extras — open the receipt via the external-browser / open-with idiom. Accepts http(s) only
+ * (the same URL the pure [PurchaseReceipt.isOpenable] gate admits) so a relative / non-web URL never
+ * launches. Best-effort: no browser -> no-op.
+ */
+internal fun openReceiptUrl(context: Context, url: String) {
+    if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) return
+    val intent = Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        // No browser / viewer available; the CTA is best-effort.
     }
 }
 
