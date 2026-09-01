@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.syndicates.ui.OpenLicensingRoute
 import com.testlogon.android.feature.syndicates.ui.SyndicateListRoute
+import com.testlogon.android.feature.syndicates.management.SyndicateManagementRoute
 import com.testlogon.android.feature.syndicates.ui.SyndicateOverviewRoute
 
 /**
@@ -51,6 +52,18 @@ data object SyndicateOpenLicensingDest {
 }
 
 /**
+ * Syndicate MANAGEMENT sub-destination (invites / join-requests / bundle plans / transfer-admin /
+ * audit). The SyndicateManagementViewModel reads {syndicateId} from SavedStateHandle (same arg name
+ * as the overview, so the same id flows through). Reachable from the overview TopAppBar (admin-only).
+ */
+data object SyndicateManagementDest {
+    const val ARG_SYNDICATE_ID = "syndicateId"
+    const val ROUTE = "syndicate/{$ARG_SYNDICATE_ID}/manage"
+
+    fun build(syndicateId: String): String = "syndicate/${Uri.encode(syndicateId)}/manage"
+}
+
+/**
  * AND-356 / AND-357 - registers the syndicate-overview destination and its open-licensing sub-destination in
  * the authenticated graph (one shared nav graph; NOT forked).
  */
@@ -77,6 +90,9 @@ fun NavGraphBuilder.syndicateDestinations(navController: NavHostController) {
                 navController.navigate(SyndicateOpenLicensingDest.build(syndicateId))
             },
             onManageAds = { navController.navigateToSyndicateAds(syndicateId) },
+            onManage = {
+                navController.navigate(SyndicateManagementDest.build(syndicateId)) { launchSingleTop = true }
+            },
         )
     }
     composable(
@@ -86,5 +102,13 @@ fun NavGraphBuilder.syndicateDestinations(navController: NavHostController) {
         ),
     ) {
         OpenLicensingRoute(onBack = { navController.popBackStack() })
+    }
+    composable(
+        route = SyndicateManagementDest.ROUTE,
+        arguments = listOf(
+            navArgument(SyndicateManagementDest.ARG_SYNDICATE_ID) { type = NavType.StringType },
+        ),
+    ) {
+        SyndicateManagementRoute(onBack = { navController.popBackStack() })
     }
 }

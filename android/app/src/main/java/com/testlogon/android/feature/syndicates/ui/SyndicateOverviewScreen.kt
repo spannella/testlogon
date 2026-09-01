@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.ManageAccounts
 import androidx.compose.material.icons.outlined.Policy
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -99,6 +100,7 @@ object SyndicateOverviewTestTags {
     const val STALE = "syndicate_stale"
     const val OPEN_LICENSING_ACTION = "syndicate_open_licensing_action"
     const val MANAGE_ADS_ACTION = "syndicate_manage_ads_action"
+    const val MANAGE_ACTION = "syndicate_manage_action"
 
     fun feedItem(postId: String) = "syndicate_feed_item_$postId"
     fun ledgerItem(index: Int) = "syndicate_ledger_item_$index"
@@ -128,6 +130,7 @@ fun SyndicateOverviewRoute(
     onBack: () -> Unit,
     onOpenLicensing: () -> Unit,
     onManageAds: () -> Unit = {},
+    onManage: () -> Unit = {},
     viewModel: SyndicateOverviewViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -157,6 +160,7 @@ fun SyndicateOverviewRoute(
         onBack = onBack,
         onOpenLicensing = onOpenLicensing,
         onManageAds = onManageAds,
+        onManage = onManage,
         onRetry = viewModel::onRetry,
         onRefresh = {
             viewModel.refresh()
@@ -188,6 +192,7 @@ fun SyndicateOverviewScreen(
     onBack: () -> Unit,
     onOpenLicensing: () -> Unit,
     onManageAds: () -> Unit = {},
+    onManage: () -> Unit = {},
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     onComposeTextChange: (String) -> Unit = {},
@@ -223,6 +228,18 @@ fun SyndicateOverviewScreen(
                             Icon(
                                 Icons.Outlined.Campaign,
                                 contentDescription = stringResource(R.string.syndicate_ads_title),
+                            )
+                        }
+                    }
+                    // Syndicate management (invites / requests / plans / audit) - admin-only entry.
+                    if ((state as? SyndicateOverviewUiState.Content)?.overview?.isAdmin == true) {
+                        IconButton(
+                            onClick = onManage,
+                            modifier = Modifier.testTag(SyndicateOverviewTestTags.MANAGE_ACTION),
+                        ) {
+                            Icon(
+                                Icons.Outlined.ManageAccounts,
+                                contentDescription = "Manage syndicate",
                             )
                         }
                     }

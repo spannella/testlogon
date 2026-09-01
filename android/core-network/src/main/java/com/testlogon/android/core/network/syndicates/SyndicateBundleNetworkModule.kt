@@ -25,4 +25,9 @@ object SyndicateBundleNetworkModule {
     @Singleton
     fun provideSyndicateCampaignApi(retrofit: Retrofit): SyndicateCampaignApi =
         retrofit.create(SyndicateCampaignApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideSyndicateManagementApi(retrofit: Retrofit): SyndicateManagementApi =
+        retrofit.create(SyndicateManagementApi::class.java)
 }
