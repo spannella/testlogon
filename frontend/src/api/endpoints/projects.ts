@@ -8,6 +8,8 @@ import type {
   ProjectCreateReq,
   ProviderCredential,
   ProviderCredentialUpsertReq,
+  ProviderOAuthStartResp,
+  ProviderOAuthCallbackReq,
   ProjectListResp,
   TrackedFile,
   TrackedFileCreateReq,
@@ -101,3 +103,14 @@ export const deleteProviderCredential = (provider: string, org?: string) => {
   if (org) params.org = org;
   return api.del<DeleteProviderCredentialResp>(`/v1/projects/providers/${provider}/credentials`, params);
 };
+
+export const startGoogleDriveOauth = () =>
+  api.post<ProviderOAuthStartResp>(
+    "/v1/projects/providers/google_drive/oauth/start",
+  );
+
+export const completeGoogleDriveOauth = (body: ProviderOAuthCallbackReq) =>
+  api.post<ProviderCredential>(
+    "/v1/projects/providers/google_drive/oauth/callback",
+    body,
+  );

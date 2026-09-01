@@ -8,6 +8,10 @@ import ProjectDetailPage from "./ProjectDetailPage";
 const getProjectDetail = vi.fn();
 const addTrackedFile = vi.fn();
 const removeTrackedFile = vi.fn();
+const getProviderCredential = vi.fn();
+const startGoogleDriveOauth = vi.fn();
+const completeGoogleDriveOauth = vi.fn();
+const deleteProviderCredential = vi.fn();
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
 
@@ -15,6 +19,10 @@ vi.mock("@/api/endpoints/projects", () => ({
   getProjectDetail: (...args: unknown[]) => getProjectDetail(...args),
   addTrackedFile: (...args: unknown[]) => addTrackedFile(...args),
   removeTrackedFile: (...args: unknown[]) => removeTrackedFile(...args),
+  getProviderCredential: (...args: unknown[]) => getProviderCredential(...args),
+  startGoogleDriveOauth: (...args: unknown[]) => startGoogleDriveOauth(...args),
+  completeGoogleDriveOauth: (...args: unknown[]) => completeGoogleDriveOauth(...args),
+  deleteProviderCredential: (...args: unknown[]) => deleteProviderCredential(...args),
 }));
 
 vi.mock("sonner", () => ({
@@ -37,6 +45,7 @@ function deferred<T>() {
 describe("ProjectDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getProviderCredential.mockResolvedValue(null);
   });
 
   const renderPage = () => {
