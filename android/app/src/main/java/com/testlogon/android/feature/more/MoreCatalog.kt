@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.Copyright
 import androidx.compose.material.icons.outlined.CardGiftcard
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.ManageSearch
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Balance
@@ -1670,6 +1671,15 @@ class MoreCatalog @Inject constructor() {
             labelRes = R.string.more_entry_tickets,
             icon = Icons.Outlined.SupportAgent,
             route = MoreRoutes.TICKETS,
+            hub = MoreHub.SUPPORT,
+            section = MoreSection.SUPPORT,
+        ),
+        // KB-AND-1: READ-ONLY Knowledge Base (help centre). Article list / search -> detail.
+        MoreEntry(
+            id = "knowledge_base",
+            labelRes = R.string.more_entry_knowledge_base,
+            icon = Icons.Outlined.MenuBook,
+            route = MoreRoutes.KNOWLEDGE_BASE,
             hub = MoreHub.SUPPORT,
             section = MoreSection.SUPPORT,
         ),

@@ -4288,6 +4288,24 @@
     <string name="tickets_message_empty">(no message)</string>
     <string name="ticket_reply_placeholder">Write a reply…</string>
     <string name="ticket_reply_send_cd">Send reply</string>
+    <!-- KB-AND-1: READ-ONLY Knowledge Base (help centre). Article list / search -> detail. -->
+    <string name="more_entry_knowledge_base">Knowledge base</string>
+    <string name="kb_title">Knowledge base</string>
+    <string name="kb_back">Back</string>
+    <string name="kb_search_placeholder">Search help articles</string>
+    <string name="kb_category_all">All</string>
+    <string name="kb_category_untitled">Category</string>
+    <string name="kb_article_untitled">Untitled article</string>
+    <string name="kb_empty_title">No articles yet</string>
+    <string name="kb_empty_body">Published help articles will appear here.</string>
+    <string name="kb_no_results_title">No matching articles</string>
+    <string name="kb_no_results_body">Try a different search or clear the filter.</string>
+    <string name="kb_helpful_pct">%1$s helpful</string>
+    <string name="kb_updated">Updated %1$s</string>
+    <string name="kb_detail_title">Article</string>
+    <string name="kb_detail_not_found_title">Article unavailable</string>
+    <string name="kb_detail_not_found_body">This article could not be found.</string>
+    <string name="kb_detail_empty_body">This article has no content yet.</string>
     <string name="ticket_reply_char_counter">%1$d / %2$d</string>
     <string name="ticket_reply_sending">Sending…</string>
     <string name="ticket_reply_failed">Couldn\'t send</string>

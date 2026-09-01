@@ -406,6 +406,9 @@ object MoreRoutes {
     // AND-372: READ-ONLY ticket spaces + threads (support / helpdesk). Spaces list -> ticket list -> thread.
     const val TICKETS = TicketSpacesListDest.ROUTE
 
+    // KB-AND-1: READ-ONLY Knowledge Base (help centre). Article list / search -> detail.
+    const val KNOWLEDGE_BASE = KbListDest.ROUTE
+
     // B-SUP (batch 7): the role-branched Support landing (USER help / ADMIN helpdesk queue).
     const val SUPPORT = SupportDest.ROUTE
 
@@ -757,6 +760,7 @@ object MoreRoutes {
             BOOSTS,
             SEO,
             TICKETS,
+            KNOWLEDGE_BASE,
             SUPPORT,
             WEBHOOKS,
             ADMIN_DASHBOARD,
