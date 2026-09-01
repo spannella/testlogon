@@ -76,6 +76,7 @@ object ManageSubscriptionTestTags {
     const val PAST_DUE_BANNER = "manage_sub_past_due_banner"
     const val UPDATE_CARD = "manage_sub_update_card"
     const val RETRY_PAYMENT = "manage_sub_retry_payment"
+    const val CONVERT_TRIAL = "manage_sub_convert_trial"
     fun changeTier(id: String) = "manage_sub_change_$id"
 }
 
@@ -117,6 +118,7 @@ fun ManageSubscriptionRoute(
         onRenewClicked = viewModel::onRenewClicked,
         onUpdateCard = viewModel::onUpdateCardClicked,
         onRetryPayment = viewModel::onRetryPaymentClicked,
+        onConvertTrial = viewModel::onConvertTrialClicked,
         onErrorRetry = viewModel::onErrorRetry,
         onBack = onBack,
         modifier = modifier,
@@ -136,6 +138,7 @@ fun ManageSubscriptionScreen(
     onRenewClicked: () -> Unit,
     onUpdateCard: () -> Unit,
     onRetryPayment: () -> Unit,
+    onConvertTrial: () -> Unit,
     onErrorRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -187,6 +190,7 @@ fun ManageSubscriptionScreen(
                         onRenewClicked = onRenewClicked,
                         onUpdateCard = onUpdateCard,
                         onRetryPayment = onRetryPayment,
+                        onConvertTrial = onConvertTrial,
                     )
             }
         }
@@ -205,6 +209,7 @@ private fun ContentBody(
     onRenewClicked: () -> Unit,
     onUpdateCard: () -> Unit,
     onRetryPayment: () -> Unit,
+    onConvertTrial: () -> Unit,
 ) {
     val sub = state.subscription
     val freeLabel = stringResource(R.string.subs_tiers_free)
@@ -318,7 +323,8 @@ private fun ContentBody(
         val working = state.mutation is MutationStatus.Canceling ||
             state.mutation is MutationStatus.Renewing ||
             state.mutation is MutationStatus.Changing ||
-            state.mutation is MutationStatus.RetryingPayment
+            state.mutation is MutationStatus.RetryingPayment ||
+            state.mutation is MutationStatus.ConvertingTrial
         if (working) {
             Box(
                 Modifier
@@ -337,6 +343,7 @@ private fun ContentBody(
                 onRenewClicked = onRenewClicked,
                 onUpdateCard = onUpdateCard,
                 onRetryPayment = onRetryPayment,
+                onConvertTrial = onConvertTrial,
             )
         }
     }
@@ -422,8 +429,28 @@ private fun PrimaryAction(
     onRenewClicked: () -> Unit,
     onUpdateCard: () -> Unit,
     onRetryPayment: () -> Unit,
+    onConvertTrial: () -> Unit,
 ) {
     when {
+        // SUBX-52 - a live trial can be converted to paid early (charge now) OR canceled below.
+        state.canConvertTrial ->
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onConvertTrial,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(ManageSubscriptionTestTags.CONVERT_TRIAL),
+                ) { Text(stringResource(R.string.manage_sub_convert_trial_action)) }
+                OutlinedButton(
+                    onClick = onCancelClicked,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag(ManageSubscriptionTestTags.CANCEL),
+                ) { Text(stringResource(R.string.manage_sub_cancel_action)) }
+            }
+
         state.isPastDue ->
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(

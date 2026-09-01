@@ -105,6 +105,10 @@ class TestSubscriptionsRepository : SubscriptionsRepository {
         ApiResult.Failure(ApiError(status = 500, message = "not configured"))
     var retryPaymentResult: ApiResult<CreatorSubscription> =
         ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var convertTrialResult: ApiResult<CreatorSubscription> =
+        ApiResult.Failure(ApiError(status = 500, message = "not configured"))
+    var convertTrialCalls = 0
+        private set
     var mySubscribersResult: ApiResult<CreatorSubscriberPage> =
         ApiResult.Failure(ApiError(status = 500, message = "not configured"))
     var myAnalyticsResult: ApiResult<SubscriptionAnalytics> =
@@ -129,6 +133,11 @@ class TestSubscriptionsRepository : SubscriptionsRepository {
         subscriptionId: String,
         body: RetryPaymentReqDto,
     ) = retryPaymentResult
+
+    override suspend fun convertTrial(subscriptionId: String): ApiResult<CreatorSubscription> {
+        convertTrialCalls++
+        return convertTrialResult
+    }
 
     override suspend fun getMySubscribers(
         status: String?,

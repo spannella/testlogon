@@ -290,6 +290,7 @@ private class FakeSubscriptionsRepository : SubscriptionsRepository {
     override suspend fun refundSubscriber(subscriptionId: String, fraction: Double?, reason: String?) =
         notCalled<com.testlogon.android.data.subscriptions.SubscriptionRefundResult>()
     override suspend fun retryPayment(subscriptionId: String, body: com.testlogon.android.data.subscriptions.RetryPaymentReqDto) = notCalled<CreatorSubscription>()
+    override suspend fun convertTrial(subscriptionId: String) = notCalled<CreatorSubscription>()
     override suspend fun getMySubscribers(status: String?, planId: String?, limit: Int?, cursor: String?) =
         notCalled<com.testlogon.android.data.subscriptions.CreatorSubscriberPage>()
     override suspend fun getMyAnalytics(periodDays: Int?) = notCalled<com.testlogon.android.data.subscriptions.SubscriptionAnalytics>()

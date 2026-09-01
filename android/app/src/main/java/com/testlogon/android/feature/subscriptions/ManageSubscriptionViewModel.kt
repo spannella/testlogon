@@ -38,6 +38,9 @@ sealed interface MutationStatus {
 
     /** SUBX-22 - retrying a PAST_DUE renewal charge (dunning recovery). */
     data object RetryingPayment : MutationStatus
+
+    /** SUBX-52 - converting a TRIALING sub to paid early (charge now). */
+    data object ConvertingTrial : MutationStatus
     data class Failed(val message: UiText) : MutationStatus
 }
 
@@ -81,6 +84,13 @@ sealed interface ManageSubscriptionUiState {
         /** SUBX-22 - PAST_DUE (dunning) -> expose update-card + retry-payment recovery actions. */
         val isPastDue: Boolean
             get() = subscription.status == SubscriptionState.PAST_DUE
+
+        /**
+         * SUBX-52 - a TRIALING sub not scheduled to cancel may be converted to paid EARLY (charge now).
+         * Delegates to the pure [TrialConvertMath.canConvert] so the rule stays JVM-tested + single-sourced.
+         */
+        val canConvertTrial: Boolean
+            get() = TrialConvertMath.canConvert(subscription)
 
         /** SUB-E2 - upgrade/downgrade is offered while the sub is active/trialing and not ending. */
         val canChangePlan: Boolean
@@ -334,6 +344,22 @@ class ManageSubscriptionViewModel @Inject constructor(
         _uiState.value = content.copy(mutation = MutationStatus.RetryingPayment)
         viewModelScope.launch {
             val result = repository.retryPayment(content.subscription.subscriptionId, RetryPaymentReqDto())
+            applyMutationResult(result)
+        }
+    }
+
+    /**
+     * SUBX-52 - convert the TRIALING sub to paid EARLY via the backend convert endpoint (same
+     * funds-guarded rail as the trial-end sweeper). A real collected charge flips trialing -> active; a
+     * decline / missing PM (402) or a non-trial state (400) surfaces a mutation error.
+     */
+    fun onConvertTrialClicked() {
+        val content = currentContent() ?: return
+        if (content.mutation != MutationStatus.Idle) return
+        if (!content.canConvertTrial) return
+        _uiState.value = content.copy(mutation = MutationStatus.ConvertingTrial)
+        viewModelScope.launch {
+            val result = repository.convertTrial(content.subscription.subscriptionId)
             applyMutationResult(result)
         }
     }

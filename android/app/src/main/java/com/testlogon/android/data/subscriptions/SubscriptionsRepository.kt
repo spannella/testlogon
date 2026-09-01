@@ -106,6 +106,13 @@ interface SubscriptionsRepository {
         body: RetryPaymentReqDto = RetryPaymentReqDto(),
     ): ApiResult<CreatorSubscription>
 
+    /**
+     * SUBX-52 - MANUALLY convert the caller TRIALING subscription to paid early (charges now via the same
+     * funds-guarded rail the sweeper uses at trial end). A decline / missing PM surfaces as an HTTP 402
+     * failure; a non-trial sub as HTTP 400. NON-idempotent -> callers never auto-retry it.
+     */
+    suspend fun convertTrial(subscriptionId: String): ApiResult<CreatorSubscription>
+
     /** SUB-E4-1 - the current creator own subscriber list (owner-scoped; X-User-Id = creator id). */
     suspend fun getMySubscribers(
         status: String? = null,
@@ -239,6 +246,11 @@ class SubscriptionsRepositoryImpl @Inject constructor(
     ): ApiResult<CreatorSubscription> = withContext(io) {
         val userId = currentUserId() ?: return@withContext unauthenticated()
         call { api.retryPayment(userId, subscriptionId, body) }.map { it.toDomain() }
+    }
+
+    override suspend fun convertTrial(subscriptionId: String): ApiResult<CreatorSubscription> = withContext(io) {
+        val userId = currentUserId() ?: return@withContext unauthenticated()
+        call { api.convertTrial(userId, subscriptionId) }.map { it.toDomain() }
     }
 
     override suspend fun getMySubscribers(

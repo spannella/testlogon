@@ -100,6 +100,7 @@ class FakeSubscriptionsRepository(
         subscriptionId: String,
         body: com.testlogon.android.data.subscriptions.RetryPaymentReqDto,
     ): ApiResult<CreatorSubscription> = error("not used")
+    override suspend fun convertTrial(subscriptionId: String): ApiResult<CreatorSubscription> = error("not used")
     override suspend fun getMySubscribers(
         status: String?,
         planId: String?,
