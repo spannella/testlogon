@@ -308,6 +308,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         fanClubDestinations(navController)
         // AND-243: invoices list (paged) + invoice detail (line items/totals + email + view-PDF).
         invoicesDestinations(navController)
+        // HRM-009: HR & payroll hub (positions/employments/payroll read) + employment/payroll detail.
+        hrDestinations(navController)
         // AND-244: refund-requests list + submit (from order/txn detail) + detail (status tracking).
         refundsDestinations(navController)
         // AND-245: disputes list + file (open a dispute from order/txn detail) + detail (status).

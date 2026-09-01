@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- HRM-009 - HR / Payroll surface strings (operator-only More hub entry + hub/detail screens). -->
+<resources>
+    <!-- More hub entry -->
+    <string name="more_entry_hr">HR &amp; payroll</string>
+
+    <!-- Hub -->
+    <string name="hr_title">HR &amp; payroll</string>
+    <string name="hr_tab_positions">Positions</string>
+    <string name="hr_tab_employments">Employments</string>
+    <string name="hr_tab_payroll">Payroll</string>
+    <string name="hr_positions_empty">No positions.</string>
+    <string name="hr_employments_empty">No employments.</string>
+    <string name="hr_payroll_empty">No payroll runs.</string>
+
+    <!-- Degrade-on-404 (feature flag off) -->
+    <string name="hr_unavailable_title">HR is not enabled</string>
+    <string name="hr_unavailable_body">The HR &amp; payroll module is not enabled for this account.</string>
+
+    <!-- Employment detail -->
+    <string name="hr_employment_detail_title">Employment</string>
+    <string name="hr_field_status">Status</string>
+    <string name="hr_field_position">Position</string>
+    <string name="hr_field_party">Employee</string>
+    <string name="hr_field_org">Organization</string>
+    <string name="hr_field_pay_rate">Pay rate</string>
+    <string name="hr_field_pay_period">Pay period</string>
+    <string name="hr_field_annualized">Annualized</string>
+    <string name="hr_field_start">Start date</string>
+    <string name="hr_field_end">End date</string>
+    <string name="hr_field_tenure">Tenure</string>
+
+    <!-- Payroll detail -->
+    <string name="hr_payroll_detail_title">Payroll run</string>
+    <string name="hr_field_period">Period</string>
+    <string name="hr_field_gross_total">Gross total</string>
+    <string name="hr_field_approved_by">Approved by</string>
+    <string name="hr_field_posted_at">Posted</string>
+    <string name="hr_payroll_lines_header">Lines</string>
+    <string name="hr_payroll_lines_empty">No lines.</string>
+</resources>

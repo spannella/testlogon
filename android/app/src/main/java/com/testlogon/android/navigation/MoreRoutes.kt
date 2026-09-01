@@ -172,6 +172,9 @@ object MoreRoutes {
     // AND-248: the read-only billing-config view (root-gated server-side; 403 surfaces as an error).
     const val BILLING_CONFIG = BillingConfigDest.ROUTE
 
+    // HRM-009: the HR & payroll hub (positions / employments / payroll runs read views). Operator-only.
+    const val HR = HrHubDest.ROUTE
+
     // AND-252: the creator earnings dashboard (totals + chart + breakdown). Base route (no range arg);
     // the registered composable route carries an optional `?range=` deep-link arg.
     const val EARNINGS = EarningsDest.ROUTE_BASE
@@ -720,6 +723,7 @@ object MoreRoutes {
             TAX_DOCUMENTS,
             TAX_FORMS_1099,
             BILLING_CONFIG,
+            HR,
             SUBSCRIPTION_TIERS,
             CREATOR_SUBSCRIBERS,
             CREATOR_TIERS,
