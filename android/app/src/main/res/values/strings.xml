@@ -4850,6 +4850,9 @@
     <string name="ideas_status_converted">Converted</string>
     <string name="ideas_status_unknown">Unknown</string>
     <string name="more_entry_licenses">Licenses</string>
+    <string name="more_entry_signing_inbox">Signatures</string>
+    <string name="more_entry_maintenance_orders">Work orders</string>
+    <string name="more_entry_workflow_rules">Workflow rules</string>
     <string name="licenses_title">Licenses</string>
     <string name="licenses_tab_issued">Issued</string>
     <string name="licenses_tab_requests">Requests</string>

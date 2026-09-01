@@ -7,6 +7,7 @@ import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 import retrofit2.http.Streaming
 
 /**
@@ -75,6 +76,24 @@ interface SigningApi {
     @Streaming
     @GET("v1/signature-packets/{packetId}/final-pdf")
     suspend fun downloadFinalPdf(@Path("packetId") packetId: String): Response<ResponseBody>
+
+    // ---- Signing inbox (SUX-008 browse lists) ----
+    //
+    // The four browse endpoints that did not exist when AND-339 shipped the load-by-id-only API. All
+    // return the same {items, count} envelope ([SigningInboxListDto]); the repository maps it to domain
+    // and the SigningInboxViewModel groups the four buckets. `limit` mirrors the web default of 100.
+
+    @GET("v1/signature-packets/awaiting")
+    suspend fun listAwaiting(@Query("limit") limit: Int = 100): SigningInboxListDto
+
+    @GET("v1/signature-packets/sent")
+    suspend fun listSent(@Query("limit") limit: Int = 100): SigningInboxListDto
+
+    @GET("v1/signature-packets/completed-for-me")
+    suspend fun listCompletedForMe(@Query("limit") limit: Int = 100): SigningInboxListDto
+
+    @GET("v1/signature-packets/drafts")
+    suspend fun listDrafts(@Query("limit") limit: Int = 100): SigningInboxListDto
 
     // ---- Templates ----
 

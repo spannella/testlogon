@@ -10,6 +10,7 @@ import androidx.navigation.navArgument
 import com.testlogon.android.feature.signing.PacketDetailRoute
 import com.testlogon.android.feature.signing.PacketDetailViewModel
 import com.testlogon.android.feature.signing.SigningEntryRoute
+import com.testlogon.android.feature.signing.packetlist.SigningInboxRoute
 import com.testlogon.android.feature.signing.capture.SigningRoute
 import com.testlogon.android.feature.signing.capture.SigningViewModel
 import com.testlogon.android.feature.signing.document.DocumentViewerRoute
@@ -28,6 +29,15 @@ import dagger.hilt.android.EntryPointAccessors
  * timeline + the status-driven primary action. onOpenPdf (-> the PDF viewer) and onSign (the assigned-
  * signer deep flow -> AND-342/343) are defaulted no-ops for now.
  */
+/**
+ * SUX-008 - the signing INBOX ("list packets") destination. Backed by the four browse endpoints
+ * (awaiting / sent / completed-for-me / drafts) that shipped after AND-340's load-by-id-only entry.
+ * Rows open the existing packet DETAIL. This is the More-hub entry point for the signing feature.
+ */
+data object SigningInboxDest {
+    const val ROUTE = "signing/inbox"
+}
+
 data object SigningEntryDest {
     const val ROUTE = "signing/entry"
 }
@@ -82,6 +92,14 @@ interface SignedDraftHandoffEntryPoint {
 
 /** AND-340 - registers the Signing entry + packet-detail screens in the authenticated graph. */
 fun NavGraphBuilder.signingDestinations(navController: NavHostController) {
+    composable(SigningInboxDest.ROUTE) {
+        SigningInboxRoute(
+            onBack = { navController.popBackStack() },
+            onOpenPacket = { packetId ->
+                navController.navigate(SigningPacketDetailDest.build(packetId))
+            },
+        )
+    }
     composable(SigningEntryDest.ROUTE) {
         SigningEntryRoute(
             onBack = { navController.popBackStack() },
