@@ -115,6 +115,9 @@ object MoreRoutes {
     // External custody providers (Fireblocks / BitGo / internal gateway): connect + per-vault provider + withdrawal approval.
     const val CUSTODY_PROVIDERS = CustodyProvidersDest.ROUTE
 
+    // Banking: native OpenBankProject linked-accounts list + account detail + transaction metadata, wired to /ui/banking (feature-flag-gated; degrades on 404).
+    const val BANKING = BankingAccountsDest.ROUTE
+
     // Portfolio: read-only cross-venue account overview (custody / spot / margin / staking snapshot).
     const val PORTFOLIO = PortfolioDest.ROUTE
 
@@ -657,6 +660,7 @@ object MoreRoutes {
             CUSTODY,
             CASH,
             CUSTODY_PROVIDERS,
+            BANKING,
             PORTFOLIO,
             PORTFOLIO_ANALYTICS,
             PNL,

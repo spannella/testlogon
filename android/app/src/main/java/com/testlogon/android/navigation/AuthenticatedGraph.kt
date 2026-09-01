@@ -224,6 +224,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         cashDestination(navController)
         // External custody providers (Fireblocks / BitGo / internal gateway): connect + per-vault provider + withdrawal approval.
         custodyProvidersDestination(navController)
+        // Banking: native OpenBankProject linked-accounts list + detail + transaction metadata, wired to /ui/banking (feature-flag-gated; reads degrade on 404).
+        bankingDestinations(navController)
         // Trading Home / Dashboard: read-only launch surface (reached from More -> Wallet hub top).
         homeDestination(navController)
         portfolioDestination(navController)
