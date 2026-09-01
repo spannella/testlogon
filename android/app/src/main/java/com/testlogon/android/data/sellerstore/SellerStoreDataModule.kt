@@ -23,6 +23,11 @@ object SellerStoreApiModule {
 
     @Provides
     @Singleton
+    fun provideProductDepthApi(retrofit: Retrofit): ProductDepthApi =
+        retrofit.create(ProductDepthApi::class.java)
+
+    @Provides
+    @Singleton
     fun provideSellerOrdersApi(retrofit: Retrofit): SellerOrdersApi =
         retrofit.create(SellerOrdersApi::class.java)
 
@@ -39,6 +44,10 @@ abstract class SellerStoreDataModule {
     @Binds
     @Singleton
     abstract fun bindSellerCatalogRepository(impl: SellerCatalogRepositoryImpl): SellerCatalogRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindProductDepthRepository(impl: ProductDepthRepositoryImpl): ProductDepthRepository
 
     @Binds
     @Singleton
