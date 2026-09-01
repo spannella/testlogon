@@ -397,6 +397,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         earningsDestinations(navController)
         // TIPX-D3/D4: ledger-backed tip insights (top supporters + received/sent history).
         tipInsightsDestinations(navController)
+        // CRM-AND-1: SuiteCRM leads list/detail + sales pipeline board.
+        crmDestinations(navController)
         // AND-254: creator engagement-rate analytics (server rate + trend chart + breakdown).
         engagementDestinations(navController)
         // AND-399: account-wide analytics dashboards (read) — KPI tiles + views/subscriber charts +
