@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,6 +63,7 @@ object ListingEditorTestTags {
     const val PICK_IMAGE = "listing_pick_image"
     const val SAVE = "listing_save"
     const val DELETE = "listing_delete"
+    const val ADVANCED_DEPTH = "listing_advanced_depth"
 
     /** LIVECOM L5 — the seller-set affiliate commission percent field. */
     const val AFFILIATE_COMMISSION = "listing_affiliate_commission_input"
@@ -71,6 +73,7 @@ object ListingEditorTestTags {
 fun ListingEditorRoute(
     onDone: () -> Unit,
     onBack: () -> Unit,
+    onOpenDepth: (itemId: String, itemName: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
     viewModel: ListingEditorViewModel = hiltViewModel(),
 ) {
@@ -102,6 +105,7 @@ fun ListingEditorRoute(
         onPickImage = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
         onSave = viewModel::save,
         onDelete = viewModel::deleteListing,
+        onOpenDepth = { state.savedItemId?.let { onOpenDepth(it, state.name) } },
         onBack = onBack,
         modifier = modifier,
     )
@@ -119,6 +123,7 @@ fun ListingEditorScreen(
     onPickImage: () -> Unit,
     onSave: () -> Unit,
     onDelete: () -> Unit,
+    onOpenDepth: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -214,6 +219,15 @@ fun ListingEditorScreen(
                     CircularProgressIndicator(Modifier.height(20.dp), strokeWidth = 2.dp)
                 } else {
                     Text(stringResource(R.string.listing_save))
+                }
+            }
+            if (state.canOpenDepth) {
+                OutlinedButton(
+                    onClick = onOpenDepth,
+                    modifier = Modifier.fillMaxWidth().testTag(ListingEditorTestTags.ADVANCED_DEPTH),
+                ) {
+                    Icon(Icons.Outlined.Tune, contentDescription = null)
+                    Text("  Advanced product options")
                 }
             }
         }

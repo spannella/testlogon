@@ -7,6 +7,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.testlogon.android.feature.sellerstore.ListingEditorRoute
+import com.testlogon.android.feature.sellerstore.ProductDepthRoute
 import com.testlogon.android.feature.sellerstore.SellerOrdersRoute
 import com.testlogon.android.feature.sellerstore.SellerSalesRoute
 import com.testlogon.android.feature.sellerstore.SellerStoreRoute
@@ -48,6 +49,21 @@ data object ListingEditorDest {
         "seller/store/${Uri.encode(categoryId)}/listing/${Uri.encode(itemId ?: NEW)}"
 }
 
+
+/**
+ * ECOM (catalog depth) — the advanced product editor (variants / price components / bundle components /
+ * per-item features) for one SAVED catalog item. Reached only from the listing editor, so it is not a
+ * top-level More entry. The item name is passed for the title; everything else is loaded by item id.
+ */
+data object ProductDepthDest {
+    const val ARG_ITEM_ID = "itemId"
+    const val ARG_ITEM_NAME = "itemName"
+    const val ROUTE = "seller/store/depth/{$ARG_ITEM_ID}?name={$ARG_ITEM_NAME}"
+
+    fun build(itemId: String, itemName: String): String =
+        "seller/store/depth/${Uri.encode(itemId)}?name=${Uri.encode(itemName)}"
+}
+
 /** Registers "My store": item rows open the listing editor; the add-item FAB opens it in create mode. */
 fun NavGraphBuilder.sellerStoreDestination(navController: NavHostController) {
     composable(SellerStoreDest.ROUTE) {
@@ -75,6 +91,9 @@ fun NavGraphBuilder.listingEditorDestination(navController: NavHostController) {
         ListingEditorRoute(
             onDone = { navController.popBackStack() },
             onBack = { navController.popBackStack() },
+            onOpenDepth = { itemId, itemName ->
+                navController.navigate(ProductDepthDest.build(itemId, itemName)) { launchSingleTop = true }
+            },
         )
     }
 }
@@ -102,5 +121,23 @@ fun NavGraphBuilder.sellerSalesDestination(navController: NavHostController) {
             onBack = { navController.popBackStack() },
             initialSaleId = entry.arguments?.getString(SellerSalesDest.ARG_SALE),
         )
+    }
+}
+
+
+/** Registers the advanced product-depth editor (nav args via SavedStateHandle). */
+fun NavGraphBuilder.productDepthDestination(navController: NavHostController) {
+    composable(
+        route = ProductDepthDest.ROUTE,
+        arguments = listOf(
+            navArgument(ProductDepthDest.ARG_ITEM_ID) { type = NavType.StringType },
+            navArgument(ProductDepthDest.ARG_ITEM_NAME) {
+                type = NavType.StringType
+                nullable = true
+                defaultValue = null
+            },
+        ),
+    ) {
+        ProductDepthRoute(onBack = { navController.popBackStack() })
     }
 }

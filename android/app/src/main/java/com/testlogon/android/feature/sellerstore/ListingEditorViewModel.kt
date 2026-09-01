@@ -46,8 +46,13 @@ data class ListingEditorUiState(
      * endpoints. Only meaningful for an existing (saved) listing.
      */
     val affiliateCommissionText: String = "",
+    /** ECOM (catalog depth) — the saved item's id, once resolved; null while creating. Gates the depth editor entry. */
+    val savedItemId: String? = null,
 ) {
     val canSave: Boolean get() = name.isNotBlank() && priceText.isNotBlank() && !saving && !uploadingImage
+
+    /** ECOM (catalog depth) — the advanced product-depth editor is only reachable for a saved item. */
+    val canOpenDepth: Boolean get() = savedItemId != null
 }
 
 sealed interface ListingEditorEvent {
@@ -99,6 +104,7 @@ class ListingEditorViewModel @Inject constructor(
                             priceText = centsToText(item.priceCents),
                             stockText = item.stockCount?.toString().orEmpty(),
                             imageUrl = item.thumbnailUrl,
+                            savedItemId = item.itemId,
                         )
                     }
                     loadCommission(item.itemId)

@@ -265,6 +265,7 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         wishlistDestination(navController)
         sellerStoreDestination(navController)
         listingEditorDestination(navController)
+        productDepthDestination(navController)
         sellerOrdersDestination(navController)
         sellerSalesDestination(navController)
         // D4 - buyer order shipment-tracking (reached from buyer shipment alerts).
