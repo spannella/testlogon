@@ -723,6 +723,23 @@ class MoreCatalog @Inject constructor() {
             hub = MoreHub.GROWTH,
             section = MoreSection.APP,
         ),
+        // CRM-AND-1: SuiteCRM leads + sales-pipeline surfaces (degrade-on-404 when the modules are off).
+        MoreEntry(
+            id = "crm_leads",
+            labelRes = R.string.more_entry_crm_leads,
+            icon = Icons.Outlined.GroupAdd,
+            route = MoreRoutes.CRM_LEADS,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "crm_pipeline",
+            labelRes = R.string.more_entry_crm_pipeline,
+            icon = Icons.Outlined.TrendingUp,
+            route = MoreRoutes.CRM_PIPELINE,
+            hub = MoreHub.GROWTH,
+            section = MoreSection.APP,
+        ),
         MoreEntry(
             id = "videos",
             labelRes = R.string.more_entry_videos,

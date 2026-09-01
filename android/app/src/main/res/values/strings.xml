@@ -94,6 +94,8 @@
     <string name="more_entry_activity">Activity</string>
     <string name="more_entry_saved">Saved</string>
     <string name="more_entry_achievements">Achievements</string>
+    <string name="more_entry_crm_leads">Leads</string>
+    <string name="more_entry_crm_pipeline">Sales pipeline</string>
     <string name="more_entry_videos">My videos</string>
     <string name="more_entry_vod_catalog">Browse videos</string>
     <string name="more_entry_clips">Clips</string>

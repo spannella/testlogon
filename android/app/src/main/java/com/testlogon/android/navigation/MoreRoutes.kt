@@ -55,6 +55,10 @@ object MoreRoutes {
     // AND-093: achievements (earned/locked + progress).
     val ACHIEVEMENTS: String get() = MainDest.Achievements.route
 
+    // CRM-AND-1: SuiteCRM leads list + lead detail (/ui/leads) and the sales pipeline board (/ui/sales).
+    val CRM_LEADS: String get() = CrmLeadsDest.ROUTE
+    val CRM_PIPELINE: String get() = CrmPipelineDest.ROUTE
+
     // AND-189: the caller's videos library grid.
     val VIDEOS: String get() = VideosLibraryDest.ROUTE
 
@@ -654,6 +658,8 @@ object MoreRoutes {
             ACTIVITY,
             SAVED,
             ACHIEVEMENTS,
+            CRM_LEADS,
+            CRM_PIPELINE,
             VIDEOS,
             VOD_CATALOG,
             VOD_RENTALS,
