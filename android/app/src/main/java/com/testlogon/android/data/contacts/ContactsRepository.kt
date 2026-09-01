@@ -49,6 +49,44 @@ data class FollowRelationship(
     val isFollowing: Boolean,
     val isFollowedBy: Boolean,
     val isMutual: Boolean,
+    val isBlockedByMe: Boolean = false,
+    val isBlockingMe: Boolean = false,
+) {
+    /** The collapsed relationship the UI switches on. */
+    val relationship: SocialRelationship
+        get() = SocialGraphMath.relationshipOf(
+            isFollowing = isFollowing,
+            isFollowedBy = isFollowedBy,
+            isMutual = isMutual,
+            isBlockedByMe = isBlockedByMe,
+            isBlockingMe = isBlockingMe,
+        )
+}
+
+/** A user in a followers / following / mutual list. */
+data class FollowGraphUser(
+    val userId: String,
+    val displayName: String,
+    val photoUrl: String?,
+    val isFollowing: Boolean,
+    val isMutual: Boolean,
+    val snoozedUntilSeconds: Long?,
+    val isSnoozed: Boolean,
+)
+
+/** Follower / following totals for a user. */
+data class FollowCounts(
+    val followerCount: Int,
+    val followingCount: Int,
+)
+
+/** A currently-snoozed following the viewer owns. */
+data class SnoozedFollowing(
+    val userId: String,
+    val displayName: String,
+    val photoUrl: String?,
+    val snoozedUntilSeconds: Long,
+    val remainingHours: Int?,
 )
 
 /**
@@ -74,6 +112,30 @@ interface ContactsRepository {
     suspend fun follow(userId: String): ApiResult<Unit>
     suspend fun unfollow(userId: String): ApiResult<Unit>
     suspend fun followStatus(userId: String): ApiResult<FollowRelationship>
+
+    /**
+     * Followers of [userId] (first page). Degrades-on-404: a missing relationship / user surface
+     * returns an EMPTY list as Success, never a Failure (this is an additive read).
+     */
+    suspend fun followers(userId: String, cursor: String? = null): ApiResult<List<FollowGraphUser>>
+
+    /** Followings of [userId] (first page). Degrades-on-404 to an empty list. */
+    suspend fun following(userId: String, cursor: String? = null): ApiResult<List<FollowGraphUser>>
+
+    /** Follower / following totals for [userId]. Degrades-on-404 to zeroes. */
+    suspend fun followCounts(userId: String): ApiResult<FollowCounts>
+
+    /** Followers the viewer shares with [userId]. Degrades-on-404 to an empty list. */
+    suspend fun mutualFollowers(userId: String, cursor: String? = null): ApiResult<List<FollowGraphUser>>
+
+    /** The viewer's currently-snoozed followings. Degrades-on-404 to an empty list. */
+    suspend fun snoozedFollowing(): ApiResult<List<SnoozedFollowing>>
+
+    /** Snooze [userId]'s content for [days] (clamped to 1..90). Returns the new expiry (epoch s). */
+    suspend fun snoozeFollowing(userId: String, days: Int): ApiResult<Long>
+
+    /** Remove snooze from [userId] (idempotent — a 404 counts as success). */
+    suspend fun unsnoozeFollowing(userId: String): ApiResult<Unit>
 }
 
 @Singleton
@@ -160,7 +222,60 @@ class ContactsRepositoryImpl @Inject constructor(
                 isFollowing = s.isFollowing,
                 isFollowedBy = s.isFollowedBy,
                 isMutual = s.isMutual,
+                isBlockedByMe = s.isBlockedByMe,
+                isBlockingMe = s.isBlockingMe,
             )
+        }
+    }
+
+    override suspend fun followers(userId: String, cursor: String?): ApiResult<List<FollowGraphUser>> =
+        withContext(io) {
+            degradeToEmpty { bodyFrom(followApi.followers(userId, cursor)).items.map { it.toDomain() } }
+        }
+
+    override suspend fun following(userId: String, cursor: String?): ApiResult<List<FollowGraphUser>> =
+        withContext(io) {
+            degradeToEmpty { bodyFrom(followApi.following(userId, cursor)).items.map { it.toDomain() } }
+        }
+
+    override suspend fun followCounts(userId: String): ApiResult<FollowCounts> = withContext(io) {
+        val result = call {
+            val c = bodyFrom(followApi.counts(userId))
+            FollowCounts(followerCount = c.followerCount, followingCount = c.followingCount)
+        }
+        // Degrade-on-404: an absent user surfaces as zeroed counts, not an error.
+        if (result is ApiResult.Failure &&
+            SocialGraphMath.isBenignSocialReadFailure(result.error.status)
+        ) {
+            ApiResult.Success(FollowCounts(followerCount = 0, followingCount = 0))
+        } else {
+            result
+        }
+    }
+
+    override suspend fun mutualFollowers(userId: String, cursor: String?): ApiResult<List<FollowGraphUser>> =
+        withContext(io) {
+            degradeToEmpty { bodyFrom(followApi.mutual(userId, cursor)).items.map { it.toDomain() } }
+        }
+
+    override suspend fun snoozedFollowing(): ApiResult<List<SnoozedFollowing>> = withContext(io) {
+        degradeToEmptySnoozed { bodyFrom(followApi.snoozedFollowing()).snoozed.map { it.toDomain() } }
+    }
+
+    override suspend fun snoozeFollowing(userId: String, days: Int): ApiResult<Long> = withContext(io) {
+        val clamped = SocialGraphMath.clampSnoozeDays(days)
+        call { bodyFrom(followApi.snoozeFollowing(userId, SnoozeFollowingDto(days = clamped))).snoozedUntil }
+    }
+
+    override suspend fun unsnoozeFollowing(userId: String): ApiResult<Unit> = withContext(io) {
+        val result = call { unitFrom(followApi.unsnoozeFollowing(userId)) }
+        // Un-snoozing is idempotent: a 404 ("not snoozed" / "not following") is a success.
+        if (result is ApiResult.Failure &&
+            SocialGraphMath.isBenignUnsnoozeFailure(result.error.status)
+        ) {
+            ApiResult.Success(Unit)
+        } else {
+            result
         }
     }
 
@@ -168,6 +283,36 @@ class ContactsRepositoryImpl @Inject constructor(
 
     private fun unitFrom(response: Response<*>) {
         if (!response.isSuccessful) throw HttpException(response)
+    }
+
+    /** Unwrap a 2xx body or throw HttpException so [call] maps it to Failure. */
+    private fun <T> bodyFrom(response: Response<T>): T {
+        if (!response.isSuccessful) throw HttpException(response)
+        return requireNotNull(response.body()) { "Empty body on a 2xx response" }
+    }
+
+    /**
+     * Run an additive social read; on a benign 404/410 (see [SocialGraphMath.isBenignSocialReadFailure])
+     * degrade to an empty list as Success rather than surfacing an error.
+     */
+    private suspend fun degradeToEmpty(
+        block: suspend () -> List<FollowGraphUser>,
+    ): ApiResult<List<FollowGraphUser>> = when (val r = call(block)) {
+        is ApiResult.Success -> r
+        is ApiResult.Failure ->
+            if (SocialGraphMath.isBenignSocialReadFailure(r.error.status)) ApiResult.Success(emptyList())
+            else r
+        is ApiResult.NetworkError -> r
+    }
+
+    private suspend fun degradeToEmptySnoozed(
+        block: suspend () -> List<SnoozedFollowing>,
+    ): ApiResult<List<SnoozedFollowing>> = when (val r = call(block)) {
+        is ApiResult.Success -> r
+        is ApiResult.Failure ->
+            if (SocialGraphMath.isBenignSocialReadFailure(r.error.status)) ApiResult.Success(emptyList())
+            else r
+        is ApiResult.NetworkError -> r
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {
@@ -209,4 +354,22 @@ private fun SuggestionCardDto.toDomain() = ContactSuggestion(
     hint = hint,
     mutualCount = mutualCount,
     source = source,
+)
+
+private fun FollowUserDto.toDomain() = FollowGraphUser(
+    userId = userId,
+    displayName = displayName?.takeIf { it.isNotBlank() } ?: userId,
+    photoUrl = profilePhotoUrl,
+    isFollowing = isFollowing,
+    isMutual = isMutual,
+    snoozedUntilSeconds = snoozedUntil,
+    isSnoozed = isSnoozed,
+)
+
+private fun SnoozedFollowingDto.toDomain() = SnoozedFollowing(
+    userId = followingSub,
+    displayName = followingName?.takeIf { it.isNotBlank() } ?: followingSub,
+    photoUrl = followingAvatarUrl,
+    snoozedUntilSeconds = snoozedUntil,
+    remainingHours = snoozeRemainingHours,
 )

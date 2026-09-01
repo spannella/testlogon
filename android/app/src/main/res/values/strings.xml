@@ -4252,6 +4252,8 @@
     <!-- Block / unblock (AND-382) -->
     <string name="block_action">Block @%1$s</string>
     <string name="unblock_action">Unblock</string>
+    <string name="snooze_action_snooze">Snooze posts</string>
+    <string name="snooze_action_unsnooze">Unsnooze posts</string>
     <string name="block_confirm_title">Block @%1$s?</string>
     <string name="block_confirm_body">They won\'t be able to message you, follow you, or see your content, and you won\'t see theirs. You can unblock them anytime.</string>
     <string name="block_confirm_cta">Block</string>

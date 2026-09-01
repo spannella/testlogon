@@ -7,6 +7,9 @@ import com.testlogon.android.data.contacts.ContactMatch
 import com.testlogon.android.data.contacts.ContactSuggestion
 import com.testlogon.android.data.contacts.ContactsRepository
 import com.testlogon.android.data.contacts.FollowRelationship
+import com.testlogon.android.data.contacts.FollowCounts
+import com.testlogon.android.data.contacts.FollowGraphUser
+import com.testlogon.android.data.contacts.SnoozedFollowing
 import com.testlogon.android.data.contacts.SavedContact
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -60,6 +63,20 @@ class ContactsHubViewModelTest {
         override suspend fun unfollow(userId: String): ApiResult<Unit> = ApiResult.Success(Unit)
         override suspend fun followStatus(userId: String): ApiResult<FollowRelationship> =
             ApiResult.Success(FollowRelationship(false, false, false))
+        override suspend fun followers(userId: String, cursor: String?): ApiResult<List<FollowGraphUser>> =
+            ApiResult.Success(emptyList())
+        override suspend fun following(userId: String, cursor: String?): ApiResult<List<FollowGraphUser>> =
+            ApiResult.Success(emptyList())
+        override suspend fun followCounts(userId: String): ApiResult<FollowCounts> =
+            ApiResult.Success(FollowCounts(0, 0))
+        override suspend fun mutualFollowers(userId: String, cursor: String?): ApiResult<List<FollowGraphUser>> =
+            ApiResult.Success(emptyList())
+        override suspend fun snoozedFollowing(): ApiResult<List<SnoozedFollowing>> =
+            ApiResult.Success(emptyList())
+        override suspend fun snoozeFollowing(userId: String, days: Int): ApiResult<Long> =
+            ApiResult.Success(0L)
+        override suspend fun unsnoozeFollowing(userId: String): ApiResult<Unit> =
+            ApiResult.Success(Unit)
     }
 
     private fun saved(id: String, favorite: Boolean = false) =
