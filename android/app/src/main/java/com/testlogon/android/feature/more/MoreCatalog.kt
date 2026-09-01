@@ -1360,6 +1360,16 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.ACCOUNT,
             operatorOnly = true,
         ),
+        // HRM-009: HR & payroll (positions / employments / payroll views). Admin/root only server-side.
+        MoreEntry(
+            id = "hr",
+            labelRes = R.string.more_entry_hr,
+            icon = Icons.Outlined.Groups,
+            route = MoreRoutes.HR,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.ACCOUNT,
+            operatorOnly = true,
+        ),
         MoreEntry(
             id = "subscription_tiers",
             labelRes = R.string.more_entry_subscription_tiers,
