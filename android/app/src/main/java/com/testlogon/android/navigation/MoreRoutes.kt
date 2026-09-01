@@ -626,6 +626,16 @@ object MoreRoutes {
     val CONTACT: String get() = LegalRoutes.CONTACT
 
     /** Routes the hub treats as registered (real destinations or intentionally-surfaced stubs). */
+
+    // SUX-008: e-signature inbox (list packets -> view -> SIGN/complete).
+    const val SIGNING_INBOX = SigningInboxDest.ROUTE
+
+    // WOV: property maintenance work orders (list + create + status).
+    const val MAINTENANCE_ORDERS = MaintenanceOrdersDest.ROUTE
+
+    // WFL: SuiteCRM workflow rules admin (read-only list; operator-only).
+    const val WORKFLOW_RULES = WorkflowRulesDest.ROUTE
+
     val REGISTERED: Set<String>
         get() = setOf(
             PROFILE,
@@ -851,6 +861,9 @@ object MoreRoutes {
             TERMS,
             GUIDELINES,
             CONTACT,
+            SIGNING_INBOX,
+            MAINTENANCE_ORDERS,
+            WORKFLOW_RULES,
         )
 }
 

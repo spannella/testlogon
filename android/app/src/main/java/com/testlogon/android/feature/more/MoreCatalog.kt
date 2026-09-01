@@ -117,6 +117,31 @@ import javax.inject.Singleton
 class MoreCatalog @Inject constructor() {
     val entries: List<MoreEntry> = listOf(
         MoreEntry(
+            id = "signing_inbox",
+            labelRes = R.string.more_entry_signing_inbox,
+            icon = Icons.Outlined.Description,
+            route = MoreRoutes.SIGNING_INBOX,
+            hub = MoreHub.INBOX,
+            section = MoreSection.ACCOUNT,
+        ),
+        MoreEntry(
+            id = "maintenance_orders",
+            labelRes = R.string.more_entry_maintenance_orders,
+            icon = Icons.Outlined.Apartment,
+            route = MoreRoutes.MAINTENANCE_ORDERS,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.APP,
+        ),
+        MoreEntry(
+            id = "workflow_rules",
+            labelRes = R.string.more_entry_workflow_rules,
+            icon = Icons.Outlined.Hub,
+            route = MoreRoutes.WORKFLOW_RULES,
+            hub = MoreHub.ADMIN,
+            section = MoreSection.SUPPORT,
+            operatorOnly = true,
+        ),
+        MoreEntry(
             id = "profile",
             labelRes = R.string.more_entry_profile,
             icon = Icons.Outlined.Person,

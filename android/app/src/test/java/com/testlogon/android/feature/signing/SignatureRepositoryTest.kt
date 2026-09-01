@@ -4,6 +4,7 @@ import com.squareup.moshi.Moshi
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.error.ApiErrorParser
 import com.testlogon.android.core.network.signing.CreateSignaturePacketRequest
+import com.testlogon.android.core.network.signing.SigningInboxListDto
 import com.testlogon.android.core.network.signing.CreateSignaturePacketResponse
 import com.testlogon.android.core.network.signing.LegalNoticeDto
 import com.testlogon.android.core.network.signing.PacketRole
@@ -330,6 +331,14 @@ class SignatureRepositoryTest {
         }
 
         override suspend fun downloadFinalPdf(packetId: String): Response<ResponseBody> = unused()
+
+        override suspend fun listAwaiting(limit: Int): SigningInboxListDto = unused()
+
+        override suspend fun listSent(limit: Int): SigningInboxListDto = unused()
+
+        override suspend fun listCompletedForMe(limit: Int): SigningInboxListDto = unused()
+
+        override suspend fun listDrafts(limit: Int): SigningInboxListDto = unused()
 
         override suspend fun listTemplates(): SignatureTemplateListDto = unused()
 

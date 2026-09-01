@@ -479,6 +479,8 @@ fun NavGraphBuilder.authenticatedGraph(navController: NavHostController) {
         // field-manifest placeholder, events, status-driven action). No backend packet-list endpoint, so
         // the "list" half is deferred.
         signingDestinations(navController)
+        maintenanceOrdersDestination(navController)
+        workflowRulesDestination(navController)
         // AND-353: organizations members/roles (list members + pending invites + invite/change-role/
         // remove with permission gating + self-protection). Nested graph so the members + invite screens
         // share one ViewModel.
