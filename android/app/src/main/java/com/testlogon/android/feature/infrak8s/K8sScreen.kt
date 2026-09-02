@@ -71,8 +71,10 @@ object K8sTestTags {
     const val LAUNCH_PRESET = "k8s_launch_preset"
     const val LAUNCH_CONFIRM = "k8s_launch_confirm"
     const val LOGS_DIALOG = "k8s_logs_dialog"
+    const val DETAIL_DIALOG = "k8s_detail_dialog"
     fun row(id: String) = "k8s_row_$id"
     fun logs(id: String) = "k8s_logs_$id"
+    fun detail(id: String) = "k8s_detail_$id"
     fun terminate(id: String) = "k8s_terminate_$id"
 }
 
@@ -91,6 +93,8 @@ fun K8sRoute(
         onTerminate = viewModel::terminate,
         onOpenLogs = viewModel::openLogs,
         onCloseLogs = viewModel::closeLogs,
+        onOpenDetail = viewModel::openDetail,
+        onCloseDetail = viewModel::closeDetail,
         onMessageShown = viewModel::clearMessage,
     )
 }
@@ -105,6 +109,8 @@ fun K8sScreen(
     onTerminate: (String) -> Unit,
     onOpenLogs: (String) -> Unit,
     onCloseLogs: () -> Unit,
+    onOpenDetail: (K8sPodDto) -> Unit,
+    onCloseDetail: () -> Unit,
     onMessageShown: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -181,7 +187,8 @@ fun K8sScreen(
                             pod = pod,
                             inFlight = state.actionInFlightId == pod.podId,
                             actionsEnabled = state.actionInFlightId == null,
-                            onLogs = { onOpenLogs(pod.podId) },
+                            onDetails = { onOpenDetail(pod) },
+                        onLogs = { onOpenLogs(pod.podId) },
                             onTerminate = { onTerminate(pod.podId) },
                         )
                     }
@@ -206,6 +213,10 @@ fun K8sScreen(
     state.logs?.let { logsState ->
         LogsDialog(logsState = logsState, onDismiss = onCloseLogs)
     }
+
+    state.detail?.let { detailState ->
+        DetailDialog(detailState = detailState, onDismiss = onCloseDetail)
+    }
 }
 
 @Composable
@@ -213,6 +224,7 @@ private fun K8sRow(
     pod: K8sPodDto,
     inFlight: Boolean,
     actionsEnabled: Boolean,
+    onDetails: () -> Unit,
     onLogs: () -> Unit,
     onTerminate: () -> Unit,
 ) {
@@ -251,6 +263,11 @@ private fun K8sRow(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator() }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = onDetails,
+                        enabled = actionsEnabled,
+                        modifier = Modifier.testTag(K8sTestTags.detail(pod.podId)),
+                    ) { Text("Details") }
                     OutlinedButton(
                         onClick = onLogs,
                         enabled = actionsEnabled,
@@ -323,6 +340,47 @@ private fun DeployDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+@Composable
+private fun DetailDialog(detailState: K8sDetailState, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag(K8sTestTags.DETAIL_DIALOG),
+        title = { Text("Pod detail") },
+        text = {
+            when (detailState) {
+                is K8sDetailState.Loading -> Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                ) { CircularProgressIndicator() }
+                is K8sDetailState.Error -> Text(infraErrorMessage(detailState.type))
+                is K8sDetailState.Loaded -> {
+                    val p = detailState.pod
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        DetailRow("Label", p.label.ifBlank { "-" })
+                        DetailRow("Status", p.status.ifBlank { "-" })
+                        DetailRow("Namespace", p.namespace.ifBlank { "-" })
+                        DetailRow("Pod name", p.k8sPodName.ifBlank { "-" })
+                        DetailRow("Image", p.imageDisplayName.ifBlank { p.image.ifBlank { "-" } })
+                        DetailRow("Preset", p.preset.ifBlank { "-" })
+                        DetailRow("Resources", "${p.cpuMillicores}m CPU / ${p.memoryMb} MB")
+                        DetailRow("Pod IP", p.podIp.ifBlank { "-" })
+                        DetailRow("Service", p.serviceHostname.ifBlank { "-" })
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 @Composable

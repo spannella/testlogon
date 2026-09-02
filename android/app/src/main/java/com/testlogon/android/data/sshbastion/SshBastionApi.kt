@@ -19,6 +19,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PATCH
 import retrofit2.http.Path
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -42,6 +43,9 @@ interface SshBastionApi {
 
     @POST("ui/compute/bastion/paths")
     suspend fun createPath(@Body body: CreateBastionPathReq): BastionPathDto
+
+    @PATCH("ui/compute/bastion/paths/{id}")
+    suspend fun updatePath(@Path("id") pathId: String, @Body body: UpdateBastionPathReq): BastionPathDto
 
     @GET("ui/compute/bastion/paths/{id}/resolve")
     suspend fun resolve(@Path("id") pathId: String): BastionResolvedDto
@@ -96,6 +100,14 @@ data class CreateBastionPathReq(
 )
 
 @JsonClass(generateAdapter = true)
+data class UpdateBastionPathReq(
+    @Json(name = "label") val label: String? = null,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "jump_hops") val jumpHops: List<BastionHopReq>? = null,
+    @Json(name = "target") val target: BastionHopReq? = null,
+)
+
+@JsonClass(generateAdapter = true)
 data class BastionResolvedDto(
     @Json(name = "path_id") val pathId: String = "",
     @Json(name = "label") val label: String = "",
@@ -111,6 +123,7 @@ data class BastionResolvedDto(
 interface SshBastionRepository {
     suspend fun list(): ApiResult<BastionPathListDto>
     suspend fun create(req: CreateBastionPathReq): ApiResult<BastionPathDto>
+    suspend fun update(pathId: String, req: UpdateBastionPathReq): ApiResult<BastionPathDto>
     suspend fun resolve(pathId: String): ApiResult<BastionResolvedDto>
     suspend fun delete(pathId: String): ApiResult<Unit>
 }
@@ -127,6 +140,9 @@ class DefaultSshBastionRepository @Inject constructor(
 
     override suspend fun create(req: CreateBastionPathReq): ApiResult<BastionPathDto> =
         withContext(io) { call { api.createPath(req) } }
+
+    override suspend fun update(pathId: String, req: UpdateBastionPathReq): ApiResult<BastionPathDto> =
+        withContext(io) { call { api.updatePath(pathId, req) } }
 
     override suspend fun resolve(pathId: String): ApiResult<BastionResolvedDto> =
         withContext(io) { call { api.resolve(pathId) } }
