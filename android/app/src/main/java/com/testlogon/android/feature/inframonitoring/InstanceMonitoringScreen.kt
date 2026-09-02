@@ -18,14 +18,19 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Monitor
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +47,9 @@ import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
 import com.testlogon.android.data.infraec2.Ec2InstanceDto
 import com.testlogon.android.data.inframonitoring.InstanceHealthDto
+import com.testlogon.android.data.inframonitoring.MonitoringMath
+import com.testlogon.android.data.inframonitoring.RestartPolicyDto
+import com.testlogon.android.data.inframonitoring.TimelineEventDto
 import com.testlogon.android.feature.charts.ChartGeometryCore
 import com.testlogon.android.feature.charts.SeriesChartType
 import com.testlogon.android.feature.charts.TestLogonSeriesChart
@@ -57,7 +65,11 @@ object InstanceMonitoringTestTags {
     const val DETAIL = "monitoring_detail"
     const val CPU_CHART = "monitoring_cpu_chart"
     const val MEM_CHART = "monitoring_mem_chart"
+    const val RESTART_POLICY = "monitoring_restart_policy"
+    const val RESTART_TOGGLE = "monitoring_restart_toggle"
+    const val TIMELINE = "monitoring_timeline"
     fun pick(id: String) = "monitoring_pick_$id"
+    fun timelineEvent(id: String) = "monitoring_timeline_$id"
 }
 
 @Composable
@@ -73,6 +85,8 @@ fun InstanceMonitoringRoute(
         onSelect = viewModel::select,
         onClearSelection = viewModel::clearSelection,
         onRefreshDetail = viewModel::refreshDetail,
+        onSetAutoRestart = viewModel::setAutoRestart,
+        onMessageShown = viewModel::clearMessage,
     )
 }
 
@@ -84,11 +98,22 @@ fun InstanceMonitoringScreen(
     onSelect: (String) -> Unit,
     onClearSelection: () -> Unit,
     onRefreshDetail: () -> Unit,
+    onSetAutoRestart: (Boolean) -> Unit,
+    onMessageShown: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val showingDetail = state.selectedInstanceId != null
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(state.transientError) {
+        val msg = state.transientError?.let { infraErrorMessage(it) }
+        if (msg != null) {
+            snackbar.showSnackbar(msg)
+            onMessageShown()
+        }
+    }
     Scaffold(
         modifier = modifier.testTag(InstanceMonitoringTestTags.SCREEN),
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text(if (showingDetail) "Instance metrics" else "Monitoring") },
@@ -105,6 +130,7 @@ fun InstanceMonitoringScreen(
                 state = state,
                 onRetry = onRetry,
                 onRefresh = onRefreshDetail,
+                onSetAutoRestart = onSetAutoRestart,
                 modifier = Modifier.fillMaxSize().padding(padding),
             )
         } else {
@@ -181,6 +207,7 @@ private fun DetailContent(
     state: MonitoringUiState,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
+    onSetAutoRestart: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (val d = state.detail) {
@@ -210,6 +237,16 @@ private fun DetailContent(
                     MetricChartCard("CPU %", d.snapshot.series.map { it.cpuPct.toLong() }, InstanceMonitoringTestTags.CPU_CHART)
                     MetricChartCard("Memory %", d.snapshot.series.map { it.memPct.toLong() }, InstanceMonitoringTestTags.MEM_CHART)
                     MetricChartCard("Disk %", d.snapshot.series.map { it.diskPct.toLong() }, "monitoring_disk_chart")
+                }
+                d.snapshot.restartPolicy?.let { policy ->
+                    RestartPolicyCard(
+                        policy = policy,
+                        updating = state.policyUpdating,
+                        onSetAutoRestart = onSetAutoRestart,
+                    )
+                }
+                if (d.snapshot.timeline.isNotEmpty()) {
+                    TimelineCard(d.snapshot.timeline)
                 }
             }
         }
@@ -243,6 +280,81 @@ private fun HealthCard(health: InstanceHealthDto) {
             }
             health.reasons.forEach { reason ->
                 Text("• $reason", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RestartPolicyCard(
+    policy: RestartPolicyDto,
+    updating: Boolean,
+    onSetAutoRestart: (Boolean) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().testTag(InstanceMonitoringTestTags.RESTART_POLICY)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text("Auto-restart", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        MonitoringMath.restartPolicySummary(
+                            enabled = policy.autoRestartEnabled,
+                            restartCount = policy.restartCount,
+                            maxRestarts = policy.maxRestarts,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = policy.autoRestartEnabled,
+                    onCheckedChange = { onSetAutoRestart(it) },
+                    enabled = !updating,
+                    modifier = Modifier.testTag(InstanceMonitoringTestTags.RESTART_TOGGLE),
+                )
+            }
+            Text(
+                "Automatically restarts this instance if it becomes unhealthy, up to ${policy.maxRestarts} times.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimelineCard(events: List<TimelineEventDto>) {
+    val ordered = remember(events) { MonitoringMath.orderTimelineDesc(events) { it.ts } }
+    Card(modifier = Modifier.fillMaxWidth().testTag(InstanceMonitoringTestTags.TIMELINE)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Timeline", style = MaterialTheme.typography.titleMedium)
+            ordered.forEachIndexed { index, event ->
+                if (index > 0) HorizontalDivider()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(InstanceMonitoringTestTags.timelineEvent(event.eventId)),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        event.eventType.replace('_', ' ').replaceFirstChar { it.uppercase() },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    val detail = event.detail.entries.joinToString(" · ") { "${it.key}=${it.value}" }
+                    if (detail.isNotBlank()) {
+                        Text(
+                            detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
     }
