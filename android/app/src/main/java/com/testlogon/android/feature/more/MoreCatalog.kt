@@ -1910,6 +1910,28 @@ class MoreCatalog @Inject constructor() {
             section = MoreSection.SECURITY,
             operatorOnly = true,
         ),
+        // Admin EMAIL management: campaign-template CRUD + suppressed-list mgmt + delivery-stats header
+        // (router /ui/admin/email). Self-gates via AdminRoleProvider + backend 403; a non-admin sees no data.
+        MoreEntry(
+            id = "admin_email_manage",
+            labelRes = R.string.more_entry_admin_email_manage,
+            icon = Icons.Outlined.Email,
+            route = MoreRoutes.ADMIN_EMAIL_MANAGE,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.SECURITY,
+            operatorOnly = true,
+        ),
+        // CUS-004 Financial Products + Collections admin (router /ui/financial-products). Self-gates via
+        // AdminRoleProvider + backend 403; a non-admin sees no data.
+        MoreEntry(
+            id = "financial_products",
+            labelRes = R.string.more_entry_financial_products,
+            icon = Icons.Outlined.AccountBalance,
+            route = MoreRoutes.FINANCIAL_PRODUCTS,
+            hub = MoreHub.ACCOUNT,
+            section = MoreSection.SECURITY,
+            operatorOnly = true,
+        ),
         // AND-374: projects (paged list -> detail + account-scoped Google Drive provider connect flow).
         MoreEntry(
             id = "projects",
