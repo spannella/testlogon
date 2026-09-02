@@ -305,3 +305,84 @@ interface CrmCampaignsApi {
     @GET("ui/crm-marketing/campaigns/{campaignId}/attribution")
     suspend fun getAttribution(@Path("campaignId") campaignId: String): CrmCampaignAttributionDto
 }
+
+// ─── Campaigns: CMP additions (create/update/delete/send/preview/ab-results) ──
+// Mirrors frontend/src/api/endpoints/crmCampaigns.ts + crmEmail.ts.
+
+interface CrmCampaignsWriteApi {
+
+    @POST("ui/crm-marketing/campaigns")
+    suspend fun createCampaign(@Body body: CrmCampaignCreateInDto): CrmCampaignFullDto
+
+    // Full campaign detail (richer than the compact list DTO).
+    @GET("ui/crm-marketing/campaigns/{campaignId}")
+    suspend fun getCampaignFull(@Path("campaignId") campaignId: String): CrmCampaignFullDto
+
+    @PATCH("ui/crm-marketing/campaigns/{campaignId}")
+    suspend fun updateCampaign(
+        @Path("campaignId") campaignId: String,
+        @Body body: CrmCampaignUpdateInDto,
+    ): CrmCampaignFullDto
+
+    @DELETE("ui/crm-marketing/campaigns/{campaignId}")
+    suspend fun deleteCampaign(@Path("campaignId") campaignId: String)
+
+    @POST("ui/crm-marketing/campaigns/{campaignId}/send")
+    suspend fun sendCampaign(
+        @Path("campaignId") campaignId: String,
+        @Body body: CrmCampaignSendInDto,
+    ): CrmCampaignSendOutDto
+
+    @GET("ui/crm-marketing/campaigns/{campaignId}/ab-results")
+    suspend fun getAbResults(@Path("campaignId") campaignId: String): CrmAbResultsDto
+
+    @POST("ui/crm-marketing/campaigns/{campaignId}/preview-email")
+    suspend fun previewCampaignEmail(
+        @Path("campaignId") campaignId: String,
+        @Body body: CrmEmailPreviewInDto,
+    ): CrmEmailPreviewOutDto
+}
+
+// ─── Email templates: prefix /ui/crm-marketing/email-templates (CMP-002) ──────
+
+interface CrmEmailTemplatesApi {
+
+    @POST("ui/crm-marketing/email-templates")
+    suspend fun createTemplate(@Body body: CrmEmailTemplateCreateInDto): CrmEmailTemplateDto
+
+    @GET("ui/crm-marketing/email-templates")
+    suspend fun listTemplates(
+        @Query("limit") limit: Int? = null,
+        @Query("cursor") cursor: String? = null,
+    ): CrmEmailTemplateListRespDto
+
+    @GET("ui/crm-marketing/email-templates/{templateId}")
+    suspend fun getTemplate(@Path("templateId") templateId: String): CrmEmailTemplateDto
+
+    @PATCH("ui/crm-marketing/email-templates/{templateId}")
+    suspend fun updateTemplate(
+        @Path("templateId") templateId: String,
+        @Body body: CrmEmailTemplateUpdateInDto,
+    ): CrmEmailTemplateDto
+
+    @DELETE("ui/crm-marketing/email-templates/{templateId}")
+    suspend fun deleteTemplate(@Path("templateId") templateId: String)
+
+    @POST("ui/crm-marketing/email-templates/{templateId}/preview")
+    suspend fun previewTemplate(
+        @Path("templateId") templateId: String,
+        @Body body: CrmEmailTemplatePreviewInDto,
+    ): CrmEmailTemplatePreviewOutDto
+}
+
+// ─── Admin: web-to-lead list (CMP-006, admin-gated → 403 for non-admins) ──────
+
+interface CrmMarketingAdminApi {
+
+    @GET("ui/admin/crm-marketing/leads")
+    suspend fun listLeads(
+        @Query("campaign_id") campaignId: String? = null,
+        @Query("limit") limit: Int? = null,
+        @Query("cursor") cursor: String? = null,
+    ): CrmWebLeadListRespDto
+}

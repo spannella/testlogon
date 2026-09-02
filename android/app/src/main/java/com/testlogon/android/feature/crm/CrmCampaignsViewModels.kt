@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testlogon.android.core.model.ApiResult
+import com.testlogon.android.data.crm.CrmAbResults
 import com.testlogon.android.data.crm.CrmCampaign
 import com.testlogon.android.data.crm.CrmCampaignAttribution
 import com.testlogon.android.data.crm.CrmCampaignsRepository
@@ -94,6 +95,7 @@ data class CrmCampaignDetailUiState(
     val phase: Phase = Phase.Loading,
     val campaign: CrmCampaign? = null,
     val attribution: CrmCampaignAttribution? = null,
+    val abResults: CrmAbResults? = null,
     val isOffline: Boolean = false,
     val errorMessage: String? = null,
 ) {
@@ -125,14 +127,20 @@ class CrmCampaignDetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             when (val r = repository.detail(campaignId)) {
-                is ApiResult.Success -> _uiState.update {
-                    it.copy(
-                        phase = CrmCampaignDetailUiState.Phase.Content,
-                        campaign = r.data.campaign,
-                        attribution = r.data.attribution,
-                        isOffline = false,
-                        errorMessage = null,
-                    )
+                is ApiResult.Success -> {
+                    // A/B results are best-effort (only present for multi-variant campaigns; 404 → null).
+                    val ab = (repository.abResults(campaignId) as? ApiResult.Success)?.data
+                        ?.takeIf { it.variants.isNotEmpty() }
+                    _uiState.update {
+                        it.copy(
+                            phase = CrmCampaignDetailUiState.Phase.Content,
+                            campaign = r.data.campaign,
+                            attribution = r.data.attribution,
+                            abResults = ab,
+                            isOffline = false,
+                            errorMessage = null,
+                        )
+                    }
                 }
                 is ApiResult.Failure -> _uiState.update {
                     it.copy(

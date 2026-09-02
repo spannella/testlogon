@@ -33,6 +33,22 @@ object CrmApiModule {
     @Provides
     @Singleton
     fun provideCrmCampaignsApi(retrofit: Retrofit): CrmCampaignsApi = retrofit.create(CrmCampaignsApi::class.java)
+
+    // CMP - campaign write/send/preview, email templates, admin leads on the same Retrofit.
+    @Provides
+    @Singleton
+    fun provideCrmCampaignsWriteApi(retrofit: Retrofit): CrmCampaignsWriteApi =
+        retrofit.create(CrmCampaignsWriteApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideCrmEmailTemplatesApi(retrofit: Retrofit): CrmEmailTemplatesApi =
+        retrofit.create(CrmEmailTemplatesApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideCrmMarketingAdminApi(retrofit: Retrofit): CrmMarketingAdminApi =
+        retrofit.create(CrmMarketingAdminApi::class.java)
 }
 
 /** CRM-AND-1 — binds the CRM repositories to their implementations. */
@@ -60,4 +76,12 @@ abstract class CrmDataModule {
     @Binds
     @Singleton
     abstract fun bindCrmCampaignsRepository(impl: CrmCampaignsRepositoryImpl): CrmCampaignsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindCrmEmailTemplatesRepository(impl: CrmEmailTemplatesRepositoryImpl): CrmEmailTemplatesRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindCrmMarketingAdminRepository(impl: CrmMarketingAdminRepositoryImpl): CrmMarketingAdminRepository
 }

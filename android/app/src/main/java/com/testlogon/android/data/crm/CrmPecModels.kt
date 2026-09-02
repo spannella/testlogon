@@ -363,3 +363,179 @@ fun CrmProjectContactLinkDto.toDomain(): CrmProjectContactLink = CrmProjectConta
     addedAt = addedAt,
     note = note,
 )
+
+// ─────────────────  CAMPAIGNS: CMP domain + mappers  ─────────────────
+// CMP-001..CMP-008 — full campaign, send result, A/B results, email template, preview, web lead.
+
+/** Full campaign (extends the compact list projection). Fields default so the compact list DTO
+ *  → domain mapping stays valid. */
+data class CrmCampaignFull(
+    val campaignId: String,
+    val name: String,
+    val status: String,
+    val objective: String?,
+    val budgetCents: Long,
+    val contactListIds: List<String>,
+    val segmentIds: List<String>,
+    val trackingCode: String?,
+    val emailTemplateId: String?,
+    val questionnaireId: String?,
+    val questionnaireUrl: String?,
+    val campaignType: String,
+    val variantLabels: List<String>,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+data class CrmCampaignSendResult(
+    val campaignId: String,
+    val totalResolved: Int,
+    val totalSent: Int,
+    val totalSkipped: Int,
+    val dryRun: Boolean,
+    val sendId: String?,
+)
+
+data class CrmAbVariantStats(
+    val variantId: String,
+    val label: String,
+    val sent: Int,
+    val opens: Int,
+    val clicks: Int,
+    val openRate: Double,
+    val clickRate: Double,
+)
+
+data class CrmAbResults(
+    val campaignId: String,
+    val variants: List<CrmAbVariantStats>,
+)
+
+data class CrmEmailPreview(
+    val subject: String,
+    val bodyText: String,
+    val bodyHtml: String?,
+    val mergeVarsUsed: Map<String, String>,
+    val mergeVarsMissing: List<String>,
+)
+
+data class CrmEmailTemplate(
+    val templateId: String,
+    val name: String,
+    val subjectTemplate: String,
+    val bodyHtmlTemplate: String,
+    val variables: List<String>,
+    val status: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+data class CrmEmailTemplatePreview(
+    val subject: String,
+    val bodyHtml: String,
+    val variables: List<String>,
+    val missingVars: List<String>,
+)
+
+data class CrmWebLead(
+    val captureId: String,
+    val firstName: String?,
+    val lastName: String?,
+    val email: String?,
+    val phone: String?,
+    val company: String?,
+    val message: String?,
+    val campaignId: String?,
+    val sourceIp: String?,
+    val createdAt: Long?,
+)
+
+// ── Mappers ──────────────────────────────────────────────────────────────────
+
+private fun variantLabelsOf(variants: List<Map<String, Any?>>?): List<String> =
+    variants.orEmpty().mapIndexed { i, v ->
+        (v["label"] as? String)?.takeIf { it.isNotBlank() }
+            ?: (v["variant_id"] as? String)?.takeIf { it.isNotBlank() }
+            ?: "Variant ${('A' + i)}"
+    }
+
+fun CrmCampaignFullDto.toDomain(): CrmCampaignFull = CrmCampaignFull(
+    campaignId = campaignId,
+    name = name,
+    status = status,
+    objective = objective,
+    budgetCents = budgetCents,
+    contactListIds = contactListIds,
+    segmentIds = segmentIds,
+    trackingCode = trackingCode,
+    emailTemplateId = emailTemplateId,
+    questionnaireId = questionnaireId,
+    questionnaireUrl = questionnaireUrl,
+    campaignType = campaignType,
+    variantLabels = variantLabelsOf(variants),
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+)
+
+fun CrmCampaignSendOutDto.toDomain(): CrmCampaignSendResult = CrmCampaignSendResult(
+    campaignId = campaignId,
+    totalResolved = totalResolved,
+    totalSent = totalSent,
+    totalSkipped = totalSkipped,
+    dryRun = dryRun,
+    sendId = sendId,
+)
+
+fun CrmAbVariantStatsDto.toDomain(): CrmAbVariantStats = CrmAbVariantStats(
+    variantId = variantId,
+    label = label,
+    sent = sent,
+    opens = opens,
+    clicks = clicks,
+    openRate = openRate,
+    clickRate = clickRate,
+)
+
+fun CrmAbResultsDto.toDomain(): CrmAbResults = CrmAbResults(
+    campaignId = campaignId,
+    variants = variantStats.map { it.toDomain() },
+)
+
+fun CrmEmailPreviewOutDto.toDomain(): CrmEmailPreview = CrmEmailPreview(
+    subject = subject,
+    bodyText = bodyText,
+    bodyHtml = bodyHtml,
+    mergeVarsUsed = mergeVarsUsed,
+    mergeVarsMissing = mergeVarsMissing,
+)
+
+fun CrmEmailTemplateDto.toDomain(): CrmEmailTemplate = CrmEmailTemplate(
+    templateId = templateId,
+    name = name,
+    subjectTemplate = subjectTemplate,
+    bodyHtmlTemplate = bodyHtmlTemplate,
+    variables = variables,
+    status = status,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+)
+
+fun CrmEmailTemplatePreviewOutDto.toDomain(): CrmEmailTemplatePreview = CrmEmailTemplatePreview(
+    subject = subject,
+    bodyHtml = bodyHtml,
+    variables = variables,
+    missingVars = missingVars,
+)
+
+fun CrmWebLeadDto.toDomain(): CrmWebLead = CrmWebLead(
+    captureId = captureId,
+    firstName = firstName,
+    lastName = lastName,
+    email = email,
+    phone = phone,
+    company = company,
+    message = message,
+    campaignId = campaignId,
+    sourceIp = sourceIp,
+    createdAt = createdAt,
+)

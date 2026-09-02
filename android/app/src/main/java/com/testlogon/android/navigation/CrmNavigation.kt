@@ -28,6 +28,10 @@ import com.testlogon.android.feature.crm.CrmEventDetailViewModel
 import com.testlogon.android.feature.crm.CrmCampaignsRoute
 import com.testlogon.android.feature.crm.CrmCampaignDetailRoute
 import com.testlogon.android.feature.crm.CrmCampaignDetailViewModel
+import com.testlogon.android.feature.crm.CrmCampaignEditorRoute
+import com.testlogon.android.feature.crm.CrmCampaignEditorViewModel
+import com.testlogon.android.feature.crm.CrmEmailTemplatesRoute
+import com.testlogon.android.feature.crm.CrmMarketingLeadsRoute
 
 /** CRM-AND-1 — the CRM leads list route (reached from the More hub / Growth). */
 data object CrmLeadsDest {
@@ -123,6 +127,25 @@ data object CrmCampaignDetailDest {
     const val ROUTE = "crm/campaigns/{$ARG_CAMPAIGN_ID}"
 
     fun build(campaignId: String): String = "crm/campaigns/${Uri.encode(campaignId)}"
+}
+
+/** CMP — the campaign editor (create / edit). The path arg is the campaign id, or "new" to create. */
+data object CrmCampaignEditorDest {
+    const val ARG_CAMPAIGN_ID = CrmCampaignEditorViewModel.ARG_CAMPAIGN_ID
+    const val ROUTE = "crm/campaigns/editor/{$ARG_CAMPAIGN_ID}"
+
+    fun build(campaignId: String?): String =
+        "crm/campaigns/editor/" + Uri.encode(campaignId?.ifBlank { null } ?: CrmCampaignEditorViewModel.NEW_SENTINEL)
+}
+
+/** CMP-002 — the HTML email-template editor list route. */
+data object CrmEmailTemplatesDest {
+    const val ROUTE = "crm/email-templates"
+}
+
+/** CMP-006 — the admin web-to-lead list route (server admin-gated → 403 surfaced as a banner). */
+data object CrmMarketingLeadsDest {
+    const val ROUTE = "crm/marketing-leads"
 }
 
 /** CRM-AND-1 — registers the CRM leads list + detail + pipeline destinations in the authenticated graph. */
@@ -226,6 +249,15 @@ fun NavGraphBuilder.crmDestinations(navController: NavHostController) {
             onCampaignClick = { id ->
                 navController.navigate(CrmCampaignDetailDest.build(id)) { launchSingleTop = true }
             },
+            onNewCampaign = {
+                navController.navigate(CrmCampaignEditorDest.build(null)) { launchSingleTop = true }
+            },
+            onOpenTemplates = {
+                navController.navigate(CrmEmailTemplatesDest.ROUTE) { launchSingleTop = true }
+            },
+            onOpenLeads = {
+                navController.navigate(CrmMarketingLeadsDest.ROUTE) { launchSingleTop = true }
+            },
             onBack = { navController.popBackStack() },
         )
     }
@@ -235,6 +267,28 @@ fun NavGraphBuilder.crmDestinations(navController: NavHostController) {
             navArgument(CrmCampaignDetailDest.ARG_CAMPAIGN_ID) { type = NavType.StringType },
         ),
     ) {
-        CrmCampaignDetailRoute(onBack = { navController.popBackStack() })
+        CrmCampaignDetailRoute(
+            onBack = { navController.popBackStack() },
+            onEdit = { id ->
+                navController.navigate(CrmCampaignEditorDest.build(id)) { launchSingleTop = true }
+            },
+        )
+    }
+    composable(
+        route = CrmCampaignEditorDest.ROUTE,
+        arguments = listOf(
+            navArgument(CrmCampaignEditorDest.ARG_CAMPAIGN_ID) { type = NavType.StringType },
+        ),
+    ) {
+        CrmCampaignEditorRoute(
+            onBack = { navController.popBackStack() },
+            onSaved = { navController.popBackStack() },
+        )
+    }
+    composable(CrmEmailTemplatesDest.ROUTE) {
+        CrmEmailTemplatesRoute(onBack = { navController.popBackStack() })
+    }
+    composable(CrmMarketingLeadsDest.ROUTE) {
+        CrmMarketingLeadsRoute(onBack = { navController.popBackStack() })
     }
 }

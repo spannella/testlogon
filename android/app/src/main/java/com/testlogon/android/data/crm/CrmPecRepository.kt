@@ -458,11 +458,21 @@ class CrmEventsRepositoryImpl @Inject constructor(
 interface CrmCampaignsRepository {
     suspend fun list(status: String? = null): ApiResult<CrmCampaignsPage>
     suspend fun detail(campaignId: String): ApiResult<CrmCampaignDetail>
+
+    // CMP-001..CMP-008 — campaign write/send/preview/ab-results.
+    suspend fun campaignFull(campaignId: String): ApiResult<CrmCampaignFull>
+    suspend fun create(body: CrmCampaignCreateInDto): ApiResult<CrmCampaignFull>
+    suspend fun update(campaignId: String, body: CrmCampaignUpdateInDto): ApiResult<CrmCampaignFull>
+    suspend fun delete(campaignId: String): ApiResult<Unit>
+    suspend fun send(campaignId: String, dryRun: Boolean): ApiResult<CrmCampaignSendResult>
+    suspend fun abResults(campaignId: String): ApiResult<CrmAbResults?>
+    suspend fun previewEmail(campaignId: String, samplePartyId: String?, sampleVars: Map<String, String>): ApiResult<CrmEmailPreview>
 }
 
 @Singleton
 class CrmCampaignsRepositoryImpl @Inject constructor(
     private val api: CrmCampaignsApi,
+    private val writeApi: CrmCampaignsWriteApi,
     private val errorParser: ApiErrorParser,
 ) : CrmCampaignsRepository {
 
@@ -492,6 +502,46 @@ class CrmCampaignsRepositoryImpl @Inject constructor(
         }
     }
 
+
+    override suspend fun campaignFull(campaignId: String): ApiResult<CrmCampaignFull> = withContext(io) {
+        call { writeApi.getCampaignFull(campaignId).toDomain() }
+    }
+
+    override suspend fun create(body: CrmCampaignCreateInDto): ApiResult<CrmCampaignFull> = withContext(io) {
+        call { writeApi.createCampaign(body).toDomain() }
+    }
+
+    override suspend fun update(campaignId: String, body: CrmCampaignUpdateInDto): ApiResult<CrmCampaignFull> =
+        withContext(io) { call { writeApi.updateCampaign(campaignId, body).toDomain() } }
+
+    override suspend fun delete(campaignId: String): ApiResult<Unit> = withContext(io) {
+        call { writeApi.deleteCampaign(campaignId) }
+    }
+
+    override suspend fun send(campaignId: String, dryRun: Boolean): ApiResult<CrmCampaignSendResult> = withContext(io) {
+        call { writeApi.sendCampaign(campaignId, CrmCampaignSendInDto(dryRun = dryRun)).toDomain() }
+    }
+
+    override suspend fun abResults(campaignId: String): ApiResult<CrmAbResults?> = withContext(io) {
+        when (val r = call { writeApi.getAbResults(campaignId).toDomain() }) {
+            is ApiResult.Success -> r
+            is ApiResult.Failure -> if (r.error.status == 404) ApiResult.Success(null) else r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun previewEmail(
+        campaignId: String,
+        samplePartyId: String?,
+        sampleVars: Map<String, String>,
+    ): ApiResult<CrmEmailPreview> = withContext(io) {
+        call {
+            writeApi.previewCampaignEmail(
+                campaignId,
+                CrmEmailPreviewInDto(samplePartyId = samplePartyId?.ifBlank { null }, sampleVars = sampleVars),
+            ).toDomain()
+        }
+    }
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = runCatchingApi(errorParser, block)
 }
 
@@ -507,4 +557,107 @@ private suspend fun <T> runCatchingApi(
     ApiResult.Failure(errorParser.from(e))
 } catch (e: IOException) {
     ApiResult.NetworkError(e, isTimeout = e is SocketTimeoutException)
+}
+
+// ──────────────────  EMAIL TEMPLATES (CMP-002)  ──────────────────
+
+data class CrmEmailTemplatesPage(
+    val templates: List<CrmEmailTemplate>,
+    val cursor: String?,
+    val moduleDisabled: Boolean = false,
+)
+
+interface CrmEmailTemplatesRepository {
+    suspend fun list(): ApiResult<CrmEmailTemplatesPage>
+    suspend fun get(templateId: String): ApiResult<CrmEmailTemplate>
+    suspend fun create(name: String, subject: String, bodyHtml: String): ApiResult<CrmEmailTemplate>
+    suspend fun update(templateId: String, body: CrmEmailTemplateUpdateInDto): ApiResult<CrmEmailTemplate>
+    suspend fun delete(templateId: String): ApiResult<Unit>
+    suspend fun preview(templateId: String, sampleVars: Map<String, String>): ApiResult<CrmEmailTemplatePreview>
+}
+
+@Singleton
+class CrmEmailTemplatesRepositoryImpl @Inject constructor(
+    private val api: CrmEmailTemplatesApi,
+    private val errorParser: ApiErrorParser,
+) : CrmEmailTemplatesRepository {
+
+    private val io: CoroutineDispatcher = Dispatchers.IO
+
+    override suspend fun list(): ApiResult<CrmEmailTemplatesPage> = withContext(io) {
+        when (val r = call { api.listTemplates() }) {
+            is ApiResult.Success -> ApiResult.Success(
+                CrmEmailTemplatesPage(r.data.templates.map { it.toDomain() }, r.data.cursor),
+            )
+            is ApiResult.Failure ->
+                if (r.error.status == 404) ApiResult.Success(CrmEmailTemplatesPage(emptyList(), null, moduleDisabled = true))
+                else r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun get(templateId: String): ApiResult<CrmEmailTemplate> = withContext(io) {
+        call { api.getTemplate(templateId).toDomain() }
+    }
+
+    override suspend fun create(name: String, subject: String, bodyHtml: String): ApiResult<CrmEmailTemplate> =
+        withContext(io) {
+            call {
+                api.createTemplate(
+                    CrmEmailTemplateCreateInDto(name = name, subjectTemplate = subject, bodyHtmlTemplate = bodyHtml),
+                ).toDomain()
+            }
+        }
+
+    override suspend fun update(templateId: String, body: CrmEmailTemplateUpdateInDto): ApiResult<CrmEmailTemplate> =
+        withContext(io) { call { api.updateTemplate(templateId, body).toDomain() } }
+
+    override suspend fun delete(templateId: String): ApiResult<Unit> = withContext(io) {
+        call { api.deleteTemplate(templateId) }
+    }
+
+    override suspend fun preview(templateId: String, sampleVars: Map<String, String>): ApiResult<CrmEmailTemplatePreview> =
+        withContext(io) {
+            call { api.previewTemplate(templateId, CrmEmailTemplatePreviewInDto(sampleVars = sampleVars)).toDomain() }
+        }
+
+    private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = runCatchingApi(errorParser, block)
+}
+
+// ──────────────────  ADMIN WEB-TO-LEAD LIST (CMP-006)  ──────────────────
+
+data class CrmWebLeadsPage(
+    val leads: List<CrmWebLead>,
+    val cursor: String?,
+    val moduleDisabled: Boolean = false,
+    val forbidden: Boolean = false,
+)
+
+interface CrmMarketingAdminRepository {
+    suspend fun leads(campaignId: String? = null): ApiResult<CrmWebLeadsPage>
+}
+
+@Singleton
+class CrmMarketingAdminRepositoryImpl @Inject constructor(
+    private val api: CrmMarketingAdminApi,
+    private val errorParser: ApiErrorParser,
+) : CrmMarketingAdminRepository {
+
+    private val io: CoroutineDispatcher = Dispatchers.IO
+
+    override suspend fun leads(campaignId: String?): ApiResult<CrmWebLeadsPage> = withContext(io) {
+        when (val r = call { api.listLeads(campaignId = campaignId?.ifBlank { null }) }) {
+            is ApiResult.Success -> ApiResult.Success(
+                CrmWebLeadsPage(r.data.leads.map { it.toDomain() }, r.data.cursor),
+            )
+            is ApiResult.Failure -> when (r.error.status) {
+                404 -> ApiResult.Success(CrmWebLeadsPage(emptyList(), null, moduleDisabled = true))
+                403 -> ApiResult.Success(CrmWebLeadsPage(emptyList(), null, forbidden = true))
+                else -> r
+            }
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = runCatchingApi(errorParser, block)
 }
