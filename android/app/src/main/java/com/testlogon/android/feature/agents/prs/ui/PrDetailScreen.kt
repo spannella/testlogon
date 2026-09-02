@@ -7,12 +7,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -32,12 +36,15 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.core.ui.state.ErrorState
 import com.testlogon.android.core.ui.state.LoadingState
-import com.testlogon.android.feature.agents.prs.data.AgentPr
+import com.testlogon.android.feature.agents.prs.data.AgentCompletion
+import com.testlogon.android.feature.agents.prs.data.PrsCompletionMath
 
 /** AGENTS-BASICS - stable testTags for the agent-PR detail. */
 object PrDetailTestTags {
     const val SCREEN = "agent_pr_detail_screen"
     const val OPEN_PR = "agent_pr_open_external"
+    const val COMPLETE = "agent_pr_complete"
+    const val COMPLETION = "agent_pr_completion_result"
 }
 
 @Composable
@@ -54,7 +61,12 @@ fun PrDetailRoute(
             }
         }
     }
-    PrDetailScreen(state = state, onBack = onBack, onRetry = viewModel::onRetry)
+    PrDetailScreen(
+        state = state,
+        onBack = onBack,
+        onRetry = viewModel::onRetry,
+        onComplete = viewModel::completeWork,
+    )
 }
 
 @Composable
@@ -62,6 +74,7 @@ fun PrDetailScreen(
     state: PrDetailUiState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onComplete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -102,13 +115,19 @@ fun PrDetailScreen(
             is PrDetailUiState.Loading -> LoadingState(modifier = Modifier.padding(padding))
             is PrDetailUiState.Error ->
                 ErrorState(modifier = Modifier.padding(padding), message = state.message, onRetry = onRetry)
-            is PrDetailUiState.Content -> PrDetailContent(pr = state.pr, modifier = Modifier.padding(padding))
+            is PrDetailUiState.Content ->
+                PrDetailContent(state = state, onComplete = onComplete, modifier = Modifier.padding(padding))
         }
     }
 }
 
 @Composable
-private fun PrDetailContent(pr: AgentPr, modifier: Modifier = Modifier) {
+private fun PrDetailContent(
+    state: PrDetailUiState.Content,
+    onComplete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val pr = state.pr
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -134,6 +153,54 @@ private fun PrDetailContent(pr: AgentPr, modifier: Modifier = Modifier) {
             Text("Files changed (${pr.filesChanged.size})", style = MaterialTheme.typography.titleSmall)
             pr.filesChanged.forEach { file ->
                 Text(file, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth())
+            }
+        }
+        HorizontalDivider()
+        if (state.completion != null) {
+            CompletionCard(state.completion)
+        } else {
+            Button(
+                onClick = onComplete,
+                enabled = !state.completing && pr.workerId.isNotBlank() && pr.ticketId.isNotBlank(),
+                modifier = Modifier.fillMaxWidth().testTag(PrDetailTestTags.COMPLETE),
+            ) {
+                if (state.completing) {
+                    CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                } else {
+                    Text("Complete work")
+                }
+            }
+            if (state.completeError != null) {
+                Text(
+                    text = state.completeError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompletionCard(completion: AgentCompletion) {
+    Card(modifier = Modifier.fillMaxWidth().testTag(PrDetailTestTags.COMPLETION)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("Work completed", style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = PrsCompletionMath.summaryLabel(completion.summary),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (completion.summary.text.isNotBlank()) {
+                Text(completion.summary.text, style = MaterialTheme.typography.bodySmall)
+            }
+            if (completion.newStatus.isNotBlank()) DetailRow("New status", completion.newStatus)
+            if (completion.nextAgentType.isNotBlank()) DetailRow("Next agent", completion.nextAgentType)
+            if (completion.summary.decisions.isNotEmpty()) {
+                Text("Decisions", style = MaterialTheme.typography.labelMedium)
+                completion.summary.decisions.forEach { Text("- $it", style = MaterialTheme.typography.bodySmall) }
             }
         }
     }

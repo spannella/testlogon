@@ -215,3 +215,47 @@ data class CreateDocTemplateRequest(
     @Json(name = "template_body") val templateBody: String,
     @Json(name = "required_sections") val requiredSections: List<String> = emptyList(),
 )
+
+// ------------------------------------------------------------------ AGENT PR — WORK COMPLETION
+
+/** Body for POST ui/agent/pr/{workerId}/complete. Mirrors AgentWorkCompleteIn (ticket_id only). */
+data class AgentWorkCompleteRequest(
+    @Json(name = "ticket_id") val ticketId: String,
+)
+
+/** The work-summary embedded in a completion result. Mirrors the web WorkSummary. */
+data class WorkSummaryDto(
+    @Json(name = "ticket_id") val ticketId: String = "",
+    @Json(name = "text") val text: String = "",
+    @Json(name = "files_changed") val filesChanged: List<String> = emptyList(),
+    @Json(name = "decisions") val decisions: List<String> = emptyList(),
+    @Json(name = "test_results") val testResults: Map<String, Int> = emptyMap(),
+)
+
+/** Result of POST ui/agent/pr/{workerId}/complete. Mirrors the web AgentCompletion (pr may be null). */
+data class AgentCompletionDto(
+    @Json(name = "ticket_id") val ticketId: String = "",
+    @Json(name = "summary") val summary: WorkSummaryDto = WorkSummaryDto(),
+    @Json(name = "pr") val pr: AgentPrDto? = null,
+    @Json(name = "new_status") val newStatus: String = "",
+    @Json(name = "next_agent_type") val nextAgentType: String = "",
+)
+
+// ------------------------------------------------------------------ FEEDBACK — CREATE + TERMINAL LOG
+
+/** Body for POST ui/agent/feedback/{workerId} (create a feedback request). Mirrors CreateFeedbackRequestIn. */
+data class CreateFeedbackRequest(
+    @Json(name = "ticket_id") val ticketId: String,
+    @Json(name = "question") val question: String,
+    @Json(name = "terminal_context") val terminalContext: String = "",
+    @Json(name = "detected_pattern") val detectedPattern: String = "",
+    @Json(name = "timeout_seconds") val timeoutSeconds: Int = 14400,
+    @Json(name = "timeout_action") val timeoutAction: String = "skip",
+)
+
+/** GET ui/agent/feedback/{workerId}/terminal-log. Mirrors TerminalOutputOut. */
+data class TerminalOutputDto(
+    @Json(name = "worker_id") val workerId: String = "",
+    @Json(name = "output") val output: String = "",
+    @Json(name = "char_count") val charCount: Int = 0,
+)

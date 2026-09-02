@@ -18,6 +18,10 @@ import javax.inject.Inject
 /**
  * AGENTS-BASICS (web-parity) - loads a single agent-PR detail (web /agents/prs -> row). Reads the prId nav arg
  * from [SavedStateHandle]. A terminal 401 -> [PrsEffect.NavigateToLogin].
+ *
+ * [completeWork] mirrors the web completeWork action: runs the completion pipeline for the PR's
+ * (workerId, ticketId), surfacing the returned summary/new-status inline. Guarded against double-submit and
+ * only invocable once the PR detail has loaded (so workerId/ticketId are known).
  */
 @HiltViewModel
 class PrDetailViewModel @Inject constructor(
@@ -51,9 +55,47 @@ class PrDetailViewModel @Inject constructor(
 
     fun onRetry() = load()
 
+    /** Run the completion pipeline for the loaded PR. No-op unless a PR with a worker + ticket is loaded. */
+    fun completeWork() {
+        val current = _uiState.value as? PrDetailUiState.Content ?: return
+        if (current.completing || current.completion != null) return
+        val workerId = current.pr.workerId
+        val ticketId = current.pr.ticketId
+        if (workerId.isBlank() || ticketId.isBlank()) {
+            _uiState.value = current.copy(completeError = CANNOT_COMPLETE)
+            return
+        }
+        _uiState.value = current.copy(completing = true, completeError = null)
+        viewModelScope.launch {
+            when (val result = repo.complete(workerId, ticketId)) {
+                is ApiResult.Success ->
+                    (_uiState.value as? PrDetailUiState.Content)?.let {
+                        _uiState.value = it.copy(completing = false, completion = result.data, completeError = null)
+                    }
+                is ApiResult.Failure -> {
+                    if (result.error.status == HTTP_UNAUTHORIZED) _effects.send(PrsEffect.NavigateToLogin)
+                    (_uiState.value as? PrDetailUiState.Content)?.let {
+                        _uiState.value = it.copy(completing = false, completeError = result.error.message)
+                    }
+                }
+                is ApiResult.NetworkError ->
+                    (_uiState.value as? PrDetailUiState.Content)?.let {
+                        _uiState.value = it.copy(completing = false, completeError = OFFLINE)
+                    }
+            }
+        }
+    }
+
+    fun dismissCompleteError() {
+        (_uiState.value as? PrDetailUiState.Content)?.let {
+            if (it.completeError != null) _uiState.value = it.copy(completeError = null)
+        }
+    }
+
     companion object {
         const val ARG_PR_ID = "prId"
         private const val HTTP_UNAUTHORIZED = 401
         private const val OFFLINE = "Couldn't reach the server. Tap retry."
+        private const val CANNOT_COMPLETE = "This PR has no linked worker + ticket to complete."
     }
 }

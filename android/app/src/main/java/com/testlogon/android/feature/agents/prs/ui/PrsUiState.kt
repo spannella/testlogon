@@ -1,5 +1,6 @@
 package com.testlogon.android.feature.agents.prs.ui
 
+import com.testlogon.android.feature.agents.prs.data.AgentCompletion
 import com.testlogon.android.feature.agents.prs.data.AgentPr
 
 /** AGENTS-BASICS (web-parity) - UI state + effect for the agent-PR list & detail (web /agents/prs). */
@@ -12,7 +13,12 @@ sealed interface PrsListUiState {
 
 sealed interface PrDetailUiState {
     data object Loading : PrDetailUiState
-    data class Content(val pr: AgentPr) : PrDetailUiState
+    data class Content(
+        val pr: AgentPr,
+        val completing: Boolean = false,
+        val completion: AgentCompletion? = null,
+        val completeError: String? = null,
+    ) : PrDetailUiState
     data class Error(val message: String) : PrDetailUiState
 }
 

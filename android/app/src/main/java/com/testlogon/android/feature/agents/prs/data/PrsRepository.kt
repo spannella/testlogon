@@ -4,6 +4,7 @@ import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.JsonEncodingException
 import com.testlogon.android.core.model.ApiResult
 import com.testlogon.android.core.network.agents.AgentPrApi
+import com.testlogon.android.core.network.agents.AgentWorkCompleteRequest
 import com.testlogon.android.core.network.error.ApiErrorParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -15,12 +16,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * AGENTS-BASICS (web-parity) - READ-ONLY data layer for the agent-PR surface over [AgentPrApi]. Folds transport
- * into [ApiResult] via [call]. Mirrors the WORKERS repository fold. No cache / Room.
+ * AGENTS-BASICS (web-parity) - data layer for the agent-PR surface over [AgentPrApi]. Folds transport into
+ * [ApiResult] via [call]. Mirrors the WORKERS repository fold. No cache / Room. [complete] runs the
+ * work-completion pipeline (web completeWork) and is excluded from auto-retry by the interceptor.
  */
 interface PrsRepository {
     suspend fun list(): ApiResult<List<AgentPr>>
     suspend fun get(prId: String): ApiResult<AgentPr>
+    suspend fun complete(workerId: String, ticketId: String): ApiResult<AgentCompletion>
 }
 
 @Singleton
@@ -34,6 +37,11 @@ class DefaultPrsRepository @Inject constructor(
 
     override suspend fun get(prId: String): ApiResult<AgentPr> =
         withContext(Dispatchers.IO) { call { api.get(prId).toDomain() } }
+
+    override suspend fun complete(workerId: String, ticketId: String): ApiResult<AgentCompletion> =
+        withContext(Dispatchers.IO) {
+            call { api.complete(workerId, AgentWorkCompleteRequest(ticketId = ticketId)).toDomain() }
+        }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {
         ApiResult.Success(block())
