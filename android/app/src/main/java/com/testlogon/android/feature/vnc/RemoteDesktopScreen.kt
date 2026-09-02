@@ -48,6 +48,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.testlogon.android.data.vnc.CreateVncSessionDto
 import com.testlogon.android.data.vnc.VncTransferFallbackDto
 import com.testlogon.android.feature.infracommon.InfraDropdown
+import com.testlogon.android.feature.rdp.RdpFallbackCard
 
 object RemoteDesktopTestTags {
     const val SCREEN = "remotedesktop_screen"
@@ -80,6 +81,7 @@ fun RemoteDesktopRoute(
         onLoadFallback = viewModel::loadFallback,
         onEnd = viewModel::endSession,
         onMessageShown = viewModel::clearMessage,
+        trailingContent = { RdpFallbackCard() },
     )
 }
 
@@ -93,6 +95,7 @@ fun RemoteDesktopScreen(
     onEnd: () -> Unit,
     onMessageShown: () -> Unit,
     modifier: Modifier = Modifier,
+    trailingContent: @Composable () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
@@ -137,6 +140,7 @@ fun RemoteDesktopScreen(
                     onEnd = onEnd,
                 )
             }
+            trailingContent()
         }
     }
 }
