@@ -143,4 +143,102 @@ class CrmPecMathTest {
         assertEquals("2021-01-01 → ${CrmPecMath.EM_DASH}", CrmPecMath.dateRange(1_609_459_200L, null))
         assertEquals("2021-01-01 → 2021-01-01", CrmPecMath.dateRange(1_609_459_200L, 1_609_459_200L))
     }
+
+    // ── Event invitee / registration (EVT-002/003) ────────────────────────────
+
+    @Test
+    fun inviteStatusLabel_knownAndDegrade() {
+        assertEquals("Pending", CrmPecMath.inviteStatusLabel("pending"))
+        assertEquals("Invited", CrmPecMath.inviteStatusLabel("sent"))
+        assertEquals("Accepted", CrmPecMath.inviteStatusLabel("accepted"))
+        assertEquals("Declined", CrmPecMath.inviteStatusLabel("declined"))
+        assertEquals(CrmPecMath.EM_DASH, CrmPecMath.inviteStatusLabel(null))
+        assertEquals("Bounced Back", CrmPecMath.inviteStatusLabel("bounced_back"))
+    }
+
+    @Test
+    fun registrationStatusLabel_knownAndDegrade() {
+        assertEquals("Registered", CrmPecMath.registrationStatusLabel("registered"))
+        assertEquals("Accepted", CrmPecMath.registrationStatusLabel("accepted"))
+        assertEquals("Declined", CrmPecMath.registrationStatusLabel("declined"))
+        assertEquals("Waitlisted", CrmPecMath.registrationStatusLabel("waitlisted"))
+        assertEquals("Attended", CrmPecMath.registrationStatusLabel("attended"))
+        assertEquals(CrmPecMath.EM_DASH, CrmPecMath.registrationStatusLabel(null))
+        assertEquals("No Show", CrmPecMath.registrationStatusLabel("no_show"))
+    }
+
+    @Test
+    fun pendingInviteCount_countsOnlyPending() {
+        val statuses = listOf("pending", "sent", "pending", null, "accepted")
+        assertEquals(2, CrmPecMath.pendingInviteCount(statuses))
+        assertEquals(0, CrmPecMath.pendingInviteCount(emptyList()))
+    }
+
+    @Test
+    fun canSendInvitations_gatedByPending() {
+        assertTrue(CrmPecMath.canSendInvitations(1))
+        assertTrue(CrmPecMath.canSendInvitations(5))
+        assertFalse(CrmPecMath.canSendInvitations(0))
+        assertFalse(CrmPecMath.canSendInvitations(-3))
+    }
+
+    @Test
+    fun isCheckedIn_positiveTimestampOnly() {
+        assertTrue(CrmPecMath.isCheckedIn(1_609_459_200L))
+        assertFalse(CrmPecMath.isCheckedIn(null))
+        assertFalse(CrmPecMath.isCheckedIn(0L))
+        assertFalse(CrmPecMath.isCheckedIn(-1L))
+    }
+
+    @Test
+    fun canRespond_openWhilePendingOrWaitlisted() {
+        assertTrue(CrmPecMath.canRespond("registered", null))
+        assertTrue(CrmPecMath.canRespond("waitlisted", null))
+        assertTrue(CrmPecMath.canRespond(null, null))
+    }
+
+    @Test
+    fun canRespond_closedAfterDecisionOrCheckIn() {
+        assertFalse(CrmPecMath.canRespond("accepted", null))
+        assertFalse(CrmPecMath.canRespond("declined", null))
+        assertFalse(CrmPecMath.canRespond("attended", null))
+        // checked-in closes RSVP even if status still says registered
+        assertFalse(CrmPecMath.canRespond("registered", 1_609_459_200L))
+    }
+
+    @Test
+    fun canCheckIn_onlyAcceptedOrRegisteredNotYetIn() {
+        assertTrue(CrmPecMath.canCheckIn("accepted", null))
+        assertTrue(CrmPecMath.canCheckIn("registered", null))
+        assertFalse(CrmPecMath.canCheckIn("declined", null))
+        assertFalse(CrmPecMath.canCheckIn("waitlisted", null))
+        // already checked-in cannot be checked in again
+        assertFalse(CrmPecMath.canCheckIn("accepted", 1_609_459_200L))
+    }
+
+    @Test
+    fun rsvpState_derivesCoarseState() {
+        assertEquals(CrmPecMath.RsvpState.CHECKED_IN, CrmPecMath.rsvpState("accepted", 1_609_459_200L))
+        assertEquals(CrmPecMath.RsvpState.CHECKED_IN, CrmPecMath.rsvpState("attended", null))
+        assertEquals(CrmPecMath.RsvpState.ACCEPTED, CrmPecMath.rsvpState("accepted", null))
+        assertEquals(CrmPecMath.RsvpState.DECLINED, CrmPecMath.rsvpState("declined", null))
+        assertEquals(CrmPecMath.RsvpState.WAITLISTED, CrmPecMath.rsvpState("waitlisted", null))
+        assertEquals(CrmPecMath.RsvpState.PENDING, CrmPecMath.rsvpState("registered", null))
+        assertEquals(CrmPecMath.RsvpState.PENDING, CrmPecMath.rsvpState(null, null))
+    }
+
+    @Test
+    fun waitlistLabel_formatsAndDegrades() {
+        assertEquals("Waitlist #3", CrmPecMath.waitlistLabel(3))
+        assertEquals(CrmPecMath.EM_DASH, CrmPecMath.waitlistLabel(null))
+        assertEquals(CrmPecMath.EM_DASH, CrmPecMath.waitlistLabel(0))
+        assertEquals(CrmPecMath.EM_DASH, CrmPecMath.waitlistLabel(-2))
+    }
+
+    @Test
+    fun capacityLabel_cappedAndUncapped() {
+        assertEquals("3 / 10", CrmPecMath.capacityLabel(10, 3))
+        assertEquals("5 going", CrmPecMath.capacityLabel(null, 5))
+        assertEquals("0 going", CrmPecMath.capacityLabel(0, 0))
+    }
 }

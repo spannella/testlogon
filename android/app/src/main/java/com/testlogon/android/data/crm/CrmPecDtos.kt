@@ -107,6 +107,79 @@ data class CrmEventCapacityDto(
     @Json(name = "available_spots") val availableSpots: Int? = null,
 )
 
+// EVT-002 — partial event update (PATCH). Only set fields are sent; nulls are omitted by Moshi.
+@JsonClass(generateAdapter = true)
+data class CrmEventUpdateInDto(
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "calendar_event_id") val calendarEventId: String? = null,
+    @Json(name = "max_attendance") val maxAttendance: Int? = null,
+)
+
+// EVT-002 — invitee management.
+@JsonClass(generateAdapter = true)
+data class CrmInviteeAddInDto(
+    @Json(name = "invitee_sub") val inviteeSub: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmInviteeBulkImportInDto(
+    @Json(name = "user_subs") val userSubs: List<String>,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmInviteeDto(
+    @Json(name = "event_id") val eventId: String = "",
+    @Json(name = "invitee_sub") val inviteeSub: String = "",
+    @Json(name = "invite_status") val inviteStatus: String = "pending",
+    @Json(name = "invited_at") val invitedAt: Long = 0,
+    @Json(name = "responded_at") val respondedAt: Long? = null,
+    @Json(name = "display_name") val displayName: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmInviteeListRespDto(
+    @Json(name = "invitees") val invitees: List<CrmInviteeDto> = emptyList(),
+    @Json(name = "cursor") val cursor: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmBulkImportDto(
+    @Json(name = "added") val added: Int = 0,
+    @Json(name = "skipped") val skipped: Int = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmSendInvitationsDto(
+    @Json(name = "sent") val sent: Int = 0,
+    @Json(name = "skipped") val skipped: Int = 0,
+    @Json(name = "failed") val failed: Int = 0,
+)
+
+// EVT-003 — registration / RSVP.
+@JsonClass(generateAdapter = true)
+data class CrmRespondInDto(
+    @Json(name = "new_status") val newStatus: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmRegistrationDto(
+    @Json(name = "event_id") val eventId: String = "",
+    @Json(name = "registrant_sub") val registrantSub: String = "",
+    @Json(name = "status") val status: String = "registered",
+    @Json(name = "registered_at") val registeredAt: Long = 0,
+    @Json(name = "responded_at") val respondedAt: Long? = null,
+    @Json(name = "checked_in_at") val checkedInAt: Long? = null,
+    @Json(name = "waitlist_position") val waitlistPosition: Int? = null,
+    @Json(name = "invited") val invited: Boolean? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class CrmRegistrationListRespDto(
+    @Json(name = "registrations") val registrations: List<CrmRegistrationDto> = emptyList(),
+    @Json(name = "cursor") val cursor: String? = null,
+)
+
 // ──────────────────────────  CAMPAIGNS  ───────────────────────────
 
 @JsonClass(generateAdapter = true)

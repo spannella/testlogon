@@ -31,6 +31,18 @@ data class CrmEventsPage(
     val moduleDisabled: Boolean = false,
 )
 
+data class CrmInviteesPage(
+    val invitees: List<CrmInvitee>,
+    val cursor: String?,
+    val moduleDisabled: Boolean = false,
+)
+
+data class CrmRegistrationsPage(
+    val registrations: List<CrmRegistration>,
+    val cursor: String?,
+    val moduleDisabled: Boolean = false,
+)
+
 data class CrmCampaignsPage(
     val campaigns: List<CrmCampaign>,
     val cursor: String?,
@@ -97,6 +109,21 @@ interface CrmEventsRepository {
     suspend fun get(eventId: String): ApiResult<CrmEvent>
     suspend fun capacity(eventId: String): ApiResult<CrmEventCapacity?>
     suspend fun create(body: CrmEventCreateInDto): ApiResult<CrmEvent>
+
+    // EVT-002 — event update + invitee management.
+    suspend fun update(eventId: String, body: CrmEventUpdateInDto): ApiResult<CrmEvent>
+    suspend fun addInvitee(eventId: String, inviteeSub: String): ApiResult<CrmInvitee>
+    suspend fun removeInvitee(eventId: String, inviteeSub: String): ApiResult<Unit>
+    suspend fun bulkImportInvitees(eventId: String, userSubs: List<String>): ApiResult<CrmBulkImportResult>
+    suspend fun sendInvitations(eventId: String): ApiResult<CrmSendInvitationsResult>
+    suspend fun listInvitees(eventId: String): ApiResult<CrmInviteesPage>
+
+    // EVT-003 — registration / RSVP / check-in.
+    suspend fun register(eventId: String): ApiResult<CrmRegistration>
+    suspend fun respond(eventId: String, registrantSub: String, newStatus: String): ApiResult<CrmRegistration>
+    suspend fun checkIn(eventId: String, registrantSub: String): ApiResult<CrmRegistration>
+    suspend fun cancelRegistration(eventId: String, registrantSub: String): ApiResult<Unit>
+    suspend fun listRegistrations(eventId: String): ApiResult<CrmRegistrationsPage>
 }
 
 @Singleton
@@ -133,6 +160,73 @@ class CrmEventsRepositoryImpl @Inject constructor(
 
     override suspend fun create(body: CrmEventCreateInDto): ApiResult<CrmEvent> = withContext(io) {
         call { api.createEvent(body).toDomain() }
+    }
+
+    override suspend fun update(eventId: String, body: CrmEventUpdateInDto): ApiResult<CrmEvent> = withContext(io) {
+        call { api.updateEvent(eventId, body).toDomain() }
+    }
+
+    override suspend fun addInvitee(eventId: String, inviteeSub: String): ApiResult<CrmInvitee> = withContext(io) {
+        call { api.addInvitee(eventId, CrmInviteeAddInDto(inviteeSub = inviteeSub)).toDomain() }
+    }
+
+    override suspend fun removeInvitee(eventId: String, inviteeSub: String): ApiResult<Unit> = withContext(io) {
+        call { api.removeInvitee(eventId, inviteeSub) }
+    }
+
+    override suspend fun bulkImportInvitees(
+        eventId: String,
+        userSubs: List<String>,
+    ): ApiResult<CrmBulkImportResult> = withContext(io) {
+        call { api.bulkImportInvitees(eventId, CrmInviteeBulkImportInDto(userSubs = userSubs)).toDomain() }
+    }
+
+    override suspend fun sendInvitations(eventId: String): ApiResult<CrmSendInvitationsResult> = withContext(io) {
+        call { api.sendInvitations(eventId).toDomain() }
+    }
+
+    override suspend fun listInvitees(eventId: String): ApiResult<CrmInviteesPage> = withContext(io) {
+        when (val r = call { api.listInvitees(eventId) }) {
+            is ApiResult.Success -> ApiResult.Success(
+                CrmInviteesPage(r.data.invitees.map { it.toDomain() }, r.data.cursor),
+            )
+            is ApiResult.Failure ->
+                if (r.error.status == 404) ApiResult.Success(CrmInviteesPage(emptyList(), null, moduleDisabled = true))
+                else r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun register(eventId: String): ApiResult<CrmRegistration> = withContext(io) {
+        call { api.registerForEvent(eventId).toDomain() }
+    }
+
+    override suspend fun respond(
+        eventId: String,
+        registrantSub: String,
+        newStatus: String,
+    ): ApiResult<CrmRegistration> = withContext(io) {
+        call { api.respondToInvitation(eventId, registrantSub, CrmRespondInDto(newStatus = newStatus)).toDomain() }
+    }
+
+    override suspend fun checkIn(eventId: String, registrantSub: String): ApiResult<CrmRegistration> = withContext(io) {
+        call { api.checkInAttendee(eventId, registrantSub).toDomain() }
+    }
+
+    override suspend fun cancelRegistration(eventId: String, registrantSub: String): ApiResult<Unit> = withContext(io) {
+        call { api.cancelRegistration(eventId, registrantSub) }
+    }
+
+    override suspend fun listRegistrations(eventId: String): ApiResult<CrmRegistrationsPage> = withContext(io) {
+        when (val r = call { api.listRegistrations(eventId) }) {
+            is ApiResult.Success -> ApiResult.Success(
+                CrmRegistrationsPage(r.data.registrations.map { it.toDomain() }, r.data.cursor),
+            )
+            is ApiResult.Failure ->
+                if (r.error.status == 404) ApiResult.Success(CrmRegistrationsPage(emptyList(), null, moduleDisabled = true))
+                else r
+            is ApiResult.NetworkError -> r
+        }
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = runCatchingApi(errorParser, block)

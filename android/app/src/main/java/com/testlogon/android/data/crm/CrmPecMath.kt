@@ -79,6 +79,91 @@ object CrmPecMath {
             "$acceptedCount / $maxAttendance"
         }
 
+    // ── Event invitee / registration (EVT-002/003) ────────────────────────────
+    // Mirrors CrmInviteStatus / CrmRegistrationStatus in crmEvents.ts.
+
+    const val INVITE_PENDING = "pending"
+    const val INVITE_SENT = "sent"
+    const val INVITE_ACCEPTED = "accepted"
+    const val INVITE_DECLINED = "declined"
+
+    const val REG_REGISTERED = "registered"
+    const val REG_ACCEPTED = "accepted"
+    const val REG_DECLINED = "declined"
+    const val REG_WAITLISTED = "waitlisted"
+    const val REG_ATTENDED = "attended"
+
+    /** Human label for an invite status; unknown/blank keys are title-cased / em-dashed. */
+    fun inviteStatusLabel(status: String?): String = when (status) {
+        INVITE_PENDING -> "Pending"
+        INVITE_SENT -> "Invited"
+        INVITE_ACCEPTED -> "Accepted"
+        INVITE_DECLINED -> "Declined"
+        null -> EM_DASH
+        else -> titleCaseSnake(status)
+    }
+
+    /** Human label for a registration status; unknown/blank keys are title-cased / em-dashed. */
+    fun registrationStatusLabel(status: String?): String = when (status) {
+        REG_REGISTERED -> "Registered"
+        REG_ACCEPTED -> "Accepted"
+        REG_DECLINED -> "Declined"
+        REG_WAITLISTED -> "Waitlisted"
+        REG_ATTENDED -> "Attended"
+        null -> EM_DASH
+        else -> titleCaseSnake(status)
+    }
+
+    /** True when a "send invitations" action is meaningful (there is at least one un-sent invitee). */
+    fun canSendInvitations(pendingCount: Int): Boolean = pendingCount > 0
+
+    /** Count of invitees still awaiting a send (status pending). */
+    fun pendingInviteCount(statuses: List<String?>): Int =
+        statuses.count { it == INVITE_PENDING }
+
+    /**
+     * Whether a registrant may still RSVP (accept/decline). Once they have accepted, declined, or
+     * been checked in / marked attended, the RSVP action is closed. A waitlisted or freshly-registered
+     * row is still open.
+     */
+    fun canRespond(status: String?, checkedInAt: Long?): Boolean {
+        if (isCheckedIn(checkedInAt)) return false
+        return when (status) {
+            REG_ACCEPTED, REG_DECLINED, REG_ATTENDED -> false
+            else -> true
+        }
+    }
+
+    /** A registrant is checked-in when a positive check-in timestamp is present. */
+    fun isCheckedIn(checkedInAt: Long?): Boolean = checkedInAt != null && checkedInAt > 0
+
+    /**
+     * Whether an owner/admin may check a registrant in: only an accepted (or already-registered)
+     * attendee who has not yet been checked in. Declined / waitlisted attendees cannot be checked in.
+     */
+    fun canCheckIn(status: String?, checkedInAt: Long?): Boolean {
+        if (isCheckedIn(checkedInAt)) return false
+        return when (status) {
+            REG_ACCEPTED, REG_REGISTERED, REG_ATTENDED -> true
+            else -> false
+        }
+    }
+
+    /** Coarse RSVP state for surfacing chips / actions on a registration row. */
+    enum class RsvpState { PENDING, ACCEPTED, DECLINED, WAITLISTED, CHECKED_IN }
+
+    fun rsvpState(status: String?, checkedInAt: Long?): RsvpState = when {
+        isCheckedIn(checkedInAt) || status == REG_ATTENDED -> RsvpState.CHECKED_IN
+        status == REG_ACCEPTED -> RsvpState.ACCEPTED
+        status == REG_DECLINED -> RsvpState.DECLINED
+        status == REG_WAITLISTED -> RsvpState.WAITLISTED
+        else -> RsvpState.PENDING
+    }
+
+    /** "Waitlist #3" style label, or em-dash when not waitlisted / no position. */
+    fun waitlistLabel(position: Int?): String =
+        if (position == null || position <= 0) EM_DASH else "Waitlist #$position"
+
     // ── Campaign status / type ────────────────────────────────────────────────
 
     fun campaignStatusLabel(status: String?): String =

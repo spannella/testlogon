@@ -14,6 +14,8 @@ import com.testlogon.android.feature.crm.CrmProjectsRoute
 import com.testlogon.android.feature.crm.CrmProjectDetailRoute
 import com.testlogon.android.feature.crm.CrmProjectDetailViewModel
 import com.testlogon.android.feature.crm.CrmEventsRoute
+import com.testlogon.android.feature.crm.CrmEventDetailRoute
+import com.testlogon.android.feature.crm.CrmEventDetailViewModel
 import com.testlogon.android.feature.crm.CrmCampaignsRoute
 import com.testlogon.android.feature.crm.CrmCampaignDetailRoute
 import com.testlogon.android.feature.crm.CrmCampaignDetailViewModel
@@ -52,6 +54,14 @@ data object CrmProjectDetailDest {
 /** CRM-AND-PEC — the CRM events list route (Growth hub). */
 data object CrmEventsDest {
     const val ROUTE = "crm/events"
+}
+
+/** CRM-AND-PEC — the CRM event detail route; the arg is the STRING event id (path param). */
+data object CrmEventDetailDest {
+    const val ARG_EVENT_ID = CrmEventDetailViewModel.ARG_EVENT_ID
+    const val ROUTE = "crm/events/{$ARG_EVENT_ID}"
+
+    fun build(eventId: String): String = "crm/events/${Uri.encode(eventId)}"
 }
 
 /** CRM-AND-PEC — the CRM marketing campaigns list route (Growth hub). */
@@ -106,7 +116,20 @@ fun NavGraphBuilder.crmDestinations(navController: NavHostController) {
         CrmProjectDetailRoute(onBack = { navController.popBackStack() })
     }
     composable(CrmEventsDest.ROUTE) {
-        CrmEventsRoute(onBack = { navController.popBackStack() })
+        CrmEventsRoute(
+            onEventClick = { id ->
+                navController.navigate(CrmEventDetailDest.build(id)) { launchSingleTop = true }
+            },
+            onBack = { navController.popBackStack() },
+        )
+    }
+    composable(
+        route = CrmEventDetailDest.ROUTE,
+        arguments = listOf(
+            navArgument(CrmEventDetailDest.ARG_EVENT_ID) { type = NavType.StringType },
+        ),
+    ) {
+        CrmEventDetailRoute(onBack = { navController.popBackStack() })
     }
     composable(CrmCampaignsDest.ROUTE) {
         CrmCampaignsRoute(

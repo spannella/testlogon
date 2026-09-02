@@ -51,6 +51,39 @@ data class CrmEventCapacity(
     val availableSpots: Int?,
 )
 
+data class CrmInvitee(
+    val eventId: String,
+    val inviteeSub: String,
+    val inviteStatus: String,
+    val invitedAt: Long,
+    val respondedAt: Long?,
+    val displayName: String?,
+)
+
+data class CrmRegistration(
+    val eventId: String,
+    val registrantSub: String,
+    val status: String,
+    val registeredAt: Long,
+    val respondedAt: Long?,
+    val checkedInAt: Long?,
+    val waitlistPosition: Int?,
+    val invited: Boolean?,
+)
+
+/** Roll-up of a send-invitations run. */
+data class CrmSendInvitationsResult(
+    val sent: Int,
+    val skipped: Int,
+    val failed: Int,
+)
+
+/** Roll-up of a bulk-import run. */
+data class CrmBulkImportResult(
+    val added: Int,
+    val skipped: Int,
+)
+
 // ─── Campaigns ───────────────────────────────────────────────────────────────
 
 data class CrmCampaign(
@@ -116,6 +149,37 @@ fun CrmEventCapacityDto.toDomain(): CrmEventCapacity = CrmEventCapacity(
     acceptedCount = acceptedCount,
     waitlistedCount = waitlistedCount,
     availableSpots = availableSpots,
+)
+
+fun CrmInviteeDto.toDomain(): CrmInvitee = CrmInvitee(
+    eventId = eventId,
+    inviteeSub = inviteeSub,
+    inviteStatus = inviteStatus,
+    invitedAt = invitedAt,
+    respondedAt = respondedAt,
+    displayName = displayName,
+)
+
+fun CrmRegistrationDto.toDomain(): CrmRegistration = CrmRegistration(
+    eventId = eventId,
+    registrantSub = registrantSub,
+    status = status,
+    registeredAt = registeredAt,
+    respondedAt = respondedAt,
+    checkedInAt = checkedInAt,
+    waitlistPosition = waitlistPosition,
+    invited = invited,
+)
+
+fun CrmSendInvitationsDto.toDomain(): CrmSendInvitationsResult = CrmSendInvitationsResult(
+    sent = sent,
+    skipped = skipped,
+    failed = failed,
+)
+
+fun CrmBulkImportDto.toDomain(): CrmBulkImportResult = CrmBulkImportResult(
+    added = added,
+    skipped = skipped,
 )
 
 fun CrmCampaignDto.toDomain(): CrmCampaign = CrmCampaign(
