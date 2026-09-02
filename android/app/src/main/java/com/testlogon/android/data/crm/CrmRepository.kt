@@ -21,6 +21,13 @@ data class LeadsPage(
     val moduleDisabled: Boolean = false,
 )
 
+/** A prospects page + a module-disabled flag (degrade-on-404). */
+data class ProspectsPage(
+    val prospects: List<Prospect>,
+    val cursor: String?,
+    val moduleDisabled: Boolean = false,
+)
+
 /** The pipeline snapshot: stage config + opportunities, with a module-disabled flag (degrade-on-404/503). */
 data class PipelineSnapshot(
     val stages: List<StageConfigItem>,
@@ -35,10 +42,27 @@ interface LeadsRepository {
     suspend fun get(leadId: String): ApiResult<Lead>
     suspend fun create(body: LeadCreateInDto): ApiResult<Lead>
     suspend fun updateStatus(leadId: String, status: String): ApiResult<Lead>
+    suspend fun delete(leadId: String): ApiResult<Unit>
     suspend fun convert(leadId: String, body: LeadConversionInDto): ApiResult<LeadConversionResult>
+    suspend fun assign(leadId: String, assigneeSub: String): ApiResult<Lead>
+    suspend fun merge(primaryLeadId: String, secondaryLeadId: String): ApiResult<Lead>
+    suspend fun duplicates(leadId: String): ApiResult<List<Lead>>
     suspend fun computeScore(leadId: String): ApiResult<Int>
+    suspend fun scoreHistory(leadId: String): ApiResult<List<LeadScoreHistoryEntry>>
     suspend fun listActivities(leadId: String): ApiResult<List<LeadActivity>>
     suspend fun logActivity(leadId: String, body: LeadLogActivityInDto): ApiResult<LeadActivity>
+
+    // Prospects (LED-007)
+    suspend fun listProspects(includeSuppressed: Boolean = true): ApiResult<ProspectsPage>
+    suspend fun createProspect(body: ProspectCreateInDto): ApiResult<Prospect>
+    suspend fun updateProspect(prospectId: String, body: ProspectUpdateInDto): ApiResult<Prospect>
+    suspend fun deleteProspect(prospectId: String): ApiResult<Unit>
+
+    // Admin (LED-013) — server enforces 403 for non-admins.
+    suspend fun getScoringRules(): ApiResult<LeadScoreRules>
+    suspend fun updateScoringRules(rules: List<LeadScoreRule>, maxScore: Int): ApiResult<LeadScoreRules>
+    suspend fun sourceSummary(): ApiResult<Map<String, Int>>
+    suspend fun adminListAll(status: String? = null): ApiResult<LeadsPage>
 }
 
 @Singleton
@@ -74,6 +98,10 @@ class LeadsRepositoryImpl @Inject constructor(
         call { api.updateLead(leadId, LeadUpdateInDto(status = status)).toDomain() }
     }
 
+    override suspend fun delete(leadId: String): ApiResult<Unit> = withContext(io) {
+        call { api.deleteLead(leadId) }
+    }
+
     override suspend fun convert(
         leadId: String,
         body: LeadConversionInDto,
@@ -81,8 +109,32 @@ class LeadsRepositoryImpl @Inject constructor(
         call { api.convertLead(leadId, body).toDomain() }
     }
 
+    override suspend fun assign(leadId: String, assigneeSub: String): ApiResult<Lead> = withContext(io) {
+        call { api.assignLead(leadId, LeadAssignInDto(assigneeSub = assigneeSub)).toDomain() }
+    }
+
+    override suspend fun merge(primaryLeadId: String, secondaryLeadId: String): ApiResult<Lead> = withContext(io) {
+        call { api.mergeLeads(primaryLeadId, LeadMergeInDto(secondaryLeadId = secondaryLeadId)).toDomain() }
+    }
+
+    override suspend fun duplicates(leadId: String): ApiResult<List<Lead>> = withContext(io) {
+        when (val r = call { api.findDuplicates(leadId) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.duplicates.map { it.toDomain() })
+            is ApiResult.Failure -> if (r.error.status == 404) ApiResult.Success(emptyList()) else r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
     override suspend fun computeScore(leadId: String): ApiResult<Int> = withContext(io) {
         call { api.computeScore(leadId).score }
+    }
+
+    override suspend fun scoreHistory(leadId: String): ApiResult<List<LeadScoreHistoryEntry>> = withContext(io) {
+        when (val r = call { api.scoreHistory(leadId) }) {
+            is ApiResult.Success -> ApiResult.Success(r.data.entries.map { it.toDomain() })
+            is ApiResult.Failure -> if (r.error.status == 404) ApiResult.Success(emptyList()) else r
+            is ApiResult.NetworkError -> r
+        }
     }
 
     override suspend fun listActivities(leadId: String): ApiResult<List<LeadActivity>> = withContext(io) {
@@ -98,6 +150,68 @@ class LeadsRepositoryImpl @Inject constructor(
         body: LeadLogActivityInDto,
     ): ApiResult<LeadActivity> = withContext(io) {
         call { api.logActivity(leadId, body).toDomain() }
+    }
+
+    // ── Prospects ────────────────────────────────────────────────────────────
+
+    override suspend fun listProspects(includeSuppressed: Boolean): ApiResult<ProspectsPage> = withContext(io) {
+        when (val r = call { api.listProspects(includeSuppressed = includeSuppressed) }) {
+            is ApiResult.Success -> ApiResult.Success(
+                ProspectsPage(r.data.prospects.map { it.toDomain() }, r.data.cursor),
+            )
+            is ApiResult.Failure ->
+                if (r.error.status == 404) ApiResult.Success(ProspectsPage(emptyList(), null, moduleDisabled = true))
+                else r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    override suspend fun createProspect(body: ProspectCreateInDto): ApiResult<Prospect> = withContext(io) {
+        call { api.createProspect(body).toDomain() }
+    }
+
+    override suspend fun updateProspect(
+        prospectId: String,
+        body: ProspectUpdateInDto,
+    ): ApiResult<Prospect> = withContext(io) {
+        call { api.updateProspect(prospectId, body).toDomain() }
+    }
+
+    override suspend fun deleteProspect(prospectId: String): ApiResult<Unit> = withContext(io) {
+        call { api.deleteProspect(prospectId) }
+    }
+
+    // ── Admin ────────────────────────────────────────────────────────────────
+
+    override suspend fun getScoringRules(): ApiResult<LeadScoreRules> = withContext(io) {
+        call { api.getScoringRules().toDomain() }
+    }
+
+    override suspend fun updateScoringRules(
+        rules: List<LeadScoreRule>,
+        maxScore: Int,
+    ): ApiResult<LeadScoreRules> = withContext(io) {
+        call {
+            api.updateScoringRules(
+                LeadScoreRulesInDto(rules = rules.map { it.toDto() }, maxScore = maxScore),
+            ).toDomain()
+        }
+    }
+
+    override suspend fun sourceSummary(): ApiResult<Map<String, Int>> = withContext(io) {
+        call { api.sourceSummary().sources }
+    }
+
+    override suspend fun adminListAll(status: String?): ApiResult<LeadsPage> = withContext(io) {
+        when (val r = call { api.adminListAllLeads(status = status) }) {
+            is ApiResult.Success -> ApiResult.Success(
+                LeadsPage(r.data.leads.map { it.toDomain() }, r.data.cursor),
+            )
+            is ApiResult.Failure ->
+                if (r.error.status == 404) ApiResult.Success(LeadsPage(emptyList(), null, moduleDisabled = true))
+                else r
+            is ApiResult.NetworkError -> r
+        }
     }
 
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> = try {

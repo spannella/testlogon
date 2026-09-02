@@ -10,6 +10,8 @@ import com.testlogon.android.feature.crm.LeadDetailRoute
 import com.testlogon.android.feature.crm.LeadDetailViewModel
 import com.testlogon.android.feature.crm.LeadsListRoute
 import com.testlogon.android.feature.crm.PipelineRoute
+import com.testlogon.android.feature.crm.ProspectPoolRoute
+import com.testlogon.android.feature.crm.ScoringRulesRoute
 import com.testlogon.android.feature.crm.CrmProjectsRoute
 import com.testlogon.android.feature.crm.CrmProjectDetailRoute
 import com.testlogon.android.feature.crm.CrmProjectDetailViewModel
@@ -36,6 +38,16 @@ data object CrmLeadDetailDest {
 /** CRM-AND-1 — the sales-pipeline board route. */
 data object CrmPipelineDest {
     const val ROUTE = "crm/pipeline"
+}
+
+/** CRM-AND-LED — the marketing prospect pool route. */
+data object CrmProspectsDest {
+    const val ROUTE = "crm/prospects"
+}
+
+/** CRM-AND-LED — the admin lead-scoring-rules route (server admin-gated). */
+data object CrmScoringRulesDest {
+    const val ROUTE = "crm/scoring-rules"
 }
 
 /** CRM-AND-PEC — the CRM projects list route (Growth hub). */
@@ -97,6 +109,12 @@ fun NavGraphBuilder.crmDestinations(navController: NavHostController) {
     }
     composable(CrmPipelineDest.ROUTE) {
         PipelineRoute(onBack = { navController.popBackStack() })
+    }
+    composable(CrmProspectsDest.ROUTE) {
+        ProspectPoolRoute(onBack = { navController.popBackStack() })
+    }
+    composable(CrmScoringRulesDest.ROUTE) {
+        ScoringRulesRoute(onBack = { navController.popBackStack() })
     }
     // CRM-AND-PEC destinations
     composable(CrmProjectsDest.ROUTE) {

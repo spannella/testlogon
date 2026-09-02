@@ -63,6 +63,10 @@ object MoreRoutes {
     // campaigns (/ui/crm-marketing/campaigns). Each degrades-on-404 when the module is off.
     val CRM_PROJECTS: String get() = CrmProjectsDest.ROUTE
     val CRM_EVENTS: String get() = CrmEventsDest.ROUTE
+    // CRM-AND-LED: the marketing prospect pool (/ui/leads/prospects) and the admin lead-scoring-rules
+    // editor (/ui/leads/admin/scoring-rules, server admin-gated). Each degrades-on-404 when off.
+    val CRM_PROSPECTS: String get() = CrmProspectsDest.ROUTE
+    val CRM_SCORING_RULES: String get() = CrmScoringRulesDest.ROUTE
     val CRM_CAMPAIGNS: String get() = CrmCampaignsDest.ROUTE
 
     // AND-189: the caller's videos library grid.
@@ -680,6 +684,8 @@ object MoreRoutes {
             CRM_PROJECTS,
             CRM_EVENTS,
             CRM_CAMPAIGNS,
+            CRM_PROSPECTS,
+            CRM_SCORING_RULES,
             VIDEOS,
             VOD_CATALOG,
             VOD_RENTALS,

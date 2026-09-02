@@ -192,3 +192,100 @@ data class StageConfigOutDto(
 data class FeatureStatusDto(
     @Json(name = "enabled") val enabled: Boolean = false,
 )
+
+// ─────────────────────────  LEADS: hygiene / admin / prospects (CRM-AND-LED)  ─────────────────────────
+
+@JsonClass(generateAdapter = true)
+data class LeadDuplicatesRespDto(
+    @Json(name = "duplicates") val duplicates: List<LeadDto> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class LeadSourceSummaryRespDto(
+    @Json(name = "sources") val sources: Map<String, Int> = emptyMap(),
+)
+
+@JsonClass(generateAdapter = true)
+data class LeadAssignInDto(
+    @Json(name = "assignee_sub") val assigneeSub: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class LeadMergeInDto(
+    @Json(name = "secondary_lead_id") val secondaryLeadId: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class LeadScoreHistoryEntryDto(
+    @Json(name = "lead_id") val leadId: String = "",
+    @Json(name = "score") val score: Int = 0,
+    @Json(name = "trigger") val trigger: String? = null,
+    @Json(name = "computed_at") val computedAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class LeadScoreHistoryRespDto(
+    @Json(name = "lead_id") val leadId: String = "",
+    @Json(name = "entries") val entries: List<LeadScoreHistoryEntryDto> = emptyList(),
+    @Json(name = "cursor") val cursor: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class LeadScoreRuleDto(
+    @Json(name = "field") val field: String = "",
+    @Json(name = "operator") val operator: String = "",
+    @Json(name = "value") val value: String = "",
+    @Json(name = "points") val points: Int = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class LeadScoreRulesDto(
+    @Json(name = "rules") val rules: List<LeadScoreRuleDto> = emptyList(),
+    @Json(name = "max_score") val maxScore: Int = 100,
+    @Json(name = "updated_at") val updatedAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class LeadScoreRulesInDto(
+    @Json(name = "rules") val rules: List<LeadScoreRuleDto>,
+    @Json(name = "max_score") val maxScore: Int = 100,
+)
+
+// ─────────────────────────  PROSPECTS (LED-007)  ─────────────────────────
+
+@JsonClass(generateAdapter = true)
+data class ProspectDto(
+    @Json(name = "prospect_id") val prospectId: String = "",
+    @Json(name = "email") val email: String = "",
+    @Json(name = "first_name") val firstName: String? = null,
+    @Json(name = "last_name") val lastName: String? = null,
+    @Json(name = "phone") val phone: String? = null,
+    @Json(name = "company") val company: String? = null,
+    @Json(name = "suppressed") val suppressed: Boolean = false,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "updated_at") val updatedAt: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class ProspectListRespDto(
+    @Json(name = "prospects") val prospects: List<ProspectDto> = emptyList(),
+    @Json(name = "cursor") val cursor: String? = null,
+    @Json(name = "count") val count: Int? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ProspectCreateInDto(
+    @Json(name = "email") val email: String,
+    @Json(name = "first_name") val firstName: String? = null,
+    @Json(name = "last_name") val lastName: String? = null,
+    @Json(name = "phone") val phone: String? = null,
+    @Json(name = "company") val company: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class ProspectUpdateInDto(
+    @Json(name = "first_name") val firstName: String? = null,
+    @Json(name = "last_name") val lastName: String? = null,
+    @Json(name = "phone") val phone: String? = null,
+    @Json(name = "company") val company: String? = null,
+)
