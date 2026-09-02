@@ -31,3 +31,5 @@ docs/suitecrm/testlogon/
 
 # In-place edit backups from parallel agent sessions
 *.bak_*
+.env.local.bak
+main==

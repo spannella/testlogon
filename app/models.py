@@ -5901,12 +5901,12 @@ class WorkerOut(BaseModel):
     user_id: str
     label: str
     agent_type: str
-    tool: str
+    tool: str = ""
     tool_version: str = ""
-    compute_type: str
+    compute_type: str = ""
     compute_instance_id: str = ""
-    instance_type: str
-    llm_key_id: str
+    instance_type: str = ""
+    llm_key_id: str = ""
     llm_provider: str = ""
     host_id: str = ""
     # AQA-002: SSH key injected during provisioning, used by the agent QA exec
