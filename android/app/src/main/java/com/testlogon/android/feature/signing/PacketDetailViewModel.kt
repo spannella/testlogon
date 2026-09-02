@@ -84,6 +84,35 @@ class PacketDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * SUX-005 - the packet OWNER revokes a signer's public signing link by [jti]. Emits a one-shot
+     * [PacketDetailEvent.LinkRevoked] on success (the timeline picks up the audited event on refresh)
+     * or [PacketDetailEvent.ActionFailed] otherwise. Guarded against a double-tap while in flight.
+     */
+    fun revokeSigningLink(signerId: String, jti: String) {
+        if (signerId.isBlank() || jti.isBlank()) return
+        val content = _uiState.value as? PacketDetailUiState.Content ?: return
+        if (content.actionInFlight) return
+        _uiState.value = content.copy(actionInFlight = true)
+        actionJob?.cancel()
+        actionJob = viewModelScope.launch {
+            when (val result = repository.revokeSigningLink(content.packet.packetId, signerId, jti)) {
+                is ApiResult.Success -> {
+                    _events.send(PacketDetailEvent.LinkRevoked(signerId, result.data.revoked))
+                    read(showSpinner = false)
+                }
+                is ApiResult.Failure -> {
+                    clearActionInFlight()
+                    _events.send(PacketDetailEvent.ActionFailed(result.error.message))
+                }
+                is ApiResult.NetworkError -> {
+                    clearActionInFlight()
+                    _events.send(PacketDetailEvent.ActionFailed(OFFLINE))
+                }
+            }
+        }
+    }
+
     private fun sendDraft(content: PacketDetailUiState.Content) {
         if (content.actionInFlight) return
         _uiState.value = content.copy(actionInFlight = true)

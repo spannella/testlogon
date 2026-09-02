@@ -73,6 +73,13 @@ class PacketDetailViewModelTest {
             packetId: String,
         ): ApiResult<com.testlogon.android.feature.signing.submit.model.MarkDoneResult> =
             throw UnsupportedOperationException("not used in detail tests")
+
+        override suspend fun revokeSigningLink(
+            packetId: String,
+            signerId: String,
+            jti: String,
+        ): ApiResult<com.testlogon.android.feature.signing.data.RevokeLinkResult> =
+            throw UnsupportedOperationException("not used in detail tests")
     }
 
     private fun vm(repo: StubRepo, packetId: String? = "pkt_1"): PacketDetailViewModel {

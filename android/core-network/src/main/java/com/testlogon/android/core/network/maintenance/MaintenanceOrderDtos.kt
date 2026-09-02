@@ -67,3 +67,80 @@ data class TransitionMaintenanceOrderRequest(
     @Json(name = "assignee_sub") val assigneeSub: String? = null,
     @Json(name = "vendor_id") val vendorId: String? = null,
 )
+
+// ---------------------------------------------------------------------------
+// WOV-005: work-order board columns (static kanban layout)
+// ---------------------------------------------------------------------------
+
+/** One board column (mirrors WoBoardColumn). `status_key` maps to a WoStatus token. */
+data class WoBoardColumnDto(
+    @Json(name = "column_id") val columnId: String,
+    @Json(name = "title") val title: String,
+    @Json(name = "status_key") val statusKey: String,
+    @Json(name = "order") val order: Int = 0,
+)
+
+/** The {columns:[...]} envelope returned by GET board-columns. */
+data class WoBoardColumnsDto(
+    @Json(name = "columns") val columns: List<WoBoardColumnDto> = emptyList(),
+)
+
+// ---------------------------------------------------------------------------
+// WOV-004: vendor directory
+// ---------------------------------------------------------------------------
+
+/** One maintenance vendor (mirrors VendorOut). `vendor_id` + `name` + `status` are required. */
+data class VendorDto(
+    @Json(name = "vendor_id") val vendorId: String,
+    @Json(name = "name") val name: String,
+    @Json(name = "status") val status: String = "active",
+    @Json(name = "trade_category") val tradeCategory: String = "general",
+    @Json(name = "source") val source: String? = null,
+    @Json(name = "email") val email: String? = null,
+    @Json(name = "phone") val phone: String? = null,
+    @Json(name = "default_currency") val defaultCurrency: String = "USD",
+    @Json(name = "payment_terms_days") val paymentTermsDays: Int = 30,
+    @Json(name = "user_sub") val userSub: String? = null,
+    @Json(name = "created_by") val createdBy: String? = null,
+    @Json(name = "created_at") val createdAt: Long = 0,
+    @Json(name = "updated_at") val updatedAt: Long = 0,
+)
+
+/** The {vendors, count, cursor} list envelope (mirrors VendorListOut). */
+data class VendorListDto(
+    @Json(name = "vendors") val vendors: List<VendorDto> = emptyList(),
+    @Json(name = "count") val count: Int = 0,
+    @Json(name = "cursor") val cursor: String? = null,
+)
+
+/** The {categories:[...]} envelope returned by GET vendors/categories. */
+data class VendorCategoriesDto(
+    @Json(name = "categories") val categories: List<String> = emptyList(),
+)
+
+/** Create body for a vendor (mirrors VendorCreateIn). */
+data class VendorCreateRequest(
+    @Json(name = "name") val name: String,
+    @Json(name = "trade_category") val tradeCategory: String,
+    @Json(name = "email") val email: String? = null,
+    @Json(name = "phone") val phone: String? = null,
+    @Json(name = "default_currency") val defaultCurrency: String? = null,
+    @Json(name = "payment_terms_days") val paymentTermsDays: Int? = null,
+    @Json(name = "user_sub") val userSub: String? = null,
+)
+
+/** Patch body for a vendor (mirrors VendorPatchIn) — every field optional. */
+data class VendorPatchRequest(
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "trade_category") val tradeCategory: String? = null,
+    @Json(name = "email") val email: String? = null,
+    @Json(name = "phone") val phone: String? = null,
+    @Json(name = "default_currency") val defaultCurrency: String? = null,
+    @Json(name = "payment_terms_days") val paymentTermsDays: Int? = null,
+    @Json(name = "user_sub") val userSub: String? = null,
+)
+
+/** Status-set body for a vendor (mirrors VendorStatusIn). */
+data class VendorStatusRequest(
+    @Json(name = "status") val status: String,
+)

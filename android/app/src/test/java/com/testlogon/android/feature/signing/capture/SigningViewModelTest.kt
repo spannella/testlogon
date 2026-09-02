@@ -76,6 +76,13 @@ class SigningViewModelTest {
             packetId: String,
         ): ApiResult<com.testlogon.android.feature.signing.submit.model.MarkDoneResult> =
             throw UnsupportedOperationException("not used in capture tests")
+
+        override suspend fun revokeSigningLink(
+            packetId: String,
+            signerId: String,
+            jti: String,
+        ): ApiResult<com.testlogon.android.feature.signing.data.RevokeLinkResult> =
+            throw UnsupportedOperationException("not used in capture tests")
     }
 
     private class FakeRasterizer : SignatureRasterizer {

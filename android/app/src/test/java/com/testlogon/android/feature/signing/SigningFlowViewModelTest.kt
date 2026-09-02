@@ -79,6 +79,13 @@ class SigningFlowViewModelTest {
             throw UnsupportedOperationException("not used in flow tests")
         override suspend fun markDone(packetId: String): ApiResult<MarkDoneResult> =
             throw UnsupportedOperationException("not used in flow tests")
+
+        override suspend fun revokeSigningLink(
+            packetId: String,
+            signerId: String,
+            jti: String,
+        ): ApiResult<com.testlogon.android.feature.signing.data.RevokeLinkResult> =
+            throw UnsupportedOperationException("not used in flow tests")
     }
 
     private fun packet(

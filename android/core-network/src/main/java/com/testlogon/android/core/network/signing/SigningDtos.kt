@@ -222,3 +222,18 @@ data class SignaturePacketLegalNoticeAckResponse(
     @Json(name = "ok") val ok: Boolean? = null,
     @Json(name = "accepted") val accepted: Boolean? = null,
 )
+
+// ---- SUX-005: owner signing-link revoke ----
+
+/** Request body for revoking a signer's public signing link (mirrors RevokeSigningLinkIn). */
+data class RevokeSigningLinkRequest(
+    @Json(name = "jti") val jti: String,
+)
+
+/** Response for revoking a signing link (mirrors RevokeSigningLinkOut). */
+data class RevokeSigningLinkResponse(
+    @Json(name = "packet_id") val packetId: String? = null,
+    @Json(name = "signer_id") val signerId: String? = null,
+    @Json(name = "jti") val jti: String? = null,
+    @Json(name = "revoked") val revoked: Boolean = false,
+)

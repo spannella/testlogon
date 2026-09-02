@@ -48,4 +48,7 @@ sealed interface PacketDetailEvent {
 
     /** The send action failed; carries a user-facing message. */
     data class ActionFailed(val message: String) : PacketDetailEvent
+
+    /** A signer's public signing link was revoked (owner action). [revoked] is false if none was live. */
+    data class LinkRevoked(val signerId: String, val revoked: Boolean) : PacketDetailEvent
 }
